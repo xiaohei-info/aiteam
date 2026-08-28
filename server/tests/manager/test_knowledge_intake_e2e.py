@@ -22,6 +22,8 @@ from tests.manager._auth_helper import (
 
 pytestmark = pytest.mark.integration
 
+ENTERPRISE_SPACE_ID = "enterprise_shared"
+
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
@@ -63,8 +65,9 @@ def _token(tid, roles, user_id="u", *, admin_url=None):
     return sign_token(admin_url, tid, roles, user_id=user_id) if admin_url else sign_inmem_token(_INMEM_SIGNER, tid, roles, user_id=user_id)
 
 
-def _make_space(client, token, ks_id="ks_default", name="default"):
-    r = client.post("/api/manager/knowledge-spaces", json={"knowledge_space_id": ks_id, "display_name": name},
+def _make_space(client, token, ks_id=ENTERPRISE_SPACE_ID, name="default"):
+    assert ks_id == ENTERPRISE_SPACE_ID
+    r = client.post("/api/manager/knowledge-spaces", json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "display_name": name},
                     headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 201, r.text
     return r.json()["data"]
@@ -79,13 +82,13 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
 
     payload = f"hello knowledge intake {uuid.uuid4().hex}\n" * 200
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_default/documents",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
         files={"file": ("report.txt", payload.encode("utf-8"), "text/plain")},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201, r.text
     doc = r.json()["data"]
-    assert doc["knowledge_space_id"] == "ks_default"
+    assert doc["knowledge_space_id"] == ENTERPRISE_SPACE_ID
     assert doc["status"] == "ready"
     assert doc["file_name"] == "report.txt"
     assert doc["text_chars"] and doc["text_chars"] > 0
@@ -95,20 +98,20 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     assert "workspace" not in {"knowledge_space_id", "display_name"}
 
     # 列表与 envelope
-    r = client.get("/api/manager/knowledge-spaces/ks_default/documents",
+    r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
                    headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 200
     items = r.json()["data"]
     assert isinstance(items, list) and len(items) == 1
 
     # 状态：已 ready，可重试
-    r = client.post(f"/api/manager/knowledge-spaces/ks_default/documents/{doc_id}/retry",
+    r = client.post(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{doc_id}/retry",
                     headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 201, r.text
     assert r.json()["data"]["status"] == "ready"  # 重试后以 ready 终态
 
     # ingestion 查询
-    r = client.get(f"/api/manager/knowledge-spaces/ks_default/documents/{doc_id}/ingestion",
+    r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{doc_id}/ingestion",
                    headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 200
     job = r.json()["data"]
@@ -116,10 +119,10 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     assert job["chunk_count"] and job["chunk_count"] >= 1
 
     # 跨租户 RLS：t-b 看不到 t-a 的知识空间/documents
-    r = client.get("/api/manager/knowledge-spaces/ks_default",
+    r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}",
                    headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 404
-    r = client.get("/api/manager/knowledge-spaces/ks_default/documents",
+    r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
                    headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 404
 
@@ -132,15 +135,15 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     owner = _token(tid_a, ["owner"], user_id="delete-owner", admin_url=admin_url)
     member = _token(tid_a, ["member"], user_id="delete-member", admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
-    _make_space(client, owner, ks_id="ks_delete", name="Delete")
+    _make_space(client, owner, name="Delete")
     uploaded = client.post(
-        "/api/manager/knowledge-spaces/ks_delete/documents",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
         files={"file": ("delete.txt", b"delete me", "text/plain")}, headers=auth,
     )
     assert uploaded.status_code == 201, uploaded.text
     document_id = uploaded.json()["data"]["id"]
     deleted = client.delete(
-        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}",
         headers={**auth, "Idempotency-Key": "delete-1"},
     )
     assert deleted.status_code == 202, deleted.text
@@ -148,14 +151,14 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     assert deleted.json()["data"]["document_status"] == "deleting"
 
     member_reconcile = client.post(
-        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}/reconcile-delete",
         headers={"Authorization": f"Bearer {member}", "Idempotency-Key": "delete-1"},
     )
     assert member_reconcile.status_code == 403
     assert member_reconcile.headers["content-type"].startswith("application/problem+json")
 
     reconciled = client.post(
-        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}/reconcile-delete",
         headers={**auth, "Idempotency-Key": "delete-1"},
     )
     assert reconciled.status_code == 202, reconciled.text
@@ -165,7 +168,7 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     assert "delete me" not in reconciled.text
 
     repeated = client.post(
-        f"/api/manager/knowledge-spaces/ks_delete/documents/{document_id}/reconcile-delete",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}/reconcile-delete",
         headers=auth,
     )
     assert repeated.status_code == 202, repeated.text
@@ -177,9 +180,9 @@ def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, 
     client = _client(migrated_db, admin_url=admin_url)
     owner = _token(tid_a, ["owner"], user_id="owner-backfill", admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
-    _make_space(client, owner, ks_id="ks_backfill", name="Backfill")
+    _make_space(client, owner, name="Backfill")
     uploaded = client.post(
-        "/api/manager/knowledge-spaces/ks_backfill/documents",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
         files={"file": ("ready.txt", b"already indexed", "text/plain")}, headers=auth,
     )
     assert uploaded.status_code == 201, uploaded.text
@@ -192,11 +195,11 @@ def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, 
     employee_id = employee.json()["data"]["employee_id"]
     bound = client.post(
         f"/api/manager/employees/{employee_id}/knowledge-bindings",
-        json={"knowledge_space_id": "ks_backfill", "enabled": True}, headers=auth,
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "enabled": True}, headers=auth,
     )
     assert bound.status_code == 201, bound.text
     bindings = client.get(
-        f"/api/manager/knowledge-spaces/ks_backfill/documents/{document_id}/bindings", headers=auth,
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}/bindings", headers=auth,
     )
     assert bindings.status_code == 200, bindings.text
     assert [(row["employee_id"], row["status"], row["rag_document_id"]) for row in bindings.json()["data"]] == [
@@ -210,7 +213,7 @@ def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
     owner_a = _token(tid_a, ["owner"], user_id="oa", admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_default/documents",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
         files={"file": ("empty.txt", b"", "text/plain")},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
@@ -224,7 +227,7 @@ def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):
     owner_a = _token(tid_a, ["owner"], user_id="oa", admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_default/documents/url",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/url",
         json={"url": "ftp://nope"},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
@@ -250,7 +253,7 @@ def test_intake_member_forbidden(migrated_db, admin_url, two_tenants):
     member_a = _token(tid_a, ["member"], user_id="ma", admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_default/documents",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
         files={"file": ("a.txt", b"data", "text/plain")},
         headers={"Authorization": f"Bearer {member_a}"},
     )

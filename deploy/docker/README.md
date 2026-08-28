@@ -92,10 +92,10 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 
 **直接使用 docker compose**（高级用户）：
 ```bash
-docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build   # 构建三端并启动内部 Relay
-docker compose -f deploy/docker/docker-compose.yml ps              # 查看状态
-docker compose -f deploy/docker/docker-compose.yml logs -f agent   # 查看日志
-docker compose -f deploy/docker/docker-compose.yml down            # 停止（保留数据）
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build   # 构建三端并启动内部 Relay
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml ps              # 查看状态
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml logs -f agent   # 查看日志
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml down            # 停止（保留数据）
 ```
 
 ### 验证按端精简产物（D15 红线）

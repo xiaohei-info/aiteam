@@ -22,7 +22,6 @@ from shared.errors import AppError
 from shared.db import PgTenantRouter
 
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
-from . import employee_lifecycle as _lc
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 
 
@@ -63,7 +62,11 @@ def _service(request: Request) -> EmployeeConfigService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_employee_config_service", None)
     if cache is None:
-        cache = build_employee_config_service(PgTenantRouter(dsn), request.app.state._operator_catalog)
+        # Minimal integration apps may mount this router without the full Manager
+        # startup state; absence means no catalog validation for that isolated app.
+        cache = build_employee_config_service(
+            PgTenantRouter(dsn), getattr(request.app.state, "_operator_catalog", None)
+        )
         request.app.state._employee_config_service = cache
     return cache
 
@@ -153,7 +156,8 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> Response:
         svc = _service(request)
         items = svc.list_all(tenant_context_from(claims))
-        import csv, io
+        import csv
+        import io
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(["employee_id", "employee_slug", "display_name", "model", "provider_ref", "thinking_level", "skills", "version"])

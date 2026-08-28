@@ -7,7 +7,7 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 - `aiteam-v1.service` — systemd unit（`Type=simple`）。由 `run.sh` 装到
   `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
 - `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；完成
-  git pull → 条件性前端 build → 装 unit → systemctl restart → healthz + HTML smoke。
+  git pull → 前端 build → 装 unit → systemctl restart → healthz + HTML smoke。
 - `.github/workflows/deploy-main.yml` — GitHub Actions workflow。
   PR merge 到 `main` 或 `workflow_dispatch` 手动触发。
 
@@ -15,11 +15,11 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 
 ```
 PR merge → GitHub Actions → self-hosted runner(taiyi)
-  → checkout workflow source
+  → 校验 DEPLOY_ROOT 上的持久化 git checkout（不依赖 runner workspace checkout）
   → 写 DEPLOY_ROOT/.env.<env>（从 GitHub Secret 注入）
   → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
       → git pull --ff-only 同步部署根
-      → 条件：dist 缺失 → pnpm install && pnpm build
+      → pnpm install && pnpm build（每次部署重建，避免前后端产物不一致）
       → 装 systemd unit（内容变了才 daemon-reload）
       → systemctl restart aiteam-v1
       → /healthz 三端冒烟 + GET / 必须是 text/html
@@ -40,26 +40,30 @@ apt install -y nodejs
 # 2. pnpm >= 11（通过 corepack，随 node 自带）
 corepack enable
 corepack prepare pnpm@11 --activate
+
+# 3. Docker Engine + Compose v2（PG/NewAPI 由 ctl.sh 通过 Docker 管理）
+docker info
+docker compose version
 ```
 
 然后：
 
 ```bash
-# 3. 部署根 clone 仓库（SSH 形式，origin 设 git@github.com:...）
+# 4. 部署根 clone 仓库（SSH 形式，origin 设 git@github.com:...）
 #    部署用户需要有 GitHub repo push/pull 权限的 SSH key。
 #    并在 GitHub repo 上添加该 key 为 deploy key。
 git clone git@github.com:OWNER/REPO.git /root/app/aiteam
 cd /root/app/aiteam
 git remote set-url origin git@github.com:OWNER/REPO.git
 
-# 4. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）
+# 5. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r server/requirements.txt
 
-# 5. 首跑前端 build（或触发一次 CI，CI 会条件性 build）
+# 6. 首跑前端 build（或触发一次 CI，CI 会在部署时重建）
 cd web && pnpm install --frozen-lockfile && pnpm build
 
-# 6. 注册 self-hosted runner（见 GitHub repo Settings → Actions → Runners）
+# 7. 注册 self-hosted runner（见 GitHub repo Settings → Actions → Runners）
 #    runner 用户在部署根所在机器执行 workflow 步骤，应有不少于部署根的可写权限。
 ```
 
@@ -104,10 +108,14 @@ journalctl -f -u aiteam-v1
 tail -f logs/{manager,operation,agent}.log
 
 # 强制重新发布（忽略 CI）
-cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh -e test
+cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh --branch main --env test
 ```
 
 ## 常见问题
+
+- **CI 报部署根不是 git 仓库 / 缺少 `deploy/ci/run.sh`**
+  这是一次性初始化问题；按上面的新服务器清单 clone 到 `$DEPLOY_ROOT`，并确认
+  origin 为 SSH。自动部署不再依赖 runner workspace 的 GitHub checkout。
 
 - **CI 报 `fatal: could not read Username for 'https://github.com'`**
   部署根的 origin 走了 HTTPS，runner job 拿不到凭证。改成 SSH：

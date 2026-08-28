@@ -19,6 +19,13 @@ on:
 permissions:
   contents: read
 
+# Compose uses this guard whenever optional skill/JWT settings are present in
+# the runner environment.  Keep the CI profile explicit instead of relying on
+# an unset shell variable (which makes `docker compose config` fail before any
+# deployment checks run).
+env:
+  AITEAM_ENV: test
+
 jobs:
   deployment-checks:
     name: deployment shell/compose/secret checks

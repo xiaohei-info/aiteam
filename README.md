@@ -1,141 +1,281 @@
 # AI Team
 
-**AI Team 是「云侧双控制面 + 用户本地数据面」的多 Agent 数字员工平台。** Operator 是多企业平台服务；Manager 按企业独立部署，一个 Manager 实例只服务一个企业；Agent 是每用户本机数据面。会话与执行全部在用户本机本地化，**内容不上传 Manager/Operator**。
+[![Server CI](https://github.com/xiaohei-info/aiteam/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xiaohei-info/aiteam/actions/workflows/ci.yml)
+[![Web CI](https://github.com/xiaohei-info/aiteam/actions/workflows/web-ci.yml/badge.svg?branch=main)](https://github.com/xiaohei-info/aiteam/actions/workflows/web-ci.yml)
+[![Deployment checks](https://github.com/xiaohei-info/aiteam/actions/workflows/deploy-ops.yml/badge.svg?branch=main)](https://github.com/xiaohei-info/aiteam/actions/workflows/deploy-ops.yml)
 
-正式架构地基见 `docs/v1正式版本/技术设计/概要设计/`（下称「v1 概要设计」，已按模块拆为 00–11 共 11 篇（01 已并入 CLAUDE/AGENTS），入口 `00-架构总纲与裁决索引.md`，含「原 § → 新文档」映射与 D1–D24 裁决表）。任何冲突一律以该拆分集为准。
+**AI Team 是一个本地优先（local-first）的多 Agent 数字员工平台。**
+它把平台运营、企业管理和用户执行拆成三个独立部署单元：Operator、Manager、Agent。
+会话、执行过程和本地运行时数据留在用户设备；控制面只接收认证、授权配置、执行快照和脱敏汇总。
 
-## 当前阶段
+> 当前项目处于 v1 重建阶段。`app/` 是冻结的 MVP 参考实现，新的功能统一落在 `server/` 与 `web/`。
 
-项目正从 **MVP 单体**（`app/`）演进到 **v1 三端微服务**（`server/` + `web/`）。v1 是**全新重建**——不与旧端点交互、不迁移旧库数据。
+## 目录
 
-- `app/`：冻结的 MVP 单体基座，仅作**契约/实现参考**，**只读不写、不再扩写**，v1 重建稳定后删除。
-- `server/`、`web/`：v1 新架构落点，按端分目录，由 v1 开发逐步建立（**当前尚未创建**）。
+- [核心能力](#核心能力)
+- [架构](#架构)
+- [仓库结构](#仓库结构)
+- [快速开始](#快速开始)
+- [运行服务](#运行服务)
+- [测试与质量门禁](#测试与质量门禁)
+- [部署](#部署)
+- [文档](#文档)
+- [贡献](#贡献)
+- [安全与隐私](#安全与隐私)
+- [许可证](#许可证)
 
-新开发一律落在 `server/` + `web/`，按 v1 概要设计的三端边界推进。当前架构修订为 Operator 多企业、Manager 一企业一部署；详见 `docs/superpowers/plans/2026-08-26-manager-one-enterprise-scope.md`。
+## 核心能力
 
-## 目标态仓库结构（v1，单仓·层优先）
+- **本地优先执行**：私聊、群聊、Run、Task、Loop 和运行时会话在 Agent 本机执行与落库。
+- **三端职责清晰**：Operator 管理平台目录，Manager 管理单个企业，Agent 负责用户本地执行。
+- **多 Agent 协作**：通过专家实例、授权快照和本地 Pi Session 组合完成私聊与群聊协作。
+- **企业知识与记忆**：Manager 管理企业共享 RAG；员工个人记忆通过受控 Hindsight facade 管理。
+- **统一运行时边界**：Codex、Claude Code、OpenCode、Hermes 等 runtime 通过 Executor/Driver 接入。
+- **可审计、可治理**：只上报脱敏的 usage、审计和治理摘要，不上传会话正文或 runtime 原始事件。
+- **可验证 API 契约**：三端提供 FastAPI/Node OpenAPI 文档、统一错误模型和 CI schema 门禁。
+
+## 架构
 
 ```text
-aiteam/
-├── server/                # 后端（Python / FastAPI）
-│   ├── operation_service/ # 运营端：企业开通 / 目录治理 / 跨企业汇总
-│   ├── manager_service/   # 企业端：配置 / 授权 / 成员认证
-│   ├── agent_service/     # 用户端 Node Agent：本地会话与执行
-│   ├── shared/            # service_client / auth / 错误模型 / db / schema base
-│   └── run.py             # 控制面启动器 --tier=operation|manager
-├── web/                   # 前端（JS/TS），按端独立工程/独立构建
-│   ├── operation/         # 运营端前端
-│   ├── manager/           # 企业端前端
-│   ├── agent/             # 用户端前端
-│   └── shared/            # page-shell / api-client 基类 / timeline-client / i18n / 设计系统
-├── deploy/                # 三端 docker-compose / 各端 Dockerfile / 安装包 / ctl.sh
-├── docs/                  # 需求、业务方案、技术设计、部署运维
-├── scripts/               # 项目级脚本
-├── app/                   # 🔒 冻结的 MVP 单体基座——只读契约参考，v1 重建完成后删除
-├── .hermes/
-│   └── hermes-agent/      # 外部 Hermes Agent 源码仓（独立 Git，不归 aiteam 主仓管理）
-├── .gitignore
-└── README.md
+                         云侧控制面
+  ┌──────────────────────┐       service call       ┌────────────────────────┐
+  │ Operator              │ ◀────────────────────▶ │ Manager（每企业一套）  │
+  │ 平台目录 / 企业开通   │                         │ 成员 / 专家 / 授权 / RAG │
+  │ Provider / 价格 / 汇总 │                         │ 企业治理与计量汇总      │
+  └──────────────────────┘                         └──────────────┬─────────┘
+                                                                    │ Agent 主动 pull
+                                                                    ▼
+                         用户本地数据面                 ┌────────────────────────┐
+                                                        │ Agent                  │
+                                                        │ 会话 / Run / Task / Loop│
+                                                        │ Pi Session / 本地 SQLite │
+                                                        └──────────────┬─────────┘
+                                                                       │
+                                                        ┌──────────────▼─────────┐
+                                                        │ 本机 runtime / MCP / RAG │
+                                                        └────────────────────────┘
 ```
 
-> `server/`（后端）与 `web/`（前端）层优先对称，各端目录一一对应；按端独立构建、按端产物精简。**无中心 Edge Gateway**——认证下沉为 `server/shared/auth` + 各端服务自带入口中间件。
+### 三端边界
 
-## 三端边界
+| 端 | 部署方式 | 主要职责 | 数据边界 |
+| --- | --- | --- | --- |
+| **Operator** | 平台方部署 | 企业开通、人才市场与方案目录、Provider/模型/价格、跨企业治理 | `oper` 控制库；不执行 Agent、不持会话 |
+| **Manager** | 每个企业独立部署 | 企业成员认证、专家/方案配置、成员授权、共享 RAG、员工记忆与企业治理 | 当前企业控制库和数据空间；不持会话、不提交执行 |
+| **Agent** | 每个用户本机部署 | 工作台、私聊、群聊、Run/Task/Loop、本地 runtime 执行 | 本机 `agent` 库；会话和执行内容不上传 |
 
-| 端 | 部署位置 | 职责 | 库 |
-|----|----------|------|----|
-| **运营端 Operator** | 平台方中心化 SaaS | 企业开通、负责人凭据、人才市场/行业方案目录、跨企业治理汇总 | oper（中心） |
-| **企业端 Manager** | 每企业一套独立部署 | 当前企业成员账号与认证、专家/方案配置、成员级授权、企业共享 RAG、员工个人记忆、企业治理与计量汇总 | 当前企业 Manager DB + 企业数据空间 |
-| **用户端 Agent** | 每用户本机自部署 | 工作台/私聊/群聊与 Pi Session——全本地执行不上传 | agent（本机） |
+跨端通信遵循最小原则：Agent 主动访问 Manager；Operator 与 Manager 通过受控服务调用；云端不向用户机器建立入站连接。
 
-**跨端通信只有两类窄通道**：
+## 仓库结构
 
-- Agent → Manager：成员登录认证、拉取已授权专家/方案与执行快照、上报脱敏计量/审计摘要
-- Operator ↔ Manager：云侧服务间调用，用于企业开通/负责人 bootstrap 同步/目录发布、招募专家或方案包拉取、企业级汇总上报
+```text
+.
+├── server/
+│   ├── operation_service/     # Operator FastAPI 服务
+│   ├── manager_service/       # Manager FastAPI 服务
+│   ├── agent_service/         # 用户端 Node Agent（Pi Session + SQLite）
+│   ├── shared/                # auth、DB、错误模型、跨端契约与 service client
+│   └── run.py                 # 控制面启动器：--tier=operation|manager
+├── web/
+│   ├── operation/             # Operator 前端
+│   ├── manager/               # Manager 前端
+│   ├── agent/                 # Agent 前端
+│   └── shared/                # 共享 API 基础设施、主题和页面壳
+├── deploy/
+│   ├── docker/                # Dockerfile 与 Compose
+│   └── ci/                    # self-hosted 自动部署脚本与 systemd unit
+├── scripts/                   # OpenAPI、部署和本地检查脚本
+├── docs/                      # v1 设计、产品、部署运维文档
+├── app/                       # 冻结的 MVP，只读参考，不参与 v1 运行
+└── .hermes/hermes-agent/      # 外部 Hermes 仓库，独立维护
+```
 
-用户机器**无入站连接**；Operator/Manager 绝不向用户机器推送。Manager 短暂不可用只影响"拉新配置/新登录/摘要上报"，已登录用户凭本地 token + 本地投影 + 已冻结快照继续工作。
+`app/`、旧 `app/.env` 和 `HERMES_WEBUI_*` 运行入口不属于 v1 运行链；不要向冻结目录写入业务逻辑。
 
-## 各目录职责
+## 快速开始
 
-### `server/`（后端，目标态）
-运营端与企业端为 FastAPI 服务，用户端为独立 Node Agent 包，另有共享 Python 包。控制面启动器 `run.py --tier=operation|manager` 只挂载对应端；用户端由 `pnpm --dir server/agent_service start` 启动，CI 按端产出精简产物，**用户端交付物绝不打包控制面代码**。
+### 环境要求
 
-### `web/`（前端，目标态）
-三套独立前端工程，按端分离、按端独立构建；公共能力（设计系统、i18n、timeline-client、api-client 基类）抽到 `web/shared` 复用。每端前端只调本端服务 `/api/<tier>/*`（同 origin），跨系统访问只能由本端服务端或本机 Agent Service 通过 `service_client` 发起，由各端服务自身静态托管。
+- Git
+- Python **3.12+**
+- Node.js **22+**
+- pnpm **11.4+**（仓库通过 `packageManager` 固定版本）
+- Docker Engine 与 Docker Compose v2（集成测试和本地 Compose 部署需要）
 
-### `app/`（冻结，只读参考）
-MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照基线），**只读不写、不再扩写**，v1 重建稳定后删除。v1 是**全新重建**：新架构**不与任何旧 `app/` 端点交互**（无反代、无桥接、无双写），**不迁移旧库数据**（新架构全新建库）。
+### 安装依赖
 
-**无运行期例外**：v1 **不读取 `app/.env`、不使用 `HERMES_WEBUI_PYTHON`/`HERMES_HOME`/`HERMES_CONFIG_PATH`/`HERMES_WEBUI_AGENT_DIR` 等旧 WebUI loopback 环境变量**（该执行链已废弃）。用户端运行时由 Node Agent 的 Pi Session 管理，`app/` 仅作只读契约参照，不参与 v1 运行链。
+```bash
+git clone https://github.com/xiaohei-info/aiteam.git
+cd aiteam
 
-### `docs/`
-AI Team 的正式文档目录，包含需求、业务方案、技术设计、部署运维与架构图。详见下文「文档导航」。
+git checkout main
 
-### `scripts/` / `deploy/`
-`scripts/` 存放项目级脚本（开发环境初始化、本地启动、集成检查）；`deploy/` 为 v1 目标态，承载三端 docker-compose、各端 Dockerfile、安装包与 `ctl.sh`。
+# Python：仓库根目录共享虚拟环境
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r server/requirements.txt
+.venv/bin/pip install pytest pytest-asyncio pytest-timeout pytest-cov diff-cover
 
-### `./.hermes/hermes-agent/`
-外部 Hermes Agent 源码仓——**独立 Git 仓库**，不归 aiteam 主仓管理（根 `.gitignore` 已忽略 `.hermes/`）。拉取/切分支/同步上游应在其目录内单独操作。v1 中 Agent 运行时由 Node Pi Session 管理；Hermes 源码仍是外部独立仓，**不再依赖旧 `app/.env` 的 `HERMES_WEBUI_*` 运行入口**。
+# Node/pnpm
+corepack enable
+corepack prepare pnpm@11.4.0 --activate
+cd web
+pnpm install --frozen-lockfile
+cd ..
+```
 
-治理原则：AI Team 业务逻辑不写进 `./.hermes/hermes-agent/`；必须改 Hermes 时只做最小补丁或可复用增强。
+### 运行最小验证
 
-## 文档导航
+不需要数据库即可先运行控制面非集成测试和前端检查：
 
-### 必读（开发前）
+```bash
+.venv/bin/pytest -q -m "not integration" server
 
-| 文档 | 用途 |
-|------|------|
-| `README.md` | 仓库结构与边界 |
-| `docs/v1正式版本/技术设计/概要设计/`（00–11 共 11 篇（01 已并入 CLAUDE/AGENTS），入口 `00-架构总纲与裁决索引.md`） | **v1 架构地基，唯一裁决口径**（三端边界、Manager 单企业部署、认证、Node Agent、D1–D24 裁决；总纲含「原 § → 新文档」映射与导航） |
-| `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 当前单机部署/运行 SOP |
-| `CLAUDE.md` / `AGENTS.md` | Agent 开发全局指导与边界约束 |
+cd web
+pnpm --filter @aiteam/shared run build
+pnpm -r typecheck
+pnpm -r test
+pnpm -r build
+```
 
-### 需求与产品输入：`docs/需求文档/`
-业务输入和页面参考材料（BPD、PRD、Demo、页面描述等），回答"业务目标是什么、页面交互想表达什么、演示口径是什么"。
+需要完整环境、PostgreSQL、Playwright 和服务启动细节时，请参阅 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
-### 管理员操作说明：`docs/管理员操作说明/`
-面向 Manager 端管理员的日常操作与 onboarding，回答"如何配置 Provider、招募专家、修改专家 LLM 配置、让 Agent 私聊可用"。
+## 运行服务
 
-| 文档 | 用途 |
-|------|------|
-| `docs/管理员操作说明/2026-07-07-provider-专家招募配置管理员操作指南.md` | **Provider 配置 + 专家招募 + 专家 LLM 配置 + Agent 私聊全链路 onboarding（管理员操作指南）** |
+### 控制面服务
 
-### 历史参照（不再作为开发口径）：`docs/mvp版本/`
-MVP 阶段的业务解决方案设计、技术概要设计与历史详细设计文档，以及 `docs/mvp版本/resources/` 下的架构图产物。仅作演进历史参照，**v1 开发以 v1 概要设计为准**。
+控制面服务使用 FastAPI，用户端 Agent 使用独立 Node 进程：
 
-## 当前设计口径（v1）
+```bash
+# Operation
+.venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000
 
-- **运营端 Operation**：平台运营控制面，负责企业开通、目录治理、负责人 bootstrap、跨企业汇总。
-- **企业端 Manager**：按企业独立部署的企业管理控制面，负责当前企业成员账号/认证、专家/方案配置、成员级授权、企业共享 RAG、员工个人记忆、企业治理。
-- **用户端 Agent**：Node 本地数据面，负责会话/群聊与 Pi Session 全本地执行，pull 装载已授权专家/方案。
-- **外部能力复用**：企业知识=Manager-owned LightRAG、员工个人记忆=Manager Hindsight facade/受控 Pi Extension、技能=Hermes skills/SkillHub、连接器；统一经受控 MCP/工具注入，普通会话内容不出本机（机制见 v1 概要设计 §6.6/§7.5）。
+# Manager（另开终端）
+DB_URL=... ADMIN_DB_URL=... OPERATOR_URL=http://127.0.0.1:8000 \
+  .venv/bin/python server/run.py --tier manager --host 127.0.0.1 --port 8001
 
-> 能力适配、事件协议、状态枚举、认证等详细契约一律以 v1 概要设计为准，本文只作仓库结构与边界导航。
+# Agent（另开终端）
+pnpm --dir server/agent_service install --frozen-lockfile
+pnpm --dir server/agent_service start
+```
 
-核心原则：
+每个服务提供：
 
-> AI Team 不自建复杂任务编排内核，而是做业务任务与多 runtime 既有运行机制之间的转换、翻译和包装。
->
-> 系统所有权分库、单写者、Manager tenant 隔离、本地优先内容不上传控制面是硬约束。Node Agent 的 Pi Session 管理本地运行时；v1 **不复用旧 `app/.env` 与 `HERMES_WEBUI_*` 运行入口**（旧 WebUI loopback 链已废弃）。
+- `/healthz`：存活检查
+- `/readyz`：本端依赖就绪检查
+- `/docs`：Swagger UI
+- `/redoc`：ReDoc
+- `/openapi.json`：运行时 OpenAPI 文档
 
-## 第一次进入本仓库的阅读顺序
+### 本地 Compose
 
-1. 先看本 README，理解三端边界与"MVP→v1 重建"现状
-2. 再读 v1 概要设计，理解三端架构地基与 D1–D24 裁决
-3. 读 `CLAUDE.md` / `AGENTS.md`，掌握开发边界与流程约束
-4. 开发时把新能力落在 `server/` + `web/` 的对应端目录，不扩写冻结的 `app/`
-5. 不要把 AI Team 业务逻辑写入 `./.hermes/hermes-agent/`
+复制环境模板并按本机修改密码、端口和可选组件配置：
 
-# e2e test marker (will be reverted after pipeline validated)
+```bash
+cp .env.example .env.dev
+# 编辑 .env.dev
+bash scripts/ctl.sh start --env dev --deploy docker
+bash scripts/ctl.sh status --env dev
+```
 
-# e2e test marker 2 (will be reverted after pipeline validated)
+直接调用 Compose 时必须显式指定环境，避免 optional signing/JWT 配置触发环境保护门：
 
-# DEPLOY_PIPELINE_TEST_3 20260702T021150Z
+```bash
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build
+AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml ps
+```
 
-# E2E_PIPELINE_TEST_4 20260702T021922Z
+停止服务：
 
-# E2E_PIPELINE_TEST_5_SCRIPT_AND_SCRIPT_LINK_FIX 20260702T022809Z
+```bash
+bash scripts/ctl.sh stop --env dev
+```
 
-# E2E_PIPELINE_TEST_6_FINAL_VALIDATION 20260702T023524Z
+## 测试与质量门禁
 
-# E2E_TEST_7_SIMPLE_RUN_SH 20260702T024505Z
+### 后端
+
+```bash
+# 非集成测试（无需 PostgreSQL）
+.venv/bin/pytest -q -m "not integration" server
+
+# 集成测试（需要 ADMIN_DB_URL、DB_URL、APP_RW_PASSWORD 和真实 PostgreSQL）
+.venv/bin/pytest -q -m integration server
+```
+
+### 前端
+
+```bash
+cd web
+pnpm --filter @aiteam/shared run build
+pnpm -r typecheck
+pnpm -r test
+pnpm -r build
+pnpm e2e
+```
+
+Playwright 会启动三端服务并检查真实路由、API 契约、Axe 无障碍、键盘焦点、light/dark/reduced-motion 和视觉快照。Linux 与 macOS 使用独立的 `*-linux.png` / `*-darwin.png` 基线。
+
+### OpenAPI 与部署检查
+
+```bash
+bash scripts/check-openapi.sh
+AITEAM_ENV=test bash scripts/check-deploy.sh
+```
+
+前一条命令从 Operation、Manager 和 Agent 真实应用生成临时 OpenAPI 并检查 summary/description、参数、字段、响应、认证和错误模型；生成的 JSON 不是手工维护的契约副本。
+
+GitHub Actions 在 `main`/`feature/**` 和相关 Pull Request 上运行：
+
+- `v1-server-ci`：契约边界、真实 PostgreSQL + RLS、Node Agent、OpenAPI 与覆盖率门禁
+- `v1-web-ci`：TypeScript、Vitest、构建、Playwright 三端真实装配
+- `deployment-ops-checks`：shell/Compose/凭据边界与部署 dry-run
+
+## 部署
+
+### 测试环境自动部署
+
+合并 Pull Request 到 `main` 后，`deploy-main.yml` 会在带 `taiyi` 标签的 self-hosted runner 上执行：
+
+1. 检查 `/root/app/aiteam` 持久化 Git 工作树、SSH origin、Node/pnpm、Python venv、Docker/Compose 和 systemd。
+2. 从 GitHub Secret `ENV_CONTENTS_TEST` 写入 `/root/app/aiteam/.env.test`（不提交、不打印）。
+3. 使用 SSH origin 拉取 `main`，重建三端前端产物。
+4. 安装/更新 `aiteam-v1.service`，重启服务。
+5. 检查三个 `/healthz`、内部 NewAPI 和三端 HTML 入口。
+
+部署根首次初始化和故障排查见 [`deploy/ci/README.md`](deploy/ci/README.md)。该流程要求部署机已经 clone 仓库并把 `origin` 配为 GitHub SSH 地址；部署 workflow 不依赖 runner workspace 的额外 checkout。
+
+### 交付边界
+
+Agent 交付物不包含 Operation/Manager 控制面代码。对应产物由 `deploy/docker/Dockerfile.agent`、`Dockerfile.manager` 和 `Dockerfile.operation` 分别构建，禁止运行时通过一个胖镜像切换端。
+
+## 文档
+
+- **架构总纲与裁决索引**：[`docs/v1正式版本/技术设计/概要设计/00-架构总纲与裁决索引.md`](docs/v1正式版本/技术设计/概要设计/00-架构总纲与裁决索引.md)
+- **v1 概要设计**：[`docs/v1正式版本/技术设计/概要设计/`](docs/v1正式版本/技术设计/概要设计/)
+- **开发环境与贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+- **后端开发说明**：[`server/README.md`](server/README.md)
+- **前端工程规范**：[`web/README.md`](web/README.md)
+- **部署与运维**：[`deploy/ci/README.md`](deploy/ci/README.md)、[`deploy/docker/README.md`](deploy/docker/README.md) 和 [`docs/部署运维/`](docs/部署运维/)
+- **管理员操作指南**：[`docs/管理员操作说明/`](docs/管理员操作说明/)
+
+## 贡献
+
+1. 从 `main` 创建分支：`git checkout -b feat/short-description`。
+2. 按约定式提交编写 commit：`feat(scope): ...`、`fix(scope): ...`、`docs(scope): ...`。
+3. 新代码只进入对应的 `server/`、`web/` 或 `deploy/` 目录，不扩写冻结的 `app/` 和外部 Hermes 仓库。
+4. 变更前端交互、API 或状态契约时同步补测试和文档。
+5. 推送并创建 Pull Request；合并前等待相关 GitHub Actions 全部通过。
+
+完整流程、架构边界和代码规范以 [`AGENTS.md`](AGENTS.md)、[`CLAUDE.md`](CLAUDE.md) 与 v1 概要设计为准。
+
+## 安全与隐私
+
+- 不要把 API key、密码、JWT/HMAC 签名密钥、LightRAG/Hindsight 凭据提交到 Git 或写入 issue/log。
+- 会话正文、群聊内容、Run/Task 明细和 runtime 原始事件不得上传 Operator/Manager。
+- Manager/Operator 只接收授权配置、执行快照和脱敏 usage/audit 摘要。
+- 发现安全问题请不要公开提交 issue；请先联系仓库维护者并提供最小复现信息。
+
+## 许可证
+
+当前仓库未包含 `LICENSE` 文件。公开使用、再分发或商用前，请先向项目维护者确认许可证和授权范围。

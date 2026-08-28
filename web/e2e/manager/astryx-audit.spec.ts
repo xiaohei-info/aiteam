@@ -33,6 +33,21 @@ async function openAuditBenchmark(page: Parameters<typeof collectBrowserErrors>[
   await page.route("**/api/manager/audit-events**", async (route) => {
     await route.fulfill({ json: auditEvents });
   });
+  await page.route("**/api/manager/members**", async (route) => {
+    await route.fulfill({ json: {
+      data: [
+        { id: "owner-001", display_name: "企业负责人" },
+        { id: "admin-002", display_name: "企业管理员" },
+      ],
+      page: { next_cursor: null, has_more: false },
+    } });
+  });
+  await page.route("**/api/manager/employees**", async (route) => {
+    await route.fulfill({ json: {
+      data: [{ employee_id: "employee-021", display_name: "销售专家" }],
+      page: { next_cursor: null, has_more: false },
+    } });
+  });
   await page.goto("/audit");
   await expect(page.getByRole("table", { name: "审计事件" })).toBeVisible();
 }

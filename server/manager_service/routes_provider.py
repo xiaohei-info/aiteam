@@ -39,7 +39,7 @@ def _snapshot_service(request: Request):
             grant_service=GrantService(repo=GrantRepository(router), members=members),
             member_service=MemberDeptService(repo=members),
             knowledge_binding=EmployeeKnowledgeBindingRepository(router),
-            platform_catalog=request.app.state._operator_catalog,
+            platform_catalog=getattr(request.app.state, "_operator_catalog", None),
         )
         request.app.state._snapshot_service = cache
     return cache
@@ -56,7 +56,8 @@ def _service(request: Request) -> ProviderCredentialService:
         crypto = getattr(request.app.state, "_crypto_service", None) or CryptoService()
         request.app.state._crypto_service = crypto
         cache = build_provider_credential_service(
-            PgTenantRouter(dsn), crypto, _snapshot_service(request), request.app.state._operator_catalog,
+            PgTenantRouter(dsn), crypto, _snapshot_service(request),
+            getattr(request.app.state, "_operator_catalog", None),
         )
         request.app.state._provider_credential_service = cache
     return cache

@@ -145,6 +145,11 @@ export function ConversationList({
                     ? (count > 1 ? <Badge label={`${count} 个对话`} variant="neutral" /> : undefined)
                     : <Badge label={conversation.state} variant={selected ? "info" : "neutral"} />}
                   isSelected={selected}
+                  // Astryx ListItem currently emits aria-selected on a plain <li>,
+                  // which violates ARIA. Keep its visual selected state but expose
+                  // the selection through the valid aria-current attribute.
+                  aria-selected={undefined}
+                  aria-current={selected ? "page" : undefined}
                   data-testid={`conversation-${conversation.id}`}
                   onClick={() => onSelect(conversation)}
                 />

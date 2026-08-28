@@ -24,6 +24,8 @@ from tests.manager._auth_helper import (
 
 pytestmark = pytest.mark.integration
 
+ENTERPRISE_SPACE_ID = "enterprise_shared"
+
 # 无 admin_url（如 without_db 用例） fallback 用固定 RSA key 的 inmem verifier/signer。
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
@@ -67,21 +69,20 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     # create
     r = client.post(
         "/api/manager/knowledge-spaces",
-        json={"knowledge_space_id": "ks_default", "display_name": "默认知识库"},
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "display_name": "默认知识库"},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201, r.text
     created = r.json()["data"]
-    assert created["knowledge_space_id"] == "ks_default"
-    # workspace 由 ManagerRagService 推导（D21），且含去连字符 tenant_id
-    assert created["workspace"].startswith("t" + tid_a.replace("-", ""))
-    assert created["workspace"].endswith("__ks_default")
+    assert created["knowledge_space_id"] == ENTERPRISE_SPACE_ID
+    # Manager deployment has one fixed enterprise workspace (D21).
+    assert created["workspace"] == ENTERPRISE_SPACE_ID
     # 入参 schema 不含 workspace（D21 红线）
     assert "workspace" not in {"knowledge_space_id", "display_name"}
 
     # get
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {owner_a}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {owner_a}"}
     )
     assert r.status_code == 200
     assert r.json()["data"]["display_name"] == "默认知识库"
@@ -93,7 +94,7 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
 
     # update
     r = client.patch(
-        "/api/manager/knowledge-spaces/ks_default",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}",
         json={"display_name": "默认改名"},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
@@ -102,43 +103,45 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
 
     # 跨租户：t-b 看不到 t-a 的知识空间（RLS 强制）
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {owner_b}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {owner_b}"}
     )
     assert r.status_code == 404
     r = client.get("/api/manager/knowledge-spaces", headers={"Authorization": f"Bearer {owner_b}"})
     assert r.status_code == 200
-    assert r.json()["data"] == []
+    # list is an idempotent materialization of the single enterprise KB.
+    assert [item["knowledge_space_id"] for item in r.json()["data"]] == [ENTERPRISE_SPACE_ID]
 
     # member 读可、写 403
     member_a = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {member_a}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {member_a}"}
     )
     assert r.status_code == 200
     r = client.post(
         "/api/manager/knowledge-spaces",
-        json={"knowledge_space_id": "ks2"},
+        json={"knowledge_space_id": "second-space"},
         headers={"Authorization": f"Bearer {member_a}"},
     )
     assert r.status_code == 403
     assert r.headers["content-type"].startswith("application/problem+json")
 
-    # delete
+    # D21: the enterprise knowledge base cannot be deleted.
     r = client.delete(
-        "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {owner_a}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {owner_a}"}
     )
-    assert r.status_code == 204
+    assert r.status_code == 409
+    assert r.json()["code"] == "conflict"
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_default", headers={"Authorization": f"Bearer {owner_a}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {owner_a}"}
     )
-    assert r.status_code == 404
+    assert r.status_code == 200
 
 
 def test_knowledge_space_conflict_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
-    body = {"knowledge_space_id": "ks_conflict"}
+    body = {"knowledge_space_id": ENTERPRISE_SPACE_ID}
     r = client.post("/api/manager/knowledge-spaces", json=body, headers={"Authorization": f"Bearer {owner_a}"})
     assert r.status_code == 201
     r = client.post("/api/manager/knowledge-spaces", json=body, headers={"Authorization": f"Bearer {owner_a}"})
@@ -154,7 +157,7 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
     # 建知识空间
     r = client.post(
         "/api/manager/knowledge-spaces",
-        json={"knowledge_space_id": "ks_bind", "display_name": "绑定测试"},
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "display_name": "绑定测试"},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201
@@ -166,23 +169,23 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
         "knowledge_refs": [],
     }
     r = client.post(
-        f"/api/manager/employees?employee_slug=exp-x",
+        "/api/manager/employees?employee_slug=exp-x",
         json=emp_body, headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201, r.text
     employee_id = r.json()["data"]["employee_id"]
 
-    # 绑定专家 → employee.knowledge_refs 含 ks_bind
+    # 绑定专家 → employee_knowledge_binding 含 enterprise_shared
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_bind/bindings",
-        json={"knowledge_space_id": "ks_bind", "resource_type": "expert", "resource_id": employee_id},
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "resource_type": "expert", "resource_id": employee_id},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201, r.text
     # 专家知识绑定的真相态是 employee_knowledge_binding，不是 employee 配置里的
     # legacy knowledge_refs 字段；通过知识空间绑定视图验证当前绑定。
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_bind/bindings",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200
@@ -194,15 +197,15 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
     # 绑定部门（id 用随机 uuid，knowledge_space_binding 不校验目标存在性，仅落元数据）
     dept_id = str(uuid.uuid4())
     r = client.post(
-        "/api/manager/knowledge-spaces/ks_bind/bindings",
-        json={"knowledge_space_id": "ks_bind", "resource_type": "department", "resource_id": dept_id},
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "resource_type": "department", "resource_id": dept_id},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 201
 
     # list bindings：三种都在（专家派生自 knowledge_refs + 部门表）
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_bind/bindings",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200
@@ -210,51 +213,53 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
     types = {b["resource_type"] for b in bindings}
     assert {"expert", "department"} <= types
 
-    # 解绑专家 → knowledge_refs 移出 ks_bind
+    # 解绑专家 → employee knowledge binding disabled
     r = client.delete(
-        f"/api/manager/knowledge-spaces/ks_bind/bindings/expert/{employee_id}",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings/expert/{employee_id}",
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 204
     r = client.get(
         f"/api/manager/employees/{employee_id}", headers={"Authorization": f"Bearer {owner_a}"}
     )
-    assert "ks_bind" not in r.json()["data"]["knowledge_refs"]
+    r = client.get(
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
+        headers={"Authorization": f"Bearer {owner_a}"},
+    )
+    assert r.status_code == 200
+    assert not any(item["resource_type"] == "expert" and item["resource_id"] == employee_id for item in r.json()["data"])
 
 
-def test_delete_clears_residual_bindings_e2e(migrated_db, admin_url, two_tenants):
+def test_enterprise_knowledge_space_cannot_be_deleted_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
 
     client.post(
         "/api/manager/knowledge-spaces",
-        json={"knowledge_space_id": "ks_del"},
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     dept_id = str(uuid.uuid4())
-    client.post(
-        "/api/manager/knowledge-spaces/ks_del/bindings",
-        json={"knowledge_space_id": "ks_del", "resource_type": "department", "resource_id": dept_id},
+    binding = client.post(
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
+        json={"knowledge_space_id": ENTERPRISE_SPACE_ID, "resource_type": "department", "resource_id": dept_id},
         headers={"Authorization": f"Bearer {owner_a}"},
     )
-    # 删除知识空间
+    assert binding.status_code == 201, binding.text
+
+    # D21: the fixed enterprise workspace and its compatibility mapping survive.
     r = client.delete(
-        "/api/manager/knowledge-spaces/ks_del", headers={"Authorization": f"Bearer {owner_a}"}
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}", headers={"Authorization": f"Bearer {owner_a}"}
     )
-    assert r.status_code == 204
-    # 残绑定清空（重建同名空间后 bindings 为空）
-    client.post(
-        "/api/manager/knowledge-spaces",
-        json={"knowledge_space_id": "ks_del"},
-        headers={"Authorization": f"Bearer {owner_a}"},
-    )
+    assert r.status_code == 409
+    assert r.json()["code"] == "conflict"
     r = client.get(
-        "/api/manager/knowledge-spaces/ks_del/bindings",
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/bindings",
         headers={"Authorization": f"Bearer {owner_a}"},
     )
     assert r.status_code == 200
-    assert r.json()["data"] == []
+    assert any(item["resource_id"] == dept_id for item in r.json()["data"])
 
 
 def test_knowledge_space_endpoints_unauth_503_without_db():

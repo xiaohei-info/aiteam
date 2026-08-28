@@ -22,7 +22,6 @@ from shared.db import PgTenantRouter
 from shared.contracts.crosstier import AuthorizedConfigPullRequest
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from tests.manager._auth_helper import sign_token, make_verifier
 
 
 # ── helpers ──
@@ -69,7 +68,7 @@ def test_manager_config_owner_create_employee_and_grant_to_member_then_pull_auth
     from manager_service.employee_config_service import build_employee_config_service
     from manager_service.authorized_config_service import AuthorizedConfigService
     from manager_service.member_service import MemberDeptService
-    from manager_service.repository_member import MemberDeptRepository, GrantRepository
+    from manager_service.repository_member import MemberDeptRepository
     from manager_service.schemas import (
         DepartmentCreate,
         MemberCreate,
@@ -215,12 +214,12 @@ def test_manager_config_capability_catalog_on_manager_service(
 
 
 @pytest.mark.integration
-def test_manager_config_provider_credential_post_no_secret_in_response(
+def test_manager_config_provider_credential_crud_is_removed(
     migrated_pg, pg_admin_url,
 ):
-    """闭环 B manager_config：Manager provider 凭据 CRUD 验证明文不回显。
+    """闭环 B manager_config：D18 禁止 Manager 暴露 Provider CRUD。
 
-    覆盖 M5 的红线：ProviderCredentialOut 绝不含 secret/密文。真 PG + RLS。
+    Provider/Relay 真相归 Operator；Manager 只保留 employee-scoped runtime-config。
     """
     from tests.manager._auth_helper import sign_token, make_verifier
     from manager_service.app import router
@@ -257,11 +256,14 @@ def test_manager_config_provider_credential_post_no_secret_in_response(
         "provider_ref": "relay-default", "display_name": "AI Relay", "endpoint": "https://relay.local/v1",
         "visibility": "tenant", "secret": "sk-超机密-9876543210",
     }, headers=hdr)
-    assert r.status_code == 201, r.text
-    created = r.json()["data"]
-    assert "secret" not in created
-    assert "encrypted_secret" not in created
-    assert created["provider_ref"] == "relay-default"
+    assert r.status_code == 404, r.text
+
+    runtime = client.post(
+        "/api/manager/provider-credentials/runtime-config",
+        json={"employee_id": str(uuid.uuid4())},
+        headers=hdr,
+    )
+    assert runtime.status_code == 404, runtime.text
 
 
 # ── 知识空间管理面 ──
@@ -307,12 +309,11 @@ def test_manager_config_knowledge_space_create_and_workspace_derived(
     hdr = {"Authorization": f"Bearer {tok}"}
 
     r = client.post("/api/manager/knowledge-spaces", json={
-        "knowledge_space_id": "ks_loop_b", "display_name": "闭环B知识库",
+        "knowledge_space_id": "enterprise_shared", "display_name": "闭环B知识库",
     }, headers=hdr)
     assert r.status_code == 201, r.text
     ws = r.json()["data"]["workspace"]
-    assert ws.startswith("t" + tid.replace("-", ""))
-    assert ws.endswith("__ks_loop_b")
+    assert ws == "enterprise_shared"
 
 
 # ── 招募/方案（通过 recruit service 直接调用，验证 employee 实例 + grant 绑定）──
@@ -341,7 +342,7 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
     from manager_service.auth_service import build_auth_service
     from manager_service.member_service import build_member_dept_service
     from manager_service.operator_catalog import FakeOperatorCatalogClient
-    from manager_service.recruit_service import build_recruit_service, RecruitService
+    from manager_service.recruit_service import build_recruit_service
     from manager_service.schemas import RecruitExpertRequest, MemberCreate
     from shared.contracts.crosstier import ExpertTemplateDetail
     from shared.contracts.enums import EnterpriseRole
@@ -353,6 +354,10 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
     catalog.seed_expert(ExpertTemplateDetail(
         template_id="tpl-rc1", version="1", display_name="模板专家",
         recommended_config={"model": "gpt-5", "thinking_level": "deep"},
+        platform_model_ref={
+            "provider_id": "relay-default", "provider_version": 1,
+            "model_id": "gpt-5", "model_version": 1,
+        },
     ))
     rsvc = build_recruit_service(catalog=catalog, router=router)
 

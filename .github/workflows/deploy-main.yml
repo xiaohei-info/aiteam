@@ -28,6 +28,12 @@ name: deploy (main -> taiyi)
 permissions:
   contents: read
 
+# The deployment root is a single-writer resource. Queue manual/merge deploys
+# instead of letting two self-hosted jobs build and restart it concurrently.
+concurrency:
+  group: deploy-taiyi-test
+  cancel-in-progress: false
+
 env:
   # 分支解析：手动触发取自 inputs，PR 触发取自 base.ref。
   # 显式拒绝任何 fallback 语义；漏填即 fail。
@@ -51,9 +57,32 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      # 让 runner 拿到 workflow 自身引用，确保 job 能正确执行 deploy/ci/run.sh。
-      - name: Checkout workflow source
-        uses: actions/checkout@v4
+      # 部署根是 self-hosted 主机上的持久化 git checkout；不在 runner workspace
+      # checkout，避免 GitHub HTTPS/TLS 短暂不可达时在真正部署前失败。
+      # deploy/ci/run.sh 随部署根代码同步，脚本随后用其 SSH origin 拉取目标分支。
+      - name: Validate persistent deployment root
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -d "${DEPLOY_ROOT}" ]] || { echo "::error::${DEPLOY_ROOT} is missing; bootstrap it per deploy/ci/README.md"; exit 1; }
+          cd "${DEPLOY_ROOT}"
+          [[ -d .git ]] || { echo "::error::${DEPLOY_ROOT} is not a git repository; bootstrap it per deploy/ci/README.md"; exit 1; }
+          [[ -x deploy/ci/run.sh ]] || { echo "::error::deploy/ci/run.sh missing or not executable in ${DEPLOY_ROOT}"; exit 1; }
+          [[ -x scripts/ctl.sh ]] || { echo "::error::scripts/ctl.sh missing or not executable in ${DEPLOY_ROOT}"; exit 1; }
+          [[ -x .venv/bin/python ]] || { echo "::error::.venv/bin/python missing; install server requirements per deploy/ci/README.md"; exit 1; }
+          command -v node >/dev/null || { echo "::error::node is required on the self-hosted runner"; exit 1; }
+          command -v pnpm >/dev/null || { echo "::error::pnpm is required on the self-hosted runner"; exit 1; }
+          command -v docker >/dev/null || { echo "::error::docker is required on the self-hosted runner"; exit 1; }
+          docker info >/dev/null || { echo "::error::runner user cannot access the Docker daemon"; exit 1; }
+          docker compose version >/dev/null || { echo "::error::Docker Compose v2 is required on the self-hosted runner"; exit 1; }
+          systemctl --version >/dev/null || { echo "::error::systemd is required on the self-hosted runner"; exit 1; }
+          origin="$(git remote get-url origin)"
+          [[ "${origin}" == git@github.com:* || "${origin}" == ssh://git@github.com/* ]] || {
+            echo "::error::deployment origin must use GitHub SSH (got ${origin})"; exit 1;
+          }
+          timeout 20 git ls-remote origin "refs/heads/${DEPLOY_BRANCH}" | grep -q . || {
+            echo "::error::cannot read origin branch ${DEPLOY_BRANCH} over SSH"; exit 1;
+          }
 
       # 把 .env.<env> 写到部署根（ctl.sh 从 $DEPLOY_ROOT/.env.<env> 读）
       # 这步必须在 git pull 之前，.env.<env> 是 gitignored，pull 不会动它。
@@ -87,7 +116,7 @@ jobs:
           if [[ -z "${DEPLOY_BRANCH}" ]]; then
             echo "::error::DEPLOY_BRANCH empty at run.sh time"; exit 2
           fi
-          bash "${{ github.workspace }}/deploy/ci/run.sh" \
+          bash "${{ env.DEPLOY_ROOT }}/deploy/ci/run.sh" \
             --branch "${DEPLOY_BRANCH}" \
             --env "${DEPLOY_ENV}" \
             --unit "${UNIT_NAME}"

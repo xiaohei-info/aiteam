@@ -48,6 +48,10 @@ if [[ -z "$BRANCH" ]]; then
   fail() { printf '[deploy-run][][ERR] %s\n' "$*" >&2; exit 2; }
   fail "branch is required: pass --branch <name> or DEPLOY_BRANCH env. Trigger must be via pull_request merge or workflow_dispatch with branch input."
 fi
+if [[ ! "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "$BRANCH" == */ || "$BRANCH" == *..* || "$BRANCH" == *'@{'* ]]; then
+  fail() { printf '[deploy-run][][ERR] %s\n' "$*" >&2; exit 2; }
+  fail "invalid deployment branch: $BRANCH"
+fi
 
 log()  { printf '[deploy-run][%s][%s] %s\n' "$ENV_TARGET" "$BRANCH" "$*"; }
 fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&2; exit 1; }
@@ -61,7 +65,13 @@ fi
 # 1) 同步目标分支最新代码
 log "fetch + checkout + pull '${BRANCH}'"
 git fetch --all --prune 2>&1 || fail "git fetch failed (network?)"
-git checkout "$BRANCH" 2>&1 | tail -1 || fail "checkout '${BRANCH}' failed (branch does not exist on remote)"
+if ! git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
+  fail "branch '${BRANCH}' does not exist on origin"
+fi
+# Reset the local deployment branch to the fetched remote tip before pull. This
+# also makes a first deploy of a newly requested branch work without a
+# pre-created local branch; ignored env/dist files are preserved.
+git checkout -B "$BRANCH" "origin/$BRANCH" 2>&1 | tail -1 || fail "checkout '${BRANCH}' failed"
 git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '${BRANCH}' failed (diverged)"
 log "code ready @ $(git rev-parse --short HEAD)"
 
@@ -105,7 +115,7 @@ fi
 
 # 5) 启动 / 重启 daemon
 log "restarting ${UNIT_NAME}"
-systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
+systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl enable ${UNIT_NAME} failed — deployment would not survive reboot"
 if ! systemctl restart "$UNIT_NAME" 2>&1; then
   systemctl status "$UNIT_NAME" --no-pager >&2 || true
   fail "systemctl restart ${UNIT_NAME} failed — see status above"

@@ -31,6 +31,7 @@ from .knowledge_intake_service import (
     manager_storage_root,
 )
 from .rag import PgManagerRagService
+from .rag_instances import RagInstanceRegistry
 from .rag_ingestion import LightRagIngestionClient, RagIngestionUnavailable
 from .schemas import (
     KnowledgeDocumentBindingOut,
@@ -66,10 +67,14 @@ def _service(request: Request) -> KnowledgeIntakeService:
         ingestion_client = getattr(request.app.state, "_knowledge_intake_ingestion_client", None)
         if ingestion_client is None:
             ingestion_client = LightRagIngestionClient()
+        registry = RagInstanceRegistry.from_env()
+        enterprise_workspace = registry.instances[0].workspace if registry is not None else "enterprise_shared"
         cache = build_knowledge_intake_service(
             router,
             storage_root=root,
-            rag_service=PgManagerRagService(dsn),
+            rag_service=PgManagerRagService(
+                dsn, instance_registry=registry, enterprise_workspace=enterprise_workspace,
+            ),
             ingestion_client=ingestion_client,
         )
         request.app.state._knowledge_intake_service = cache

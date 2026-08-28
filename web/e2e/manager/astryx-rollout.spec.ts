@@ -62,6 +62,14 @@ async function mockGovernance(page: Page): Promise<void> {
   await page.route("**/api/manager/quota-policies**", (route) =>
     route.fulfill({ json: governanceResponses.quotas }),
   );
+  await page.route("**/api/manager/employees**", (route) => route.fulfill({ json: {
+    data: [{ employee_id: "employee-001", display_name: "销售专家" }],
+    page: { next_cursor: null, has_more: false },
+  } }));
+  await page.route("**/api/manager/members**", (route) => route.fulfill({ json: {
+    data: [{ id: "owner-001", display_name: "企业负责人" }],
+    page: { next_cursor: null, has_more: false },
+  } }));
 }
 
 async function expectCriticalAxeClean(page: Page): Promise<void> {
@@ -83,11 +91,11 @@ authTest.describe("Manager Astryx rollout", () => {
     expect(browserErrors).toEqual([]);
   });
 
-  authTest("Members、Providers、Governance、Audit 均有标题与主地标", async ({ authedPage }) => {
+  authTest("Members、Experts、Governance、Audit 均有标题与主地标", async ({ authedPage }) => {
     const browserErrors = collectBrowserErrors(authedPage);
     const gates = [
       { path: "/members", heading: "成员账号" },
-      { path: "/providers", heading: "Provider 凭据" },
+      { path: "/experts", heading: "已招募专家实例" },
       { path: "/governance", heading: "企业治理" },
       { path: "/audit", heading: "审计事件" },
     ];
