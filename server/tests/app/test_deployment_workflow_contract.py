@@ -12,6 +12,7 @@ def test_deployment_checks_pin_compose_environment():
 def test_taiyi_deploy_uses_persistent_root_without_workspace_checkout():
     workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
     assert "Validate persistent deployment root" in workflow
+    assert 'git config --global --add safe.directory "${DEPLOY_ROOT}"' in workflow
     assert "actions/checkout@v4" not in workflow
     assert 'bash "${{ env.DEPLOY_ROOT }}/deploy/ci/run.sh"' in workflow
     assert "concurrency:" in workflow
