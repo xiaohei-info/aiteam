@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,7 +36,7 @@ class PlatformModel(BaseModel):
     provider_id: str
     model_id: str
     display_name: str = ""
-    capabilities: dict = Field(default_factory=dict)
+    capabilities: dict[str, Any] = Field(default_factory=dict, description="模型能力标签和参数。")
     status: Literal["draft", "published", "disabled"]
     source: Literal["discovery", "manual"] = "discovery"
     version: int = Field(ge=1)

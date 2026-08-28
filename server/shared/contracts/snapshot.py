@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from .platform_provider import PricingSnapshot
@@ -47,7 +49,7 @@ class EmployeeExecutionSnapshot(BaseModel):
     skills: list[str] = Field(default_factory=list, description="技能引用列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
-    memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
+    memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。")
     skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
         default_factory=list,
         description="仅用于 Agent 离线验签的公开 key metadata；不含 private key/JWT/HMAC secret",

@@ -110,11 +110,15 @@ class AuthorizedConfigService:
             # Prompt/expert changes are not reflected in solution_version; use config_version so Agent re-syncs.
             current_ver = f"{sol_instance.solution_version}:{sol_instance.config_version}"
             if known_ver != current_ver:
+                template_meta = sol_instance.template_meta if isinstance(sol_instance.template_meta, dict) else {}
                 solutions.append({
                     "id": sol_instance.id,
                     "solution_id": sol_instance.solution_id,
                     "solution_version": sol_instance.solution_version,
                     "display_name": sol_instance.display_name,
+                    "description": template_meta.get("description", "") if isinstance(template_meta.get("description", ""), str) else "",
+                    "icon": template_meta.get("icon", "") if isinstance(template_meta.get("icon", ""), str) else "",
+                    "tags": [tag for tag in template_meta.get("tags", []) if isinstance(tag, str)] if isinstance(template_meta.get("tags", []), list) else [],
                     "status": sol_instance.status,
                     "config_version": sol_instance.config_version,
                     "expert_employee_ids": sol_instance.expert_employee_ids,

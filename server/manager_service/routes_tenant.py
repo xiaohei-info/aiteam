@@ -13,6 +13,9 @@ from shared.contracts.envelope import Envelope
 from shared.service_token import verify_service_token
 
 from .exceptions import ManagerAdminDbNotConfigured
+from .openapi_schemas import TenantProvisionOut
+from .knowledge_space_service import ensure_enterprise_knowledge_space
+from .rag_instances import RagInstanceRegistry
 
 router = APIRouter(tags=["manager", "control-plane"])
 
@@ -28,7 +31,7 @@ def provision_tenant(
     body: TenantProvisionRequest,
     request: Request,
     _svc=Depends(verify_service_token),  # 服务间认证守卫（平面③ 代码层，03 §9.1）
-) -> Envelope[dict]:
+) -> Envelope[TenantProvisionOut]:
     """同步路由（def）：psycopg 同步驱动，FastAPI 自动 run in threadpool，不阻塞事件循环。
 
     落地 initial_quota_policy 和 visible_catalog_policy（05 §5.1 D4）。
@@ -65,15 +68,21 @@ def provision_tenant(
             raise Conflict(f"企业代码 '{body.enterprise_code}' 已被占用，请更换")
         raise Conflict("企业信息重复，请检查企业名称和代码")
 
-    # 2. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
+    # 2. Manager 开通即幂等初始化企业共享知识空间；文档索引仍由 Manager 后续 intake 负责。
+    if business_dsn:
+        registry = RagInstanceRegistry.from_env()
+        if registry is not None:
+            ensure_enterprise_knowledge_space(business_dsn, body.tenant_id, registry.instances[0].workspace)
+
+    # 3. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
     if body.initial_quota_policy:
         _provision_initial_quota_policy(business_dsn, body.tenant_id, body.initial_quota_policy)
 
-    # 3. 处理 visible_catalog_policy（租户作用域，需要 RLS + SET LOCAL）
+    # 4. 处理 visible_catalog_policy（租户作用域，需要 RLS + SET LOCAL）
     if body.visible_catalog_policy:
         _provision_visible_catalog_policy(business_dsn, body.tenant_id, body.visible_catalog_policy)
 
-    return Envelope[dict](data={"tenant_id": body.tenant_id})
+    return Envelope[TenantProvisionOut](data=TenantProvisionOut(tenant_id=body.tenant_id))
 
 
 def _provision_initial_quota_policy(dsn: str, tenant_id: str, policy: dict) -> None:

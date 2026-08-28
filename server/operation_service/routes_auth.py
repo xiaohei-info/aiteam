@@ -32,7 +32,13 @@ def _service(request: Request) -> OperationAuthService:
     return svc
 
 
-@router.post("/login", description="系统管理员用账号密码登录运营端。返回 JWT token。", summary="系统账号登录（公开端点）", operation_id="operation_system_login")
+@router.post(
+    "/login",
+    description="系统管理员使用运营端账号密码登录并获取短期 RS256 access token。",
+    summary="系统账号登录（公开端点）",
+    operation_id="operation_system_login",
+    response_model=Envelope[SystemAuthResult],
+)
 async def login(body: SystemLoginInput, request: Request) -> Response:
     from fastapi.responses import JSONResponse
 

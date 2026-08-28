@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
-from shared.auth import require_claims, tenant_context_from
+from shared.auth import tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
 from shared.contracts.envelope import Envelope, ListEnvelope
@@ -19,7 +19,8 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden
 
 from .authorized_config_service import AuthorizedConfigService
-from .capability_catalog_service import CapabilityCatalogService, build_capability_catalog_service
+from .openapi_schemas import GrantRevocationOut
+from .capability_catalog_service import build_capability_catalog_service
 from .employee_config_service import build_employee_config_service
 from .routes_member import _services, _token_claims
 from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate
@@ -65,7 +66,7 @@ async def create_grant(
     return Envelope[MemberGrantOut](data=grant_svc.create_grant(ctx, body))
 
 
-@router.get("/grants", description="请查看接口名称了解用途", summary="列本租户授权（按 tenant 裁剪）", operation_id="manager_list_grants")
+@router.get("/grants", description="列本租户授权（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户授权（按 tenant 裁剪）", operation_id="manager_list_grants")
 async def list_grants(
     request: Request,
     resource_type: str | None = None,
@@ -81,7 +82,7 @@ async def list_grants(
     return ListEnvelope[MemberGrantOut](data=rows)
 
 
-@router.get("/grants/{grant_id}", description="请查看接口名称了解用途", summary="授权详情（按 tenant 裁剪）", operation_id="manager_get_grant")
+@router.get("/grants/{grant_id}", description="授权详情（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="授权详情（按 tenant 裁剪）", operation_id="manager_get_grant")
 async def get_grant(
     grant_id: str,
     request: Request,
@@ -92,7 +93,7 @@ async def get_grant(
     return Envelope[MemberGrantOut](data=grant_svc.get_grant(ctx, grant_id))
 
 
-@router.patch("/grants/{grant_id}", description="请查看接口名称了解用途", summary="改授权部门/成员", operation_id="manager_update_grant")
+@router.patch("/grants/{grant_id}", description="改授权部门/成员。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改授权部门/成员", operation_id="manager_update_grant")
 async def update_grant(
     grant_id: str,
     body: MemberGrantUpdate,
@@ -109,16 +110,16 @@ async def delete_grant(
     grant_id: str,
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
-) -> Envelope[dict]:
+) -> Envelope[GrantRevocationOut]:
     ctx = tenant_context_from(claims)
     _, grant_svc = _services(request)
     grant_svc.delete_grant(ctx, grant_id)
-    return Envelope[dict](data={"revoked": grant_id})
+    return Envelope[GrantRevocationOut](data=GrantRevocationOut(revoked=grant_id))
 
 
 @router.post(
     "/grants/authorized-config",
-    description="请查看接口名称了解用途", summary="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）",
+    description="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="Agent pull 授权配置增量（F10 / 05 §5.4 / D5/D12/D22）",
     operation_id="manager_grants_authorized_config_pull",
 )
 async def pull_authorized_config(

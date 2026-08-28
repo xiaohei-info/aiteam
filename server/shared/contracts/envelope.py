@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,7 +29,7 @@ class Envelope(BaseModel, Generic[T]):
     model_config = ConfigDict(extra="forbid")
 
     data: T | None = Field(default=None, description="业务对象；空成功可为 null")
-    meta: dict | None = Field(default=None, description="非敏感诊断信息，可选")
+    meta: dict[str, Any] | None = Field(default=None, description="非敏感诊断信息，可选")
 
 
 class ListEnvelope(BaseModel, Generic[T]):
@@ -39,7 +39,7 @@ class ListEnvelope(BaseModel, Generic[T]):
 
     data: list[T] = Field(default_factory=list)
     page: Page = Field(default_factory=Page)
-    meta: dict | None = Field(default=None)
+    meta: dict[str, Any] | None = Field(default=None, description="非敏感诊断信息，可选")
 
 
 class ProblemFieldError(BaseModel):
@@ -69,4 +69,4 @@ class Problem(BaseModel):
     instance: str | None = Field(default=None, description="出错的资源路径")
     request_id: str | None = Field(default=None, description="调试关联 id")
     errors: list[ProblemFieldError] | None = Field(default=None, description="字段级校验错误")
-    meta: dict | None = Field(default=None, description="非敏感诊断信息")
+    meta: dict[str, Any] | None = Field(default=None, description="非敏感诊断信息")

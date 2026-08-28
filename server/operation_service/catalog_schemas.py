@@ -10,6 +10,8 @@ SolutionPackage）一律从 shared.contracts.crosstier import，**禁在此重�
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.enums import CatalogStatus, CatalogType
@@ -100,8 +102,8 @@ class PublishTemplateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    visible_scope: dict | None = Field(
-        default=None, description="可见范围（如 tenant_ids 白名单）；空=全可见"
+    visible_scope: dict[str, Any] | None = Field(
+        default=None, description="可见范围（如 tenant_ids 白名单）；空=全可见。"
     )
 
 
@@ -110,7 +112,7 @@ class SetVisibilityRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    visible_scope: dict = Field(description="新的可见范围")
+    visible_scope: dict[str, Any] = Field(description="新的可见范围配置。")
 
 
 class UpdateExpertTemplateRequest(BaseModel):
@@ -149,7 +151,7 @@ class CatalogEntryResponse(BaseModel):
     version: str
     display_name: str
     status: CatalogStatus
-    visible_scope: dict | None = None
+    visible_scope: dict[str, Any] | None = Field(default=None, description="目录可见范围配置。")
     category: str = Field(default="")
     avatar_url: str = Field(default="")
     system_prompt: str = Field(default="")
@@ -158,7 +160,7 @@ class CatalogEntryResponse(BaseModel):
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     description: str = Field(default="")
-    initial_memories: list[dict] = Field(default_factory=list)
+    initial_memories: list[dict[str, Any]] = Field(default_factory=list, description="模板预置记忆条目。")
     sort_order: int = Field(default=0)
 
     # payload 顶层字段（对齐前端 CatalogItem 编辑模式预填与回写）。

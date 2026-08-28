@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
@@ -25,6 +26,7 @@ from .routes_knowledge_intake import build_knowledge_intake_router
 from .routes_member import router as member_router
 from .routes_provider import build_provider_credential_router
 from .routes_platform_model import build_platform_model_router
+from .routes_llm import build_llm_router
 from .routes_recruit import build_recruit_router
 from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
@@ -52,6 +54,7 @@ from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import build_knowledge_intake_repositories
 from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .knowledge_space_repository import KnowledgeSpaceRepository
+from .knowledge_space_service import ensure_enterprise_knowledge_space
 from .member_service import GrantService, MemberDeptService
 from .rag import PgManagerRagService
 from .rag_ingestion import LightRagIngestionClient
@@ -103,12 +106,18 @@ def _build_verifier():
 
 _verifier = _build_verifier()
 
+class PingOut(BaseModel):
+    """企业端存活探针结果。"""
+
+    pong: bool = Field(description="固定存活探针结果。")
+
+
 router = APIRouter(prefix="/api/manager", tags=["manager"])
 
 
-@router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="manager_ping")
-async def ping() -> Envelope[dict]:
-    return Envelope[dict](data={"pong": True})
+@router.get("/ping", summary="liveness ping（演示 envelope）", description="返回企业端固定存活结果。", operation_id="manager_ping", response_model=Envelope[PingOut])
+async def ping() -> Envelope[PingOut]:
+    return Envelope[PingOut](data=PingOut(pong=True))
 
 
 @router.get("/whoami", summary="解出当前身份（演示受保护端点 401/200）", operation_id="manager_whoami")
@@ -190,6 +199,7 @@ app.include_router(build_in_app_notification_router(_verifier))
 # ---- 功能补全：B04/B09 账单工资+充值 ----
 app.include_router(build_billing_router(_verifier))
 # ---- 功能补全：B01 LLM Provider/Model 管理 ----
+app.include_router(build_llm_router(_verifier))
 # ---- 功能补全：B07 记忆条目管理 ----
 app.include_router(build_memory_items_router(_verifier))
 # P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
@@ -208,6 +218,7 @@ app.include_router(oauth_mgmt_router)
 
 # Manager-owned read-only RAG MCP facade. It is unavailable (rather than
 # bypassed) when the Manager business database is not configured.
+_rag_settings = LightRagSettings.from_env() if settings.db_url else None
 if settings.db_url:
     _rag_router = PgTenantRouter(settings.db_url)
     _rag_member_repo = MemberDeptRepository(_rag_router)
@@ -223,7 +234,6 @@ if settings.db_url:
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
     # Load the static registry once at Manager startup and share that exact
     # immutable routing map between query, ingestion, and workspace derivation.
-    _rag_settings = LightRagSettings.from_env()
     _rag_light = LightRagClient(_rag_settings)
     _rag_ingestion = LightRagIngestionClient(
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
@@ -248,6 +258,20 @@ if settings.db_url:
     _rag_mcp, _rag_mcp_app = build_rag_mcp(verifier=_verifier, access=_rag_access)
     app.mount("/api/manager/rag", _rag_mcp_app)
     install_rag_mcp_lifespan(app, _rag_mcp, close=_rag_light.aclose)
+
+
+def _initialize_enterprise_knowledge_spaces() -> None:
+    """Materialize the fixed enterprise space for already-provisioned tenants."""
+    if not settings.db_url or not settings.admin_db_url or _rag_settings is None or not _rag_settings.workspace:
+        return
+    import psycopg
+    with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
+        tenant_ids = [str(row[0]) for row in conn.execute("SELECT tenant_id FROM tenant_registry").fetchall()]
+    for tenant_id in tenant_ids:
+        ensure_enterprise_knowledge_space(settings.db_url, tenant_id, _rag_settings.workspace)
+
+
+_initialize_enterprise_knowledge_spaces()
 
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
 # 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。

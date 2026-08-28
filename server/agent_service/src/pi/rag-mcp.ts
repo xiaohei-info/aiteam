@@ -76,7 +76,9 @@ export function ragToolNames(snapshot: unknown, managerUrl?: string): string[] {
   const policy = snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>).tool_policy : undefined;
   const allowed: unknown[] = policy && typeof policy === "object" && Array.isArray((policy as Record<string, unknown>).allowed_tools)
     ? (policy as Record<string, unknown>).allowed_tools as unknown[] : [];
-  if (!ragMcpUrl(managerUrl) || !allowed.includes(SEARCH_TOOL)) return [];
+  if (!ragMcpUrl(managerUrl)) return [];
+  if (allowed.length === 0) return [SEARCH_TOOL, GET_TOOL];
+  if (!allowed.includes(SEARCH_TOOL)) return [];
   return allowed.includes(GET_TOOL) ? [SEARCH_TOOL, GET_TOOL] : [SEARCH_TOOL];
 }
 

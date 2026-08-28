@@ -219,6 +219,18 @@ def _ensure_can_write(ctx: TenantContext) -> None:
         raise Forbidden("knowledge space write requires owner or enterprise_admin")
 
 
+def ensure_enterprise_knowledge_space(dsn: str, tenant_id: str, workspace: str) -> KnowledgeSpaceRow:
+    """Idempotently provision the one Manager-owned enterprise space."""
+    repo = KnowledgeSpaceRepository(PgTenantRouter(dsn), enterprise_workspace=workspace)
+    ctx = TenantContext(tenant_id=tenant_id, user_id="manager-system", roles=["service"])
+    return repo.ensure(
+        ctx,
+        knowledge_space_id=enterprise_knowledge_space_id(workspace),
+        display_name="企业知识库",
+        workspace=workspace,
+    )
+
+
 def _validate_binding_resource_type(resource_type: str) -> None:
     """绑定目标白名单（expert|department|member）。
 

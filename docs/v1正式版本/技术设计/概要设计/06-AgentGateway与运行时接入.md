@@ -64,8 +64,8 @@ EmployeeExecutionSnapshot
 - `SettingsManager.inMemory()`；
 - 禁止 ambient `~/.pi`、项目 `.pi`、未审核 package/extension/context 自动发现；
 - 仅加载 Manager 授权、签名、固定 hash/version 的 Skill；
-- 仅注册当前 snapshot/tool policy 允许的 custom tools；
-- Hindsight、Manager RAG、审批和 sandbox 为产品自有受控扩展/工具。
+- 平台内置工具/Extension 默认随 Agent 产物提供；业务能力仍按 Manager 快照和本地会话权限生效；
+- Hindsight、Manager RAG、审批和 sandbox 为产品自有受控扩展/工具；默认 Memory 使用 employee-private scope，默认 RAG 使用 Manager 唯一企业知识空间。
 
 Pi Project Trust、tool allowlist 和 prompt 不是 sandbox。coding tools 必须全部经过 Agent 的外部非特权 sandbox boundary；sandbox 不可用时 fail-closed。
 
@@ -76,9 +76,11 @@ Conversation 直接映射 Pi Session 内容事实：
 ```text
 private Conversation
   -> 1 个固定 participant employee Pi Session JSONL
+  -> permission_mode: read-only | workspace-write | full-access
 
 group Conversation
   -> N 个固定 participant employee Pi Session JSONL
+  -> one shared permission_mode for all participant Sessions
 ```
 
 Agent SQLite 只保存 Conversation 索引、participant Session 索引、授权 snapshot、approval、附件/制品、schedule、幂等收据、消息来源索引和治理 outbox；不复制 Message/Run/Task/Timeline 正文。
@@ -111,7 +113,7 @@ EmployeeSnapshot
 | 文件/bash/edit | Pi built-in tools，经外部 sandbox operations 路由 |
 | Agent 协作 | `mention_employee` custom tool + 固定 peer Session |
 
-Pi Extension 只提供机制，不取得业务授权；最终工具集合必须是 Manager grant、EmployeeSnapshot tool policy 和本地安全策略的交集。
+Pi Extension 只提供机制，不取得业务授权；默认平台能力不绕过 Manager 的撤销/收紧结果，connector 等带凭据能力仍必须经过 Manager grant。文件类工具另外受 Conversation 的 `permission_mode` 约束，默认 `read-only`，可显式升为 `workspace-write` 或 `full-access`。
 
 ### 7.6 私聊、本地群聊与统一消息投递
 

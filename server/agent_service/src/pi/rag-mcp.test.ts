@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRagMcpFactory, ragMcpUrl, ragToolNames } from "./rag-mcp.js";
 
-test("RAG MCP is enabled only by the snapshot allowlist and fixed endpoint", () => {
+test("RAG MCP defaults to the enterprise tools while honoring an explicit allowlist", () => {
   assert.equal(ragMcpUrl(undefined), undefined);
   assert.equal(ragMcpUrl("http://other.test"), undefined);
   process.env.AITEAM_RAG_MCP_URL = "http://manager.test/api/manager/rag/mcp";
@@ -11,6 +11,7 @@ test("RAG MCP is enabled only by the snapshot allowlist and fixed endpoint", () 
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }, "http://manager.test"), ["knowledge_search"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get"] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_get"] } }, "http://manager.test"), []);
+    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: [] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }), []);
     assert.equal(createRagMcpFactory({ caller: { callerId: "member" }, employeeId: "employee", snapshot: {} } as never, "http://manager.test"), undefined);
   } finally {

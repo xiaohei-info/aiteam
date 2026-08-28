@@ -17,6 +17,7 @@ from shared.errors import AppError
 
 from .connector_ops_repository import ConnectorOpsRepository
 from .connector_ops_service import ConnectorOpsService
+from .openapi_schemas import ConnectorGrantsOut
 from .connector_probe import known_auth_scheme_for_preset
 from .routes_connector_schemas import (
     ConnectorGrantsPatch,
@@ -88,9 +89,9 @@ def build_connector_ops_router(verifier) -> APIRouter:
         body: ConnectorGrantsPatch,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[ConnectorGrantsOut]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
-        return Envelope(data=svc.set_grants(ctx, connector_id, body.employee_ids, body.action))
+        return Envelope(data=ConnectorGrantsOut(**svc.set_grants(ctx, connector_id, body.employee_ids, body.action)))
 
     return router

@@ -18,6 +18,7 @@ from shared.contracts.auth import TokenClaims
 from shared.errors import AppError
 
 from .member_service import build_member_dept_service, MemberDeptService
+from .openapi_schemas import DeletedResourceOut
 from .schemas import DepartmentCreate, DepartmentOut, DepartmentUpdate, MemberCreate, MemberOut, MemberUpdate
 from .routes_auth import _auth_service
 
@@ -49,7 +50,7 @@ def _services(request: Request) -> tuple[MemberDeptService, "object"]:
 router = APIRouter(prefix="/api/manager", tags=["member", "department"])
 
 
-@router.post("/departments", description="请查看接口名称了解用途", summary="建部门（owner/enterprise_admin）", operation_id="manager_create_department")
+@router.post("/departments", description="建部门（owner/enterprise_admin）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建部门（owner/enterprise_admin）", operation_id="manager_create_department")
 async def create_department(
     body: DepartmentCreate,
     request: Request,
@@ -71,7 +72,7 @@ async def list_departments(
     return ListEnvelope[DepartmentOut](data=rows)
 
 
-@router.get("/departments/{department_id}", description="请查看接口名称了解用途", summary="部门详情", operation_id="manager_get_department")
+@router.get("/departments/{department_id}", description="部门详情。成功响应遵循统一 envelope，失败返回 problem+json。", summary="部门详情", operation_id="manager_get_department")
 async def get_department(
     department_id: str,
     request: Request,
@@ -82,7 +83,7 @@ async def get_department(
     return Envelope[DepartmentOut](data=member_svc.get_department(ctx, department_id))
 
 
-@router.patch("/departments/{department_id}", description="请查看接口名称了解用途", summary="改部门", operation_id="manager_update_department")
+@router.patch("/departments/{department_id}", description="改部门。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改部门", operation_id="manager_update_department")
 async def update_department(
     department_id: str,
     body: DepartmentUpdate,
@@ -99,14 +100,14 @@ async def delete_department(
     department_id: str,
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
-) -> Envelope[dict]:
+) -> Envelope[DeletedResourceOut]:
     ctx = tenant_context_from(claims)
     member_svc, _ = _services(request)
     member_svc.delete_department(ctx, department_id)
-    return Envelope[dict](data={"deleted": department_id})
+    return Envelope[DeletedResourceOut](data=DeletedResourceOut(deleted=department_id))
 
 
-@router.post("/members", description="请查看接口名称了解用途", summary="建成员（03 §9.4B）", operation_id="manager_create_member")
+@router.post("/members", description="建成员（03 §9.4B）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建成员（03 §9.4B）", operation_id="manager_create_member")
 async def create_member(
     body: MemberCreate,
     request: Request,
@@ -127,7 +128,7 @@ async def list_members(
     return ListEnvelope[MemberOut](data=member_svc.list_members(ctx))
 
 
-@router.get("/members/{member_id}", description="请查看接口名称了解用途", summary="成员详情（不回显凭据）", operation_id="manager_get_member")
+@router.get("/members/{member_id}", description="成员详情（不回显凭据）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="成员详情（不回显凭据）", operation_id="manager_get_member")
 async def get_member(
     member_id: str,
     request: Request,
@@ -138,7 +139,7 @@ async def get_member(
     return Envelope[MemberOut](data=member_svc.get_member(ctx, member_id))
 
 
-@router.patch("/members/{member_id}", description="请查看接口名称了解用途", summary="改成员（角色/部门/状态）", operation_id="manager_update_member")
+@router.patch("/members/{member_id}", description="改成员（角色/部门/状态）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改成员（角色/部门/状态）", operation_id="manager_update_member")
 async def update_member(
     member_id: str,
     body: MemberUpdate,
@@ -155,8 +156,8 @@ async def delete_member(
     member_id: str,
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
-) -> Envelope[dict]:
+) -> Envelope[DeletedResourceOut]:
     ctx = tenant_context_from(claims)
     member_svc, _ = _services(request)
     member_svc.delete_member(ctx, member_id)
-    return Envelope[dict](data={"deleted": member_id})
+    return Envelope[DeletedResourceOut](data=DeletedResourceOut(deleted=member_id))

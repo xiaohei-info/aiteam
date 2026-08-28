@@ -82,4 +82,29 @@ describe("ConversationList", () => {
     await act(async () => fireEvent.click(screen.getByTestId("conversation-new")));
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "new", entry_employee_id: "emp-1" }));
   });
+
+  it("groups new group conversations under the same solution", async () => {
+    const onSelect = vi.fn();
+    const newest = { ...makeConv("new-group"), title: "软件开发", solution_instance_id: "solution-1" };
+    const previous = { ...makeConv("old-group"), title: "软件开发", solution_instance_id: "solution-1" };
+    const other = { ...makeConv("other-group"), title: "数据分析", solution_instance_id: "solution-2" };
+    mockedList.mockResolvedValue({ items: [newest, previous, other], nextCursor: null, hasMore: false });
+
+    render(
+      <ConversationList
+        client={makeClient()}
+        selectedId="old-group"
+        onSelect={onSelect}
+        headerLabel="群聊"
+        filter={(conversation) => conversation.kind === "group"}
+        groupByGroup
+      />,
+    );
+
+    expect(await screen.findByTestId("conversation-new-group")).toBeInTheDocument();
+    expect(screen.queryByTestId("conversation-old-group")).not.toBeInTheDocument();
+    expect(screen.getByText("2 个对话")).toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByTestId("conversation-new-group")));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "new-group", solution_instance_id: "solution-1" }));
+  });
 });

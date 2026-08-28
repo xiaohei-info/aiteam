@@ -23,7 +23,7 @@ test("LocalSandbox confines a harmless command and denies writes outside its wor
   const sandbox = new LocalSandbox();
   try {
     if (!(await requireAvailable(t, sandbox, workspace))) return;
-    const operations = sandbox.operations(workspace);
+    const operations = sandbox.operations(workspace, undefined, "workspace-write");
     let output = "";
     const harmless = await operations.bash.exec("printf confined", workspace, { onData: (data) => { output += data.toString(); } });
     assert.equal(harmless.exitCode, 0);
@@ -65,6 +65,27 @@ test("LocalSandbox confines a harmless command and denies writes outside its wor
     await symlink(process.env.HOME ?? process.cwd(), symlinkEscape);
     assert.throws(() => operations.write.writeFile(join(symlinkEscape, "must-stay-inside"), "nope"), /escapes the session workspace/);
     await rm(symlinkEscape, { force: true });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { force: true });
+  }
+});
+
+test("LocalSandbox applies read-only, workspace-write, and full-access modes", async () => {
+  const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-permissions-"));
+  const outside = join(process.env.HOME ?? process.cwd(), `.dsh-sandbox-permission-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const sandbox = new LocalSandbox();
+  try {
+    const readOnly = sandbox.operations(workspace);
+    assert.throws(() => readOnly.write.writeFile(join(workspace, "blocked"), "nope"), /只读权限/);
+
+    const workspaceWrite = sandbox.operations(workspace, undefined, "workspace-write");
+    await workspaceWrite.write.writeFile(join(workspace, "allowed"), "ok");
+    assert.equal((await readFile(join(workspace, "allowed"))).toString(), "ok");
+
+    const full = sandbox.operations(workspace, undefined, "full-access");
+    await full.write.writeFile(outside, "full");
+    assert.equal((await readFile(outside)).toString(), "full");
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(outside, { force: true });

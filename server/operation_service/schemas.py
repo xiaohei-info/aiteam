@@ -9,6 +9,8 @@ Operator 自身只持其 hash（03 §9.2）。响应体不含长期密码、toke
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -17,11 +19,11 @@ class ProvisionEnterpriseRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enterprise_name: str = Field(min_length=1)
+    enterprise_name: str = Field(min_length=1, description="企业展示名称。")
     owner_phone: str = Field(min_length=1, description="负责人手机号，用于 Manager 校验登录身份")
     enterprise_code: str | None = Field(default=None, description="可读 slug，可选，需唯一")
-    initial_quota_policy: dict | None = Field(default=None)
-    visible_catalog_policy: dict | None = Field(default=None)
+    initial_quota_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的默认配额策略。")
+    visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的目录可见范围策略。")
 
 
 class EnterpriseProvisioned(BaseModel):
@@ -29,11 +31,11 @@ class EnterpriseProvisioned(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enterprise_id: str
-    tenant_id: str
-    enterprise_name: str
-    enterprise_code: str | None = None
-    owner_phone: str
+    enterprise_id: str = Field(description="运营端企业 ID。")
+    tenant_id: str = Field(description="Manager 企业租户 ID。")
+    enterprise_name: str = Field(description="企业展示名称。")
+    enterprise_code: str | None = Field(default=None, description="企业可读代码。")
+    owner_phone: str = Field(description="负责人手机号。")
     owner_bootstrap_secret: str = Field(description="一次性明文 bootstrap，仅本次返回；Operator 只持 hash")
     must_reset: bool = Field(default=True, description="负责人首登强制重置")
 
@@ -43,8 +45,8 @@ class OwnerBootstrapResetResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enterprise_id: str
-    tenant_id: str
-    owner_phone: str
+    enterprise_id: str = Field(description="运营端企业 ID。")
+    tenant_id: str = Field(description="Manager 企业租户 ID。")
+    owner_phone: str = Field(description="负责人手机号。")
     owner_bootstrap_secret: str = Field(description="重置后的一次性明文 bootstrap，仅本次返回")
     must_reset: bool = Field(default=True)

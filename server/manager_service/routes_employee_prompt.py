@@ -55,8 +55,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.post(
         "/{employee_id}/prompts",
-        description="请查看接口名称了解用途",
-        summary="建 employee prompt（version=1，同时落 history v1）",
+        description="建 employee prompt（version=1，同时落 history v1）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建 employee prompt（version=1，同时落 history v1）",
         operation_id="manager_employee_prompt_create",
         status_code=status.HTTP_201_CREATED,
     )
@@ -73,8 +72,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.get(
         "/{employee_id}/prompts",
-        description="请查看接口名称了解用途",
-        summary="取 employee prompt 当前 head",
+        description="取 employee prompt 当前 head。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取 employee prompt 当前 head",
         operation_id="manager_employee_prompt_get",
     )
     async def get_prompt(
@@ -89,8 +87,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.put(
         "/{employee_id}/prompts",
-        description="请查看接口名称了解用途",
-        summary="改写 employee prompt（version+1，旧版归档到 history）",
+        description="改写 employee prompt（version+1，旧版归档到 history）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee prompt（version+1，旧版归档到 history）",
         operation_id="manager_employee_prompt_update",
     )
     async def update_prompt(
@@ -106,8 +103,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.delete(
         "/{employee_id}/prompts",
-        description="请查看接口名称了解用途",
-        summary="删 employee prompt head + history",
+        description="删 employee prompt head + history。成功响应遵循统一 envelope，失败返回 problem+json。", summary="删 employee prompt head + history",
         operation_id="manager_employee_prompt_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -123,8 +119,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.get(
         "/{employee_id}/prompts/history",
-        description="请查看接口名称了解用途",
-        summary="列 employee prompt 全部历史版本（version_no 降序）",
+        description="列 employee prompt 全部历史版本（version_no 降序）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列 employee prompt 全部历史版本（version_no 降序）",
         operation_id="manager_employee_prompt_history",
     )
     async def list_history(
@@ -139,8 +134,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
 
     @router.post(
         "/{employee_id}/prompts/rollback",
-        description="请查看接口名称了解用途",
-        summary="回滚到某历史版本（产生新 version_no，不回退历史）",
+        description="回滚到某历史版本（产生新 version_no，不回退历史）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="回滚到某历史版本（产生新 version_no，不回退历史）",
         operation_id="manager_employee_prompt_rollback",
     )
     async def rollback_prompt(

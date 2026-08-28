@@ -126,24 +126,42 @@ function authenticateDevelopment(request: import("node:http").IncomingMessage) {
   }
 }
 
+const DEFAULT_AGENT_TOOLS = ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"] as const;
+
 function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   if (!authorization) return "You are an AI Team digital employee. Be concise.";
   const snapshot = authorization.snapshot;
   const persona = typeof snapshot.persona === "string" ? snapshot.persona : "You are an AI Team digital employee.";
   const skills = Array.isArray(snapshot.skill_refs) ? snapshot.skill_refs.filter((value): value is string => typeof value === "string") : [];
   const policy = snapshot.tool_policy && typeof snapshot.tool_policy === "object" ? snapshot.tool_policy as Record<string, unknown> : undefined;
-  const allowedTools = Array.isArray(policy?.allowed_tools) ? policy.allowed_tools : snapshot.tools;
-  const todoHint = Array.isArray(allowedTools) && allowedTools.includes("todo_update")
+  const configuredTools = Array.isArray(policy?.allowed_tools)
+    ? policy.allowed_tools.filter((value): value is string => typeof value === "string")
+    : Array.isArray(snapshot.tools)
+      ? snapshot.tools.filter((value): value is string => typeof value === "string")
+      : [];
+  const allowedTools: readonly string[] = configuredTools.length > 0 ? configuredTools : DEFAULT_AGENT_TOOLS;
+  const todoHint = allowedTools.includes("todo_update")
     ? "For multi-step work, keep the user-visible checklist current with todo_update."
     : "";
   const source = authorization.groupMessageSource
     ? `You are replying inside a group conversation. Message source: ${authorization.groupMessageSource.type === "employee" ? "employee" : "human"} ${authorization.groupMessageSource.displayName ?? authorization.groupMessageSource.id}. Reply as this employee; do not impersonate another employee.`
     : "";
-  const mentionHint = authorization.employeeId && authorization.rosterEmployeeIds
-    ? "In this group, direct employee mentions are routed by the host to the addressed participant session. Use mention_employee only when you need to consult another authorized participant."
+  const defaultToolHint = configuredTools.length === 0
+    ? `Use the default AI Team platform tool set available to this Agent: ${allowedTools.join(", ")}.`
+    : "Use only the tools authorized by the current employee snapshot.";
+  const mentionHint = authorization.peerMentionAllowed
+    ? "This group coordinator also has the platform-owned mention_employee coordination tool. When a request asks you to assign, ask, check, or coordinate another member, you MUST call mention_employee for the actual delivery and wait for its result before claiming contact; writing an @ name in your reply is not a delivery."
     : "";
+  const toolBoundary = authorization.peerMentionAllowed
+    ? `${defaultToolHint} The platform-owned mention_employee tool is additionally available to this group coordinator.`
+    : defaultToolHint;
+  const permissionHint = authorization.permissionMode === "full-access"
+    ? "Current local execution permission: full-access. File and network isolation is disabled by explicit user choice."
+    : authorization.permissionMode === "workspace-write"
+      ? "Current local execution permission: workspace-write. File writes are limited to this session workspace and network access is disabled."
+      : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
   const groupContext = authorization.groupContext ? `Bounded recent group context (reference only):\n${authorization.groupContext}` : "";
-  return [persona, "Use only the tools authorized by the current employee snapshot.", source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  return [persona, toolBoundary, permissionHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function loadJwtOptions() {

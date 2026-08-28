@@ -7,6 +7,7 @@ local memory CRUD repository is constructed here.
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
 from fastapi.responses import Response
@@ -24,6 +25,7 @@ from .enterprise_audit_repository import build_enterprise_audit_repository
 from .hindsight_client import HindsightClient
 from .member_service import GrantService, MemberDeptService
 from .memory_service import MemoryService, build_memory_service
+from .openapi_schemas import MemoryResultOut
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import build_snapshot_service
 
@@ -32,7 +34,7 @@ class MemoryRetainIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     employee_id: str = Field(min_length=1)
     content: str = Field(min_length=1)
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict, description="写入 Hindsight 的附加元数据。")
 
 
 class MemoryUpdateIn(BaseModel):
@@ -110,42 +112,42 @@ def build_memory_items_router(verifier) -> APIRouter:
             meta={"total": result["total"], "limit": result["limit"], "offset": result["offset"]},
         )
 
-    @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall")
+    @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall", response_model_exclude_none=True)
     async def recall(
         request: Request,
         employee_id: str = Query(min_length=1),
         query: str = Query(min_length=1),
         limit: int = Query(default=10, ge=1, le=100),
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[MemoryResultOut]:
         data = _service(request).recall(
             tenant_context_from(claims), employee_id=employee_id, query=query, limit=limit,
         )
-        return Envelope(data=data)
+        return Envelope[MemoryResultOut](data=MemoryResultOut.model_validate(data))
 
     @router.post("", summary="写入 Hindsight 记忆", operation_id="manager_memory_create",
-                 status_code=status.HTTP_201_CREATED)
+                 status_code=status.HTTP_201_CREATED, response_model_exclude_none=True)
     @router.post("/retain", summary="写入 Hindsight 记忆", operation_id="manager_memory_retain",
-                 status_code=status.HTTP_201_CREATED)
+                 status_code=status.HTTP_201_CREATED, response_model_exclude_none=True)
     async def retain(
         body: MemoryRetainIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[MemoryResultOut]:
         data = _service(request).retain(
             tenant_context_from(claims), employee_id=body.employee_id,
             content=body.content, metadata=body.metadata,
         )
-        return Envelope(data=data)
+        return Envelope[MemoryResultOut](data=MemoryResultOut.model_validate(data))
 
-    @router.patch("/{memory_id}", summary="编辑 Hindsight 记忆", operation_id="manager_memory_update")
+    @router.patch("/{memory_id}", summary="编辑 Hindsight 记忆", operation_id="manager_memory_update", response_model_exclude_none=True)
     async def update_memory(
         memory_id: str,
         body: MemoryUpdateIn,
         request: Request,
         employee_id: str = Query(min_length=1),
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[MemoryResultOut]:
         if body.text is None and body.content is None and body.state is None:
             from shared.errors import ValidationProblem
             raise ValidationProblem(detail="memory update requires text or state", errors=None)
@@ -158,7 +160,7 @@ def build_memory_items_router(verifier) -> APIRouter:
             tenant_context_from(claims), employee_id=employee_id, memory_id=memory_id,
             payload=payload,
         )
-        return Envelope[dict](data=data)
+        return Envelope[MemoryResultOut](data=MemoryResultOut.model_validate(data))
 
     @router.delete("/{memory_id}", summary="删除 Hindsight 记忆", operation_id="manager_memory_delete",
                    status_code=status.HTTP_204_NO_CONTENT)

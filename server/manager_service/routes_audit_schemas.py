@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AuditEventOut(BaseModel):
@@ -14,5 +15,5 @@ class AuditEventOut(BaseModel):
     actor_id: str | None = None
     target_type: str | None = None
     target_id: str | None = None
-    detail: dict = {}
+    detail: dict[str, Any] = Field(default_factory=dict, description="脱敏审计详情。")
     created_at: datetime

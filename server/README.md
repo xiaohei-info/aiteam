@@ -73,6 +73,17 @@ python run.py --tier=manager        # 或 operation；用户端用 `pnpm --dir a
 
 每端暴露 `/healthz` `/readyz` `/docs` `/redoc` `/openapi.json`。
 
+### OpenAPI 文档门禁
+
+Swagger UI 和 ReDoc 都直接消费运行时生成的 OpenAPI。提交前运行下面的命令，它会装配 Operation、Manager、Node Agent 三端真实应用，导出文档并检查描述、参数、schema、鉴权、错误响应和路由清单：
+
+```bash
+# 在仓库根目录执行
+bash scripts/check-openapi.sh
+```
+
+输出目录可作为第一个参数传入；该目录只保存临时生成的 JSON，不是手工维护的契约副本。
+
 ---
 
 ## 4. 目录结构

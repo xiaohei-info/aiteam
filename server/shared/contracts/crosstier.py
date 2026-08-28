@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from .skill import SignedSkillPackage, SkillSigningKeyMetadata
@@ -32,8 +34,8 @@ class TenantProvisionRequest(BaseModel):
     tenant_id: str
     enterprise_name: str
     enterprise_code: str | None = Field(default=None, description="可读账号/slug，不参与 RLS 主键")
-    initial_quota_policy: dict | None = Field(default=None, description="首次开通时默认配额策略（可选）")
-    visible_catalog_policy: dict | None = Field(default=None, description="可见目录策略（可选）")
+    initial_quota_policy: dict[str, Any] | None = Field(default=None, description="首次开通时默认配额策略（可选）")
+    visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="可见目录策略（可选）")
 
 
 class OwnerBootstrapSync(BaseModel):
@@ -60,7 +62,7 @@ class CatalogReleaseNotify(BaseModel):
     template_id: str
     version: str
     action: str = Field(description="published | unpublished | visibility_changed")
-    visible_scope: dict | None = Field(default=None, description="可见范围定义（可选）")
+    visible_scope: dict[str, Any] | None = Field(default=None, description="可见范围定义（可选）")
 
 
 
@@ -94,7 +96,7 @@ class ExpertTemplateDetail(BaseModel):
     version: str
     display_name: str
     persona: str | None = Field(default=None, description="内部人设/系统提示词影子（backfill from system_prompt）")
-    recommended_config: dict = Field(
+    recommended_config: dict[str, Any] = Field(
         default_factory=dict,
         description="推荐配置（Manager 招募时预填充模型和专家能力配置）；backfill from flat 字段",
     )
@@ -105,7 +107,7 @@ class ExpertTemplateDetail(BaseModel):
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator platform skill fixed references")
     description: str = Field(default="", description="用户可见职位描述（≤200字）")
-    initial_memories: list[dict] = Field(default_factory=list, description="预置记忆条目")
+    initial_memories: list[dict[str, Any]] = Field(default_factory=list, description="预置记忆条目")
     sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）")
     sequence_no: int = Field(default=1, ge=1, description="方案内专家绑定排序号，决定 apply 时专家的创建和编排顺序")
     enabled: bool = Field(default=True, description="单个专家启用开关；false 时方案内该专家不参与 apply")
@@ -127,7 +129,7 @@ class SolutionPackage(BaseModel):
     icon: str = Field(default="", description="方案图标")
     coordinator_template_id: str = Field(default="", description="方案内固定协调专家模板 id")
     coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明，不定义执行状态机")
-    workflow_skill_ref: dict | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
+    workflow_skill_ref: dict[str, Any] | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
     output_requirements: str = Field(default="", description="可选的方案交付要求")
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")

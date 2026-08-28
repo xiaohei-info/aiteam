@@ -18,6 +18,17 @@ vi.mock("../group/useGroupApi", () => ({ listLoadedExperts: vi.fn(() => new Prom
 
 afterEach(() => vi.clearAllMocks());
 
+function placeCaretAtEnd(element: HTMLElement): void {
+  const selection = window.getSelection();
+  const range = document.createRange();
+  const textNode = element.firstChild ?? document.createTextNode("");
+  if (!textNode.parentNode) element.appendChild(textNode);
+  range.setStart(textNode, textNode.textContent?.length ?? 0);
+  range.collapse(true);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 describe("MessageComposer runtime state", () => {
   it("submits solution-scoped group mentions through the shared composer", async () => {
     const onSent = vi.fn();
@@ -43,6 +54,90 @@ describe("MessageComposer runtime state", () => {
       "key",
     ));
     expect(onSent).toHaveBeenCalled();
+  });
+
+  it("opens the authorized group roster when @ is typed", async () => {
+    const inputRoster = [{ employee_id: "e1", tenant_id: "t1", version: "v1", handle: "tester", display_name: "测试员", revoked: false }];
+    render(
+      <MessageComposer
+        conversationId="group-1"
+        isPrompting={false}
+        onPromptingChange={vi.fn()}
+        onSent={vi.fn()}
+        mentionRoster={inputRoster}
+      />,
+    );
+
+    const input = screen.getByLabelText("消息内容");
+    input.focus();
+    input.textContent = "@";
+    placeCaretAtEnd(input);
+    fireEvent.input(input);
+
+    expect(await screen.findByRole("listbox", { name: "可 @ 的群成员" })).toBeInTheDocument();
+    expect(screen.getByRole("option")).toHaveTextContent("测试员");
+    expect(screen.getByRole("option")).not.toHaveTextContent("tester");
+  });
+
+  it("selects a group mention with Enter without submitting and renders the display name", async () => {
+    const inputRoster = [{ employee_id: "e1", tenant_id: "t1", version: "v1", handle: "tester", display_name: "测试员", revoked: false }];
+    render(
+      <MessageComposer
+        conversationId="group-1"
+        isPrompting={false}
+        onPromptingChange={vi.fn()}
+        onSent={vi.fn()}
+        mentionRoster={inputRoster}
+      />,
+    );
+
+    const input = screen.getByLabelText("消息内容");
+    input.focus();
+    input.textContent = "@";
+    placeCaretAtEnd(input);
+    fireEvent.input(input);
+    expect(await screen.findByRole("listbox", { name: "可 @ 的群成员" })).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox", { name: "可 @ 的群成员" })).not.toBeInTheDocument();
+    expect(input).toHaveTextContent("@测试员");
+    expect(screen.getByText("已 @提及：@测试员")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(submitPrompt).toHaveBeenCalledWith(
+      {},
+      "group-1",
+      { text: "@测试员", attachment_ids: [], mentions: ["tester"] },
+      "key",
+    ));
+  });
+
+  it("canonicalizes manually typed display names before submitting group mentions", async () => {
+    const inputRoster = [{ employee_id: "e1", tenant_id: "t1", version: "v1", handle: "tester", display_name: "测试员", revoked: false }];
+    render(
+      <MessageComposer
+        conversationId="group-1"
+        isPrompting={false}
+        onPromptingChange={vi.fn()}
+        onSent={vi.fn()}
+        mentionRoster={inputRoster}
+      />,
+    );
+
+    const input = screen.getByLabelText("消息内容");
+    input.focus();
+    input.textContent = "@测试员 请分析";
+    placeCaretAtEnd(input);
+    fireEvent.input(input);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(submitPrompt).toHaveBeenCalledWith(
+      {},
+      "group-1",
+      { text: "@测试员 请分析", attachment_ids: [], mentions: ["tester"] },
+      "key",
+    ));
   });
 
   it("locks input, shows the compact running hint, and replaces send with terminate", async () => {

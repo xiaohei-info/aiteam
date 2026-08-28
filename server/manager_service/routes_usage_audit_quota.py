@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
@@ -43,6 +44,7 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
+from .openapi_schemas import UsageRollupItemsOut, UsageUploadOut
 from .rollup_reporter import RollupReporter, ServiceClientRollupClient
 from shared.service_client import ServiceClient
 from .usage_audit_quota_service import (
@@ -65,8 +67,8 @@ class UsageSummaryUploadIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tenant_id: str | None = Field(default=None, description="兼容字段；租户以服务身份 claim 为准")
-    usage: list[dict] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
-    audits: list[dict] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")
+    usage: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
+    audits: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")
 
 
 def _service(request: Request) -> UsageAuditQuotaService:
@@ -110,14 +112,14 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/usage/upload",
-        description="请查看接口名称了解用途", summary="接收脱敏 usage/audit 摘要上报（F13，本端消费落库聚合）",
+        description="接收 Agent 上报的脱敏 usage/audit 聚合摘要并写入企业级汇总；不接收会话内容。", summary="接收脱敏 usage/audit 摘要上报（F13，本端消费落库聚合）",
         operation_id="manager_usage_upload",
     )
     async def upload_usage(
         body: UsageSummaryUploadIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[UsageUploadOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if body.tenant_id != ctx.tenant_id:
@@ -127,13 +129,13 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
             _report_to_operator(request, svc, ctx)
         except Exception:  # best effort; Agent outbox already has durable retry semantics
             logger.warning("usage rollup upload to Operator deferred", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
-        return Envelope[dict](data=result)
+        return Envelope[UsageUploadOut](data=UsageUploadOut(**result))
 
     # ---- usage 查询 ----
 
     @router.get(
         "/usage/rollup",
-        description="请查看接口名称了解用途", summary="查本租户 usage 聚合（按窗口）/ 明细",
+        description="查本租户 usage 聚合（按窗口）/ 明细。成功响应遵循统一 envelope，失败返回 problem+json。", summary="查本租户 usage 聚合（按窗口）/ 明细",
         operation_id="manager_usage_rollup",
     )
     async def get_usage_rollup(
@@ -141,18 +143,18 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         window_start: datetime | None = Query(default=None, description="聚合窗口起（含）"),
         window_end: datetime | None = Query(default=None, description="聚合窗口止（含）"),
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[UsageAggregateOut | UsageRollupItemsOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if window_start is not None and window_end is not None:
             agg = svc.aggregate_usage(ctx, window_start=window_start, window_end=window_end)
-            return Envelope[dict](data=agg.model_dump(mode="json"))
+            return Envelope[UsageAggregateOut | UsageRollupItemsOut](data=agg)
         items = svc.list_usage(ctx)
-        return Envelope[dict](data={"items": [i.model_dump(mode="json") for i in items]})
+        return Envelope[UsageAggregateOut | UsageRollupItemsOut](data=UsageRollupItemsOut(items=items))
 
     @router.get(
         "/usage/rollup/list",
-        description="请查看接口名称了解用途", summary="列本租户全部 usage 明细",
+        description="列本租户全部 usage 明细。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户全部 usage 明细",
         operation_id="manager_usage_rollup_list",
         response_model_exclude_none=True,
     )
@@ -167,7 +169,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/audits",
-        description="请查看接口名称了解用途", summary="列本租户审计事件摘要（无会话内容）",
+        description="列本租户审计事件摘要（无会话内容）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户审计事件摘要（无会话内容）",
         operation_id="manager_audit_list",
         response_model_exclude_none=True,
     )
@@ -182,7 +184,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/quota-policies",
-        description="请查看接口名称了解用途", summary="建软配额策略（owner/enterprise_admin/finance_admin）",
+        description="建软配额策略（owner/enterprise_admin/finance_admin）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建软配额策略（owner/enterprise_admin/finance_admin）",
         operation_id="manager_quota_policy_create",
         status_code=status.HTTP_201_CREATED,
         response_model_exclude_none=True,
@@ -199,7 +201,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/quota-policies",
-        description="请查看接口名称了解用途", summary="列本租户配额策略",
+        description="列本租户配额策略。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户配额策略",
         operation_id="manager_quota_policy_list",
         response_model_exclude_none=True,
     )
@@ -212,7 +214,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.get(
         "/quota-policies/{policy_id}",
-        description="请查看接口名称了解用途", summary="取单个配额策略",
+        description="取单个配额策略。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个配额策略",
         operation_id="manager_quota_policy_get",
         response_model_exclude_none=True,
     )
@@ -228,7 +230,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.put(
         "/quota-policies/{policy_id}",
-        description="请查看接口名称了解用途", summary="改写配额策略（version 自增）",
+        description="改写配额策略（version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写配额策略（version 自增）",
         operation_id="manager_quota_policy_update",
         response_model_exclude_none=True,
     )
@@ -245,7 +247,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.delete(
         "/quota-policies/{policy_id}",
-        description="请查看接口名称了解用途", summary="删配额策略",
+        description="删配额策略。成功响应遵循统一 envelope，失败返回 problem+json。", summary="删配额策略",
         operation_id="manager_quota_policy_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -260,7 +262,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
 
     @router.post(
         "/quota-policies/{policy_id}/evaluate",
-        description="请查看接口名称了解用途", summary="评估配额并产出软治理动作（不阻断 run，D24）",
+        description="评估配额并产出软治理动作（不阻断 run，D24）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="评估配额并产出软治理动作（不阻断 run，D24）",
         operation_id="manager_quota_policy_evaluate",
         response_model_exclude_none=True,
     )

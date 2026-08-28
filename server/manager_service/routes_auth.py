@@ -13,6 +13,7 @@ from shared.contracts.envelope import Envelope
 from shared.errors import AppError
 
 from .auth_service import AuthResult, AuthService, LoginInput, OwnerResetInput, build_auth_service
+from .openapi_schemas import JwksOut
 
 
 class ResolveTenantInput(BaseModel):
@@ -94,10 +95,10 @@ async def owner_reset(body: OwnerResetInput, svc: AuthService = Depends(_auth_se
     return Envelope[AuthResult](data=svc.owner_reset(body))
 
 
-@router.get("/{tenant_id}/jwks.json", description="下发指定 tenant 的验签公钥（JWKS 格式）。用户端凭此本地验签。", summary="下发 tenant 验签公钥（JWKS）", operation_id="manager_jwks")
-async def jwks(tenant_id: str, svc: AuthService = Depends(_auth_service)) -> dict:
+@router.get("/{tenant_id}/jwks.json", description="下发指定 tenant 的验签公钥（JWKS 格式）。用户端凭此本地验签。", summary="下发 tenant 验签公钥（JWKS）", operation_id="manager_jwks", response_model=JwksOut, response_model_exclude_none=True)
+async def jwks(tenant_id: str, svc: AuthService = Depends(_auth_service)) -> JwksOut:
     # JWKS 是公开验签材料（公钥），可下发用户端本地验签（D23）。
-    return svc.jwks(tenant_id)
+    return JwksOut.model_validate(svc.jwks(tenant_id))
 
 
 @router.post("/resolve-tenant", description="企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。按 enterprise_code 或 enterprise_slug 匹配，404 未找到。", summary="解析企业标识到 tenant_id（公开端点）", operation_id="manager_resolve_tenant")

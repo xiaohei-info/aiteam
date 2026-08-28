@@ -14,14 +14,23 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
+from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
 from shared.errors import NotFound, install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
+from shared.openapi import install_openapi_enrichment
 
 logger = logging.getLogger(__name__)
+
+
+class HealthResponse(BaseModel):
+    """Standard liveness/readiness response."""
+
+    status: str = Field(description="服务状态。")
+    service: str = Field(description="服务名称。")
 
 
 def create_app(settings: Settings, router: APIRouter) -> FastAPI:
@@ -29,6 +38,11 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
 
     app = FastAPI(
         title=f"AI Team {settings.tier} service",
+        description=(
+            "AI Team v1 "
+            + ("运营端" if settings.tier == "operation" else "企业端")
+            + " API；响应遵循统一 envelope 与 problem+json 契约。"
+        ),
         docs_url="/docs" if settings.expose_public_docs else None,
         redoc_url="/redoc" if settings.expose_public_docs else None,
         openapi_url="/openapi.json",
@@ -37,15 +51,18 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
 
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)
+    # Apply the shared OpenAPI policy after router inclusion; the wrapper defers
+    # generation until the first request so every mounted endpoint is visible.
+    install_openapi_enrichment(app, settings.tier)
 
-    @app.get("/healthz", tags=["infra"], summary="liveness")
-    async def healthz() -> dict:  # noqa: ANN202
-        return {"status": "ok", "service": settings.service_name}
+    @app.get("/healthz", tags=["infra"], summary="liveness", description="检查服务进程是否存活。", response_model=HealthResponse)
+    async def healthz() -> HealthResponse:
+        return HealthResponse(status="ok", service=settings.service_name)
 
-    @app.get("/readyz", tags=["infra"], summary="readiness")
-    async def readyz() -> dict:  # noqa: ANN202
+    @app.get("/readyz", tags=["infra"], summary="readiness", description="检查本端数据库和本地依赖是否可用。", response_model=HealthResponse)
+    async def readyz() -> HealthResponse:
         # 只校验本端依赖；上端不可达按"可降级 pull"对待，不致本端 not-ready（CLAUDE/AGENTS §13）。
-        return {"status": "ready", "service": settings.service_name}
+        return HealthResponse(status="ready", service=settings.service_name)
 
     app.include_router(router)
 

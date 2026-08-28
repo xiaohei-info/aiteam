@@ -24,6 +24,11 @@ function publicUsageSummary(value: unknown): UsageSummary | undefined {
 export type ReceiptState = "accepted" | "completed" | "unknown";
 
 export type ConversationState = "draft" | "active" | "paused" | "muted" | "archived";
+export type ConversationPermissionMode = "read-only" | "workspace-write" | "full-access";
+
+export function normalizePermissionMode(value: unknown): ConversationPermissionMode {
+  return value === "workspace-write" || value === "full-access" ? value : "read-only";
+}
 
 export interface ConversationRecord {
   id: string;
@@ -39,6 +44,7 @@ export interface ConversationRecord {
   tenantId?: string | null;
   memberId?: string | null;
   schedule?: Record<string, unknown> | null;
+  permissionMode?: ConversationPermissionMode;
   lastReadEntryId?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -56,6 +62,7 @@ export interface ConversationMetadata {
   tenant_id?: string | null;
   member_id?: string | null;
   schedule: Record<string, unknown> | null;
+  permission_mode: ConversationPermissionMode;
   last_read_entry_id: string | null;
   created_at: string;
   updated_at: string;
@@ -101,8 +108,19 @@ export interface LoadedExpertProjection {
 
 export interface LoadedSolutionProjection {
   solution_instance_id: string;
+  solution_id?: string;
   display_name: string;
+  description?: string;
+  icon?: string;
+  tags?: string[];
   version: string;
+  status?: string;
+  coordinator_instructions?: string;
+  workflow_skill_ref?: Record<string, unknown> | null;
+  output_requirements?: string;
+  config_version?: number;
+  coordinator_employee_id?: string | null;
+  expert_employee_ids?: string[];
   tenant_id?: string;
   member_id?: string;
   [key: string]: unknown;
@@ -203,6 +221,7 @@ interface ConversationRow {
   tenant_id: string | null;
   member_id: string | null;
   schedule_json: string | null;
+  permission_mode: ConversationPermissionMode;
   last_read_entry_id: string | null;
   created_at: string;
   updated_at: string;
@@ -246,6 +265,7 @@ export class AgentSqliteStore {
         tenant_id TEXT,
         member_id TEXT,
         schedule_json TEXT,
+        permission_mode TEXT NOT NULL DEFAULT 'read-only' CHECK (permission_mode IN ('read-only', 'workspace-write', 'full-access')),
         last_read_entry_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -370,6 +390,7 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN tenant_id TEXT",
       "ALTER TABLE conversation ADD COLUMN member_id TEXT",
       "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
+      "ALTER TABLE conversation ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'read-only'",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
@@ -421,13 +442,13 @@ export class AgentSqliteStore {
   }
 
   listScheduledConversations(): ConversationRecord[] {
-    const rows = this.db.prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
+    const rows = this.db.prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
     return rows.map((row) => this.toConversation(row));
   }
 
   getConversation(id: string): ConversationRecord | undefined {
     const row = this.db
-      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
+      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
       .get(id) as ConversationRow | undefined;
     return row ? this.toConversation(row) : undefined;
   }
@@ -436,7 +457,7 @@ export class AgentSqliteStore {
     const safeLimit = Math.min(Math.max(limit, 1), 100);
     const rows = this.db.prepare(`
       SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
-             coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at
+             coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at
       FROM conversation
       WHERE (? IS NULL OR updated_at < (SELECT updated_at FROM conversation WHERE id = ?))
         AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)
@@ -452,8 +473,8 @@ export class AgentSqliteStore {
     this.db.prepare(`
       INSERT INTO conversation (
         id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
-        coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, last_read_entry_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         session_file = excluded.session_file,
         workspace = excluded.workspace,
@@ -467,6 +488,7 @@ export class AgentSqliteStore {
         tenant_id = excluded.tenant_id,
         member_id = excluded.member_id,
         schedule_json = excluded.schedule_json,
+        permission_mode = excluded.permission_mode,
         last_read_entry_id = excluded.last_read_entry_id,
         updated_at = excluded.updated_at
     `).run(
@@ -474,7 +496,7 @@ export class AgentSqliteStore {
       JSON.stringify(record.labels ?? []), record.state ?? "active", record.entryEmployeeId ?? null,
       record.coordinatorEmployeeId ?? null, record.solutionRef ?? null,
       record.tenantId ?? null, record.memberId ?? null,
-      record.schedule ? JSON.stringify(record.schedule) : null, record.lastReadEntryId ?? null,
+      record.schedule ? JSON.stringify(record.schedule) : null, record.permissionMode ?? "read-only", record.lastReadEntryId ?? null,
       record.createdAt ?? now, record.updatedAt ?? now,
     );
   }
@@ -985,6 +1007,7 @@ export class AgentSqliteStore {
       tenantId: row.tenant_id,
       memberId: row.member_id,
       schedule: this.parseJsonObject(row.schedule_json),
+      permissionMode: normalizePermissionMode(row.permission_mode),
       lastReadEntryId: row.last_read_entry_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -1005,6 +1028,7 @@ export class AgentSqliteStore {
       tenant_id: record.tenantId ?? null,
       member_id: record.memberId ?? null,
       schedule: record.schedule ?? null,
+      permission_mode: normalizePermissionMode(record.permissionMode),
       last_read_entry_id: record.lastReadEntryId ?? null,
       created_at: record.createdAt ?? new Date(0).toISOString(),
       updated_at: record.updatedAt ?? new Date(0).toISOString(),

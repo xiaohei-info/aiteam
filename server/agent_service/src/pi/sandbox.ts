@@ -9,6 +9,7 @@ import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import type { EditOperations } from "@earendil-works/pi-coding-agent";
 import type { ReadOperations } from "@earendil-works/pi-coding-agent";
 import type { WriteOperations } from "@earendil-works/pi-coding-agent";
+import type { ConversationPermissionMode } from "../storage/sqlite.js";
 
 const LOCAL_PROVIDER_CONFIG = { runnerCommand: [], runnerFailureSignatures: [], probeTimeoutMs: 5_000 };
 
@@ -24,9 +25,10 @@ export class LocalSandbox {
   private readonly provider = new LocalSandboxProvider(this.context, LOCAL_PROVIDER_CONFIG);
 
   /** Run the provider's real backend selection/probe; no environment flag participates. */
-  async isAvailable(workspaceRoot: string): Promise<boolean> {
+  async isAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only"): Promise<boolean> {
+    if (mode === "full-access") return true;
     try {
-      const confined = this.provider.confine(["true"], this.policy(workspaceRoot));
+      const confined = this.provider.confine(["true"], this.policy(workspaceRoot, undefined, mode));
       if (confined.enforcement !== "full") return false;
       const argv = networkIsolatedArgv(confined.argv);
       return (await run(argv, resolve(workspaceRoot), { onData: () => undefined })).exitCode === 0;
@@ -36,19 +38,23 @@ export class LocalSandbox {
     }
   }
 
-  async assertAvailable(workspaceRoot: string): Promise<void> {
-    if (!(await this.isAvailable(workspaceRoot))) throw new SandboxUnavailableError("workspace-write", "No functional local sandbox backend is available");
+  async assertAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only"): Promise<void> {
+    if (mode === "full-access") return;
+    if (!(await this.isAvailable(workspaceRoot, mode))) throw new SandboxUnavailableError(mode, "No functional local sandbox backend is available");
   }
 
-  operations(workspaceRoot: string, sessionId?: string): SandboxOperations {
+  operations(workspaceRoot: string, sessionId?: string, mode: ConversationPermissionMode = "read-only"): SandboxOperations {
+    if (mode === "full-access") return this.unconfinedOperations(workspaceRoot);
     const root = canonicalPath(resolve(workspaceRoot));
-    const policy = this.policy(root, sessionId);
+    const policy = this.policy(root, sessionId, mode);
+    const readOnly = mode === "read-only";
+    const rejectWrite = () => { throw new Error("当前会话为只读权限，请切换到工作区可写或完全访问"); };
     return {
       bash: {
         exec: async (command, cwd, options) => {
           const actualCwd = assertWorkspacePath(cwd, root);
-          const confined = this.provider.confine(["bash", "-c", command], { ...policy, workspaceRoot: root });
-          if (confined.enforcement !== "full") throw new SandboxUnavailableError("workspace-write", "Sandbox backend provides only partial enforcement");
+          const confined = this.provider.confine(["bash", "-c", command], policy);
+          if (confined.enforcement !== "full") throw new SandboxUnavailableError(policy.mode, "Sandbox backend provides only partial enforcement");
           return run(networkIsolatedArgv(confined.argv), actualCwd, options);
         },
       },
@@ -57,19 +63,29 @@ export class LocalSandbox {
         access: async (path) => access(assertWorkspacePath(path, root), constants.R_OK),
       },
       write: {
-        writeFile: (path, content) => writeFile(assertWorkspacePath(path, root), content),
-        mkdir: async (path) => { await mkdir(assertWorkspacePath(path, root), { recursive: true }); },
+        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(assertWorkspacePath(path, root), content),
+        mkdir: readOnly ? rejectWrite : async (path) => { await mkdir(assertWorkspacePath(path, root), { recursive: true }); },
       },
       edit: {
         readFile: (path) => readFile(assertWorkspacePath(path, root)),
-        writeFile: (path, content) => writeFile(assertWorkspacePath(path, root), content),
-        access: async (path) => access(assertWorkspacePath(path, root), constants.R_OK | constants.W_OK),
+        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(assertWorkspacePath(path, root), content),
+        access: async (path) => access(assertWorkspacePath(path, root), readOnly ? constants.R_OK : constants.R_OK | constants.W_OK),
       },
     };
   }
 
-  private policy(workspaceRoot: string, sessionId?: string): SandboxPolicy {
-    return { mode: "workspace-write", workspaceRoot: canonicalPath(resolve(workspaceRoot)), ...(sessionId ? { sessionId: sessionId as never } : {}) };
+  private unconfinedOperations(workspaceRoot: string): SandboxOperations {
+    const cwd = resolve(workspaceRoot);
+    return {
+      bash: { exec: (command, actualCwd, options) => run(["bash", "-c", command], resolve(actualCwd || cwd), options) },
+      read: { readFile: (path) => readFile(resolve(path)), access: async (path) => access(resolve(path), constants.R_OK) },
+      write: { writeFile: (path, content) => writeFile(resolve(path), content), mkdir: async (path) => { await mkdir(resolve(path), { recursive: true }); } },
+      edit: { readFile: (path) => readFile(resolve(path)), writeFile: (path, content) => writeFile(resolve(path), content), access: async (path) => access(resolve(path), constants.R_OK | constants.W_OK) },
+    };
+  }
+
+  private policy(workspaceRoot: string, sessionId: string | undefined, mode: ConversationPermissionMode): SandboxPolicy {
+    return { mode: mode === "workspace-write" ? "workspace-write" : "read-only", workspaceRoot: canonicalPath(resolve(workspaceRoot)), ...(sessionId ? { sessionId: sessionId as never } : {}) };
   }
 }
 

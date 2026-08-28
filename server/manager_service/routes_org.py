@@ -13,6 +13,7 @@ from shared.contracts.envelope import Envelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
+from .openapi_schemas import OrgAssignmentOut
 from .org_service import OrgService
 from .routes_org_schemas import OrgAssignmentPatch, OrgTreeNode
 
@@ -52,9 +53,9 @@ def build_org_router(verifier) -> APIRouter:
         body: OrgAssignmentPatch,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[dict]:
+    ) -> Envelope[OrgAssignmentOut]:
         ctx = tenant_context_from(claims)
         svc = _service(request)
-        return Envelope(data=svc.update_assignment(ctx, employee_id, body.department_id))
+        return Envelope[OrgAssignmentOut](data=OrgAssignmentOut(**svc.update_assignment(ctx, employee_id, body.department_id)))
 
     return router

@@ -16,6 +16,7 @@ from shared.service_token import verify_service_token
 
 from .auth_service import AuthService
 from .exceptions import ManagerAdminDbNotConfigured
+from .openapi_schemas import OwnerBootstrapOut
 
 router = APIRouter(tags=["manager", "control-plane"])
 
@@ -38,12 +39,13 @@ def _tenant_exists(admin_db_url: str, tenant_id: str) -> bool:
     description="运营端Manager云侧调用：负责人首次登录凭据 hash 落库。用户端凭此完成首登重置。",
     operation_id="manager_owner_bootstrap",
     status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
 )
 def owner_bootstrap(
     body: OwnerBootstrapSync,
     request: Request,
     _svc=Depends(verify_service_token),  # 服务间认证守卫（平面③ 代码层，03 §9.1）
-) -> Envelope[dict]:
+) -> Envelope[OwnerBootstrapOut]:
     settings = request.app.state.settings
     db_url = settings.db_url
     admin_db_url = settings.admin_db_url
@@ -78,4 +80,4 @@ def owner_bootstrap(
     data = {"tenant_id": body.tenant_id, "user_id": user_id}
     if idempotent:
         data["idempotent"] = True
-    return Envelope[dict](data=data)
+    return Envelope[OwnerBootstrapOut](data=OwnerBootstrapOut(**data))

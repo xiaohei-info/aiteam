@@ -68,6 +68,10 @@ test("controlled loader uses only the Manager lease and loads approved Hindsight
     assert.deepEqual(memoryToolNames(auth.snapshot, runtime).join(","), "hindsight_recall,hindsight_retain");
     const recallOnly = authorization("member-1", "employee-1", { enabled: true, allowed_operations: ["recall"] });
     assert.deepEqual(memoryToolNames(recallOnly.snapshot, runtime), ["hindsight_recall"]);
+    const defaultPolicy = authorization("member-1", "employee-1");
+    defaultPolicy.snapshot.tool_policy = { allowed_tools: [] };
+    assert.equal(isMemoryPolicyEnabled(defaultPolicy.snapshot), true);
+    assert.deepEqual(memoryToolNames(defaultPolicy.snapshot, runtime), ["hindsight_recall", "hindsight_retain"]);
 
     const configPath = hindsightConfigPath(agentDir, workspace);
     const configDir = join(hindsightStateDir(agentDir, workspace), "config");
@@ -189,7 +193,7 @@ test("Hindsight state cleanup removes failed queue state only when explicitly re
   }
 });
 
-test("memory policy must explicitly enable the extension and only Manager leases select a bank", async () => {
+test("memory defaults on, supports explicit disable, and only Manager leases select a bank", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "aiteam-hindsight-policy-"));
   const agentDir = mkdtempSync(join(tmpdir(), "aiteam-hindsight-agent-"));
   try {

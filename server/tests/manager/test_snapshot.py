@@ -301,7 +301,17 @@ def test_generate_maps_all_fields():
     assert snap.snapshot_version  # 非空
 
 
+def test_generate_defaults_memory_policy_when_employee_has_no_override():
+    config_svc, _grant, _member, snap_svc = _services()
+    ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
+    created = config_svc.create(ctx, _full_body().model_copy(update={"memory_policy": None, "tools": []}), employee_slug="exp-a")
+    snap = snap_svc.generate(ctx, member_id="admin-1", employee_id=created.employee_id)
+    assert snap.tools == ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"]
+    assert snap.memory_policy == {"enabled": True, "scope": "employee", "allowed_operations": ["recall", "retain"]}
+
+
 def test_generate_with_explicit_matching_version():
+
     config_svc, _grant, _member, snap_svc = _services()
     ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
     created = config_svc.create(ctx, _full_body(), employee_slug="exp-a")

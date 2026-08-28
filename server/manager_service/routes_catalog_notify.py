@@ -16,6 +16,8 @@ from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.envelope import Envelope
 from shared.service_token import verify_service_token
 
+from .openapi_schemas import CatalogNotifyOut
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["manager", "control-plane"])
@@ -32,7 +34,7 @@ def catalog_notify(
     body: CatalogReleaseNotify,
     request: Request,
     _svc=Depends(verify_service_token),
-) -> Envelope[dict]:
+) -> Envelope[CatalogNotifyOut]:
     """接收目录变更通知并记录日志（Manager 按需拉取，不持久化模板真相）。
 
     当前实现：记录通知用于审计与缓存失效；租户侧可见目录由 F06/F07 拉取保证最终一致。
@@ -52,6 +54,6 @@ def catalog_notify(
         except Exception:  # noqa: BLE001
             logger.debug("catalog cache invalidate skipped", exc_info=True)
 
-    return Envelope[dict](
-        data={"received": True, "template_id": body.template_id, "action": body.action}
+    return Envelope[CatalogNotifyOut](
+        data=CatalogNotifyOut(received=True, template_id=body.template_id, action=body.action)
     )

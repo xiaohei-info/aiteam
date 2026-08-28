@@ -10,6 +10,7 @@ token 经 AuthService.issue 签发（与密码登录同一出口）。
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,6 +23,16 @@ from shared.errors import AppError, NotFound
 
 from .auth_service import AuthResult, AuthService, build_auth_service
 from .login_audit import LoginAuditRepository
+from .openapi_schemas import (
+    OAuthAuthorizeOut,
+    OAuthConnectionOut,
+    OAuthLinkOut,
+    OAuthUnlinkOut,
+    PasskeyCredentialOut,
+    PasskeyCredentialResultOut,
+    PasskeyDeleteOut,
+    PasskeyOptionsOut,
+)
 from .oauth import OAuthConnectionStore, GitHubOAuth, GoogleOAuth
 from .oauth_service import OAuthService
 from .passkey_service import PasskeyService
@@ -34,29 +45,40 @@ class _ManagerNotConfigured(AppError):
 
 class PasskeyRegistrationFinishIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    label: str | None = None
-    response: dict = Field(description="navigator.credentials.create 返回的 PublicKeyCredential")
+    label: str | None = Field(default=None, description="用户为该 passkey 设置的标签。")
+    response: dict[str, Any] = Field(description="navigator.credentials.create 返回的 PublicKeyCredential。")
+
+
+class PasskeyLoginIn(BaseModel):
+    """WebAuthn 登录断言。"""
+
+    model_config = ConfigDict(extra="allow", json_schema_extra={"x-dynamic-json": True})
+    tenant_id: str = Field(description="企业租户 ID。")
+    id: str | None = Field(default=None, description="credential ID。")
+    rawId: str | None = Field(default=None, description="base64url credential ID。")
+    type: str | None = Field(default=None, description="WebAuthn credential 类型。")
+    response: dict[str, Any] | None = Field(default=None, description="浏览器返回的断言响应。")
 
 
 class OAuthAuthorizeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider: str
-    tenant_id: str
-    redirect_uri: str
+    provider: str = Field(description="OAuth 提供方。")
+    tenant_id: str = Field(description="企业租户 ID。")
+    redirect_uri: str = Field(description="OAuth 回调地址。")
 
 
 class OAuthCallbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider: str
-    code: str
-    state: str
+    provider: str = Field(description="OAuth 提供方。")
+    code: str = Field(description="OAuth authorization code。")
+    state: str = Field(description="CSRF state。")
 
 
 class OAuthLinkIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider: str
-    code: str
-    redirect_uri: str
+    provider: str = Field(description="OAuth 提供方。")
+    code: str = Field(description="OAuth authorization code。")
+    redirect_uri: str = Field(description="OAuth 回调地址。")
 
 
 def _require(request: Request):
@@ -148,15 +170,16 @@ passkey_router = APIRouter(prefix="/api/auth/passkey", tags=["mfa", "passkey"])
     summary="生成 WebAuthn 登录选项（challenge）",
     description="按 tenant_id 生成挑战；携 account 则限定为该账号已注册凭据，否则 usernameless（依赖 resident credential）。",
     operation_id="manager_passkey_authentication_options",
+    response_model_exclude_none=True,
 )
 async def passkey_authentication_options(
-    tenant_id: str,
-    account: str | None = Query(default=None),
+    tenant_id: str = Query(..., description="企业租户 ID。"),
+    account: str | None = Query(default=None, description="可选员工账号；不传则使用 usernameless 模式。"),
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
-) -> Envelope[dict]:
+) -> Envelope[PasskeyOptionsOut]:
     svc = _passkey_service(request, auth)
-    return Envelope[dict](data=svc.authentication_options(tenant_id, account))
+    return Envelope[PasskeyOptionsOut](data=PasskeyOptionsOut.model_validate(svc.authentication_options(tenant_id, account)))
 
 
 @passkey_router.post(
@@ -166,12 +189,13 @@ async def passkey_authentication_options(
     operation_id="manager_passkey_login",
 )
 async def passkey_login(
-    body: dict,
+    body: PasskeyLoginIn,
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
 ) -> Envelope[AuthResult]:
     svc = _passkey_service(request, auth)
-    return Envelope[AuthResult](data=svc.finish_login(tenant_id=body.get("tenant_id"), payload=body))
+    payload = body.model_dump(exclude_none=True)
+    return Envelope[AuthResult](data=svc.finish_login(tenant_id=body.tenant_id, payload=payload))
 
 
 # ---------------- passkey protected (需 token) ----------------
@@ -187,11 +211,11 @@ async def passkeys_list(
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[list]:
+) -> Envelope[list[PasskeyCredentialOut]]:
     ctx = tenant_context_from(claims)
     store = PasskeyStore(_router_for(request))
     rows = store.list_for_user(ctx, claims.user_id)
-    return Envelope[list](data=[
+    return Envelope[list[PasskeyCredentialOut]](data=[
         {"credential_id": r.credential_id, "label": r.label,
          "created_at": _iso(r.created_at), "last_used_at": _iso(r.last_used_at)}
         for r in rows
@@ -202,28 +226,30 @@ async def passkeys_list(
     "/registration-options",
     summary="生成当前用户的 passkey 注册选项（challenge）",
     operation_id="manager_passkey_registration_options",
+    response_model_exclude_none=True,
 )
 async def passkey_registration_options(
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[PasskeyOptionsOut]:
     ctx = tenant_context_from(claims)
     svc = _passkey_service(request, auth)
-    return Envelope[dict](data=svc.registration_options(ctx, claims.user_id))
+    return Envelope[PasskeyOptionsOut](data=PasskeyOptionsOut.model_validate(svc.registration_options(ctx, claims.user_id)))
 
 
 @passkey_mgmt_router.post(
     "",
     summary="提交 passkey 注册响应，完成绑定",
     operation_id="manager_passkey_register",
+    response_model_exclude_none=True,
 )
 async def passkey_register(
     body: PasskeyRegistrationFinishIn,
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[PasskeyCredentialResultOut]:
     label = (body.label or "").strip() or None
     ctx = tenant_context_from(claims)
     svc = _passkey_service(request, auth)
@@ -231,28 +257,28 @@ async def passkey_register(
                                      {"label": label, "response": body.response})
     store = PasskeyStore(_router_for(request))
     cred = store.find_by_credential(tenant_context_from(claims), result["credential_id"])
-    return Envelope[dict](data={"credential_id": result["credential_id"],
-                                 "label": cred.label if cred else result["label"]})
+    return Envelope[PasskeyCredentialResultOut](data=PasskeyCredentialResultOut(credential_id=result["credential_id"], label=cred.label if cred else result["label"]))
 
 
 @passkey_mgmt_router.delete(
     "/{credential_id}",
     summary="删除当前用户某个 passkey 凭据",
     operation_id="manager_passkey_delete",
+    response_model_exclude_none=True,
 )
 async def passkey_delete(
     credential_id: str,
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[PasskeyDeleteOut]:
     ctx = tenant_context_from(claims)
     store = PasskeyStore(_router_for(request))
     cred = store.find_by_credential(ctx, credential_id)
     if cred is None or cred.user_id != claims.user_id:
         raise NotFound("passkey not found")
     store.delete(ctx, credential_id=credential_id)
-    return Envelope[dict](data={"deleted": True, "credential_id": credential_id})
+    return Envelope[PasskeyDeleteOut](data=PasskeyDeleteOut(deleted=True, credential_id=credential_id))
 
 
 # ---------------- oauth public ----------------
@@ -267,9 +293,9 @@ oauth_router = APIRouter(prefix="/api/auth/oauth", tags=["mfa", "oauth"])
 async def oauth_providers(
     request: Request,
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[list]:
+) -> Envelope[list[str]]:
     svc = _oauth_service(request, auth)
-    return Envelope[list](data=svc.provider_names())
+    return Envelope[list[str]](data=svc.provider_names())
 
 
 @oauth_router.post(
@@ -281,10 +307,10 @@ async def oauth_authorize(
     body: OAuthAuthorizeIn,
     request: Request,
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[OAuthAuthorizeOut]:
     svc = _oauth_service(request, auth)
-    return Envelope[dict](data=svc.authorize(provider=body.provider, tenant_id=body.tenant_id,
-                                             redirect_uri=body.redirect_uri))
+    return Envelope[OAuthAuthorizeOut](data=OAuthAuthorizeOut(**svc.authorize(provider=body.provider, tenant_id=body.tenant_id,
+                                                                                redirect_uri=body.redirect_uri)))
 
 
 @oauth_router.post(
@@ -315,10 +341,10 @@ async def oauth_connections(
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[list]:
+) -> Envelope[list[OAuthConnectionOut]]:
     ctx = tenant_context_from(claims)
     svc = _oauth_service(request, auth)
-    return Envelope[list](data=svc.list_connections(ctx, claims.user_id))
+    return Envelope[list[OAuthConnectionOut]](data=[OAuthConnectionOut(**item) for item in svc.list_connections(ctx, claims.user_id)])
 
 
 @oauth_mgmt_router.post(
@@ -331,11 +357,11 @@ async def oauth_link(
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[OAuthLinkOut]:
     ctx = tenant_context_from(claims)
     svc = _oauth_service(request, auth)
-    return Envelope[dict](data=svc.link(ctx, provider=body.provider, code=body.code,
-                                        redirect_uri=body.redirect_uri, user_id=claims.user_id))
+    return Envelope[OAuthLinkOut](data=OAuthLinkOut(**svc.link(ctx, provider=body.provider, code=body.code,
+                                                               redirect_uri=body.redirect_uri, user_id=claims.user_id)))
 
 
 @oauth_mgmt_router.delete(
@@ -348,8 +374,8 @@ async def oauth_unlink(
     request: Request,
     claims: TokenClaims = Depends(_require),  # noqa: ARG001
     auth: AuthService = Depends(_auth_service),
-) -> Envelope[dict]:
+) -> Envelope[OAuthUnlinkOut]:
     ctx = tenant_context_from(claims)
     svc = _oauth_service(request, auth)
     ok = svc.unlink(ctx, provider=provider, user_id=claims.user_id)
-    return Envelope[dict](data={"unlinked": ok, "provider": provider})
+    return Envelope[OAuthUnlinkOut](data=OAuthUnlinkOut(unlinked=ok, provider=provider))

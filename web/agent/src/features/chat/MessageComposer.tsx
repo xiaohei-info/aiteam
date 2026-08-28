@@ -24,6 +24,8 @@ import {
   ChatComposer,
   ChatComposerInput,
   type ChatComposerInputHandle,
+  type ChatComposerToken,
+  type ChatComposerTrigger,
 } from "@astryxdesign/core/Chat";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -33,10 +35,12 @@ import { Icon } from "@astryxdesign/core/Icon";
 import { Popover } from "@astryxdesign/core/Popover";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
+import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type LocalFile } from "./useChatApi";
+import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
+import { ConversationPermissionControl } from "./ConversationPermissionControl";
 import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
@@ -48,6 +52,8 @@ const SKILL_OPTIONS = [
 ] as const;
 
 const TOAST_TTL_MS = 2500;
+
+type MentionItem = { id: string; label: string; auxiliaryData: LoadedExpertProjection };
 
 export type PendingSubmission = { key: string; text: string; uploaded: LocalFile[]; uploadsComplete: boolean; promptAttempted: boolean };
 
@@ -66,9 +72,12 @@ export interface MessageComposerProps {
   onSent: () => void;
   /** Group conversations pass their authorized solution roster; private chat keeps the local roster lookup. */
   mentionRoster?: LoadedExpertProjection[];
+  /** The owning conversation enables the shared permission control beside Send. */
+  conversation?: Conversation;
+  onConversationChanged?: (conversation: Conversation) => void;
 }
 
-export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, mentionRoster }: MessageComposerProps) {
+export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, mentionRoster, conversation, onConversationChanged }: MessageComposerProps) {
   const { client } = useApp();
   const toMessage = useApiError();
   const [content, setContent] = useState("");
@@ -113,7 +122,43 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
 
   const activeRoster = mentionRoster ?? roster;
   const visibleHandles = useMemo(() => new Set(footerHandles(activeRoster)), [activeRoster]);
-  const mentioned = useMemo(() => parseMentions(content, visibleHandles), [content, visibleHandles]);
+  const mentionAliases = useMemo(() => {
+    const aliases = new Map<string, string>();
+    const ambiguous = new Set<string>();
+    for (const expert of activeRoster) {
+      const name = typeof expert.display_name === "string" ? expert.display_name.trim() : "";
+      if (!name) continue;
+      if (aliases.has(name) && aliases.get(name) !== expert.handle) ambiguous.add(name);
+      else if (!ambiguous.has(name)) aliases.set(name, expert.handle);
+    }
+    for (const name of ambiguous) aliases.delete(name);
+    return aliases;
+  }, [activeRoster]);
+  const mentioned = useMemo(() => parseMentions(content, visibleHandles, mentionAliases), [content, mentionAliases, visibleHandles]);
+  const mentionByHandle = useMemo(
+    () => new Map(activeRoster.map((expert) => [expert.handle, expert] as const)),
+    [activeRoster],
+  );
+  const mentionItems = useMemo<MentionItem[]>(
+    () => activeRoster.map((expert) => ({
+      id: expert.employee_id,
+      label: mentionDisplayName(expert),
+      auxiliaryData: expert,
+    })),
+    [activeRoster],
+  );
+  const mentionTriggers = useMemo<ChatComposerTrigger[]>(() => {
+    if (mentionRoster === undefined || mentionItems.length === 0) return [];
+    return [{
+      character: "@",
+      searchSource: createStaticSource(mentionItems),
+      renderItem: (item) => <span>{item.label}</span>,
+      onSelect: (item) => mentionToken(item.auxiliaryData as LoadedExpertProjection),
+      emptySearchResultsText: "没有匹配的群成员",
+      loadingText: "加载群成员…",
+      menuLabel: "可 @ 的群成员",
+    }];
+  }, [mentionItems, mentionRoster]);
 
   function showToast(message: string) {
     setToast(message);
@@ -144,20 +189,30 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     setContent(input.getValue());
   }
 
+  function insertMention(expert: LoadedExpertProjection) {
+    const input = composerInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.insertToken(mentionToken(expert));
+    setContent(input.getValue());
+  }
+
   // GroupExpertRoster uses the same composer as private chat and only emits a
   // local insertion event; prompt submission remains in this shared component.
   useEffect(() => {
     const onAppendMention = (event: Event) => {
       if (mentionRoster === undefined) return;
       const handle = (event as CustomEvent<string>).detail;
-      if (typeof handle === "string" && visibleHandles.has(handle)) insertAtCursor(`@${handle} `);
+      const expert = typeof handle === "string" ? mentionByHandle.get(handle) : undefined;
+      if (expert) insertMention(expert);
     };
     window.addEventListener("group:append-mention", onAppendMention);
     return () => window.removeEventListener("group:append-mention", onAppendMention);
-  }, [mentionRoster, visibleHandles]);
+  }, [mentionByHandle, mentionRoster]);
 
   function pickHandle(handle: string) {
-    insertAtCursor(`@${handle} `);
+    const expert = mentionByHandle.get(handle);
+    if (expert) insertMention(expert);
     setMentionOpen(false);
   }
 
@@ -233,6 +288,9 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
       event.stopPropagation();
       return;
     }
+    // ChatComposerInput owns trigger-menu keyboard navigation. Its internal
+    // handler runs after capture; let it consume Enter when an option exists.
+    if (hasActiveTriggerOption(event.target)) return;
     event.preventDefault();
     event.stopPropagation();
     void submitCurrentContent();
@@ -370,7 +428,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
               )}
               {mentioned.length > 0 && (
                 <Text type="supporting" as="div" aria-live="polite">
-                  已 @提及：{mentioned.map((h) => `@${h}`).join(" ")}
+                  已 @提及：{mentioned.map((handle) => `@${mentionDisplayName(mentionByHandle.get(handle))}`).join(" ")}
                 </Text>
               )}
             </VStack>
@@ -382,6 +440,8 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
             handleRef={composerInputRef}
             label="消息内容"
             value={content}
+            triggers={mentionTriggers}
+            debounceMs={0}
             onChange={setContent}
             onSubmit={() => undefined}
             onKeyDownCapture={handleInputKeyDownCapture}
@@ -390,17 +450,22 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
           />
         }
         sendButton={
-          isPrompting ? (
-            <Button label="终止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
-          ) : (
-            <Button
-              label="发送"
-              variant="primary"
-              isLoading={submitting}
-              isDisabled={submitting || !content.trim() && attachments.length === 0}
-              onClick={() => void submitCurrentContent()}
-            />
-          )
+          <HStack gap={1} align="center">
+            {conversation && onConversationChanged ? (
+              <ConversationPermissionControl client={client} conversation={conversation} onChanged={onConversationChanged} />
+            ) : null}
+            {isPrompting ? (
+              <Button label="终止" variant="secondary" onClick={() => void abortCurrentPrompt()} />
+            ) : (
+              <Button
+                label="发送"
+                variant="primary"
+                isLoading={submitting}
+                isDisabled={submitting || !content.trim() && attachments.length === 0}
+                onClick={() => void submitCurrentContent()}
+              />
+            )}
+          </HStack>
         }
       />
 
@@ -424,4 +489,25 @@ export function footerHandles(roster: LoadedExpertProjection[]): string[] {
     if (p.handle) seen.add(p.handle);
   }
   return [...seen];
+}
+
+function mentionDisplayName(expert: LoadedExpertProjection | undefined): string {
+  const name = expert?.display_name;
+  return typeof name === "string" && name.trim() ? name.trim() : expert?.handle ?? "群成员";
+}
+
+function mentionToken(expert: LoadedExpertProjection): ChatComposerToken {
+  const displayName = mentionDisplayName(expert);
+  return {
+    value: `@${displayName}`,
+    render: () => <span aria-label={`@${displayName}`}>@{displayName}</span>,
+  };
+}
+
+function hasActiveTriggerOption(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const editable = target.closest('[contenteditable="true"]');
+  if (!editable || editable.getAttribute("aria-expanded") !== "true") return false;
+  const activeId = editable.getAttribute("aria-activedescendant");
+  return Boolean(activeId && document.getElementById(activeId));
 }

@@ -32,6 +32,11 @@ from .schemas import EmployeeConfigOut
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_AGENT_TOOLS = [
+    "bash", "read", "write", "edit", "todo_update",
+    "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain",
+]
+
 # 越权拦截审计动作名（05 F16）。
 _SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
 
@@ -228,11 +233,15 @@ def _to_snapshot(
         persona=config.persona,
         model_policy=config.model_policy.model_copy(update={"pricing": pricing}),
         execution_policy=ExecutionPolicy(timeout_seconds=config.execution_policy.timeout_seconds),
-        tools=list(config.tools),
+        tools=list(config.tools) if config.tools else list(_DEFAULT_AGENT_TOOLS),
         skills=list(config.skills),
         knowledge_refs=knowledge_refs,
         connector_refs=list(config.connector_refs),
-        memory_policy=config.memory_policy,
+        memory_policy=config.memory_policy if config.memory_policy is not None else {
+            "enabled": True,
+            "scope": "employee",
+            "allowed_operations": ["recall", "retain"],
+        },
     )
 
 

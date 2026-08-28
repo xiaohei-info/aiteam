@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import RS256TokenVerifier, require_claims
@@ -34,12 +35,18 @@ _auth = build_operation_auth_service(admin_db_url=settings.admin_db_url)
 # 静态 RS256 验签器（Operation 单 key，无需 kid 动态解析）。
 _verifier = RS256TokenVerifier.from_public_pems({_auth.kid: _auth.signer.public_pem()})
 
+class PingOut(BaseModel):
+    """运营端存活探针结果。"""
+
+    pong: bool = Field(description="固定存活探针结果。")
+
+
 router = APIRouter(prefix="/api/operation", tags=["operation"])
 
 
-@router.get("/ping", summary="liveness ping（演示 envelope）", operation_id="operation_ping")
-async def ping() -> Envelope[dict]:
-    return Envelope[dict](data={"pong": True})
+@router.get("/ping", summary="liveness ping（演示 envelope）", description="返回运营端固定存活结果。", operation_id="operation_ping", response_model=Envelope[PingOut])
+async def ping() -> Envelope[PingOut]:
+    return Envelope[PingOut](data=PingOut(pong=True))
 
 
 @router.get("/whoami", summary="解出当前身份（受保护端点 401/200）", operation_id="operation_whoami")

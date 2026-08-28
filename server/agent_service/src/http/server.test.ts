@@ -73,6 +73,38 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
   }
 });
 
+test("Agent conversation permissions default to read-only and update through the local API", async () => {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const created = await fetch(`${base}/api/agent/conversations`, {
+      method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "permission" }),
+    });
+    assert.equal(created.status, 201);
+    const initial = (await created.json() as { data: { id: string; permission_mode: string } }).data;
+    assert.equal(initial.permission_mode, "read-only");
+    const updated = await fetch(`${base}/api/agent/conversations/${initial.id}`, {
+      method: "PATCH", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ permission_mode: "workspace-write" }),
+    });
+    assert.equal(updated.status, 200);
+    assert.equal((await updated.json() as { data: { permission_mode: string } }).data.permission_mode, "workspace-write");
+    const invalid = await fetch(`${base}/api/agent/conversations/${initial.id}`, {
+      method: "PATCH", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ permission_mode: "unsafe" }),
+    });
+    assert.equal(invalid.status, 422);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent group creation binds an authorized coordinator and rejects cross-roster input", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
@@ -234,6 +266,42 @@ test("Agent OpenAPI documents local attachment and artifact contracts", async ()
   }
 });
 
+test("Agent OpenAPI exposes complete operation metadata", async () => {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const document = await (await fetch(`http://127.0.0.1:${address.port}/openapi.json`)).json() as { paths: Record<string, Record<string, any>>; components: { securitySchemes: Record<string, unknown>; schemas: Record<string, any> } };
+    assert(document.components.securitySchemes.bearerAuth);
+    const ids = new Set<string>();
+    for (const [path, pathItem] of Object.entries(document.paths)) {
+      if (!path.startsWith("/api/")) continue;
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+        assert(operation.summary, `${method} ${path} missing summary`);
+        assert(operation.description, `${method} ${path} missing description`);
+        assert(operation.tags?.length, `${method} ${path} missing tags`);
+        assert(operation.operationId && !ids.has(operation.operationId), `${method} ${path} has duplicate operationId`);
+        ids.add(operation.operationId);
+        assert.deepEqual(operation.security, path.startsWith("/api/auth/") || path.endsWith("/login") || path.endsWith("/reset-password") || path.endsWith("/ping") ? [] : [{ bearerAuth: [] }]);
+        assert(operation.responses["422"]?.$ref === "#/components/responses/ValidationError", `${method} ${path} missing unified validation response`);
+      }
+    }
+    for (const [name, schema] of Object.entries(document.components.schemas)) {
+      assert(schema.description, `schema ${name} missing description`);
+      for (const [field, value] of Object.entries(schema.properties ?? {})) {
+        const property = value as { $ref?: unknown; description?: unknown };
+        if (value && typeof value === "object" && !property.$ref) assert(property.description, `schema ${name}.${field} missing description`);
+      }
+    }
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent HTTP prompt accepts an idempotent Pi prompt", async () => {
   const fixture = await createFixture();
   fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
@@ -288,6 +356,7 @@ test("Agent HTTP prompt accepts an idempotent Pi prompt", async () => {
     }
     assert(streamed.includes("event: pi"));
     assert(streamed.includes('"type":"message_update"'));
+    assert(streamed.includes('"source_employee_id":"employee-1"'));
     eventsAbort.abort();
     await reader.cancel().catch(() => undefined);
 

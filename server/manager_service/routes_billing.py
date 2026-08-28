@@ -5,10 +5,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from typing import Literal
-from uuid import uuid4
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,8 +57,8 @@ class UsageOverviewOut(BaseModel):
     unknown_pricing_runs: int = 0
     top_employee_id: str | None = None
     top_employee_tokens: int = 0
-    trend: list[dict] = Field(default_factory=list)
-    ranking: list[dict] = Field(default_factory=list)
+    trend: list[dict[str, Any]] = Field(default_factory=list, description="按时间排序的用量趋势。")
+    ranking: list[dict[str, Any]] = Field(default_factory=list, description="员工用量排名。")
 
 
 class UsageRecordOut(BaseModel):

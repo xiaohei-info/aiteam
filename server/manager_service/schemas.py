@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,7 +42,7 @@ class EmployeeConfig(BaseModel):
     skills: list[str] = Field(default_factory=list, description="技能引用；A 类能力本地经 MCP 注入")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list)
-    memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
+    memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。键值由记忆能力约定。")
 
 
 class EmployeeConfigIn(EmployeeConfig):
@@ -361,7 +361,7 @@ class SkillCatalogIn(BaseModel):
     install_policy: SkillInstallPolicy = Field(default="on_demand", description="安装策略")
     binding_policy: SkillBindingPolicy = Field(default="opt_in", description="绑定策略")
     visibility: CatalogVisibility = Field(default="private")
-    config: dict = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）")
+    config: dict[str, Any] = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）。")
     # M2：技能真相（文件列表 + 包级内容哈希）；供 Agent 端 cache 按 version/hash 判定更新。
     files: list[SkillFileIn] = Field(default_factory=list, description="技能文件列表（含 SKILL.md）")
     content_hash: str = Field(default="", description="包级内容指纹（SkillPackage 同步 key）")
@@ -387,7 +387,7 @@ class ConnectorCatalogIn(BaseModel):
     display_name: str = ""
     visibility: CatalogVisibility = Field(default="private")
     grant_scope: ConnectorGrantScope = Field(default="tenant_wide", description="凭据授权范围元数据（D18）")
-    config: dict = Field(default_factory=dict, description="中立配置（不含凭据本体，D18）")
+    config: dict[str, Any] = Field(default_factory=dict, description="中立配置（不含凭据本体，D18）。")
 
 
 class ConnectorCatalogOut(ConnectorCatalogIn):
@@ -408,11 +408,11 @@ class MemoryPolicyCatalogIn(BaseModel):
 
     policy_id: str = Field(description="租户内记忆策略标识（中立引用，供 employee.memory_policy 指向）")
     display_name: str = ""
-    policy: dict = Field(default_factory=dict, description="记忆策略（mem0 可消费的中立配置，D17）")
-    seed_memories: list[dict] = Field(default_factory=list, description="种子记忆（策略级，非运行时记忆数据）")
+    policy: dict[str, Any] = Field(default_factory=dict, description="记忆策略（mem0 可消费的中立配置，D17）。")
+    seed_memories: list[dict[str, Any]] = Field(default_factory=list, description="种子记忆（策略级，非运行时记忆数据）。")
     retention_days: int | None = Field(default=None, ge=0, description="保留期（天）；None 表示不限")
     visibility: CatalogVisibility = Field(default="private")
-    config: dict = Field(default_factory=dict, description="中立配置")
+    config: dict[str, Any] = Field(default_factory=dict, description="中立配置。")
 
 
 class MemoryPolicyCatalogOut(MemoryPolicyCatalogIn):
@@ -494,7 +494,7 @@ class SolutionInstanceOut(BaseModel):
     expert_employee_ids: list[str] = Field(default_factory=list, description="按方案固定顺序展开的 employee 实例")
     coordinator_employee_id: str | None = Field(default=None, description="本 tenant 内映射后的协调专家 employee id")
     coordinator_instructions: str = Field(default="", description="自然语言协作说明")
-    workflow_skill_ref: dict | None = Field(default=None, description="方案工作流 Skill 固定版本引用")
+    workflow_skill_ref: dict[str, Any] | None = Field(default=None, description="方案工作流 Skill 固定版本引用。")
     output_requirements: str = Field(default="", description="方案交付要求")
     config_version: int = Field(default=1, ge=1)
     created_at: datetime | None = None
@@ -578,7 +578,7 @@ class SolutionApplyRecordOut(BaseModel):
     applied_by: str | None = Field(description="应用发起者 user_id")
     status: str = Field(description="applied | revoked — 方案应用状态")
     expert_instance_ids: list[str] = Field(default_factory=list, description="应用落到本 tenant 的专家 employee id 列表")
-    detail: dict | None = Field(default=None, description="补充信息（如 solution_instance_id / expert_count）")
+    detail: dict[str, Any] | None = Field(default=None, description="补充信息（如 solution_instance_id / expert_count）。")
     created_at: datetime | None = Field(default=None, description="首次应用时间 (applied_at)")
     updated_at: datetime | None = Field(default=None, description="最近更新时间")
 
@@ -651,7 +651,7 @@ class QuotaPolicyIn(BaseModel):
     )
     window_start: datetime
     window_end: datetime
-    dimensions: dict = Field(
+    dimensions: dict[str, Any] = Field(
         default_factory=dict,
         description="中立策略维度（如 cost_cap_usd/token_cap/run_cap/threshold），不含会话内容",
     )
@@ -674,7 +674,7 @@ class QuotaPolicyOut(BaseModel):
     target_ref: str | None = None
     window_start: datetime
     window_end: datetime
-    dimensions: dict = Field(default_factory=dict)
+    dimensions: dict[str, Any] = Field(default_factory=dict, description="当前策略维度快照。")
     enforcement: str
     status: str
     version: int = Field(description="策略版本；每次配置变更单调递增")
@@ -714,7 +714,7 @@ class EmployeePromptBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     system_prompt: str = Field(default="", description="中立 prompt 文本（不写 SOUL.md）")
-    behavior_rules_json: dict = Field(
+    behavior_rules_json: dict[str, Any] = Field(
         default_factory=dict,
         description="行为约束 JSON（中立结构；如 {max_turns, forbid_topics,...}，由 Pi 会话直接使用）",
     )
@@ -742,7 +742,7 @@ class EmployeePromptOut(BaseModel):
 
     employee_id: str = Field(description="归属 employee")
     system_prompt: str = ""
-    behavior_rules_json: dict = Field(default_factory=dict)
+    behavior_rules_json: dict[str, Any] = Field(default_factory=dict, description="行为约束 JSON。")
     opening_message: str | None = None
     version_no: int = Field(description="当前版本号（update 单调 +1）")
     source_template_version: str | None = None
@@ -758,7 +758,7 @@ class EmployeePromptHistoryOut(BaseModel):
     history_id: str = Field(description="历史记录 id")
     employee_id: str = Field(description="归属 employee")
     system_prompt: str = ""
-    behavior_rules_json: dict = Field(default_factory=dict)
+    behavior_rules_json: dict[str, Any] = Field(default_factory=dict, description="行为约束 JSON。")
     opening_message: str | None = None
     version_no: int = Field(description="该历史快照的版本号")
     source_template_version: str | None = None

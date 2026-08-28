@@ -2,6 +2,8 @@
 import type { PiEntry, PiEvent, ConversationEntries } from "@aiteam/shared/contracts";
 import type { AgentApiClient } from "../../lib/api-client";
 
+export type ConversationPermissionMode = "read-only" | "workspace-write" | "full-access";
+
 export interface Conversation {
   id: string;
   title: string | null;
@@ -13,6 +15,7 @@ export interface Conversation {
   coordinator_employee_id: string | null;
   solution_instance_id: string | null;
   schedule: Record<string, unknown> | null;
+  permission_mode?: ConversationPermissionMode;
   last_read_entry_id: string | null;
   created_at: string;
   updated_at: string;
@@ -44,6 +47,7 @@ export interface CreateConversationInput {
   entry_employee_id?: string | null;
   coordinator_employee_id?: string | null;
   solution_instance_id?: string | null;
+  permission_mode?: ConversationPermissionMode;
 }
 
 export async function createConversation(
@@ -58,6 +62,7 @@ export async function createConversation(
       ...(input.entry_employee_id !== undefined ? { entry_employee_id: input.entry_employee_id } : {}),
       ...(input.coordinator_employee_id !== undefined ? { coordinator_employee_id: input.coordinator_employee_id } : {}),
       ...(input.solution_instance_id !== undefined ? { solution_instance_id: input.solution_instance_id } : {}),
+      ...(input.permission_mode !== undefined ? { permission_mode: input.permission_mode } : {}),
     },
   });
 }
@@ -167,7 +172,7 @@ export async function abortPrompt(client: AgentApiClient, conversationId: string
 export async function updateConversation(
   client: AgentApiClient,
   conversationId: string,
-  patch: { title?: string | null; schedule?: Record<string, unknown> | null },
+  patch: { title?: string | null; schedule?: Record<string, unknown> | null; permission_mode?: ConversationPermissionMode },
 ): Promise<Conversation | null> {
   return client.patch<Conversation>(
     `/api/agent/conversations/${encodeURIComponent(conversationId)}`,

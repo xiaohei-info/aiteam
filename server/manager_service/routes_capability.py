@@ -55,7 +55,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- skill 目录（/api/manager/skills/*）----
 
     @router.post(
-        "/skills", description="请查看接口名称了解用途", summary="建技能目录条目（runtime 中立，D16）",
+        "/skills", description="建技能目录条目（runtime 中立，D16）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建技能目录条目（runtime 中立，D16）",
         operation_id="manager_skill_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_skill(
@@ -71,7 +71,7 @@ def build_capability_router(verifier) -> APIRouter:
         svc = _service(request)
         return ListEnvelope[SkillCatalogOut](data=svc.list_skills(tenant_context_from(claims)))
 
-    @router.get("/skills/{catalog_id}", description="请查看接口名称了解用途", summary="取单个技能目录条目", operation_id="manager_skill_catalog_get")
+    @router.get("/skills/{catalog_id}", description="取单个技能目录条目。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个技能目录条目", operation_id="manager_skill_catalog_get")
     async def get_skill(
         catalog_id: str, request: Request, claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillCatalogOut]:
@@ -81,7 +81,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/skills/{catalog_id}", description="请查看接口名称了解用途", summary="改写技能目录条目（catalog_version 自增）",
+        "/skills/{catalog_id}", description="改写技能目录条目（catalog_version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写技能目录条目（catalog_version 自增）",
         operation_id="manager_skill_catalog_update",
     )
     async def update_skill(
@@ -107,7 +107,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- connector 目录（/api/manager/connectors/*）----
 
     @router.post(
-        "/connectors", description="请查看接口名称了解用途", summary="建连接器目录条目（凭据本体归 M5，D18）",
+        "/connectors", description="建连接器目录条目（凭据本体归 M5，D18）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建连接器目录条目（凭据本体归 M5，D18）",
         operation_id="manager_connector_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_connector(
@@ -126,7 +126,7 @@ def build_capability_router(verifier) -> APIRouter:
         return ListEnvelope[ConnectorCatalogOut](data=svc.list_connectors(tenant_context_from(claims)))
 
     @router.get(
-        "/connectors/{catalog_id}", description="请查看接口名称了解用途", summary="取单个连接器目录条目",
+        "/connectors/{catalog_id}", description="取单个连接器目录条目。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个连接器目录条目",
         operation_id="manager_connector_catalog_get",
     )
     async def get_connector(
@@ -138,7 +138,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/connectors/{catalog_id}", description="请查看接口名称了解用途", summary="改写连接器目录条目（catalog_version 自增）",
+        "/connectors/{catalog_id}", description="改写连接器目录条目（catalog_version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写连接器目录条目（catalog_version 自增）",
         operation_id="manager_connector_catalog_update",
     )
     async def update_connector(
@@ -164,7 +164,7 @@ def build_capability_router(verifier) -> APIRouter:
     # ---- memory_policy 目录（/api/manager/memory-policies/*，D17）----
 
     @router.post(
-        "/memory-policies", description="请查看接口名称了解用途", summary="建记忆策略目录条目（复用 mem0，D17）",
+        "/memory-policies", description="建记忆策略目录条目（复用 mem0，D17）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建记忆策略目录条目（复用 mem0，D17）",
         operation_id="manager_memory_policy_catalog_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_memory_policy(
@@ -188,7 +188,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.get(
-        "/memory-policies/{catalog_id}", description="请查看接口名称了解用途", summary="取单个记忆策略目录条目",
+        "/memory-policies/{catalog_id}", description="取单个记忆策略目录条目。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个记忆策略目录条目",
         operation_id="manager_memory_policy_catalog_get",
     )
     async def get_memory_policy(
@@ -200,7 +200,7 @@ def build_capability_router(verifier) -> APIRouter:
         )
 
     @router.put(
-        "/memory-policies/{catalog_id}", description="请查看接口名称了解用途", summary="改写记忆策略目录条目（catalog_version 自增）",
+        "/memory-policies/{catalog_id}", description="改写记忆策略目录条目（catalog_version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写记忆策略目录条目（catalog_version 自增）",
         operation_id="manager_memory_policy_catalog_update",
     )
     async def update_memory_policy(

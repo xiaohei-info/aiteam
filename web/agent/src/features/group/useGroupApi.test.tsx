@@ -26,6 +26,10 @@ describe("useGroupApi read-only projections", () => {
     expect(parseMentions("请 @Alice 处理", new Set(["alice"]))).toEqual([]);
   });
 
+  it("resolves a manually typed display name to its stable handle", () => {
+    expect(parseMentions("请 @测试员 处理", new Set(["tester"]), new Map([["测试员", "tester"]]))).toEqual(["tester"]);
+  });
+
   it("lets the server resolve the coordinator for solution groups", async () => {
     const client = { post: vi.fn(async (_path: string, options: { body: unknown }) => ({
       id: "c1",

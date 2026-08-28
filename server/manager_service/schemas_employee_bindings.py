@@ -7,6 +7,7 @@ runtime 中立（D16/D17）：只搬运中立字段，不出现 runtime 原生�
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,13 +48,13 @@ class SkillBindingCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     skill_id: str = Field(description="绑定的 skill_catalog.skill_id")
     enabled: bool = True
-    config: dict = Field(default_factory=dict, description="级联覆盖参数")
+    config: dict[str, Any] = Field(default_factory=dict, description="级联覆盖参数。")
 
 
 class SkillBindingPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool | None = None
-    config: dict | None = None
+    config: dict[str, Any] | None = None
 
 
 class SkillBindingOut(BaseModel):
@@ -62,7 +63,7 @@ class SkillBindingOut(BaseModel):
     employee_id: str
     skill_id: str
     enabled: bool
-    config: dict
+    config: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 
@@ -73,13 +74,13 @@ class KnowledgeBindingCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     knowledge_space_id: str = Field(description="绑定的 knowledge_space id")
     enabled: bool = True
-    config: dict = Field(default_factory=dict, description="级联覆盖参数")
+    config: dict[str, Any] = Field(default_factory=dict, description="级联覆盖参数。")
 
 
 class KnowledgeBindingPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool | None = None
-    config: dict | None = None
+    config: dict[str, Any] | None = None
 
 
 class KnowledgeBindingOut(BaseModel):
@@ -88,7 +89,7 @@ class KnowledgeBindingOut(BaseModel):
     employee_id: str
     knowledge_space_id: str
     enabled: bool
-    config: dict
+    config: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 
@@ -97,8 +98,8 @@ class KnowledgeBindingOut(BaseModel):
 
 class MemorySettingIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    policy: dict = Field(default_factory=dict, description="记忆策略（04 §6.6，mem0）")
-    seed_memories: list = Field(default_factory=list, description="种子记忆")
+    policy: dict[str, Any] = Field(default_factory=dict, description="记忆策略（04 §6.6，mem0）。")
+    seed_memories: list[dict[str, Any]] = Field(default_factory=list, description="种子记忆。")
     retention_days: int | None = Field(default=None, description="保留天数")
     scope: str = Field(default="employee", description="可见性作用域（employee 为默认个人级；兼容 tenant/department）")
 
@@ -107,8 +108,8 @@ class MemorySettingOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     binding_id: str
     employee_id: str
-    policy: dict
-    seed_memories: list
+    policy: dict[str, Any]
+    seed_memories: list[dict[str, Any]]
     retention_days: int | None = None
     scope: str = "employee"
     updated_at: datetime
@@ -121,14 +122,14 @@ class ConnectorBindingCreate(BaseModel):
     connector_id: str = Field(description="绑定的 connector_catalog.connector_id")
     grant_ref: str | None = Field(default=None, description="M5 provider_credential 授权引用")
     enabled: bool = True
-    config: dict = Field(default_factory=dict, description="级联覆盖参数")
+    config: dict[str, Any] = Field(default_factory=dict, description="级联覆盖参数。")
 
 
 class ConnectorBindingPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     grant_ref: str | None = None
     enabled: bool | None = None
-    config: dict | None = None
+    config: dict[str, Any] | None = None
 
 
 class ConnectorBindingOut(BaseModel):
@@ -138,6 +139,6 @@ class ConnectorBindingOut(BaseModel):
     connector_id: str
     grant_ref: str | None = None
     enabled: bool
-    config: dict
+    config: dict[str, Any]
     created_at: datetime
     updated_at: datetime

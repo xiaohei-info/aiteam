@@ -6,16 +6,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
-from shared.contracts.enums import PlatformRole
+from shared.contracts.enums import AuditSeverity, PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
 
 from .admin_dependencies import get_admin_service
@@ -40,12 +40,12 @@ class EnterpriseAccountOut(BaseModel):
 
 
 class EnterpriseAccountDetail(EnterpriseAccountOut):
-    recharge_records: list[dict] = Field(default_factory=list)
-    audit_events: list[dict] = Field(default_factory=list)
+    recharge_records: list[dict[str, Any]] = Field(default_factory=list, description="企业充值记录。")
+    audit_events: list[dict[str, Any]] = Field(default_factory=list, description="企业审计摘要。")
     audit_events_total: int = 0
     employee_count: int = 0
-    token_history: list[dict] = Field(default_factory=list)
-    quota: dict | None = None
+    token_history: list[dict[str, Any]] = Field(default_factory=list, description="企业 token 计量历史。")
+    quota: dict[str, Any] | None = Field(default=None, description="企业配额快照。")
     suspended_at: datetime | None = None
     suspended_reason: str | None = None
     banned_at: datetime | None = None
@@ -74,7 +74,7 @@ class EnterpriseExportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     total: int = 0
-    rows: list[dict] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list, description="导出的企业记录。")
 
 
 class EnterpriseStatsOut(BaseModel):
@@ -118,16 +118,16 @@ class FinanceOverviewOut(BaseModel):
     revenue_currency: str = "CNY"
     cost_currency: str = "USD"
     active_orgs: int = 0
-    monthly_trend: list[dict] = Field(default_factory=list)
-    top5_consumers: list[dict] = Field(default_factory=list)
+    monthly_trend: list[dict[str, Any]] = Field(default_factory=list, description="月度财务趋势。")
+    top5_consumers: list[dict[str, Any]] = Field(default_factory=list, description="用量最高的五个企业。")
 
 
 class FinanceReportOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    recharge_details: list[dict] = Field(default_factory=list)
-    consumption_details: list[dict] = Field(default_factory=list)
-    profit_details: list[dict] = Field(default_factory=list)
+    recharge_details: list[dict[str, Any]] = Field(default_factory=list, description="充值明细。")
+    consumption_details: list[dict[str, Any]] = Field(default_factory=list, description="消耗明细。")
+    profit_details: list[dict[str, Any]] = Field(default_factory=list, description="利润明细。")
 
 
 # ---- 系统健康 ----
@@ -136,7 +136,7 @@ class SystemHealthOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: str = "healthy"
-    services: dict = Field(default_factory=dict)
+    services: dict[str, Any] = Field(default_factory=dict, description="各依赖服务状态。")
     timestamp: datetime
 
 
@@ -208,7 +208,7 @@ class QuotaResponse(BaseModel):
     limit: int
     used: int
     # Map of dimension -> {limit, used} for full snapshots.
-    dimensions: dict = Field(default_factory=dict)
+    dimensions: dict[str, Any] = Field(default_factory=dict, description="配额维度快照。")
 
 
 # ---- S01 新增：审计事件 enriched（issue #413）----
@@ -304,7 +304,7 @@ def build_admin_router(verifier) -> APIRouter:
             "ban": lambda: service.ban(org_id, reason=body.reason, actor_name="system_admin", actor_id=str(_claims.user_id) if _claims.user_id else None),
         }
         new_status = dispatch[body.action]()
-        detail_after = service.get_enterprise_detail(org_id)
+        _detail_after = service.get_enterprise_detail(org_id)
         return Envelope(data=LifecycleResponse(
             org_id=org_id,
             action=body.action,

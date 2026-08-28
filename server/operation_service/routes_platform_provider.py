@@ -63,11 +63,31 @@ class TenantRuntimeAccessOut(BaseModel):
 
 class PublicPricingSyncOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source: str
-    updated: int
-    skipped_known: int
-    skipped_manual: int
-    unmatched: int
+    source: str = Field(description="价格来源。")
+    updated: int = Field(description="已更新的价格条数。")
+    skipped_known: int = Field(description="已存在且被跳过的价格条数。")
+    skipped_manual: int = Field(description="手工价格被保留的条数。")
+    unmatched: int = Field(description="未匹配到模型的条数。")
+
+
+class PlatformModelListOut(BaseModel):
+    """Provider 下的平台模型列表。"""
+
+    model_config = ConfigDict(extra="forbid")
+    items: list[PlatformModel] = Field(default_factory=list, description="该 Provider 的模型列表。")
+
+
+class PublishedCountOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    published: int = Field(ge=0, description="已发布模型数量。")
+
+
+class PlatformCatalogOut(BaseModel):
+    """Manager 使用的已发布 Provider/Model 目录。"""
+
+    model_config = ConfigDict(extra="forbid")
+    providers: list[PlatformProvider] = Field(default_factory=list, description="已发布平台 Provider。")
+    models: list[PlatformModel] = Field(default_factory=list, description="已发布平台模型。")
 
 
 class _ProviderNotConfigured(AppError):
@@ -116,8 +136,8 @@ def publish_provider(provider_id: str, request: Request, _claims=Depends(_platfo
 
 
 @router.get("/providers/{provider_id}/models", operation_id="operation_platform_model_list")
-def list_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[dict]:
-    return Envelope(data={"items": _service(request).list_models(provider_id)})
+def list_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PlatformModelListOut]:
+    return Envelope(data=PlatformModelListOut(items=_service(request).list_models(provider_id)))
 
 
 @router.post("/providers/{provider_id}/sync-public-prices", operation_id="operation_platform_model_public_price_sync")
@@ -138,15 +158,15 @@ def publish_model(provider_id: str, body: ModelPublishRequest, request: Request,
 
 
 @router.post("/providers/{provider_id}/models/publish-priced", operation_id="operation_platform_models_publish_priced")
-def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[dict[str, int]]:
-    return Envelope(data=_service(request).publish_priced_models(provider_id))
+def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PublishedCountOut]:
+    return Envelope(data=PublishedCountOut(**_service(request).publish_priced_models(provider_id)))
 
 
 @router.get("/catalog/platform-providers", operation_id="operation_platform_provider_pull")
-def pull_platform_catalog(request: Request, _svc=Depends(verify_service_token)) -> Envelope[dict]:
+def pull_platform_catalog(request: Request, _svc=Depends(verify_service_token)) -> Envelope[PlatformCatalogOut]:
     service = _service(request)
     providers = service.list_providers(published_only=True)
-    return Envelope(data={"providers": providers, "models": [item for provider in providers for item in service.list_models(provider.provider_id, published_only=True)]})
+    return Envelope(data=PlatformCatalogOut(providers=providers, models=[item for provider in providers for item in service.list_models(provider.provider_id, published_only=True)]))
 
 
 @router.post("/provider-access/resolve", operation_id="operation_tenant_provider_access_resolve")

@@ -49,6 +49,21 @@ test("participant session index is additive, ordered, and removed with its conve
   }
 });
 
+test("conversation permissions default to read-only and survive updates", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-conversation-permission-test-"));
+  const store = new AgentSqliteStore(join(root, "agent.sqlite"));
+  try {
+    const created = store.createConversation({ id: "permissioned", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
+    assert.equal(created.permission_mode, "read-only");
+    const updated = store.updateConversation("permissioned", { permissionMode: "workspace-write" });
+    assert.equal(updated?.permission_mode, "workspace-write");
+    assert.equal(store.getConversation("permissioned")?.permissionMode, "workspace-write");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Agent startup drops legacy Manager knowledge content while preserving local tables", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-knowledge-cleanup-test-"));
   const path = join(root, "agent.sqlite");

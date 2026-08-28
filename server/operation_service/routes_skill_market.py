@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
@@ -28,7 +28,63 @@ class _ClawHubUnavailable(AppError):
 
 class SkillMarketSettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    auto_publish_downloads: bool
+    auto_publish_downloads: bool = Field(description="下载后的外部技能是否自动发布到平台目录。")
+
+
+class SkillMarketSettingsOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    auto_publish_downloads: bool = Field(description="下载后的外部技能是否自动发布。")
+
+
+class ExternalSkillOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(description="外部技能发布者句柄。")
+    slug: str = Field(description="外部技能 slug。")
+    display_name: str = Field(description="技能展示名称。")
+    summary: str = Field(description="外部技能摘要。")
+    version: str | None = Field(default=None, description="当前版本。")
+    latest_version: str | None = Field(default=None, description="最新可用版本。")
+    updated_at: int | None = Field(default=None, description="外部市场更新时间（Unix 秒）。")
+    downloads: int = Field(default=0, ge=0, description="外部市场下载次数。")
+    canonical_url: str = Field(default="", description="外部技能规范 URL。")
+    security_ok: bool | None = Field(default=None, description="外部安全检查结果。")
+
+
+class ExternalSkillBrowseOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    data: list[ExternalSkillOut] = Field(default_factory=list, description="外部技能结果列表。")
+    next_cursor: str | None = Field(default=None, description="下一页游标。")
+
+
+class PlatformSkillOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skill_id: str = Field(description="平台技能 ID。")
+    owner: str = Field(default="", description="技能发布者。")
+    slug: str = Field(default="", description="技能 slug。")
+    display_name: str = Field(default="", description="技能展示名称。")
+    summary: str = Field(default="", description="技能摘要。")
+    latest_external_version: str | None = Field(default=None, description="外部市场最新版本。")
+    latest_internal_version: str | None = Field(default=None, description="平台导入的最新版本。")
+    published_version: str | None = Field(default=None, description="当前发布版本。")
+    status: str = Field(default="", description="平台技能状态。")
+    latest_content_hash: str | None = Field(default=None, description="最新版本内容哈希。")
+    content_hash: str | None = Field(default=None, description="当前发布版本内容哈希。")
+    latest_version_status: str | None = Field(default=None, description="最新版本状态。")
+    version_id: str | None = Field(default=None, description="导入版本 ID。")
+    version: str | None = Field(default=None, description="导入版本号。")
+
+
+class PlatformSkillImportOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skill_id: str = Field(description="平台技能 ID。")
+    version_id: str = Field(description="导入版本 ID。")
+    owner: str = Field(description="外部技能发布者。")
+    slug: str = Field(description="外部技能 slug。")
+    display_name: str = Field(description="技能展示名称。")
+    summary: str = Field(default="", description="技能摘要。")
+    version: str = Field(description="导入版本。")
+    content_hash: str = Field(description="技能内容哈希。")
+    status: str = Field(description="导入后的发布状态。")
 
 
 def _verified_text_manifest(verification: dict, *, owner: str, slug: str, version: str) -> set[tuple[object, object, object]]:
@@ -90,60 +146,60 @@ def _client(request: Request) -> ClawHubClient:
     return client
 
 
-@router.get("/external")
+@router.get("/external", summary="浏览外部技能市场", description="从外部技能市场检索或分页浏览可导入的纯文本技能。", operation_id="operation_skill_market_external_list", response_model_exclude_none=True)
 async def browse_external(
     request: Request,
-    q: str | None = Query(default=None),
-    cursor: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=100),
+    q: str | None = Query(default=None, description="外部技能搜索关键词。"),
+    cursor: str | None = Query(default=None, description="外部市场分页游标。"),
+    limit: int = Query(default=20, ge=1, le=100, description="返回条数上限。"),
     claims: TokenClaims = Depends(_claims),
-) -> dict:
+) -> ExternalSkillBrowseOut:
     del claims
     client = _client(request)
     try:
         if q and q.strip():
-            return {"data": [item.__dict__ for item in client.search(q.strip(), limit=limit)]}
+            return ExternalSkillBrowseOut(data=[ExternalSkillOut.model_validate(item.__dict__) for item in client.search(q.strip(), limit=limit)])
         items, next_cursor = client.browse(cursor=cursor, limit=limit)
-        return {"data": [item.__dict__ for item in items], "next_cursor": next_cursor}
+        return ExternalSkillBrowseOut(data=[ExternalSkillOut.model_validate(item.__dict__) for item in items], next_cursor=next_cursor)
     except AppError:
         raise
     except Exception as exc:
         raise _ClawHubUnavailable("ClawHub is unavailable") from exc
 
 
-@router.get("/internal")
+@router.get("/internal", summary="列出平台技能目录", description="列出已导入 Operator 平台目录的技能及其发布状态。", operation_id="operation_skill_market_internal_list")
 async def list_internal(
     request: Request,
     _claims: TokenClaims = Depends(_claims),
-) -> ListEnvelope[dict]:
-    return ListEnvelope(data=_repo(request).list_internal())
+) -> ListEnvelope[PlatformSkillOut]:
+    return ListEnvelope(data=[PlatformSkillOut(**item) for item in _repo(request).list_internal()])
 
 
-@router.get("/settings")
+@router.get("/settings", summary="读取技能市场设置", description="读取外部技能下载后的自动发布开关。", operation_id="operation_skill_market_settings_get")
 async def get_settings(
     request: Request,
     _claims: TokenClaims = Depends(_claims),
-) -> Envelope[dict]:
-    return Envelope(data={"auto_publish_downloads": _repo(request).get_setting()})
+) -> Envelope[SkillMarketSettingsOut]:
+    return Envelope(data=SkillMarketSettingsOut(auto_publish_downloads=_repo(request).get_setting()))
 
 
-@router.put("/settings")
+@router.put("/settings", summary="更新技能市场设置", description="更新外部技能下载后的自动发布策略。", operation_id="operation_skill_market_settings_update")
 async def set_settings(
     request: Request,
     body: SkillMarketSettingsIn,
     _claims: TokenClaims = Depends(_claims),
-) -> Envelope[dict]:
-    return Envelope(data={"auto_publish_downloads": _repo(request).set_setting(body.auto_publish_downloads)})
+) -> Envelope[SkillMarketSettingsOut]:
+    return Envelope(data=SkillMarketSettingsOut(auto_publish_downloads=_repo(request).set_setting(body.auto_publish_downloads)))
 
 
-@router.post("/external/{owner}/{slug}/download")
+@router.post("/external/{owner}/{slug}/download", summary="导入外部技能", description="校验外部技能安全清单后下载并导入平台目录。", operation_id="operation_skill_market_external_download")
 async def download_external(
     owner: str,
     slug: str,
     request: Request,
-    version: str | None = Query(default=None),
+    version: str | None = Query(default=None, description="要导入的技能版本；缺省使用最新版本。"),
     _claims: TokenClaims = Depends(_claims),
-) -> Envelope[dict]:
+) -> Envelope[PlatformSkillImportOut]:
     client = _client(request)
     repo = _repo(request)
     try:
@@ -183,23 +239,23 @@ async def download_external(
         raise _ClawHubUnavailable("ClawHub skill download failed") from exc
 
 
-@router.post("/internal/{skill_id}/publish")
-async def publish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[dict]:
+@router.post("/internal/{skill_id}/publish", summary="发布平台技能", description="发布指定版本的平台技能，使 Manager 可以拉取。", operation_id="operation_skill_market_internal_publish")
+async def publish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
     return Envelope(data=_repo(request).set_status(skill_id=skill_id, status="published"))
 
 
-@router.post("/internal/{skill_id}/unpublish")
-async def unpublish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[dict]:
+@router.post("/internal/{skill_id}/unpublish", summary="下架平台技能", description="下架指定平台技能，阻止新的 Manager 拉取。", operation_id="operation_skill_market_internal_unpublish")
+async def unpublish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
     return Envelope(data=_repo(request).set_status(skill_id=skill_id, status="unpublished"))
 
 
-@router.get("/pull/skills")
-async def pull_published_skills(request: Request) -> ListEnvelope[dict]:
+@router.get("/pull/skills", summary="拉取已发布技能目录", description="供 Manager 服务间调用，返回已发布的平台技能摘要。", operation_id="operation_skill_market_pull_list")
+async def pull_published_skills(request: Request) -> ListEnvelope[PlatformSkillOut]:
     _service_token(request)
-    return ListEnvelope(data=_repo(request).list_internal(status="published"))
+    return ListEnvelope(data=[PlatformSkillOut(**item) for item in _repo(request).list_internal(status="published")])
 
 
-@router.get("/pull/skills/{skill_id}/versions/{version}")
+@router.get("/pull/skills/{skill_id}/versions/{version}", summary="拉取固定版本技能包", description="供 Manager 服务间调用，返回已发布技能的固定版本和签名材料。", operation_id="operation_skill_market_pull_package")
 async def pull_published_skill_package(skill_id: str, version: str, request: Request) -> Envelope[PlatformSkillPackage]:
     _service_token(request)
     row = _repo(request).get_package(skill_id=skill_id, version=version, published_only=True)

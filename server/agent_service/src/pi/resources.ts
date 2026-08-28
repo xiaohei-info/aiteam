@@ -19,6 +19,7 @@ import type { SessionAuthorization } from "./session-host.js";
 import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
 
 const HINDSIGHT_TOOLS = new Set(["hindsight_recall", "hindsight_retain"]);
+const DEFAULT_MEMORY_TOOLS = ["hindsight_recall", "hindsight_retain"] as const;
 const AGENT_IGNORED_HINDSIGHT_ENV = [
   "PI_HINDSIGHT_ENABLED",
   "PI_HINDSIGHT_PROJECT_BANK_ID",
@@ -127,9 +128,10 @@ export function memoryToolNames(snapshot: FrozenSnapshot, hindsightRuntimeConfig
   const rawAllowed: unknown[] = policy && typeof policy === "object" && Array.isArray((policy as Record<string, unknown>).allowed_tools)
     ? (policy as Record<string, unknown>).allowed_tools as unknown[]
     : [];
-  const allowed = rawAllowed.filter((name): name is string => typeof name === "string");
-  const names = new Set(allowed.map((name) => LEGACY_MEMORY_TOOLS.get(name) ?? name));
+  let allowed = rawAllowed.filter((name): name is string => typeof name === "string");
   const memory = getMemoryPolicy(snapshot);
+  if (allowed.length === 0 && memory?.enabled) allowed = [...DEFAULT_MEMORY_TOOLS];
+  const names = new Set(allowed.map((name) => LEGACY_MEMORY_TOOLS.get(name) ?? name));
   if (!hindsightRuntimeConfig) return [];
   return [...HINDSIGHT_TOOLS].filter((name) => names.has(name) && (name === "hindsight_recall" ? memory?.recall : memory?.retain));
 }
@@ -140,7 +142,10 @@ export function isMemoryPolicyEnabled(snapshot: FrozenSnapshot): boolean {
 
 function getMemoryPolicy(snapshot: FrozenSnapshot): { enabled: boolean; recall: boolean; retain: boolean } | undefined {
   const policy = snapshot.memory_policy;
-  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return undefined;
+  // Memory is a platform default; an explicit policy can still disable or
+  // narrow it for a deployment that needs stricter controls.
+  if (policy === undefined || policy === null) return { enabled: true, recall: true, retain: true };
+  if (typeof policy !== "object" || Array.isArray(policy)) return undefined;
   const value = policy as Record<string, unknown>;
   if (value.enabled !== true) return { enabled: false, recall: false, retain: false };
   const operations = value.allowed_operations ?? value.operations;

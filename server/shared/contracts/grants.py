@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,7 +48,7 @@ class LoadedExpertProjection(BaseModel):
     skills: list[str] = Field(default_factory=list, description="技能引用列表")
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
-    memory_policy: dict | None = Field(default=None, description="记忆策略（04 §6.6，mem0）")
+    memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。")
     synced_at: datetime | None = Field(default=None, description="最后同步时间（UTC）")
     revoked: bool = Field(default=False, description="授权撤销后置 true 并从可用列表移除")
     handle: str = Field(default="", description="ASCII 稳定句柄，供 roster / @提及使用；后端未给时回退 employee_id")

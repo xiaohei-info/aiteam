@@ -6,6 +6,7 @@ name: v1-server-ci
 #   2) 集成测试（真 PostgreSQL + RLS）——堵住「集成测试在无 PG 机器上被 deselect、门是绿的
 #      但集成路径从没真跑过」的假绿漏洞（该漏洞曾让 M3/M5 的 jsonb→text[] 等真 bug 漏到合并后）。
 # Node Agent 的 typecheck/test 由 node-agent job 独立执行；Python jobs 仅覆盖控制面与 shared。
+# OpenAPI 文档门禁会从三端真实 app 生成文档，再检查 schema/鉴权/错误响应/路由清单。
 #
 # 注：仅作用于 v1 新代码 server/；不触碰冻结的 app/（旧单体有自己的测试）。
 
@@ -16,6 +17,9 @@ on:
     branches: ["main", "feature/**"]
     paths:
       - "server/**"
+      - "scripts/check-openapi.sh"
+      - "scripts/check_openapi.py"
+      - "scripts/export_openapi.py"
       - ".github/workflows/ci.yml"
   pull_request:
     # main = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
@@ -23,6 +27,9 @@ on:
     branches: ["main", "feature/**"]
     paths:
       - "server/**"
+      - "scripts/check-openapi.sh"
+      - "scripts/check_openapi.py"
+      - "scripts/export_openapi.py"
       - ".github/workflows/ci.yml"
 
 # 同一 PR/分支的旧 run 直接作废——过期提交的结果没有信息量，只烧分钟数。
@@ -245,10 +252,34 @@ jobs:
           print("OK：总分支覆盖未退化")
           PY
 
-  # ---- 待服务建成后启用（占位，当前不执行）----
-  # openapi-gate:
-  #   name: OpenAPI 质量门禁（schema/operation_id/envelope/错误覆盖/diff）
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - run: echo "TODO: 生成三端+跨系统 OpenAPI 并校验（02 §10.3.9）"
+  openapi-gate:
+    name: OpenAPI 质量门禁（三端真实文档）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.4.0 --activate
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+      - name: Install Agent dependencies
+        working-directory: server/agent_service
+        run: pnpm install --frozen-lockfile
+      - name: Generate and validate all OpenAPI documents
+        env:
+          OPERATION_SYSTEM_USERNAME: sysadmin
+          OPERATION_SYSTEM_PASSWORD: changeme-me
+          OPERATOR_URL: http://operator.invalid
+          AITEAM_ENV: test
+        run: scripts/check-openapi.sh "$RUNNER_TEMP/aiteam-openapi"

@@ -74,7 +74,7 @@ def build_employee_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post(
-        "", description="请查看接口名称了解用途", summary="建 employee/expert 配置（runtime 中立）",
+        "", description="建 employee/expert 配置（runtime 中立）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建 employee/expert 配置（runtime 中立）",
         operation_id="manager_employee_config_create", status_code=status.HTTP_201_CREATED,
     )
     async def create_employee_config(
@@ -88,7 +88,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
-        "", description="请查看接口名称了解用途", summary="列本租户全部 employee 配置",
+        "", description="列本租户全部 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户全部 employee 配置",
         operation_id="manager_employee_config_list",
     )
     async def list_employee_config(
@@ -100,7 +100,7 @@ def build_employee_router(verifier) -> APIRouter:
         return ListEnvelope[EmployeeConfigOut](data=items)
 
     @router.get(
-        "/{employee_id}", description="请查看接口名称了解用途", summary="取单个 employee 配置",
+        "/{employee_id}", description="取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",
         operation_id="manager_employee_config_get",
     )
     async def get_employee_config(
@@ -112,7 +112,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
 
     @router.put(
-        "/{employee_id}", description="请查看接口名称了解用途", summary="改写 employee 配置（version 自增）",
+        "/{employee_id}", description="改写 employee 配置（version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",
         operation_id="manager_employee_config_update",
     )
     async def update_employee_config(
@@ -127,7 +127,7 @@ def build_employee_router(verifier) -> APIRouter:
         )
 
     @router.delete(
-        "/{employee_id}", description="请查看接口名称了解用途", summary="删 employee 配置",
+        "/{employee_id}", description="删 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="删 employee 配置",
         operation_id="manager_employee_config_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -141,7 +141,11 @@ def build_employee_router(verifier) -> APIRouter:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get(
-        "/export/all", summary="导出员工列表 CSV", operation_id="manager_employee_export",
+        "/export/all",
+        summary="导出员工列表 CSV",
+        description="导出当前企业员工配置的 CSV 文件；不包含凭据。",
+        operation_id="manager_employee_export",
+        responses={200: {"content": {"text/csv": {"schema": {"type": "string", "format": "binary", "description": "员工配置 CSV 文件。"}}}}},
     )
     async def export_employees(
         request: Request,

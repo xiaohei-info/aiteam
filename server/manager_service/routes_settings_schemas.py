@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EnterpriseSettingsOut(BaseModel):
@@ -17,7 +17,7 @@ class EnterpriseSettingsOut(BaseModel):
     invite_required: bool = True
     member_approval: bool = True
     max_employees: int = 100
-    features: dict[str, Any] = {}
+    features: dict[str, Any] = Field(default_factory=dict, description="企业功能开关 JSON。")
     updated_at: datetime
 
 

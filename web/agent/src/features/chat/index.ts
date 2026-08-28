@@ -1,5 +1,6 @@
 export { ChatPage } from "./ChatPage";
 export { ConversationList } from "./ConversationList";
+export { ConversationPermissionControl } from "./ConversationPermissionControl";
 export { ConversationStateControl } from "./ConversationStateControl";
 export { ScheduleControl } from "./ScheduleControl";
 export { TimelineView } from "./TimelineView";
@@ -15,6 +16,7 @@ export {
   updateConversation,
   setConversationState,
   type Conversation,
+  type ConversationPermissionMode,
   type PromptInput,
   type PromptAccepted,
 } from "./useChatApi";

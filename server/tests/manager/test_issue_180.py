@@ -56,7 +56,7 @@ class _FakeRecruitRepo:
         return list(self._store.get(ctx.tenant_id, []))
 
 
-def _make_solution(sol_id: str = "sol-1") -> SolutionInstanceRow:
+def _make_solution(sol_id: str = "sol-1", template_meta: dict | None = None) -> SolutionInstanceRow:
     return SolutionInstanceRow(
         id=sol_id,
         solution_id="tpl-1",
@@ -67,7 +67,7 @@ def _make_solution(sol_id: str = "sol-1") -> SolutionInstanceRow:
         knowledge_refs=[],
         skill_refs=[],
         default_grants_meta=None,
-        template_meta=None,
+        template_meta=template_meta,
     )
 
 
@@ -108,6 +108,32 @@ class TestSolutionsTrimming:
         ctx = _ctx("t-a", roles=["member"], user_id="m-1")
         resp = svc.pull(ctx, AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1"))
         assert any(s["id"] == "sol-1" for s in resp.solutions)
+
+    def test_solution_projection_preserves_display_metadata(self):
+        recruit_repo = _FakeRecruitRepo()
+        recruit_repo.add_solution("t-a", _make_solution(
+            template_meta={"description": "软件研发协作方案", "icon": "code", "tags": ["研发", 7]},
+        ))
+        _, _, _, svc = _services_with_solutions(recruit_repo)
+
+        ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
+        resp = svc.pull(ctx, AuthorizedConfigPullRequest(tenant_id="t-a", member_id="admin-1"))
+        assert resp.solutions == [{
+            "id": "sol-1",
+            "solution_id": "tpl-1",
+            "solution_version": "v1",
+            "display_name": "方案A",
+            "description": "软件研发协作方案",
+            "icon": "code",
+            "tags": ["研发"],
+            "status": "applied",
+            "config_version": 1,
+            "expert_employee_ids": [],
+            "coordinator_employee_id": None,
+            "coordinator_instructions": "",
+            "workflow_skill_ref": None,
+            "output_requirements": "",
+        }]
 
     def test_member_without_solution_grant_sees_nothing(self):
         recruit_repo = _FakeRecruitRepo()

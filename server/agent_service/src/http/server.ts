@@ -15,7 +15,7 @@ import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEvent } from "../pi/event-sse.js";
-import type { ConversationState, LoadedExpertProjection, LocalFileKind } from "../storage/sqlite.js";
+import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
@@ -38,41 +38,186 @@ const FASTIFY_BODY = Symbol("fastifyBody");
 type BufferedRequest = IncomingMessage & { [FASTIFY_BODY]?: unknown };
 type AgentRouteHandler = (request: IncomingMessage, response: ServerResponse, caller?: AuthenticatedCaller, fastifyRequest?: FastifyRequest) => void | Promise<void>;
 
-const ConversationParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
-const ConversationFileParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }), attachment_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
-const ConversationArtifactParams = Type.Object({ conversation_id: Type.String({ minLength: 1 }), artifact_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
-const ExpertParams = Type.Object({ employee_id: Type.String({ minLength: 1 }) }, { additionalProperties: false });
-const ConversationQuery = Type.Object({ after: Type.Optional(Type.String()), limit: Type.Optional(Type.String()), cursor: Type.Optional(Type.String()) }, { additionalProperties: false });
-const PromptImage = Type.Object({
-  type: Type.Literal("image"),
-  data: Type.String({ contentEncoding: "base64" }),
-  mimeType: Type.String({ enum: ["image/gif", "image/jpeg", "image/png", "image/webp"] }),
+const ConversationParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }) }, { additionalProperties: false });
+const ConversationFileParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), attachment_id: Type.String({ minLength: 1, description: "附件 ID。" }) }, { additionalProperties: false });
+const ConversationArtifactParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), artifact_id: Type.String({ minLength: 1, description: "产物 ID。" }) }, { additionalProperties: false });
+const ExpertParams = Type.Object({ employee_id: Type.String({ minLength: 1, description: "授权员工/专家 ID。" }) }, { additionalProperties: false });
+const ConversationQuery = Type.Object({
+  after: Type.Optional(Type.String({ description: "从指定条目之后读取。" })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "返回条数上限（1–100）。" })),
+  cursor: Type.Optional(Type.String({ description: "从指定会话游标之后读取。" })),
 }, { additionalProperties: false });
+const PermissionMode = Type.Union([
+  Type.Literal("read-only", { description: "只读，不允许本地写入。" }),
+  Type.Literal("workspace-write", { description: "仅允许写入当前会话工作区。" }),
+  Type.Literal("full-access", { description: "按用户明确选择开放本地访问。" }),
+]);
+const JsonObject = Type.Record(
+  Type.String({ description: "扩展 JSON 键。" }),
+  Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()], { description: "扩展 JSON 值。" }),
+  { description: "扩展 JSON 对象；仅用于 runtime 不稳定的受控元数据。", "x-dynamic-json": true },
+);
+const ConversationSchedule = Type.Object({
+  schedule_id: Type.String({ minLength: 1, maxLength: 128, description: "调度稳定标识。" }),
+  revision: Type.Optional(Type.Integer({ minimum: 1, description: "调度配置修订号。" })),
+  enabled: Type.Optional(Type.Boolean({ description: "是否启用调度。" })),
+  at: Type.Optional(Type.String({ format: "date-time", description: "一次性或重复调度锚点（ISO 8601）。" })),
+  interval_seconds: Type.Optional(Type.Integer({ minimum: 1, description: "重复执行间隔（秒）。" })),
+  one_shot: Type.Optional(Type.Boolean({ description: "是否只执行一次。" })),
+  overlap: Type.Optional(Type.Literal("skip", { description: "已有执行时跳过本次触发。" })),
+  misfire: Type.Optional(Type.Literal("skip", { description: "错过触发时间时跳过。" })),
+  prompt_template: Type.String({ minLength: 1, maxLength: 200_000, description: "触发时提交给员工的提示词。" }),
+}, { $id: "ConversationSchedule", additionalProperties: false, description: "本地会话定时执行配置。" });
+const ResolveTenantRequest = Type.Object({ account: Type.String({ minLength: 1, maxLength: 256, description: "员工手机号或账号。" }) }, { $id: "ResolveTenantRequest", additionalProperties: false, description: "员工账号企业解析请求。" });
+const AgentLoginRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID。" }), account: Type.String({ minLength: 1, maxLength: 256, description: "登录账号。" }), password: Type.String({ minLength: 1, maxLength: 512, description: "登录密码。" }) }, { $id: "AgentLoginRequest", additionalProperties: false, description: "Agent 登录请求。" });
+const AgentResetPasswordRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID。" }), account: Type.String({ minLength: 1, maxLength: 256, description: "登录账号。" }), old_password: Type.String({ minLength: 1, maxLength: 512, description: "当前密码。" }), new_password: Type.String({ minLength: 1, maxLength: 512, description: "新密码。" }) }, { $id: "AgentResetPasswordRequest", additionalProperties: false, description: "Agent 密码重置请求。" });
+const ConversationMetadata = Type.Object({
+  id: Type.String({ description: "会话唯一标识。" }),
+  title: Type.Union([Type.String(), Type.Null()], { description: "会话标题。" }),
+  kind: Type.String({ description: "会话类型，例如 chat 或 group。" }),
+  labels: Type.Array(Type.String(), { description: "会话标签。" }),
+  state: Type.Union([Type.Literal("draft"), Type.Literal("active"), Type.Literal("paused"), Type.Literal("muted"), Type.Literal("archived")], { description: "持久化会话状态。" }),
+  entry_employee_id: Type.Union([Type.String(), Type.Null()], { description: "私聊入口员工 ID。" }),
+  coordinator_employee_id: Type.Union([Type.String(), Type.Null()], { description: "群聊协调员工 ID。" }),
+  solution_instance_id: Type.Union([Type.String(), Type.Null()], { description: "关联方案实例 ID。" }),
+  tenant_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "企业租户 ID。" })),
+  member_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "本地成员 ID。" })),
+  schedule: Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "定时执行配置。" }),
+  permission_mode: PermissionMode,
+  last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的条目 ID。" }),
+  created_at: Type.String({ format: "date-time", description: "创建时间。" }),
+  updated_at: Type.String({ format: "date-time", description: "最后更新时间。" }),
+}, { $id: "ConversationMetadata", additionalProperties: false, description: "本地会话元数据。" });
+const ConversationCreateRequest = Type.Object({ id: Type.Optional(Type.String({ description: "可选的客户端会话 ID。" })), title: Type.Optional(Type.Union([Type.String({ maxLength: 200, description: "会话标题。" }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64, description: "会话类型，例如 chat 或 group。" })), labels: Type.Optional(Type.Array(Type.String({ description: "会话标签。" }), { maxItems: 32 })), entry_employee_id: Type.Optional(Type.Union([Type.String({ description: "私聊入口员工 ID。" }), Type.Null()])), coordinator_employee_id: Type.Optional(Type.Union([Type.String({ description: "群聊协调员工 ID。" }), Type.Null()])), solution_instance_id: Type.Optional(Type.Union([Type.String({ description: "方案实例 ID。" }), Type.Null()])), permission_mode: Type.Optional(PermissionMode), schedule: Type.Optional(Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "定时执行配置。" })) }, { $id: "ConversationCreateRequest", additionalProperties: false, description: "创建本地会话请求。" });
+const ConversationUpdateRequest = Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200, description: "会话标题。" }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64, description: "会话类型。" })), labels: Type.Optional(Type.Array(Type.String({ description: "会话标签。" }), { maxItems: 32 })), permission_mode: Type.Optional(PermissionMode), schedule: Type.Optional(Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "定时执行配置。" })), last_read_entry_id: Type.Optional(Type.Union([Type.String({ description: "最后读取条目 ID。" }), Type.Null()])) }, { $id: "ConversationUpdateRequest", additionalProperties: false, description: "更新本地会话请求。" });
+const ConversationStateUpdateRequest = Type.Object({ state: Type.String({ minLength: 1, maxLength: 32, description: "目标会话状态。" }) }, { $id: "ConversationStateUpdateRequest", additionalProperties: false, description: "更新会话状态请求。" });
+const GrantSyncRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, maxLength: 200, description: "当前成员 ID。" }), known_versions: Type.Optional(Type.Record(Type.String({ description: "投影键。" }), Type.String({ description: "本地已知版本。" }), { description: "投影键到本地版本的映射。" })) }, { $id: "GrantSyncRequest", additionalProperties: false, description: "授权配置增量同步请求。" });
+const UsageFlushRequest = Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "本次最多处理的摘要数量。" })) }, { $id: "UsageFlushRequest", additionalProperties: false, description: "用量摘要刷新请求。" });
+const ConversationEnvelope = Type.Object({ data: Type.Ref("ConversationMetadata") }, { $id: "ConversationEnvelope", description: "单个会话响应。" });
+const ConversationListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ConversationMetadata")), page: Type.Ref("Page") }, { $id: "ConversationListEnvelope", description: "会话列表响应。" });
+const ConversationStateOut = Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), state: Type.String({ description: "当前会话状态。" }), prompting: Type.Boolean({ description: "是否正在执行提示。" }) }, { $id: "ConversationStateOut", additionalProperties: false, description: "会话运行状态。" });
+const ConversationStateEnvelope = Type.Object({ data: Type.Ref("ConversationStateOut") }, { $id: "ConversationStateEnvelope" });
+const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ description: "是否删除成功。" }) }, { additionalProperties: false }) }, { $id: "ConversationDeleteEnvelope" });
+const ConversationContentPart = Type.Object({
+  type: Type.String({ description: "消息内容片段类型。" }),
+  text: Type.Optional(Type.String({ description: "文本片段。" })),
+  thinking: Type.Optional(Type.String({ description: "受控思考摘要片段。" })),
+  id: Type.Optional(Type.String({ description: "工具调用 ID。" })),
+  name: Type.Optional(Type.String({ description: "工具名称。" })),
+  arguments: Type.Optional(JsonObject),
+}, { $id: "ConversationContentPart", additionalProperties: true, description: "消息内容片段。", "x-dynamic-json": true });
+const ConversationMessage = Type.Object({
+  role: Type.String({ description: "消息角色。" }),
+  timestamp: Type.Optional(Type.Integer({ description: "消息时间戳（Unix 毫秒）。" })),
+  content: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Ref("ConversationContentPart"))], { description: "消息内容。" })),
+  toolCallId: Type.Optional(Type.String({ description: "工具调用 ID。" })),
+  toolName: Type.Optional(Type.String({ description: "工具名称。" })),
+  isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
+}, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息。", "x-dynamic-json": true });
+const ConversationEntry = Type.Object({
+  id: Type.String({ description: "条目 ID。" }),
+  type: Type.String({ description: "条目类型。" }),
+  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "父条目 ID。" })),
+  timestamp: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Integer()], { description: "条目时间。" })),
+  message: Type.Optional(Type.Ref("ConversationMessage")),
+  logical_message_id: Type.Optional(Type.String({ description: "逻辑消息幂等 ID。" })),
+  source_type: Type.Optional(Type.String({ enum: ["human", "employee"], description: "消息来源类型。" })),
+  source_id: Type.Optional(Type.String({ description: "消息来源 ID。" })),
+  source_display_name: Type.Optional(Type.String({ description: "消息来源展示名。" })),
+  source_employee_id: Type.Optional(Type.String({ description: "产生该条目的员工 ID。" })),
+  source_employee_display_name: Type.Optional(Type.String({ description: "产生该条目的员工展示名。" })),
+  source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "消息来源角色。" })),
+}, { $id: "ConversationEntry", additionalProperties: true, description: "会话历史条目（仅返回脱敏后的持久化视图）。", "x-dynamic-json": true });
+const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "会话条目列表。" }) }, { additionalProperties: false }) }, { $id: "ConversationEntriesEnvelope" });
+const AbortEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), aborted: Type.Boolean({ description: "是否发现并终止活动执行。" }) }, { additionalProperties: false }) }, { $id: "AbortEnvelope" });
+const AuthClaims = Type.Object({
+  user_id: Type.String({ description: "成员账号 ID。" }),
+  tenant_id: Type.Union([Type.String(), Type.Null()], { description: "企业租户 ID。" }),
+  roles: Type.Array(Type.String(), { description: "账号角色列表。" }),
+  iss: Type.Optional(Type.String({ description: "JWT issuer。" })),
+  aud: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())], { description: "JWT audience。" })),
+  exp: Type.Optional(Type.Integer({ description: "过期时间（Unix 秒）。" })),
+}, { $id: "AuthClaims", additionalProperties: false, description: "当前登录身份声明。" });
+const AuthResult = Type.Object({ token: Type.String({ description: "短期 access token。" }), claims: Type.Ref("AuthClaims") }, { $id: "AuthResult", additionalProperties: false, description: "登录结果。" });
+const AuthResultEnvelope = Type.Object({ data: Type.Ref("AuthResult") }, { $id: "AuthResultEnvelope" });
+const TenantResolution = Type.Object({ tenant_id: Type.String({ description: "解析出的企业租户 ID。" }) }, { $id: "TenantResolution", additionalProperties: false, description: "企业租户解析结果。" });
+const TenantResolutionEnvelope = Type.Object({ data: Type.Ref("TenantResolution") }, { $id: "TenantResolutionEnvelope" });
+const PingEnvelope = Type.Object({ data: Type.Object({ pong: Type.Boolean({ description: "固定存活探针结果。" }) }, { additionalProperties: false }) }, { $id: "PingEnvelope" });
+const ClaimsEnvelope = Type.Object({ data: Type.Ref("AuthClaims") }, { $id: "ClaimsEnvelope" });
+const ModelPolicy = Type.Object({ model: Type.Optional(Type.String({ description: "模型标识。" })), provider_ref: Type.Optional(Type.String({ description: "平台 Provider 引用。" })), thinking_level: Type.Optional(Type.String({ description: "思考深度。" })) }, { $id: "AgentModelPolicy", additionalProperties: false, description: "员工模型策略。" });
+const ExpertProjection = Type.Object({
+  employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" })), skill_signing_keys: Type.Optional(Type.Array(JsonObject)),
+}, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影。", "x-dynamic-json": true });
+const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
+const SnapshotProjection = Type.Object({ employee_id: Type.String({ description: "员工 ID。" }), version: Type.String({ description: "员工配置版本。" }), snapshot_version: Type.String({ description: "执行快照版本。" }), display_name: Type.String({ description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String(), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "快照技能引用。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(JsonObject)), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String(), { description: "允许的工具名称。" }) }, { additionalProperties: false })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照。", "x-dynamic-json": true });
+const ExpertListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ExpertProjection")), page: Type.Ref("Page") }, { $id: "ExpertListEnvelope" });
+const SolutionListEnvelope = Type.Object({ data: Type.Array(Type.Ref("SolutionProjection")), page: Type.Ref("Page") }, { $id: "SolutionListEnvelope" });
+const SnapshotListEnvelope = Type.Object({ data: Type.Array(Type.Ref("SnapshotProjection")), page: Type.Ref("Page") }, { $id: "SnapshotListEnvelope" });
+const ReadinessEnvelope = Type.Object({ data: Type.Object({ runtime: Type.String({ description: "Agent runtime 状态。" }), runtime_reason: Type.Optional(Type.String({ description: "不可用原因。" })), experts: Type.Array(Type.Ref("ExpertReadiness"), { description: "各授权专家状态。" }) }, { additionalProperties: false }) }, { $id: "ReadinessEnvelope" });
+const ExpertReadiness = Type.Object({ employee_id: Type.String({ description: "员工 ID。" }), display_name: Type.String({ description: "员工展示名称。" }), handle: Type.String({ description: "员工句柄。" }), available: Type.Boolean({ description: "是否可执行。" }), runtime: Type.String({ description: "runtime 状态。" }), provider: Type.String({ description: "模型 Provider 状态。" }), skills: Type.Array(Type.String(), { description: "技能列表。" }), capabilities: Type.Array(Type.String(), { description: "能力列表。" }), reasons: Type.Array(Type.String(), { description: "不可用原因列表。" }) }, { $id: "ExpertReadiness", additionalProperties: false, description: "单个专家的本地执行就绪状态。" });
+const ExpertReadinessEnvelope = Type.Object({ data: Type.Ref("ExpertReadiness") }, { $id: "ExpertReadinessEnvelope" });
+const GrantSyncEnvelope = Type.Object({ data: Type.Object({ ok: Type.Boolean({ description: "同步是否成功。" }), upserted: Type.Integer({ minimum: 0, description: "写入的投影数量。" }), revoked: Type.Integer({ minimum: 0, description: "撤销的投影数量。" }) }, { additionalProperties: false }) }, { $id: "GrantSyncEnvelope" });
+const UsageFlushEnvelope = Type.Object({ data: Type.Object({ sent: Type.Array(Type.String(), { description: "已成功上报的摘要 ID。" }), failed: Type.Array(Type.String(), { description: "上报失败的摘要 ID。" }) }, { additionalProperties: false }) }, { $id: "UsageFlushEnvelope" });
+const OrgTreeNode = Type.Object({ id: Type.String({ description: "组织节点 ID。" }), name: Type.String({ description: "组织节点名称。" }), type: Type.String({ description: "节点类型。" }), children: Type.Array(Type.Object({ id: Type.String({ description: "子节点 ID。" }), name: Type.String({ description: "子节点名称。" }), type: Type.String({ description: "子节点类型。" }) }, { additionalProperties: false }), { description: "子组织节点。" }) }, { $id: "OrgTreeNode", additionalProperties: false, description: "组织树投影。" });
+const OrgTreeEnvelope = Type.Object({ data: Type.Ref("OrgTreeNode") }, { $id: "OrgTreeEnvelope" });
+const OfficeSceneEnvelope = Type.Object({
+  data: Type.Object({
+    employees: Type.Array(Type.Object({
+      employee_id: Type.String({ description: "员工 ID。" }),
+      display_name: Type.String({ description: "员工展示名称。" }),
+      status: Type.String({ description: "办公状态。" }),
+      task: Type.Union([Type.String(), Type.Null()], { description: "当前任务标题。" }),
+      avatar_url: Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" }),
+    }, { additionalProperties: false })),
+    summary: Type.Object({
+      total: Type.Integer({ description: "员工总数。" }),
+      working: Type.Integer({ description: "工作中数量。" }),
+      ready: Type.Integer({ description: "就绪数量。" }),
+      offline: Type.Integer({ description: "离线数量。" }),
+    }, { additionalProperties: false }),
+  }, { additionalProperties: false }),
+}, { $id: "OfficeSceneEnvelope", description: "本地办公场景响应。" });
+const OfficeFeedEnvelope = Type.Object({
+  data: Type.Object({
+    events: Type.Array(Type.Object({
+      type: Type.String({ description: "事件类型。" }),
+      conversation_id: Type.String({ description: "会话 ID。" }),
+      title: Type.String({ description: "事件标题。" }),
+      schedule: Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "调度配置。" }),
+    }, { additionalProperties: false })),
+  }, { additionalProperties: false }),
+}, { $id: "OfficeFeedEnvelope", description: "本地办公动态响应。" });
+const GoneEnvelope = Type.Object({ data: Type.Object({ removed: Type.Boolean({ description: "接口已移除。" }), replacement: Type.String({ description: "替代接口说明。" }) }, { additionalProperties: false }) }, { $id: "GoneEnvelope", description: "已移除接口的替代说明。" });
+const PromptImage = Type.Object({
+  type: Type.Literal("image", { description: "图片内容类型。" }),
+  data: Type.String({ contentEncoding: "base64", description: "base64 编码的图片数据。" }),
+  mimeType: Type.String({ enum: ["image/gif", "image/jpeg", "image/png", "image/webp"], description: "图片 MIME 类型。" }),
+}, { additionalProperties: false, description: "内联图片。" });
 const PromptRequest = Type.Object({
-  text: Type.String({ minLength: 1, maxLength: 200_000 }),
-  images: Type.Optional(Type.Array(PromptImage, { maxItems: MAX_PROMPT_IMAGES })),
-  attachment_ids: Type.Optional(Type.Array(Type.String(), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true })),
-  mentions: Type.Optional(Type.Array(Type.String(), { maxItems: 16 })),
-}, { $id: "PromptRequest", additionalProperties: false });
-const PromptAccepted = Type.Object({ conversation_id: Type.String(), accepted: Type.Boolean(), state: Type.String({ enum: ["accepted", "completed"] }), idempotency_key: Type.String() }, { $id: "PromptAccepted" });
+  text: Type.String({ minLength: 1, maxLength: 200_000, description: "提交给当前员工的文本提示。" }),
+  images: Type.Optional(Type.Array(PromptImage, { maxItems: MAX_PROMPT_IMAGES, description: "最多 8 张内联图片。" })),
+  attachment_ids: Type.Optional(Type.Array(Type.String({ description: "本地图片附件 ID。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传图片附件 ID。" })),
+  mentions: Type.Optional(Type.Array(Type.String({ description: "被 @提及的员工句柄。" }), { maxItems: 16, description: "群聊中的员工提及。" })),
+}, { $id: "PromptRequest", additionalProperties: false, description: "向本地会话提交提示的请求。" });
+const PromptAccepted = Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), accepted: Type.Boolean({ description: "是否已接受执行。" }), state: Type.String({ enum: ["accepted", "completed"], description: "幂等收据状态。" }), idempotency_key: Type.String({ description: "幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据。" });
 const PromptAcceptedEnvelope = Type.Object({ data: Type.Ref("PromptAccepted") }, { $id: "PromptAcceptedEnvelope" });
-const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME }), mime_type: Type.String(), data: Type.String({ contentEncoding: "base64" }) }, { $id: "LocalFileUpload", additionalProperties: false });
+const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME, description: "安全的文件名，不含路径分隔符。" }), mime_type: Type.String({ description: "文件 MIME 类型。" }), data: Type.String({ contentEncoding: "base64", description: "base64 编码的文件内容。" }) }, { $id: "LocalFileUpload", additionalProperties: false, description: "本地附件/产物上传请求。" });
 const LocalFileMetadata = Type.Object({
-  id: Type.String(), conversation_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.String({ enum: ["attachment", "artifact"] }), filename: Type.String(), mime_type: Type.String(), byte_size: Type.Integer({ minimum: 0 }), sha256: Type.String(), created_at: Type.String({ format: "date-time" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
-}, { $id: "LocalFileMetadata" });
+  id: Type.String({ description: "文件 ID。" }), conversation_id: Type.String({ description: "所属会话 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.String({ description: "所属成员 ID。" }), kind: Type.String({ enum: ["attachment", "artifact"], description: "文件类型。" }), filename: Type.String({ description: "文件名。" }), mime_type: Type.String({ description: "文件 MIME 类型。" }), byte_size: Type.Integer({ minimum: 0, description: "文件字节数。" }), sha256: Type.String({ description: "SHA-256 摘要。" }), created_at: Type.String({ format: "date-time", description: "创建时间。" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "被提示引用的时间。" })),
+}, { $id: "LocalFileMetadata", description: "本地文件元数据。" });
 const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope" });
-const Page = Type.Object({ next_cursor: Type.Union([Type.String(), Type.Null()]), has_more: Type.Boolean() }, { $id: "Page" });
+const Page = Type.Object({ next_cursor: Type.Union([Type.String(), Type.Null()], { description: "下一页游标。" }), has_more: Type.Boolean({ description: "是否还有更多。" }) }, { $id: "Page", description: "分页信息。" });
 const LocalFileListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalFileMetadata")), page: Type.Ref("Page") }, { $id: "LocalFileListEnvelope" });
-const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean(), id: Type.String() }) }, { $id: "LocalFileDeleteEnvelope" });
-const MarketplaceTemplate = Type.Object({ template_id: Type.String(), display_name: Type.String(), category: Type.String(), model_name: Type.String(), skills_count: Type.Integer({ minimum: 0 }), recruit_count: Type.Integer({ minimum: 0 }), is_recruited: Type.Boolean(), tags: Type.Array(Type.String()), avatar_url: Type.Union([Type.String(), Type.Null()]) }, { $id: "MarketplaceTemplate" });
+const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ description: "是否删除成功。" }), id: Type.String({ description: "删除的文件 ID。" }) }, { additionalProperties: false }) }, { $id: "LocalFileDeleteEnvelope" });
+const MarketplaceTemplate = Type.Object({ template_id: Type.String({ description: "模板 ID。" }), display_name: Type.String({ description: "模板展示名称。" }), category: Type.String({ description: "模板分类。" }), model_name: Type.String({ description: "默认模型名称。" }), skills_count: Type.Integer({ minimum: 0, description: "技能数量。" }), recruit_count: Type.Integer({ minimum: 0, description: "已招募次数。" }), is_recruited: Type.Boolean({ description: "当前成员是否已招募。" }), tags: Type.Array(Type.String(), { description: "模板标签。" }), avatar_url: Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" }) }, { $id: "MarketplaceTemplate", description: "可招募专家模板摘要。" });
 const MarketplaceTemplateEnvelope = Type.Object({ data: Type.Ref("MarketplaceTemplate") }, { $id: "MarketplaceTemplateEnvelope" });
 const MarketplaceTemplateListEnvelope = Type.Object({ data: Type.Array(Type.Ref("MarketplaceTemplate")), page: Type.Ref("Page") }, { $id: "MarketplaceTemplateListEnvelope" });
-const UsageSummary = Type.Object({ schema_version: Type.Literal("1"), summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), employee_id: Type.String(), window_start: Type.String({ format: "date-time" }), window_end: Type.String({ format: "date-time" }), prompt_count: Type.Integer({ minimum: 0 }), settled_count: Type.Integer({ minimum: 0 }), error_count: Type.Integer({ minimum: 0 }), input_tokens: Type.Integer({ minimum: 0 }), output_tokens: Type.Integer({ minimum: 0 }), cache_tokens: Type.Integer({ minimum: 0 }), cost_minor: Type.Integer({ minimum: 0 }), currency: Type.Literal("USD"), duration_ms_total: Type.Integer({ minimum: 0 }), pricing_version: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]), pricing_status: Type.Union([Type.Literal("known"), Type.Literal("unknown")]) }, { $id: "UsageSummary" });
-const UsageOutboxItem = Type.Object({ summary_id: Type.String(), tenant_id: Type.String(), member_id: Type.String(), kind: Type.String(), status: Type.String(), attempts: Type.Integer({ minimum: 0 }), last_error: Type.Union([Type.String(), Type.Null()]), created_at: Type.String({ format: "date-time" }), payload: Type.Optional(Type.Ref("UsageSummary")) }, { $id: "UsageOutboxItem" });
+const UsageSummary = Type.Object({ schema_version: Type.Literal("1", { description: "摘要 schema 版本。" }), summary_id: Type.String({ description: "摘要幂等 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.String({ description: "成员 ID。" }), employee_id: Type.String({ description: "员工 ID。" }), window_start: Type.String({ format: "date-time", description: "统计窗口起点。" }), window_end: Type.String({ format: "date-time", description: "统计窗口终点。" }), prompt_count: Type.Integer({ minimum: 0, description: "提示次数。" }), settled_count: Type.Integer({ minimum: 0, description: "已结算次数。" }), error_count: Type.Integer({ minimum: 0, description: "错误次数。" }), input_tokens: Type.Integer({ minimum: 0, description: "输入 token 数。" }), output_tokens: Type.Integer({ minimum: 0, description: "输出 token 数。" }), cache_tokens: Type.Integer({ minimum: 0, description: "缓存 token 数。" }), cost_minor: Type.Integer({ minimum: 0, description: "最小货币单位成本。" }), currency: Type.Literal("USD", { description: "成本币种。" }), duration_ms_total: Type.Integer({ minimum: 0, description: "总耗时（毫秒）。" }), pricing_version: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "计价版本。" }), pricing_status: Type.Union([Type.Literal("known"), Type.Literal("unknown")], { description: "价格是否可用。" }) }, { $id: "UsageSummary", description: "脱敏用量摘要。" });
+const UsageOutboxItem = Type.Object({ summary_id: Type.String({ description: "摘要幂等 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.String({ description: "成员 ID。" }), kind: Type.String({ description: "摘要类型。" }), status: Type.String({ description: "outbox 状态。" }), attempts: Type.Integer({ minimum: 0, description: "已尝试上报次数。" }), last_error: Type.Union([Type.String(), Type.Null()], { description: "最近一次错误。" }), created_at: Type.String({ format: "date-time", description: "入队时间。" }), payload: Type.Optional(Type.Ref("UsageSummary")) }, { $id: "UsageOutboxItem", description: "本地用量上报 outbox 项。" });
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
-const ProblemSchema = Type.Object({ type: Type.String(), title: Type.String(), status: Type.Integer(), code: Type.String(), detail: Type.String(), instance: Type.String(), request_id: Type.String(), errors: Type.Optional(Type.Any()) }, { $id: "Problem" });
-const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: Type.Any() }]));
-const OPENAPI_SCHEMAS = [PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
+const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
+const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, GrantSyncRequest, UsageFlushRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
 function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { operationId, ...fields };
@@ -148,29 +293,79 @@ export class AgentHttpServer {
     void this.app.register(swagger, {
       openapi: {
         openapi: "3.1.0",
-        info: { title: "AI Team Agent Service", version: "0.1.0" },
+        info: { title: "AI Team Agent Service", version: "0.1.0", description: "AI Team v1 用户本地 Agent API；会话与执行内容仅保存在本机。" },
         components: {
           securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
           responses: {
             Unauthorized: { description: "Authentication required", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            Forbidden: { description: "Authenticated caller is not authorized", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
             NotFound: { description: "Conversation or file not found", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            Conflict: { description: "Request conflicts with current state", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
             TooLarge: { description: "File or request exceeds a limit", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
             ValidationError: { description: "Validation error", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
             ManagerUnavailable: { description: "Manager-backed capability is unavailable", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            Gone: { description: "The endpoint has been removed", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
+            TooManyRequests: { description: "Too many requests", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" } } } },
           },
         },
       },
       refResolver: { buildLocalReference: (json: any, _baseUri: any, _fragment: string, index: number) => json.$id ?? `def-${index}` },
       transformObject: (documentObject: any) => {
         const openapiObject = documentObject.openapiObject ?? documentObject.swaggerObject;
-        const responseNames = new Set(["Unauthorized", "NotFound", "TooLarge", "ValidationError", "ManagerUnavailable"]);
-        for (const pathItem of Object.values(openapiObject.paths ?? {})) {
-          for (const operation of Object.values(pathItem as Record<string, any>)) {
-            if (!operation || typeof operation !== "object" || !operation.responses) continue;
+        const responseNames = new Set(["Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "Gone", "TooManyRequests"]);
+        const parameterDescriptions: Record<string, string> = {
+          conversation_id: "本地会话 ID。", attachment_id: "本地附件 ID。", artifact_id: "本地产物 ID。", employee_id: "授权员工/专家 ID。", template_id: "专家模板 ID。",
+          knowledge_base_id: "旧知识库 ID。", resource_id: "资源 ID。", kind: "资源类型。", after: "从指定事件之后继续读取。", cursor: "分页游标。", limit: "返回条数上限。", "Idempotency-Key": "写操作幂等键。",
+        };
+        const humanize = (value: string) => value.replace(/_/gu, " ").replace(/([a-z])([A-Z])/gu, "$1 $2");
+        const enrichNode = (node: any, field?: string): void => {
+          if (!node || typeof node !== "object") return;
+          if (node.type === "object" && node.additionalProperties === true) node["x-dynamic-json"] = true;
+          if (field && !node.description) node.description = parameterDescriptions[field] ?? `业务字段：${humanize(field)}。`;
+          if (node.properties && typeof node.properties === "object") for (const [name, child] of Object.entries(node.properties)) enrichNode(child, name);
+          if (node.items) enrichNode(node.items, field);
+          for (const key of ["anyOf", "oneOf", "allOf"]) for (const child of node[key] ?? []) enrichNode(child, field);
+        };
+        for (const [path, pathItem] of Object.entries(openapiObject.paths ?? {})) {
+          for (const [method, operation] of Object.entries(pathItem as Record<string, any>)) {
+            if (!operation || typeof operation !== "object" || !operation.responses || !["get", "post", "put", "patch", "delete", "head", "options", "trace"].includes(method)) continue;
+            const operationId = String(operation.operationId ?? `${method}_${path}`);
+            const summary = String(operation.summary ?? humanize(operationId));
+            operation.summary = summary;
+            if (!operation.description || operation.description === "请查看接口名称了解用途") operation.description = `${summary}。成功响应遵循本地 Agent envelope；失败响应使用 application/problem+json。`;
+            operation.tags ??= [path.startsWith("/api/auth/") ? "auth" : "agent"];
+            if (!operation.security) operation.security = path.startsWith("/api/auth/") || path.endsWith("/login") || path.endsWith("/reset-password") ? [] : [{ bearerAuth: [] }];
+            for (const parameter of operation.parameters ?? []) {
+              if (!parameter.description) parameter.description = parameterDescriptions[parameter.name] ?? `请求${parameter.in}参数：${humanize(parameter.name)}。`;
+              enrichNode(parameter.schema, parameter.name);
+            }
+            const authenticated = Array.isArray(operation.security) && operation.security.length > 0;
+            operation.responses["422"] ??= { $ref: "#/components/responses/ValidationError" };
+            const publicAuth = path.startsWith("/api/auth/") || path.endsWith("/login") || path.endsWith("/reset-password");
+            if (authenticated || publicAuth) operation.responses["401"] ??= { $ref: "#/components/responses/Unauthorized" };
+            if (authenticated) {
+              operation.responses["403"] ??= { $ref: "#/components/responses/Forbidden" };
+              operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
+            }
+            if (publicAuth) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
+            if (path === "/api/auth/resolve-tenant-by-account") {
+              operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
+              operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
+            }
+            if (["post", "put", "patch", "delete"].includes(method)) operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
             for (const [status, response] of Object.entries(operation.responses as Record<string, any>)) {
-              if (response && responseNames.has(response.description)) operation.responses[status] = { $ref: `#/components/responses/${response.description}` };
+              if (response && responseNames.has(response.description)) {
+                operation.responses[status] = { $ref: `#/components/responses/${response.description}` };
+                continue;
+              }
+              for (const content of Object.values(response?.content ?? {}) as any[]) enrichNode(content.schema);
             }
           }
+        }
+        for (const [name, model] of Object.entries(openapiObject.components?.schemas ?? {})) {
+          const schema = model as any;
+          schema.description ??= `${humanize(name)} 数据结构。`;
+          enrichNode(schema);
         }
         return openapiObject;
       },
@@ -195,11 +390,10 @@ export class AgentHttpServer {
   }
 
   private registerRoutes(): void {
-    const generic = Type.Object({ data: Type.Any() });
     const jsonResponse = (schema: unknown, description = "Successful response") => ({ description, content: { "application/json": { schema } } });
-    const problemResponse = (name: "Unauthorized" | "NotFound" | "TooLarge" | "ValidationError" | "ManagerUnavailable") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
-    this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { response: { 200: generic } }), false);
-    this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String() } } } } }), false);
+    const problemResponse = (name: "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "TooLarge" | "ValidationError" | "ManagerUnavailable" | "Gone" | "TooManyRequests") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
+    this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { summary: "Agent 存活检查", description: "检查 Agent 进程是否存活。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ status: Type.String({ description: "服务状态。" }) }, { additionalProperties: false }) }, { additionalProperties: false })) } }), false);
+    this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { summary: "导出 Agent 指标", description: "返回 Prometheus 文本格式的本地 Agent 指标。", response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String({ description: "Prometheus 指标文本。" }) } } } } }), false);
     this.registerRoute("GET", "/readyz", async (_request, response) => {
       let ready = false;
       try {
@@ -207,81 +401,81 @@ export class AgentHttpServer {
         ready = (await this.options.localReady?.()) ?? true;
       } catch { ready = false; }
       this.writeJson(response, ready ? 200 : 503, { data: { ready } });
-    }, routeSchema("readyz", { response: { 200: generic, 503: generic } }), false);
-    this.registerRoute("GET", "/openapi.json", (_request, response) => this.writeJson(response, 200, this.app.swagger()), routeSchema("openapi"), false);
-    this.registerRoute("GET", "/redoc", (_request, response) => this.writeHtml(response, redocHtml("/openapi.json")), routeSchema("redoc"), false);
-    this.registerRoute("GET", "/redoc/redoc.standalone.js", (_request, response) => this.writeText(response, 200, REDOC_BUNDLE, "text/javascript; charset=utf-8"), routeSchema("redocBundle"), false);
+    }, routeSchema("readyz", { summary: "Agent 就绪检查", description: "检查本地数据库、工作目录和 sandbox 是否可用。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ ready: Type.Boolean({ description: "本地 Agent 是否就绪。" }) }, { additionalProperties: false }) })), 503: jsonResponse(Type.Object({ data: Type.Object({ ready: Type.Boolean({ description: "本地 Agent 是否就绪。" }) }, { additionalProperties: false }) })) } }), false);
+    this.registerRoute("GET", "/openapi.json", (_request, response) => this.writeJson(response, 200, this.app.swagger()), routeSchema("openapi", { summary: "获取 Agent OpenAPI", description: "返回当前用户端 Agent 的 OpenAPI 3.1 文档。" }), false);
+    this.registerRoute("GET", "/redoc", (_request, response) => this.writeHtml(response, redocHtml("/openapi.json")), routeSchema("redoc", { summary: "查看 Agent ReDoc", description: "使用 ReDoc 渲染当前 Agent OpenAPI 文档。" }), false);
+    this.registerRoute("GET", "/redoc/redoc.standalone.js", (_request, response) => this.writeText(response, 200, REDOC_BUNDLE, "text/javascript; charset=utf-8"), routeSchema("redocBundle", { summary: "获取 ReDoc 静态资源", description: "返回 ReDoc JavaScript 资源。" }), false);
 
-    this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { body: Type.Object({ account: Type.String({ minLength: 1, maxLength: 256 }) }), response: { 200: generic, 400: problemResponse("ValidationError") } }), false);
-    this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), account: Type.String({ minLength: 1, maxLength: 256 }), password: Type.String({ minLength: 1, maxLength: 512 }) }), response: { 200: generic } }), false);
-    this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), account: Type.String({ minLength: 1, maxLength: 256 }), old_password: Type.String({ minLength: 1, maxLength: 512 }), new_password: Type.String({ minLength: 1, maxLength: 512 }) }), response: { 200: generic } }), false);
+    this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { summary: "解析员工账号所属企业", description: "在登录前根据员工账号解析唯一企业租户。", body: Type.Ref("ResolveTenantRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("TenantResolution") })), 400: problemResponse("ValidationError") } }), false);
+    this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { summary: "Agent 登录", description: "使用 Manager 返回的企业租户、账号和密码建立本地会话。", body: Type.Ref("AgentLoginRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
+    this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { summary: "重置负责人密码", description: "使用当前凭据向 Manager 请求重置密码。", body: Type.Ref("AgentResetPasswordRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
 
-    this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { querystring: ConversationQuery, response: { 200: generic } }));
-    this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), entry_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), solution_instance_id: Type.Optional(Type.Union([Type.String(), Type.Null()])), schedule: Type.Optional(Type.Any()) }), response: { 201: generic } }));
-    this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.getConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
-    const conversationUpdateSchema = routeSchema("updateConversation", { params: ConversationParams, body: Type.Object({ title: Type.Optional(Type.Union([Type.String({ maxLength: 200 }), Type.Null()])), kind: Type.Optional(Type.String({ maxLength: 64 })), labels: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })), schedule: Type.Optional(Type.Any()), last_read_entry_id: Type.Optional(Type.Union([Type.String(), Type.Null()])) }), response: { 200: generic, 404: problemResponse("NotFound") } });
+    this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
+    this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { summary: "列出本地会话", description: "按当前成员列出本地会话，支持游标和条数限制。", querystring: ConversationQuery, response: { 200: jsonResponse(Type.Ref("ConversationListEnvelope")) } }));
+    this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { summary: "创建本地会话", description: "创建私聊、群聊或任务会话；会话内容仅保存在本机。", body: Type.Ref("ConversationCreateRequest"), response: { 201: jsonResponse(Type.Ref("ConversationEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.getConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversation", { summary: "获取本地会话", description: "返回当前成员拥有的本地会话元数据。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } }));
+    const conversationUpdateSchema = routeSchema("updateConversation", { summary: "更新本地会话", description: "更新会话标题、标签、权限、调度或已读位置。", params: ConversationParams, body: Type.Ref("ConversationUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } });
     this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id", (request, response, caller, fastifyRequest) => this.updateConversation(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), conversationUpdateSchema);
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id", (request, response, caller, fastifyRequest) => this.updateConversation(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), { ...conversationUpdateSchema, operationId: "replaceConversation" });
-    this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.deleteConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("deleteConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
-    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (_request, response, caller, fastifyRequest) => this.getConversationState(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationState", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
-    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller, fastifyRequest) => this.updateConversationState(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationState", { params: ConversationParams, body: Type.Object({ state: Type.String({ minLength: 1, maxLength: 32 }) }), response: { 200: generic, 404: problemResponse("NotFound") } }));
+    this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.deleteConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("deleteConversation", { summary: "删除本地会话", description: "删除当前成员拥有的会话及其本地执行状态。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationDeleteEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (_request, response, caller, fastifyRequest) => this.getConversationState(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationState", { summary: "获取会话运行状态", description: "返回会话持久化状态以及当前是否正在执行提示。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationStateEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller, fastifyRequest) => this.updateConversationState(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationState", { summary: "更新会话状态", description: "更新当前成员会话的持久化状态。", params: ConversationParams, body: Type.Ref("ConversationStateUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
-    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 409: problemResponse("ValidationError"), 422: problemResponse("ValidationError") } }));
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { summary: "提交会话提示", description: "向本地会话提交文本、图片和群聊提及；使用 Idempotency-Key 保证重试安全。", params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/events", (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
       return this.events(request, response, conversationId, new URL(request.url ?? "/", "http://localhost").searchParams.get("after"));
-    }, routeSchema("subscribeConversationEvents", { params: ConversationParams, querystring: Type.Object({ after: Type.Optional(Type.String()) }, { additionalProperties: false }), response: { 200: { description: "Pi event stream", content: { "text/event-stream": { schema: Type.String() } } } } }));
+    }, routeSchema("subscribeConversationEvents", { summary: "订阅会话事件流", description: "以 Server-Sent Events 形式读取本地 Pi 事件；after 可用于断点续读。", params: ConversationParams, querystring: Type.Object({ after: Type.Optional(Type.String({ description: "从指定事件 ID 之后续读。" })) }, { additionalProperties: false }), response: { 200: { description: "Pi event stream", content: { "text/event-stream": { schema: Type.String({ description: "SSE 事件流文本。" }) } } } } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/entries", async (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
       const entries = await this.options.host.entries(conversationId);
       this.writeJson(response, 200, { data: { conversation_id: conversationId, entries } });
-    }, routeSchema("listConversationEntries", { params: ConversationParams, response: { 200: generic } }));
+    }, routeSchema("listConversationEntries", { summary: "列出会话条目", description: "读取当前成员会话的脱敏历史条目。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEntriesEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
       const aborted = await this.options.host.abort(conversationId);
       this.writeJson(response, 200, { data: { conversation_id: conversationId, aborted } });
-    }, routeSchema("abortConversation", { params: ConversationParams, response: { 200: generic, 404: problemResponse("NotFound") } }));
+    }, routeSchema("abortConversation", { summary: "终止会话执行", description: "请求终止当前会话中正在运行的 Pi 提示。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("AbortEnvelope")), 404: problemResponse("NotFound") } }));
 
     const fileCollection = (kind: LocalFileKind, operationId: string, params: unknown) => {
       const route = (fastifyRequest?: FastifyRequest) => ({ conversationId: String((fastifyRequest?.params as { conversation_id?: string })?.conversation_id ?? ""), kind });
-      this.registerRoute("GET", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (_request, response, caller, fastifyRequest) => this.listLocalFiles(response, route(fastifyRequest), caller!), routeSchema(operationId, { params, response: { 200: jsonResponse(Type.Ref("LocalFileListEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
-      this.registerRoute("POST", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (request, response, caller, fastifyRequest) => this.uploadLocalFile(request, response, route(fastifyRequest), caller!), routeSchema(kind === "artifact" ? "uploadArtifact" : "uploadAttachment", { params, body: Type.Ref("LocalFileUpload"), response: { 201: jsonResponse(Type.Ref("LocalFileEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
+      this.registerRoute("GET", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (_request, response, caller, fastifyRequest) => this.listLocalFiles(response, route(fastifyRequest), caller!), routeSchema(operationId, { summary: kind === "artifact" ? "列出会话产物" : "列出会话附件", description: `列出当前成员会话中的本地${kind === "artifact" ? "产物" : "附件"}元数据。`, params, response: { 200: jsonResponse(Type.Ref("LocalFileListEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("POST", `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}`, (request, response, caller, fastifyRequest) => this.uploadLocalFile(request, response, route(fastifyRequest), caller!), routeSchema(kind === "artifact" ? "uploadArtifact" : "uploadAttachment", { summary: kind === "artifact" ? "上传会话产物" : "上传会话附件", description: `向当前成员会话上传本地${kind === "artifact" ? "产物" : "附件"}。`, params, body: Type.Ref("LocalFileUpload"), response: { 201: jsonResponse(Type.Ref("LocalFileEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
     };
     fileCollection("attachment", "listAttachments", ConversationParams);
     fileCollection("artifact", "listArtifacts", ConversationParams);
     const fileItem = (kind: LocalFileKind, idName: "attachment_id" | "artifact_id", operationPrefix: string, params: unknown) => {
       const route = (request: IncomingMessage, fastifyRequest?: FastifyRequest) => { const values = fastifyRequest?.params as Record<string, string>; return { conversationId: values.conversation_id, kind, fileId: values[idName] }; };
       const path = `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}/:${idName}`;
-      this.registerRoute("GET", path, (request, response, caller, fastifyRequest) => this.downloadLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`download${operationPrefix}`, { params, response: { 200: { description: "Local file bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
-      this.registerRoute("DELETE", path, (request, response, caller, fastifyRequest) => this.deleteLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`delete${operationPrefix}`, { params, response: { 200: jsonResponse(Type.Ref("LocalFileDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("GET", path, (request, response, caller, fastifyRequest) => this.downloadLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`download${operationPrefix}`, { summary: `下载会话${kind === "artifact" ? "产物" : "附件"}`, description: `下载当前成员会话中的${kind === "artifact" ? "产物" : "附件"}二进制内容。`, params, response: { 200: { description: "Local file bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
+      this.registerRoute("DELETE", path, (request, response, caller, fastifyRequest) => this.deleteLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`delete${operationPrefix}`, { summary: `删除会话${kind === "artifact" ? "产物" : "附件"}`, description: `删除当前成员会话中的${kind === "artifact" ? "产物" : "附件"}。`, params, response: { 200: jsonResponse(Type.Ref("LocalFileDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
     };
     fileItem("attachment", "attachment_id", "Attachment", ConversationFileParams);
     fileItem("artifact", "artifact_id", "Artifact", ConversationArtifactParams);
 
-    this.registerRoute("GET", "/api/agent/grants/experts", (_request, response, caller) => this.listExperts(response, caller!), routeSchema("listAuthorizedExperts", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/grants/solutions", (_request, response, caller) => this.listSolutions(response, caller!), routeSchema("listAuthorizedSolutions", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { params: ExpertParams, response: { 200: generic } }));
-    this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { body: Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200 }), member_id: Type.String({ minLength: 1, maxLength: 200 }), known_versions: Type.Optional(Type.Record(Type.String(), Type.String())) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
-    this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { body: Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }), response: { 200: generic, 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/marketplace/templates", (_request, response, caller) => this.listMarketplaceTemplates(response, caller!), routeSchema("listMarketplaceTemplates", { response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (_request, response, caller, fastifyRequest) => this.listMarketplaceTemplates(response, caller!, (fastifyRequest?.params as { template_id: string }).template_id), routeSchema("getMarketplaceTemplate", { params: Type.Object({ template_id: Type.String({ minLength: 1 }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/knowledge-bases", (_request, response) => this.listKnowledgeBases(response), routeSchema("listKnowledgeBases", { response: { 410: generic } }));
-    for (const path of ["/api/agent/knowledge-bases/:knowledge_base_id/:kind", "/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id"]) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema("knowledgeReadModel", { response: { 410: generic } }));
-    this.registerRoute("GET", "/api/agent/org/tree", (request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { response: { 200: generic } }));
-    this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { response: { 200: generic } }));
+    this.registerRoute("GET", "/api/agent/grants/experts", (_request, response, caller) => this.listExperts(response, caller!), routeSchema("listAuthorizedExperts", { summary: "列出已授权专家", description: "列出当前成员在本机已装载的专家投影。", response: { 200: jsonResponse(Type.Ref("ExpertListEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/grants/solutions", (_request, response, caller) => this.listSolutions(response, caller!), routeSchema("listAuthorizedSolutions", { summary: "列出已授权方案", description: "列出当前成员在本机已装载的方案投影。", response: { 200: jsonResponse(Type.Ref("SolutionListEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { summary: "列出冻结快照", description: "列出当前成员本地缓存的员工执行快照。", response: { 200: jsonResponse(Type.Ref("SnapshotListEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { summary: "检查授权执行就绪状态", description: "检查 Agent runtime 和当前授权专家是否可以执行。", response: { 200: jsonResponse(Type.Ref("ReadinessEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { summary: "检查专家就绪状态", description: "检查指定授权专家的本地执行条件。", params: ExpertParams, response: { 200: jsonResponse(Type.Ref("ExpertReadinessEnvelope")) } }));
+    this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { summary: "同步授权配置", description: "主动从 Manager 拉取当前成员的增量授权配置并更新本地投影。", body: Type.Ref("GrantSyncRequest"), response: { 200: jsonResponse(Type.Ref("GrantSyncEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { summary: "列出用量上报队列", description: "查看本地待上报或失败的脱敏用量摘要。", response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
+    this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { summary: "刷新用量上报", description: "将本地脱敏用量摘要尽力上报到 Manager。", body: Type.Ref("UsageFlushRequest"), response: { 200: jsonResponse(Type.Ref("UsageFlushEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates", (_request, response, caller) => this.listMarketplaceTemplates(response, caller!), routeSchema("listMarketplaceTemplates", { summary: "列出专家市场模板", description: "从 Manager 拉取当前成员可见的专家模板。", response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/marketplace/templates/:template_id", (_request, response, caller, fastifyRequest) => this.listMarketplaceTemplates(response, caller!, (fastifyRequest?.params as { template_id: string }).template_id), routeSchema("getMarketplaceTemplate", { summary: "获取专家市场模板", description: "获取当前成员可见的单个专家模板。", params: Type.Object({ template_id: Type.String({ minLength: 1, description: "专家模板 ID。" }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateEnvelope")), 404: problemResponse("NotFound"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/knowledge-bases", (_request, response) => this.listKnowledgeBases(response), routeSchema("listKnowledgeBases", { summary: "查询已移除的知识库接口", description: "该 Agent 知识库旧接口已移除，请改用 Pi 知识工具。", response: { 410: problemResponse("Gone") } }));
+    for (const path of ["/api/agent/knowledge-bases/:knowledge_base_id/:kind", "/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id"]) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema(path.endsWith(":resource_id") ? "knowledgeReadModelResource" : "knowledgeReadModel", { summary: "查询已移除的知识库读模型", description: "该 Agent 知识库旧读模型已移除，请改用 Pi 知识工具。", params: Type.Object({ knowledge_base_id: Type.String({ minLength: 1, description: "旧知识库 ID。" }), kind: Type.String({ minLength: 1, description: "旧资源类型。" }), resource_id: Type.Optional(Type.String({ minLength: 1, description: "旧资源 ID。" })) }, { additionalProperties: false }), response: { 410: problemResponse("Gone") } }));
+    this.registerRoute("GET", "/api/agent/org/tree", (request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { summary: "获取组织树", description: "从 Manager 拉取当前成员可见的组织结构投影。", response: { 200: jsonResponse(Type.Ref("OrgTreeEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { summary: "获取办公场景", description: "返回本地专家工作状态和当前会话摘要。", response: { 200: jsonResponse(Type.Ref("OfficeSceneEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
-    for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: generic } }));
+    for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
 
   private registerRoute(method: string | string[], url: string, handler: AgentRouteHandler, schema: Record<string, unknown>, authenticated = true): void {
@@ -394,6 +588,7 @@ export class AgentHttpServer {
     const entryEmployeeId = this.optionalString(body.entry_employee_id, "entry_employee_id");
     let coordinatorEmployeeId = this.optionalString(body.coordinator_employee_id, "coordinator_employee_id");
     const solutionRef = this.optionalString(body.solution_instance_id, "solution_instance_id");
+    const permissionMode = parsePermissionMode(body.permission_mode);
     const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
     const existing = this.options.store.getConversationMetadata(id);
@@ -422,7 +617,7 @@ export class AgentHttpServer {
     if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
     const metadata = this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
-      entryEmployeeId, coordinatorEmployeeId, solutionRef,
+      entryEmployeeId, coordinatorEmployeeId, solutionRef, permissionMode,
       tenantId: caller.tenantId,
       memberId,
     });
@@ -489,6 +684,7 @@ export class AgentHttpServer {
     if (body.kind !== undefined) patch.kind = this.stringField(body.kind, "kind", 64);
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
+    if (body.permission_mode !== undefined) patch.permissionMode = parsePermissionMode(body.permission_mode);
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.optionalString(body.last_read_entry_id, "last_read_entry_id");
     this.requireOwnedConversation(conversationId, caller);
     const updated = this.options.store.updateConversation(conversationId, patch);
@@ -753,13 +949,11 @@ export class AgentHttpServer {
       if (!response.writableEnded) {
         const event = serializePiEvent(envelope.event, {
           conversation_id: envelope.conversation_id ?? conversationId,
-          ...(envelope.source_ref ? {
-            source_ref: envelope.source_ref,
-            tool_call_id: envelope.tool_call_id,
-            source_employee_id: envelope.source_employee_id,
-            source_employee_display_name: envelope.source_employee_display_name,
-            source_role: envelope.source_role,
-          } : {}),
+          ...(envelope.source_ref ? { source_ref: envelope.source_ref } : {}),
+          ...(envelope.tool_call_id ? { tool_call_id: envelope.tool_call_id } : {}),
+          ...(envelope.source_employee_id ? { source_employee_id: envelope.source_employee_id } : {}),
+          ...(envelope.source_employee_display_name ? { source_employee_display_name: envelope.source_employee_display_name } : {}),
+          ...(envelope.source_role ? { source_role: envelope.source_role } : {}),
         });
         if (!event) return;
         response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
@@ -938,6 +1132,12 @@ export class AgentHttpServer {
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }
+}
+
+function parsePermissionMode(value: unknown): ConversationPermissionMode {
+  if (value === undefined) return "read-only";
+  if (value === "read-only" || value === "workspace-write" || value === "full-access") return value;
+  throw new HttpProblem(422, "invalid_permission_mode", "permission_mode must be read-only, workspace-write, or full-access");
 }
 
 function decodeBase64(value: string): Buffer | undefined {

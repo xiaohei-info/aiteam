@@ -10,6 +10,7 @@ from fastapi import APIRouter, Body, Depends, Request
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
+from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.enums import CatalogStatus, CatalogType, PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
 
@@ -41,7 +42,7 @@ def _require_platform_operator(request: Request) -> TokenClaims:
 
 @router.post(
     "/expert-templates",
-    description="请查看接口名称了解用途", summary="注册专家模板（草稿态）",
+    description="注册专家模板（草稿态）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="注册专家模板（草稿态）",
     operation_id="operation_register_expert_template",
     status_code=201,
 )
@@ -55,7 +56,7 @@ async def register_expert_template(
 
 @router.post(
     "/solution-templates",
-    description="请查看接口名称了解用途", summary="注册行业方案模板（草稿态）",
+    description="注册行业方案模板（草稿态）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="注册行业方案模板（草稿态）",
     operation_id="operation_register_solution_template",
     status_code=201,
 )
@@ -69,7 +70,7 @@ async def register_solution_template(
 
 @router.post(
     "/{catalog_type}/{template_id}/publish",
-    description="请查看接口名称了解用途", summary="发布目录项（通知 Manager）",
+    description="发布目录项（通知 Manager）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="发布目录项（通知 Manager）",
     operation_id="operation_publish_catalog_entry",
 )
 async def publish_catalog_entry(
@@ -86,7 +87,7 @@ async def publish_catalog_entry(
 
 @router.post(
     "/{catalog_type}/{template_id}/unpublish",
-    description="请查看接口名称了解用途", summary="下架目录项（通知 Manager）",
+    description="下架目录项（通知 Manager）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="下架目录项（通知 Manager）",
     operation_id="operation_unpublish_catalog_entry",
 )
 async def unpublish_catalog_entry(
@@ -102,7 +103,7 @@ async def unpublish_catalog_entry(
 
 @router.put(
     "/{catalog_type}/{template_id}/visibility",
-    description="请查看接口名称了解用途", summary="变更可见范围（通知 Manager）",
+    description="变更可见范围（通知 Manager）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="变更可见范围（通知 Manager）",
     operation_id="operation_set_catalog_visibility",
 )
 async def set_catalog_visibility(
@@ -119,7 +120,7 @@ async def set_catalog_visibility(
 
 @router.get(
     "",
-    description="请查看接口名称了解用途", summary="列举目录项（可按类型/状态过滤）",
+    description="列举目录项（可按类型/状态过滤）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列举目录项（可按类型/状态过滤）",
     operation_id="operation_list_catalog",
 )
 async def list_catalog(
@@ -135,7 +136,7 @@ async def list_catalog(
 
 @router.get(
     "/{catalog_type}/{template_id}",
-    description="请查看接口名称了解用途", summary="获取单个目录项",
+    description="获取单个目录项。成功响应遵循统一 envelope，失败返回 problem+json。", summary="获取单个目录项",
     operation_id="operation_get_catalog_entry",
 )
 async def get_catalog_entry(
@@ -177,7 +178,7 @@ def _require_service_token(request: Request) -> None:
 
 @router_pull.get(
     "/expert-templates/{template_id}",
-    description="请查看接口名称了解用途", summary="F06 Manager 拉取专家模板详情（服务间调用）",
+    description="F06 Manager 拉取专家模板详情（服务间调用）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F06 Manager 拉取专家模板详情（服务间调用）",
     operation_id="operation_pull_expert_template",
 )
 async def pull_expert_template(
@@ -185,15 +186,12 @@ async def pull_expert_template(
     request: Request,
     version: str | None = None,
     service: CatalogService = Depends(get_catalog_service),
-):
+) -> Envelope[ExpertTemplateDetail]:
     """F06：Manager 向 Operator 拉取专家模板详情（只读；Operator 持模板真相）。
 
     鉴权：服务间调用（X-Service-Token）。version 为 None 时返回最新已发布版本。
     """
     _require_service_token(request)
-    from shared.contracts.crosstier import ExpertTemplateDetail
-    from shared.contracts.envelope import Envelope
-
     return Envelope[ExpertTemplateDetail](
         data=service.pull_expert_template_detail(template_id=template_id, version=version)
     )
@@ -201,7 +199,7 @@ async def pull_expert_template(
 
 @router_pull.get(
     "/solution-templates/{solution_id}",
-    description="请查看接口名称了解用途", summary="F07 Manager 拉取行业方案包（服务间调用）",
+    description="F07 Manager 拉取行业方案包（服务间调用）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F07 Manager 拉取行业方案包（服务间调用）",
     operation_id="operation_pull_solution_package",
 )
 async def pull_solution_package(
@@ -209,15 +207,12 @@ async def pull_solution_package(
     request: Request,
     version: str | None = None,
     service: CatalogService = Depends(get_catalog_service),
-):
+) -> Envelope[SolutionPackage]:
     """F07：Manager 向 Operator 拉取行业方案包（只读；Operator 持模板真相）。
 
     鉴权：服务间调用（X-Service-Token）。version 为 None 时返回最新已发布版本。
     """
     _require_service_token(request)
-    from shared.contracts.crosstier import SolutionPackage
-    from shared.contracts.envelope import Envelope
-
     return Envelope[SolutionPackage](
         data=service.pull_solution_package(solution_id=solution_id, version=version)
     )
@@ -225,39 +220,33 @@ async def pull_solution_package(
 
 @router_pull.get(
     "/expert-templates",
-    description="请查看接口名称了解用途", summary="F06 Manager 列举可招募专家模板（服务间调用）",
+    description="F06 Manager 列举可招募专家模板（服务间调用）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F06 Manager 列举可招募专家模板（服务间调用）",
     operation_id="operation_list_expert_templates",
 )
 async def list_expert_templates(
     request: Request,
     service: CatalogService = Depends(get_catalog_service),
-):
+) -> ListEnvelope[ExpertTemplateDetail]:
     """F06：Manager 浏览可招募专家模板（只读，只返回 PUBLISHED 状态）。
 
     鉴权：服务间调用（X-Service-Token）。
     """
     _require_service_token(request)
-    from shared.contracts.crosstier import ExpertTemplateDetail
-    from shared.contracts.envelope import ListEnvelope
-
     return ListEnvelope[ExpertTemplateDetail](data=service.list_published_expert_templates())
 
 
 @router_pull.get(
     "/solution-templates",
-    description="请查看接口名称了解用途", summary="F07 Manager 列举可应用行业方案包（服务间调用）",
+    description="F07 Manager 列举可应用行业方案包（服务间调用）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F07 Manager 列举可应用行业方案包（服务间调用）",
     operation_id="operation_list_solution_packages",
 )
 async def list_solution_packages(
     request: Request,
     service: CatalogService = Depends(get_catalog_service),
-):
+) -> ListEnvelope[SolutionPackage]:
     """F07：Manager 浏览可应用行业方案包（只读，只返回 PUBLISHED 状态）。
 
     鉴权：服务间调用（X-Service-Token）。
     """
     _require_service_token(request)
-    from shared.contracts.crosstier import SolutionPackage
-    from shared.contracts.envelope import ListEnvelope
-
     return ListEnvelope[SolutionPackage](data=service.list_published_solution_packages())
