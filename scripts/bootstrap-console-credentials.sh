@@ -70,13 +70,12 @@ set_env_value() {
   python3 - "$path" "$key" "$value" <<'PY'
 from pathlib import Path
 import os
-import shlex
 import sys
 path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 if "'" in value:
     raise SystemExit("credential value cannot contain a single quote")
 lines = path.read_text().splitlines()
-replacement = f"{key}={shlex.quote(value)}"
+replacement = f"{key}='{value}'"
 for index, line in enumerate(lines):
     if line.startswith(f"{key}="):
         lines[index] = replacement
@@ -311,6 +310,12 @@ if [[ -e "$CREDENTIALS_FILE" ]]; then
   : "${LIGHTRAG_TOKEN_SECRET:?credentials file missing LIGHTRAG_TOKEN_SECRET}"
   : "${HINDSIGHT_CP_ACCESS_KEY:?credentials file missing HINDSIGHT_CP_ACCESS_KEY}"
   NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"
+  # Standalone LightRAG consumes its native names; Compose maps the prefixed
+  # names below. Add aliases when upgrading an older credential file.
+  AUTH_ACCOUNTS="${AUTH_ACCOUNTS:-$LIGHTRAG_AUTH_ACCOUNTS}"
+  TOKEN_SECRET="${TOKEN_SECRET:-$LIGHTRAG_TOKEN_SECRET}"
+  set_env_value "$CREDENTIALS_FILE" "AUTH_ACCOUNTS" "$AUTH_ACCOUNTS"
+  set_env_value "$CREDENTIALS_FILE" "TOKEN_SECRET" "$TOKEN_SECRET"
   echo "[console-creds] reusing $CREDENTIALS_FILE"
 else
   NEWAPI_ADMIN_USERNAME="aiteamroot"
@@ -334,6 +339,8 @@ else
     printf 'LIGHTRAG_ADMIN_PASSWORD=%s\n' "$(quote_env "$LIGHTRAG_ADMIN_PASSWORD")"
     printf 'LIGHTRAG_AUTH_ACCOUNTS=%s\n' "$(quote_env "$LIGHTRAG_AUTH_ACCOUNTS")"
     printf 'LIGHTRAG_TOKEN_SECRET=%s\n' "$(quote_env "$LIGHTRAG_TOKEN_SECRET")"
+    printf 'AUTH_ACCOUNTS=%s\n' "$(quote_env "$LIGHTRAG_AUTH_ACCOUNTS")"
+    printf 'TOKEN_SECRET=%s\n' "$(quote_env "$LIGHTRAG_TOKEN_SECRET")"
     printf 'HINDSIGHT_CP_ACCESS_KEY=%s\n' "$(quote_env "$HINDSIGHT_CP_ACCESS_KEY")"
   } > "$tmp"
   chmod 600 "$tmp"

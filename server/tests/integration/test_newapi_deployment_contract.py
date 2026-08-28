@@ -42,6 +42,8 @@ def test_newapi_admin_secrets_only_enter_operation_process():
     assert "-u NEWAPI_ADMIN_TOKEN" in ctl
     assert "-u NEWAPI_ADMIN_PASSWORD" in ctl
     assert "-u LIGHTRAG_ADMIN_PASSWORD" in ctl
+    assert "-u AUTH_ACCOUNTS" in ctl
+    assert "-u TOKEN_SECRET" in ctl
     assert 'NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"' in ctl
     assert 'if [[ "${SERVER}" != "newapi" ]]' in ctl
     assert '-u NEWAPI_URL' in ctl
@@ -71,6 +73,8 @@ def test_console_credentials_bootstrap_is_local_and_reused():
     assert "NEWAPI_ADMIN_PASSWORD" in script
     assert "LIGHTRAG_AUTH_ACCOUNTS" in script
     assert "HINDSIGHT_CP_ACCESS_KEY" in script
+    assert "AUTH_ACCOUNTS" in script
+    assert "TOKEN_SECRET" in script
     assert 'source "${AITEAM_CONSOLE_CREDENTIALS_FILE}"' in ctl
     assert "scripts/bootstrap-console-credentials.sh" in docs
     assert "不要提交 Git" in docs
