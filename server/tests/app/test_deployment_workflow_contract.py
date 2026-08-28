@@ -21,6 +21,7 @@ def test_taiyi_deploy_uses_persistent_root_without_workspace_checkout():
 
 def test_deploy_script_fetches_requested_remote_branch_and_requires_enable():
     script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    assert 'export HOME="${HOME:-/root}"' in script
     assert 'git checkout -B "$BRANCH" "origin/$BRANCH"' in script
     assert 'systemctl enable "$UNIT_NAME"' in script
     assert "deployment would not survive reboot" in script

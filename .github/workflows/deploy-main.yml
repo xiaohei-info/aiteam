@@ -66,7 +66,9 @@ jobs:
           set -euo pipefail
           [[ -d "${DEPLOY_ROOT}" ]] || { echo "::error::${DEPLOY_ROOT} is missing; bootstrap it per deploy/ci/README.md"; exit 1; }
           # The persistent checkout is intentionally owned by the deploy user,
-          # while the runner service may use another account.
+          # while the runner service may use another account. The runner unit
+          # currently does not export HOME, so provide a writable Git config home.
+          export HOME="${HOME:-/root}"
           git config --global --add safe.directory "${DEPLOY_ROOT}"
           cd "${DEPLOY_ROOT}"
           [[ -d .git ]] || { echo "::error::${DEPLOY_ROOT} is not a git repository; bootstrap it per deploy/ci/README.md"; exit 1; }

@@ -16,6 +16,10 @@
 
 set -euo pipefail
 
+# Git refuses a persistent checkout with a different owner unless it is marked
+# safe. Self-hosted runner services may also omit HOME entirely.
+export HOME="${HOME:-/root}"
+
 BRANCH="${DEPLOY_BRANCH:-}"
 ENV_TARGET="${DEPLOY_ENV:-test}"
 UNIT_NAME="${UNIT_NAME:-aiteam-v1}"
@@ -60,6 +64,9 @@ cd "$DEPLOY_ROOT"
 
 if [[ ! -d ".git" ]]; then
   fail "${DEPLOY_ROOT} is not a git repository — bootstrap it first (see deploy/ci/README.md)"
+fi
+if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$DEPLOY_ROOT"; then
+  git config --global --add safe.directory "$DEPLOY_ROOT" || fail "cannot mark ${DEPLOY_ROOT} as a safe git directory"
 fi
 
 # 1) 同步目标分支最新代码
