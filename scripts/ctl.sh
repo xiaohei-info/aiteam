@@ -191,9 +191,17 @@ validate_lightrag_production_env() {
 validate_newapi_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
   local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:+${NEWAPI_URL%/}/v1}}"
-  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
+  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
   done
+  # The standalone NewAPI container does not need an Operator dashboard token
+  # to start. bootstrap-console-credentials.sh provisions the root account and
+  # token after this first start; operation/all still require both values.
+  if [[ "${SERVER}" != "newapi" ]]; then
+    for name in NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
+      [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
+    done
+  fi
   [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_URL or NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
   [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || {
     echo "[ctl] ERROR: NEWAPI_IMAGE must use a fixed version tag or sha256 digest" >&2; exit 1;
