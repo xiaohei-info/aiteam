@@ -232,8 +232,8 @@ test.describe("Pi prompt usage outbox flush → Manager rollup 跨端数据传�
     request,
   }) => {
     test.setTimeout(180_000);
-    if (process.env.AITEAM_PI_FAKE === "true") {
-      test.skip(true, "Usage outbox requires a real runtime; fake responses are intentionally non-billable");
+    if (process.env.AITEAM_PI_FAKE === "true" || process.env.E2E_EXTERNAL !== "true") {
+      test.skip(true, "Usage outbox requires a real external runtime; local/fake responses are intentionally non-billable");
       return;
     }
     // 单 test 内完成全链路（避免 fullyParallel 下测试间顺序依赖）：
