@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
 import { ApiError } from "@aiteam/shared/api-client";
-import { createConversation, deleteAttachment, getConversationRuntimeState, getEntries, listConversations, setConversationState, submitPrompt, subscribePiEvents } from "./useChatApi";
+import { createConversation, deleteAttachment, downloadLocalFile, getConversationContext, getConversationRuntimeState, getEntries, listConversations, listLocalFiles, setConversationState, setConversationThinkingLevel, submitPrompt, subscribePiEvents, type LocalFile } from "./useChatApi";
 import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
 afterEach(() => {
@@ -23,6 +23,37 @@ describe("Pi chat contract", () => {
     await expect(listConversations(api)).resolves.toMatchObject({ items: [{ id: "c1" }], nextCursor: "c1", hasMore: true });
     await expect(createConversation(api, { title: "Private", entry_employee_id: "e1" })).resolves.toMatchObject({ entry_employee_id: "e1" });
     expect(fetchMock.mock.calls[0]?.[0]).toBe("http://agent.test/api/agent/conversations?limit=50");
+  });
+
+  it("reads the local context HUD and updates thinking level through the Agent API", async () => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        expect(JSON.parse(String(init.body))).toEqual({ thinking_level: "high" });
+      }
+      return new Response(JSON.stringify({ data: {
+        conversation_id: "c1", employee_id: "e1", model: { provider: "local", id: "model", name: "Model" },
+        used_tokens: 120, context_window: 1_000, percentage: 12, thinking_level: init?.method === "PATCH" ? "high" : "medium", prompting: false,
+      } }), { headers: { "content-type": "application/json" } });
+    });
+    const api = client(fetchMock as unknown as typeof fetch);
+    await expect(getConversationContext(api, "c1")).resolves.toMatchObject({ used_tokens: 120, context_window: 1_000, percentage: 12, thinking_level: "medium" });
+    await expect(setConversationThinkingLevel(api, "c1", "high")).resolves.toMatchObject({ thinking_level: "high" });
+    expect(fetchMock).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/context", expect.objectContaining({ method: "PATCH" }));
+  });
+
+  it("lists authenticated attachments and artifacts and downloads through the local client", async () => {
+    const attachment: LocalFile = { id: "a1", conversation_id: "c1", tenant_id: "t1", member_id: "m1", kind: "attachment", filename: "notes.md", mime_type: "text/markdown", byte_size: 5, sha256: "a", created_at: "2026-01-01", referenced_at: null };
+    const artifact: LocalFile = { ...attachment, id: "f1", kind: "artifact", filename: "result.ts", mime_type: "text/typescript" };
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/attachments")) return new Response(JSON.stringify({ data: [attachment], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+      if (String(url).endsWith("/artifacts")) return new Response(JSON.stringify({ data: [artifact], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+      return new Response("const result = true;", { headers: { "content-type": "text/typescript" } });
+    });
+    const api = client(fetchMock as unknown as typeof fetch);
+    await expect(listLocalFiles(api, "c1")).resolves.toEqual([attachment, artifact]);
+    const response = await downloadLocalFile(api, artifact);
+    await expect(response.text()).resolves.toBe("const result = true;");
+    expect(fetchMock).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/artifacts/f1", expect.objectContaining({ method: "GET" }));
   });
 
   it("reads runtime prompting state without persisting it and updates the durable state separately", async () => {

@@ -23,6 +23,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
+from .analytics_schemas import KnowledgeAnalyticsOut
 from .knowledge_intake_service import (
     KnowledgeIntakeService,
     RagDeletionBusy,
@@ -101,6 +102,25 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
             svc.list_documents, tenant_context_from(claims), knowledge_space_id=knowledge_space_id
         )
         return ListEnvelope[KnowledgeDocumentOut](data=items)
+
+    @router.get(
+        "/api/manager/knowledge-spaces/{knowledge_space_id}/analytics",
+        summary="读取企业知识库 LightRAG 统计与文档活动",
+        description="返回固定企业 workspace 的安全元数据投影；不接受 workspace 或凭据，也不返回文档正文。",
+        operation_id="manager_knowledge_analytics",
+    )
+    async def knowledge_analytics(
+        knowledge_space_id: str,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[KnowledgeAnalyticsOut]:
+        svc = _service(request)
+        data = await asyncio.to_thread(
+            svc.analytics,
+            tenant_context_from(claims),
+            knowledge_space_id=knowledge_space_id,
+        )
+        return ListEnvelope[KnowledgeAnalyticsOut](data=[data])
 
     @router.post(
         "/api/manager/knowledge-spaces/{knowledge_space_id}/documents",

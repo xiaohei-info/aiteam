@@ -166,6 +166,14 @@ describe("ExpertsPage", () => {
     expect(screen.getByRole("article", { name: "研究员" })).toBeInTheDocument();
   });
 
+  it("列表展示员工所属部门", async () => {
+    const { api } = mockApis([{ ...employeeConfigured, department_ids: ["d1"] }]);
+    api.listDepartments = vi.fn().mockResolvedValue([{ id: "d1", display_name: "研发部" }]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("employee-row")).toBeInTheDocument());
+    expect(screen.getByText("研发部")).toBeInTheDocument();
+  });
+
   it("模型没有显示名时回退显示 model_id", async () => {
     const unnamedProvider = { ...provider, supported_models: [{ model: "minimax-m3", display_name: "", enabled: true }] };
     mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, model: "minimax-m3" } }], [unnamedProvider]);

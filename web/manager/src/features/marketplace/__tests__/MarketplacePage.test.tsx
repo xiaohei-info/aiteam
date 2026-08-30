@@ -91,6 +91,33 @@ describe("MarketplacePage", () => {
     await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1" }));
   });
 
+  it("招募先完成部门设置，并把所选部门传给后端", async () => {
+    const api = mockApi();
+    api.listDepartments = vi.fn().mockResolvedValue([{ id: "d1", display_name: "研发部" }]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "招募" }));
+    const dialog = await screen.findByRole("dialog", { name: "招募测试专家" });
+    await waitFor(() => expect(api.listDepartments).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "所属部门" }));
+    fireEvent.click(screen.getByRole("option", { name: "研发部", hidden: true }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "招募" }));
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", department_ids: ["d1"] }));
+  });
+
+  it("部门设置允许显式选择未设置", async () => {
+    const api = mockApi();
+    api.listDepartments = vi.fn().mockResolvedValue([]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "招募" }));
+    const dialog = await screen.findByRole("dialog", { name: "招募测试专家" });
+    expect(within(dialog).getByRole("option", { name: "未设置", hidden: true })).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "招募" })).toBeEnabled());
+    fireEvent.click(within(dialog).getByRole("button", { name: "招募" }));
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", department_ids: [] }));
+  });
+
   it("只读角色（member）不显示招募入口", async () => {
     mockApi();
     renderPage(["member"]);
@@ -109,7 +136,7 @@ describe("MarketplacePage", () => {
     const api = mockApi();
     (api.listTemplates as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage(["owner"]);
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
+    await waitFor(() => expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("加载失败"))).toBe(true));
   });
 
   it("空状态：无模板时显示空提示", async () => {

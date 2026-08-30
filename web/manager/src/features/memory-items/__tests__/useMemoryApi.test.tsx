@@ -35,6 +35,27 @@ function setup() {
 }
 
 describe("useMemoryApi", () => {
+  it("loads per-employee Hindsight analytics through the Manager list envelope", async () => {
+    const { client, wrapper } = setup();
+    client.listGet!.mockResolvedValue({
+      items: [{
+        status: "available", employee_count: 1, total_memory_count: 2,
+        refreshed_at: "2026-08-26T00:00:00Z", unavailable_employee_count: 0,
+        employees: [{
+          employee_id: "emp-1", display_name: "专家", memory_count: 2,
+          state_counts: { valid: 2 }, category_counts: { preference: 2 },
+          latest_created_at: "2026-08-26T00:00:00Z", oldest_created_at: "2026-08-20T00:00:00Z",
+          latest_used_at: null, average_importance: 0.8, max_importance: 1, truncated: false,
+        }],
+      }],
+      page: { next_cursor: null, has_more: false },
+    });
+    const { result } = renderHook(() => useMemoryApi(), { wrapper });
+
+    await expect(result.current.getAnalytics?.()).resolves.toMatchObject({ total_memory_count: 2 });
+    expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories/analytics");
+  });
+
   it("list 无参数时调用 listGet", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useMemoryApi(), { wrapper });

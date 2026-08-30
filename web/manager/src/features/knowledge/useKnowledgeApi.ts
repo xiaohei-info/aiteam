@@ -9,12 +9,15 @@ import {
   type KnowledgeDocumentOperation,
   type KnowledgeImportUrl,
   type KnowledgeIngestionJob,
+  type KnowledgeAnalytics,
 } from "./types";
 
 const BASE = "/api/manager/knowledge-spaces";
 export interface KnowledgeApi {
   list: () => Promise<KnowledgeSpace[]>;
   listDocuments: (id: string) => Promise<KnowledgeDocument[]>;
+  /** Safe Manager projection; the endpoint returns one item in a list envelope. */
+  getAnalytics?: (id: string) => Promise<import("./types").KnowledgeAnalytics | null>;
   uploadDocument: (id: string, file: File, displayName?: string) => Promise<KnowledgeDocument | null>;
   importUrl: (id: string, body: KnowledgeImportUrl) => Promise<KnowledgeDocument | null>;
   deleteDocument: (id: string, docId: string) => Promise<KnowledgeDocumentOperation>;
@@ -61,6 +64,9 @@ export function createKnowledgeApi(c: ApiClient): KnowledgeApi {
   return {
     async list() { return (await c.listGet<KnowledgeSpace>(BASE)).items; },
     async listDocuments(id) { return (await c.listGet<KnowledgeDocument>(`${BASE}/${id}/documents`)).items; },
+    async getAnalytics(id) {
+      return (await c.listGet<KnowledgeAnalytics>(`${BASE}/${id}/analytics`)).items[0] ?? null;
+    },
     async uploadDocument(id, file, displayName) {
       const form = new FormData();
       form.append("file", file);

@@ -50,6 +50,7 @@ class EmployeeExecutionSnapshot(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
     memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。")
+    department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表；空列表表示未设置。")
     skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
         default_factory=list,
         description="仅用于 Agent 离线验签的公开 key metadata；不含 private key/JWT/HMAC secret",

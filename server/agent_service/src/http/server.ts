@@ -19,18 +19,14 @@ import { normalizePermissionMode, type ConversationPermissionMode, type Conversa
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
+import { ALLOWED_FILE_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
-const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_LOCAL_FILE_NAME = 255;
 const MAX_PROMPT_IMAGES = 8;
 const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_UPLOAD_JSON_BYTES = Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4 + 64 * 1024;
-const ALLOWED_FILE_MIMES = new Set([
-  "application/json", "application/pdf", "application/octet-stream", "image/gif", "image/jpeg", "image/png", "image/webp", "text/markdown", "text/plain",
-]);
-const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 const require = createRequire(import.meta.url);
 const REDOC_BUNDLE = readFileSync(require.resolve("redoc/bundles/redoc.standalone.js"), "utf8");
 const FASTIFY_BODY = Symbol("fastifyBody");
@@ -97,6 +93,27 @@ const ConversationEnvelope = Type.Object({ data: Type.Ref("ConversationMetadata"
 const ConversationListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ConversationMetadata")), page: Type.Ref("Page") }, { $id: "ConversationListEnvelope", description: "会话列表响应。" });
 const ConversationStateOut = Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), state: Type.String({ description: "当前会话状态。" }), prompting: Type.Boolean({ description: "是否正在执行提示。" }) }, { $id: "ConversationStateOut", additionalProperties: false, description: "会话运行状态。" });
 const ConversationStateEnvelope = Type.Object({ data: Type.Ref("ConversationStateOut") }, { $id: "ConversationStateEnvelope" });
+const ThinkingLevel = Type.Union([
+  Type.Literal("off", { description: "关闭思考。" }),
+  Type.Literal("minimal", { description: "最小思考。" }),
+  Type.Literal("low", { description: "低强度思考。" }),
+  Type.Literal("medium", { description: "中等思考。" }),
+  Type.Literal("high", { description: "高强度思考。" }),
+  Type.Literal("xhigh", { description: "超高强度思考。" }),
+  Type.Literal("max", { description: "最大思考（由模型能力决定）。" }),
+], { $id: "ThinkingLevel", description: "Pi 当前思考档位。" });
+const ConversationContextOut = Type.Object({
+  conversation_id: Type.String({ description: "会话 ID。" }),
+  employee_id: Type.String({ description: "当前上下文对应的授权员工 ID。" }),
+  model: Type.Union([Type.Object({ provider: Type.String({ description: "模型 Provider 标识。" }), id: Type.String({ description: "模型标识。" }), name: Type.String({ description: "模型展示名称。" }) }, { additionalProperties: false }), Type.Null()], { description: "当前模型（不含凭据）。" }),
+  used_tokens: Type.Union([Type.Integer({ minimum: 0, description: "当前已使用上下文 token 数。" }), Type.Null()], { description: "当前已使用上下文 token 数；SDK 暂不可估算时为 null。" }),
+  context_window: Type.Integer({ minimum: 0, description: "当前模型上下文窗口 token 数。" }),
+  percentage: Type.Union([Type.Number({ minimum: 0, description: "上下文使用百分比。" }), Type.Null()], { description: "上下文使用百分比；token 未知时为 null。" }),
+  thinking_level: Type.Ref("ThinkingLevel"),
+  prompting: Type.Boolean({ description: "当前会话是否正在执行提示。" }),
+}, { $id: "ConversationContextOut", additionalProperties: false, description: "本地会话上下文 HUD 数据；不包含会话正文、凭据或运行时原始事件。" });
+const ConversationContextEnvelope = Type.Object({ data: Type.Ref("ConversationContextOut") }, { $id: "ConversationContextEnvelope" });
+const ConversationThinkingLevelRequest = Type.Object({ thinking_level: Type.Ref("ThinkingLevel") }, { $id: "ConversationThinkingLevelRequest", additionalProperties: false, description: "更新本地会话思考档位请求。" });
 const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ description: "是否删除成功。" }) }, { additionalProperties: false }) }, { $id: "ConversationDeleteEnvelope" });
 const ConversationContentPart = Type.Object({
   type: Type.String({ description: "消息内容片段类型。" }),
@@ -158,7 +175,15 @@ const ExpertReadiness = Type.Object({ employee_id: Type.String({ description: "�
 const ExpertReadinessEnvelope = Type.Object({ data: Type.Ref("ExpertReadiness") }, { $id: "ExpertReadinessEnvelope" });
 const GrantSyncEnvelope = Type.Object({ data: Type.Object({ ok: Type.Boolean({ description: "同步是否成功。" }), upserted: Type.Integer({ minimum: 0, description: "写入的投影数量。" }), revoked: Type.Integer({ minimum: 0, description: "撤销的投影数量。" }) }, { additionalProperties: false }) }, { $id: "GrantSyncEnvelope" });
 const UsageFlushEnvelope = Type.Object({ data: Type.Object({ sent: Type.Array(Type.String(), { description: "已成功上报的摘要 ID。" }), failed: Type.Array(Type.String(), { description: "上报失败的摘要 ID。" }) }, { additionalProperties: false }) }, { $id: "UsageFlushEnvelope" });
-const OrgTreeNode = Type.Object({ id: Type.String({ description: "组织节点 ID。" }), name: Type.String({ description: "组织节点名称。" }), type: Type.String({ description: "节点类型。" }), children: Type.Array(Type.Object({ id: Type.String({ description: "子节点 ID。" }), name: Type.String({ description: "子节点名称。" }), type: Type.String({ description: "子节点类型。" }) }, { additionalProperties: false }), { description: "子组织节点。" }) }, { $id: "OrgTreeNode", additionalProperties: false, description: "组织树投影。" });
+const OrgTreeNode = Type.Object({
+  id: Type.String({ description: "组织节点 ID。" }),
+  name: Type.String({ description: "组织节点名称。" }),
+  type: Type.String({ description: "节点类型（department 或 employee）。" }),
+  parent_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "父节点 ID。" })),
+  status: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "节点状态。" })),
+  avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "员工头像引用。" })),
+  children: Type.Array(Type.Ref("OrgTreeNode"), { description: "递归子组织节点。" }),
+}, { $id: "OrgTreeNode", additionalProperties: false, description: "递归组织树投影。" });
 const OrgTreeEnvelope = Type.Object({ data: Type.Ref("OrgTreeNode") }, { $id: "OrgTreeEnvelope" });
 const OfficeSceneEnvelope = Type.Object({
   data: Type.Object({
@@ -196,7 +221,7 @@ const PromptImage = Type.Object({
 const PromptRequest = Type.Object({
   text: Type.String({ minLength: 1, maxLength: 200_000, description: "提交给当前员工的文本提示。" }),
   images: Type.Optional(Type.Array(PromptImage, { maxItems: MAX_PROMPT_IMAGES, description: "最多 8 张内联图片。" })),
-  attachment_ids: Type.Optional(Type.Array(Type.String({ description: "本地图片附件 ID。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传图片附件 ID。" })),
+  attachment_ids: Type.Optional(Type.Array(Type.String({ description: "本地附件 ID；只有图片附件会作为 Pi 图片输入，其余文件保持本地元数据。" }), { maxItems: MAX_PROMPT_IMAGES, uniqueItems: true, description: "已上传本地附件 ID。" })),
   mentions: Type.Optional(Type.Array(Type.String({ description: "被 @提及的员工句柄。" }), { maxItems: 16, description: "群聊中的员工提及。" })),
 }, { $id: "PromptRequest", additionalProperties: false, description: "向本地会话提交提示的请求。" });
 const PromptAccepted = Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), accepted: Type.Boolean({ description: "是否已接受执行。" }), state: Type.String({ enum: ["accepted", "completed"], description: "幂等收据状态。" }), idempotency_key: Type.String({ description: "幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据。" });
@@ -217,7 +242,7 @@ const UsageOutboxItem = Type.Object({ summary_id: Type.String({ description: "�
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, GrantSyncRequest, UsageFlushRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
 function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { operationId, ...fields };
@@ -421,6 +446,9 @@ export class AgentHttpServer {
     this.registerRoute("DELETE", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.deleteConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("deleteConversation", { summary: "删除本地会话", description: "删除当前成员拥有的会话及其本地执行状态。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationDeleteEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/state", (_request, response, caller, fastifyRequest) => this.getConversationState(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationState", { summary: "获取会话运行状态", description: "返回会话持久化状态以及当前是否正在执行提示。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationStateEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/state", (request, response, caller, fastifyRequest) => this.updateConversationState(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationState", { summary: "更新会话状态", description: "更新当前成员会话的持久化状态。", params: ConversationParams, body: Type.Ref("ConversationStateUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/context", (_request, response, caller, fastifyRequest) => this.getConversationContext(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationContext", { summary: "获取会话上下文状态", description: "返回当前本地 Pi 会话的模型、上下文 token 使用量、窗口、百分比和思考档位；不返回会话正文或凭据。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/context", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationContext", { summary: "更新会话思考档位", description: "更新当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/thinking-level", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationThinkingLevel", { summary: "设置会话思考档位", description: "设置当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { summary: "提交会话提示", description: "向本地会话提交文本、图片和群聊提及；使用 Idempotency-Key 保证重试安全。", params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
@@ -698,6 +726,18 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { conversation_id: metadata.id, state: metadata.state, prompting: this.options.host.isPrompting(conversationId) } });
   }
 
+  private async getConversationContext(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    this.requireOwnedConversation(conversationId, caller);
+    this.writeJson(response, 200, { data: await this.options.host.getConversationContext(conversationId, caller) });
+  }
+
+  private async updateConversationContext(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    this.requireOwnedConversation(conversationId, caller);
+    const body = await this.readJson(request);
+    const thinkingLevel = parseThinkingLevel(body.thinking_level);
+    this.writeJson(response, 200, { data: await this.options.host.setThinkingLevel(conversationId, thinkingLevel, caller) });
+  }
+
   private async updateConversationState(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     const state = this.stringField(body.state, "state", 32) as ConversationState;
@@ -903,9 +943,14 @@ export class AgentHttpServer {
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
+        const metadata = this.options.store.getOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+        if (!metadata) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
+        if (metadata.kind !== "attachment") throw new HttpProblem(422, "invalid_attachment", "Only conversation attachments can be referenced by a prompt");
+        // Non-image attachments remain local metadata. Never load their bytes into
+        // the Pi image content array; the current Pi prompt contract accepts images only.
+        if (!IMAGE_MIMES.has(metadata.mime_type)) continue;
         const loaded = this.options.store.readOwnedLocalFile(attachmentId, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
-        if (!loaded) throw new HttpProblem(404, "attachment_not_found", "Attachment not found");
-        if (loaded.record.kind !== "attachment" || !IMAGE_MIMES.has(loaded.record.mime_type) || !hasImageSignature(loaded.record.mime_type, loaded.data)) throw new HttpProblem(422, "invalid_attachment", "Only valid image attachments can be sent to Pi");
+        if (!loaded || !hasImageSignature(loaded.record.mime_type, loaded.data)) throw new HttpProblem(422, "invalid_attachment", "Image attachment content does not match its MIME type");
         decodedImageBytes += loaded.data.byteLength;
         loadedImages.push({ type: "image", data: loaded.data.toString("base64"), mimeType: loaded.record.mime_type });
       }
@@ -1140,18 +1185,15 @@ function parsePermissionMode(value: unknown): ConversationPermissionMode {
   throw new HttpProblem(422, "invalid_permission_mode", "permission_mode must be read-only, workspace-write, or full-access");
 }
 
+function parseThinkingLevel(value: unknown): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" {
+  if (value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") return value;
+  throw new HttpProblem(422, "invalid_thinking_level", "thinking_level must be off, minimal, low, medium, high, xhigh, or max");
+}
+
 function decodeBase64(value: string): Buffer | undefined {
   if (!value || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return undefined;
   const decoded = Buffer.from(value, "base64");
   return decoded.toString("base64") === value ? decoded : undefined;
-}
-
-function hasImageSignature(mimeType: string, data: Buffer): boolean {
-  if (mimeType === "image/png") return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (mimeType === "image/jpeg") return data.length >= 3 && data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
-  if (mimeType === "image/gif") return data.length >= 6 && (data.subarray(0, 6).toString("ascii") === "GIF87a" || data.subarray(0, 6).toString("ascii") === "GIF89a");
-  if (mimeType === "image/webp") return data.length >= 12 && data.subarray(0, 4).toString("ascii") === "RIFF" && data.subarray(8, 12).toString("ascii") === "WEBP";
-  return false;
 }
 
 function redocHtml(url: string): string {

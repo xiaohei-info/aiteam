@@ -26,6 +26,61 @@ export const KNOWLEDGE_DOCUMENT_STATUSES = [
 export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
 export type KnowledgeOperationKind = "delete" | "reindex";
 export type KnowledgeOperationStatus = "pending" | "accepted" | "failed" | "completed";
+export interface KnowledgeActivityDay {
+  date: string;
+  activity_count: number;
+  documents_created: number;
+  documents_updated: number;
+  ingestions: number;
+  ready: number;
+  failed: number;
+}
+
+export interface KnowledgeDocumentAnalytics {
+  document_id: string;
+  display_name: string;
+  source_type: "file" | "url";
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  text_chars: number | null;
+  chunk_count: number | null;
+  status: KnowledgeDocumentStatus;
+  ingestion_status: string | null;
+  upstream_status: string | null;
+  error_code: string | null;
+  binding_count: number;
+  ready_binding_count: number;
+  stale_binding_count: number;
+  revoked_binding_count: number;
+  pending_binding_count: number;
+  ingestion_started_at: string | null;
+  ingestion_completed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface KnowledgeAnalytics {
+  knowledge_space_id: string;
+  status: "available" | "unavailable" | "not_configured";
+  document_count: number;
+  ready_count: number;
+  failed_count: number;
+  processing_count: number;
+  deleted_count: number;
+  total_bytes: number;
+  total_text_chars: number;
+  total_chunks: number;
+  upstream_document_count: number | null;
+  upstream_ready_count: number | null;
+  upstream_failed_count: number | null;
+  upstream_processing_count: number | null;
+  last_activity_at: string | null;
+  refreshed_at: string;
+  daily_activity: KnowledgeActivityDay[];
+  documents: KnowledgeDocumentAnalytics[];
+}
+
 export interface KnowledgeDocumentOperation {
   operation_id: string;
   operation: KnowledgeOperationKind;

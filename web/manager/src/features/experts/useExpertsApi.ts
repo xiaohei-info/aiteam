@@ -13,6 +13,7 @@ import { useSession } from "../../auth/session";
 import type {
   ApplySolutionInput,
   ApplySolutionResult,
+  Department,
   EmployeeConfig,
   EmployeeConfigIn,
   ExpertTemplate,
@@ -25,6 +26,8 @@ import type {
 export interface ExpertsApi {
   listTemplates: () => Promise<ExpertTemplate[]>;
   listSolutions: () => Promise<SolutionPackage[]>;
+  /** Optional for compatibility with older injected test clients. */
+  listDepartments?: () => Promise<Department[]>;
   recruitExpert: (input: RecruitExpertInput) => Promise<unknown>;
   applySolution: (input: ApplySolutionInput) => Promise<ApplySolutionResult | null>;
   listEmployees: () => Promise<EmployeeConfig[]>;
@@ -46,6 +49,10 @@ export function useExpertsApi(): ExpertsApi {
       },
       async listSolutions() {
         const r = await client.listGet<SolutionPackage>("/api/manager/recruit/catalog/solutions");
+        return r.items;
+      },
+      async listDepartments() {
+        const r = await client.listGet<Department>("/api/manager/departments");
         return r.items;
       },
       recruitExpert(input) {

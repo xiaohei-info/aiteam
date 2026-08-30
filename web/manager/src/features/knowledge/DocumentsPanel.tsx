@@ -18,7 +18,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useKnowledgeApi } from "./useKnowledgeApi";
-import type { KnowledgeDocument, KnowledgeDocumentStatus, KnowledgeImportUrl } from "./types";
+import type { KnowledgeAnalytics, KnowledgeDocument, KnowledgeDocumentAnalytics, KnowledgeDocumentStatus, KnowledgeImportUrl } from "./types";
 
 const STATUS_LABEL: Record<KnowledgeDocumentStatus, string> = {
   uploaded: "待处理",
@@ -62,6 +62,8 @@ interface Props {
   spaceId: string;
   spaceName: string;
   canWrite: boolean;
+  /** Initial page projection; standalone panel usage can omit it. */
+  analytics?: KnowledgeAnalytics | null;
   onClose: () => void;
 }
 
@@ -100,7 +102,7 @@ function citationStatus(document: KnowledgeDocument): {
   return { label: "等待就绪", description: "文档处理完成后才可获取引用", variant: "neutral" };
 }
 
-export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props): ReactNode {
+export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClose }: Props): ReactNode {
   const api = useKnowledgeApi();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -117,6 +119,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
   const [url, setUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pendingDelete, setPendingDelete] = useState<KnowledgeDocument | null>(null);
+  const [detailDocument, setDetailDocument] = useState<KnowledgeDocument | null>(null);
 
   const reload = useCallback(async () => {
     const requestedSpaceId = spaceId;
@@ -144,6 +147,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
     setSelectedFile(null);
     setUrl("");
     setPendingDelete(null);
+    setDetailDocument(null);
     void reload();
     return () => { requestSequence.current += 1; };
   }, [reload]);
@@ -305,6 +309,21 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         },
       },
     ];
+    result.push({
+      key: "details",
+      header: "详情",
+      width: pixel(140),
+      align: "end",
+      resizable: false,
+      renderCell: (doc) => (
+        <Button
+          label={`查看详情${doc.display_name}`}
+          variant="ghost"
+          size="sm"
+          onClick={() => setDetailDocument(doc)}
+        />
+      ),
+    });
     if (canWrite) {
       result.push({
         key: "actions",
@@ -363,6 +382,21 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
             <VStack gap={4}>
               {error && <Banner status="error" title={error} />}
               {actionNotice && <Banner status={actionNoticeStatus} title={actionNotice} />}
+              {analytics?.status === "unavailable" && (
+                <Banner status="info" title="LightRAG 详情暂不可用；以下仍显示 Manager 文档与绑定状态。" />
+              )}
+              {analytics && analytics.status !== "unavailable" && (
+                <VStack gap={3} aria-label="文档摄入统计">
+                  <Grid columns={{ minWidth: 180, repeat: "fit" }} gap={3}>
+                    <Card><VStack gap={1}><Text type="supporting">文档</Text><Text weight="bold">{analytics.document_count} 个</Text><Text type="supporting">就绪 {analytics.ready_count} · 失败 {analytics.failed_count}</Text></VStack></Card>
+                    <Card><VStack gap={1}><Text type="supporting">内容</Text><Text weight="bold">{formatBytes(analytics.total_bytes)}</Text><Text type="supporting">{analytics.total_text_chars.toLocaleString()} 字符 · {analytics.total_chunks.toLocaleString()} 分块</Text></VStack></Card>
+                    <Card><VStack gap={1}><Text type="supporting">处理队列</Text><Text weight="bold">{analytics.processing_count} 个</Text><Text type="supporting">最近活动 {analytics.last_activity_at?.slice(0, 10) || "暂无"}</Text></VStack></Card>
+                  </Grid>
+                  {analytics.daily_activity.length > 0 && (
+                    <Card><VStack gap={2}><Text weight="bold">摄入活动</Text><HStack gap={4} wrap="wrap">{analytics.daily_activity.slice(-7).map((day) => <Text key={day.date} type="supporting">{day.date} · {day.activity_count} 次 · 就绪 {day.ready} · 失败 {day.failed}</Text>)}</HStack></VStack></Card>
+                  )}
+                </VStack>
+              )}
               <Banner status="info" title="引用正文不通过 Manager HTTP 页面加载：文档已就绪后，请通过 Agent Pi knowledge_get 获取；本页不直连 MCP 或 LightRAG。" />
               {loading ? (
                 <Card role="status" aria-label="正在加载文档">
@@ -417,6 +451,14 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack></LayoutFooter>}
       />
 
+      {detailDocument && (
+        <DocumentDetailDialog
+          document={detailDocument}
+          analytics={analytics?.documents.find((item) => item.document_id === detailDocument.id) ?? null}
+          onClose={() => setDetailDocument(null)}
+        />
+      )}
+
       <AlertDialog
         isOpen={pendingDelete != null}
         onOpenChange={(isOpen) => { if (!isOpen && !busy) setPendingDelete(null); }}
@@ -427,6 +469,41 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, onClose }: Props)
         isActionLoading={busy}
         onAction={() => void handleDelete()}
       />
+    </Dialog>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function DocumentDetailDialog({
+  document,
+  analytics,
+  onClose,
+}: {
+  document: KnowledgeDocument;
+  analytics: KnowledgeDocumentAnalytics | null;
+  onClose: () => void;
+}): ReactNode {
+  const textChars = analytics?.text_chars ?? document.text_chars;
+  return (
+    <Dialog isOpen aria-label={`文档详情 · ${document.display_name}`} onOpenChange={(open) => { if (!open) onClose(); }} width={620} maxHeight="80vh" purpose="form">
+      <VStack gap={3}>
+        <DialogHeader title={`文档详情 · ${document.display_name}`} onOpenChange={(open) => { if (!open) onClose(); }} />
+        <Card><VStack gap={2}>
+          <Text>文件：{document.file_name || "未命名文件"}</Text>
+          <Text type="supporting">类型：{document.file_type || "未知"} · 大小：{formatBytes(document.file_size)}</Text>
+          <Text type="supporting">Manager 状态：{STATUS_LABEL[document.status]} · 摄入：{analytics?.ingestion_status || "暂无任务"}</Text>
+          <Text type="supporting">LightRAG：{analytics?.upstream_status || "未读取"} · 分块：{analytics?.chunk_count == null ? "未知" : analytics.chunk_count.toLocaleString()}</Text>
+          <Text type="supporting">文本：{textChars == null ? "未知" : `${textChars.toLocaleString()} 字符`} · 绑定：{analytics?.binding_count ?? 0} 个（就绪 {analytics?.ready_binding_count ?? 0}，过期 {analytics?.stale_binding_count ?? 0}，撤销 {analytics?.revoked_binding_count ?? 0}）</Text>
+          {analytics?.error_code && <Text type="supporting">最近错误：{analytics.error_code}</Text>}
+        </VStack></Card>
+        <HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack>
+      </VStack>
     </Dialog>
   );
 }

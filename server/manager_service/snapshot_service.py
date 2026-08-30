@@ -242,6 +242,7 @@ def _to_snapshot(
             "scope": "employee",
             "allowed_operations": ["recall", "retain"],
         },
+        department_ids=list(config.department_ids),
     )
 
 

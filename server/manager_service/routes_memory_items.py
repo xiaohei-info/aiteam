@@ -20,6 +20,8 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
+from .analytics_schemas import MemoryAnalyticsOut
+from .employee_config_repository import EmployeeConfigRepository
 from .employee_config_service import build_employee_config_service
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .hindsight_client import HindsightClient
@@ -79,7 +81,11 @@ def _service(request: Request) -> MemoryService:
             platform_catalog=request.app.state._operator_catalog,
         )
         backend = getattr(request.app.state, "_hindsight_client", None) or HindsightClient()
-        service = build_memory_service(snapshot=snapshot, backend=backend)
+        service = build_memory_service(
+            snapshot=snapshot,
+            backend=backend,
+            employee_reader=EmployeeConfigRepository(router),
+        )
         request.app.state._memory_service = service
     return service
 
@@ -93,6 +99,21 @@ def _delete_key(tenant_id: str, employee_id: str, memory_id: str) -> str:
 def build_memory_items_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/manager/memories", tags=["manager", "hindsight"])
     require = require_claims(verifier)
+
+    @router.get(
+        "/analytics",
+        summary="读取各专家 Hindsight 记忆统计",
+        description="返回经当前 employee snapshot 授权的记忆数量、分类、重要度和新鲜度；不可用时返回状态而非上游凭据。",
+        operation_id="manager_memory_analytics",
+    )
+    async def memory_analytics(
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> ListEnvelope[MemoryAnalyticsOut]:
+        data = _service(request).analytics(tenant_context_from(claims))
+        return ListEnvelope[MemoryAnalyticsOut](
+            data=[MemoryAnalyticsOut.model_validate(data)],
+        )
 
     @router.get("", summary="列出指定专家的 Hindsight 记忆", operation_id="manager_memory_list")
     async def list_memories(

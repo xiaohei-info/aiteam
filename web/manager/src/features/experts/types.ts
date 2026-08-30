@@ -87,6 +87,8 @@ export interface EmployeeConfig {
   knowledge_refs: string[];
   connector_refs: string[];
   memory_policy: Record<string, unknown> | null;
+  /** Employee organizational departments; an empty list means 未设置. */
+  department_ids?: string[];
   status: string;
   archive_reason?: string | null;
   archived_at?: string | null;
@@ -116,6 +118,8 @@ export interface RecruitExpertInput {
   /** 可选；未传时后端自动生成 slug（PRD P03：实例标识由服务端自动创建）。 */
   employee_slug?: string | null;
   display_name_override?: string | null;
+  department_ids?: string[];
+  member_ids?: string[];
 }
 
 /** 应用方案入参（对齐 ApplySolutionRequest）。 */
@@ -142,6 +146,12 @@ export interface SolutionInstance {
   config_version?: number;
   created_at: string | null;
   updated_at: string | null;
+}
+
+/** Department option used by recruitment and employee configuration dialogs. */
+export interface Department {
+  id: string;
+  display_name: string;
 }
 
 /** Result of Manager solution expansion; employees are the tenant-owned targets for optional bindings. */

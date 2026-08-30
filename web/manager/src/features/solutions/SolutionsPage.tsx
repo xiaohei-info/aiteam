@@ -27,6 +27,7 @@ import { Token } from "@astryxdesign/core/Token";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
+import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useGrantsApi } from "../grants/useGrantsApi";
 import type { Department, Member } from "../grants/types";
@@ -244,17 +245,24 @@ function SolutionApplyDialog({
     <Dialog isOpen purpose="form" width={640} maxHeight="85vh" aria-label={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
       <VStack gap={4}>
         <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
-        <Text color="secondary">应用后会在当前企业创建方案专家，并只给下方选中的成员/部门授权。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
+        <Text color="secondary">应用后会在当前企业创建方案专家，并将其归属到下方部门；所选部门也会作为部门授权范围。未归属部门时请选择“未设置”。成员授权仍按下方选择生效。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
         {error && <Banner status="error" title={error} />}
         {loading ? <Text role="status">加载成员和部门…</Text> : (
           <VStack gap={3}>
+            <DepartmentSelector
+              departments={departments}
+              value={departmentIds}
+              onChange={setDepartmentIds}
+              label="所属部门 / 授权部门"
+              isDisabled={working}
+              dataTestId="solution-departments-selector"
+            />
             <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name || "未命名成员" }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
-            <MultiSelector label="授权部门" options={departments.map((department) => ({ value: department.id, label: department.display_name || "未命名部门" }))} value={departmentIds} onChange={setDepartmentIds} triggerDisplay="labels" isOptional isDisabled={working} />
           </VStack>
         )}
         <HStack justify="end" gap={2}>
           <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working || (!memberIds.length && !departmentIds.length)} />
+          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working} />
         </HStack>
       </VStack>
     </Dialog>

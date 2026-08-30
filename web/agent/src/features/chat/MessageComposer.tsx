@@ -39,7 +39,7 @@ import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
+import { abortPrompt, attachmentMimeType, deleteAttachment, isSupportedAttachmentMime, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
 import { ConversationPermissionControl } from "./ConversationPermissionControl";
 import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
@@ -170,9 +170,9 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
 
   function handleFileChange(ev: ChangeEvent<HTMLInputElement>) {
     const files = ev.target.files ? Array.from(ev.target.files) : [];
-    const accepted = files.filter((file) => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type));
+    const accepted = files.filter((file) => file.size <= 5 * 1024 * 1024 && isSupportedAttachmentMime(attachmentMimeType(file)));
     if (accepted.length > 0) setAttachments((prev) => [...prev, ...accepted]);
-    if (accepted.length !== files.length) showToast("仅支持 PNG、JPEG、WEBP 或 GIF 图片");
+    if (accepted.length !== files.length) showToast("仅支持受支持的本地文件，单个文件不超过 5 MiB");
     // 清空 value 使同一文件再次可选。
     ev.target.value = "";
   }
@@ -473,7 +473,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/png,image/jpeg,image/webp,image/gif"
+        accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.markdown,.json,.csv,.css,.html,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sh,.sql,.yaml,.yml,.xml,.doc,.docx,.ppt,.pptx"
         hidden
         onChange={handleFileChange}
         aria-hidden="true"

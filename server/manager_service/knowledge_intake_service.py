@@ -19,10 +19,11 @@ import logging
 import os
 import stat
 import uuid
+from collections import defaultdict
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
@@ -41,6 +42,11 @@ from .knowledge_intake_repository import (
 )
 from .knowledge_space_repository import ExpertKnowledgeBinding
 from .rag_ingestion import RagIngestionPort, RagIngestionUnavailable
+from .analytics_schemas import (
+    KnowledgeActivityDay,
+    KnowledgeAnalyticsOut,
+    KnowledgeDocumentAnalyticsOut,
+)
 from .schemas import (
     KnowledgeDocumentBindingOut,
     KnowledgeDocumentOperationOut,
@@ -195,6 +201,176 @@ class KnowledgeIntakeService:
     ) -> list[KnowledgeDocumentBindingOut]:
         self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
         return [_to_bind_out(r) for r in self._binding_repo.list_by_document(ctx, document_id=document_id)]
+
+    def analytics(
+        self, ctx: TenantContext, *, knowledge_space_id: str
+    ) -> KnowledgeAnalyticsOut:
+        """Build a safe management projection from Manager and LightRAG metadata.
+
+        Manager rows remain the business source of truth. LightRAG contributes
+        only bounded status/count metadata from the startup-fixed workspace;
+        upstream outages therefore leave the local inventory usable and visible.
+        """
+        self._require_space(ctx, knowledge_space_id)
+        documents = self._doc_repo.list_by_space(ctx, knowledge_space_id=knowledge_space_id)
+        jobs = self._job_repo.list_by_space(ctx, knowledge_space_id=knowledge_space_id)
+        latest_jobs: dict[str, Any] = {}
+        for job in jobs:
+            current = latest_jobs.get(job.document_id)
+            if current is None or _activity_sort_key(job.created_at) >= _activity_sort_key(current.created_at):
+                latest_jobs[job.document_id] = job
+
+        upstream_status = "not_configured"
+        upstream: list[Any] = []
+        try:
+            handle = self._rag_service.get(ctx, knowledge_space_id)
+            if (
+                handle is None
+                or handle.tenant_id != ctx.tenant_id
+                or handle.knowledge_space_id != knowledge_space_id
+                or not isinstance(handle.workspace, str)
+                or not handle.workspace.strip()
+            ):
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            list_documents = getattr(self._ingestion_client, "list_documents", None)
+            if not callable(list_documents):
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            registry = getattr(self._ingestion_client, "instance_registry", None)
+            if registry is not None:
+                instance = registry.resolve(handle.workspace)
+                if getattr(handle, "instance_id", "legacy") != instance.instance_id:
+                    raise RagIngestionUnavailable("knowledge analytics unavailable")
+            upstream = list_documents(workspace=handle.workspace)
+            upstream_status = "available"
+        except RagIngestionUnavailable:
+            upstream_status = (
+                "not_configured"
+                if getattr(self._ingestion_client, "settings", None) is None
+                and getattr(self._ingestion_client, "instance_registry", None) is None
+                else "unavailable"
+            )
+        except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
+            logger.warning("[kb] analytics probe failed: %s", type(exc).__name__)
+            upstream_status = "unavailable"
+
+        upstream_by_source = {
+            item.file_path: item
+            for item in upstream
+            if isinstance(getattr(item, "file_path", None), str)
+        }
+        binding_counts: dict[str, dict[str, int]] = {}
+        for document in documents:
+            counts = defaultdict(int)
+            try:
+                bindings = self._binding_repo.list_by_document(ctx, document_id=document.id)
+            except Exception as exc:  # noqa: BLE001 - inventory remains readable if binding read is degraded
+                logger.warning("[kb] analytics binding read failed: %s", type(exc).__name__)
+                bindings = []
+            for binding in bindings:
+                counts[str(getattr(binding, "status", "pending"))] += 1
+            binding_counts[document.id] = dict(counts)
+
+        document_items: list[KnowledgeDocumentAnalyticsOut] = []
+        for document in documents:
+            job = latest_jobs.get(document.id)
+            rag_document = upstream_by_source.get(document.id)
+            chunk_count = _nonnegative_int(getattr(job, "chunk_count", None))
+            if chunk_count is None:
+                chunk_count = _nonnegative_int(getattr(rag_document, "chunks_count", None))
+            counts = binding_counts[document.id]
+            document_items.append(KnowledgeDocumentAnalyticsOut(
+                document_id=document.id,
+                display_name=document.display_name,
+                source_type=document.source_type,
+                file_name=document.file_name,
+                file_type=document.file_type,
+                file_size=max(0, int(document.file_size or 0)),
+                text_chars=_nonnegative_int(document.text_chars),
+                chunk_count=chunk_count,
+                status=document.status,
+                ingestion_status=getattr(job, "status", None),
+                upstream_status=getattr(rag_document, "status", None),
+                error_code=document.error_code or getattr(job, "error_code", None),
+                binding_count=sum(counts.values()),
+                ready_binding_count=counts.get("ready", 0),
+                stale_binding_count=counts.get("stale", 0),
+                revoked_binding_count=counts.get("revoked", 0),
+                pending_binding_count=counts.get("pending", 0),
+                ingestion_started_at=getattr(job, "started_at", None),
+                ingestion_completed_at=getattr(job, "completed_at", None),
+                created_at=document.created_at,
+                updated_at=document.updated_at,
+            ))
+
+        activity: dict[str, dict[str, int]] = defaultdict(lambda: {
+            "activity_count": 0, "documents_created": 0, "documents_updated": 0,
+            "ingestions": 0, "ready": 0, "failed": 0,
+        })
+        last_activity: datetime | None = None
+
+        def record(value: Any, field: str | None = None) -> None:
+            nonlocal last_activity
+            day = _activity_day(value)
+            if day is None:
+                return
+            activity[day]["activity_count"] += 1
+            if field is not None:
+                activity[day][field] += 1
+            parsed = _activity_datetime(value)
+            if parsed is not None and (last_activity is None or parsed > last_activity):
+                last_activity = parsed
+
+        for document in documents:
+            record(document.created_at, "documents_created")
+            if document.updated_at is not None and document.updated_at != document.created_at:
+                record(document.updated_at, "documents_updated")
+        for job in jobs:
+            record(job.created_at, "ingestions")
+            if job.completed_at is not None:
+                record(job.completed_at, "ready" if job.status == "done" else "failed" if job.status == "failed" else None)
+        # LightRAG timestamps fill gaps when a local compatibility row has no
+        # timestamp; never double-count a document already represented locally.
+        local_by_id = {document.id: document for document in documents}
+        for item in upstream:
+            local = local_by_id.get(getattr(item, "file_path", None))
+            if local is None:
+                continue
+            if local.created_at is None:
+                record(getattr(item, "created_at", None), "documents_created")
+            if local.updated_at is None:
+                record(getattr(item, "updated_at", None), "documents_updated")
+
+        daily = [KnowledgeActivityDay(date=day, **values) for day, values in sorted(activity.items())]
+        ready_count = sum(document.status == "ready" for document in documents)
+        failed_count = sum(document.status == "failed" for document in documents)
+        deleted_count = sum(document.status == "deleted" for document in documents)
+        processing_count = sum(document.status in {
+            "uploaded", "parsing", "indexing", "reindex_requested", "deleting",
+        } for document in documents)
+        total_chunks = sum(item.chunk_count or 0 for item in document_items)
+        upstream_ready = sum(getattr(item, "status", None) in {"processed", "ready"} for item in upstream)
+        upstream_failed = sum(getattr(item, "status", None) in {"failed", "failure", "error"} for item in upstream)
+        upstream_processing = len(upstream) - upstream_ready - upstream_failed
+        return KnowledgeAnalyticsOut(
+            knowledge_space_id=knowledge_space_id,
+            status=upstream_status,
+            document_count=len(documents),
+            ready_count=ready_count,
+            failed_count=failed_count,
+            processing_count=processing_count,
+            deleted_count=deleted_count,
+            total_bytes=sum(max(0, int(document.file_size or 0)) for document in documents),
+            total_text_chars=sum(_nonnegative_int(document.text_chars) or 0 for document in documents),
+            total_chunks=total_chunks,
+            upstream_document_count=len(upstream) if upstream_status == "available" else None,
+            upstream_ready_count=upstream_ready if upstream_status == "available" else None,
+            upstream_failed_count=upstream_failed if upstream_status == "available" else None,
+            upstream_processing_count=upstream_processing if upstream_status == "available" else None,
+            last_activity_at=last_activity,
+            refreshed_at=datetime.now(timezone.utc),
+            daily_activity=daily,
+            documents=document_items,
+        )
 
     # ─────────────────────────────── 写 ───────────────────────────────
 
@@ -1176,6 +1352,32 @@ class KnowledgeIntakeService:
 
 
 # ─────────────────────────────── 出参映射 ───────────────────────────────
+
+
+def _nonnegative_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _activity_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _activity_sort_key(value: Any) -> tuple[int, str]:
+    parsed = _activity_datetime(value)
+    return (1, parsed.isoformat()) if parsed is not None else (0, str(value or ""))
+
+
+def _activity_day(value: Any) -> str | None:
+    parsed = _activity_datetime(value)
+    return parsed.date().isoformat() if parsed is not None else None
 
 
 def _to_doc_out(row) -> KnowledgeDocumentOut:

@@ -7,5 +7,7 @@ export interface OrgTreeNode {
   status?: string | null;
   role?: string | null;
   avatar_url?: string | null;
+  /** Employee department assignment carried by Manager projections. */
+  department_ids?: string[];
   children?: OrgTreeNode[];
 }

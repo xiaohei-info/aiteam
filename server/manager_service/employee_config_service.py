@@ -51,6 +51,7 @@ class EmployeeConfigService:
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
             platform_model_ref=_platform_model_ref(body.model_policy),
+            department_ids=list(body.department_ids),
         )
         return _to_out(row)
 
@@ -79,6 +80,7 @@ class EmployeeConfigService:
             connector_refs=body.connector_refs,
             memory_policy=body.memory_policy,
             platform_model_ref=_platform_model_ref(body.model_policy),
+            department_ids=list(body.department_ids),
         )
         if row is None:  # 双保险：RLS 下跨 tenant 删除/不可见
             raise NotFound("employee not found in this tenant")
@@ -184,6 +186,7 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         knowledge_refs=[],
         connector_refs=row.connector_refs,
         memory_policy=row.memory_policy,
+        department_ids=list(getattr(row, "department_ids", []) or []),
         version=row.version,
         status=row.status,
         archive_reason=row.archive_reason,

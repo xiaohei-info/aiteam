@@ -19,6 +19,8 @@ import httpx
 from shared.errors import AppError
 from shared.contracts.tenancy import TenantContext
 
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
 
 class HindsightUnavailable(AppError):
     status, code, title = 503, "hindsight_unavailable", "Memory service unavailable"
@@ -155,6 +157,8 @@ class HindsightClient:
             )
             if response.status_code >= 400:
                 raise HindsightUnavailable(f"Hindsight returned HTTP {response.status_code}")
+            if len(response.content) > _MAX_RESPONSE_BYTES:
+                raise HindsightUnavailable("Hindsight response is too large")
             return response.json() if response.content else {}
         except HindsightUnavailable:
             raise
