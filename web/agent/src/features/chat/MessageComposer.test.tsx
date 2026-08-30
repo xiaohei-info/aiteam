@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@aiteam/shared/api-client";
 import { MessageComposer } from "./MessageComposer";
-import { abortPrompt, submitPrompt } from "./useChatApi";
+import { abortPrompt, deleteAttachment, submitPrompt, uploadAttachment } from "./useChatApi";
 
 vi.mock("../../lib/app-context", () => ({
   useApp: () => ({ client: {} }),
@@ -154,6 +155,49 @@ describe("MessageComposer runtime state", () => {
     await waitFor(() => expect(submitPrompt).toHaveBeenCalledWith(
       {}, "c1", { text: "\n\n[附件: notes.txt]", attachment_ids: ["uploaded"] }, "key",
     ));
+  });
+
+  it("reuses pending uploads after an unknown idempotency response", async () => {
+    (submitPrompt as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new ApiError("unknown", 409, "idempotency_unknown"))
+      .mockResolvedValueOnce({ accepted: true });
+    const view = render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    const input = screen.getByLabelText("消息内容");
+    fireEvent.input(input, { target: { textContent: "retry me" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByText(/执行状态未知/);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(submitPrompt).toHaveBeenCalledTimes(2));
+  });
+
+  it("cleans an uploaded file when the conversation changes before prompt dispatch", async () => {
+    let resolveUpload: ((value: unknown) => void) | undefined;
+    const upload = uploadAttachment as unknown as ReturnType<typeof vi.fn>;
+    upload.mockReturnValueOnce(new Promise((resolve) => { resolveUpload = resolve; }));
+    const view = render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    const fileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["x"], "notes.txt", { type: "text/plain" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(upload).toHaveBeenCalled());
+    view.rerender(<MessageComposer conversationId="c2" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    resolveUpload?.({ id: "uploaded" });
+    await waitFor(() => expect(deleteAttachment).toHaveBeenCalledWith({}, "c1", "uploaded"));
+    expect(submitPrompt).not.toHaveBeenCalled();
+  });
+
+  it("ignores an upload failure after a conversation change", async () => {
+    const upload = uploadAttachment as unknown as ReturnType<typeof vi.fn>;
+    let rejectUpload: ((cause: unknown) => void) | undefined;
+    upload.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectUpload = reject; }));
+    const view = render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    const fileInput = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["x"], "notes.txt", { type: "text/plain" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(upload).toHaveBeenCalled());
+    view.rerender(<MessageComposer conversationId="c2" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    rejectUpload?.(new Error("upload failed"));
+    await waitFor(() => expect(screen.getByLabelText("消息内容")).not.toHaveTextContent("upload failed"));
+    expect(submitPrompt).not.toHaveBeenCalled();
   });
 
   it("ignores a stale submission after switching conversations", async () => {

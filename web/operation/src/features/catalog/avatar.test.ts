@@ -16,6 +16,17 @@ describe("catalog avatar data", () => {
     expect(isSafeAvatarDataUrl(value)).toBe(true);
   });
 
+  it("accepts the supported raster signatures", async () => {
+    const variants: Array<[string, Uint8Array]> = [
+      ["image/jpeg", new Uint8Array([0xff, 0xd8, 0xff, 0x00])],
+      ["image/gif", new TextEncoder().encode("GIF89a\0")],
+      ["image/webp", new TextEncoder().encode("RIFF\0\0\0\0WEBP")],
+    ];
+    for (const [type, bytes] of variants) {
+      expect(await readAvatarFile(file(bytes, type))).toMatch(new RegExp(`^data:${type};base64,`));
+    }
+  });
+
   it("rejects an unsupported MIME type and a mismatched signature", async () => {
     await expect(readAvatarFile(file(PNG_SIGNATURE, "image/svg+xml"))).rejects.toThrow("仅支持");
     await expect(readAvatarFile(file(new Uint8Array([0xff, 0xd8, 0xff]), "image/png"))).rejects.toThrow("不匹配");

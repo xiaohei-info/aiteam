@@ -29,6 +29,16 @@ function file(overrides: Partial<LocalFile>): LocalFile {
 }
 
 describe("FilesPanel", () => {
+  it("keeps an upstream file-list error visible", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/events")) return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
+      return new Response("offline", { status: 503, headers: { "content-type": "text/plain" } });
+    }) as typeof fetch;
+    const client = new AgentApiClient({ baseUrl: "http://agent.test", fetch: globalThis.fetch });
+    render(<FilesPanel client={client} conversationId="c1" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/错误响应|加载失败/);
+  });
+
   it("shows authenticated attachments and generated artifacts with safe text preview and download actions", async () => {
     const attachment = file({});
     const artifact = file({ id: "f1", kind: "artifact", filename: "result.ts", mime_type: "text/typescript" });

@@ -119,6 +119,29 @@ describe("OfficePage", () => {
     expect(screen.getByTestId("office-poll-state")).toHaveTextContent("实时");
   });
 
+  it("renders recent, waiting, completed, error, and unknown statuses", async () => {
+    const varied: OfficeScene = {
+      employees: [
+        { employee_id: "busy", display_name: "繁忙", status: "busy", task: "忙碌", avatar_url: null, last_status: "waiting", last_task: "等待", last_activity_at: "2026-01-01T00:00:00Z" },
+        { employee_id: "idle", display_name: "空闲", status: "idle", task: null, avatar_url: null },
+        { employee_id: "done", display_name: "完成", status: "completed", task: null, avatar_url: null, last_status: "completed", last_task: "已完成" },
+        { employee_id: "error", display_name: "异常", status: "error", task: null, avatar_url: null },
+        { employee_id: "unknown", display_name: "未知", status: "custom", task: null, avatar_url: null },
+      ],
+      summary: { total: 5, working: 1, ready: 2, offline: 0 },
+    };
+    mockOfficeApi(varied, { events: [] });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("office-employee")).toHaveLength(5));
+    expect(screen.getAllByText("繁忙").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("空闲").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("最近完成").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("异常").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("custom").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /完成工位/ }));
+    expect(screen.getByTestId("office-employee-detail")).toHaveTextContent("最近完成");
+  });
+
   it("makes every workstation keyboard-accessible and opens a local employee detail view", async () => {
     mockOfficeApi();
 
