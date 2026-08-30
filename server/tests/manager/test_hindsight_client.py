@@ -46,6 +46,19 @@ def test_hindsight_client_sends_tenant_context_and_never_falls_back():
     assert json.loads(seen["body"]) == {"query": "hello", "max_tokens": 768}
 
 
+def test_env_backed_hindsight_defaults_to_native_paths(monkeypatch):
+    monkeypatch.setenv("HINDSIGHT_URL", "http://hindsight")
+    monkeypatch.setenv("HINDSIGHT_SERVICE_TOKEN", "manager-secret")
+    monkeypatch.delenv("HINDSIGHT_RECALL_PATH", raising=False)
+    monkeypatch.delenv("HINDSIGHT_RETAIN_PATH", raising=False)
+    monkeypatch.delenv("HINDSIGHT_DELETE_PATH", raising=False)
+    settings = HindsightSettings.from_env()
+    assert settings.recall_path.endswith("/memories/recall")
+    assert settings.retain_path.endswith("/memories")
+    assert settings.delete_path.endswith("/memories/{memory_id}")
+    assert settings.stats_path.endswith("/stats")
+
+
 def test_env_backed_hindsight_client_uses_manager_derived_bank_scope(monkeypatch):
     seen = {}
 

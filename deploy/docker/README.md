@@ -141,6 +141,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
 | `HINDSIGHT_URL` | Manager-only Hindsight API URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |
+| `HINDSIGHT_RECALL_PATH` / `HINDSIGHT_RETAIN_PATH` / `HINDSIGHT_DELETE_PATH` | 可选 Manager-side 原生操作路径；未设置时使用 native bank API defaults | `/v1/default/banks/{bank_id}/memories/...` |
 | `HINDSIGHT_CP_ACCESS_KEY` | Hindsight 原生控制台访问密钥（仅 Hindsight 服务） | `***` |
 | `HINDSIGHT_FACADE_URL` | Manager 对 Agent 暴露的 facade URL（仅 URL，不含 secret） | `/api/manager/hindsight` |
 | `HINDSIGHT_LIST_PATH` | Manager-side Hindsight memory listing path（可选，原生接口默认按 recall path 推导） | `/v1/default/banks/{bank_id}/memories/list` |

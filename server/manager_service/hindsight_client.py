@@ -20,6 +20,9 @@ from shared.errors import AppError
 from shared.contracts.tenancy import TenantContext
 
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+_NATIVE_RECALL_PATH = "/v1/default/banks/{bank_id}/memories/recall"
+_NATIVE_RETAIN_PATH = "/v1/default/banks/{bank_id}/memories"
+_NATIVE_DELETE_PATH = "/v1/default/banks/{bank_id}/memories/{memory_id}"
 
 
 class HindsightUnavailable(AppError):
@@ -54,8 +57,9 @@ class HindsightSettings:
 
     @classmethod
     def from_env(cls) -> "HindsightSettings":
-        recall_path = os.getenv("HINDSIGHT_RECALL_PATH")
-        delete_path = os.getenv("HINDSIGHT_DELETE_PATH")
+        recall_path = os.getenv("HINDSIGHT_RECALL_PATH") or _NATIVE_RECALL_PATH
+        retain_path = os.getenv("HINDSIGHT_RETAIN_PATH") or _NATIVE_RETAIN_PATH
+        delete_path = os.getenv("HINDSIGHT_DELETE_PATH") or _NATIVE_DELETE_PATH
         list_path = os.getenv("HINDSIGHT_LIST_PATH") or _derive_list_path(recall_path)
         update_path = os.getenv("HINDSIGHT_UPDATE_PATH") or _derive_update_path(list_path, delete_path)
         stats_path = os.getenv("HINDSIGHT_STATS_PATH") or _derive_stats_path(list_path)
@@ -63,7 +67,7 @@ class HindsightSettings:
             base_url=os.getenv("HINDSIGHT_URL"),
             token=os.getenv("HINDSIGHT_SERVICE_TOKEN"),
             recall_path=recall_path,
-            retain_path=os.getenv("HINDSIGHT_RETAIN_PATH"),
+            retain_path=retain_path,
             delete_path=delete_path,
             list_path=list_path,
             update_path=update_path,
