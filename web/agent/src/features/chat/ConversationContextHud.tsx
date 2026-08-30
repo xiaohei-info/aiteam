@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
@@ -30,18 +30,37 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(0);
+
+  const load = useCallback(async (reset = false): Promise<void> => {
+    const id = ++requestId.current;
+    if (reset) {
+      setContext(null);
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const next = await getConversationContext(client, conversationId);
+      if (id !== requestId.current) return;
+      setContext(next);
+      if (!next) setError("上下文状态暂不可用");
+      else setError(null);
+    } catch (cause) {
+      if (id === requestId.current) setError(cause instanceof Error ? cause.message : "上下文状态暂不可用");
+    } finally {
+      if (id === requestId.current && reset) setLoading(false);
+    }
+  }, [client, conversationId]);
 
   useEffect(() => {
-    let alive = true;
-    setContext(null);
-    setLoading(true);
-    setError(null);
-    void getConversationContext(client, conversationId)
-      .then((next) => { if (alive) setContext(next); })
-      .catch(() => undefined)
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [client, conversationId, refreshSignal]);
+    void load(true);
+  }, [load, refreshSignal]);
+
+  useEffect(() => {
+    if (!isPrompting) return undefined;
+    const interval = window.setInterval(() => { void load(); }, 2_500);
+    return () => window.clearInterval(interval);
+  }, [isPrompting, load]);
 
   async function changeThinkingLevel(value: string): Promise<void> {
     if (!context || saving || isPrompting || !isThinkingLevel(value)) return;
@@ -57,23 +76,33 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
     }
   }
 
-  if (loading || !context) return null;
+  if (loading && !context) {
+    return <Card data-testid="conversation-context-hud" role="status" aria-label="上下文状态加载中" padding={3}><Text type="supporting">上下文状态加载中…</Text></Card>;
+  }
+  if (!context) {
+    return <Card data-testid="conversation-context-hud" role="region" aria-label="上下文状态" padding={3}><Banner status="info" title={error ?? "上下文状态暂不可用"} /></Card>;
+  }
   const modelLabel = context.model ? `${context.model.provider}/${context.model.id}` : "未选择模型";
   const used = context.used_tokens === null ? "未知" : formatTokens(context.used_tokens);
-  const window = formatTokens(context.context_window);
+  const contextWindow = formatTokens(context.context_window);
   const percentage = context.percentage === null ? "未知" : `${context.percentage.toFixed(1)}%`;
+  const availableLevels = context.available_thinking_levels.filter(isThinkingLevel);
+  const thinkingOptions = (availableLevels.length > 0 ? availableLevels : THINKING_LEVELS.map((item) => item.value)).map((value) => ({
+    value,
+    label: THINKING_LEVELS.find((item) => item.value === value)?.label ?? value,
+  }));
 
   return (
     <Card data-testid="conversation-context-hud" role="region" aria-label="上下文状态" padding={3}>
       <VStack gap={2}>
         <Text as="div" type="supporting">模型：<strong>{modelLabel}</strong></Text>
-        <Text as="div" type="supporting">上下文：<strong>{used}</strong> / {window}（{percentage}）</Text>
+        <Text as="div" type="supporting">上下文：<strong>{used}</strong> / {contextWindow}（{percentage}）</Text>
         {context.percentage !== null ? (
           <progress aria-label="上下文使用百分比" max={100} value={Math.min(100, Math.max(0, context.percentage))} />
         ) : null}
         <Selector
           label="思考档位"
-          options={THINKING_LEVELS.map(({ value, label }) => ({ value, label }))}
+          options={thinkingOptions}
           value={context.thinking_level}
           onChange={(value) => { void changeThinkingLevel(value); }}
           isDisabled={saving || isPrompting}

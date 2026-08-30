@@ -194,7 +194,7 @@ export function ChatPage(): React.ReactNode {
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
         </Card>
       </StackItem>
-      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} /> : null}
+      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} isPrompting={prompting} /> : null}
       {selected && historyOpen ? (
         <Dialog
           isOpen

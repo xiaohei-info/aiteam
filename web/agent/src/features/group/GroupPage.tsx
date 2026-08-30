@@ -363,7 +363,7 @@ export function GroupPage() {
         )}
       </Card>
       </VStack>
-      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} /> : null}
+      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} /> : null}
 
       <Dialog
         isOpen={showCreateModal}

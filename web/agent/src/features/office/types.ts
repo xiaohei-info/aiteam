@@ -4,6 +4,9 @@ export interface OfficeEmployee {
   status: string;
   task: string | null;
   avatar_url: string | null;
+  last_activity_at?: string | null;
+  last_status?: string | null;
+  last_task?: string | null;
 }
 
 export interface OfficeScene {

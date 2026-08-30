@@ -110,6 +110,7 @@ const ConversationContextOut = Type.Object({
   context_window: Type.Integer({ minimum: 0, description: "当前模型上下文窗口 token 数。" }),
   percentage: Type.Union([Type.Number({ minimum: 0, description: "上下文使用百分比。" }), Type.Null()], { description: "上下文使用百分比；token 未知时为 null。" }),
   thinking_level: Type.Ref("ThinkingLevel"),
+  available_thinking_levels: Type.Array(Type.Ref("ThinkingLevel"), { description: "当前模型支持的思考档位。" }),
   prompting: Type.Boolean({ description: "当前会话是否正在执行提示。" }),
 }, { $id: "ConversationContextOut", additionalProperties: false, description: "本地会话上下文 HUD 数据；不包含会话正文、凭据或运行时原始事件。" });
 const ConversationContextEnvelope = Type.Object({ data: Type.Ref("ConversationContextOut") }, { $id: "ConversationContextEnvelope" });
@@ -193,6 +194,9 @@ const OfficeSceneEnvelope = Type.Object({
       status: Type.String({ description: "办公状态。" }),
       task: Type.Union([Type.String(), Type.Null()], { description: "当前任务标题。" }),
       avatar_url: Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" }),
+      last_activity_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "最近一次本地会话活动时间。" })),
+      last_status: Type.Optional(Type.String({ description: "最近活动状态（working/completed/waiting/error/idle）。" })),
+      last_task: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "最近关联的会话任务标题。" })),
     }, { additionalProperties: false })),
     summary: Type.Object({
       total: Type.Integer({ description: "员工总数。" }),
@@ -866,24 +870,37 @@ export class AgentHttpServer {
     }
   }
 
-  private officeScene(response: ServerResponse, caller: AuthenticatedCaller): void {
+  private async officeScene(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const memberId = caller.userId ?? caller.callerId;
     const conversations = this.options.store.listConversations(100, undefined, caller.tenantId, memberId).items;
-    const taskByEmployee = new Map<string, { title: string; conversation_id: string }>();
+    const activityByEmployee = new Map<string, { conversation_id: string; prompting: boolean; last_activity_at: string | null; last_status: string; last_task: string | null }>();
     for (const conversation of conversations) {
-      const employeeId = conversation.entry_employee_id ?? conversation.coordinator_employee_id;
-      if (!employeeId || taskByEmployee.has(employeeId)) continue;
-      if (conversation.state === "active" || conversation.state === "draft") {
-        taskByEmployee.set(employeeId, { title: conversation.title || (conversation.kind === "task" ? "Task" : "Conversation"), conversation_id: conversation.id });
+      if (conversation.state === "paused" || conversation.state === "muted" || conversation.state === "archived") continue;
+      const host = this.options.host as SessionHost & { getOfficeActivities?: (conversationId: string) => Promise<Array<{ employee_id: string; conversation_id: string; prompting: boolean; last_activity_at: string | null; last_status: string; last_task: string | null }>> };
+      const activities = typeof host.getOfficeActivities === "function"
+        ? await host.getOfficeActivities(conversation.id)
+        : [];
+      for (const activity of activities) {
+        const previous = activityByEmployee.get(activity.employee_id);
+        const previousTime = previous?.last_activity_at ? Date.parse(previous.last_activity_at) : -1;
+        const nextTime = activity.last_activity_at ? Date.parse(activity.last_activity_at) : -1;
+        if (!previous || activity.prompting || nextTime >= previousTime) activityByEmployee.set(activity.employee_id, activity);
       }
     }
     const employees = this.options.store.listLoadedExperts(caller.tenantId, memberId, true).map((expert) => {
-      const task = taskByEmployee.get(expert.employee_id);
-      const conversation = task ? conversations.find((item) => item.id === task.conversation_id) : undefined;
-      const status = expert.revoked || ["paused", "muted", "archived"].includes(conversation?.state ?? "")
-        ? "offline"
-        : task && this.options.host.isPrompting(task.conversation_id) ? "working" : "ready";
-      return { employee_id: expert.employee_id, display_name: expert.display_name, status, task: status === "working" ? task?.title ?? null : null, avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null };
+      const activity = activityByEmployee.get(expert.employee_id);
+      const inactive = expert.revoked || (typeof expert.status === "string" && expert.status !== "active");
+      const status = inactive ? "offline" : activity?.prompting ? "working" : "ready";
+      return {
+        employee_id: expert.employee_id,
+        display_name: expert.display_name,
+        status,
+        task: status === "working" ? activity?.last_task ?? null : null,
+        avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null,
+        ...(activity?.last_activity_at ? { last_activity_at: activity.last_activity_at } : {}),
+        last_status: inactive ? "offline" : activity?.last_status ?? "idle",
+        last_task: activity?.last_task ?? null,
+      };
     });
     const summary = {
       total: employees.length,

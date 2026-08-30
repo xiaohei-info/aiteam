@@ -54,6 +54,10 @@ function statusMeta(status: string): StatusMeta {
       return { raw, label: "空闲", tone: "ready", motion: "idle" };
     case "offline":
       return { raw, label: "离线", tone: "offline", motion: "idle" };
+    case "completed":
+      return { raw, label: "最近完成", tone: "ready", motion: "idle" };
+    case "waiting":
+      return { raw, label: "等待回复", tone: "busy", motion: "idle" };
     case "error":
     case "failed":
       return { raw, label: "异常", tone: "attention", motion: "idle" };
@@ -103,6 +107,13 @@ function summaryItems(scene: OfficeScene) {
 function formatUpdatedAt(updatedAt: Date | null): string {
   if (!updatedAt) return "等待首次同步";
   return `更新于 ${updatedAt.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+}
+
+function formatActivityTime(value: string): string {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : value;
 }
 
 function OfficeBackdrop(): ReactNode {
@@ -166,7 +177,8 @@ interface WorkstationProps {
 function Workstation({ employee, position, selected, onSelect }: WorkstationProps): ReactNode {
   const meta = statusMeta(employee.status);
   const task = employee.task?.trim() || null;
-  const label = `${employee.display_name}工位，${meta.label}${task ? `，当前任务：${task}` : "，当前无任务"}`;
+  const recentTask = employee.last_task?.trim() || null;
+  const label = `${employee.display_name}工位，${meta.label}${task ? `，当前任务：${task}` : recentTask ? `，最近任务：${recentTask}` : "，当前无任务"}`;
   const stationStyle = {
     left: `${position.x}%`,
     top: `${position.y}%`,
@@ -188,7 +200,7 @@ function Workstation({ employee, position, selected, onSelect }: WorkstationProp
         onClick={() => onSelect(employee.employee_id)}
       >
         <span className={"office-workstation__inner"}>
-          {task ? <span className={"office-workstation__bubble"}>任务 · {task}</span> : null}
+          {task ? <span className={"office-workstation__bubble"}>{task}</span> : null}
           <span className={"office-workstation__visual"} aria-hidden="true">
             <span className={"office-monitor"}>
               <span className={"office-monitor__screen"}>
@@ -211,7 +223,7 @@ function Workstation({ employee, position, selected, onSelect }: WorkstationProp
               <span>{meta.label}</span>
               <span className={"office-status-code"} aria-hidden="true">{meta.raw}</span>
             </span>
-            <span className={"office-workstation__task"}>{task ?? "当前无任务"}</span>
+            <span className={"office-workstation__task"}>{task ? `当前任务：${task}` : recentTask ? `最近：${recentTask}` : "当前无任务"}</span>
           </span>
         </span>
       </Button>
@@ -348,6 +360,8 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
         </div>
         <dl className={"office-detail-list"}>
           <div><dt>当前任务</dt><dd>{selected.task?.trim() ? `当前任务：${selected.task.trim()}` : "当前无任务"}</dd></div>
+          <div><dt>最近状态</dt><dd>{statusMeta(selected.last_status || selected.status).label}{selected.last_activity_at ? ` · ${formatActivityTime(selected.last_activity_at)}` : ""}</dd></div>
+          <div><dt>最近任务</dt><dd>{selected.last_task?.trim() ? selected.last_task.trim() : "暂无已完成任务"}</dd></div>
           <div><dt>数据来源</dt><dd>本机 Agent 实时投影</dd></div>
         </dl>
         <Text type="supporting">执行内容留在本机，办公室只展示状态与任务摘要。</Text>
@@ -382,7 +396,7 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
                     <DigitalEmployeeAvatar name={employee.display_name} seed={employee.employee_id} src={employee.avatar_url} size={36} />
                     <span className={"office-activity-copy"}>
                       <span className={"office-activity-name"}><StatusMark tone={meta.tone} /> {employee.display_name} · {meta.label}</span>
-                      <span className={"office-activity-task"}>{employee.task?.trim() ? `当前任务：${employee.task.trim()}` : "当前无任务"}</span>
+                      <span className={"office-activity-task"}>{employee.task?.trim() ? `当前任务：${employee.task.trim()}` : employee.last_task?.trim() ? `最近任务：${employee.last_task.trim()}` : "当前无任务"}{employee.last_activity_at ? ` · ${formatActivityTime(employee.last_activity_at)}` : ""}</span>
                     </span>
                   </span>
                 </Button>

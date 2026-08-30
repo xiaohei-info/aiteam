@@ -637,6 +637,11 @@ test("SessionHost exposes local context HUD state, persists thinking changes, an
     const after = await host.getConversationContext("conversation-1", caller);
     assert.equal(after.thinking_level, "high");
     assert.equal(after.prompting, false);
+    assert.equal(after.available_thinking_levels.includes("high"), true);
+    const officeActivities = await host.getOfficeActivities("conversation-1");
+    assert.equal(officeActivities.length, 1);
+    assert.equal(officeActivities[0]?.last_status, "completed");
+    assert.equal(typeof officeActivities[0]?.last_activity_at, "string");
     const artifacts = fixture.store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1", "artifact");
     assert.deepEqual(artifacts.map((item) => item.filename), ["generated.ts"]);
     assert.equal(fixture.store.readOwnedLocalFile(artifacts[0]!.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), "export const answer = 42;\n");

@@ -41,5 +41,10 @@ describe("DigitalEmployeeAvatar", () => {
     const { container: local } = render(<DigitalEmployeeAvatar name="本地头像" src="/avatars/avatar.png" />);
     expect(local.querySelector("img")).toHaveAttribute("src", "/avatars/avatar.png");
     expect(local.querySelector("svg")).toBeNull();
+
+    const inline = "data:image/png;base64,iVBORw0KGgo=";
+    const { container: uploaded } = render(<DigitalEmployeeAvatar name="上传头像" src={inline} />);
+    expect(uploaded.querySelector("img")).toHaveAttribute("src", inline);
+    expect(uploaded.querySelector("svg")).toBeNull();
   });
 });

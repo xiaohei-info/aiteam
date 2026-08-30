@@ -18,6 +18,8 @@ export interface FilesPanelProps {
   client: AgentApiClient;
   conversationId: string;
   refreshSignal?: number;
+  /** Poll while a prompt is active so generated artifacts appear after the 202 receipt. */
+  isPrompting?: boolean;
 }
 
 type Preview =
@@ -25,7 +27,7 @@ type Preview =
   | { file: LocalFile; kind: "image" | "pdf"; url: string }
   | { file: LocalFile; kind: "unsupported" };
 
-export function FilesPanel({ client, conversationId, refreshSignal = 0 }: FilesPanelProps): ReactNode {
+export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompting = false }: FilesPanelProps): ReactNode {
   const [files, setFiles] = useState<LocalFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,18 +41,24 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0 }: FilesP
     setPreview(null);
   }, []);
 
-  const loadFiles = useCallback(() => {
+  const loadFiles = useCallback((initial = false) => {
     let alive = true;
-    setLoading(true);
+    if (initial) setLoading(true);
     setError(null);
     void listLocalFiles(client, conversationId)
       .then((items) => { if (alive) setFiles(items); })
       .catch((cause) => { if (alive) setError(cause instanceof Error ? cause.message : "文件列表加载失败"); })
-      .finally(() => { if (alive) setLoading(false); });
+      .finally(() => { if (alive && initial) setLoading(false); });
     return () => { alive = false; };
   }, [client, conversationId]);
 
-  useEffect(() => loadFiles(), [loadFiles, refreshSignal]);
+  useEffect(() => loadFiles(true), [loadFiles, refreshSignal]);
+
+  useEffect(() => {
+    if (!isPrompting) return undefined;
+    const interval = window.setInterval(() => { loadFiles(false); }, 2_000);
+    return () => window.clearInterval(interval);
+  }, [isPrompting, loadFiles]);
 
   // The prompt endpoint acknowledges before the local run finishes. Refresh on
   // the terminal Pi event so generated artifacts become visible without a page reload.
@@ -59,7 +67,7 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0 }: FilesP
     const subscription = subscribePiEvents(client, conversationId, ({ event }) => {
       if (event.type !== "agent_end" && event.type !== "agent_settled") return;
       for (const delay of [100, 500]) {
-        const timer = setTimeout(() => { timers.delete(timer); loadFiles(); }, delay);
+        const timer = setTimeout(() => { timers.delete(timer); loadFiles(false); }, delay);
         timers.add(timer);
       }
     });

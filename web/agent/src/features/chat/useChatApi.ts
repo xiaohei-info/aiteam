@@ -83,12 +83,13 @@ export interface ConversationContext {
   context_window: number;
   percentage: number | null;
   thinking_level: ConversationThinkingLevel;
+  available_thinking_levels: ConversationThinkingLevel[];
   prompting: boolean;
 }
 
 export async function getConversationContext(client: AgentApiClient, conversationId: string): Promise<ConversationContext | null> {
   const result = await client.get<ConversationContext>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/context`);
-  return isConversationContext(result) ? result : null;
+  return normalizeConversationContext(result);
 }
 
 export async function setConversationThinkingLevel(
@@ -100,7 +101,17 @@ export async function setConversationThinkingLevel(
     `/api/agent/conversations/${encodeURIComponent(conversationId)}/context`,
     { body: { thinking_level: thinkingLevel } },
   );
-  return isConversationContext(result) ? result : null;
+  return normalizeConversationContext(result);
+}
+
+function normalizeConversationContext(value: ConversationContext | null): ConversationContext | null {
+  if (!isConversationContext(value)) return null;
+  return {
+    ...value,
+    available_thinking_levels: Array.isArray(value.available_thinking_levels) && value.available_thinking_levels.length > 0
+      ? value.available_thinking_levels
+      : ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+  };
 }
 
 export interface LocalFile {
@@ -310,7 +321,12 @@ async function readSse(
 }
 
 function isConversationContext(value: ConversationContext | null): value is ConversationContext {
-  return Boolean(value && typeof value.conversation_id === "string" && typeof value.employee_id === "string" && typeof value.context_window === "number" && typeof value.thinking_level === "string");
+  return Boolean(value
+    && typeof value.conversation_id === "string"
+    && typeof value.employee_id === "string"
+    && typeof value.context_window === "number"
+    && typeof value.thinking_level === "string"
+    && (value.available_thinking_levels === undefined || Array.isArray(value.available_thinking_levels)));
 }
 
 function isLocalFile(value: LocalFile): value is LocalFile {

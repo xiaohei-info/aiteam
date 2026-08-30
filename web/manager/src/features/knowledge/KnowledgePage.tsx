@@ -156,6 +156,7 @@ export function KnowledgePage(): ReactNode {
           spaceName="企业知识库"
           canWrite={canWrite}
           analytics={analytics}
+          onChanged={() => void load()}
           onClose={() => setDocumentSpaceId(null)}
         />
       )}

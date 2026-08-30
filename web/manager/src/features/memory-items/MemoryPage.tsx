@@ -135,7 +135,7 @@ export function MemoryPage(): ReactNode {
               <Text type="supporting">访问密钥由 HINDSIGHT_CP_ACCESS_KEY 配置</Text>
             </VStack>
           )}
-          <Button label="+ 新增记忆" variant="primary" size="sm" onClick={() => setShowForm(!showForm)} />
+          {canManage && <Button label="+ 新增记忆" variant="primary" size="sm" onClick={() => setShowForm(!showForm)} />}
         </HStack>
       </HStack>
       <HStack gap={2} align="end">
@@ -200,7 +200,7 @@ export function MemoryPage(): ReactNode {
             <Text type="supporting">专家：{employees.find((employee) => employee.employee_id === m.employee_id)?.display_name || "已删除专家"}</Text>
             <Text type="supporting">{[m.category, m.importance == null ? null : `重要度 ${formatImportance(m.importance)}`, m.state || "valid", m.source, formatDate(m.created_at)].filter(Boolean).join(" · ")}</Text>
           </>}
-        </VStack>{editing?.memory_id !== m.memory_id && <HStack gap={2}><Button label={`查看详情${m.memory_id}`} variant="ghost" size="sm" onClick={() => setDetailItem(m)} /><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => void handleDelete(m)} /></HStack>}</HStack></Card>
+        </VStack>{editing?.memory_id !== m.memory_id && <HStack gap={2}><Button label={`查看详情${m.memory_id}`} variant="ghost" size="sm" onClick={() => setDetailItem(m)} />{canManage && <><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => void handleDelete(m)} /></>}</HStack>}</HStack></Card>
       ))}</VStack>}
 
       {detailItem && (

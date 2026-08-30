@@ -70,7 +70,17 @@ export interface ConversationContext {
   context_window: number;
   percentage: number | null;
   thinking_level: ConversationThinkingLevel;
+  available_thinking_levels: ConversationThinkingLevel[];
   prompting: boolean;
+}
+
+export interface OfficeEmployeeActivity {
+  employee_id: string;
+  conversation_id: string;
+  prompting: boolean;
+  last_activity_at: string | null;
+  last_status: "working" | "completed" | "waiting" | "error" | "idle";
+  last_task: string | null;
 }
 
 export interface SessionAuthorization {
@@ -246,6 +256,48 @@ export class SessionHost {
     return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
   }
 
+  /**
+   * Return bounded per-participant activity for the local office projection.
+   * Only entry type/timestamp and the conversation title cross this seam; message
+   * bodies, tool arguments, paths, and provider data stay in the chat session.
+   */
+  async getOfficeActivities(conversationId: string): Promise<OfficeEmployeeActivity[]> {
+    const metadata = this.options.store.getConversationMetadata(conversationId);
+    if (!metadata) return [];
+    const participantIds = this.options.store.listConversationParticipants(conversationId).map((item) => item.employee_id);
+    const employeeIds = [...new Set(participantIds.length > 0
+      ? participantIds
+      : [metadata.entry_employee_id ?? metadata.coordinator_employee_id].filter((id): id is string => Boolean(id)))];
+    const activities: OfficeEmployeeActivity[] = [];
+    for (const employeeId of employeeIds) {
+      const record = this.ensureRecord(conversationId, employeeId);
+      const entries = record.sessionManager.getEntries();
+      let latest: SessionEntry | undefined;
+      let latestTimestamp = -1;
+      for (const entry of entries) {
+        const timestamp = this.entryTimestamp(entry);
+        if (timestamp >= latestTimestamp) {
+          latestTimestamp = timestamp;
+          latest = entry;
+        }
+      }
+      const prompting = record.prompting;
+      const lastStatus = prompting ? "working" : officeEntryStatus(latest);
+      const lastActivityAt = prompting
+        ? new Date().toISOString()
+        : officeEntryTimestamp(latest) ?? metadata.updated_at;
+      activities.push({
+        employee_id: employeeId,
+        conversation_id: conversationId,
+        prompting,
+        last_activity_at: lastActivityAt,
+        last_status: lastStatus,
+        last_task: metadata.title ?? null,
+      });
+    }
+    return activities;
+  }
+
   async getConversationContext(conversationId: string, caller: AuthenticatedCaller): Promise<ConversationContext> {
     const record = this.ensureContextRecord(conversationId, caller);
     const authorization = this.resolveAuthorization(record, caller);
@@ -286,6 +338,9 @@ export class SessionHost {
     const model = session.model;
     const contextWindow = usage?.contextWindow ?? model?.contextWindow ?? 0;
     const thinkingLevel = normalizeThinkingLevel(session.thinkingLevel);
+    const available: ConversationThinkingLevel[] = typeof session.getAvailableThinkingLevels === "function"
+      ? session.getAvailableThinkingLevels().map(normalizeThinkingLevel)
+      : ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     return {
       conversation_id: record.conversationId,
       employee_id: record.employeeId ?? "conversation",
@@ -294,6 +349,7 @@ export class SessionHost {
       context_window: contextWindow,
       percentage: usage?.percent ?? null,
       thinking_level: thinkingLevel,
+      available_thinking_levels: [...new Set(available)],
       prompting: record.prompting,
     };
   }
@@ -1163,6 +1219,28 @@ export class SessionHost {
   private safeDirectoryName(conversationId: string): string {
     return `conversation-${createHash("sha256").update(conversationId).digest("hex").slice(0, 24)}`;
   }
+}
+
+function officeEntryTimestamp(entry: SessionEntry | undefined): string | null {
+  const timestamp = entry && (entry as unknown as { timestamp?: unknown }).timestamp;
+  if (typeof timestamp === "string") {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+  }
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+  return null;
+}
+
+function officeEntryStatus(entry: SessionEntry | undefined): OfficeEmployeeActivity["last_status"] {
+  if (!entry) return "idle";
+  if (entry.type === "message") {
+    if (entry.message.role === "assistant") return "completed";
+    if (entry.message.role === "user") return "waiting";
+    return "idle";
+  }
+  if (entry.type === "compaction" || entry.type === "branch_summary") return "completed";
+  if (entry.type === "thinking_level_change" || entry.type === "model_change") return "idle";
+  return entry.type.includes("error") ? "error" : "idle";
 }
 
 function normalizeThinkingLevel(value: unknown): ConversationThinkingLevel {

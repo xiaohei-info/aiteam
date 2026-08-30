@@ -64,6 +64,7 @@ interface Props {
   canWrite: boolean;
   /** Initial page projection; standalone panel usage can omit it. */
   analytics?: KnowledgeAnalytics | null;
+  onChanged?: () => void;
   onClose: () => void;
 }
 
@@ -102,7 +103,7 @@ function citationStatus(document: KnowledgeDocument): {
   return { label: "等待就绪", description: "文档处理完成后才可获取引用", variant: "neutral" };
 }
 
-export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClose }: Props): ReactNode {
+export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChanged, onClose }: Props): ReactNode {
   const api = useKnowledgeApi();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -167,6 +168,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClos
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await reload();
+      onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) setError(errorMessage(err, "上传失败"));
     } finally {
@@ -190,6 +192,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClos
       if (currentSpaceId.current !== actionSpaceId) return;
       setUrl("");
       await reload();
+      onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) setError(errorMessage(err, "导入失败"));
     } finally {
@@ -216,6 +219,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClos
       setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
       setActionNotice(operation.status === "completed" ? "删除已完成" : "删除请求已接受，处理中");
       await reload();
+      onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) {
         setPendingDelete(null);
@@ -238,6 +242,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClos
       setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
       setActionNotice(operation.status === "completed" ? "删除已完成" : "删除仍在处理中");
       await reload();
+      onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) setError(retryableMessage(err, "检查删除状态失败"));
     } finally {
@@ -261,6 +266,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onClos
       setActionNoticeStatus(operation.status === "completed" ? "success" : "info");
       setActionNotice(operation.status === "completed" ? "索引重建已完成" : "重建索引请求已接受，处理中");
       await reload();
+      onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) setError(retryableMessage(err, "重建索引失败"));
     } finally {
