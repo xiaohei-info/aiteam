@@ -313,7 +313,7 @@ export class SessionHost {
       let ownedSession: AgentSession | undefined;
       try {
         const existing = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-        ownedSession = existing ?? await this.ensureSession(record, authorization, { skipHindsight: true });
+        ownedSession = existing ?? await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
         return this.contextValue(record, ownedSession);
       } finally {
         if (!active && !record.prompting && ownedSession && record.session === ownedSession) await this.disposeSession(record);
@@ -327,7 +327,7 @@ export class SessionHost {
       if (record.prompting) throw new ConversationBusyError();
       const authorization = this.resolveAuthorization(record, caller);
       try {
-        const session = await this.ensureSession(record, authorization, { skipHindsight: true });
+        const session = await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
         session.setThinkingLevel(level);
         return this.contextValue(record, session);
       } finally {
@@ -659,13 +659,13 @@ export class SessionHost {
     return targets as string[];
   }
 
-  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean } = {}): Promise<AgentSession> {
+  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean; skipSandbox?: boolean } = {}): Promise<AgentSession> {
     if (record.session) return record.session;
     const hindsightRuntimeConfig = options.skipHindsight ? undefined : await this.resolveHindsightRuntimeConfig(authorization);
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig);
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
-    if (authorization && this.hasCodingTools(authorization.snapshot)) {
+    if (!options.skipSandbox && authorization && this.hasCodingTools(authorization.snapshot)) {
       if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
       await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
     }
