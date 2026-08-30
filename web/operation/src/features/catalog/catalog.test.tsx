@@ -172,6 +172,14 @@ async function selectAstryxOption(label: string, option: string): Promise<void> 
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
 
+function avatarFile(name = "avatar.png") {
+  return new File(
+    [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    name,
+    { type: "image/png" },
+  );
+}
+
 function makeCatalogItem(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     catalog_type: "expert_template",
@@ -544,7 +552,8 @@ describe("注册表单", () => {
     await screen.findByText("注册专家模板");
     fireEvent.click(screen.getByText("注册专家模板"));
     fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "保留的专家" } });
-    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://example.com/avatar.png" } });
+    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
+    await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "保留的人设" } });
     await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "描述" } });
@@ -581,6 +590,16 @@ describe("注册表单", () => {
         coordinatorTemplateId: "",
       }),
     ).toEqual({ displayName: "名称不能为空" });
+  });
+
+  it("专家头像字段仅提供本地图片上传，不提供 URL 输入", async () => {
+    renderCatalogPage(makeSystemAdminSession());
+    fireEvent.click(await screen.findByText("注册专家模板"));
+
+    const input = await screen.findByLabelText("头像（可选，本地图片）");
+    expect(input).toHaveAttribute("type", "file");
+    expect(input).toHaveAttribute("accept", "image/png,image/jpeg,image/webp,image/gif");
+    expect(screen.queryByPlaceholderText("https://...")).not.toBeInTheDocument();
   });
 
   it("点击注册按钮展示表单", async () => {
@@ -698,7 +717,8 @@ describe("注册表单", () => {
 
     // Fill all PRD required fields so the always-send payload is complete.
     await selectAstryxOption("分类 (category)", "市场营销");
-    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://example.com/a.png" } });
+    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
+    await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "淘宝电商客服" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -709,7 +729,7 @@ describe("注册表单", () => {
     expect(capturedBody).toEqual({
       display_name: "新专家",
       category: "市场营销",
-      avatar_url: "https://example.com/a.png",
+      avatar_url: "data:image/png;base64,iVBORw0KGgo=",
       system_prompt: "电商客服",
       platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
       description: "淘宝电商客服",
@@ -753,7 +773,8 @@ describe("注册表单", () => {
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
     await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
-    fireEvent.change(screen.getByPlaceholderText("https://..."), { target: { value: "https://x.png" } });
+    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
+    await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "desc" } });
 
     fireEvent.click(screen.getByRole("button", { name: "新建分类" }));
@@ -1278,7 +1299,8 @@ describe("详情页多 section", () => {
     fireEvent.click(screen.getByText("编辑"));
     await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
-    fireEvent.change(screen.getByLabelText("avatar_url"), { target: { value: "https://new.png" } });
+    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile("new-avatar.png")] } });
+    await waitFor(() => expect(screen.getByText("已选择：new-avatar.png")).toBeInTheDocument());
     const descTa = screen.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && (el as HTMLTextAreaElement).value === "旧描述");
     expect(descTa).toBeTruthy();
     fireEvent.change(descTa!, { target: { value: "新描述" } });
@@ -1289,7 +1311,7 @@ describe("详情页多 section", () => {
       expect(patchCall).toBeDefined();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.category).toBe("finance");
-      expect(body.avatar_url).toBe("https://new.png");
+      expect(body.avatar_url).toBe("data:image/png;base64,iVBORw0KGgo=");
       expect(body.description).toBe("新描述");
       expect(body.platform_skill_refs).toEqual([{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }]);
       expect(body.skill_ids).toBeUndefined();

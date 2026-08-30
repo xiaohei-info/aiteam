@@ -367,11 +367,42 @@ function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing
 export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
+  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
   if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
   for (const key of ["version", "provider_version", "model_version"]) if (typeof raw[key] !== "number" || !Number.isInteger(raw[key]) || Number(raw[key]) < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
-  return { ...raw, pricing: normalizeRuntimePricing(raw.pricing) } as unknown as RuntimeProviderConfig;
+  const capabilities = normalizeRuntimeModelCapabilities(raw.model_capabilities);
+  return { ...raw, pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
+}
+
+function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfig["model_capabilities"] | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["context_window", "max_tokens", "reasoning", "input", "thinking_level_map"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+  const output: NonNullable<RuntimeProviderConfig["model_capabilities"]> = {};
+  for (const key of ["context_window", "max_tokens"] as const) {
+    const item = raw[key];
+    if (item !== undefined && (typeof item !== "number" || !Number.isInteger(item) || item < 1 || item > 10_000_000)) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    if (item !== undefined) output[key] = item;
+  }
+  if (raw.reasoning !== undefined) {
+    if (typeof raw.reasoning !== "boolean") throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    output.reasoning = raw.reasoning;
+  }
+  if (raw.input !== undefined) {
+    if (!Array.isArray(raw.input) || raw.input.some((item) => item !== "text" && item !== "image")) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    output.input = [...new Set(raw.input)] as Array<"text" | "image">;
+  }
+  if (raw.thinking_level_map !== undefined) {
+    if (!raw.thinking_level_map || typeof raw.thinking_level_map !== "object" || Array.isArray(raw.thinking_level_map)) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    const map = raw.thinking_level_map as Record<string, unknown>;
+    const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    if (Object.keys(map).some((key) => !levels.has(key) || (map[key] !== null && typeof map[key] !== "string"))) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    output.thinking_level_map = map as unknown as NonNullable<typeof output.thinking_level_map>;
+  }
+  return output;
 }
 
 function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string): FrozenSnapshot {

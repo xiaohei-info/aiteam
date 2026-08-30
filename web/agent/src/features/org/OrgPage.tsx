@@ -147,17 +147,17 @@ function downloadSvgAsPng(svg: string, filename: string) {
 }
 
 function OrgNode({ node, experts }: { node: OrgTreeNode; experts: Map<string, LoadedExpertProjection> }) {
-  const isRoot = node.type === "department";
-  const expert = !isRoot ? experts.get(node.id) : undefined;
+  const isDepartment = node.type === "department";
+  const expert = !isDepartment ? experts.get(node.id) : undefined;
   const kids = node.children ?? [];
   return (
     <VStack align="center" gap={2} data-testid="org-node" data-node-id={node.id} data-node-type={node.type}>
-      <Card padding={2} variant={isRoot ? "yellow" : "muted"} minHeight={64} width={170}>
+      <Card padding={2} variant={isDepartment ? "yellow" : "muted"} minHeight={64} width={170}>
         <HStack gap={2} align="center">
-          {!isRoot ? <DigitalEmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
-          <VStack align={isRoot ? "center" : "start"} gap={1}>
+          {!isDepartment ? <DigitalEmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
+          <VStack align={isDepartment ? "center" : "start"} gap={1}>
             <Text weight="semibold" data-testid="org-node-name">{node.name}</Text>
-            <Text type="supporting">{isRoot ? "部门" : "员工"}</Text>
+            <Text type="supporting">{isDepartment ? "部门" : "员工"}</Text>
           </VStack>
         </HStack>
       </Card>

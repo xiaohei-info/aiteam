@@ -448,6 +448,35 @@ describe("KnowledgePage Astryx contract", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("加载文档失败");
   });
 
+  it("renders LightRAG analytics cards and a document detail drawer", async () => {
+    const analytics = {
+      knowledge_space_id: "enterprise_shared", status: "available" as const,
+      document_count: 2, ready_count: 1, failed_count: 1, processing_count: 0, deleted_count: 0,
+      total_bytes: 2048, total_text_chars: 800, total_chunks: 4,
+      upstream_document_count: 2, upstream_ready_count: 1,
+      upstream_failed_count: 1, upstream_processing_count: 0,
+      last_activity_at: "2026-08-26T00:00:00Z", refreshed_at: "2026-08-26T00:00:00Z",
+      daily_activity: [{ date: "2026-08-26", activity_count: 2, documents_created: 1, documents_updated: 0, ingestions: 1, ready: 1, failed: 0 }],
+      documents: [{
+        document_id: "doc-ready", display_name: "销售 FAQ.md", source_type: "file" as const,
+        file_name: "faq.md", file_type: "text/markdown", file_size: 64, text_chars: 42, chunk_count: 4,
+        status: "ready" as const, ingestion_status: "done", upstream_status: "processed", error_code: null,
+        binding_count: 1, ready_binding_count: 1, stale_binding_count: 0, revoked_binding_count: 0, pending_binding_count: 0,
+        ingestion_started_at: null, ingestion_completed_at: null, created_at: null, updated_at: null,
+      }],
+    };
+    const client = makeClient({ listGet: (url) => url.endsWith("/analytics") ? { items: [analytics], page: PAGE } : defaultListGet(url) });
+    renderPage();
+    expect(await screen.findByText("文档总数")).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
+    expect(await screen.findByRole("button", { name: "查看详情销售 FAQ.md" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查看详情销售 FAQ.md" }));
+    expect(await screen.findByRole("dialog", { name: "文档详情 · 销售 FAQ.md" })).toBeTruthy();
+    expect(screen.getByText(/分块：4/)).toBeTruthy();
+    expect(client.listGet).toHaveBeenCalledWith("/api/manager/knowledge-spaces/enterprise_shared/analytics");
+  });
+
   it("keeps member access read-only and does not expose write controls", async () => {
     makeClient();
     render(<KnowledgePage />, { wrapper: ({ children }) => (

@@ -119,6 +119,35 @@ def test_register_solution_rejects_removed_runtime_fields(client):
     assert response.status_code == 422
 
 
+def test_register_accepts_valid_local_avatar_data(client):
+    body = {
+        "display_name": "本地头像专家",
+        "category": "市场营销",
+        "avatar_url": "data:image/png;base64,iVBORw0KGgo=",
+        "system_prompt": "你是客服",
+        "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-4.1", "model_version": 1},
+        "description": "客服专家",
+    }
+    response = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["avatar_url"] == body["avatar_url"]
+
+
+def test_register_rejects_mismatched_local_avatar_data(client):
+    body = {
+        "display_name": "错误头像专家",
+        "category": "市场营销",
+        "avatar_url": "data:image/png;base64,/9j/",
+        "system_prompt": "你是客服",
+        "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-4.1", "model_version": 1},
+        "description": "客服专家",
+    }
+    response = client.post("/api/operation/catalog/expert-templates", json=body, headers=_auth())
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert "data:image" not in response.text
+
+
 def test_register_allows_empty_avatar_and_skills(client):
     body = {
         "display_name": "草稿专家",
@@ -192,6 +221,18 @@ def test_publish_unknown_404(client):
     )
     assert r.status_code == 404
     assert r.json()["code"] == "not_found"
+
+
+def test_update_rejects_unsafe_avatar_scheme(client):
+    _register_expert(client)
+    response = client.patch(
+        "/api/operation/catalog/expert_template/tpl-cmo",
+        json={"avatar_url": "javascript:alert(1)"},
+        headers=_auth(),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert "javascript" not in response.text
 
 
 def test_invalid_catalog_type_422(client):

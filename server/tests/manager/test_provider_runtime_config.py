@@ -34,6 +34,8 @@ class _Snapshot:
 
 class _Operator:
     def __init__(self): self.calls = []
+    def list_platform_catalog(self):
+        return {}
     def resolve_tenant_access(self, **kwargs):
         self.calls.append(kwargs)
         return {
@@ -42,6 +44,23 @@ class _Operator:
             "api_protocol": "openai-completions",
             "relay_token": "tenant-scoped-token",
         }
+
+
+def test_runtime_config_projects_non_sensitive_model_capabilities():
+    operator = _Operator()
+    operator.list_platform_catalog = lambda: {"models": [
+        {"model": {"provider_id": "provider-1", "model_id": "minimax-m3", "version": 3, "capabilities": {
+            "context_window": 96_000, "max_tokens": 8_192, "reasoning": True,
+            "input_modalities": ["text", "image", "secret"], "thinking_level_map": {"high": "high", "low": None, "password": "no"},
+        }}}
+    ]}
+    result = ProviderCredentialService(object(), object(), _Snapshot(), operator).runtime_config(
+        TenantContext(tenant_id="t1", user_id="member-1", roles=["member"]), employee_id="employee-1",
+    )
+    assert result.model_capabilities == {
+        "context_window": 96_000, "max_tokens": 8_192, "reasoning": True,
+        "input": ["text", "image"], "thinking_level_map": {"high": "high", "low": None},
+    }
 
 
 def test_runtime_config_uses_operator_tenant_access_and_frozen_price():
@@ -61,6 +80,7 @@ def test_runtime_config_uses_operator_tenant_access_and_frozen_price():
         "model_version": 3,
         "pricing": result.pricing.model_dump(mode="json"),
         "version": 4,
+        "model_capabilities": {},
     }
     assert operator.calls == [{"tenant_id": "t1", "provider_id": "provider-1", "model_ids": ["minimax-m3"]}]
     assert str(result.pricing.input_usd_per_million) == "0.30"

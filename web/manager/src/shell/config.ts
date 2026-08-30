@@ -26,7 +26,7 @@ export const managerShellConfig: PageShellConfig = {
     { id: "experts", labelKey: "manager.nav.experts", path: "/experts", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "grants", labelKey: "manager.nav.grants", path: "/grants", icon: "key", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控
-    { id: "memory", labelKey: "manager.nav.memory", path: "/memory", icon: "dashboard" },
+    { id: "memory", labelKey: "manager.nav.memory", path: "/memory", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "knowledge", labelKey: "manager.nav.knowledge", path: "/knowledge", icon: "catalog" },
     // manage_connectors 门控
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },

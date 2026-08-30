@@ -3,6 +3,7 @@ import type { PiEntry, PiEvent, ConversationEntries } from "@aiteam/shared/contr
 import type { AgentApiClient } from "../../lib/api-client";
 
 export type ConversationPermissionMode = "read-only" | "workspace-write" | "full-access";
+export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Conversation {
   id: string;
@@ -74,6 +75,47 @@ export interface PromptInput {
   mentions?: string[];
 }
 
+export interface ConversationContext {
+  conversation_id: string;
+  employee_id: string;
+  model: { provider: string; id: string; name: string } | null;
+  used_tokens: number | null;
+  context_window: number;
+  percentage: number | null;
+  thinking_level: ConversationThinkingLevel;
+  available_thinking_levels: ConversationThinkingLevel[];
+  prompting: boolean;
+}
+
+export async function getConversationContext(client: AgentApiClient, conversationId: string): Promise<ConversationContext | null> {
+  const result = await client.get<ConversationContext>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/context`);
+  return normalizeConversationContext(result);
+}
+
+export async function setConversationThinkingLevel(
+  client: AgentApiClient,
+  conversationId: string,
+  thinkingLevel: ConversationThinkingLevel,
+): Promise<ConversationContext | null> {
+  const result = await client.patch<ConversationContext>(
+    `/api/agent/conversations/${encodeURIComponent(conversationId)}/context`,
+    { body: { thinking_level: thinkingLevel } },
+  );
+  return normalizeConversationContext(result);
+}
+
+function normalizeConversationContext(value: ConversationContext | null): ConversationContext | null {
+  if (!isConversationContext(value)) return null;
+  return {
+    ...value,
+    available_thinking_levels: value.available_thinking_levels === undefined
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+      : value.available_thinking_levels.length > 0
+        ? value.available_thinking_levels
+        : ["off"],
+  };
+}
+
 export interface LocalFile {
   id: string;
   conversation_id: string;
@@ -88,13 +130,45 @@ export interface LocalFile {
   referenced_at: string | null;
 }
 
+const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_ATTACHMENT_MIMES = new Set([
+  "application/json", "application/msword", "application/octet-stream", "application/pdf", "application/rtf",
+  "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/xml", "application/yaml",
+  "image/gif", "image/jpeg", "image/png", "image/webp", "text/csv", "text/css", "text/html", "text/javascript",
+  "text/markdown", "text/plain", "text/typescript", "text/xml", "text/yaml",
+]);
+const MIME_BY_EXTENSION: Record<string, string> = {
+  bash: "text/plain", c: "text/plain", cc: "text/plain", cfg: "text/plain", conf: "text/plain", cpp: "text/plain", cxx: "text/plain",
+  css: "text/css", csv: "text/csv", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  go: "text/plain", h: "text/plain", hpp: "text/plain", htm: "text/html", html: "text/html", ini: "text/plain", java: "text/plain",
+  js: "text/javascript", json: "application/json", jsx: "text/javascript", md: "text/markdown", markdown: "text/markdown", mjs: "text/javascript",
+  cjs: "text/javascript", pdf: "application/pdf", php: "text/plain", ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation", py: "text/plain", rb: "text/plain", rs: "text/plain",
+  sh: "text/plain", sql: "text/plain", swift: "text/plain", toml: "text/plain", ts: "text/typescript", tsx: "text/typescript",
+  txt: "text/plain", xml: "application/xml", yaml: "text/yaml", yml: "text/yaml", webp: "image/webp", png: "image/png", jpg: "image/jpeg",
+  jpeg: "image/jpeg", gif: "image/gif",
+};
+
+export function attachmentMimeType(file: Pick<File, "name" | "type">): string {
+  if (file.type && SUPPORTED_ATTACHMENT_MIMES.has(file.type)) return file.type;
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return (extension && MIME_BY_EXTENSION[extension]) || file.type || "application/octet-stream";
+}
+
+export function isSupportedAttachmentMime(mimeType: string): boolean {
+  return SUPPORTED_ATTACHMENT_MIMES.has(mimeType);
+}
+
 export async function uploadAttachment(client: AgentApiClient, conversationId: string, file: File): Promise<LocalFile> {
-  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error("Only PNG, JPEG, WEBP, and GIF attachments are supported");
+  if (file.size > MAX_LOCAL_FILE_BYTES) throw new Error("Local files must be 5 MiB or smaller");
+  const mimeType = attachmentMimeType(file);
+  if (!SUPPORTED_ATTACHMENT_MIMES.has(mimeType)) throw new Error("Unsupported local attachment type");
   const bytes = new Uint8Array(await file.arrayBuffer());
   let data = "";
   for (let offset = 0; offset < bytes.length; offset += 0x8000) data += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   const result = await client.post<LocalFile>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments`, {
-    body: { filename: file.name, mime_type: file.type, data: btoa(data) },
+    body: { filename: file.name, mime_type: mimeType, data: btoa(data) },
   });
   if (!result) throw new Error("attachment upload: empty response");
   return result;
@@ -102,6 +176,22 @@ export async function uploadAttachment(client: AgentApiClient, conversationId: s
 
 export async function deleteAttachment(client: AgentApiClient, conversationId: string, attachmentId: string): Promise<void> {
   await client.del(`/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments/${encodeURIComponent(attachmentId)}`);
+}
+
+export async function listLocalFiles(client: AgentApiClient, conversationId: string): Promise<LocalFile[]> {
+  const prefix = `/api/agent/conversations/${encodeURIComponent(conversationId)}`;
+  const [attachments, artifacts] = await Promise.all([
+    client.listGet<LocalFile>(`${prefix}/attachments`),
+    client.listGet<LocalFile>(`${prefix}/artifacts`),
+  ]);
+  return [...attachments.items, ...artifacts.items]
+    .filter(isLocalFile)
+    .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id));
+}
+
+export function downloadLocalFile(client: AgentApiClient, file: LocalFile): Promise<Response> {
+  const collection = file.kind === "artifact" ? "artifacts" : "attachments";
+  return client.stream(`/api/agent/conversations/${encodeURIComponent(file.conversation_id)}/${collection}/${encodeURIComponent(file.id)}`);
 }
 
 export interface PromptAccepted {
@@ -230,6 +320,19 @@ async function readSse(
   } finally {
     reader.releaseLock();
   }
+}
+
+function isConversationContext(value: ConversationContext | null): value is ConversationContext {
+  return Boolean(value
+    && typeof value.conversation_id === "string"
+    && typeof value.employee_id === "string"
+    && typeof value.context_window === "number"
+    && typeof value.thinking_level === "string"
+    && (value.available_thinking_levels === undefined || Array.isArray(value.available_thinking_levels)));
+}
+
+function isLocalFile(value: LocalFile): value is LocalFile {
+  return Boolean(value && typeof value.id === "string" && typeof value.conversation_id === "string" && (value.kind === "attachment" || value.kind === "artifact") && typeof value.filename === "string" && typeof value.mime_type === "string" && typeof value.byte_size === "number");
 }
 
 function eventId(event: PiEvent): string {

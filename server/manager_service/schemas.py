@@ -43,6 +43,7 @@ class EmployeeConfig(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list)
     memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。键值由记忆能力约定。")
+    department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表；空列表表示未设置。")
 
 
 class EmployeeConfigIn(EmployeeConfig):

@@ -10,6 +10,7 @@ from shared.db import PgTenantRouter
 from shared.errors import Forbidden, NotFound
 
 _ORG_WRITE_ROLES = frozenset({"owner", "enterprise_admin"})
+UNASSIGNED_DEPARTMENT_ID = "unassigned"
 
 
 class OrgService:
@@ -32,39 +33,48 @@ class OrgService:
                 "FROM employee e ORDER BY e.display_name",
             ).fetchall()
 
-        # 构建部门节点
+        # 构建部门节点。组织树根下只允许部门节点，员工永远挂在部门节点下。
         dept_nodes = {}
         for r in dept_rows:
-            dept_nodes[str(r[0])] = {
-                "id": str(r[0]), "type": "department", "name": r[2] or r[1],
-                "parent_id": None, "status": None, "children": [],
+            department_id = str(r[0])
+            dept_nodes[department_id] = {
+                "id": department_id, "type": "department", "name": r[2] or r[1],
+                "parent_id": "root", "status": None, "children": [],
             }
 
-        # 员工归属到部门
+        # 员工归属到部门；历史数据中的空值或无效部门 id 统一归入“未设置”。
         unassigned_employees = []
         for r in emp_rows:
             emp_id = str(r[0])
-            emp_node = {
-                "id": emp_id, "type": "employee", "name": r[2] or r[1],
-                "parent_id": None, "status": None, "children": [],
-            }
-            dept_ids = list(r[3]) if r[3] else []
-            assigned = False
-            for did in dept_ids:
-                if did in dept_nodes:
-                    dept_nodes[did]["children"].append(emp_node)
-                    assigned = True
-            if not assigned:
-                unassigned_employees.append(emp_node)
+            dept_ids = [str(department_id) for department_id in (r[3] or [])]
+            assigned_ids = [department_id for department_id in dept_ids if department_id in dept_nodes]
+            if assigned_ids:
+                for department_id in assigned_ids:
+                    dept_nodes[department_id]["children"].append({
+                        "id": emp_id, "type": "employee", "name": r[2] or r[1],
+                        "parent_id": department_id, "status": None, "children": [],
+                    })
+            else:
+                unassigned_employees.append({
+                    "id": emp_id, "type": "employee", "name": r[2] or r[1],
+                    "parent_id": UNASSIGNED_DEPARTMENT_ID, "status": None, "children": [],
+                })
 
-        # 构建树：根节点 → 部门 → 员工
+        # 构建树：根节点 → 部门 → 员工；未设置也是一个合成部门节点。
         root = {
             "id": "root", "type": "department", "name": "企业",
             "parent_id": None, "status": None, "children": [],
         }
-        for dn in dept_nodes.values():
-            root["children"].append(dn)
-        root["children"].extend(unassigned_employees)
+        root["children"].extend(dept_nodes.values())
+        if unassigned_employees:
+            root["children"].append({
+                "id": UNASSIGNED_DEPARTMENT_ID,
+                "type": "department",
+                "name": "未设置",
+                "parent_id": "root",
+                "status": None,
+                "children": unassigned_employees,
+            })
 
         return root
 

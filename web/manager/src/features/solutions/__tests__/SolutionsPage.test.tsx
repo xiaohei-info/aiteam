@@ -100,6 +100,17 @@ describe("SolutionsPage", () => {
     await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: ["m-1"], department_ids: [] }));
   });
 
+  it("部门设置允许显式选择未设置并在无授权目标时应用", async () => {
+    const api = mockApi(); renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    fireEvent.click(within(dialog).getByRole("combobox", { name: /所属部门/ }));
+    expect(screen.getByRole("option", { name: "未设置", hidden: true })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: [], department_ids: [] }));
+  });
+
   it("只读成员不显示应用入口", async () => {
     mockApi(); renderPage(["member"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());

@@ -1,11 +1,11 @@
 /**
  * 人才市场页（AITEAM-290 / GH#404）。
  *
- * Manager 端唯一的人才招募入口：浏览可招募专家模板 + 一键招募为 tenant 实例。
+ * Manager 端唯一的人才招募入口：浏览可招募专家模板 + 设置部门后招募为 tenant 实例。
  * 招募无需手填实例标识（slug）—— 由后端自动生成（PRD P03/P04，AITEAM-356）。
  *
  * 设计对齐 PRD P03/P04：招募无需手工填写实例标识（slug），服务端按模板自动创建实例；
- * 招募动作为一键按钮，入参仅 template_id。
+ * 部门设置允许明确选择“未设置”，并沿用所选部门授权范围。
  *
  * 招募成功后提示可前往专家实例配置 Provider / LLM（AITEAM-683）。
  */
@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { ApiError, DigitalEmployeeAvatar, EnterpriseRole, hasRole } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
@@ -21,8 +22,9 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
+import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
-import type { ExpertTemplate } from "../experts/types";
+import type { Department, ExpertTemplate } from "../experts/types";
 import "../experts/experts.css";
 
 type MarketplaceFilter = "all" | "available" | "recruited";
@@ -48,6 +50,7 @@ export function MarketplacePage(): ReactNode {
   const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<MarketplaceFilter>("all");
+  const [recruitFor, setRecruitFor] = useState<ExpertTemplate | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,19 +87,30 @@ export function MarketplacePage(): ReactNode {
   ];
 
   const runAction = useCallback(
-    async (fn: () => Promise<unknown>, successKey: string) => {
+    async (fn: () => Promise<unknown>, successKey: string): Promise<boolean> => {
       setActionError(null);
       setNotice(null);
       try {
         await fn();
         setNotice(i18n.t(successKey));
         await load();
+        return true;
       } catch (err) {
         setActionError(err instanceof ApiError ? err.message : i18n.t("manager.experts.action_error"));
+        return false;
       }
     },
     [i18n, load],
   );
+
+  async function recruitWithDepartments(departmentIds: string[]): Promise<void> {
+    if (!recruitFor) return;
+    const succeeded = await runAction(
+      () => api.recruitExpert({ template_id: recruitFor.template_id, department_ids: departmentIds }),
+      "manager.experts.recruit_ok",
+    );
+    if (succeeded) setRecruitFor(null);
+  }
 
   return (
     <VStack as="section" gap={6} data-ui="expert-page">
@@ -225,10 +239,18 @@ export function MarketplacePage(): ReactNode {
                         label={i18n.t("manager.experts.recruit")}
                         size="sm"
                         variant="primary"
-                        clickAction={() => runAction(
-                          () => api.recruitExpert({ template_id: t.template_id }),
-                          "manager.experts.recruit_ok",
-                        )}
+                        clickAction={() => {
+                          if (api.listDepartments) {
+                            setRecruitFor(t);
+                            return;
+                          }
+                          // Older injected clients do not expose department lookup;
+                          // preserve their original direct-recruit contract.
+                          void runAction(
+                            () => api.recruitExpert({ template_id: t.template_id }),
+                            "manager.experts.recruit_ok",
+                          );
+                        }}
                       />
                     )
                   )}
@@ -243,6 +265,86 @@ export function MarketplacePage(): ReactNode {
           </div>
         )}
       </VStack>
+
+      {recruitFor && api.listDepartments && (
+        <RecruitDepartmentDialog
+          template={recruitFor}
+          listDepartments={api.listDepartments}
+          onClose={() => setRecruitFor(null)}
+          onSubmit={recruitWithDepartments}
+        />
+      )}
     </VStack>
+  );
+}
+
+function RecruitDepartmentDialog({
+  template,
+  listDepartments,
+  onClose,
+  onSubmit,
+}: {
+  template: ExpertTemplate;
+  listDepartments: () => Promise<Department[]>;
+  onClose: () => void;
+  onSubmit: (departmentIds: string[]) => Promise<void>;
+}): ReactNode {
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void listDepartments()
+      .then((items) => { if (active) setDepartments(items); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : "部门列表加载失败"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [listDepartments]);
+
+  async function submit(): Promise<void> {
+    setWorking(true);
+    setError(null);
+    try {
+      await onSubmit(departmentIds);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "招募失败");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Dialog
+      isOpen
+      purpose="form"
+      width={560}
+      aria-label={`招募${template.display_name}`}
+      onOpenChange={(open) => { if (!open && !working) onClose(); }}
+    >
+      <VStack gap={4}>
+        <DialogHeader
+          title={`为${template.display_name}设置部门`}
+          onOpenChange={(open) => { if (!open && !working) onClose(); }}
+        />
+        <Text color="secondary">请选择该专家所属部门；不归属部门时请选择“未设置”。所选部门也会沿用为该专家的部门授权范围。</Text>
+        {error && <Banner status="error" title={error} />}
+        <DepartmentSelector
+          departments={departments}
+          value={departmentIds}
+          onChange={setDepartmentIds}
+          label="所属部门"
+          isDisabled={working}
+          isLoading={loading}
+          dataTestId="recruit-departments-selector"
+        />
+        <div>
+          <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
+          <Button label="招募" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={working || loading} />
+        </div>
+      </VStack>
+    </Dialog>
   );
 }

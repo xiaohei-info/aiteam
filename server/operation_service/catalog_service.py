@@ -16,6 +16,7 @@ from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.errors import Conflict, NotFound, ValidationProblem
 
+from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
 from .catalog_schemas import (
@@ -84,7 +85,7 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         status=entry.status,
         visible_scope=entry.visible_scope,
         category=payload.get("category", ""),
-        avatar_url=payload.get("avatar_url", ""),
+        avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
         system_prompt=payload.get("system_prompt", ""),
         platform_model_ref=payload.get("platform_model_ref"),
         skill_ids=payload.get("skill_ids", []),
@@ -152,7 +153,7 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
         status=entry.status,
         visible_scope=entry.visible_scope,
         category=payload.get("category", ""),
-        avatar_url=payload.get("avatar_url", ""),
+        avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
         system_prompt=payload.get("system_prompt", ""),
         platform_model_ref=payload.get("platform_model_ref"),
         skill_ids=payload.get("skill_ids", []),
@@ -184,6 +185,7 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         self._validate_platform_skill_refs(req.platform_skill_refs)
         self._validate_platform_model_ref(req.platform_model_ref)
+        avatar_url = normalize_avatar_for_service(req.avatar_url)
 
         def make(candidate: str) -> CatalogEntry:
             return CatalogEntry(
@@ -193,7 +195,7 @@ class CatalogService:
                 display_name=req.display_name,
                 payload={
                     "category": req.category,
-                    "avatar_url": req.avatar_url,
+                    "avatar_url": avatar_url,
                     "system_prompt": req.system_prompt,
                     "platform_model_ref": req.platform_model_ref.model_dump(mode="json"),
                     "skill_ids": [],
@@ -281,6 +283,7 @@ class CatalogService:
             from shared.contracts.platform_provider import PlatformModelRef
             from shared.contracts.platform_skill import PlatformSkillRef
             payload = entry.payload or {}
+            normalize_avatar_for_service(payload.get("avatar_url") or "")
             refs = [PlatformSkillRef.model_validate(ref) for ref in payload.get("platform_skill_refs", [])]
             self._validate_platform_skill_refs(refs)
             self._validate_platform_model_ref(_parse_platform_model_ref(payload.get("platform_model_ref")))
@@ -350,6 +353,8 @@ class CatalogService:
         body 中 None 值已在 routes 层经 exclude_none 排除，此处 changes 不含 None。
         """
         entry = self._repo.get(catalog_type, template_id)
+        if catalog_type == CatalogType.EXPERT_TEMPLATE and "avatar_url" in changes:
+            changes = {**changes, "avatar_url": normalize_avatar_for_service(changes["avatar_url"])}
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
             from shared.contracts.platform_skill import PlatformSkillRef
             self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
@@ -456,7 +461,7 @@ class CatalogService:
             persona=persona,
             recommended_config=recommended,
             category=payload.get("category", ""),
-            avatar_url=payload.get("avatar_url", ""),
+            avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
             system_prompt=payload.get("system_prompt", ""),
             platform_model_ref=payload.get("platform_model_ref"),
             skill_ids=payload.get("skill_ids", []),
@@ -546,7 +551,7 @@ class CatalogService:
                     persona=persona,
                     recommended_config=recommended,
                     category=payload.get("category", ""),
-                    avatar_url=payload.get("avatar_url", ""),
+                    avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
                     system_prompt=payload.get("system_prompt", ""),
                     platform_model_ref=model_ref,
                     skill_ids=payload.get("skill_ids", []),

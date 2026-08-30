@@ -23,7 +23,10 @@ const auth = { Authorization: "Bearer test", "Content-Type": "application/json" 
 test("Agent platform metadata, local projections, readiness, office, identity and removal boundaries", async () => {
   const remote: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [], snapshots: [], revoked_ids: [] }),
-    getOrgTree: async () => ({ id: "root", type: "department", name: "Tenant", children: [] }),
+    getOrgTree: async () => ({ id: "root", type: "department", name: "Tenant", children: [
+      { id: "e1", type: "employee", name: "Helper", parent_id: "root", children: [] },
+      { id: "secret", type: "employee", name: "Hidden", parent_id: "root", children: [] },
+    ] }),
   };
   const { fixture, http, base } = await start(remote);
   try {
@@ -46,7 +49,9 @@ test("Agent platform metadata, local projections, readiness, office, identity an
       assert.equal(response.status, 200, path);
     }
     assert.equal((await (await fetch(`${base}/api/agent/grants/experts`, { headers: auth })).json() as { data: unknown[] }).data.length, 1);
-    assert.equal((await (await fetch(`${base}/api/agent/org/tree`, { headers: auth })).json() as { data: { name: string } }).data.name, "Tenant");
+    const org = (await (await fetch(`${base}/api/agent/org/tree`, { headers: auth })).json() as { data: { name: string; children: Array<{ id: string }> } }).data;
+    assert.equal(org.name, "Tenant");
+    assert.deepEqual(org.children.map((child) => child.id), ["e1"]);
     assert.equal((await (await fetch(`${base}/api/agent/whoami`, { headers: auth })).json() as { data: { user_id: string } }).data.user_id, "m1");
     assert.deepEqual((await (await fetch(`${base}/api/agent/ping`, { headers: auth })).json() as { data: { pong: boolean } }).data, { pong: true });
     assert.equal((await fetch(`${base}/api/agent/conversations/c1/group-dispatch`, { method: "POST", headers: auth, body: "{}" })).status, 410);

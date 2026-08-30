@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { AgentHttpServer } from "./server.js";
 import { createFixture } from "../test-fixture.js";
 
@@ -203,6 +203,73 @@ test("Agent prompt resolves only owned image attachment IDs into Pi", async () =
   }
 });
 
+test("Agent context HUD is authenticated and thinking changes apply to later prompts without sending non-images to Pi", async () => {
+  const fixture = await createFixture();
+  const reasoning = fauxProvider({
+    api: "aiteam-context-api",
+    provider: "aiteam-context",
+    models: [{ id: "aiteam-context-1", name: "Context Test", reasoning: true, contextWindow: 2_000 }],
+  });
+  fixture.modelRuntime.registerNativeProvider(reasoning.provider);
+  const host = fixture.createHost(reasoning.getModel());
+  const now = new Date().toISOString();
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: reasoning.getModel().id } },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const initial = await fetch(`${base}/api/agent/conversations/c1/context`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(initial.status, 200);
+    const initialContext = (await initial.json() as { data: { model: { id: string }; context_window: number; used_tokens: number | null; thinking_level: string } }).data;
+    assert.equal(initialContext.model.id, "aiteam-context-1");
+    assert.equal(initialContext.context_window, 2_000);
+    assert.equal(initialContext.thinking_level, "off");
+    assert.equal(initialContext.used_tokens === null || initialContext.used_tokens >= 0, true);
+
+    const attachment = await fetch(`${base}/api/agent/conversations/c1/attachments`, {
+      method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "notes.md", mime_type: "text/markdown", data: Buffer.from("local notes").toString("base64") }),
+    });
+    assert.equal(attachment.status, 201);
+    const attachmentId = (await attachment.json() as { data: { id: string } }).data.id;
+
+    const changed = await fetch(`${base}/api/agent/conversations/c1/context`, {
+      method: "PATCH", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ thinking_level: "high" }),
+    });
+    assert.equal(changed.status, 200);
+    assert.equal((await changed.json() as { data: { thinking_level: string } }).data.thinking_level, "high");
+
+    reasoning.setResponses([(context) => {
+      assert.equal(JSON.stringify(context.messages).includes('"type":"image"'), false);
+      return fauxAssistantMessage("ok");
+    }]);
+    const prompt = await fetch(`${base}/api/agent/conversations/c1/prompt`, {
+      method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json", "Idempotency-Key": "context-prompt" },
+      body: JSON.stringify({ text: "inspect local metadata", attachment_ids: [attachmentId] }),
+    });
+    assert.equal(prompt.status, 202);
+    await waitForEntries(`${base}/api/agent/conversations/c1/entries`, "Bearer test");
+    assert(fixture.store.getOwnedLocalFile(attachmentId, "c1", "tenant-1", "member-1")?.referenced_at);
+
+    const later = await fetch(`${base}/api/agent/conversations/c1/thinking-level`, {
+      method: "PUT", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ thinking_level: "low" }),
+    });
+    assert.equal(later.status, 200);
+    assert.equal((await later.json() as { data: { thinking_level: string } }).data.thinking_level, "low");
+  } finally {
+    await http.close();
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
 test("Agent prompt rejects aggregate decoded image bytes over 20 MiB", async () => {
   const fixture = await createFixture();
   fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
@@ -246,7 +313,7 @@ test("Agent OpenAPI documents local attachment and artifact contracts", async ()
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").required, true);
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").schema.maxLength, 256);
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "conversation_id").schema.type, "string");
-    assert.deepEqual(Object.keys(document.paths["/api/agent/conversations/{conversation_id}/attachments/{attachment_id}"].get.responses["200"].content).sort(), ["application/json", "application/octet-stream", "application/pdf", "image/gif", "image/jpeg", "image/png", "image/webp", "text/markdown", "text/plain"]);
+    assert.deepEqual(Object.keys(document.paths["/api/agent/conversations/{conversation_id}/attachments/{attachment_id}"].get.responses["200"].content).sort(), ["application/json", "application/msword", "application/octet-stream", "application/pdf", "application/rtf", "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/xml", "application/yaml", "image/gif", "image/jpeg", "image/png", "image/webp", "text/css", "text/csv", "text/html", "text/javascript", "text/markdown", "text/plain", "text/typescript", "text/xml", "text/yaml"]);
     for (const [path, pathItem] of Object.entries(document.paths)) {
       const names = [...path.matchAll(/\{([^}]+)\}/gu)].map((match) => match[1]);
       const item = pathItem as Record<string, any>;

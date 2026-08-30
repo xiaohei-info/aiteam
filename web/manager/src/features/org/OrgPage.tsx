@@ -22,8 +22,10 @@ import type { OrgTreeNode } from "./types";
 
 interface DepartmentOption { id: string; name: string }
 
+const UNASSIGNED_DEPARTMENT_ID = "unassigned";
+
 function collectDepartments(node: OrgTreeNode, output: DepartmentOption[]): void {
-  if (node.type === "department") output.push({ id: node.id, name: node.name });
+  if (node.type === "department" && node.id !== "root" && node.id !== UNASSIGNED_DEPARTMENT_ID) output.push({ id: node.id, name: node.name });
   node.children?.forEach((child) => collectDepartments(child, output));
 }
 

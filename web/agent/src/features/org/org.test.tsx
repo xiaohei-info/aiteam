@@ -21,8 +21,20 @@ const tree: OrgTreeNode = {
   type: "department",
   name: "企业",
   children: [
-    { id: "e1", type: "employee", name: "Luna" },
-    { id: "e2", type: "employee", name: "Rex" },
+    {
+      id: "d1",
+      type: "department",
+      name: "研发部",
+      parent_id: "root",
+      children: [{ id: "e1", type: "employee", name: "Luna", parent_id: "d1" }],
+    },
+    {
+      id: "unassigned",
+      type: "department",
+      name: "未设置",
+      parent_id: "root",
+      children: [{ id: "e2", type: "employee", name: "Rex", parent_id: "unassigned" }],
+    },
   ],
 };
 
@@ -87,16 +99,21 @@ describe("OrgPage 组织架构", () => {
     vi.restoreAllMocks();
   });
 
-  it("渲染组织树：根部门 + 员工节点", async () => {
+  it("渲染组织树：员工全部嵌套在部门（含未设置合成部门）下", async () => {
     renderOrg();
     await waitFor(() => expect(screen.getByTestId("org-tree")).toBeInTheDocument());
     const nodes = screen.getAllByTestId("org-node");
-    expect(nodes.length).toBe(3);
+    expect(nodes.length).toBe(5);
     expect(screen.getByText("企业")).toBeInTheDocument();
+    expect(screen.getByText("研发部")).toBeInTheDocument();
+    expect(screen.getByText("未设置")).toBeInTheDocument();
     expect(screen.getByText("Luna")).toBeInTheDocument();
     expect(screen.getByText("Rex")).toBeInTheDocument();
     const rootNode = nodes.find((n) => n.getAttribute("data-node-id") === "root");
     expect(rootNode?.getAttribute("data-node-type")).toBe("department");
+    expect(nodes.filter((node) => node.getAttribute("data-node-type") === "department")).toHaveLength(3);
+    const unassignedNode = nodes.find((node) => node.getAttribute("data-node-id") === "unassigned");
+    expect(unassignedNode?.querySelector('[data-node-id="e2"]')).toBeInTheDocument();
     expect(document.querySelectorAll('[data-aiteam-avatar="true"]')).toHaveLength(2);
     expect(document.querySelector('[data-aiteam-avatar="true"] img')).toHaveAttribute("src", "/avatars/luna.png");
     const urls = fetchMock.mock.calls.map((c) => (typeof c[0] === "string" ? c[0] : c[0]?.toString() ?? ""));

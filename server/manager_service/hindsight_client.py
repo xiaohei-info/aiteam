@@ -19,6 +19,8 @@ import httpx
 from shared.errors import AppError
 from shared.contracts.tenancy import TenantContext
 
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
 
 class HindsightUnavailable(AppError):
     status, code, title = 503, "hindsight_unavailable", "Memory service unavailable"
@@ -48,19 +50,24 @@ class HindsightSettings:
     # optional so existing positional test/legacy settings remain valid.
     list_path: str | None = None
     update_path: str | None = None
+    stats_path: str | None = None
 
     @classmethod
     def from_env(cls) -> "HindsightSettings":
         recall_path = os.getenv("HINDSIGHT_RECALL_PATH")
         delete_path = os.getenv("HINDSIGHT_DELETE_PATH")
+        list_path = os.getenv("HINDSIGHT_LIST_PATH") or _derive_list_path(recall_path)
+        update_path = os.getenv("HINDSIGHT_UPDATE_PATH") or _derive_update_path(list_path, delete_path)
+        stats_path = os.getenv("HINDSIGHT_STATS_PATH") or _derive_stats_path(list_path)
         return cls(
             base_url=os.getenv("HINDSIGHT_URL"),
             token=os.getenv("HINDSIGHT_SERVICE_TOKEN"),
             recall_path=recall_path,
             retain_path=os.getenv("HINDSIGHT_RETAIN_PATH"),
             delete_path=delete_path,
-            list_path=os.getenv("HINDSIGHT_LIST_PATH") or _derive_list_path(recall_path),
-            update_path=os.getenv("HINDSIGHT_UPDATE_PATH") or delete_path,
+            list_path=list_path,
+            update_path=update_path,
+            stats_path=stats_path,
             facade_url=os.getenv("HINDSIGHT_FACADE_URL") or "/api/manager/hindsight",
             lease_ttl_seconds=_lease_ttl_seconds(os.getenv("HINDSIGHT_LEASE_TTL_SECONDS")),
             bank_id_mode="scoped",
@@ -71,6 +78,30 @@ def _derive_list_path(recall_path: str | None) -> str:
     if isinstance(recall_path, str) and recall_path.rstrip("/").endswith("/memories/recall"):
         return recall_path.rsplit("/", 1)[0] + "/list"
     return "/v1/default/banks/{bank_id}/memories/list"
+
+
+def _derive_stats_path(list_path: str | None) -> str | None:
+    if not isinstance(list_path, str) or not list_path.strip():
+        return None
+    normalized = list_path.rstrip("/")
+    if normalized.endswith("/memories/list"):
+        return normalized[:-len("/memories/list")] + "/stats"
+    return None
+
+
+def _derive_update_path(list_path: str | None, delete_path: str | None) -> str | None:
+    """Derive an item PATCH path without accidentally targeting a delete action."""
+    for candidate in (list_path, delete_path):
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        if "{memory_id}" in candidate:
+            return candidate
+        normalized = candidate.rstrip("/")
+        if normalized.endswith("/list"):
+            return normalized[:-len("/list")] + "/{memory_id}"
+        if normalized.endswith("/delete"):
+            return normalized[:-len("/delete")] + "/{memory_id}"
+    return None
 
 
 class HindsightClient:
@@ -155,6 +186,8 @@ class HindsightClient:
             )
             if response.status_code >= 400:
                 raise HindsightUnavailable(f"Hindsight returned HTTP {response.status_code}")
+            if len(response.content) > _MAX_RESPONSE_BYTES:
+                raise HindsightUnavailable("Hindsight response is too large")
             return response.json() if response.content else {}
         except HindsightUnavailable:
             raise
@@ -188,6 +221,12 @@ class HindsightClient:
             "items": [item], "async": True, "operation_id": operation_id,
         }, employee_id=employee_id)
 
+    def stats(self, ctx: TenantContext, *, employee_id: str) -> dict:
+        path = self._settings.stats_path or _derive_stats_path(self._settings.list_path)
+        return self._request(
+            ctx, path, None, employee_id=employee_id, method="GET",
+        )
+
     def list(
         self,
         ctx: TenantContext,
@@ -220,9 +259,12 @@ class HindsightClient:
         memory_id: str,
         payload: dict[str, Any],
     ) -> dict:
+        update_path = self._settings.update_path or _derive_update_path(
+            self._settings.list_path, self._settings.delete_path,
+        )
         return self._request(
             ctx,
-            self._settings.update_path or self._settings.delete_path,
+            update_path,
             payload,
             employee_id=employee_id,
             memory_id=memory_id,

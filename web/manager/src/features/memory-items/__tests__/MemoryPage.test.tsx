@@ -80,6 +80,28 @@ describe("MemoryPage 记忆管理", () => {
     expect(container.querySelector(".astryx-card")).toBeInTheDocument();
   });
 
+  it("渲染 Hindsight 统计卡片并打开记忆详情", async () => {
+    const api = mockApi({
+      getAnalytics: vi.fn().mockResolvedValue({
+        status: "available", employee_count: 1, total_memory_count: 1,
+        refreshed_at: "2026-08-26T00:00:00Z", unavailable_employee_count: 0,
+        employees: [{
+          employee_id: "emp-2", display_name: "专家B", memory_count: 1,
+          state_counts: { valid: 1 }, category_counts: { preference: 1 },
+          latest_created_at: "2026-08-26T00:00:00Z", oldest_created_at: "2026-08-26T00:00:00Z",
+          latest_used_at: null, average_importance: 0.8, max_importance: 0.8, truncated: false,
+        }],
+      }),
+    });
+    renderPage();
+    expect(await screen.findByText("记忆总数")).toBeInTheDocument();
+    expect(screen.getByText("覆盖 1 位专家")).toBeInTheDocument();
+    await waitFor(() => expect(api.getAnalytics).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "查看详情m1" }));
+    expect(await screen.findByRole("dialog", { name: "记忆详情 · m1" })).toBeInTheDocument();
+    expect(screen.getAllByText(/状态：valid/).length).toBeGreaterThan(0);
+  });
+
   it("加载失败展示错误", async () => {
     mockApi({ list: vi.fn().mockRejectedValue(new ApiError("记忆服务不可用", 503, "memory_unavailable")) });
     renderPage();
@@ -121,6 +143,8 @@ describe("MemoryPage 记忆管理", () => {
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("删除"));
+    expect(screen.getByRole("button", { name: "确认删除" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith("m1", "emp-1"));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });

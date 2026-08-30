@@ -20,7 +20,8 @@ BEGIN
         NEW.skills IS DISTINCT FROM OLD.skills OR
         NEW.knowledge_refs IS DISTINCT FROM OLD.knowledge_refs OR
         NEW.connector_refs IS DISTINCT FROM OLD.connector_refs OR
-        NEW.memory_policy IS DISTINCT FROM OLD.memory_policy
+        NEW.memory_policy IS DISTINCT FROM OLD.memory_policy OR
+        NEW.department_ids IS DISTINCT FROM OLD.department_ids
     )) THEN
         NEW.version := COALESCE(OLD.version, 0) + 1;
     END IF;

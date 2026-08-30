@@ -53,6 +53,26 @@ function setup() {
 describe("useKnowledgeApi document lifecycle", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("loads the Manager knowledge analytics projection without a workspace argument", async () => {
+    const { client, wrapper } = setup();
+    client.listGet.mockResolvedValue({
+      items: [{
+        knowledge_space_id: "ks-sales", status: "available", document_count: 2,
+        ready_count: 1, failed_count: 1, processing_count: 0, deleted_count: 0,
+        total_bytes: 100, total_text_chars: 80, total_chunks: 4,
+        upstream_document_count: 2, upstream_ready_count: 1,
+        upstream_failed_count: 1, upstream_processing_count: 0,
+        last_activity_at: null, refreshed_at: "2026-08-26T00:00:00Z",
+        daily_activity: [], documents: [],
+      }],
+      page: { next_cursor: null, has_more: false },
+    });
+    const { result } = renderHook(() => useKnowledgeApi(), { wrapper });
+
+    await expect(result.current.getAnalytics?.("ks-sales")).resolves.toMatchObject({ document_count: 2 });
+    expect(client.listGet).toHaveBeenCalledWith("/api/manager/knowledge-spaces/ks-sales/analytics");
+  });
+
   it("deletes with a UUID Idempotency-Key and validates the operation data", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useKnowledgeApi(), { wrapper });

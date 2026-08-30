@@ -1,7 +1,7 @@
 /**
  * 专家实例详情 / LLM 配置抽屉（AITEAM-683）。
  *
- * 列表行点击后打开：展示并修改 display_name / persona / model_policy / execution_policy；
+ * 列表行点击后打开：展示并修改 display_name / persona / department_ids / model_policy / execution_policy；
  * provider 与 model 只能从 Operator 对本 tenant 发布的平台模型目录选择（V1 不提供手输）。
  *
  * 保存复用 PUT /api/manager/employees/{employee_id}，回传完整载入配置，
@@ -26,10 +26,11 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
+import { DepartmentSelector } from "./DepartmentSelector";
 import { useExpertsApi } from "./useExpertsApi";
 import { usePlatformModelsApi } from "../platform-models/usePlatformModelsApi";
 import { useCapabilityApi } from "../capability/useCapabilityApi";
-import type { EmployeeConfig, EmployeeConfigIn } from "./types";
+import type { Department, EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
 import type { SkillCatalog } from "../capability/types";
 
@@ -37,6 +38,7 @@ export interface EmployeeConfigDrawerProps {
   employeeId: string | null;
   /** 由列表页注入已加载的实例，避免抽屉内按 id 重复拉取全表。 */
   employee?: EmployeeConfig | null;
+  departments?: Department[];
   onClose: () => void;
   onSaved: (updated: EmployeeConfig) => void;
 }
@@ -53,6 +55,7 @@ type Draft = {
   thinking_level: (typeof THINKING_LEVELS)[number] | "";
   timeout_seconds: string;
   skills: string[];
+  department_ids: string[];
 };
 
 function toDraft(e: EmployeeConfig): Draft {
@@ -70,6 +73,7 @@ function toDraft(e: EmployeeConfig): Draft {
     timeout_seconds:
       e.execution_policy.timeout_seconds != null ? String(e.execution_policy.timeout_seconds) : "",
     skills: e.skills,
+    department_ids: e.department_ids ?? [],
   };
 }
 
@@ -96,6 +100,7 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
 export function EmployeeConfigDrawer({
   employeeId,
   employee: injectedEmployee,
+  departments = [],
   onClose,
   onSaved,
 }: EmployeeConfigDrawerProps): ReactNode {
@@ -244,6 +249,7 @@ export function EmployeeConfigDrawer({
         timeout_seconds: timeout,
       },
       skills: draft.skills,
+      department_ids: draft.department_ids,
     };
 
     try {
@@ -307,6 +313,18 @@ export function EmployeeConfigDrawer({
                           isDisabled={submitting}
                         />
                       </FormLayout>
+                    </VStack>
+
+                    <VStack gap={3}>
+                      <Heading level={3}>组织归属</Heading>
+                      <DepartmentSelector
+                        departments={departments}
+                        value={draft.department_ids}
+                        onChange={(value) => update("department_ids", value)}
+                        label="所属部门"
+                        isDisabled={submitting}
+                        dataTestId="employee-departments-selector"
+                      />
                     </VStack>
 
                     <VStack gap={3}>

@@ -33,6 +33,14 @@ export interface RuntimePricingSnapshot {
   effective_from: string;
 }
 
+export interface RuntimeModelCapabilities {
+  context_window?: number;
+  max_tokens?: number;
+  reasoning?: boolean;
+  input?: Array<"text" | "image">;
+  thinking_level_map?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
+}
+
 export interface RuntimeProviderConfig {
   base_url: string;
   api_protocol: "openai-completions" | "openai-responses" | "anthropic-messages";
@@ -43,6 +51,7 @@ export interface RuntimeProviderConfig {
   model_version: number;
   pricing: RuntimePricingSnapshot;
   version: number;
+  model_capabilities?: RuntimeModelCapabilities;
 }
 
 /** Register one Manager-authorized provider in memory and bind its runtime key. */
@@ -58,16 +67,17 @@ export async function registerRuntimeProvider(runtime: ModelRuntime, config: Run
         id: config.model,
         name: config.model,
         api: config.api_protocol as Api,
-        reasoning: true,
-        input: ["text"],
+        reasoning: config.model_capabilities?.reasoning ?? true,
+        input: config.model_capabilities?.input?.length ? config.model_capabilities.input : ["text"],
+        thinkingLevelMap: config.model_capabilities?.thinking_level_map,
         cost: {
           input: Number(config.pricing.input_usd_per_million ?? 0),
           output: Number(config.pricing.output_usd_per_million ?? 0),
           cacheRead: Number(config.pricing.cache_read_usd_per_million ?? 0),
           cacheWrite: Number(config.pricing.cache_write_usd_per_million ?? 0),
         },
-        contextWindow: 128_000,
-        maxTokens: 32_768,
+        contextWindow: config.model_capabilities?.context_window ?? 128_000,
+        maxTokens: config.model_capabilities?.max_tokens ?? 32_768,
       }],
     });
     await runtime.setRuntimeApiKey(providerId, config.api_key);

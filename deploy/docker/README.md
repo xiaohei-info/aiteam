@@ -143,6 +143,9 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |
 | `HINDSIGHT_CP_ACCESS_KEY` | Hindsight 原生控制台访问密钥（仅 Hindsight 服务） | `***` |
 | `HINDSIGHT_FACADE_URL` | Manager 对 Agent 暴露的 facade URL（仅 URL，不含 secret） | `/api/manager/hindsight` |
+| `HINDSIGHT_LIST_PATH` | Manager-side Hindsight memory listing path（可选，原生接口默认按 recall path 推导） | `/v1/default/banks/{bank_id}/memories/list` |
+| `HINDSIGHT_UPDATE_PATH` | Manager-side Hindsight memory PATCH path（可选，按 list/delete path 推导） | `/v1/default/banks/{bank_id}/memories/{memory_id}` |
+| `HINDSIGHT_STATS_PATH` | Manager-side Hindsight bank stats path（可选，按原生 list path 推导） | `/v1/default/banks/{bank_id}/stats` |
 | `HINDSIGHT_LEASE_TTL_SECONDS` | Manager opaque bank lease TTL（30–3600 秒） | `300` |
 | `LIGHTRAG_URL` | Manager-only LightRAG API/UI URL（未配置时 Agent lease fail-closed） | `http://lightrag:9621` |
 | `LIGHTRAG_API_KEY` | Manager-only LightRAG API key | `***` |

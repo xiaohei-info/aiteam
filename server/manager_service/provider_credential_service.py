@@ -167,6 +167,7 @@ class ProviderCredentialService:
                 model_version=policy.model_version,
                 pricing=policy.pricing,
                 version=int(access["version"]),
+                model_capabilities=_runtime_model_capabilities(self._operator, provider_ref, model, policy.model_version),
             )
         except NotFound:
             raise
@@ -213,6 +214,45 @@ def _visible_rows(
     if _can_view_all(ctx):
         return rows
     return [row for row in rows if _is_visible(ctx, row)]
+
+
+def _runtime_model_capabilities(operator, provider_ref: str, model_id: str, model_version: int) -> dict[str, Any]:
+    """Expose only non-sensitive capability fields needed by the local Pi model."""
+    try:
+        catalog = operator.list_platform_catalog()
+    except Exception:  # noqa: BLE001 - runtime config remains compatible with older catalogs
+        return {}
+    models = catalog.get("models", []) if isinstance(catalog, dict) else []
+    if not isinstance(models, list):
+        return {}
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        model = item.get("model") if isinstance(item.get("model"), dict) else item
+        if not isinstance(model, dict) or model.get("provider_id") != provider_ref or model.get("model_id") != model_id or model.get("version") != model_version:
+            continue
+        raw = model.get("capabilities")
+        if not isinstance(raw, dict):
+            return {}
+        output: dict[str, Any] = {}
+        for key in ("context_window", "max_tokens"):
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 10_000_000:
+                output[key] = value
+        if isinstance(raw.get("reasoning"), bool):
+            output["reasoning"] = raw["reasoning"]
+        input_modes = raw.get("input") or raw.get("input_modalities")
+        if isinstance(input_modes, list):
+            modes = [mode for mode in input_modes if mode in {"text", "image"}]
+            if modes:
+                output["input"] = list(dict.fromkeys(modes))
+        thinking_map = raw.get("thinking_level_map")
+        if isinstance(thinking_map, dict):
+            clean_map = {str(key): value for key, value in thinking_map.items() if key in {"off", "minimal", "low", "medium", "high", "xhigh", "max"} and (value is None or isinstance(value, str))}
+            if clean_map:
+                output["thinking_level_map"] = clean_map
+        return output
+    return {}
 
 
 def _to_out(row: ProviderCredentialRow) -> ProviderCredentialOut:

@@ -669,11 +669,11 @@ export class AgentSqliteStore {
     return true;
   }
 
-  markLocalFilesReferenced(ids: string[], conversationId: string, tenantId: string, memberId: string): void {
+  markLocalFilesReferenced(ids: string[], conversationId: string, tenantId: string, memberId: string, kind: LocalFileKind = "attachment"): void {
     if (ids.length === 0) return;
     const now = new Date().toISOString();
-    const mark = this.db.prepare("UPDATE local_file SET referenced_at = ? WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ? AND kind = 'attachment'");
-    for (const id of ids) mark.run(now, id, conversationId, tenantId, memberId);
+    const mark = this.db.prepare("UPDATE local_file SET referenced_at = ? WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ? AND kind = ?");
+    for (const id of ids) mark.run(now, id, conversationId, tenantId, memberId, kind);
   }
 
   deleteConversationLocalFiles(conversationId: string, tenantId: string, memberId: string): void {

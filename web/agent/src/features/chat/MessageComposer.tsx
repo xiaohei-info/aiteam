@@ -39,7 +39,7 @@ import { createStaticSource } from "@astryxdesign/core/Typeahead";
 import { useApiError, useApp } from "../../lib/app-context";
 import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
-import { abortPrompt, deleteAttachment, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
+import { abortPrompt, attachmentMimeType, deleteAttachment, isSupportedAttachmentMime, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
 import { ConversationPermissionControl } from "./ConversationPermissionControl";
 import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
@@ -55,7 +55,15 @@ const TOAST_TTL_MS = 2500;
 
 type MentionItem = { id: string; label: string; auxiliaryData: LoadedExpertProjection };
 
-export type PendingSubmission = { key: string; text: string; uploaded: LocalFile[]; uploadsComplete: boolean; promptAttempted: boolean };
+export type PendingSubmission = {
+  key: string;
+  text: string;
+  uploaded: LocalFile[];
+  uploadsComplete: boolean;
+  promptAttempted: boolean;
+  conversationId?: string;
+  inputSignature?: string;
+};
 
 export function isIdempotencyUnknownError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 409 && error.code === "idempotency_unknown";
@@ -93,6 +101,22 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
   const composerInputRef = useRef<ChatComposerInputHandle>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSubmission = useRef<PendingSubmission | null>(null);
+  const previousConversationId = useRef(conversationId);
+  const submissionGeneration = useRef(0);
+
+  useEffect(() => {
+    if (previousConversationId.current === conversationId) return;
+    previousConversationId.current = conversationId;
+    submissionGeneration.current += 1;
+    pendingSubmission.current = null;
+    setSending(false);
+    onPromptingChange(false);
+    setContent("");
+    setAttachments([]);
+    setError(null);
+    setMentionOpen(false);
+    setSkillOpen(false);
+  }, [conversationId, onPromptingChange]);
 
   // Private chat reads the full local roster. Group chat supplies the solution-scoped roster
   // so the composer never offers an employee outside the current conversation.
@@ -170,9 +194,9 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
 
   function handleFileChange(ev: ChangeEvent<HTMLInputElement>) {
     const files = ev.target.files ? Array.from(ev.target.files) : [];
-    const accepted = files.filter((file) => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type));
+    const accepted = files.filter((file) => file.size <= 5 * 1024 * 1024 && isSupportedAttachmentMime(attachmentMimeType(file)));
     if (accepted.length > 0) setAttachments((prev) => [...prev, ...accepted]);
-    if (accepted.length !== files.length) showToast("仅支持 PNG、JPEG、WEBP 或 GIF 图片");
+    if (accepted.length !== files.length) showToast("仅支持受支持的本地文件，单个文件不超过 5 MiB");
     // 清空 value 使同一文件再次可选。
     ev.target.value = "";
   }
@@ -234,13 +258,25 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     if ((!text && attachments.length === 0) || sending) return;
     setSending(true);
     setError(null);
-    const pending = pendingSubmission.current ?? { key: makeIdempotencyKey(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false };
+    const inputSignature = JSON.stringify({ conversationId, text: text + attachedNote, files: attachments.map((file) => `${file.name}:${file.size}:${file.lastModified}`) });
+    const existing = pendingSubmission.current;
+    const pending = existing
+      && existing.conversationId === conversationId
+      && existing.inputSignature === inputSignature
+      ? existing
+      : { key: makeIdempotencyKey(), text: text + attachedNote, uploaded: [], uploadsComplete: false, promptAttempted: false, conversationId, inputSignature };
     pendingSubmission.current = pending;
+    const generation = submissionGeneration.current;
+    const isCurrent = () => generation === submissionGeneration.current && pendingSubmission.current === pending;
     try {
       // Upload bytes to Agent storage first; Manager never sees attachment content.
       if (!pending.uploadsComplete) {
         for (const file of attachments) pending.uploaded.push(await uploadAttachment(client, conversationId, file));
         pending.uploadsComplete = true;
+      }
+      if (!isCurrent()) {
+        await Promise.all(pending.uploaded.map((file) => deleteAttachment(client, conversationId, file.id).catch(() => undefined)));
+        return;
       }
       // Keep the key and local IDs stable: a lost response may mean the Agent accepted the prompt.
       pending.promptAttempted = true;
@@ -250,11 +286,18 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         attachment_ids: pending.uploaded.map((file) => file.id),
         ...(mentionRoster !== undefined && mentioned.length > 0 ? { mentions: mentioned } : {}),
       }, pending.key);
+      if (!isCurrent()) return;
       pendingSubmission.current = null;
       setContent("");
       setAttachments([]);
       onSent();
     } catch (err) {
+      if (!isCurrent()) {
+        if (!pending.promptAttempted) {
+          await Promise.all(pending.uploaded.map((file) => deleteAttachment(client, conversationId, file.id).catch(() => undefined)));
+        }
+        return;
+      }
       onPromptingChange(false);
       if (!pending.promptAttempted) {
         // Upload failed before any prompt attempt; these IDs are definitely orphaned.
@@ -267,7 +310,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
       }
       if (!isIdempotencyUnknownError(err)) setError(toMessage(err));
     } finally {
-      setSending(false);
+      if (generation === submissionGeneration.current) setSending(false);
     }
   }
 
@@ -473,7 +516,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/png,image/jpeg,image/webp,image/gif"
+        accept="image/png,image/jpeg,image/webp,image/gif,.pdf,.txt,.md,.markdown,.json,.csv,.css,.html,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sh,.sql,.yaml,.yml,.xml,.doc,.docx,.ppt,.pptx"
         hidden
         onChange={handleFileChange}
         aria-hidden="true"

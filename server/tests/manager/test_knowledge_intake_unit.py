@@ -954,6 +954,46 @@ def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls[0] == "ingest_url"
 
 
+def test_analytics_offloads_sync_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import manager_service.routes_knowledge_intake as routes
+    from shared.auth import RejectingTokenVerifier
+
+    calls = []
+    analytics = {
+        "knowledge_space_id": "ks", "status": "not_configured", "document_count": 0,
+        "ready_count": 0, "failed_count": 0, "processing_count": 0, "deleted_count": 0,
+        "total_bytes": 0, "total_text_chars": 0, "total_chunks": 0,
+        "upstream_document_count": None, "upstream_ready_count": None,
+        "upstream_failed_count": None, "upstream_processing_count": None,
+        "last_activity_at": None, "refreshed_at": datetime.now(timezone.utc),
+        "daily_activity": [], "documents": [],
+    }
+
+    class Service:
+        def analytics(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            from manager_service.analytics_schemas import KnowledgeAnalyticsOut
+            return KnowledgeAnalyticsOut(**analytics)
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "_service", lambda request: Service())
+    monkeypatch.setattr(routes, "tenant_context_from", lambda claims: "ctx")
+    monkeypatch.setattr(routes.asyncio, "to_thread", fake_to_thread)
+    router = routes.build_knowledge_intake_router(RejectingTokenVerifier("x"))
+    endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", "").endswith("/analytics"))
+
+    async def invoke():
+        response = await endpoint("ks", object(), object())
+        assert response.data[0].knowledge_space_id == "ks"
+
+    asyncio.run(invoke())
+    assert calls[0] == "analytics"
+
+
 def test_routes_registered() -> None:
     from manager_service.routes_knowledge_intake import build_knowledge_intake_router
     from shared.auth import RejectingTokenVerifier

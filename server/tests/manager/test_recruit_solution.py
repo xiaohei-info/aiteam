@@ -69,6 +69,7 @@ class _FakeEmployeeRepo:
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
             status=kw.get("status", "draft"), platform_model_ref=kw.get("platform_model_ref"),
+            department_ids=list(kw.get("department_ids") or []),
         )
         self._bucket(ctx)[row.employee_id] = row
         if kw.get("source_template_id"):
@@ -417,7 +418,7 @@ def test_recruit_expert_binds_grants_when_subjects_provided():
     """F06 可选招募即绑定授权（D12）：提供 department_ids/member_ids → 落 member_grant。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_expert(_expert_template())
-    svc, _, grant, _, _ = _build_service(catalog)
+    svc, emp, grant, _, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"),
@@ -428,6 +429,7 @@ def test_recruit_expert_binds_grants_when_subjects_provided():
     )
 
     assert result.grants_applied is True
+    assert emp.get(_ctx("t-a"), employee_id=result.employee_id).department_ids == ["dept-1"]
     grants = grant._bucket(_ctx("t-a"))
     assert ("expert", result.employee_id) in grants
     row = grants[("expert", result.employee_id)]
@@ -573,7 +575,7 @@ def test_apply_solution_request_grants_override_package_defaults():
     """F07：请求显式指定授权 → 覆盖方案包 default_grants。"""
     catalog = FakeOperatorCatalogClient()
     catalog.seed_solution(_solution_package())
-    svc, _, grant, _, _ = _build_service(catalog)
+    svc, emp, grant, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(
         _ctx("t-a"),
@@ -582,6 +584,7 @@ def test_apply_solution_request_grants_override_package_defaults():
     assert result.grants_applied is True
     grants = grant._bucket(_ctx("t-a"))
     for eid in result.solution_instance.expert_employee_ids:
+        assert emp.get(_ctx("t-a"), employee_id=eid).department_ids == ["dept-req"]
         assert grants[("expert", eid)].department_ids == ["dept-req"]
         assert grants[("expert", eid)].member_ids == ["mem-req"]
     solution_grant = grants[("solution", result.solution_instance.id)]

@@ -27,11 +27,15 @@ test("runtime provider config is strict and registers an in-memory model/key", a
     model_version: 4,
     pricing,
     version: 3,
+    model_capabilities: { context_window: 96_000, max_tokens: 8_192, reasoning: false, input: ["text"] },
   });
   const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false });
   const model = await registerRuntimeProvider(runtime, config, "aiteam:test-provider");
   assert.equal(model.provider, "aiteam:test-provider");
   assert.equal(model.id, "minimax-m3");
+  assert.equal(model.contextWindow, 96_000);
+  assert.equal(model.maxTokens, 8_192);
+  assert.equal(model.reasoning, false);
   assert.equal((await runtime.getAuth("aiteam:test-provider"))?.auth.apiKey, "runtime-secret");
   await runtime.removeRuntimeApiKey("aiteam:test-provider");
   runtime.unregisterProvider("aiteam:test-provider");

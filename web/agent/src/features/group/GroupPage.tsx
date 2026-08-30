@@ -40,6 +40,8 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { ConversationList } from "../chat/ConversationList";
 import { MessageComposer } from "../chat/MessageComposer";
 import { TimelineView } from "../chat/TimelineView";
+import { ConversationContextHud } from "../chat/ConversationContextHud";
+import { FilesPanel } from "../chat/FilesPanel";
 import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import {
@@ -267,7 +269,7 @@ export function GroupPage() {
   const conversationTitle = selected?.title ?? "群聊";
 
   return (
-    <HStack gap={4} height="100%" minHeight={0}>
+    <HStack gap={4} height="100%" minHeight={0} data-testid="group-chat-layout">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -305,6 +307,7 @@ export function GroupPage() {
       <Card role="region" aria-label="群聊协作工作区" width="100%" padding={0}>
         {selected ? (
           <VStack gap={2} padding={4}>
+            <ConversationContextHud client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} />
             <HStack justify="between" align="center" wrap="wrap">
               <Heading level={2}>{conversationTitle}</Heading>
               <HStack gap={1} role="group" aria-label="群聊操作">
@@ -360,6 +363,7 @@ export function GroupPage() {
         )}
       </Card>
       </VStack>
+      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} /> : null}
 
       <Dialog
         isOpen={showCreateModal}

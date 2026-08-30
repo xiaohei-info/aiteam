@@ -23,7 +23,7 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { EmployeeConfigDrawer } from "./EmployeeConfigDrawer";
 import { useExpertsApi } from "./useExpertsApi";
-import type { EmployeeConfig } from "./types";
+import type { Department, EmployeeConfig } from "./types";
 import "./experts.css";
 
 type ExpertFilter = "all" | "active" | "attention";
@@ -41,6 +41,7 @@ export function ExpertsPage(): ReactNode {
   const api = useExpertsApi();
 
   const [items, setItems] = useState<EmployeeConfig[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -52,7 +53,12 @@ export function ExpertsPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      setItems(await api.listEmployees());
+      const [employeeItems, departmentItems] = await Promise.all([
+        api.listEmployees(),
+        api.listDepartments ? api.listDepartments() : Promise.resolve([]),
+      ]);
+      setItems(employeeItems);
+      setDepartments(departmentItems);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("manager.experts.load_error"));
     } finally {
@@ -63,6 +69,11 @@ export function ExpertsPage(): ReactNode {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const departmentNames = useMemo(
+    () => new Map(departments.map((department) => [department.id, department.display_name])),
+    [departments],
+  );
 
   // 直接定位已加载实例，注入抽屉以避免抽屉内再次按 id 线性查找。
   const detailEmployee = useMemo(
@@ -200,6 +211,7 @@ export function ExpertsPage(): ReactNode {
                   <span><strong>模型</strong>{employee.model_policy.model || "待配置"}</span>
                   <span><strong>技能</strong>{employee.skills.length} 项</span>
                   <span><strong>知识</strong>{employee.knowledge_refs.length} 项</span>
+                  <span><strong>部门</strong>{(employee.department_ids ?? []).map((id) => departmentNames.get(id) ?? id).join(", ") || "未设置"}</span>
                 </div>
 
                 <div data-ui="expert-card-config">
@@ -247,6 +259,7 @@ export function ExpertsPage(): ReactNode {
         <EmployeeConfigDrawer
           employeeId={detailId}
           employee={detailEmployee}
+          departments={departments}
           onClose={() => setDetailId(null)}
           onSaved={onSaved}
         />

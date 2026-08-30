@@ -90,6 +90,19 @@ test("runtime config accepts only the Pi protocols implemented by this contract"
       pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
     }).api_protocol, api_protocol);
   }
+  const withCapabilities = normalizeRuntimeProviderConfig({
+    base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "secret",
+    model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 1,
+    pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
+    model_capabilities: { context_window: 64_000, max_tokens: 4_096, reasoning: true, input: ["text", "image"], thinking_level_map: { high: "high" } },
+  });
+  assert.equal(withCapabilities.model_capabilities?.context_window, 64_000);
+  assert.throws(() => normalizeRuntimeProviderConfig({
+    base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "secret",
+    model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 1,
+    pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", effective_from: new Date().toISOString() },
+    model_capabilities: { api_key: "secret" },
+  }), /invalid model capabilities/);
   assert.throws(() => normalizeRuntimeProviderConfig({
     base_url: "https://newapi.test/v1", api_protocol: "pi-messages", api_key: "secret",
     model: "m1", provider_ref: "p1", provider_version: 1, model_version: 1, version: 1,

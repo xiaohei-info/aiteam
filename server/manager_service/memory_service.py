@@ -7,12 +7,22 @@ the current enterprise state, not caller-supplied scope.
 
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
-from shared.errors import Forbidden
+from shared.errors import AppError, Forbidden
+
+_MAX_ANALYTICS_PAGES = 32
+_ANALYTICS_PAGE_SIZE = 200
+_MEMORY_MANAGER_ROLES = frozenset({EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value})
+
+
+def _is_memory_manager(ctx: TenantContext) -> bool:
+    return bool(set(ctx.roles) & _MEMORY_MANAGER_ROLES)
 
 
 class MemoryBackend(Protocol):
@@ -24,6 +34,8 @@ class MemoryBackend(Protocol):
         self, ctx: TenantContext, *, employee_id: str, query: str | None, limit: int, offset: int
     ) -> dict: ...
 
+    def stats(self, ctx: TenantContext, *, employee_id: str) -> dict: ...
+
     def update(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, payload: dict
     ) -> dict: ...
@@ -34,9 +46,10 @@ class MemoryBackend(Protocol):
 class MemoryService:
     """Authorize memory access with a fresh snapshot, then delegate to Hindsight."""
 
-    def __init__(self, *, snapshot, backend: MemoryBackend):
+    def __init__(self, *, snapshot, backend: MemoryBackend, employee_reader=None):
         self._snapshot = snapshot
         self._backend = backend
+        self._employee_reader = employee_reader
 
     def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
         self._authorize(ctx, employee_id=employee_id, operation="recall")
@@ -83,6 +96,104 @@ class MemoryService:
             ctx, employee_id=employee_id, memory_id=memory_id, payload=sanitize_metadata(payload),
         ))
 
+    def analytics(self, ctx: TenantContext) -> dict[str, Any]:
+        """Return bounded per-employee Hindsight statistics without memory text."""
+        if self._employee_reader is None:
+            return {
+                "status": "not_configured", "employee_count": 0,
+                "total_memory_count": 0, "refreshed_at": datetime.now(timezone.utc),
+                "employees": [], "unavailable_employee_count": 0,
+            }
+        summaries: list[dict[str, Any]] = []
+        unavailable_count = 0
+        for employee in self._employee_reader.list_all(ctx):
+            employee_id = str(getattr(employee, "employee_id", ""))
+            if not employee_id:
+                continue
+            try:
+                if not _is_memory_manager(ctx):
+                    self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
+                items, truncated = self._analytics_items(ctx, employee_id=employee_id)
+                stats = self._analytics_stats(ctx, employee_id=employee_id)
+            except Forbidden:
+                # Member-level policy/grant denial must not reveal that an employee exists.
+                continue
+            except AppError as exc:
+                if exc.status == 503:
+                    unavailable_count += 1
+                    continue
+                if exc.status in (403, 404):
+                    continue
+                raise
+            summaries.append(_memory_summary(
+                employee_id=employee_id,
+                display_name=str(getattr(employee, "display_name", "") or "未命名专家"),
+                items=items,
+                truncated=truncated,
+                stats=stats,
+            ))
+        status = "available"
+        if unavailable_count:
+            status = "partial" if summaries else "unavailable"
+        return {
+            "status": status,
+            "employee_count": len(summaries),
+            "total_memory_count": sum(item["memory_count"] for item in summaries),
+            "refreshed_at": datetime.now(timezone.utc),
+            "employees": summaries,
+            "unavailable_employee_count": unavailable_count,
+        }
+
+    def _analytics_stats(self, ctx: TenantContext, *, employee_id: str) -> dict[str, Any]:
+        stats = getattr(self._backend, "stats", None)
+        if not callable(stats):
+            return {}
+        try:
+            raw = sanitize_metadata(stats(ctx, employee_id=employee_id))
+        except Exception:  # noqa: BLE001 - inventory remains useful if optional stats are unavailable
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        if isinstance(raw.get("data"), dict):
+            raw = raw["data"]
+        fields = (
+            "total_nodes", "total_links", "total_documents", "total_observations",
+            "pending_operations", "failed_operations", "pending_consolidation", "failed_consolidation",
+            "last_memory_write_at", "last_consolidated_at",
+        )
+        output: dict[str, Any] = {}
+        for field in fields:
+            value = raw.get(field)
+            if field.endswith("_at"):
+                if isinstance(value, str) and len(value) <= 128 and not any(char in value for char in "\x00\r\n"):
+                    output[field] = value
+            elif isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                output[field] = value
+        return output
+
+    def _analytics_items(self, ctx: TenantContext, *, employee_id: str) -> tuple[list[dict], bool]:
+        items: list[dict] = []
+        offset = 0
+        truncated = False
+        for _ in range(_MAX_ANALYTICS_PAGES):
+            raw = sanitize_metadata(self._backend.list(
+                ctx, employee_id=employee_id, query=None,
+                limit=_ANALYTICS_PAGE_SIZE, offset=offset,
+            ))
+            page = normalize_memory_list(
+                raw, employee_id=employee_id, limit=_ANALYTICS_PAGE_SIZE, offset=offset,
+            )
+            page_items = page["items"]
+            items.extend(page_items)
+            total = page.get("total")
+            if len(page_items) < _ANALYTICS_PAGE_SIZE or (
+                isinstance(total, int) and total <= offset + len(page_items)
+            ):
+                return items, truncated
+            offset += len(page_items)
+        truncated = True
+        return items, truncated
+
     def delete(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str
     ) -> dict:
@@ -105,9 +216,7 @@ class MemoryService:
         if snapshot.employee_id != employee_id:
             raise Forbidden("employee snapshot does not match requested employee")
         policy = snapshot.memory_policy
-        is_manager = bool(set(ctx.roles) & {
-            EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value,
-        })
+        is_manager = _is_memory_manager(ctx)
         if management and is_manager:
             return snapshot
         if not isinstance(policy, dict) or not policy or policy.get("enabled") is False:
@@ -124,8 +233,8 @@ class MemoryService:
         return snapshot
 
 
-def build_memory_service(*, snapshot, backend: MemoryBackend) -> MemoryService:
-    return MemoryService(snapshot=snapshot, backend=backend)
+def build_memory_service(*, snapshot, backend: MemoryBackend, employee_reader=None) -> MemoryService:
+    return MemoryService(snapshot=snapshot, backend=backend, employee_reader=employee_reader)
 
 
 def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int) -> dict:
@@ -139,22 +248,97 @@ def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int
             continue
         memory_id = item.get("id") or item.get("memory_id")
         content = item.get("text") or item.get("content")
-        if not isinstance(memory_id, str) or not isinstance(content, str):
+        if not isinstance(memory_id, str) or not memory_id.strip() or len(memory_id) > 256 or not isinstance(content, str):
             continue
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        importance = item.get("importance")
+        if not isinstance(importance, (int, float)) or isinstance(importance, bool) or not math.isfinite(float(importance)):
+            importance = None
         normalized.append({
             "memory_id": memory_id,
             "employee_id": employee_id,
             "content": content,
-            "category": item.get("fact_type") or item.get("category") or "memory",
-            "importance": item.get("importance") if isinstance(item.get("importance"), (int, float)) else None,
-            "source": item.get("source") or metadata.get("retainSource") or "hindsight",
-            "created_at": item.get("date") or item.get("created_at") or item.get("mentioned_at"),
-            "last_used_at": item.get("last_used_at"),
-            "state": item.get("state") or "valid",
+            "category": _safe_bucket(item.get("fact_type") or item.get("type") or item.get("category"), "memory"),
+            "importance": importance,
+            "source": _safe_bucket(item.get("source") or metadata.get("retainSource"), "hindsight"),
+            "created_at": _safe_timestamp(item.get("date") or item.get("created_at") or item.get("mentioned_at")),
+            "last_used_at": _safe_timestamp(item.get("last_used_at")),
+            "state": _safe_bucket(item.get("state"), "valid"),
         })
     total = raw.get("total") if isinstance(raw, dict) and isinstance(raw.get("total"), int) else len(normalized)
     return {"items": normalized, "total": total, "limit": limit, "offset": offset}
+
+
+def _memory_summary(
+    *, employee_id: str, display_name: str, items: list[dict], truncated: bool,
+    stats: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    state_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    created: list[tuple[datetime, str]] = []
+    used: list[tuple[datetime, str]] = []
+    importance: list[float] = []
+    for item in items:
+        state = _safe_bucket(item.get("state"), "valid")
+        category = _safe_bucket(item.get("category"), "memory")
+        state_counts[state] = state_counts.get(state, 0) + 1
+        category_counts[category] = category_counts.get(category, 0) + 1
+        for field, target in (("created_at", created), ("last_used_at", used)):
+            value = item.get(field)
+            parsed = _memory_datetime(value)
+            if parsed is not None and isinstance(value, str):
+                target.append((parsed, value))
+        value = item.get("importance")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+            importance.append(float(value))
+    created.sort(key=lambda entry: entry[0])
+    used.sort(key=lambda entry: entry[0])
+    return {
+        "employee_id": employee_id,
+        "display_name": display_name[:256],
+        "memory_count": len(items),
+        "state_counts": state_counts,
+        "category_counts": category_counts,
+        "latest_created_at": created[-1][1] if created else None,
+        "oldest_created_at": created[0][1] if created else None,
+        "latest_used_at": used[-1][1] if used else None,
+        "average_importance": sum(importance) / len(importance) if importance else None,
+        "max_importance": max(importance) if importance else None,
+        "truncated": truncated,
+        "total_nodes": (stats or {}).get("total_nodes"),
+        "total_links": (stats or {}).get("total_links"),
+        "total_documents": (stats or {}).get("total_documents"),
+        "total_observations": (stats or {}).get("total_observations"),
+        "pending_operations": (stats or {}).get("pending_operations"),
+        "failed_operations": (stats or {}).get("failed_operations"),
+        "pending_consolidation": (stats or {}).get("pending_consolidation"),
+        "failed_consolidation": (stats or {}).get("failed_consolidation"),
+        "last_memory_write_at": (stats or {}).get("last_memory_write_at"),
+        "last_consolidated_at": (stats or {}).get("last_consolidated_at"),
+    }
+
+
+def _safe_bucket(value: Any, fallback: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return fallback
+    value = value.strip()
+    return value[:128]
+
+
+def _safe_timestamp(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) > 128 or any(char in value for char in "\x00\r\n"):
+        return None
+    return value
+
+
+def _memory_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def sanitize_metadata(value: Any, key: str | None = None) -> Any:

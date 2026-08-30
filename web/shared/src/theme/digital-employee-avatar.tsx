@@ -33,6 +33,9 @@ type AvatarPalette = {
   hair: string;
 };
 
+const SAFE_INLINE_AVATAR = /^data:image\/(?:gif|jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/u;
+const MAX_INLINE_AVATAR_LENGTH = 3_000_000;
+
 type AvatarTraits = {
   palette: AvatarPalette;
   preset: AvatarPreset;
@@ -81,7 +84,11 @@ export function DigitalEmployeeAvatar({
   const seedValue = seed == null ? label : String(seed);
   const traits = avatarTraitsFor(`${variant}:${seedValue}`, variant);
   const candidate = src?.trim();
-  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//") ? candidate : undefined;
+  const imageSrc = candidate?.startsWith("/") && !candidate.startsWith("//")
+    ? candidate
+    : candidate && candidate.length <= MAX_INLINE_AVATAR_LENGTH && SAFE_INLINE_AVATAR.test(candidate)
+      ? candidate
+      : undefined;
 
   return (
     <span

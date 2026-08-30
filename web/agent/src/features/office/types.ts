@@ -1,11 +1,27 @@
-export interface OfficeEmployee { employee_id: string; display_name: string; status: string; task: string | null; avatar_url: string | null; }
-export interface OfficeScene { employees: OfficeEmployee[]; summary: Record<string, number>; }
+export interface OfficeEmployee {
+  employee_id: string;
+  display_name: string;
+  status: string;
+  task: string | null;
+  avatar_url: string | null;
+  last_activity_at?: string | null;
+  last_status?: string | null;
+  last_task?: string | null;
+}
 
-/** A schedule is Conversation metadata; execution state belongs to the Pi event stream. */
+export interface OfficeScene {
+  employees: OfficeEmployee[];
+  summary: Record<string, number>;
+}
+
+/** A feed item is Conversation metadata; execution state belongs to the Pi event stream. */
 export interface ConversationSchedule {
-  type: "conversation_schedule";
+  type: string;
   conversation_id: string;
   title: string;
-  schedule: Record<string, unknown>;
+  schedule: Record<string, unknown> | null;
 }
-export interface OfficeFeed { events: ConversationSchedule[]; }
+
+export interface OfficeFeed {
+  events: ConversationSchedule[];
+}

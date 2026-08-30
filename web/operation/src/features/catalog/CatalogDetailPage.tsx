@@ -19,6 +19,7 @@ import { TemplateOverview, visibilityScopeFor } from "./TemplateOverview";
 import { TemplateVersionPanel, type DetailTab } from "./TemplateVersionPanel";
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem, CatalogItemType } from "./types";
+import { isSafeAvatarDataUrl } from "./avatar";
 
 export function CatalogDetailPage(): ReactNode {
   const { catalog_type, template_id } = useParams<{ catalog_type: string; template_id: string }>();
@@ -106,7 +107,9 @@ export function CatalogDetailPage(): ReactNode {
       if (draft.catalog_type === "expert_template") {
         changes.system_prompt = draft.system_prompt ?? "";
         changes.category = draft.category ?? "";
-        changes.avatar_url = draft.avatar_url ?? "";
+        const avatar = draft.avatar_url ?? "";
+        // Legacy URL values stay readable but are not re-submitted by the new file-only editor.
+        if (!avatar || isSafeAvatarDataUrl(avatar)) changes.avatar_url = avatar;
         changes.description = draft.description ?? "";
         changes.platform_skill_refs = draft.platform_skill_refs ?? [];
         changes.platform_model_ref = draft.platform_model_ref ?? null;

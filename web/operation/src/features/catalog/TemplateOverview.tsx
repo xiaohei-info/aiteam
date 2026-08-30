@@ -11,6 +11,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { AvatarFileInput, AvatarPreview } from "./AvatarFileInput";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import type { CatalogItem } from "./types";
 import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
@@ -136,12 +137,15 @@ function ExpertDetailSections({
         {editing ? (
           <FormLayout direction="horizontal">
             <TextInput label="category" value={draft.category ?? ""} onChange={(category) => onChange({ ...draft, category })} />
-            <TextInput label="avatar_url" value={draft.avatar_url ?? ""} onChange={(avatar_url) => onChange({ ...draft, avatar_url })} />
+            <AvatarFileInput value={draft.avatar_url} onChange={(avatar_url) => onChange({ ...draft, avatar_url })} />
           </FormLayout>
         ) : (
           <Grid columns={{ minWidth: 220, max: 2 }} gap={4}>
             <ReadonlyRow label="category" value={draft.category} />
-            <ReadonlyRow label="avatar_url" value={draft.avatar_url} />
+            <VStack gap={1}>
+              <Text type="supporting" color="secondary">头像</Text>
+              <AvatarPreview value={draft.avatar_url} />
+            </VStack>
           </Grid>
         )}
       </DetailSection>

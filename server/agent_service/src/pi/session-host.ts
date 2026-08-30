@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, chmodSync, rmSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -23,11 +23,12 @@ import type { AgentSqliteStore, ConversationPermissionMode, FrozenSnapshot } fro
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { serializePiEvent } from "./event-sse.js";
+import { serializePiEntry, serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
+import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -57,6 +58,29 @@ export class InvalidEventCursorError extends Error {
 export interface PromptDeliveryOptions {
   logicalMessageId?: string;
   idempotencyKey?: string;
+}
+
+export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ConversationContext {
+  conversation_id: string;
+  employee_id: string;
+  model: { provider: string; id: string; name: string } | null;
+  used_tokens: number | null;
+  context_window: number;
+  percentage: number | null;
+  thinking_level: ConversationThinkingLevel;
+  available_thinking_levels: ConversationThinkingLevel[];
+  prompting: boolean;
+}
+
+export interface OfficeEmployeeActivity {
+  employee_id: string;
+  conversation_id: string;
+  prompting: boolean;
+  last_activity_at: string | null;
+  last_status: "working" | "completed" | "waiting" | "error" | "idle";
+  last_task: string | null;
 }
 
 export interface SessionAuthorization {
@@ -96,6 +120,13 @@ interface Subscriber {
   queued: PiEventEnvelope[];
 }
 
+interface WorkspaceFileSnapshot {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  mimeType: string;
+}
+
 interface SessionRecord {
   conversationId: string;
   employeeId?: string;
@@ -120,6 +151,7 @@ interface SessionRecord {
   activeSourceRole?: "human" | "child" | "participant" | "coordinator";
   activeSource?: GroupMessageSource;
   hindsightWorkspaces: Set<string>;
+  contextOperation?: Promise<void>;
   disposing?: Promise<void>;
 }
 
@@ -225,6 +257,132 @@ export class SessionHost {
     return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
   }
 
+  /**
+   * Return bounded per-participant activity for the local office projection.
+   * Only entry type/timestamp and the conversation title cross this seam; message
+   * bodies, tool arguments, paths, and provider data stay in the chat session.
+   */
+  async getOfficeActivities(conversationId: string): Promise<OfficeEmployeeActivity[]> {
+    const metadata = this.options.store.getConversationMetadata(conversationId);
+    if (!metadata) return [];
+    const participants = this.options.store.listConversationParticipants(conversationId);
+    const participantIds = participants.map((item) => item.employee_id);
+    const employeeIds = [...new Set(participantIds.length > 0
+      ? participantIds
+      : [metadata.entry_employee_id ?? metadata.coordinator_employee_id].filter((id): id is string => Boolean(id)))];
+    const activities: OfficeEmployeeActivity[] = [];
+    for (const employeeId of employeeIds) {
+      // Office polling must be observational: do not call ensureRecord(), which
+      // creates a workspace/session participant row when a chat has never been opened.
+      const record = this.records.get(this.recordKey(conversationId, employeeId));
+      const participant = participants.find((item) => item.employee_id === employeeId);
+      const sessionFile = participant?.session_file || (employeeIds.length === 1 ? this.options.store.getConversation(conversationId)?.sessionFile : undefined);
+      const entries = record?.sessionManager.getEntries() ?? this.readPersistedOfficeEntries(sessionFile);
+      const prompting = record?.prompting ?? false;
+      let latest: SessionEntry | undefined;
+      let latestTimestamp = -1;
+      for (const entry of entries) {
+        if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info") continue;
+        const timestamp = this.entryTimestamp(entry);
+        if (timestamp >= latestTimestamp) {
+          latestTimestamp = timestamp;
+          latest = entry;
+        }
+      }
+      const lastStatus = prompting ? "working" : officeEntryStatus(latest);
+      const lastActivityAt = prompting
+        ? new Date().toISOString()
+        : officeEntryTimestamp(latest) ?? metadata.updated_at;
+      activities.push({
+        employee_id: employeeId,
+        conversation_id: conversationId,
+        prompting,
+        last_activity_at: lastActivityAt,
+        last_status: lastStatus,
+        last_task: lastStatus === "idle" ? null : officeEntryTask(entries) ?? metadata.title ?? null,
+      });
+    }
+    return activities;
+  }
+
+  async getConversationContext(conversationId: string, caller: AuthenticatedCaller): Promise<ConversationContext> {
+    const record = this.ensureContextRecord(conversationId, caller);
+    return this.withContextOperation(record, async () => {
+      const authorization = this.resolveAuthorization(record, caller);
+      const active = record.prompting;
+      let ownedSession: AgentSession | undefined;
+      try {
+        const existing = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
+        ownedSession = existing ?? await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
+        return this.contextValue(record, ownedSession);
+      } finally {
+        if (!active && !record.prompting && ownedSession && record.session === ownedSession) await this.disposeSession(record);
+      }
+    });
+  }
+
+  async setThinkingLevel(conversationId: string, level: ConversationThinkingLevel, caller: AuthenticatedCaller): Promise<ConversationContext> {
+    const record = this.ensureContextRecord(conversationId, caller);
+    return this.withContextOperation(record, async () => {
+      if (record.prompting) throw new ConversationBusyError();
+      const authorization = this.resolveAuthorization(record, caller);
+      try {
+        const session = await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
+        session.setThinkingLevel(level);
+        return this.contextValue(record, session);
+      } finally {
+        if (!record.prompting) await this.disposeSession(record);
+      }
+    });
+  }
+
+  private async withContextOperation<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
+    const previous = record.contextOperation ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    record.contextOperation = current;
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (record.contextOperation === current) record.contextOperation = undefined;
+    }
+  }
+
+  private ensureContextRecord(conversationId: string, caller: AuthenticatedCaller): SessionRecord {
+    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId ?? "", caller.userId ?? caller.callerId);
+    if (!metadata) throw new SessionAuthorizationError("Conversation is not owned by the authenticated member");
+    const employeeId = metadata.entry_employee_id ?? metadata.coordinator_employee_id;
+    if (!employeeId) throw new SessionAuthorizationError("Conversation has no authorized employee");
+    return this.ensureRecord(conversationId, employeeId);
+  }
+
+  private contextValue(record: SessionRecord, session: AgentSession): ConversationContext {
+    const stats = typeof session.getSessionStats === "function" ? session.getSessionStats() : undefined;
+    const usage = (typeof session.getContextUsage === "function" ? session.getContextUsage() : undefined) ?? stats?.contextUsage;
+    const model = session.model;
+    const contextWindow = usage?.contextWindow ?? model?.contextWindow ?? 0;
+    const thinkingLevel = normalizeThinkingLevel(session.thinkingLevel);
+    const reportedThinkingLevels = typeof session.getAvailableThinkingLevels === "function"
+      ? session.getAvailableThinkingLevels().map(normalizeThinkingLevel)
+      : undefined;
+    const available: ConversationThinkingLevel[] = reportedThinkingLevels === undefined
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+      : ["off", ...reportedThinkingLevels];
+    return {
+      conversation_id: record.conversationId,
+      employee_id: record.employeeId ?? "conversation",
+      model: model ? { provider: model.provider, id: model.id, name: model.name } : null,
+      used_tokens: usage?.tokens ?? null,
+      context_window: contextWindow,
+      percentage: usage?.percent ?? null,
+      thinking_level: thinkingLevel,
+      available_thinking_levels: [...new Set(available)],
+      prompting: record.prompting,
+    };
+  }
+
   async delete(conversationId: string, tenantId: string, memberId: string): Promise<boolean> {
     const indexed = this.options.store.getOwnedConversation(conversationId, tenantId, memberId);
     if (!indexed) return false;
@@ -302,6 +460,27 @@ export class SessionHost {
       if (Number.isFinite(timestamp)) return timestamp;
     }
     return 0;
+  }
+
+  private readPersistedOfficeEntries(sessionFile?: string): SessionEntry[] {
+    if (!sessionFile || !existsSync(sessionFile)) return [];
+    try {
+      this.assertManagedPathEither(sessionFile, this.options.sessionDir, this.options.cwdRoot);
+      // Keep office polling bounded; the latest entries are enough to derive a status.
+      return readFileSync(sessionFile, "utf8").split("\\n").slice(-256).flatMap((line) => {
+        if (!line.trim()) return [];
+        try {
+          const value = JSON.parse(line) as unknown;
+          return value && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string"
+            ? [value as SessionEntry]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+    } catch {
+      return [];
+    }
   }
 
   async initializeConversationParticipants(conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -480,13 +659,13 @@ export class SessionHost {
     return targets as string[];
   }
 
-  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
+  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean; skipSandbox?: boolean } = {}): Promise<AgentSession> {
     if (record.session) return record.session;
-    const hindsightRuntimeConfig = await this.resolveHindsightRuntimeConfig(authorization);
+    const hindsightRuntimeConfig = options.skipHindsight ? undefined : await this.resolveHindsightRuntimeConfig(authorization);
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig);
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
-    if (authorization && this.hasCodingTools(authorization.snapshot)) {
+    if (!options.skipSandbox && authorization && this.hasCodingTools(authorization.snapshot)) {
       if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
       await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
     }
@@ -501,7 +680,7 @@ export class SessionHost {
       cwd: record.workspace,
       agentDir: this.options.agentDir,
       model: authorization ? this.modelFor(authorization.snapshot, authorization.runtimeProviderId) : this.requireDefaultModel(),
-      thinkingLevel: this.thinkingLevelFor(authorization),
+      thinkingLevel: this.thinkingLevelFor(record, authorization),
       modelRuntime: this.options.modelRuntime,
       resourceLoader,
       sessionManager: record.sessionManager,
@@ -555,12 +734,14 @@ export class SessionHost {
     return new Set(names);
   }
 
-  private thinkingLevelFor(authorization?: SessionAuthorization): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" {
+  private thinkingLevelFor(record: SessionRecord, authorization?: SessionAuthorization): ConversationThinkingLevel {
+    const persisted = [...record.sessionManager.getBranch()].reverse().find((entry) => entry.type === "thinking_level_change");
+    if (persisted && persisted.type === "thinking_level_change") return normalizeThinkingLevel(persisted.thinkingLevel);
     const policy = authorization?.snapshot.model_policy;
     const value = policy && typeof policy === "object"
       ? (policy as Record<string, unknown>).thinking_level
       : undefined;
-    return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" ? value : "off";
+    return normalizeThinkingLevel(value);
   }
 
   private resolveAuthorization(record: SessionRecord, caller: AuthenticatedCaller, mentions: string[] = []): SessionAuthorization | undefined {
@@ -619,6 +800,74 @@ export class SessionHost {
     await controlled?.shutdown?.();
   }
 
+  private workspaceSnapshot(root: string): Map<string, WorkspaceFileSnapshot> {
+    const files = new Map<string, WorkspaceFileSnapshot>();
+    const visit = (directory: string): void => {
+      let entries;
+      try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          visit(path);
+          continue;
+        }
+        if (!entry.isFile() || !isSafeArtifactFilename(entry.name)) continue;
+        const mimeType = mimeTypeForFilename(entry.name);
+        if (!mimeType) continue;
+        try {
+          const info = lstatSync(path);
+          if (!info.isFile()) continue;
+          const pathFromRoot = relative(root, path);
+          if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) continue;
+          files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, mimeType });
+        } catch {
+          // A file can disappear while a tool is writing it; ignore that snapshot.
+        }
+      }
+    };
+    visit(root);
+    return files;
+  }
+
+  private captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFileSnapshot>): void {
+    const tenantId = authorization?.caller.tenantId;
+    const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
+    if (!tenantId || !memberId) return;
+    const existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
+    for (const [pathFromRoot, current] of this.workspaceSnapshot(record.workspace)) {
+      const previous = before.get(pathFromRoot);
+      if (previous && previous.size === current.size && previous.mtimeMs === current.mtimeMs) continue;
+      if (current.size > MAX_LOCAL_FILE_BYTES) continue;
+      let data: Buffer;
+      try {
+        this.assertManagedPath(current.path, this.options.cwdRoot);
+        data = readFileSync(current.path);
+      } catch {
+        continue;
+      }
+      if (data.byteLength > MAX_LOCAL_FILE_BYTES || (IMAGE_MIMES.has(current.mimeType) && !hasImageSignature(current.mimeType, data)) || containsLikelySecret(data, current.mimeType)) continue;
+      const filename = basename(pathFromRoot);
+      const sha256 = createHash("sha256").update(data).digest("hex");
+      if (existing.some((item) => item.filename === filename && item.sha256 === sha256)) continue;
+      try {
+        const artifact = this.options.store.createLocalFile({
+          conversationId: record.conversationId,
+          tenantId,
+          memberId,
+          kind: "artifact",
+          filename,
+          mimeType: current.mimeType,
+          data,
+        });
+        existing.push(artifact);
+        this.options.store.markLocalFilesReferenced([artifact.id], record.conversationId, tenantId, memberId, "artifact");
+      } catch {
+        // Artifact capture is best effort and must not turn a completed Pi run into an error.
+      }
+    }
+  }
+
   private async deliverToParticipant(command: GroupMessageCommand, employeeId: string): Promise<GroupMessageReply> {
     const caller = command.caller;
     if (!caller) {
@@ -658,6 +907,7 @@ export class SessionHost {
     const employeeId = record.employeeId ?? "conversation";
     const startedAt = Date.now();
     const entriesBefore = record.sessionManager.getEntries().length;
+    if (record.contextOperation) await record.contextOperation;
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
     record.aborting = false;
@@ -665,6 +915,7 @@ export class SessionHost {
     record.activeSourceRef = command.toolCallId ? `${record.conversationId}:${command.toolCallId}` : undefined;
     record.activeSource = command.source;
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
+    const workspaceBefore = this.workspaceSnapshot(record.workspace);
     try {
       record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
@@ -683,6 +934,7 @@ export class SessionHost {
       await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
       throw error;
     } finally {
+      this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
       record.promptPromise = undefined;
       record.sessionReady = undefined;
       record.prompting = false;
@@ -1018,6 +1270,50 @@ export class SessionHost {
   private safeDirectoryName(conversationId: string): string {
     return `conversation-${createHash("sha256").update(conversationId).digest("hex").slice(0, 24)}`;
   }
+}
+
+function officeEntryTimestamp(entry: SessionEntry | undefined): string | null {
+  const timestamp = entry && (entry as unknown as { timestamp?: unknown }).timestamp;
+  if (typeof timestamp === "string") {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+  }
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
+  return null;
+}
+
+function officeEntryStatus(entry: SessionEntry | undefined): OfficeEmployeeActivity["last_status"] {
+  if (!entry) return "idle";
+  if (entry.type === "message") {
+    if (entry.message.role === "assistant") return "completed";
+    if (entry.message.role === "user") return "waiting";
+    return "idle";
+  }
+  if (entry.type === "compaction" || entry.type === "branch_summary") return "completed";
+  if (entry.type === "thinking_level_change" || entry.type === "model_change") return "idle";
+  return entry.type.includes("error") ? "error" : "idle";
+}
+
+function officeEntryTask(entries: readonly SessionEntry[]): string | null {
+  for (const entry of [...entries].reverse()) {
+    if (entry.type !== "message" || (entry.message.role !== "assistant" && entry.message.role !== "user")) continue;
+    const serialized = serializePiEntry(entry);
+    const message = serialized?.message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const content = (message as Record<string, unknown>).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((part) => part && typeof part === "object" && !Array.isArray(part) && typeof (part as Record<string, unknown>).text === "string" ? [(part as Record<string, unknown>).text as string] : []).join(" ")
+        : "";
+    const task = text.replace(/\\s+/gu, " ").trim();
+    if (task) return task.slice(0, 240);
+  }
+  return null;
+}
+
+function normalizeThinkingLevel(value: unknown): ConversationThinkingLevel {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : "off";
 }
 
 function uniqueStrings(...values: unknown[]): string[] {

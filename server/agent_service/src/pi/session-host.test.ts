@@ -598,6 +598,60 @@ test("SessionHost aborts active delegated child sessions", async () => {
   }
 });
 
+test("SessionHost exposes local context HUD state, persists thinking changes, and captures safe artifacts", async () => {
+  const fixture = await createFixture();
+  const reasoning = fauxProvider({
+    api: "aiteam-reasoning-api",
+    provider: "aiteam-reasoning",
+    models: [{ id: "aiteam-reasoning-1", name: "Reasoning Test", reasoning: true, contextWindow: 1_000 }],
+  });
+  fixture.modelRuntime.registerNativeProvider(reasoning.provider);
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let workspace = "";
+  const host = fixture.createHost(reasoning.getModel(), undefined, (_id, _authorization, path) => {
+    workspace = path ?? "";
+    return createControlledResourceLoader("test system prompt");
+  });
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: reasoning.getModel().id } },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+
+    const initial = await host.getConversationContext("conversation-1", caller);
+    assert.equal(initial.model?.id, reasoning.getModel().id);
+    assert.equal(initial.context_window, 1_000);
+    assert.equal(initial.thinking_level, "off");
+
+    const changed = await host.setThinkingLevel("conversation-1", "high", caller);
+    assert.equal(changed.thinking_level, "high");
+    reasoning.setResponses([() => {
+      writeFileSync(join(workspace, "generated.ts"), "export const answer = 42;\n");
+      writeFileSync(join(workspace, ".env"), "API_KEY=must-not-capture\n");
+      writeFileSync(join(workspace, "notes.ts"), "const api_key = 'sk-secret-value';\n");
+      writeFileSync(join(workspace, "config.json"), JSON.stringify({ apiKey: "0123456789" }));
+      return fauxAssistantMessage("done");
+    }]);
+    await host.prompt("conversation-1", "generate", undefined, caller);
+
+    const after = await host.getConversationContext("conversation-1", caller);
+    assert.equal(after.thinking_level, "high");
+    assert.equal(after.prompting, false);
+    assert.equal(after.available_thinking_levels.includes("high"), true);
+    const officeActivities = await host.getOfficeActivities("conversation-1");
+    assert.equal(officeActivities.length, 1);
+    assert.equal(officeActivities[0]?.last_status, "completed");
+    assert.equal(typeof officeActivities[0]?.last_activity_at, "string");
+    const artifacts = fixture.store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1", "artifact");
+    assert.deepEqual(artifacts.map((item) => item.filename), ["generated.ts"]);
+    assert.equal(fixture.store.readOwnedLocalFile(artifacts[0]!.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), "export const answer = 42;\n");
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
 test("SessionHost aborts an active Pi prompt", async () => {
   const fixture = await createFixture();
   try {

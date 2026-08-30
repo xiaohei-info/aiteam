@@ -1,0 +1,1119 @@
+.office-page {
+  --office-surface: var(--color-background-card, #fff);
+  --office-surface-muted: var(--color-background-muted, #f4f1eb);
+  --office-page: var(--color-background, #f8f7f4);
+  --office-ink: var(--color-text, #202124);
+  --office-muted: var(--color-text-secondary, #60656b);
+  --office-line: var(--color-border, #dedbd3);
+  --office-line-strong: var(--color-border-emphasized, #c9c4b9);
+  --office-accent: var(--color-text-accent, #3f5f88);
+  --office-working: var(--color-text-orange, #a76419);
+  --office-working-soft: var(--color-background-orange, #fff0da);
+  --office-ready: var(--color-text-green, #27786b);
+  --office-ready-soft: var(--color-background-green, #e1f1ed);
+  --office-offline: var(--color-text-secondary, #73777c);
+  --office-attention: var(--color-text-red, #b34a45);
+  --office-attention-soft: var(--color-background-red, #fbe9e6);
+  --office-sky-start: color-mix(in srgb, var(--office-surface-muted) 80%, var(--office-accent));
+  --office-sky-end: var(--office-page);
+  --office-board: color-mix(in srgb, var(--office-surface) 90%, var(--office-accent));
+  --office-floor-start: color-mix(in srgb, var(--office-surface-muted) 76%, var(--office-accent));
+  --office-floor-end: color-mix(in srgb, var(--office-surface) 92%, var(--office-accent));
+  --office-grid: color-mix(in srgb, var(--office-accent) 25%, transparent);
+  --office-grid-soft: color-mix(in srgb, var(--office-accent) 10%, transparent);
+  --office-pixel: color-mix(in srgb, var(--office-accent) 22%, transparent);
+  min-width: 0;
+  color: var(--office-ink);
+}
+
+.office-page-header {
+  min-width: 0;
+}
+
+.office-page-header > * {
+  min-width: 0;
+}
+
+.office-kicker {
+  display: block;
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.office-page-header .office-kicker {
+  color: var(--office-accent);
+}
+
+.office-live-pill,
+.office-scene-count,
+.office-panel-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--office-line);
+  border-radius: 999px;
+  color: var(--office-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.office-live-pill {
+  min-height: 1.85rem;
+  padding: 0.35rem 0.65rem;
+}
+
+.office-live-pill--live {
+  border-color: color-mix(in srgb, var(--office-ready) 38%, var(--office-line));
+  color: var(--office-ready);
+}
+
+.office-live-pill--paused {
+  border-color: color-mix(in srgb, var(--office-working) 42%, var(--office-line));
+  color: var(--office-working);
+}
+
+.office-live-pill__dot,
+.office-scene-count__dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.office-live-pill--live .office-live-pill__dot {
+  animation: office-live-pulse 2.2s steps(2, end) infinite;
+}
+
+.office-updated {
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.office-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.office-metric {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 7.5rem;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  gap: 0.2rem 0.5rem;
+  overflow: hidden;
+  padding: 1rem;
+  border: 1px solid var(--office-line);
+  border-radius: 0.9rem;
+  background: var(--office-surface);
+  box-shadow: var(--shadow-low, 0 0.25rem 1rem rgba(32, 29, 24, 0.06));
+}
+
+.office-metric::after {
+  position: absolute;
+  right: -1.5rem;
+  bottom: -1.5rem;
+  width: 4.5rem;
+  height: 4.5rem;
+  border: 0.5rem solid color-mix(in srgb, var(--office-accent) 10%, transparent);
+  border-radius: 50%;
+  content: "";
+}
+
+.office-metric-code {
+  grid-column: 1 / -1;
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.office-metric-label {
+  align-self: center;
+  color: var(--office-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.office-metric-value {
+  align-self: center;
+  color: var(--office-ink);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: clamp(1.6rem, 3vw, 2.25rem);
+  font-weight: 750;
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.office-metric-hint {
+  grid-column: 1 / -1;
+  color: var(--office-muted);
+  font-size: 0.7rem;
+}
+
+.office-metric--working .office-metric-value {
+  color: var(--office-working);
+}
+
+.office-metric--ready .office-metric-value {
+  color: var(--office-ready);
+}
+
+.office-metric--offline .office-metric-value {
+  color: var(--office-offline);
+}
+
+.office-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(18rem, 0.75fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.office-scene-card,
+.office-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--office-line);
+  border-radius: 1rem;
+  background: var(--office-surface);
+  box-shadow: var(--shadow-low, 0 0.25rem 1rem rgba(32, 29, 24, 0.06));
+}
+
+.office-scene-card {
+  position: relative;
+}
+
+.office-scene-header,
+.office-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--office-line);
+}
+
+.office-scene-header > div,
+.office-panel-header > div {
+  min-width: 0;
+}
+
+.office-scene-header h2,
+.office-panel-header h2 {
+  margin-top: 0.25rem;
+}
+
+.office-scene-header .office-scene-count {
+  margin-top: 0.15rem;
+  padding: 0.42rem 0.6rem;
+}
+
+.office-scene-count {
+  color: var(--office-ready);
+}
+
+.office-scene-count__dot {
+  animation: office-live-pulse 2.2s steps(2, end) infinite;
+}
+
+.office-scene-viewport {
+  position: relative;
+  min-height: clamp(28rem, 42vw, 37rem);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--office-board);
+}
+
+.office-floor-art,
+.office-scene-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.office-floor-art {
+  display: block;
+  z-index: 0;
+}
+
+.office-floor__sky {
+  opacity: 0.9;
+}
+
+.office-floor__window {
+  fill: color-mix(in srgb, var(--office-surface) 50%, transparent);
+  stroke: color-mix(in srgb, var(--office-accent) 25%, var(--office-line));
+  stroke-width: 2;
+}
+
+.office-floor__window-glow {
+  fill: color-mix(in srgb, var(--office-ready-soft) 44%, transparent);
+}
+
+.office-floor__shelf {
+  fill: color-mix(in srgb, var(--office-line-strong) 48%, var(--office-surface));
+  stroke: var(--office-line);
+  stroke-width: 1;
+}
+
+.office-floor__floor {
+  stroke: color-mix(in srgb, var(--office-accent) 30%, var(--office-line));
+  stroke-width: 2;
+}
+
+.office-floor__mosaic {
+  fill: url(#office-mosaic);
+  opacity: 0.62;
+}
+
+.office-floor__floor-grid {
+  fill: none;
+  stroke: var(--office-grid);
+  stroke-width: 1;
+}
+
+.office-floor__desk-shadow {
+  fill: color-mix(in srgb, var(--office-accent) 12%, transparent);
+}
+
+.office-floor__decor {
+  fill: none;
+  stroke: color-mix(in srgb, var(--office-accent) 42%, var(--office-line));
+  stroke-linecap: square;
+  stroke-width: 3;
+}
+
+.office-scene-grid {
+  z-index: 1;
+}
+
+.office-station-item {
+  position: absolute;
+  width: min(23%, 11.5rem);
+  transform: translate(-50%, -50%);
+}
+
+.office-workstation {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  min-width: 0;
+  min-height: 0 !important;
+  padding: 0.3rem !important;
+  border: 1px solid transparent !important;
+  border-radius: 0.9rem !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--office-ink) !important;
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.office-workstation:hover {
+  border-color: color-mix(in srgb, var(--office-accent) 48%, transparent) !important;
+  background: color-mix(in srgb, var(--office-accent) 10%, transparent) !important;
+  transform: translateY(-0.15rem);
+}
+
+.office-workstation:focus-visible {
+  outline: 2px solid var(--office-accent) !important;
+  outline-offset: 2px;
+}
+
+.office-workstation[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--office-accent) 68%, var(--office-line)) !important;
+  background: color-mix(in srgb, var(--office-accent) 14%, transparent) !important;
+}
+
+.office-workstation > span:not([role="status"]) {
+  display: block;
+  width: 100%;
+}
+
+.office-workstation__inner {
+  position: relative;
+  display: block;
+}
+
+.office-workstation__visual {
+  position: relative;
+  display: block;
+  height: 8.1rem;
+  filter: drop-shadow(0 0.45rem 0.4rem color-mix(in srgb, var(--office-accent) 12%, transparent));
+}
+
+.office-monitor {
+  position: absolute;
+  z-index: 2;
+  top: 0.35rem;
+  left: 50%;
+  display: block;
+  width: 68%;
+  height: 4.8rem;
+  transform: translateX(-50%);
+}
+
+.office-monitor__screen {
+  position: absolute;
+  inset: 0.05rem 0.1rem 0.65rem;
+  display: block;
+  overflow: hidden;
+  border: 0.24rem solid color-mix(in srgb, var(--office-line-strong) 74%, var(--office-surface));
+  border-radius: 0.35rem;
+  background: color-mix(in srgb, var(--office-accent) 9%, var(--office-page));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--office-accent) 20%, transparent);
+}
+
+.office-monitor__screen::before {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 0.5rem, color-mix(in srgb, var(--office-accent) 8%, transparent) 0.51rem 0.56rem);
+  content: "";
+}
+
+.office-monitor__stand {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  display: block;
+  width: 28%;
+  height: 0.68rem;
+  border-bottom: 0.2rem solid color-mix(in srgb, var(--office-line-strong) 78%, var(--office-surface));
+  transform: translateX(-50%);
+}
+
+.office-screen-pixels {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.5rem;
+  display: flex;
+  gap: 0.22rem;
+  z-index: 1;
+}
+
+.office-screen-pixels i {
+  display: block;
+  width: 0.4rem;
+  height: 0.4rem;
+  background: var(--office-accent);
+  image-rendering: pixelated;
+  opacity: 0.75;
+}
+
+.office-screen-pixels i:nth-child(2) {
+  height: 0.65rem;
+  background: var(--office-ready);
+}
+
+.office-screen-pixels i:nth-child(3) {
+  opacity: 0.42;
+}
+
+.office-screen-line {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.55rem;
+  left: 0.5rem;
+  z-index: 1;
+  height: 0.22rem;
+  background: color-mix(in srgb, var(--office-accent) 38%, transparent);
+}
+
+.office-desk {
+  position: absolute;
+  z-index: 3;
+  right: 4%;
+  bottom: 1.15rem;
+  left: 4%;
+  display: block;
+  height: 2.1rem;
+  border: 1px solid color-mix(in srgb, var(--office-accent) 30%, var(--office-line));
+  border-radius: 0.25rem 0.25rem 0.6rem 0.6rem;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--office-surface) 82%, var(--office-accent)), var(--office-surface-muted));
+  clip-path: polygon(5% 0, 95% 0, 100% 30%, 90% 100%, 10% 100%, 0 30%);
+}
+
+.office-desk::after {
+  position: absolute;
+  right: 13%;
+  bottom: -0.6rem;
+  left: 13%;
+  height: 0.7rem;
+  border-right: 2px solid color-mix(in srgb, var(--office-line-strong) 76%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--office-line-strong) 76%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--office-line-strong) 76%, transparent);
+  content: "";
+}
+
+.office-chair {
+  position: absolute;
+  z-index: 2;
+  bottom: 0.28rem;
+  left: 50%;
+  display: block;
+  width: 1.75rem;
+  height: 1.15rem;
+  border: 2px solid color-mix(in srgb, var(--office-accent) 48%, var(--office-line));
+  border-radius: 0.55rem 0.55rem 0.2rem 0.2rem;
+  background: color-mix(in srgb, var(--office-accent) 18%, var(--office-surface));
+  transform: translateX(-50%);
+}
+
+.office-agent-avatar {
+  position: absolute;
+  z-index: 4;
+  bottom: 1.4rem;
+  left: 50%;
+  display: block;
+  width: 3rem;
+  height: 3rem;
+  overflow: hidden;
+  border: 2px solid var(--office-surface);
+  border-radius: 0.7rem;
+  background: var(--office-surface);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--office-accent) 35%, transparent);
+  transform: translateX(-50%);
+}
+
+.office-agent-avatar [data-aiteam-avatar="true"] {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.office-status-light {
+  position: absolute;
+  z-index: 5;
+  right: 0.2rem;
+  bottom: 1.25rem;
+  display: grid;
+  width: 0.85rem;
+  height: 0.85rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--office-surface);
+}
+
+.office-status-light .office-status-mark {
+  width: 0.52rem;
+  height: 0.52rem;
+}
+
+.office-workstation__bubble {
+  position: absolute;
+  z-index: 8;
+  top: -0.8rem;
+  left: 50%;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0.32rem 0.52rem;
+  border: 1px solid color-mix(in srgb, var(--office-working) 46%, var(--office-line));
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--office-working-soft) 88%, var(--office-surface));
+  color: var(--office-working);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.office-workstation--working .office-workstation__bubble,
+.office-workstation--busy .office-workstation__bubble {
+  animation: office-bubble-rise 3s steps(3, end) infinite;
+}
+
+.office-workstation__label {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.35rem 0.4rem 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--office-line) 78%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--office-surface) 91%, transparent);
+}
+
+.office-workstation__name,
+.office-activity-name {
+  overflow: hidden;
+  color: var(--office-ink);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-activity-name {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.office-activity-name .office-status-mark {
+  width: 0.42rem;
+  height: 0.42rem;
+}
+
+.office-workstation__status,
+.office-activity-status,
+.office-detail-status {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  color: var(--office-muted);
+  font-size: 0.64rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.office-status-code {
+  overflow: hidden;
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.54rem;
+  font-weight: 600;
+  opacity: 0.7;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.office-workstation__task,
+.office-activity-task {
+  overflow: hidden;
+  color: var(--office-muted);
+  font-size: 0.62rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-status-mark {
+  display: inline-block;
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 1px;
+  background: var(--office-muted);
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+  transform: rotate(45deg);
+}
+
+.office-status-mark--working,
+.office-status-mark--busy {
+  background: var(--office-working);
+  color: var(--office-working);
+}
+
+.office-status-mark--ready {
+  border-radius: 50%;
+  background: var(--office-ready);
+  color: var(--office-ready);
+}
+
+.office-status-mark--offline {
+  background: var(--office-offline);
+  color: var(--office-offline);
+  opacity: 0.65;
+}
+
+.office-status-mark--attention {
+  background: var(--office-attention);
+  color: var(--office-attention);
+}
+
+.office-workstation--working .office-screen-pixels,
+.office-workstation--busy .office-screen-pixels {
+  animation: office-screen-flicker 1.8s steps(4, end) infinite;
+}
+
+.office-workstation--working .office-agent-avatar,
+.office-workstation--busy .office-agent-avatar {
+  animation: office-working-bob 2.4s steps(3, end) infinite;
+}
+
+.office-workstation--ready .office-status-light {
+  animation: office-breathe 4s ease-in-out infinite;
+}
+
+.office-workstation--offline {
+  filter: grayscale(0.82);
+  opacity: 0.58;
+}
+
+.office-workstation--attention .office-status-light {
+  animation: office-attention-blink 1.7s steps(2, end) infinite;
+}
+
+.office-scene-empty {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--office-board) 78%, transparent);
+  text-align: center;
+}
+
+.office-scene-empty [data-empty-state="true"] {
+  max-width: 20rem;
+}
+
+.office-empty-pixel {
+  display: block;
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-bottom: 0.5rem;
+  border: 0.3rem solid var(--office-accent);
+  box-shadow: 0.5rem 0.5rem 0 color-mix(in srgb, var(--office-accent) 28%, transparent);
+  image-rendering: pixelated;
+}
+
+.office-scene-sign {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.8rem;
+  z-index: 7;
+  color: color-mix(in srgb, var(--office-accent) 58%, transparent);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.office-scene-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
+  min-height: 3rem;
+  padding: 0.65rem 1.1rem;
+  border-top: 1px solid var(--office-line);
+}
+
+.office-legend-item,
+.office-legend-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--office-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.office-legend-note {
+  margin-left: auto;
+  font-weight: 500;
+}
+
+.office-side-column {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.office-panel {
+  padding-bottom: 0.55rem;
+}
+
+.office-panel-header {
+  align-items: center;
+  padding: 0.9rem 1rem;
+}
+
+.office-panel-count {
+  min-width: 1.6rem;
+  justify-content: center;
+  padding: 0.36rem 0.48rem;
+  color: var(--office-accent);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+}
+
+.office-activity-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.55rem;
+  list-style: none;
+}
+
+.office-activity-item {
+  min-width: 0;
+}
+
+.office-activity-button {
+  width: 100%;
+  min-height: 3.5rem;
+  justify-content: flex-start !important;
+  padding: 0.45rem !important;
+  border-radius: 0.7rem !important;
+  text-align: left !important;
+}
+
+.office-activity-button__inner {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 2.25rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.office-activity-button [data-aiteam-avatar="true"] {
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+}
+
+.office-activity-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.office-activity-status {
+  font-size: 0.62rem;
+}
+
+.office-activity-task {
+  font-size: 0.66rem;
+}
+
+.office-detail-panel {
+  padding-bottom: 1rem;
+}
+
+.office-detail-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.office-detail-identity [data-aiteam-avatar="true"] {
+  width: 3.5rem !important;
+  height: 3.5rem !important;
+  flex: 0 0 auto;
+  border-radius: 0.8rem;
+}
+
+.office-detail-identity h3 {
+  margin: 0;
+}
+
+.office-detail-status {
+  margin-top: 0.35rem;
+}
+
+.office-detail-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0 1rem 0.9rem;
+}
+
+.office-detail-list > div {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--office-line);
+}
+
+.office-detail-list dt {
+  color: var(--office-muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.office-detail-list dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--office-ink);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.office-detail-panel > p {
+  margin: 0 1rem;
+}
+
+.office-feed-panel {
+  padding-bottom: 0.8rem;
+}
+
+.office-feed-panel [data-testid="office-scheduled-jobs-empty"],
+.office-feed-panel [data-testid="office-feed-unavailable"] {
+  margin: 0.65rem;
+}
+
+.office-inline-status {
+  margin: 0.8rem 1rem;
+  color: var(--office-muted);
+  font-size: 0.72rem;
+}
+
+.office-job-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.65rem;
+  list-style: none;
+}
+
+.office-job-card {
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--office-line);
+  border-radius: 0.7rem;
+  background: var(--office-surface-muted);
+}
+
+.office-job-card__title {
+  display: block;
+  overflow: hidden;
+  color: var(--office-ink);
+  font-size: 0.76rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.office-job-card__meta {
+  display: grid;
+  gap: 0.16rem;
+  margin-top: 0.35rem;
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.61rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.office-job-card__tag {
+  display: inline-block;
+  margin-bottom: 0.25rem;
+  color: var(--office-accent);
+  font-size: 0.57rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.office-data-caption {
+  display: block;
+  color: var(--office-muted);
+  font-family: var(--font-family-code, ui-monospace, monospace);
+  font-size: 0.62rem;
+  line-height: 1.4;
+}
+
+@keyframes office-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.32;
+  }
+}
+
+@keyframes office-screen-flicker {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+
+  35% {
+    opacity: 1;
+  }
+
+  63% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes office-working-bob {
+  0%,
+  100% {
+    transform: translate(-50%, 0);
+  }
+
+  50% {
+    transform: translate(-50%, -0.14rem);
+  }
+}
+
+@keyframes office-bubble-rise {
+  0%,
+  100% {
+    opacity: 0.86;
+    transform: translate(-50%, 0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -0.24rem);
+  }
+}
+
+@keyframes office-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--office-ready) 20%, transparent);
+    transform: scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 0.28rem color-mix(in srgb, var(--office-ready) 0%, transparent);
+    transform: scale(1.06);
+  }
+}
+
+@keyframes office-attention-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .office-page {
+    --office-line: var(--color-border-emphasized, #777);
+  }
+
+  .office-workstation__label,
+  .office-job-card,
+  .office-metric,
+  .office-scene-card,
+  .office-panel {
+    box-shadow: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .office-workstation__label,
+  .office-job-card,
+  .office-scene-empty {
+    background: var(--office-surface);
+  }
+
+  .office-scene-empty {
+    opacity: 0.98;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-page *,
+  .office-page *::before,
+  .office-page *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .office-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .office-side-column {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+@media (max-width: 680px) {
+  .office-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .office-scene-header {
+    flex-wrap: wrap;
+  }
+
+  .office-scene-header > .office-scene-count {
+    margin-top: 0;
+  }
+
+  .office-side-column {
+    grid-template-columns: 1fr;
+  }
+
+  .office-scene-viewport {
+    min-height: 32rem;
+  }
+
+  .office-station-item {
+    width: min(30%, 10.5rem);
+  }
+}
+
+@media (max-width: 460px) {
+  .office-page-header {
+    align-items: flex-start;
+  }
+
+  .office-page-header > :last-child {
+    width: 100%;
+  }
+
+  .office-page-header > :last-child > * {
+    flex: 1 1 auto;
+  }
+
+  .office-updated {
+    text-align: right;
+  }
+
+  .office-scene-viewport {
+    min-height: 35rem;
+  }
+
+  .office-station-item {
+    width: min(38%, 9.5rem);
+  }
+
+  .office-workstation__visual {
+    height: 7.2rem;
+  }
+
+  .office-workstation__bubble {
+    max-width: 130%;
+    font-size: 0.56rem;
+  }
+
+  .office-legend-note {
+    width: 100%;
+    margin-left: 0;
+  }
+}

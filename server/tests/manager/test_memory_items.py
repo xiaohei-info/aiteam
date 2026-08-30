@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import httpx
@@ -11,7 +12,7 @@ from manager_service.hindsight_client import HindsightClient, HindsightSettings,
 from manager_service.memory_service import MemoryService
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
-from shared.errors import Forbidden
+from shared.errors import AppError, Forbidden
 
 
 def _route_client(service):
@@ -45,6 +46,26 @@ def _snapshot(employee_id: str = "employee-a") -> EmployeeExecutionSnapshot:
         snapshot_version="snapshot-a",
         memory_policy={"enabled": True},
     )
+
+
+def test_memory_service_update_sanitizes_payload_and_response():
+    snapshot = Mock()
+    snapshot.generate.return_value = _snapshot()
+    backend = Mock()
+    backend.update.return_value = {"metadata": {"api_key": "hidden", "label": "ok"}}
+
+    result = MemoryService(snapshot=snapshot, backend=backend).update(
+        _ctx(), employee_id="employee-a", memory_id="memory-a", payload={"text": "updated", "api_key": "secret"},
+    )
+
+    assert result == {"metadata": {"api_key": "[REDACTED]", "label": "ok"}}
+    backend.update.assert_called_once_with(_ctx(), employee_id="employee-a", memory_id="memory-a", payload={"text": "updated", "api_key": "[REDACTED]"})
+
+
+def test_memory_analytics_without_employee_reader_is_explicitly_unconfigured():
+    result = MemoryService(snapshot=Mock(), backend=Mock()).analytics(_ctx())
+    assert result["status"] == "not_configured"
+    assert result["employees"] == []
 
 
 def test_memory_route_denies_same_tenant_employee_before_hindsight():
@@ -128,6 +149,82 @@ def test_memory_service_denies_same_tenant_employee_without_current_grant():
     )
 
 
+def test_memory_service_accepts_native_hindsight_type_field():
+    snapshot = Mock()
+    snapshot.generate.return_value = _snapshot()
+    backend = Mock()
+    backend.list.return_value = {"items": [{"id": "memory-a", "text": "fact", "type": "observation"}], "total": 1}
+
+    result = MemoryService(snapshot=snapshot, backend=backend).list(
+        _ctx(), employee_id="employee-a", query=None, limit=10, offset=0,
+    )
+
+    assert result["items"][0]["category"] == "observation"
+
+
+def test_memory_analytics_filters_denied_and_reports_partial_upstream():
+    class Snapshot:
+        def generate(self, ctx, *, member_id, employee_id, employee_version=None):
+            return _snapshot(employee_id)
+    class Employees:
+        def list_all(self, ctx):
+            return [SimpleNamespace(employee_id="e1", display_name="One"), SimpleNamespace(employee_id="e2", display_name="Two")]
+
+    class Backend:
+        def stats(self, ctx, *, employee_id):
+            return {}
+        def list(self, ctx, *, employee_id, query, limit, offset):
+            if employee_id == "e1":
+                raise HindsightUnavailable("down")
+            return {"items": [{"id": "m2", "text": "ok", "type": "world"}], "total": 1}
+
+    result = MemoryService(snapshot=Snapshot(), backend=Backend(), employee_reader=Employees()).analytics(
+        TenantContext(tenant_id="tenant-a", user_id="member-a", roles=["owner"]),
+    )
+    assert result["status"] == "partial"
+    assert result["employee_count"] == 1
+    assert result["unavailable_employee_count"] == 1
+
+
+def test_memory_analytics_skips_empty_employee_ids_and_forbidden_members():
+    class Employees:
+        def list_all(self, ctx):
+            return [Mock(employee_id=""), SimpleNamespace(employee_id="e1", display_name="Hidden")]
+
+    class Backend:
+        def list(self, *args, **kwargs):
+            raise Forbidden("denied")
+
+    class Snapshot:
+        def generate(self, ctx, *, member_id, employee_id, employee_version=None):
+            return _snapshot(employee_id)
+
+    result = MemoryService(snapshot=Snapshot(), backend=Backend(), employee_reader=Employees()).analytics(
+        TenantContext(tenant_id="tenant-a", user_id="member-a", roles=["member"]),
+    )
+    assert result["employees"] == []
+
+
+def test_memory_analytics_reraises_unexpected_app_error():
+    class Snapshot:
+        def generate(self, ctx, *, member_id, employee_id, employee_version=None):
+            return _snapshot(employee_id)
+    class Employees:
+        def list_all(self, ctx):
+            return [SimpleNamespace(employee_id="e1", display_name="One")]
+
+    class Backend:
+        def list(self, *args, **kwargs):
+            raise AppError("boom")
+        def stats(self, *args, **kwargs):
+            return {}
+
+    with pytest.raises(AppError):
+        MemoryService(snapshot=Snapshot(), backend=Backend(), employee_reader=Employees()).analytics(
+            TenantContext(tenant_id="tenant-a", user_id="member-a", roles=["owner"]),
+        )
+
+
 def test_memory_service_normalizes_hindsight_list_without_metadata_leaks():
     snapshot = Mock()
     snapshot.generate.return_value = _snapshot()
@@ -150,6 +247,16 @@ def test_memory_service_normalizes_hindsight_list_without_metadata_leaks():
         "created_at": "2026-08-26T00:00:00Z", "last_used_at": None, "state": "valid",
     }]
     assert "cwd" not in result["items"][0]
+
+
+def test_normalize_memory_list_discards_malformed_rows_and_defaults_total():
+    from manager_service.memory_service import normalize_memory_list
+
+    result = normalize_memory_list({"items": [None, {"id": "", "text": "bad"}, {"id": "ok", "text": "good", "importance": float("nan")}]}, employee_id="e", limit=10, offset=0)
+    assert result["total"] == 1
+    assert result["items"][0]["memory_id"] == "ok"
+    assert result["items"][0]["importance"] is None
+    assert normalize_memory_list({"items": "bad"}, employee_id="e", limit=10, offset=0)["items"] == []
 
 
 def test_memory_delete_binds_memory_id_to_authorized_employee():

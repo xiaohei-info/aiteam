@@ -88,6 +88,19 @@ class RagIngestionResult:
 
 
 @dataclass(frozen=True)
+class RagDocumentInfo:
+    """Bounded, non-secret LightRAG document metadata for Manager analytics."""
+
+    upstream_document_id: str
+    file_path: str
+    status: str
+    chunks_count: int | None = None
+    content_length: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+@dataclass(frozen=True)
 class RagDeletionResult:
     """LightRAG 1.5.6 deletion acknowledgement.
 
@@ -102,6 +115,8 @@ class RagDeletionResult:
 
 class RagIngestionPort(Protocol):
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult: ...
+
+    def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]: ...
 
     def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None: ...
 
@@ -159,20 +174,48 @@ def _validated_aliases(values: Any) -> set[str]:
 
 
 def _document_identity(document: Any, *, workspace: str) -> tuple[str, str]:
+    info = _document_info(document, workspace=workspace)
+    return info.upstream_document_id, info.file_path
+
+
+def _document_info(document: Any, *, workspace: str) -> RagDocumentInfo:
     if not isinstance(document, dict):
-        raise RagIngestionUnavailable("knowledge deletion unavailable")
+        raise RagIngestionUnavailable("knowledge analytics unavailable")
     document_id = document.get("id")
     file_path = document.get("file_path")
     if not _valid_document_alias(document_id) or not _valid_document_alias(file_path):
-        raise RagIngestionUnavailable("knowledge deletion unavailable")
+        raise RagIngestionUnavailable("knowledge analytics unavailable")
     metadata = document.get("metadata")
     for source in (document, metadata if isinstance(metadata, dict) else {}):
         for field_name in ("workspace", "workspace_id"):
             value = source.get(field_name)
             if value is not None and (not _valid_document_alias(value) or value != workspace):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
-    return document_id, file_path
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+    status = document.get("status")
+    # Deletion reconciliation historically only required id/file_path. Keep
+    # that contract while representing status-less upstream rows as unknown.
+    if not isinstance(status, str) or not status.strip() or len(status) > 128 or any(char in status for char in "\x00\r\n"):
+        status = "unknown"
 
+    def nonnegative_int(value: Any) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    def safe_timestamp(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or len(value) > 128 or any(char in value for char in "\x00\r\n"):
+            return None
+        return value
+
+    return RagDocumentInfo(
+        upstream_document_id=document_id,
+        file_path=file_path,
+        status=status.strip().casefold(),
+        chunks_count=nonnegative_int(document.get("chunks_count")),
+        content_length=nonnegative_int(document.get("content_length")),
+        created_at=safe_timestamp(document.get("created_at")),
+        updated_at=safe_timestamp(document.get("updated_at")),
+    )
 
 class LightRagIngestionClient:
     """Bounded synchronous client for LightRAG's text ingestion API."""
@@ -257,6 +300,24 @@ class LightRagIngestionClient:
         except (httpx.HTTPError, ValueError, TypeError, UnicodeError) as exc:
             logger.warning("LightRAG ingestion request failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
+
+    def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]:
+        """List only validated metadata from the Manager's fixed workspace."""
+        settings = self.settings
+        if not isinstance(workspace, str) or not workspace.strip():
+            raise RagIngestionUnavailable("knowledge analytics unavailable")
+        try:
+            if settings is None:
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            instance = self.instance_for_workspace(workspace)
+            timeout = settings.request_timeout_ms / 1000
+            headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+            return list(self._paginated_documents(instance, headers=headers, timeout=timeout))
+        except RagIngestionUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
+            logger.warning("LightRAG document analytics failed: %s", type(exc).__name__)
+            raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
 
     def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
         """Resolve Manager/source aliases to one workspace-local LightRAG id."""
@@ -376,10 +437,24 @@ class LightRagIngestionClient:
         timeout: float,
     ):
         """Yield only validated ids from the bounded Manager workspace listing."""
+        try:
+            for document in self._paginated_documents(instance, headers=headers, timeout=timeout):
+                yield document.upstream_document_id, document.file_path
+        except RagIngestionUnavailable as exc:
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+    def _paginated_documents(
+        self,
+        instance: RagInstance,
+        *,
+        headers: dict[str, str],
+        timeout: float,
+    ):
+        """Yield bounded LightRAG metadata after validating pagination and scope."""
         page = 1
         while True:
             if page > _MAX_PAGINATED_PAGES:
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             response = self._http.post(
                 f"{instance.url}/documents/paginated",
                 headers=headers,
@@ -392,23 +467,23 @@ class LightRagIngestionClient:
                 timeout=timeout,
             )
             if response.status_code != 200:
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             payload = _response_json(
                 response,
                 max_bytes=_MAX_PROBE_RESPONSE_BYTES,
-                unavailable_message="knowledge deletion unavailable",
+                unavailable_message="knowledge analytics unavailable",
             )
             documents = payload.get("documents")
             pagination = payload.get("pagination")
             if not isinstance(documents, list) or not isinstance(pagination, dict):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             response_page = pagination.get("page")
             if response_page is not None and (
                 not isinstance(response_page, int)
                 or isinstance(response_page, bool)
                 or response_page != page
             ):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             response_page_size = pagination.get("page_size", _MAX_PAGINATED_PAGE_SIZE)
             if (
                 not isinstance(response_page_size, int)
@@ -417,9 +492,9 @@ class LightRagIngestionClient:
                 or response_page_size > _MAX_PAGINATED_PAGE_SIZE
                 or len(documents) > response_page_size
             ):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
-            identities = [
-                _document_identity(document, workspace=instance.workspace)
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            records = [
+                _document_info(document, workspace=instance.workspace)
                 for document in documents
             ]
             total_pages = pagination.get("total_pages")
@@ -429,39 +504,39 @@ class LightRagIngestionClient:
                 or total_pages < 0
                 or total_pages > _MAX_PAGINATED_PAGES
             ):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             total_count = pagination.get("total_count")
             if total_count is not None and (
                 not isinstance(total_count, int)
                 or isinstance(total_count, bool)
                 or total_count < 0
             ):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             has_next = pagination.get("has_next")
             if has_next is not None and not isinstance(has_next, bool):
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
             if total_pages is not None and total_count is not None:
                 expected_pages = (
                     0 if total_count == 0
                     else (total_count + response_page_size - 1) // response_page_size
                 )
                 if total_pages != expected_pages:
-                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    raise RagIngestionUnavailable("knowledge analytics unavailable")
             if total_pages is not None:
                 more = page < total_pages
                 if has_next is not None and has_next != more:
-                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    raise RagIngestionUnavailable("knowledge analytics unavailable")
             elif total_count is not None:
                 more = page * response_page_size < total_count
                 if has_next is not None and has_next != more:
-                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    raise RagIngestionUnavailable("knowledge analytics unavailable")
             elif has_next is not None:
                 more = has_next
             else:
                 more = len(documents) == response_page_size
             if page == _MAX_PAGINATED_PAGES and more:
-                raise RagIngestionUnavailable("knowledge deletion unavailable")
-            yield from identities
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            yield from records
             if not more:
                 return
             page += 1
@@ -543,6 +618,7 @@ __all__ = [
     "LightRagIngestionClient",
     "LightRagIngestionSettings",
     "RagDeletionResult",
+    "RagDocumentInfo",
     "RagIngestionPort",
     "RagIngestionResult",
     "RagIngestionUnavailable",

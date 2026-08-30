@@ -1,7 +1,7 @@
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { TextArea } from "@astryxdesign/core/TextArea";
-import { TextInput } from "@astryxdesign/core/TextInput";
 import { Selector } from "@astryxdesign/core/Selector";
+import { AvatarFileInput } from "../AvatarFileInput";
 
 export interface ExpertTemplateFieldsProps {
   avatarUrl: string;
@@ -36,14 +36,7 @@ export function ExpertTemplateFields({
 }: ExpertTemplateFieldsProps) {
   return (
     <FormLayout>
-      <TextInput
-        label="头像 (avatar_url)"
-        value={avatarUrl}
-        onChange={onAvatarUrlChange}
-        placeholder="https://..."
-        isOptional
-        isDisabled={disabled}
-      />
+      <AvatarFileInput value={avatarUrl} onChange={onAvatarUrlChange} disabled={disabled} />
       <TextArea
         label="系统提示词 (system_prompt)"
         value={systemPrompt}

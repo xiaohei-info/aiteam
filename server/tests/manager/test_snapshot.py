@@ -101,6 +101,7 @@ def _full_body() -> EmployeeConfigIn:
         knowledge_refs=["ks_default"],
         connector_refs=["slack"],
         memory_policy={"seed": "记住用户偏好"},
+        department_ids=["d-eng"],
     )
 
 
@@ -298,6 +299,7 @@ def test_generate_maps_all_fields():
     assert snap.knowledge_refs == []  # relation binding is the sole snapshot source
     assert snap.connector_refs == ["slack"]
     assert snap.memory_policy == {"seed": "记住用户偏好"}
+    assert snap.department_ids == ["d-eng"]
     assert snap.snapshot_version  # 非空
 
 

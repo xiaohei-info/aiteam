@@ -59,6 +59,7 @@ class _FakeRepo:
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
             status="draft",
+            department_ids=list(kw.get("department_ids") or []),
         )
         self._bucket(ctx)[row.employee_id] = row
         return row
@@ -86,6 +87,7 @@ class _FakeRepo:
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"],
             version=old.version + 1, status=old.status,
             archive_reason=old.archive_reason, archived_at=old.archived_at,
+            department_ids=list(kw["department_ids"]) if kw.get("department_ids") is not None else old.department_ids,
         )
         b[employee_id] = row
         return row
@@ -125,6 +127,16 @@ def test_crud_roundtrip_and_version_increment():
     svc.delete(ctx, employee_id=created.employee_id)
     with pytest.raises(NotFound):
         svc.get(ctx, employee_id=created.employee_id)
+
+
+def test_department_ids_roundtrip_and_update():
+    svc = EmployeeConfigService(_FakeRepo())
+    ctx = _ctx("t-a")
+    created = svc.create(_ctx("t-a"), _body(department_ids=["d-1", "d-2"]), employee_slug="exp-1")
+    assert created.department_ids == ["d-1", "d-2"]
+
+    updated = svc.update(ctx, _body(department_ids=["d-3"]), employee_id=created.employee_id)
+    assert updated.department_ids == ["d-3"]
 
 
 def test_cross_tenant_isolation_not_visible():

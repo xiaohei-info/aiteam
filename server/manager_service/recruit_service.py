@@ -158,6 +158,7 @@ class RecruitService:
                 source_template_id=template.template_id,
                 source_template_version=template.version,
                 platform_model_ref=recommended["platform_model_ref"],
+                department_ids=list(req.department_ids),
             )
             row = self._employees.transition_status(
                 ctx, employee_id=row.employee_id, from_status="draft", to_status="active"
@@ -288,6 +289,7 @@ class RecruitService:
                     connector_refs=list(recommended.get("connector_refs", [])),
                     memory_policy=recommended.get("memory_policy"),
                     platform_model_ref=recommended["platform_model_ref"],
+                    department_ids=list(req.department_ids),
                 )
                 created_employee_id = row.employee_id
                 row = self._employees.transition_status(

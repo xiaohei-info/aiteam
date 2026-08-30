@@ -28,6 +28,7 @@ import type {
 export type UpdateExpertTemplateChanges = {
   display_name?: string;
   category?: string;
+  /** New values are local image data URLs; avatar_url remains for Catalog wire compatibility. */
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };

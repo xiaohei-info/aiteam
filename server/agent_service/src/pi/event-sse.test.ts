@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyToolKind, serializePiEvent } from "./event-sse.js";
+import { classifyToolKind, serializePiEntry, serializePiEvent } from "./event-sse.js";
 
 test("Pi SSE serializer keeps bounded ordinary tool summaries without credential/path fields", () => {
   const event = serializePiEvent({
@@ -18,6 +18,24 @@ test("Pi SSE serializer keeps bounded ordinary tool summaries without credential
     partialResult: { output: "partial" },
   });
   assert.equal(serializePiEvent({ type: "unknown_internal_event", body: "secret" } as never), undefined);
+});
+
+test("persisted entries use the same redacted boundary as live events", () => {
+  const entry = serializePiEntry({
+    id: "entry-1",
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "read /private/file with api_key=hidden-value" }],
+      usage: { input: 100, provider: "secret" },
+    },
+    details: { token: "hidden-token", safe: "visible" },
+  });
+  assert.equal(entry?.id, "entry-1");
+  assert(!JSON.stringify(entry).includes("hidden-token"));
+  assert(!JSON.stringify(entry).includes("/private/file"));
+  assert(!JSON.stringify(entry).includes("provider"));
+  assert.equal((entry?.message as { role?: string } | undefined)?.role, "assistant");
 });
 
 test("Pi tool classification covers memory, RAG, and todo tools", () => {

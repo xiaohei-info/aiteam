@@ -22,6 +22,7 @@ import { TemplateLifecycleActions, type TemplateLifecycleAction } from "./Templa
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";
 import { labelToVisibleScope, visibilityLabel } from "./types";
+import { isSafeAvatarDataUrl } from "./avatar";
 import "./catalog.css";
 
 type CatalogRow = CatalogItem & Record<string, unknown>;
@@ -46,7 +47,16 @@ function visibilityText(label: VisibilityLabel): string {
 }
 
 function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
-  return <DigitalEmployeeAvatar name={name} src={src} size={54} />;
+  if (!isSafeAvatarDataUrl(src)) return <DigitalEmployeeAvatar name={name} size={54} />;
+  return (
+    <span
+      data-aiteam-avatar="true"
+      aria-hidden="true"
+      style={{ width: 54, height: 54, display: "inline-flex", overflow: "hidden", flex: "0 0 auto", borderRadius: "999px" }}
+    >
+      <img src={src} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+    </span>
+  );
 }
 
 function ExpertCatalogCard({ item, canWrite, onAction }: {
