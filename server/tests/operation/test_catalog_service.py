@@ -4,8 +4,11 @@
 对端 Manager 用 fake 网关；不写 Manager 租户库（只服务调用）。
 """
 
+import base64
+
 import pytest
 
+from operation_service.catalog_avatar import AVATAR_MAX_BYTES
 from operation_service.catalog_gateway import CatalogManagerGateway
 from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_schemas import (
@@ -97,6 +100,40 @@ def _multi_solution(**kw):
 
 
 # ---- 注册（草稿态，不通知 Manager）----
+
+def test_register_expert_accepts_valid_local_avatar_data(service):
+    avatar = "data:image/png;base64,iVBORw0KGgo="
+    entry = service.register_expert_template(_expert(avatar_url=avatar))
+    assert entry.avatar_url == avatar
+    stored = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
+    assert stored.payload["avatar_url"] == avatar
+
+
+def test_register_expert_rejects_invalid_local_avatar_data(service):
+    with pytest.raises(ValueError, match="avatar"):
+        _expert(avatar_url="data:image/png;base64,not-base64")
+
+
+def test_register_expert_rejects_oversized_local_avatar_data(service):
+    signature = b"\x89PNG\r\n\x1a\n"
+    raw = signature + b"x" * (AVATAR_MAX_BYTES - len(signature) + 1)
+    encoded = base64.b64encode(raw).decode("ascii")
+    with pytest.raises(ValueError, match="too large"):
+        _expert(avatar_url=f"data:image/png;base64,{encoded}")
+
+
+def test_response_omits_invalid_inline_avatar_from_legacy_row(service):
+    service._repo.create(
+        CatalogEntry(
+            catalog_type=CatalogType.EXPERT_TEMPLATE,
+            template_id="legacy-avatar",
+            version="1",
+            display_name="Legacy",
+            payload={"avatar_url": "data:image/png;base64,AAAA"},
+        )
+    )
+    assert service.get_entry(CatalogType.EXPERT_TEMPLATE, "legacy-avatar").avatar_url == ""
+
 
 def test_register_expert_is_draft_and_silent(service, manager):
     entry = service.register_expert_template(_expert())

@@ -9,7 +9,7 @@
  *     CatalogDetailView)
  *
  * 字段对齐 PRD-v2 S02/S03：
- *   - 专家: display_name / category / avatar_url / system_prompt /
+ *   - 专家: display_name / category / avatar_url (local image data URL) / system_prompt /
  *     default_model / skill_ids / tags / description / initial_memories / sort_order
  *   - 行业方案: display_name / description / icon / expert_template_ids /
  *     expert_bindings / coordinator_template_id / coordinator_instructions / tags
@@ -55,6 +55,7 @@ export interface CatalogItem {
 
   // ---- 专家模板字段 ----
   category?: string;
+  /** Backward-compatible Catalog field; new values are validated local-image data URLs. */
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref?: PlatformModelRef;
@@ -79,6 +80,7 @@ export interface RegisterExpertTemplate {
   template_id?: string;
   display_name: string;
   category?: string;
+  /** Optional local image encoded as a validated data URL for the legacy Catalog field. */
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref: PlatformModelRef;

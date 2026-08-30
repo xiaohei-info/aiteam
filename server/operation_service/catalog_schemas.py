@@ -12,11 +12,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
+
+from .catalog_avatar import AVATAR_MAX_DATA_URL_LENGTH, validate_avatar_value
 
 
 class ExpertBinding(BaseModel):
@@ -40,6 +42,8 @@ class RegisterExpertTemplateRequest(BaseModel):
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
     platform_model_ref / platform_skill_refs / description。
     创建专家模板的最小字段：名称、分类、系统提示词、默认模型、岗位描述；头像可选。
+    ``avatar_url`` 保留为 Catalog 兼容字段；新头像必须是经过校验的本地图片 data URL，
+    旧 HTTP/path 值仅为兼容历史 API 数据。
     技能只接受 Operator 内部平台技能的固定版本引用，未选择时为空。
     """
 
@@ -53,8 +57,17 @@ class RegisterExpertTemplateRequest(BaseModel):
     # is_published 不在注册请求中；注册即草稿，发布由单独发布动作完成（05 F03）。
     display_name: str = Field(min_length=1, description="专家名称（PRD: name）")
     category: str = Field(min_length=1, description="分类（市场营销/财务分析/…）(PRD: category, 必填)")
-    avatar_url: str = Field(default="", description="可选头像图片 URL")
+    avatar_url: str = Field(
+        default="",
+        max_length=AVATAR_MAX_DATA_URL_LENGTH,
+        description="可选本地头像图片 data URL；兼容历史 HTTP/path 值，不接受其他 URI scheme",
+    )
     system_prompt: str = Field(min_length=1, description="岗位描述系统提示词（纯文本）(PRD: system_prompt, 必填)")
+
+    @field_validator("avatar_url")
+    @classmethod
+    def validate_avatar(cls, value: str) -> str:
+        return validate_avatar_value(value)
     platform_model_ref: PlatformModelRef = Field(description="Operator 已发布平台 Provider/模型固定引用")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection; use platform_skill_refs")
@@ -120,7 +133,12 @@ class UpdateExpertTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = None
     category: str | None = None
-    avatar_url: str | None = None
+    avatar_url: str | None = Field(default=None, max_length=AVATAR_MAX_DATA_URL_LENGTH)
+
+    @field_validator("avatar_url")
+    @classmethod
+    def validate_avatar(cls, value: str | None) -> str | None:
+        return None if value is None else validate_avatar_value(value)
     system_prompt: str | None = None
     platform_model_ref: PlatformModelRef | None = None
     platform_skill_refs: list[PlatformSkillRef] | None = None
@@ -153,7 +171,10 @@ class CatalogEntryResponse(BaseModel):
     status: CatalogStatus
     visible_scope: dict[str, Any] | None = Field(default=None, description="目录可见范围配置。")
     category: str = Field(default="")
-    avatar_url: str = Field(default="")
+    avatar_url: str = Field(
+        default="",
+        description="经校验的本地头像图片 data URL；兼容历史 HTTP/path 值",
+    )
     system_prompt: str = Field(default="")
     platform_model_ref: PlatformModelRef | None = None
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
