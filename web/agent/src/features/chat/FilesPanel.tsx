@@ -174,9 +174,9 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
             {preview.kind === "text" ? (
               <pre data-file-preview="text">{preview.text}{preview.truncated ? "\n\n[预览已截断，请下载完整文件]" : ""}</pre>
             ) : preview.kind === "image" ? (
-              <img data-file-preview="image" src={preview.url} alt={preview.file.filename} />
+              <img data-file-preview="image" data-testid="file-preview-image" src={preview.url} alt={preview.file.filename} />
             ) : preview.kind === "pdf" ? (
-              <iframe data-file-preview="pdf" title={preview.file.filename} src={preview.url} sandbox="" />
+              <iframe data-file-preview="pdf" data-testid="file-preview-pdf" title={preview.file.filename} src={preview.url} sandbox="" />
             ) : (
               <Text type="supporting">此文件类型不支持安全预览，请下载后查看。</Text>
             )}

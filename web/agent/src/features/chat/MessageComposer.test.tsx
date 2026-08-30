@@ -9,10 +9,12 @@ vi.mock("../../lib/app-context", () => ({
 }));
 vi.mock("./useChatApi", () => ({
   abortPrompt: vi.fn().mockResolvedValue(true),
-  deleteAttachment: vi.fn(),
+  attachmentMimeType: vi.fn((file: { type: string }) => file.type),
+  deleteAttachment: vi.fn().mockResolvedValue(undefined),
+  isSupportedAttachmentMime: vi.fn((mime: string) => mime.startsWith("text/")),
   makeIdempotencyKey: () => "key",
   submitPrompt: vi.fn(),
-  uploadAttachment: vi.fn(),
+  uploadAttachment: vi.fn().mockResolvedValue({ id: "uploaded", kind: "attachment", filename: "notes.txt", mime_type: "text/plain", conversation_id: "c1", tenant_id: "t1", member_id: "m1", byte_size: 1, sha256: "hash", created_at: "2026-01-01T00:00:00Z", referenced_at: null }),
 }));
 vi.mock("../group/useGroupApi", () => ({ listLoadedExperts: vi.fn(() => new Promise(() => undefined)) }));
 
@@ -137,6 +139,20 @@ describe("MessageComposer runtime state", () => {
       "group-1",
       { text: "@测试员 请分析", attachment_ids: [], mentions: ["tester"] },
       "key",
+    ));
+  });
+
+  it("accepts supported files, rejects unsupported files, and sends uploaded ids", async () => {
+    const { container } = render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const good = new File(["hello"], "notes.txt", { type: "text/plain" });
+    const bad = new File(["binary"], "program.bin", { type: "application/octet-stream" });
+    fireEvent.change(input, { target: { files: [good, bad] } });
+    expect(await screen.findByText("仅支持受支持的本地文件，单个文件不超过 5 MiB")).toBeInTheDocument();
+    expect(screen.getByText("notes.txt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(submitPrompt).toHaveBeenCalledWith(
+      {}, "c1", { text: "\n\n[附件: notes.txt]", attachment_ids: ["uploaded"] }, "key",
     ));
   });
 

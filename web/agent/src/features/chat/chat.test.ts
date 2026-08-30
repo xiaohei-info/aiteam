@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
 import { ApiError } from "@aiteam/shared/api-client";
-import { createConversation, deleteAttachment, downloadLocalFile, getConversationContext, getConversationRuntimeState, getEntries, listConversations, listLocalFiles, setConversationState, setConversationThinkingLevel, submitPrompt, subscribePiEvents, type LocalFile } from "./useChatApi";
+import { attachmentMimeType, createConversation, deleteAttachment, downloadLocalFile, getConversationContext, getConversationRuntimeState, getEntries, isSupportedAttachmentMime, listConversations, listLocalFiles, setConversationState, setConversationThinkingLevel, submitPrompt, subscribePiEvents, type LocalFile, uploadAttachment } from "./useChatApi";
 import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
 afterEach(() => {
@@ -41,6 +41,18 @@ describe("Pi chat contract", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/context", expect.objectContaining({ method: "PATCH" }));
   });
 
+  it("normalizes model capabilities and attachment MIME fallbacks", async () => {
+    const context = await getConversationContext(client(async () => new Response(JSON.stringify({ data: {
+      conversation_id: "c1", employee_id: "e1", model: null, used_tokens: null, context_window: 1000,
+      percentage: null, thinking_level: "off", available_thinking_levels: [], prompting: false,
+    } }), { headers: { "content-type": "application/json" } })), "c1");
+    expect(context?.available_thinking_levels).toEqual(["off"]);
+    expect(attachmentMimeType({ name: "report.docx", type: "" })).toContain("wordprocessingml");
+    expect(attachmentMimeType({ name: "unknown.bin", type: "application/octet-stream" })).toBe("application/octet-stream");
+    expect(isSupportedAttachmentMime("text/plain")).toBe(true);
+    expect(isSupportedAttachmentMime("application/x-custom")).toBe(false);
+  });
+
   it("lists authenticated attachments and artifacts and downloads through the local client", async () => {
     const attachment: LocalFile = { id: "a1", conversation_id: "c1", tenant_id: "t1", member_id: "m1", kind: "attachment", filename: "notes.md", mime_type: "text/markdown", byte_size: 5, sha256: "a", created_at: "2026-01-01", referenced_at: null };
     const artifact: LocalFile = { ...attachment, id: "f1", kind: "artifact", filename: "result.ts", mime_type: "text/typescript" };
@@ -54,6 +66,19 @@ describe("Pi chat contract", () => {
     const response = await downloadLocalFile(api, artifact);
     await expect(response.text()).resolves.toBe("const result = true;");
     expect(fetchMock).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/artifacts/f1", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("rejects oversized or unsupported uploads and detects empty upload responses", async () => {
+    const oversized = { name: "big.txt", type: "text/plain", size: 5 * 1024 * 1024 + 1 } as File;
+    await expect(uploadAttachment(client(async () => new Response()), "c1", oversized)).rejects.toThrow("5 MiB");
+    const unsupported = { name: "run.exe", type: "application/x-msdownload", size: 1 } as File;
+    await expect(uploadAttachment(client(async () => new Response()), "c1", unsupported)).rejects.toThrow("Unsupported");
+    const empty = {
+      name: "note.txt", type: "text/plain", size: 5,
+      arrayBuffer: async () => new TextEncoder().encode("hello").buffer,
+    } as unknown as File;
+    const api = client(async () => new Response(JSON.stringify({ data: null }), { headers: { "content-type": "application/json" } }));
+    await expect(uploadAttachment(api, "c1", empty)).rejects.toThrow("empty response");
   });
 
   it("reads runtime prompting state without persisting it and updates the durable state separately", async () => {

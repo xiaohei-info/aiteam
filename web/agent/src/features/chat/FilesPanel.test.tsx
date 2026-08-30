@@ -32,15 +32,20 @@ describe("FilesPanel", () => {
   it("shows authenticated attachments and generated artifacts with safe text preview and download actions", async () => {
     const attachment = file({});
     const artifact = file({ id: "f1", kind: "artifact", filename: "result.ts", mime_type: "text/typescript" });
+    const image = file({ id: "f2", kind: "artifact", filename: "chart.png", mime_type: "image/png" });
+    const pdf = file({ id: "f3", kind: "artifact", filename: "report.pdf", mime_type: "application/pdf" });
+    const binary = file({ id: "f4", kind: "artifact", filename: "deck.pptx", mime_type: "application/vnd.ms-powerpoint" });
     const stream = () => new Response(new ReadableStream({ start(controller) { controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/attachments")) return new Response(JSON.stringify({ data: [attachment], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
-      if (url.endsWith("/artifacts")) return new Response(JSON.stringify({ data: [artifact], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+      if (url.endsWith("/artifacts")) return new Response(JSON.stringify({ data: [artifact, image, pdf, binary], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
       if (url.endsWith("/events")) return stream();
       return new Response("export const answer = 42;", { headers: { "content-type": "text/typescript" } });
     }) as typeof fetch;
     const client = new AgentApiClient({ baseUrl: "http://agent.test", fetch: globalThis.fetch });
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:test") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
 
     render(<FilesPanel client={client} conversationId="c1" />);
 
@@ -50,5 +55,14 @@ describe("FilesPanel", () => {
     expect(await screen.findByText("export const answer = 42;")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "下载 result.ts" }).at(-1)!);
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith("http://agent.test/api/agent/conversations/c1/artifacts/f1", expect.objectContaining({ method: "GET" })));
+
+    fireEvent.click(screen.getByRole("button", { name: "查看 chart.png" }));
+    expect(await screen.findByTestId("file-preview-image")).toHaveAttribute("src", "blob:test");
+    fireEvent.click(screen.getByRole("button", { name: "关闭预览" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看 report.pdf" }));
+    expect(await screen.findByTestId("file-preview-pdf")).toHaveAttribute("src", "blob:test");
+    fireEvent.click(screen.getByRole("button", { name: "关闭预览" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看 deck.pptx" }));
+    expect(await screen.findByText("此文件类型不支持安全预览，请下载后查看。")).toBeInTheDocument();
   });
 });
