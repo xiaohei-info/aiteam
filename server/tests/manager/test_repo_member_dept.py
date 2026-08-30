@@ -100,14 +100,17 @@ class TestUpdateDepartment:
 
 
 class TestDeleteDepartment:
-    def test_deleted_returns_true(self):
+    def test_deleted_returns_true_and_clears_denormalized_assignments(self):
         router = FakeRouter()
-        router.queue(FakeCursor(rowcount=1))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=1))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="d-1") is True
+        assert len(router.executed) == 5
+        assert all("department_ids" in sql for sql, _ in router.executed[:3])
+        assert "knowledge_space_binding" in router.executed[3][0]
 
     def test_not_found_returns_false(self):
         router = FakeRouter()
-        router.queue(FakeCursor(rowcount=0))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=0))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="x") is False
 
 

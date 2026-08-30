@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from manager_service.employee_config_repository import EmployeeConfigRepository
+from manager_service.employee_config_repository import EmployeeConfigRepository, _row_to_config
 
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
@@ -12,6 +12,10 @@ def _row(department_ids=None):
         "emp-1", "expert", "专家", "persona", "model", "provider", "deep", 60,
         [], [], [], [], None, 2, "active", None, None, None, department_ids or [],
     )
+
+
+def test_legacy_rows_without_department_ids_default_to_empty():
+    assert _row_to_config(_row()[:-1]).department_ids == []
 
 
 def test_create_and_update_carry_department_ids():

@@ -630,6 +630,7 @@ test("SessionHost exposes local context HUD state, persists thinking changes, an
       writeFileSync(join(workspace, "generated.ts"), "export const answer = 42;\n");
       writeFileSync(join(workspace, ".env"), "API_KEY=must-not-capture\n");
       writeFileSync(join(workspace, "notes.ts"), "const api_key = 'sk-secret-value';\n");
+      writeFileSync(join(workspace, "config.json"), JSON.stringify({ apiKey: "0123456789" }));
       return fauxAssistantMessage("done");
     }]);
     await host.prompt("conversation-1", "generate", undefined, caller);

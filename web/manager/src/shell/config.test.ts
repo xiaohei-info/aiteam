@@ -186,7 +186,6 @@ describe("manager shell config", () => {
     expect(vm.nav.map((n) => n.id)).toEqual([
       "departments",
       "solutions",
-      "memory",
       "knowledge",
       "billing",
       "recharge",
@@ -204,7 +203,6 @@ describe("manager shell config", () => {
     expect(vm.nav.map((n) => n.id)).toEqual([
       "departments",
       "solutions",
-      "memory",
       "knowledge",
       "settings",
     ]);

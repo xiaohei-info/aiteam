@@ -100,6 +100,16 @@ class MemoryEmployeeAnalyticsOut(BaseModel):
     latest_used_at: str | None = None
     average_importance: float | None = None
     max_importance: float | None = None
+    total_nodes: int | None = Field(default=None, ge=0)
+    total_links: int | None = Field(default=None, ge=0)
+    total_documents: int | None = Field(default=None, ge=0)
+    total_observations: int | None = Field(default=None, ge=0)
+    pending_operations: int | None = Field(default=None, ge=0)
+    failed_operations: int | None = Field(default=None, ge=0)
+    pending_consolidation: int | None = Field(default=None, ge=0)
+    failed_consolidation: int | None = Field(default=None, ge=0)
+    last_memory_write_at: str | None = None
+    last_consolidated_at: str | None = None
     truncated: bool = False
 
 

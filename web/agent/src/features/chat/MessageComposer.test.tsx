@@ -140,6 +140,23 @@ describe("MessageComposer runtime state", () => {
     ));
   });
 
+  it("ignores a stale submission after switching conversations", async () => {
+    let resolveSubmit: ((value: unknown) => void) | undefined;
+    (submitPrompt as ReturnType<typeof vi.fn>).mockReturnValueOnce(new Promise((resolve) => { resolveSubmit = resolve; }));
+    const onSent = vi.fn();
+    const onPromptingChange = vi.fn();
+    const view = render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={onPromptingChange} onSent={onSent} />);
+    const input = screen.getByLabelText("消息内容");
+    fireEvent.input(input, { target: { textContent: "old prompt" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(submitPrompt).toHaveBeenCalled());
+
+    view.rerender(<MessageComposer conversationId="c2" isPrompting={false} onPromptingChange={onPromptingChange} onSent={onSent} />);
+    resolveSubmit?.({ accepted: true });
+    await waitFor(() => expect(screen.getByLabelText("消息内容")).not.toHaveTextContent("old prompt"));
+    expect(onSent).not.toHaveBeenCalled();
+  });
+
   it("locks input, shows the compact running hint, and replaces send with terminate", async () => {
     const onPromptingChange = vi.fn();
     const view = render(

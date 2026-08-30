@@ -34,6 +34,7 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   const previewUrl = useRef<string | null>(null);
+  const requestGeneration = useRef(0);
 
   const releasePreview = useCallback(() => {
     if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
@@ -42,17 +43,21 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
   }, []);
 
   const loadFiles = useCallback((initial = false) => {
-    let alive = true;
+    const generation = ++requestGeneration.current;
     if (initial) setLoading(true);
     setError(null);
     void listLocalFiles(client, conversationId)
-      .then((items) => { if (alive) setFiles(items); })
-      .catch((cause) => { if (alive) setError(cause instanceof Error ? cause.message : "文件列表加载失败"); })
-      .finally(() => { if (alive && initial) setLoading(false); });
-    return () => { alive = false; };
+      .then((items) => { if (generation === requestGeneration.current) setFiles(items); })
+      .catch((cause) => { if (generation === requestGeneration.current) setError(cause instanceof Error ? cause.message : "文件列表加载失败"); })
+      .finally(() => { if (generation === requestGeneration.current && initial) setLoading(false); });
   }, [client, conversationId]);
 
-  useEffect(() => loadFiles(true), [loadFiles, refreshSignal]);
+  useEffect(() => {
+    requestGeneration.current += 1;
+    releasePreview();
+    return () => { requestGeneration.current += 1; };
+  }, [conversationId, releasePreview]);
+  useEffect(() => { loadFiles(true); }, [loadFiles, refreshSignal]);
 
   useEffect(() => {
     if (!isPrompting) return undefined;
@@ -129,7 +134,10 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
       <VStack gap={3}>
         <HStack justify="between" align="center">
           <Heading level={2}>会话文件</Heading>
-          <Badge label={`${files.length}`} variant="neutral" />
+          <HStack gap={1} align="center">
+            <Badge label={`${files.length}`} variant="neutral" />
+            <Button label="刷新文件" variant="ghost" size="sm" isLoading={loading} onClick={() => loadFiles(true)} />
+          </HStack>
         </HStack>
         {error ? <Banner status="error" title={error} /> : null}
         {loading ? <Text type="supporting">加载中…</Text> : null}

@@ -108,9 +108,11 @@ function normalizeConversationContext(value: ConversationContext | null): Conver
   if (!isConversationContext(value)) return null;
   return {
     ...value,
-    available_thinking_levels: Array.isArray(value.available_thinking_levels) && value.available_thinking_levels.length > 0
-      ? value.available_thinking_levels
-      : ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    available_thinking_levels: value.available_thinking_levels === undefined
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+      : value.available_thinking_levels.length > 0
+        ? value.available_thinking_levels
+        : ["off"],
   };
 }
 

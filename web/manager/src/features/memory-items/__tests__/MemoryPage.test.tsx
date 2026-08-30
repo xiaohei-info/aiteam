@@ -143,6 +143,8 @@ describe("MemoryPage 记忆管理", () => {
     await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("删除"));
+    expect(screen.getByRole("button", { name: "确认删除" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith("m1", "emp-1"));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });

@@ -8,7 +8,14 @@ import base64
 
 import pytest
 
-from operation_service.catalog_avatar import AVATAR_MAX_BYTES
+from operation_service.catalog_avatar import (
+    AVATAR_MAX_BYTES,
+    AVATAR_MAX_DATA_URL_LENGTH,
+    canonical_avatar_data_url,
+    normalize_avatar_for_service,
+    safe_avatar_for_response,
+    validate_avatar_value,
+)
 from operation_service.catalog_gateway import CatalogManagerGateway
 from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_schemas import (
@@ -101,6 +108,33 @@ def _multi_solution(**kw):
 
 # ---- 注册（草稿态，不通知 Manager）----
 
+@pytest.mark.parametrize("mime, data", [
+    ("image/jpeg", b"\xff\xd8\xff\x00"),
+    ("image/gif", b"GIF89a\x00"),
+    ("image/webp", b"RIFF\x00\x00\x00\x00WEBP"),
+])
+def test_avatar_signature_variants_are_accepted(mime, data):
+    value = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+    assert canonical_avatar_data_url(value) == value
+
+
+def test_avatar_validation_rejects_empty_noncanonical_and_unsupported_values():
+    with pytest.raises(ValueError, match="too large"):
+        canonical_avatar_data_url("data:image/png;base64," + "A" * AVATAR_MAX_DATA_URL_LENGTH)
+    with pytest.raises(ValueError, match="empty"):
+        canonical_avatar_data_url("data:image/png;base64,")
+    with pytest.raises(ValueError, match="canonical"):
+        canonical_avatar_data_url("data:image/png;base64,iVBORw0KGgo")
+    with pytest.raises(ValueError, match="MIME"):
+        canonical_avatar_data_url("data:image/png;base64,R0lGODlh")
+    with pytest.raises(ValueError, match="legacy"):
+        validate_avatar_value("javascript:alert(1)")
+    with pytest.raises(ValidationProblem, match="string"):
+        normalize_avatar_for_service(None)
+    assert safe_avatar_for_response("data:image/png;base64,AAAA") == ""
+    assert safe_avatar_for_response("https://legacy.example/avatar.png") == "https://legacy.example/avatar.png"
+
+
 def test_register_expert_accepts_valid_local_avatar_data(service):
     avatar = "data:image/png;base64,iVBORw0KGgo="
     entry = service.register_expert_template(_expert(avatar_url=avatar))
@@ -133,6 +167,13 @@ def test_response_omits_invalid_inline_avatar_from_legacy_row(service):
         )
     )
     assert service.get_entry(CatalogType.EXPERT_TEMPLATE, "legacy-avatar").avatar_url == ""
+
+
+def test_update_expert_validates_and_persists_avatar(service):
+    service.register_expert_template(_expert())
+    avatar = "data:image/png;base64,iVBORw0KGgo="
+    updated = service.update_entry(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", {"avatar_url": avatar})
+    assert updated.avatar_url == avatar
 
 
 def test_register_expert_is_draft_and_silent(service, manager):

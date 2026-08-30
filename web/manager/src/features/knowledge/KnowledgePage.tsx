@@ -117,6 +117,7 @@ export function KnowledgePage(): ReactNode {
             <Card><VStack gap={1}><Text type="supporting">文档总数</Text><Heading level={2}>{analytics.document_count}</Heading><Text type="supporting">就绪 {analytics.ready_count} · 处理中 {analytics.processing_count}</Text></VStack></Card>
             <Card><VStack gap={1}><Text type="supporting">索引失败</Text><Heading level={2}>{analytics.failed_count}</Heading><Text type="supporting">已删除 {analytics.deleted_count}</Text></VStack></Card>
             <Card><VStack gap={1}><Text type="supporting">内容规模</Text><Heading level={2}>{formatBytes(analytics.total_bytes)}</Heading><Text type="supporting">文本 {analytics.total_text_chars.toLocaleString()} 字符 · 分块 {analytics.total_chunks.toLocaleString()}</Text></VStack></Card>
+            <Card><VStack gap={1}><Text type="supporting">LightRAG 索引</Text><Heading level={2}>{analytics.upstream_document_count == null ? "—" : "已同步"}</Heading><Text type="supporting">文档 {analytics.upstream_document_count ?? "—"} · 已处理 {analytics.upstream_ready_count ?? "—"} · 失败 {analytics.upstream_failed_count ?? "—"}</Text></VStack></Card>
           </Grid>
           {analytics.daily_activity.length > 0 && (
             <Card>

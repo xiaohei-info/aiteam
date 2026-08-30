@@ -4,8 +4,21 @@ import httpx
 import json
 import pytest
 
-from manager_service.hindsight_client import HindsightClient, HindsightSettings, HindsightUnavailable
+from manager_service.hindsight_client import (
+    HindsightClient, HindsightSettings, HindsightUnavailable,
+    _derive_stats_path, _derive_update_path,
+)
 from shared.contracts.tenancy import TenantContext
+
+
+def test_hindsight_path_derivation_handles_native_and_legacy_routes():
+    assert _derive_stats_path(None) is None
+    assert _derive_stats_path("/legacy/list") is None
+    assert _derive_stats_path("/v1/default/banks/{bank_id}/memories/list") == "/v1/default/banks/{bank_id}/stats"
+    assert _derive_update_path(None, None) is None
+    assert _derive_update_path("/v1/default/banks/{bank_id}/memories/{memory_id}", None).endswith("/{memory_id}")
+    assert _derive_update_path("/v1/default/banks/{bank_id}/memories/list", None).endswith("/memories/{memory_id}")
+    assert _derive_update_path(None, "/legacy/delete").endswith("/{memory_id}")
 
 
 def test_hindsight_client_sends_tenant_context_and_never_falls_back():
@@ -78,6 +91,47 @@ def test_hindsight_client_lists_memory_units_with_pagination():
         "method": "GET",
         "path": "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/memories/list",
         "query": {"q": "hello", "limit": "10", "offset": "20"},
+    }
+
+
+def test_hindsight_client_reads_native_bank_stats():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"total_nodes": 2})
+
+    client = HindsightClient(
+        HindsightSettings("http://hindsight", "secret", "/recall", "/retain", "/delete", list_path="/v1/default/banks/{bank_id}/memories/list"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert client.stats(TenantContext(tenant_id="tenant-a", user_id="u", roles=[]), employee_id="employee-a") == {"total_nodes": 2}
+    assert seen == {"method": "GET", "path": "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/stats"}
+
+
+def test_hindsight_update_does_not_reuse_delete_action_path():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"id": "memory-1", "text": "updated"})
+
+    settings = HindsightSettings(
+        "http://hindsight", "secret", "/recall", "/retain", "/v1/default/banks/{bank_id}/memories/delete",
+        list_path="/v1/default/banks/{bank_id}/memories/list",
+    )
+    client = HindsightClient(settings, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result = client.update(
+        TenantContext(tenant_id="tenant-a", user_id="u", roles=[]),
+        employee_id="employee-a", memory_id="memory-1", payload={"text": "updated"},
+    )
+
+    assert result == {"id": "memory-1", "text": "updated"}
+    assert seen == {
+        "method": "PATCH",
+        "path": "/v1/default/banks/tenant_tenant-a_member_u_employee_employee-a/memories/memory-1",
     }
 
 

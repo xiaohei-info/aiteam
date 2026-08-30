@@ -6,6 +6,7 @@ local memory CRUD repository is constructed here.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Any
 
@@ -110,7 +111,9 @@ def build_memory_items_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[MemoryAnalyticsOut]:
-        data = _service(request).analytics(tenant_context_from(claims))
+        data = await asyncio.to_thread(
+            _service(request).analytics, tenant_context_from(claims),
+        )
         return ListEnvelope[MemoryAnalyticsOut](
             data=[MemoryAnalyticsOut.model_validate(data)],
         )

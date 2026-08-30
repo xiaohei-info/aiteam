@@ -269,7 +269,7 @@ export function GroupPage() {
   const conversationTitle = selected?.title ?? "群聊";
 
   return (
-    <HStack gap={4} height="100%" minHeight={0}>
+    <HStack gap={4} height="100%" minHeight={0} data-testid="group-chat-layout">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}

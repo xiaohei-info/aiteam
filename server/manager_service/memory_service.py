@@ -18,6 +18,11 @@ from shared.errors import AppError, Forbidden
 
 _MAX_ANALYTICS_PAGES = 32
 _ANALYTICS_PAGE_SIZE = 200
+_MEMORY_MANAGER_ROLES = frozenset({EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value})
+
+
+def _is_memory_manager(ctx: TenantContext) -> bool:
+    return bool(set(ctx.roles) & _MEMORY_MANAGER_ROLES)
 
 
 class MemoryBackend(Protocol):
@@ -28,6 +33,8 @@ class MemoryBackend(Protocol):
     def list(
         self, ctx: TenantContext, *, employee_id: str, query: str | None, limit: int, offset: int
     ) -> dict: ...
+
+    def stats(self, ctx: TenantContext, *, employee_id: str) -> dict: ...
 
     def update(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, payload: dict
@@ -104,8 +111,10 @@ class MemoryService:
             if not employee_id:
                 continue
             try:
-                self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
+                if not _is_memory_manager(ctx):
+                    self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
                 items, truncated = self._analytics_items(ctx, employee_id=employee_id)
+                stats = self._analytics_stats(ctx, employee_id=employee_id)
             except Forbidden:
                 # Member-level policy/grant denial must not reveal that an employee exists.
                 continue
@@ -121,6 +130,7 @@ class MemoryService:
                 display_name=str(getattr(employee, "display_name", "") or "未命名专家"),
                 items=items,
                 truncated=truncated,
+                stats=stats,
             ))
         status = "available"
         if unavailable_count:
@@ -133,6 +143,33 @@ class MemoryService:
             "employees": summaries,
             "unavailable_employee_count": unavailable_count,
         }
+
+    def _analytics_stats(self, ctx: TenantContext, *, employee_id: str) -> dict[str, Any]:
+        stats = getattr(self._backend, "stats", None)
+        if not callable(stats):
+            return {}
+        try:
+            raw = sanitize_metadata(stats(ctx, employee_id=employee_id))
+        except Exception:  # noqa: BLE001 - inventory remains useful if optional stats are unavailable
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        if isinstance(raw.get("data"), dict):
+            raw = raw["data"]
+        fields = (
+            "total_nodes", "total_links", "total_documents", "total_observations",
+            "pending_operations", "failed_operations", "pending_consolidation", "failed_consolidation",
+            "last_memory_write_at", "last_consolidated_at",
+        )
+        output: dict[str, Any] = {}
+        for field in fields:
+            value = raw.get(field)
+            if field.endswith("_at"):
+                if isinstance(value, str) and len(value) <= 128 and not any(char in value for char in "\x00\r\n"):
+                    output[field] = value
+            elif isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                output[field] = value
+        return output
 
     def _analytics_items(self, ctx: TenantContext, *, employee_id: str) -> tuple[list[dict], bool]:
         items: list[dict] = []
@@ -179,9 +216,7 @@ class MemoryService:
         if snapshot.employee_id != employee_id:
             raise Forbidden("employee snapshot does not match requested employee")
         policy = snapshot.memory_policy
-        is_manager = bool(set(ctx.roles) & {
-            EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value,
-        })
+        is_manager = _is_memory_manager(ctx)
         if management and is_manager:
             return snapshot
         if not isinstance(policy, dict) or not policy or policy.get("enabled") is False:
@@ -223,7 +258,7 @@ def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int
             "memory_id": memory_id,
             "employee_id": employee_id,
             "content": content,
-            "category": _safe_bucket(item.get("fact_type") or item.get("category"), "memory"),
+            "category": _safe_bucket(item.get("fact_type") or item.get("type") or item.get("category"), "memory"),
             "importance": importance,
             "source": _safe_bucket(item.get("source") or metadata.get("retainSource"), "hindsight"),
             "created_at": _safe_timestamp(item.get("date") or item.get("created_at") or item.get("mentioned_at")),
@@ -236,6 +271,7 @@ def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int
 
 def _memory_summary(
     *, employee_id: str, display_name: str, items: list[dict], truncated: bool,
+    stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
@@ -269,6 +305,16 @@ def _memory_summary(
         "average_importance": sum(importance) / len(importance) if importance else None,
         "max_importance": max(importance) if importance else None,
         "truncated": truncated,
+        "total_nodes": (stats or {}).get("total_nodes"),
+        "total_links": (stats or {}).get("total_links"),
+        "total_documents": (stats or {}).get("total_documents"),
+        "total_observations": (stats or {}).get("total_observations"),
+        "pending_operations": (stats or {}).get("pending_operations"),
+        "failed_operations": (stats or {}).get("failed_operations"),
+        "pending_consolidation": (stats or {}).get("pending_consolidation"),
+        "failed_consolidation": (stats or {}).get("failed_consolidation"),
+        "last_memory_write_at": (stats or {}).get("last_memory_write_at"),
+        "last_consolidated_at": (stats or {}).get("last_consolidated_at"),
     }
 
 

@@ -19,6 +19,7 @@ describe("catalog avatar data", () => {
   it("rejects an unsupported MIME type and a mismatched signature", async () => {
     await expect(readAvatarFile(file(PNG_SIGNATURE, "image/svg+xml"))).rejects.toThrow("仅支持");
     await expect(readAvatarFile(file(new Uint8Array([0xff, 0xd8, 0xff]), "image/png"))).rejects.toThrow("不匹配");
+    await expect(readAvatarFile(file(new Uint8Array([0x89]), "image/png"))).rejects.toThrow("不匹配");
     expect(isSafeAvatarDataUrl("data:image/svg+xml;base64,PHN2Zz4=")).toBe(false);
   });
 

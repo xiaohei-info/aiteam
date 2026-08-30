@@ -308,16 +308,9 @@ class LightRagIngestionClient:
             raise RagIngestionUnavailable("knowledge analytics unavailable")
         try:
             if settings is None:
-                # Analytics is a read-only probe and must remain useful when a
-                # deployment has LightRAG configured but no ingestion poll timeout.
-                registry = self.instance_registry
-                if registry is None:
-                    raise RagIngestionUnavailable("knowledge analytics unavailable")
-                instance = registry.resolve(workspace)
-                timeout = 5.0
-            else:
-                instance = self.instance_for_workspace(workspace)
-                timeout = settings.request_timeout_ms / 1000
+                raise RagIngestionUnavailable("knowledge analytics unavailable")
+            instance = self.instance_for_workspace(workspace)
+            timeout = settings.request_timeout_ms / 1000
             headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
             return list(self._paginated_documents(instance, headers=headers, timeout=timeout))
         except RagIngestionUnavailable:

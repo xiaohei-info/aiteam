@@ -86,7 +86,7 @@ const ARTIFACT_MIME_BY_EXTENSION: ReadonlyMap<string, string> = new Map([
 ]);
 
 const SENSITIVE_ARTIFACT_NAME = /(?:^|[._-])(env|secret|secrets|credential|credentials|password|passwd|token|private|api[_-]?key|access[_-]?key)(?:$|[._-])/iu;
-const SENSITIVE_ARTIFACT_CONTENT = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----|(?:api[_-]?key|client[_-]?secret|password|passwd|authorization|access[_-]?token)\s*[:=]\s*["']?[^\s"']{8,}/iu;
+const SENSITIVE_ARTIFACT_CONTENT = /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----|(?:api[_-]?key|client[_-]?secret|password|passwd|authorization|access[_-]?token)["']?\s*[:=]\s*["']?[^\s"']{8,}/iu;
 
 export function mimeTypeForFilename(filename: string): string | undefined {
   return ARTIFACT_MIME_BY_EXTENSION.get(extname(filename).toLowerCase());

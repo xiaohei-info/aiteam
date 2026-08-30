@@ -1,6 +1,7 @@
 /** B07 记忆管理页 — 记忆条目列表 + CRUD + 搜索。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, EnterpriseRole, hasRole, serviceUrl } from "@aiteam/shared";
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -48,8 +49,14 @@ export function MemoryPage(): ReactNode {
   const [editing, setEditing] = useState<MemoryItem | null>(null);
   const [editContent, setEditContent] = useState("");
   const [detailItem, setDetailItem] = useState<MemoryItem | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<MemoryItem | null>(null);
 
   const load = useCallback(async () => {
+    if (!canManage) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     if (!selectedEmployee) {
       setItems([]);
       setLoading(false);
@@ -60,21 +67,30 @@ export function MemoryPage(): ReactNode {
     try { setItems(await api.list({ employee_id: selectedEmployee, keyword: keyword || undefined })); } catch (err) {
       setError(err instanceof ApiError ? err.message : "记忆数据加载失败");
     } finally { setLoading(false); }
-  }, [api, keyword, selectedEmployee]);
+  }, [api, canManage, keyword, selectedEmployee]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => {
-    if (!api.getAnalytics) {
+  const refreshAnalytics = useCallback(async (): Promise<void> => {
+    if (!canManage || !api.getAnalytics) {
       setAnalytics(null);
       return;
     }
     setAnalyticsError(null);
-    void api.getAnalytics().then(setAnalytics).catch((err) => {
+    try {
+      setAnalytics(await api.getAnalytics());
+    } catch (err) {
       setAnalytics(null);
       setAnalyticsError(err instanceof ApiError ? err.message : "Hindsight 统计暂不可用");
-    });
-  }, [api]);
+    }
+  }, [api, canManage]);
+
+  useEffect(() => { void refreshAnalytics(); }, [refreshAnalytics]);
   useEffect(() => {
+    if (!canManage) {
+      setEmployees([]);
+      setSelectedEmployee("");
+      return;
+    }
     void expertsApi.listEmployees().then((nextEmployees) => {
       setEmployees(nextEmployees);
       setSelectedEmployee((current) => current && nextEmployees.some((employee) => employee.employee_id === current)
@@ -83,7 +99,7 @@ export function MemoryPage(): ReactNode {
       setEmployees([]);
       setSelectedEmployee("");
     });
-  }, [expertsApi]);
+  }, [canManage, expertsApi]);
 
   const handleCreate = useCallback(async () => {
     if (!newEmployee || !newContent) return;
@@ -91,18 +107,18 @@ export function MemoryPage(): ReactNode {
     try {
       await api.create({ employee_id: newEmployee, content: newContent });
       setNewContent(""); setNewEmployee(""); setShowForm(false);
-      await load();
+      await Promise.all([load(), refreshAnalytics()]);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "创建失败，请重试");
     }
-  }, [api, newEmployee, newContent, load]);
+  }, [api, newEmployee, newContent, load, refreshAnalytics]);
 
   const handleDelete = useCallback(async (item: MemoryItem) => {
     setActionError(null);
-    try { await api.delete(item.memory_id, item.employee_id); await load(); } catch (err) {
+    try { await api.delete(item.memory_id, item.employee_id); await Promise.all([load(), refreshAnalytics()]); } catch (err) {
       setError(err instanceof ApiError ? err.message : "删除失败，请重试");
     }
-  }, [api, load]);
+  }, [api, load, refreshAnalytics]);
 
   const handleUpdate = useCallback(async () => {
     if (!editing || !editContent.trim()) return;
@@ -111,11 +127,15 @@ export function MemoryPage(): ReactNode {
       await api.update(editing.memory_id, { content: editContent.trim() }, editing.employee_id);
       setEditing(null);
       setEditContent("");
-      await load();
+      await Promise.all([load(), refreshAnalytics()]);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "保存失败，请重试");
     }
-  }, [api, editContent, editing, load]);
+  }, [api, editContent, editing, load, refreshAnalytics]);
+
+  if (!canManage) {
+    return <VStack gap={3}><Heading level={1}>记忆管理</Heading><Banner status="info" title="记忆管理仅对企业管理员开放。" /></VStack>;
+  }
 
   return (
     <VStack gap={4}>
@@ -173,6 +193,9 @@ export function MemoryPage(): ReactNode {
                     <Text type="supporting">状态：{Object.entries(employee.state_counts).map(([state, count]) => `${state} ${count}`).join(" · ") || "暂无"}</Text>
                     <Text type="supporting">最近创建 {formatDate(employee.latest_created_at)} · 最近使用 {formatDate(employee.latest_used_at)}</Text>
                     <Text type="supporting">平均重要度 {formatImportance(employee.average_importance)}</Text>
+                    {employee.total_nodes != null && <Text type="supporting">图谱 {employee.total_nodes} 节点 · {employee.total_links ?? 0} 关系 · 观察 {employee.total_observations ?? 0}</Text>}
+                    {employee.pending_operations != null && <Text type="supporting">后台任务：待处理 {employee.pending_operations} · 失败 {employee.failed_operations ?? 0}</Text>}
+                    {employee.pending_consolidation != null && <Text type="supporting">归纳：待处理 {employee.pending_consolidation} · 失败 {employee.failed_consolidation ?? 0}</Text>}
                     <Button label={`查看${employee.display_name}记忆`} variant="ghost" size="sm" onClick={() => setSelectedEmployee(employee.employee_id)} />
                   </VStack>
                 </Card>
@@ -200,7 +223,7 @@ export function MemoryPage(): ReactNode {
             <Text type="supporting">专家：{employees.find((employee) => employee.employee_id === m.employee_id)?.display_name || "已删除专家"}</Text>
             <Text type="supporting">{[m.category, m.importance == null ? null : `重要度 ${formatImportance(m.importance)}`, m.state || "valid", m.source, formatDate(m.created_at)].filter(Boolean).join(" · ")}</Text>
           </>}
-        </VStack>{editing?.memory_id !== m.memory_id && <HStack gap={2}><Button label={`查看详情${m.memory_id}`} variant="ghost" size="sm" onClick={() => setDetailItem(m)} />{canManage && <><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => void handleDelete(m)} /></>}</HStack>}</HStack></Card>
+        </VStack>{editing?.memory_id !== m.memory_id && <HStack gap={2}><Button label={`查看详情${m.memory_id}`} variant="ghost" size="sm" onClick={() => setDetailItem(m)} />{canManage && <><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => setPendingDelete(m)} /></>}</HStack>}</HStack></Card>
       ))}</VStack>}
 
       {detailItem && (
@@ -218,6 +241,20 @@ export function MemoryPage(): ReactNode {
           </VStack>
         </Dialog>
       )}
+
+      <AlertDialog
+        isOpen={pendingDelete != null}
+        title="删除记忆"
+        description={pendingDelete ? `确定删除这条记忆吗？（${pendingDelete.content.slice(0, 80)}）` : "删除后记忆将被标记为无效。"}
+        cancelLabel="取消"
+        actionLabel="确认删除"
+        onOpenChange={(open) => { if (!open) setPendingDelete(null); }}
+        onAction={() => {
+          const item = pendingDelete;
+          setPendingDelete(null);
+          if (item) void handleDelete(item);
+        }}
+      />
     </VStack>
   );
 }

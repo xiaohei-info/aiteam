@@ -11,6 +11,8 @@ from manager_service.rag_ingestion import (
     LightRagIngestionClient,
     LightRagIngestionSettings,
     RagIngestionUnavailable,
+    _document_identity,
+    _document_info,
 )
 
 
@@ -19,6 +21,47 @@ def _settings(**kwargs):
               "pipeline_timeout_ms": 5, "poll_interval_ms": 1}
     values.update(kwargs)
     return LightRagIngestionSettings(**values)
+
+
+def test_client_rebinds_explicit_instance_registry():
+    from manager_service.rag_instances import RagInstance, RagInstanceRegistry
+    registry = RagInstanceRegistry((RagInstance("fixed", "http://rag", "manager-secret", "derived"),))
+    client = LightRagIngestionClient(_settings(), instance_registry=registry)
+    try:
+        assert client.instance_for_workspace("derived").instance_id == "fixed"
+    finally:
+        client.close()
+
+
+def test_document_info_projects_bounded_metadata_and_legacy_identity():
+    value = _document_info({
+        "id": "upstream", "file_path": "source", "status": " PROCESSED ",
+        "chunks_count": 3, "content_length": 10,
+        "created_at": "2026-08-26T00:00:00Z", "updated_at": None,
+    }, workspace="fixed")
+    assert value.status == "processed"
+    assert value.chunks_count == 3
+    assert value.updated_at is None
+    assert _document_identity({"id": "upstream", "file_path": "source"}, workspace="fixed") == ("upstream", "source")
+
+
+@pytest.mark.parametrize("value", [None, [], {"id": "id"}, {"id": "id", "file_path": "source", "workspace": "other"}])
+def test_document_info_rejects_invalid_or_cross_workspace_rows(value):
+    with pytest.raises(RagIngestionUnavailable):
+        _document_info(value, workspace="fixed")
+
+
+def test_document_info_sanitizes_invalid_optional_values():
+    result = _document_info({
+        "id": "id", "file_path": "source", "status": "bad\nstatus",
+        "chunks_count": -1, "content_length": True,
+        "created_at": 42, "updated_at": "x" * 129,
+    }, workspace="fixed")
+    assert result.status == "unknown"
+    assert result.chunks_count is None
+    assert result.content_length is None
+    assert result.created_at is None
+    assert result.updated_at is None
 
 
 def test_ingestion_posts_manager_headers_and_waits_for_ready():
@@ -66,6 +109,58 @@ def test_ingestion_posts_manager_headers_and_waits_for_ready():
     assert seen[0].url.path == "/documents/text"
     assert seen[1].url.path == "/documents/track_status/insert_20250331_090000_def456"
     assert seen[-1].url.path == "/documents/track_status/insert_20250331_090000_def456"
+
+
+@pytest.mark.parametrize("payload", [
+    {"documents": "bad", "pagination": {}},
+    {"documents": [], "pagination": {"page": 2}},
+    {"documents": [], "pagination": {"page": 1, "page_size": 0}},
+    {"documents": [], "pagination": {"page": 1, "total_count": -1}},
+    {"documents": [], "pagination": {"page": 1, "has_next": "yes"}},
+    {"documents": [], "pagination": {"page": 1, "total_count": 1, "total_pages": 2}},
+    {"documents": [], "pagination": {"page": 1, "total_pages": 1, "has_next": True}},
+    {"documents": [], "pagination": {"page": 1, "total_count": 201, "has_next": False}},
+])
+def test_document_listing_rejects_ambiguous_pagination(payload):
+    client = LightRagIngestionClient(
+        _settings(), transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable, match="knowledge analytics unavailable"):
+            client.list_documents(workspace="derived")
+    finally:
+        client.close()
+
+
+def test_document_listing_converts_transport_errors_to_unavailable():
+    def handler(request: httpx.Request):
+        raise RuntimeError("transport down")
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RagIngestionUnavailable, match="knowledge analytics unavailable"):
+            client.list_documents(workspace="derived")
+    finally:
+        client.close()
+
+
+def test_document_listing_rejects_upstream_http_error():
+    client = LightRagIngestionClient(
+        _settings(), transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable, match="knowledge analytics unavailable"):
+            client.list_documents(workspace="derived")
+    finally:
+        client.close()
+
+
+def test_document_listing_rejects_empty_workspace():
+    client = LightRagIngestionClient(_settings())
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.list_documents(workspace=" ")
+    finally:
+        client.close()
 
 
 def test_ingestion_fails_on_missing_config(monkeypatch: pytest.MonkeyPatch):

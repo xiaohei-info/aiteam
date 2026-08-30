@@ -11,7 +11,12 @@ from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
 from manager_service.hindsight_client import HindsightUnavailable
-from manager_service.knowledge_intake_service import KnowledgeIntakeService
+from manager_service.knowledge_intake_service import (
+    KnowledgeIntakeService,
+    _activity_datetime,
+    _activity_day,
+    _activity_sort_key,
+)
 from manager_service.memory_service import MemoryService
 from manager_service.rag_ingestion import RagDocumentInfo
 from shared.app_factory import create_app
@@ -154,6 +159,58 @@ def test_knowledge_analytics_combines_fixed_lightrag_metadata_and_manager_bindin
     assert {item.date for item in result.daily_activity} == {"2026-08-26", "2026-08-27"}
 
 
+def test_knowledge_analytics_handles_bad_lightrag_handle_and_binding_probe_errors():
+    class BadRag:
+        def get(self, ctx, knowledge_space_id):
+            return None
+
+    service = KnowledgeIntakeService(
+        doc_repo=_Docs([_doc("doc", status="ready", created_at=datetime(2026, 8, 26, tzinfo=timezone.utc), updated_at=datetime(2026, 8, 27, tzinfo=timezone.utc), size=1, text=None)]),
+        job_repo=_Jobs([]), binding_repo=type("Bindings", (), {"list_by_document": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("degraded"))})(),
+        expert_binding=_NoOp(), employee_index_port=_NoOp(), space_exists=lambda ctx, space_id: True,
+        storage_root=None, rag_service=BadRag(), ingestion_client=SimpleNamespace(settings=object(), instance_registry=None),
+    )
+    result = service.analytics(CTX, knowledge_space_id="enterprise_shared")
+    assert result.status == "unavailable"
+    assert result.documents[0].binding_count == 0
+
+
+def test_knowledge_analytics_handles_registry_mismatch_and_generic_probe_error():
+    class Registry:
+        def resolve(self, workspace):
+            return SimpleNamespace(instance_id="expected")
+
+    class RAG:
+        def get(self, ctx, knowledge_space_id):
+            return SimpleNamespace(tenant_id="tenant-a", knowledge_space_id=knowledge_space_id, workspace="fixed", instance_id="actual")
+
+    class Ingestion:
+        settings = object()
+        instance_registry = Registry()
+        def list_documents(self, *, workspace):
+            raise RuntimeError("offline")
+
+    result = _knowledge_service([], [], [], Ingestion()).analytics(CTX, knowledge_space_id="enterprise_shared")
+    assert result.status == "unavailable"
+
+    class GenericFailure(Ingestion):
+        instance_registry = None
+        def list_documents(self, *, workspace):
+            raise RuntimeError("offline")
+
+    assert _knowledge_service([], [], [], GenericFailure()).analytics(CTX, knowledge_space_id="enterprise_shared").status == "unavailable"
+
+
+def test_activity_helpers_normalize_datetime_and_invalid_values():
+    aware = datetime(2026, 8, 26, 1, tzinfo=timezone.utc)
+    assert _activity_datetime(aware) == aware
+    assert _activity_datetime("2026-08-26T01:00:00Z") is not None
+    assert _activity_datetime("") is None
+    assert _activity_datetime("not-a-date") is None
+    assert _activity_day("2026-08-26T01:00:00Z") == "2026-08-26"
+    assert _activity_sort_key("not-a-date")[0] == 0
+
+
 def test_knowledge_analytics_reports_unconfigured_lightrag_without_losing_local_inventory():
     ready_time = datetime(2026, 8, 26, 9, tzinfo=timezone.utc)
     ingestion = SimpleNamespace(settings=None, instance_registry=None)
@@ -216,6 +273,14 @@ class _Employees:
 
 
 class _MemoryBackend:
+    def stats(self, ctx, *, employee_id):
+        assert ctx is CTX
+        return {
+            "total_nodes": 3, "total_links": 2, "total_documents": 1,
+            "total_observations": 1, "pending_operations": 0, "failed_operations": 0,
+            "last_memory_write_at": "2026-08-26T00:00:00Z",
+        }
+
     def list(self, ctx, *, employee_id, query, limit, offset):
         assert ctx is CTX
         assert query is None
@@ -226,6 +291,24 @@ class _MemoryBackend:
                     "date": "2026-08-20T00:00:00Z", "last_used_at": None, "state": "invalidated"}],
         }
         return {"items": data[employee_id], "total": len(data[employee_id])}
+
+
+def test_memory_analytics_accepts_native_stats_payload_and_ignores_invalid_values():
+    class Backend(_MemoryBackend):
+        def stats(self, ctx, *, employee_id):
+            return {"data": {
+                "total_nodes": 4, "total_links": True, "pending_consolidation": 2,
+                "failed_consolidation": 1, "last_memory_write_at": "2026-08-26T00:00:00Z",
+                "last_consolidated_at": "bad\nvalue",
+            }}
+
+    result = MemoryService(snapshot=_Snapshot(), backend=Backend(), employee_reader=_Employees()).analytics(CTX)
+    first = next(item for item in result["employees"] if item["employee_id"] == "e1")
+    assert first["total_nodes"] == 4
+    assert first["total_links"] is None
+    assert first["pending_consolidation"] == 2
+    assert first["failed_consolidation"] == 1
+    assert first["last_consolidated_at"] is None
 
 
 def test_memory_analytics_reports_categories_recency_importance_and_state():
@@ -241,6 +324,8 @@ def test_memory_analytics_reports_categories_recency_importance_and_state():
     assert first["latest_created_at"] == "2026-08-25T00:00:00Z"
     assert first["latest_used_at"] == "2026-08-26T00:00:00Z"
     assert first["average_importance"] == pytest.approx(0.8)
+    assert first["total_nodes"] == 3
+    assert first["total_links"] == 2
 
 
 class _UnavailableBackend(_MemoryBackend):

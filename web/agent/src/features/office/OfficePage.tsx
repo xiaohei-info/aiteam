@@ -369,6 +369,12 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
     );
   }
 
+  const recentEmployees = [...employees].sort((left, right) => {
+    const leftTime = left.last_activity_at ? Date.parse(left.last_activity_at) : -1;
+    const rightTime = right.last_activity_at ? Date.parse(right.last_activity_at) : -1;
+    return rightTime - leftTime || left.display_name.localeCompare(right.display_name);
+  });
+
   return (
     <section className={"office-panel"} aria-labelledby="office-recent-heading" data-testid="office-recent">
       <header className={"office-panel-header"}>
@@ -382,8 +388,8 @@ function ActivityPanel({ employees, selectedEmployeeId, onSelectEmployee, onClea
         <EmptyState title="暂无状态" description="员工出现在办公室后，这里会显示最近一次本地投影。" headingLevel={3} isCompact />
       ) : (
         <ul className={"office-activity-list"}>
-          {employees.slice(0, 6).map((employee) => {
-            const meta = statusMeta(employee.status);
+          {recentEmployees.slice(0, 6).map((employee) => {
+            const meta = statusMeta(employee.last_status || employee.status);
             return (
               <li className={"office-activity-item"} key={employee.employee_id} data-testid="office-recent-item">
                 <Button
@@ -422,8 +428,8 @@ function FeedPanel({ feed, feedLoaded, loading, error }: FeedPanelProps): ReactN
     <section className={"office-panel office-feed-panel"} aria-labelledby="office-feed-heading" data-testid="office-feed-panel">
       <header className={"office-panel-header"}>
         <div>
-          <span className={"office-kicker"}>LOCAL ACTIVITY</span>
-          <Heading level={2} id="office-feed-heading">近期动态</Heading>
+          <span className={"office-kicker"}>SCHEDULED PLANS</span>
+          <Heading level={2} id="office-feed-heading">定时计划</Heading>
         </div>
         <span className={"office-panel-count"}>{feedLoaded && feed ? scheduledJobs.length : "—"}</span>
       </header>

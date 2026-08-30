@@ -12,6 +12,16 @@ export interface MemoryEmployeeAnalytics {
   latest_used_at: string | null;
   average_importance: number | null;
   max_importance: number | null;
+  total_nodes?: number | null;
+  total_links?: number | null;
+  total_documents?: number | null;
+  total_observations?: number | null;
+  pending_operations?: number | null;
+  failed_operations?: number | null;
+  pending_consolidation?: number | null;
+  failed_consolidation?: number | null;
+  last_memory_write_at?: string | null;
+  last_consolidated_at?: string | null;
   truncated: boolean;
 }
 

@@ -14,7 +14,7 @@ import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStor
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
-import { serializePiEvent } from "../pi/event-sse.js";
+import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -465,7 +465,7 @@ export class AgentHttpServer {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
       const entries = await this.options.host.entries(conversationId);
-      this.writeJson(response, 200, { data: { conversation_id: conversationId, entries } });
+      this.writeJson(response, 200, { data: { conversation_id: conversationId, entries: entries.map(serializePiEntry).filter((entry): entry is Record<string, unknown> => entry !== undefined) } });
     }, routeSchema("listConversationEntries", { summary: "列出会话条目", description: "读取当前成员会话的脱敏历史条目。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEntriesEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
@@ -863,7 +863,15 @@ export class AgentHttpServer {
 
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient) throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable");
-    try { this.writeJson(response, 200, { data: await this.options.managerClient.getOrgTree(caller) }); }
+    try {
+      const raw = await this.options.managerClient.getOrgTree(caller);
+      const visibleEmployees = new Set(
+        this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId)
+          .filter((expert) => !expert.revoked)
+          .map((expert) => expert.employee_id),
+      );
+      this.writeJson(response, 200, { data: projectOrgTree(raw, visibleEmployees) });
+    }
     catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
       throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable");
@@ -1194,6 +1202,32 @@ export class AgentHttpServer {
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }
+}
+
+function projectOrgTree(value: unknown, visibleEmployees: ReadonlySet<string>): Record<string, unknown> {
+  const root = projectOrgNode(value, visibleEmployees, true);
+  return root ?? { id: "root", name: "企业", type: "department", children: [] };
+}
+
+function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, root = false): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  if (typeof source.id !== "string" || typeof source.name !== "string" || typeof source.type !== "string") return undefined;
+  if (source.type === "employee" && !visibleEmployees.has(source.id)) return undefined;
+  if (source.type !== "employee" && source.type !== "department") return undefined;
+  const children = Array.isArray(source.children)
+    ? source.children.map((child) => projectOrgNode(child, visibleEmployees)).filter((child): child is Record<string, unknown> => child !== undefined)
+    : [];
+  if (!root && source.type === "department" && children.length === 0) return undefined;
+  return {
+    id: source.id,
+    name: source.name,
+    type: source.type,
+    ...(typeof source.parent_id === "string" || source.parent_id === null ? { parent_id: source.parent_id } : {}),
+    ...(typeof source.status === "string" || source.status === null ? { status: source.status } : {}),
+    ...(typeof source.avatar_url === "string" || source.avatar_url === null ? { avatar_url: source.avatar_url } : {}),
+    children,
+  };
 }
 
 function parsePermissionMode(value: unknown): ConversationPermissionMode {

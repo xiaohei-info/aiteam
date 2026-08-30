@@ -23,7 +23,7 @@ import type { AgentSqliteStore, ConversationPermissionMode, FrozenSnapshot } fro
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { serializePiEvent } from "./event-sse.js";
+import { serializePiEntry, serializePiEvent } from "./event-sse.js";
 import type { UsageCapture } from "../usage.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
@@ -151,6 +151,7 @@ interface SessionRecord {
   activeSourceRole?: "human" | "child" | "participant" | "coordinator";
   activeSource?: GroupMessageSource;
   hindsightWorkspaces: Set<string>;
+  contextOperation?: Promise<void>;
   disposing?: Promise<void>;
 }
 
@@ -264,24 +265,30 @@ export class SessionHost {
   async getOfficeActivities(conversationId: string): Promise<OfficeEmployeeActivity[]> {
     const metadata = this.options.store.getConversationMetadata(conversationId);
     if (!metadata) return [];
-    const participantIds = this.options.store.listConversationParticipants(conversationId).map((item) => item.employee_id);
+    const participants = this.options.store.listConversationParticipants(conversationId);
+    const participantIds = participants.map((item) => item.employee_id);
     const employeeIds = [...new Set(participantIds.length > 0
       ? participantIds
       : [metadata.entry_employee_id ?? metadata.coordinator_employee_id].filter((id): id is string => Boolean(id)))];
     const activities: OfficeEmployeeActivity[] = [];
     for (const employeeId of employeeIds) {
-      const record = this.ensureRecord(conversationId, employeeId);
-      const entries = record.sessionManager.getEntries();
+      // Office polling must be observational: do not call ensureRecord(), which
+      // creates a workspace/session participant row when a chat has never been opened.
+      const record = this.records.get(this.recordKey(conversationId, employeeId));
+      const participant = participants.find((item) => item.employee_id === employeeId);
+      const sessionFile = participant?.session_file || (employeeIds.length === 1 ? this.options.store.getConversation(conversationId)?.sessionFile : undefined);
+      const entries = record?.sessionManager.getEntries() ?? this.readPersistedOfficeEntries(sessionFile);
+      const prompting = record?.prompting ?? false;
       let latest: SessionEntry | undefined;
       let latestTimestamp = -1;
       for (const entry of entries) {
+        if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info") continue;
         const timestamp = this.entryTimestamp(entry);
         if (timestamp >= latestTimestamp) {
           latestTimestamp = timestamp;
           latest = entry;
         }
       }
-      const prompting = record.prompting;
       const lastStatus = prompting ? "working" : officeEntryStatus(latest);
       const lastActivityAt = prompting
         ? new Date().toISOString()
@@ -292,7 +299,7 @@ export class SessionHost {
         prompting,
         last_activity_at: lastActivityAt,
         last_status: lastStatus,
-        last_task: metadata.title ?? null,
+        last_task: lastStatus === "idle" ? null : officeEntryTask(entries) ?? metadata.title ?? null,
       });
     }
     return activities;
@@ -300,27 +307,46 @@ export class SessionHost {
 
   async getConversationContext(conversationId: string, caller: AuthenticatedCaller): Promise<ConversationContext> {
     const record = this.ensureContextRecord(conversationId, caller);
-    const authorization = this.resolveAuthorization(record, caller);
-    const active = record.prompting;
-    try {
-      const session = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-      const current = session ?? await this.ensureSession(record, authorization);
-      return this.contextValue(record, current);
-    } finally {
-      if (!active) await this.disposeSession(record);
-    }
+    return this.withContextOperation(record, async () => {
+      const authorization = this.resolveAuthorization(record, caller);
+      const active = record.prompting;
+      let ownedSession: AgentSession | undefined;
+      try {
+        const existing = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
+        ownedSession = existing ?? await this.ensureSession(record, authorization, { skipHindsight: true });
+        return this.contextValue(record, ownedSession);
+      } finally {
+        if (!active && !record.prompting && ownedSession && record.session === ownedSession) await this.disposeSession(record);
+      }
+    });
   }
 
   async setThinkingLevel(conversationId: string, level: ConversationThinkingLevel, caller: AuthenticatedCaller): Promise<ConversationContext> {
     const record = this.ensureContextRecord(conversationId, caller);
-    if (record.prompting) throw new ConversationBusyError();
-    const authorization = this.resolveAuthorization(record, caller);
+    return this.withContextOperation(record, async () => {
+      if (record.prompting) throw new ConversationBusyError();
+      const authorization = this.resolveAuthorization(record, caller);
+      try {
+        const session = await this.ensureSession(record, authorization, { skipHindsight: true });
+        session.setThinkingLevel(level);
+        return this.contextValue(record, session);
+      } finally {
+        if (!record.prompting) await this.disposeSession(record);
+      }
+    });
+  }
+
+  private async withContextOperation<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
+    const previous = record.contextOperation ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    record.contextOperation = current;
+    await previous;
     try {
-      const session = await this.ensureSession(record, authorization);
-      session.setThinkingLevel(level);
-      return this.contextValue(record, session);
+      return await operation();
     } finally {
-      await this.disposeSession(record);
+      release();
+      if (record.contextOperation === current) record.contextOperation = undefined;
     }
   }
 
@@ -338,9 +364,12 @@ export class SessionHost {
     const model = session.model;
     const contextWindow = usage?.contextWindow ?? model?.contextWindow ?? 0;
     const thinkingLevel = normalizeThinkingLevel(session.thinkingLevel);
-    const available: ConversationThinkingLevel[] = typeof session.getAvailableThinkingLevels === "function"
+    const reportedThinkingLevels = typeof session.getAvailableThinkingLevels === "function"
       ? session.getAvailableThinkingLevels().map(normalizeThinkingLevel)
-      : ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+      : undefined;
+    const available: ConversationThinkingLevel[] = reportedThinkingLevels === undefined
+      ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+      : ["off", ...reportedThinkingLevels];
     return {
       conversation_id: record.conversationId,
       employee_id: record.employeeId ?? "conversation",
@@ -431,6 +460,27 @@ export class SessionHost {
       if (Number.isFinite(timestamp)) return timestamp;
     }
     return 0;
+  }
+
+  private readPersistedOfficeEntries(sessionFile?: string): SessionEntry[] {
+    if (!sessionFile || !existsSync(sessionFile)) return [];
+    try {
+      this.assertManagedPathEither(sessionFile, this.options.sessionDir, this.options.cwdRoot);
+      // Keep office polling bounded; the latest entries are enough to derive a status.
+      return readFileSync(sessionFile, "utf8").split("\\n").slice(-256).flatMap((line) => {
+        if (!line.trim()) return [];
+        try {
+          const value = JSON.parse(line) as unknown;
+          return value && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string"
+            ? [value as SessionEntry]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+    } catch {
+      return [];
+    }
   }
 
   async initializeConversationParticipants(conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -609,9 +659,9 @@ export class SessionHost {
     return targets as string[];
   }
 
-  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization): Promise<AgentSession> {
+  private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean } = {}): Promise<AgentSession> {
     if (record.session) return record.session;
-    const hindsightRuntimeConfig = await this.resolveHindsightRuntimeConfig(authorization);
+    const hindsightRuntimeConfig = options.skipHindsight ? undefined : await this.resolveHindsightRuntimeConfig(authorization);
     const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig);
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
@@ -857,6 +907,7 @@ export class SessionHost {
     const employeeId = record.employeeId ?? "conversation";
     const startedAt = Date.now();
     const entriesBefore = record.sessionManager.getEntries().length;
+    if (record.contextOperation) await record.contextOperation;
     if (record.prompting) throw new ConversationBusyError();
     record.prompting = true;
     record.aborting = false;
@@ -1241,6 +1292,24 @@ function officeEntryStatus(entry: SessionEntry | undefined): OfficeEmployeeActiv
   if (entry.type === "compaction" || entry.type === "branch_summary") return "completed";
   if (entry.type === "thinking_level_change" || entry.type === "model_change") return "idle";
   return entry.type.includes("error") ? "error" : "idle";
+}
+
+function officeEntryTask(entries: readonly SessionEntry[]): string | null {
+  for (const entry of [...entries].reverse()) {
+    if (entry.type !== "message" || (entry.message.role !== "assistant" && entry.message.role !== "user")) continue;
+    const serialized = serializePiEntry(entry);
+    const message = serialized?.message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const content = (message as Record<string, unknown>).content;
+    const text = typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.flatMap((part) => part && typeof part === "object" && !Array.isArray(part) && typeof (part as Record<string, unknown>).text === "string" ? [(part as Record<string, unknown>).text as string] : []).join(" ")
+        : "";
+    const task = text.replace(/\\s+/gu, " ").trim();
+    if (task) return task.slice(0, 240);
+  }
+  return null;
 }
 
 function normalizeThinkingLevel(value: unknown): ConversationThinkingLevel {

@@ -101,7 +101,33 @@ class MemberDeptRepository:
         return None if row is None else DepartmentRow(_s(row[0]), row[1], row[2], row[3])
 
     def delete_department(self, ctx: TenantContext, *, department_id: str) -> bool:
+        """Delete a department and remove every tenant-local assignment first.
+
+        Department ids are denormalized text arrays on users, employees, and grants;
+        clearing them in the same transaction prevents dangling org/authorization
+        references after a successful delete.
+        """
         with self._router.session(ctx) as s:
+            s.execute(
+                "UPDATE app_user SET department_ids = array_remove(department_ids, %s) "
+                "WHERE %s = ANY(department_ids)",
+                (department_id, department_id),
+            )
+            s.execute(
+                "UPDATE employee SET department_ids = array_remove(department_ids, %s) "
+                "WHERE %s = ANY(department_ids)",
+                (department_id, department_id),
+            )
+            s.execute(
+                "UPDATE member_grant SET department_ids = array_remove(department_ids, %s) "
+                "WHERE %s = ANY(department_ids)",
+                (department_id, department_id),
+            )
+            s.execute(
+                "DELETE FROM knowledge_space_binding "
+                "WHERE resource_type = 'department' AND resource_id = %s",
+                (department_id,),
+            )
             cur = s.execute("DELETE FROM department WHERE id = %s", (department_id,))
             return cur.rowcount > 0
 

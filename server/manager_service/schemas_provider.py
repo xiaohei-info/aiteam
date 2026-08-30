@@ -123,6 +123,10 @@ class RuntimeProviderConfigOut(BaseModel):
     model_version: int
     pricing: PricingSnapshot
     version: int
+    model_capabilities: dict[str, Any] = Field(
+        default_factory=dict,
+        description="当前模型的非敏感运行时能力（上下文窗口、最大输出、推理和输入模态）。",
+    )
 
 
 class ProviderCredentialOut(BaseModel):

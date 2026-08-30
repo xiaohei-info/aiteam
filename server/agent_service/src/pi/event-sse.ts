@@ -13,7 +13,7 @@ const ASSISTANT_EVENTS = new Set([
 ]);
 const SECRET_KEY = /(?:authorization|access.?token|refresh.?token|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
-const INLINE_PATH = /(?:\/(?:Users|private|home|tmp|var|workspace|etc|root)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/gi;
+const INLINE_PATH = /(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/gi;
 const UNSAFE_VALUE_KEY = /^(?:api|provider|model|raw|headers|request|diagnostics|session)$/i;
 
 const MAX_EVENT_BYTES = 24 * 1024;
@@ -34,6 +34,50 @@ export interface PiEventMetadata {
   source_employee_id?: string;
   source_employee_display_name?: string;
   source_role?: "human" | "child" | "participant" | "coordinator";
+}
+
+/**
+ * Project a persisted SessionManager entry through the same bounded/redacted
+ * boundary as live events. Conversation history is local content, but it still
+ * must not bypass credential/path filtering when returned over HTTP.
+ */
+export function serializePiEntry(entry: unknown): Record<string, unknown> | undefined {
+  const raw = asRecord(entry);
+  if (!raw || typeof raw.id !== "string" || typeof raw.type !== "string") return undefined;
+  const result: Record<string, unknown> = { id: boundedIdentifier(raw.id, MAX_IDENTIFIER_CHARS), type: boundedIdentifier(raw.type, MAX_IDENTIFIER_CHARS) };
+  if (typeof raw.parentId === "string" || raw.parentId === null) result.parentId = raw.parentId;
+  if (typeof raw.timestamp === "string") {
+    const parsed = Date.parse(raw.timestamp);
+    if (Number.isFinite(parsed)) result.timestamp = new Date(parsed).toISOString();
+  } else if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
+    result.timestamp = raw.timestamp;
+  }
+  const message = serializeMessage(raw.message);
+  if (message) result.message = message;
+  for (const key of ["logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
+    const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
+    if (value) result[key] = value;
+  }
+  if (raw.source_type === "human" || raw.source_type === "employee") result.source_type = raw.source_type;
+  if (raw.source_role === "human" || raw.source_role === "child" || raw.source_role === "participant" || raw.source_role === "coordinator") result.source_role = raw.source_role;
+  for (const key of ["summary", "firstKeptEntryId", "reason"] as const) {
+    if (typeof raw[key] === "string") result[key] = safeText(raw[key], MAX_TEXT_CHARS);
+  }
+  for (const key of ["tokensBefore", "details"] as const) {
+    if (key === "tokensBefore" && typeof raw[key] === "number" && Number.isFinite(raw[key])) result[key] = Math.max(0, Math.floor(raw[key]));
+    else if (key === "details") {
+      const clean = boundedValue(raw[key]);
+      if (clean !== undefined) result[key] = clean;
+    }
+  }
+  return boundEntry(result);
+}
+
+function boundEntry(value: Record<string, unknown>): Record<string, unknown> {
+  let serialized: string;
+  try { serialized = JSON.stringify(value); } catch { return { id: value.id, type: value.type }; }
+  if (Buffer.byteLength(serialized, "utf8") <= MAX_EVENT_BYTES) return value;
+  return { id: value.id, type: value.type, ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */
