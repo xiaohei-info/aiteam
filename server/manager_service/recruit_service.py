@@ -329,6 +329,8 @@ class RecruitService:
                     knowledge_refs=list(recommended.get("knowledge_refs", [])),
                     connector_refs=list(recommended.get("connector_refs", [])),
                     memory_policy=recommended.get("memory_policy"),
+                    source_template_id=template.template_id,
+                    source_template_version=template.version,
                     platform_model_ref=recommended["platform_model_ref"],
                     department_ids=list(req.department_ids),
                 )
