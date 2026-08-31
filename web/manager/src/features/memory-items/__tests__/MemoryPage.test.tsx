@@ -97,6 +97,7 @@ describe("MemoryPage 记忆管理", () => {
     expect(await screen.findByText("记忆总数")).toBeInTheDocument();
     expect(screen.getByText("覆盖 1 位专家")).toBeInTheDocument();
     await waitFor(() => expect(api.getAnalytics).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "查看详情m1" }));
     expect(await screen.findByRole("dialog", { name: "记忆详情 · m1" })).toBeInTheDocument();
     expect(screen.getAllByText(/状态：valid/).length).toBeGreaterThan(0);
