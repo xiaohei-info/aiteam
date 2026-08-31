@@ -53,6 +53,10 @@ authTest.describe("Agent Astryx Chat", () => {
     await openChat(authedPage, authedRequest);
     // External deployments may contain prior conversations; keep visual snapshots deterministic in local seeded runs.
     if (process.env.E2E_EXTERNAL !== "true") {
+      // Wait for the empty event state before capturing the visual baseline; the
+      // composer and file panel are otherwise ready before TimelineView finishes
+      // its first local entries request.
+      await expect(authedPage.getByTestId("conversation-events")).toContainText("暂无事件");
       await expect(authedPage).toHaveScreenshot("agent-chat-light.png", { fullPage: true });
     }
     const results = await new AxeBuilder({ page: authedPage }).analyze();
