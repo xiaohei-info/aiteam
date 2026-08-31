@@ -281,14 +281,101 @@ body,
   overflow: auto;
 }
 
-[data-testid="conversation-context-hud"] {
-  background: color-mix(in srgb, var(--color-background-gray) 72%, transparent);
+[data-context-hud="true"] {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--color-text-primary);
 }
 
-[data-testid="conversation-context-hud"] progress {
+[data-context-summary="true"] {
+  min-width: 0;
+  max-width: 12rem;
+}
+
+[data-context-model="true"] {
+  max-width: 12rem;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-context-usage="true"] {
+  white-space: nowrap;
+}
+
+[data-context-ring="true"] {
+  position: relative;
+  display: inline-grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--color-text-secondary);
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+[data-context-ring="true"] svg {
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+[data-context-ring-track="true"],
+[data-context-ring-value="true"] {
+  fill: none;
+  stroke-width: 4;
+}
+
+[data-context-ring-track="true"] {
+  stroke: var(--color-background-muted);
+}
+
+[data-context-ring-value="true"] {
+  stroke: var(--color-accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--duration-fast), stroke var(--duration-fast);
+}
+
+[data-context-ring="true"][data-level="warning"] [data-context-ring-value="true"] {
+  stroke: var(--color-warning);
+}
+
+[data-context-ring="true"][data-level="critical"] [data-context-ring-value="true"] {
+  stroke: var(--color-error);
+}
+
+[data-context-ring="true"][data-level="unknown"] [data-context-ring-value="true"] {
+  stroke: transparent;
+}
+
+[data-context-running="true"] {
+  width: 0.5rem;
   height: 0.5rem;
-  accent-color: var(--color-accent);
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 0.2rem var(--color-accent-muted);
+}
+
+[data-context-loading="true"] {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--color-border-emphasized);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: context-spin 700ms linear infinite;
+}
+
+@keyframes context-spin {
+  to { transform: rotate(360deg); }
 }
 
 [data-files-list="true"] {
@@ -363,6 +450,14 @@ body,
 @media (prefers-reduced-motion: reduce) {
   [data-timeline-card-header="true"]::before {
     transition: none;
+  }
+
+  [data-context-ring-value="true"] {
+    transition: none;
+  }
+
+  [data-context-loading="true"] {
+    animation: none;
   }
 }
 
