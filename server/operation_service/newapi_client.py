@@ -55,6 +55,8 @@ class NewApiAdminClient:
             raise NewApiError("NewAPI returned an invalid model catalog")
         models: set[str] = set()
         for channel_models in raw.values():
+            if channel_models is None:
+                continue
             if not isinstance(channel_models, list) or any(not isinstance(item, str) for item in channel_models):
                 raise NewApiError("NewAPI returned an invalid model catalog")
             models.update(item.strip() for item in channel_models if item.strip())

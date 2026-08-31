@@ -106,7 +106,7 @@ def test_newapi_client_reads_available_models_from_internal_catalog():
 
     def handler(request: httpx.Request):
         seen["path"] = request.url.path
-        return httpx.Response(200, json={"success": True, "data": {"1": [" minimax-m3", "gpt-5.5"], "2": ["gpt-5.5"]}})
+        return httpx.Response(200, json={"success": True, "data": {"1": [" minimax-m3", "gpt-5.5"], "2": ["gpt-5.5"], "37": None}})
 
     client = NewApiAdminClient("http://newapi.test", "admin-pat", "1", transport=httpx.MockTransport(handler))
     assert client.fetch_available_models() == ["gpt-5.5", "minimax-m3"]
