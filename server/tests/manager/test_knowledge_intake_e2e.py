@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -73,6 +74,20 @@ def _make_space(client, token, ks_id=ENTERPRISE_SPACE_ID, name="default"):
     return r.json()["data"]
 
 
+def _wait_ready(client, token, document_id: str) -> dict:
+    """BackgroundTasks are asynchronous even with TestClient; poll the durable row."""
+    headers = {"Authorization": f"Bearer {token}"}
+    path = f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents"
+    for _ in range(40):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, response.text
+        document = next(item for item in response.json()["data"] if item["id"] == document_id)
+        if document["status"] in {"ready", "failed"}:
+            return document
+        time.sleep(0.05)
+    raise AssertionError(f"document {document_id} did not reach a terminal status")
+
+
 def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
@@ -89,8 +104,10 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     assert r.status_code == 201, r.text
     doc = r.json()["data"]
     assert doc["knowledge_space_id"] == ENTERPRISE_SPACE_ID
-    assert doc["status"] == "ready"
+    assert doc["status"] in {"uploaded", "parsing", "indexing", "ready"}
     assert doc["file_name"] == "report.txt"
+    doc = _wait_ready(client, owner_a, doc["id"])
+    assert doc["status"] == "ready"
     assert doc["text_chars"] and doc["text_chars"] > 0
     doc_id = doc["id"]
 
@@ -142,6 +159,7 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     )
     assert uploaded.status_code == 201, uploaded.text
     document_id = uploaded.json()["data"]["id"]
+    _wait_ready(client, owner, document_id)
     deleted = client.delete(
         f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents/{document_id}",
         headers={**auth, "Idempotency-Key": "delete-1"},
@@ -187,6 +205,7 @@ def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, 
     )
     assert uploaded.status_code == 201, uploaded.text
     document_id = uploaded.json()["data"]["id"]
+    _wait_ready(client, owner, document_id)
     employee = client.post(
         f"/api/manager/employees?employee_slug=backfill-{uuid.uuid4().hex[:8]}",
         json={"display_name": "Backfill employee", "persona": "p"}, headers=auth,
