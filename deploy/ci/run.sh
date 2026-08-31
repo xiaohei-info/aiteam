@@ -83,14 +83,28 @@ git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '${BRANCH}'
 log "code ready @ $(git rev-parse --short HEAD)"
 
 # 2) 前端产物无条件每次 CI 都重新 build（部署根下需已装 node >=22 + pnpm >=11）。
-#    条件性 build 容易因为残留旧的 dist/ 导致前后端不一致；每次重建代价
+#    条件性 build 容易因为残留旧的 dist/导致前后端不一致；每次重建代价
 #    可控（pnpm install --frozen-lockfile ~10s, pnpm build --parallel ~3s）。
 log "building web frontend"
-if ! command -v pnpm >/dev/null 2>&1; then
-  fail "pnpm not found on PATH — install pnpm first (see deploy/ci/README.md)"
+if ! command -v pnpm >/dev/null 2>&1 || ! command -v corepack >/dev/null 2>&1; then
+  fail "pnpm and corepack are required — install Node.js >=22 first (see deploy/ci/README.md)"
 fi
+# The host may have a newer global pnpm than the repository pin.  Direct
+# recursive scripts invoke `pnpm` again, so merely wrapping the top-level
+# command with corepack is not enough; put the pinned Corepack binary first on
+# PATH for both the build command and its child scripts.
+PNPM_VERSION="$(node -p "require('./web/package.json').packageManager.replace(/^pnpm@/, '')" 2>/dev/null || true)"
+[[ "${PNPM_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "web/package.json has no pinned pnpm version"
+corepack "pnpm@${PNPM_VERSION}" --version >/dev/null 2>&1 || fail "pnpm ${PNPM_VERSION} is unavailable"
+PNPM_MJS="$(find "${COREPACK_HOME:-${HOME}/.cache/node/corepack}" -path "*/pnpm/${PNPM_VERSION}/bin/pnpm.mjs" -print -quit 2>/dev/null || true)"
+[[ -f "${PNPM_MJS}" ]] || fail "Corepack pnpm ${PNPM_VERSION} binary was not cached"
+PNPM_SHIM_DIR="$(mktemp -d)"
+ln -s "${PNPM_MJS}" "${PNPM_SHIM_DIR}/pnpm"
+export PATH="${PNPM_SHIM_DIR}:${PATH}"
+[[ "$(pnpm --version)" == "${PNPM_VERSION}" ]] || fail "pnpm version mismatch after Corepack setup"
 (cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
+rm -rf "${PNPM_SHIM_DIR}"
 
 # 3) NewAPI 数据在服务重启/升级前先做可恢复备份（首次部署无容器时跳过）。
 ENV_FILE="${DEPLOY_ROOT}/.env.${ENV_TARGET}"
