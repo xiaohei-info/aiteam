@@ -20,6 +20,7 @@ from .public_pricing_client import ModelsDevPricingClient, PublicPricingError
 
 INTERNAL_PROVIDER_CODE = "newapi"
 INTERNAL_PROVIDER_NAME = "内部 NewAPI"
+INTERNAL_NEWAPI_CHANNEL_ID = 1
 
 
 class PlatformProviderService:
@@ -36,6 +37,7 @@ class PlatformProviderService:
             display_name=INTERNAL_PROVIDER_NAME,
             relay_base_url=self._public_relay_url,
             api_protocol="openai-completions",
+            newapi_channel_id=INTERNAL_NEWAPI_CHANNEL_ID,
         )
         if sync_models:
             self._sync_models(row)
@@ -46,8 +48,10 @@ class PlatformProviderService:
         return [self._provider_output(row) for row in self._repo.list_providers(published_only=published_only)]
 
     def _sync_models(self, provider: ProviderRow) -> list[PlatformModel]:
+        if provider.newapi_channel_id is None:
+            raise Conflict("internal NewAPI channel is not configured")
         try:
-            model_ids = self._newapi.fetch_available_models()
+            model_ids = self._newapi.fetch_channel_models(provider.newapi_channel_id)
         except NewApiError as exc:
             raise Conflict(f"NewAPI model discovery failed: {exc}") from exc
         if not model_ids:

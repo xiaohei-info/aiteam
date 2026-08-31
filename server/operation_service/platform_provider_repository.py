@@ -92,27 +92,27 @@ class PlatformProviderRepository:
     def _rate(row) -> RateRow:
         return RateRow(**dict(row))
 
-    def ensure_internal_provider(self, *, provider_code: str, display_name: str, relay_base_url: str, api_protocol: str) -> ProviderRow:
+    def ensure_internal_provider(self, *, provider_code: str, display_name: str, relay_base_url: str, api_protocol: str, newapi_channel_id: int) -> ProviderRow:
         """Return the single deployment-owned NewAPI provider projection."""
         with self._connect() as conn:
             row = conn.execute(
                 """INSERT INTO platform_provider (provider_code,display_name,relay_base_url,api_protocol,newapi_channel_id,status)
-                   VALUES (%s,%s,%s,%s,NULL,'published')
+                   VALUES (%s,%s,%s,%s,%s,'published')
                    ON CONFLICT (provider_code) DO UPDATE SET
                      display_name=EXCLUDED.display_name,
                      relay_base_url=EXCLUDED.relay_base_url,
                      api_protocol=EXCLUDED.api_protocol,
-                     newapi_channel_id=NULL,
+                     newapi_channel_id=EXCLUDED.newapi_channel_id,
                      status='published',
                      version=CASE WHEN platform_provider.status <> 'published'
                        OR platform_provider.display_name IS DISTINCT FROM EXCLUDED.display_name
                        OR platform_provider.relay_base_url IS DISTINCT FROM EXCLUDED.relay_base_url
                        OR platform_provider.api_protocol IS DISTINCT FROM EXCLUDED.api_protocol
-                       OR platform_provider.newapi_channel_id IS NOT NULL
+                       OR platform_provider.newapi_channel_id IS DISTINCT FROM EXCLUDED.newapi_channel_id
                        THEN platform_provider.version + 1 ELSE platform_provider.version END,
                      updated_at=now()
                    RETURNING provider_id::text,provider_code,display_name,relay_base_url,api_protocol,newapi_channel_id,status,version,updated_at""",
-                (provider_code, display_name, relay_base_url, api_protocol),
+                (provider_code, display_name, relay_base_url, api_protocol, newapi_channel_id),
             ).fetchone()
         return self._provider(row)
 

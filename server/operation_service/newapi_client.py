@@ -47,23 +47,7 @@ class NewApiAdminClient:
             raise NewApiError(detail)
         return payload
 
-    def fetch_available_models(self) -> list[str]:
-        """Read the model catalog exposed by the internal NewAPI gateway."""
-        payload = self._request("GET", "/api/models")
-        raw = payload.get("data")
-        if not isinstance(raw, dict):
-            raise NewApiError("NewAPI returned an invalid model catalog")
-        models: set[str] = set()
-        for channel_models in raw.values():
-            if channel_models is None:
-                continue
-            if not isinstance(channel_models, list) or any(not isinstance(item, str) for item in channel_models):
-                raise NewApiError("NewAPI returned an invalid model catalog")
-            models.update(item.strip() for item in channel_models if item.strip())
-        return sorted(models)
-
     def fetch_channel_models(self, channel_id: int) -> list[str]:
-        """Compatibility helper for diagnostics of a specific NewAPI channel."""
         payload = self._request("GET", f"/api/channel/fetch_models/{channel_id}")
         raw = payload.get("data") or []
         if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
