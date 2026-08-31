@@ -75,6 +75,18 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
     assert seen["newapi_channel_id"] == 1
 
 
+def test_internal_provider_sync_requires_the_deployment_channel_mapping():
+    provider = ProviderRow("p1", "newapi", "Internal NewAPI", "http://relay/v1", "openai-completions", None, "published", 1, datetime.now(UTC))
+
+    class Repo:
+        def get_provider(self, _provider_id):
+            return provider
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
+    with pytest.raises(Conflict, match="internal NewAPI channel is not configured"):
+        service.sync_models("p1")
+
+
 def test_public_price_sync_only_fills_unpriced_models():
     provider = ProviderRow("p1", "newapi", "NewAPI", "http://old/v1", "openai-completions", 1, "draft", 1, datetime.now(UTC))
     model = ModelRow("p1", "gpt-5.5", "", {}, "draft", "discovery", 1, datetime.now(UTC))
