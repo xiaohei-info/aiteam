@@ -62,11 +62,19 @@ class PublicPricingSyncOut(BaseModel):
     unmatched: int = Field(description="未匹配到模型的条数。")
 
 
+class PlatformModelWithRateOut(BaseModel):
+    """Provider model plus its current optional USD rate card."""
+
+    model_config = ConfigDict(extra="forbid")
+    model: PlatformModel
+    rate: PlatformModelRate | None = None
+
+
 class PlatformModelListOut(BaseModel):
     """Provider 下的平台模型列表。"""
 
     model_config = ConfigDict(extra="forbid")
-    items: list[PlatformModel] = Field(default_factory=list, description="该 Provider 的模型列表。")
+    items: list[PlatformModelWithRateOut] = Field(default_factory=list, description="该 Provider 的模型列表。")
 
 
 class PublishedCountOut(BaseModel):
