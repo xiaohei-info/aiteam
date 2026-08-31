@@ -531,6 +531,30 @@ def test_apply_solution_expands_experts_and_instance():
     assert events[0].source_solution_id == "sol-1"
 
 
+def test_apply_solution_reuses_existing_template_and_recruits_only_missing_experts():
+    """方案应用按 source_template_id 去重：已有员工复用，缺失模板自动落地。"""
+    catalog = FakeOperatorCatalogClient()
+    package = _solution_package()
+    catalog.seed_solution(package)
+    for expert in package.experts:
+        catalog.seed_expert(expert)
+    svc, emp, _, _, orders = _build_service(catalog)
+
+    existing = svc.recruit_expert(
+        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-a", employee_slug="programmer"),
+    )
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+
+    assert result.solution_instance.expert_employee_ids[0] == existing.employee_id
+    assert len(result.solution_instance.expert_employee_ids) == 2
+    assert len(emp._bucket(_ctx("t-a"))) == 2
+    assert result.experts[0].employee_id == existing.employee_id
+    assert result.experts[0].order is None
+    assert result.experts[0].provider_match_status == "reused"
+    assert result.experts[1].order is not None
+    assert len(orders.list_orders(_ctx("t-a"))) == 2  # manual recruit + one new solution expert
+
+
 def test_apply_solution_rolls_back_partial_employee_creation():
     """方案展开中途失败不留下已创建员工或授权。"""
     catalog = FakeOperatorCatalogClient()

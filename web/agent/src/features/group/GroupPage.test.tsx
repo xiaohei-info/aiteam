@@ -84,6 +84,7 @@ describe("GroupPage conversation creation", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "旧群聊" })).toBeInTheDocument();
+    expect(screen.getByTestId("group-chat-layout")).toContainElement(screen.getByTestId("group-chat-content"));
     expect(screen.getByTestId("group-conversation-workspace")).toContainElement(screen.getByTestId("conversation-files-panel"));
     fireEvent.click(screen.getByRole("button", { name: "与旧群聊新建对话" }));
 

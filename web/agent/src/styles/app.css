@@ -271,7 +271,14 @@ body,
 
 [data-testid="chat-layout"],
 [data-testid="group-chat-layout"] {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  min-width: 0;
+}
+
+[data-testid="group-chat-content"] {
+  min-width: 0;
+  flex: 1 1 0;
 }
 
 [data-testid="chat-conversation-main"],
@@ -301,6 +308,59 @@ body,
 
 [data-testid="conversation-files-panel"][data-collapsed="true"] > * {
   min-width: 0;
+}
+
+[data-testid="org-tree"] {
+  overflow: auto;
+}
+
+[data-org-branch="true"] {
+  position: relative;
+  display: flex;
+  min-width: 170px;
+  flex-direction: column;
+  align-items: center;
+}
+
+[data-org-children="true"] {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+  padding-top: 2rem;
+}
+
+/* Vertical stem from a parent card and horizontal branch shared by its children. */
+[data-org-children="true"]::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 2rem;
+  border-left: 1px solid var(--color-border-emphasized);
+  content: "";
+}
+
+[data-org-children="true"]::after {
+  position: absolute;
+  top: 2rem;
+  right: calc(170px / 2);
+  left: calc(170px / 2);
+  border-top: 1px solid var(--color-border-emphasized);
+  content: "";
+}
+
+[data-org-child="true"] {
+  position: relative;
+  padding-top: 1rem;
+}
+
+[data-org-child="true"]::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: 1rem;
+  border-left: 1px solid var(--color-border-emphasized);
+  content: "";
 }
 
 [data-context-hud="true"] {
@@ -474,6 +534,11 @@ body,
   [data-testid="group-chat-layout"] {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  [data-testid="group-chat-content"] {
+    width: 100%;
+    flex-basis: auto;
   }
 
   [data-testid="chat-layout"] > *,

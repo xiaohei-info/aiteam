@@ -268,7 +268,7 @@ export function GroupPage() {
   const conversationTitle = selected?.title ?? "群聊";
 
   return (
-    <HStack gap={4} height="100%" minHeight={0} data-testid="group-chat-layout">
+    <HStack gap={4} height="100%" minHeight={0} width="100%" data-testid="group-chat-layout">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -280,7 +280,7 @@ export function GroupPage() {
         filter={isGroupConversation}
         onItemsLoaded={setConversations}
       />
-      <VStack gap={4} width="100%" minHeight={0}>
+      <VStack data-testid="group-chat-content" gap={4} width="100%" minHeight={0}>
         <Toolbar
           label="群聊协作操作"
           startContent={

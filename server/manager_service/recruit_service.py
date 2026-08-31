@@ -24,7 +24,7 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound
 
-from .employee_config_repository import EmployeeConfigRepository
+from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .operator_catalog import OperatorCatalogPort
 from .platform_skill_service import PlatformSkillService
 from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
@@ -246,20 +246,61 @@ class RecruitService:
         active_template_ids = {template.template_id for template in ordered_experts}
         if coordinator_template_id not in active_template_ids:
             raise Conflict("solution coordinator must be one of the enabled experts")
-        prepared: list[tuple[object, str, dict, ProviderMatchResult, list[str]]] = []
+        # Reuse an existing live employee when the solution references a template that
+        # this tenant already recruited. The source template id is the stable identity;
+        # solution-derived slugs must only be generated for genuinely new employees.
+        prepared: list[tuple[object, EmployeeConfigRow | None, str, dict | None, ProviderMatchResult | None, list[str]]] = []
+        seen_template_ids: set[str] = set()
         seen_slugs: set[str] = set()
         for idx, template in enumerate(ordered_experts):
+            if template.template_id in seen_template_ids:
+                raise Conflict(f"solution contains duplicate expert template: {template.template_id}")
+            seen_template_ids.add(template.template_id)
+            existing = self._employees.get_by_source_template(
+                ctx, source_template_id=template.template_id,
+            )
+            if existing is not None:
+                prepared.append((template, existing, existing.employee_slug, None, None, []))
+                continue
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
             if slug in seen_slugs or self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
                 raise Conflict(f"employee slug collision during solution expansion: {slug}")
             seen_slugs.add(slug)
             recommended, match = _resolve_platform_model(self._catalog, ctx, template)
             skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
-            prepared.append((template, slug, recommended, match, skills))
+            prepared.append((template, None, slug, recommended, match, skills))
 
         expert_results: list[RecruitExpertResult] = []
         expert_employee_ids: list[str] = []
-        for template, slug, recommended, match, skills in prepared:
+        created_employee_ids: list[str] = []
+        for template, existing, slug, recommended, match, skills in prepared:
+            if existing is not None:
+                # Existing employee configuration is authoritative: a solution must not
+                # silently overwrite a Manager-side model/persona override.
+                row = existing
+                expert_employee_ids.append(row.employee_id)
+                _match_audits.append({
+                    "reused": True,
+                    "reused_employee_id": row.employee_id,
+                    "source_template_id": template.template_id,
+                })
+                expert_results.append(
+                    RecruitExpertResult(
+                        employee_id=row.employee_id,
+                        employee_slug=row.employee_slug,
+                        display_name=row.display_name,
+                        persona=row.persona,
+                        source_template_id=template.template_id,
+                        source_template_version=template.version,
+                        grants_applied=False,
+                        order=None,
+                        provider_match_status="reused",
+                        provider_match_candidates=[row.provider_ref] if row.provider_ref else [],
+                    )
+                )
+                continue
+
+            assert recommended is not None and match is not None
             try:
                 order = _track_provision(
                     self._orders, ctx,
@@ -268,7 +309,7 @@ class RecruitService:
                     solution_id=package.solution_id,
                 )
             except Exception:
-                self._rollback_solution_resources(ctx, expert_employee_ids)
+                self._rollback_solution_resources(ctx, created_employee_ids)
                 raise
             created_employee_id: str | None = None
             try:
@@ -298,9 +339,10 @@ class RecruitService:
             except Exception as exc:
                 failed = order.mark_failed(_error_code(exc), str(exc)[:1000])
                 self._orders.update(ctx, failed)
-                self._rollback_solution_resources(ctx, [*expert_employee_ids, *([created_employee_id] if created_employee_id else [])])
+                self._rollback_solution_resources(ctx, [*created_employee_ids, *([created_employee_id] if created_employee_id else [])])
                 raise
             expert_employee_ids.append(row.employee_id)
+            created_employee_ids.append(row.employee_id)
             done = order.mark_succeeded(row.employee_id)
             self._orders.update(ctx, done)
             fin = _order_out(done)
@@ -336,7 +378,7 @@ class RecruitService:
                 ctx, expert_employee_ids, grant_dept_ids, grant_member_ids,
             )
         except Exception:
-            self._rollback_solution_resources(ctx, expert_employee_ids)
+            self._rollback_solution_resources(ctx, created_employee_ids)
             raise
 
         # 5) 建 solution_instance（本 tenant 展开后的真相）。
@@ -361,7 +403,7 @@ class RecruitService:
                 output_requirements=getattr(package, "output_requirements", ""),
             )
         except Exception:
-            self._rollback_solution_resources(ctx, expert_employee_ids)
+            self._rollback_solution_resources(ctx, created_employee_ids)
             raise
 
         # 方案本身也必须被授权：Agent 的方案投影按 ``resource_type=solution`` 裁剪，
@@ -375,7 +417,7 @@ class RecruitService:
                 )
                 grants_applied = True
             except Exception:
-                self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+                self._rollback_solution_resources(ctx, created_employee_ids, instance.id)
                 raise
 
         try:
@@ -387,7 +429,7 @@ class RecruitService:
                 match_audits=_match_audits,
             )
         except Exception:
-            self._rollback_solution_resources(ctx, expert_employee_ids, instance.id)
+            self._rollback_solution_resources(ctx, created_employee_ids, instance.id)
             raise
 
         return ApplySolutionResult(
