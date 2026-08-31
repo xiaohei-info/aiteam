@@ -105,7 +105,6 @@ class PlatformProviderRepository:
                      newapi_channel_id=EXCLUDED.newapi_channel_id,
                      status='published',
                      version=CASE WHEN platform_provider.status <> 'published'
-                       OR platform_provider.display_name IS DISTINCT FROM EXCLUDED.display_name
                        OR platform_provider.relay_base_url IS DISTINCT FROM EXCLUDED.relay_base_url
                        OR platform_provider.api_protocol IS DISTINCT FROM EXCLUDED.api_protocol
                        OR platform_provider.newapi_channel_id IS DISTINCT FROM EXCLUDED.newapi_channel_id
@@ -196,7 +195,7 @@ class PlatformProviderRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 """UPDATE platform_model AS m SET status='published',version=version+1,updated_at=now()
-                   WHERE m.provider_id=%s::uuid AND m.status <> 'published'
+                   WHERE m.provider_id=%s::uuid AND m.status NOT IN ('published','disabled')
                      AND EXISTS (
                        SELECT 1 FROM platform_model_rate AS r
                        WHERE r.provider_id=m.provider_id AND r.model_id=m.model_id

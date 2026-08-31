@@ -1,5 +1,5 @@
 /**
- * 运营端导航与壳配置（08 §12.2 page-shell）。平台 Provider/模型/价格及 NewAPI 原生控制台均归 Operation。
+ * 运营端导航与壳配置（08 §12.2 page-shell）。平台 Provider/模型/价格及 LLM 网关控制台均归 Operation。
  */
 import { PlatformRole } from "@aiteam/shared";
 import type { NavItem, PageShellConfig } from "@aiteam/shared";

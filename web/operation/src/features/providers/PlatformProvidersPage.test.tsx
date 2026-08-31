@@ -23,27 +23,30 @@ describe("PlatformProvidersPage", () => {
     providerApi.models.mockResolvedValue([]);
   });
 
-  it("不再提供新增服务入口，内部渠道由 NewAPI 管理", () => {
+  it("只展示 LLM 网关，不提供新增服务入口", () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     expect(screen.queryByRole("button", { name: "新增大模型服务" })).not.toBeInTheDocument();
-    expect(screen.getByText(/渠道配置在 NewAPI 管理面完成/)).toBeInTheDocument();
+    expect(screen.getByText(/统一通过 LLM 网关/)).toBeInTheDocument();
+    expect(screen.queryByText(/NewAPI/i)).not.toBeInTheDocument();
   });
 
-  it("连接内置 NewAPI 后直接展示可用模型区域", async () => {
+  it("连接 LLM 网关后直接展示可用模型区域", async () => {
     providerApi.list.mockResolvedValue([{
-      provider_id: "p1", provider_code: "newapi", display_name: "内部 NewAPI",
+      provider_id: "p1", provider_code: "newapi", display_name: "LLM 网关",
       relay_base_url: "http://127.0.0.1:9300/v1", api_protocol: "openai-completions",
       status: "published", version: 1, updated_at: "2026-01-01T00:00:00Z",
     }]);
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText("NewAPI 暂无可用模型")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("LLM 网关暂无可用模型")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "发布全部有价格模型" })).not.toBeInTheDocument();
+    expect(screen.getByText(/新模型会自动补齐公开价格并发布/)).toBeInTheDocument();
   });
 
-  it("在大模型服务页提供 NewAPI 网关超链接", async () => {
+  it("在大模型服务页提供 LLM 网关超链接，并保留价格更新入口", async () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
-    expect(screen.getByRole("link", { name: "打开大模型网关" })).toHaveAttribute("href", "http://localhost:9300/");
+    expect(screen.getByRole("link", { name: "打开 LLM 网关" })).toHaveAttribute("href", "http://localhost:9300/");
     await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "大模型服务" })).toBeInTheDocument());
-    expect(screen.getByRole("link", { name: "打开大模型网关" })).toHaveAttribute("target", "_blank");
-    expect(screen.getByRole("link", { name: "打开大模型网关" })).toHaveAttribute("title", expect.stringContaining("管理 Token"));
+    expect(screen.getByRole("link", { name: "打开 LLM 网关" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "打开 LLM 网关" })).toHaveAttribute("title", expect.stringContaining("管理凭据"));
   });
 });

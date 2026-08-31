@@ -24,7 +24,7 @@ import { validateRegistration } from "./register/validation";
 import type { SessionContextValue } from "../../auth/session";
 
 const platformProvidersMock = vi.hoisted(() => ({
-  list: vi.fn().mockResolvedValue([{ provider_id: "provider-1", provider_code: "newapi", display_name: "内部 NewAPI", relay_base_url: "http://relay/v1", api_protocol: "openai-completions", status: "published", version: 2, updated_at: "now" }]),
+  list: vi.fn().mockResolvedValue([{ provider_id: "provider-1", provider_code: "newapi", display_name: "LLM 网关", relay_base_url: "http://relay/v1", api_protocol: "openai-completions", status: "published", version: 2, updated_at: "now" }]),
   models: vi.fn().mockResolvedValue([{ model: { provider_id: "provider-1", model_id: "gpt-5", display_name: "GPT-5", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } }]),
 }));
 vi.mock("../providers/usePlatformProvidersApi", () => ({ usePlatformProvidersApi: () => platformProvidersMock }));
@@ -555,7 +555,7 @@ describe("注册表单", () => {
     fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
     await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "保留的人设" } });
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "描述" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -713,7 +713,7 @@ describe("注册表单", () => {
     )!;
     fireEvent.change(systemPrompt, { target: { value: "电商客服" } });
 
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
 
     // Fill all PRD required fields so the always-send payload is complete.
     await selectAstryxOption("分类 (category)", "市场营销");
@@ -772,7 +772,7 @@ describe("注册表单", () => {
 
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("内部 NewAPI"));
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
     fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
     await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "desc" } });
