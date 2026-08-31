@@ -272,8 +272,11 @@ body,
 [data-testid="chat-layout"],
 [data-testid="group-chat-layout"] {
   flex-wrap: nowrap;
-  align-items: stretch;
   min-width: 0;
+}
+
+[data-testid="group-chat-layout"] {
+  align-items: stretch;
 }
 
 [data-testid="group-chat-content"] {
