@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
 import { HStack } from "@astryxdesign/core/HStack";
-import { Selector } from "@astryxdesign/core/Selector";
+import { Popover } from "@astryxdesign/core/Popover";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { AgentApiClient } from "../../lib/api-client";
@@ -28,6 +29,8 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
   const [context, setContext] = useState<ConversationContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestId = useRef(0);
 
@@ -75,6 +78,11 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
     }
   }
 
+  function closeMenu(): void {
+    setMenuOpen(false);
+    setThinkingMenuOpen(false);
+  }
+
   if (loading && !context) {
     return <HStack data-testid="conversation-context-hud" data-context-hud="true" role="status" aria-label="上下文状态加载中" gap={2} align="center"><span data-context-loading="true" aria-hidden="true" /><Text type="supporting">上下文加载中…</Text></HStack>;
   }
@@ -90,8 +98,9 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
   if (!thinkingValues.includes(context.thinking_level)) thinkingValues.push(context.thinking_level);
   const thinkingOptions = thinkingValues.map((value) => ({
     value,
-    label: THINKING_LEVELS.find((item) => item.value === value)?.label ?? value,
+    label: thinkingLabel(value, thinkingValues),
   }));
+  const currentThinkingLabel = thinkingLabel(context.thinking_level, thinkingValues);
 
   return (
     <HStack
@@ -115,22 +124,73 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
           {used} / {contextWindow}
         </Text>
       </VStack>
-      <Selector
-        label="思考档位"
-        isLabelHidden
-        size="sm"
+      <Popover
+        isOpen={menuOpen}
+        onOpenChange={(open) => {
+          setMenuOpen(open);
+          if (!open) setThinkingMenuOpen(false);
+        }}
+        label="模型和思考等级"
         placement="above"
-        width={104}
-        options={thinkingOptions}
-        value={context.thinking_level}
-        onChange={(value) => { void changeThinkingLevel(value); }}
-        isDisabled={saving || isPrompting}
-        data-testid="conversation-thinking-level"
-      />
+        width={248}
+        content={thinkingMenuOpen ? (
+          <VStack gap={1} data-context-menu="thinking">
+            <Button
+              label="返回模型设置"
+              variant="ghost"
+              size="sm"
+              onClick={() => setThinkingMenuOpen(false)}
+            />
+            {thinkingOptions.map((option) => (
+              <Button
+                key={option.value}
+                label={option.label}
+                variant={option.value === context.thinking_level ? "secondary" : "ghost"}
+                size="sm"
+                isDisabled={saving || isPrompting}
+                onClick={() => {
+                  void changeThinkingLevel(option.value);
+                  closeMenu();
+                }}
+              />
+            ))}
+          </VStack>
+        ) : (
+          <VStack gap={1} data-context-menu="root">
+            <HStack data-context-menu-row="model" justify="between" align="center" gap={2}>
+              <Text type="supporting">模型</Text>
+              <Text data-context-menu-value="true" aria-label={providerDetail ? `${modelLabel}（${providerDetail}）` : modelLabel}>{modelLabel}</Text>
+            </HStack>
+            <Button
+              label={`思考等级 ${currentThinkingLabel} ›`}
+              variant="ghost"
+              size="sm"
+              onClick={() => setThinkingMenuOpen(true)}
+              data-testid="conversation-thinking-level-menu"
+            />
+            <Text type="supporting" data-context-menu-note="true">模型由 Manager 配置</Text>
+          </VStack>
+        )}
+      >
+        <Button
+          label={`${modelLabel} ${currentThinkingLabel}`}
+          tooltip="模型和思考等级"
+          variant="ghost"
+          size="sm"
+          isDisabled={saving || isPrompting}
+          data-testid="conversation-thinking-level"
+        />
+      </Popover>
       {isPrompting ? <span data-context-running="true" aria-label="执行中" title="执行中" /> : null}
       {error ? <Banner status="error" title={error} /> : null}
     </HStack>
   );
+}
+
+function thinkingLabel(value: ConversationThinkingLevel, available: ConversationThinkingLevel[]): string {
+  if (value === "off") return "关闭";
+  if (value === "high" && available.length === 2 && available.includes("off") && available.includes("high")) return "开启思考";
+  return THINKING_LEVELS.find((item) => item.value === value)?.label ?? value;
 }
 
 function ContextRing({ percentage, used, contextWindow }: { percentage: number | null; used: string; contextWindow: string }): ReactNode {

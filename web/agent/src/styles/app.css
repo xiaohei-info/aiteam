@@ -329,6 +329,37 @@ body,
   white-space: nowrap;
 }
 
+[data-testid="conversation-thinking-level"] {
+  max-width: 7.5rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-context-menu="root"],
+[data-context-menu="thinking"] {
+  min-width: 0;
+}
+
+[data-context-menu-row="model"] {
+  min-height: 2rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-element);
+  background: var(--color-neutral);
+}
+
+[data-context-menu-value="true"] {
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-context-menu-note="true"] {
+  padding: 0.25rem 0.5rem;
+}
+
 [data-context-ring="true"] {
   position: relative;
   display: inline-grid;
