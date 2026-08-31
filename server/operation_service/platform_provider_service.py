@@ -18,6 +18,10 @@ from .platform_provider_repository import PlatformProviderRepository, ProviderRo
 from .public_pricing_client import ModelsDevPricingClient, PublicPricingError
 
 
+INTERNAL_PROVIDER_CODE = "newapi"
+INTERNAL_PROVIDER_NAME = "内部 NewAPI"
+
+
 class PlatformProviderService:
     def __init__(self, repo: PlatformProviderRepository, newapi: NewApiAdminClient, crypto: CryptoService, public_relay_url: str, public_pricing: ModelsDevPricingClient | None = None):
         self._repo = repo
@@ -26,41 +30,32 @@ class PlatformProviderService:
         self._public_relay_url = public_relay_url.rstrip("/")
         self._public_pricing = public_pricing or ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"))
 
-    def create_provider(self, *, provider_code: str, display_name: str, api_protocol: str, newapi_channel_id: int) -> PlatformProvider:
-        try:
-            row = self._repo.create_provider(
-                provider_code=provider_code.strip(), display_name=display_name.strip(), relay_base_url=self._public_relay_url,
-                api_protocol=api_protocol, newapi_channel_id=newapi_channel_id,
-            )
-        except Exception as exc:
-            if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
-                raise Conflict("platform provider code already exists") from exc
-            raise
+    def ensure_internal_provider(self, *, sync_models: bool = True) -> PlatformProvider:
+        row = self._repo.ensure_internal_provider(
+            provider_code=INTERNAL_PROVIDER_CODE,
+            display_name=INTERNAL_PROVIDER_NAME,
+            relay_base_url=self._public_relay_url,
+            api_protocol="openai-completions",
+        )
+        if sync_models:
+            self._sync_models(row)
         return self._provider_output(row)
 
     def list_providers(self, *, published_only: bool = False) -> list[PlatformProvider]:
+        self.ensure_internal_provider()
         return [self._provider_output(row) for row in self._repo.list_providers(published_only=published_only)]
 
-    def publish_provider(self, provider_id: str) -> PlatformProvider:
-        provider = self._require_provider(provider_id)
-        models = self._repo.list_models(provider_id, published_only=True)
-        if not models:
-            raise Conflict("publish at least one priced model before publishing provider")
-        if any((rate := self._repo.current_rate(provider_id, model.model_id)) is None or rate.pricing_status != "known" for model in models):
-            raise Conflict("every published model requires a known active price")
-        return self._provider_output(self._repo.set_provider_status(provider.provider_id, "published"))
-
-    def sync_models(self, provider_id: str) -> list[PlatformModel]:
-        provider = self._require_provider(provider_id)
-        if provider.newapi_channel_id is None:
-            raise Conflict("provider has no internal NewAPI channel")
+    def _sync_models(self, provider: ProviderRow) -> list[PlatformModel]:
         try:
-            model_ids = self._newapi.fetch_channel_models(provider.newapi_channel_id)
+            model_ids = self._newapi.fetch_available_models()
         except NewApiError as exc:
             raise Conflict(f"NewAPI model discovery failed: {exc}") from exc
         if not model_ids:
             raise Conflict("NewAPI discovered no models")
-        return [_model(row) for row in self._repo.upsert_discovered_models(provider_id, model_ids)]
+        return [_model(row) for row in self._repo.upsert_discovered_models(provider.provider_id, model_ids)]
+
+    def sync_models(self, provider_id: str) -> list[PlatformModel]:
+        return self._sync_models(self._require_provider(provider_id))
 
     def list_models(self, provider_id: str, *, published_only: bool = False) -> list[dict]:
         self._require_provider(provider_id)

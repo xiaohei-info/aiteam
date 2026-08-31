@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { PlatformProvidersPage } from "./PlatformProvidersPage";
@@ -7,22 +7,19 @@ vi.mock("./usePlatformProvidersApi", () => ({
   usePlatformProvidersApi: () => ({
     list: vi.fn().mockReturnValue(new Promise(() => {})),
     models: vi.fn().mockResolvedValue([]),
-    create: vi.fn(),
     sync: vi.fn(),
     syncPublicPrices: vi.fn(),
     publishPricedModels: vi.fn(),
-    publishProvider: vi.fn(),
     publishModel: vi.fn(),
     setRate: vi.fn(),
   }),
 }));
 
 describe("PlatformProvidersPage", () => {
-  it("新增服务时不要求填写内部 NewAPI channel ID", () => {
+  it("不再提供新增服务入口，内部渠道由 NewAPI 管理", () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
-    fireEvent.click(screen.getByRole("button", { name: "新增大模型服务" }));
-    expect(screen.queryByLabelText("内部 NewAPI channel ID")).not.toBeInTheDocument();
-    expect(screen.getByText("内部 NewAPI 渠道由部署配置统一管理，无需手动填写。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新增大模型服务" })).not.toBeInTheDocument();
+    expect(screen.getByText(/渠道配置在 NewAPI 管理面完成/)).toBeInTheDocument();
   });
 
   it("在大模型服务页提供 NewAPI 网关超链接", async () => {

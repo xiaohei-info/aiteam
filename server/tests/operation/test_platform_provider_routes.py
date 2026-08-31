@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from run import get_app
 from shared.contracts.auth import TokenClaims
 from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
-from operation_service.routes_platform_provider import PlatformProviderCreate
 
 
 class FakePlatformProviders:
@@ -15,7 +14,7 @@ class FakePlatformProviders:
         self.provider = PlatformProvider(
             provider_id="p1", provider_code="newapi", display_name="Internal NewAPI",
             relay_base_url="https://relay.example/v1", api_protocol="openai-completions",
-            status="draft", version=1, updated_at=datetime.now(UTC),
+            status="published", version=1, updated_at=datetime.now(UTC),
         )
         self.model = PlatformModel(
             provider_id="p1", model_id="minimax-m3", display_name="MiniMax M3",
@@ -28,10 +27,8 @@ class FakePlatformProviders:
             source="manual", effective_from=datetime.now(UTC), manually_overridden=True,
         )
 
-    def create_provider(self, **_): return self.provider
     def list_providers(self, **_): return [self.provider]
     def sync_models(self, _provider_id): return [self.model]
-    def publish_provider(self, _provider_id): return self.provider.model_copy(update={"status": "published", "version": 2})
     def list_models(self, _provider_id, **_): return [{"model": self.model, "rate": self.rate}]
     def set_rate(self, _provider_id, _model_id, **_): return self.rate
     def sync_public_prices(self, _provider_id): return {"source": "models.dev", "updated": 1, "skipped_known": 0, "skipped_manual": 0, "unmatched": 0}
@@ -53,21 +50,11 @@ def auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_provider_creation_uses_the_deployment_owned_newapi_channel_by_default():
-    request = PlatformProviderCreate.model_validate({
-        "provider_code": "newapi", "display_name": "Internal NewAPI",
-        "api_protocol": "openai-completions",
-    })
-    assert request.newapi_channel_id == 1
-
-
 def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
-    created = client.post("/api/operation/providers", headers=auth(), json={
-        "provider_code": "newapi", "display_name": "Internal NewAPI",
-        "api_protocol": "openai-completions", "newapi_channel_id": 1,
-    })
-    assert created.status_code == 201
-    assert "token" not in str(created.json()).lower()
+    listed = client.get("/api/operation/providers", headers=auth())
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["provider_code"] == "newapi"
+    assert "token" not in str(listed.json()).lower()
 
     synced = client.post("/api/operation/providers/p1/sync-models", headers=auth())
     assert synced.status_code == 200
@@ -91,6 +78,11 @@ def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     published_priced = client.post("/api/operation/providers/p1/models/publish-priced", headers=auth())
     assert published_priced.status_code == 200
     assert published_priced.json()["data"]["published"] == 26
+
+
+def test_provider_creation_route_is_not_available(client):
+    response = client.post("/api/operation/providers", headers=auth(), json={})
+    assert response.status_code == 405
 
 
 def test_platform_provider_admin_routes_require_platform_auth(client):

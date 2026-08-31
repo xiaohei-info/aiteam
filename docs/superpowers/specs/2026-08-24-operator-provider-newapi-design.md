@@ -8,8 +8,8 @@
 ## 1. 目标
 
 1. 内部 NewAPI 作为 AI Team 整体部署组件，与 PostgreSQL、LightRAG/Hindsight 同级，由平台管理。
-2. Operator 是 Provider、发布模型、价格和专家模板默认模型的唯一真相端。
-3. Operator 把现有外部 `newapi.xiaohei.tech/v1` Provider 配为内部 NewAPI 的上游渠道；Agent 只调用内部 NewAPI。
+2. AI Team 只对接部署内置的单一内部 NewAPI；Operator 服务启动后自动确保该内置 Provider 投影存在并刷新可用模型。
+3. 新上游服务/渠道只在 NewAPI 管理面配置；Agent 只调用内部 NewAPI，Operator 页面不再提供 Provider 创建流程。
 4. Manager 招募专家时继承模板固定的 Provider/模型并直接可用，无需再创建 Provider 或补模型。
 5. Manager 可切换员工模型，但只能从 Operator 对该 tenant 发布的模型目录选择，不能自由输入 Provider/model/price。
 6. Agent 从 Manager 获取同一模型、价格和 tenant 受限令牌；每次 Run 冻结版本并在本地计算 cost。计费始终按 AI Team 请求的快照模型和价格计算，忽略 Relay/上游响应中的实际模型名，不做二次映射或校正。
@@ -27,8 +27,8 @@
 
 旧 D18（Manager 持 Provider 凭据）替换为：
 
-- Operator 持平台 Provider 定义、模型目录、版本化价格、Relay 管理凭据和 tenant access 真相。
-- 内部 NewAPI 持真实上游 channel key；Operator 只在受控管理面配置/轮换，不向下游分发。
+- Operator 持内置 NewAPI Provider 投影、模型目录、版本化价格、Relay 管理凭据和 tenant access 真相；Provider 本身不由用户创建。
+- 内部 NewAPI 持真实上游 channel key；新渠道只在 NewAPI 管理面配置/轮换，不向下游分发。
 - Manager 只持平台目录的 tenant 只读投影、employee 的平台模型选择，以及加密的 tenant 受限 Relay Token 投影；不创建 Provider、不编辑价格。
 - Agent 只持授权后的只读执行快照和 tenant 受限 Relay Token，本地最小注入；不持上游 key 或管理 token。
 - `RunSpec.provider_ref` 引用平台 Provider；每个 Run 冻结 `provider_version/model_version/pricing_version`。
@@ -37,7 +37,7 @@
 
 ### 4.1 Operator
 
-- `platform_provider`：provider code/name、内部 Relay endpoint、API protocol、状态、版本、加密 NewAPI 管理凭据引用。
+- `platform_provider`：固定内置 NewAPI Provider code/name、内部 Relay endpoint、API protocol、状态、版本、加密 NewAPI 管理凭据引用；旧 channel 映射字段仅作数据兼容保留。
 - `platform_model`：provider 下已发现/已发布模型、能力、来源、状态、版本。
 - `platform_model_rate`：按模型和生效时间版本化价格；Decimal 字符串或整数 micro-USD，禁止 float。
 - `platform_provider_tenant_access`：tenant 对 provider 的 NewAPI token 引用、允许模型、配额、状态、版本；token 加密保存。
@@ -71,8 +71,8 @@
 ### 5.2 上游渠道
 
 - 内部 NewAPI channel 指向现有 `https://newapi.xiaohei.tech/v1`。
-- 上游 key 由 Operator 管理流程写入 NewAPI；不落 AI Team 普通业务表明文、不进入日志。
-- 通过 NewAPI `/api/channel/fetch_models` 或上游 `/v1/models` 发现模型；首次应发现 `minimax-m3`。
+- 上游 key 由 NewAPI 管理面写入；不落 AI Team 普通业务表明文、不进入日志。
+- Operation 通过 NewAPI 管理面的模型目录发现可用模型；新渠道/模型由 NewAPI 管理面配置后自动进入目录，首次应发现 `minimax-m3`。
 
 ### 5.3 Tenant Token
 
@@ -94,10 +94,10 @@
 
 ### 7.1 Operator 配置
 
-1. 系统管理员创建平台 Provider，并配置内部 NewAPI channel。
-2. 点击同步模型，预览新增/下线差异。
+1. Operation 启动后首次访问时自动确保内置 NewAPI Provider 投影，并从 NewAPI 模型目录刷新模型。
+2. Operator 页面默认展示内部 NewAPI 和可用模型；新上游渠道在 NewAPI 管理面配置。
 3. 同步公开价格或人工维护，发布模型/价格版本。
-4. 注册专家模板时从已发布 Provider→model 级联选择。
+4. 注册专家模板时从已发布模型选择。
 
 ### 7.2 Manager 招募
 
@@ -126,7 +126,7 @@
 
 1. taiyi 内部 NewAPI、Redis、DB 健康；管理端不公网暴露，推理入口可控。
 2. 内部 NewAPI 渠道使用当前外部 Provider，`/v1/models` 至少返回 `minimax-m3`，真实 completion 成功。
-3. Operator 可同步、人工改价、发布 Provider/model，模板 UI 只能选择已发布模型。
+3. Operator 可查看内部 NewAPI 模型、同步/人工改价并发布 model，模板 UI 只能选择已发布模型；不提供 Provider 创建。
 4. 全新 tenant 招募模板后 employee 直接带 model/provider，不出现“待 Manager 配置”。
 5. Manager 编辑员工模型时无法提交 Operator 未发布 model。
 6. Agent 通过内部 NewAPI tenant token 完成真实对话；全局/管理 key 不出现在 Manager/Agent API、日志、前端或快照。
