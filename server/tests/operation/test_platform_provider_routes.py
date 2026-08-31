@@ -56,6 +56,11 @@ def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     assert listed.json()["data"][0]["provider_code"] == "newapi"
     assert "token" not in str(listed.json()).lower()
 
+    model_list = client.get("/api/operation/providers/p1/models", headers=auth())
+    assert model_list.status_code == 200
+    assert model_list.json()["data"]["items"][0]["model"]["model_id"] == "minimax-m3"
+    assert model_list.json()["data"]["items"][0]["rate"]["input_usd_per_million"] == "0.300000"
+
     synced = client.post("/api/operation/providers/p1/sync-models", headers=auth())
     assert synced.status_code == 200
     assert synced.json()["data"][0]["model_id"] == "minimax-m3"
