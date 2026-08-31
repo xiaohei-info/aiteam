@@ -48,13 +48,17 @@ describe("PlatformProvidersPage", () => {
       relay_base_url: "http://127.0.0.1:9300/v1", api_protocol: "openai-completions",
       status: "published", version: 1, updated_at: "2026-01-01T00:00:00Z",
     }]);
-    providerApi.models.mockResolvedValue([{
-      model: { provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" },
-      rate: { rate_id: "r1", provider_id: "p1", model_id: "minimax-m3", pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "0.3", output_usd_per_million: "1.2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", source: "public_reference", effective_from: "2026-01-01T00:00:00Z" },
-    }]);
+    providerApi.models.mockResolvedValue([
+      {
+        model: { provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" },
+        rate: { rate_id: "r1", provider_id: "p1", model_id: "minimax-m3", pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "0.3", output_usd_per_million: "1.2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", source: "public_reference", effective_from: "2026-01-01T00:00:00Z" },
+      },
+      { model: { provider_id: "p1", model_id: "unpriced", display_name: "", capabilities: {}, status: "draft", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" }, rate: null },
+    ]);
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("MiniMax M3")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "设置价格" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "设置价格" })).toHaveLength(2);
+    expect(screen.getByText("价格未知")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "发布模型" })).not.toBeInTheDocument();
   });
 
