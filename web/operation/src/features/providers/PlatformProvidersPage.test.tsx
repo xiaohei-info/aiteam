@@ -7,7 +7,6 @@ vi.mock("./usePlatformProvidersApi", () => ({
   usePlatformProvidersApi: () => ({
     list: vi.fn().mockReturnValue(new Promise(() => {})),
     models: vi.fn().mockResolvedValue([]),
-    sync: vi.fn(),
     syncPublicPrices: vi.fn(),
     publishPricedModels: vi.fn(),
     publishModel: vi.fn(),

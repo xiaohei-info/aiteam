@@ -15,9 +15,6 @@ export function usePlatformProvidersApi() {
         const data = await client.get<{ items: PlatformModelWithRate[] }>(`${BASE}/${providerId}/models`);
         return data?.items ?? [];
       },
-      async sync(providerId: string): Promise<PlatformModel[]> {
-        return (await client.post<PlatformModel[]>(`${BASE}/${providerId}/sync-models`)) ?? [];
-      },
       syncPublicPrices(providerId: string) {
         return client.post<PublicPricingSyncResult>(`${BASE}/${providerId}/sync-public-prices`);
       },
