@@ -120,7 +120,7 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
         isLabelHidden
         size="sm"
         placement="above"
-        width={124}
+        width={104}
         options={thinkingOptions}
         value={context.thinking_level}
         onChange={(value) => { void changeThinkingLevel(value); }}

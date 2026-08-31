@@ -289,11 +289,11 @@ body,
 
 [data-context-summary="true"] {
   min-width: 0;
-  max-width: 12rem;
+  max-width: 8rem;
 }
 
 [data-context-model="true"] {
-  max-width: 12rem;
+  max-width: 8rem;
   overflow: hidden;
   color: var(--color-text-primary);
   font-size: 0.8125rem;
