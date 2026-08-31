@@ -72,7 +72,7 @@
 
 - 内部 NewAPI channel 指向现有 `https://newapi.xiaohei.tech/v1`。
 - 上游 key 由 NewAPI 管理面写入；不落 AI Team 普通业务表明文、不进入日志。
-- Operation 通过 NewAPI 管理面的模型目录发现可用模型；新渠道/模型由 NewAPI 管理面配置后自动进入目录，首次应发现 `minimax-m3`。
+- Operation 通过内部 NewAPI 渠道的模型发现接口读取可用模型；新上游配置在 NewAPI 管理面完成后，刷新页面即可同步，首次应发现 `minimax-m3`。
 
 ### 5.3 Tenant Token
 
@@ -94,7 +94,7 @@
 
 ### 7.1 Operator 配置
 
-1. Operation 启动后首次访问时自动确保内置 NewAPI Provider 投影，并从 NewAPI 模型目录刷新模型。
+1. Operation 启动后首次访问时自动确保内置 NewAPI Provider 投影，并从内部 NewAPI 渠道刷新模型。
 2. Operator 页面默认展示内部 NewAPI 和可用模型；新上游渠道在 NewAPI 管理面配置。
 3. 同步公开价格或人工维护，发布模型/价格版本。
 4. 注册专家模板时从已发布模型选择。
