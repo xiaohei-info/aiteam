@@ -84,9 +84,14 @@ def test_internal_provider_upsert_reconciles_discovered_models(monkeypatch):
         newapi_channel_id=1,
     )
     models = repo.upsert_discovered_models("p1", ["minimax-m3"])
+    repo.list_models("p1")
+    repo.list_models("p1", published_only=True)
 
     assert provider.status == "published"
     assert models[0].model_id == "minimax-m3"
     stale_update = next(sql for sql, _ in conn.executed if "UPDATE platform_model SET" in sql)
     assert "ANY" in stale_update
     assert ("p1", ["minimax-m3"]) in [params for sql, params in conn.executed if "status='disabled'" in sql]
+    model_queries = [sql for sql, _ in conn.executed if "FROM platform_model WHERE provider_id" in sql]
+    assert "status <> 'disabled'" in model_queries[-2]
+    assert "status='published'" in model_queries[-1]
