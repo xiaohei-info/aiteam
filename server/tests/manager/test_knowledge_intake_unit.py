@@ -645,6 +645,29 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
         svc.retry(ctx, knowledge_space_id="ks", document_id="d1")
 
 
+def test_resolver_handles_empty_and_legacy_alias_results(tmp_path: Path) -> None:
+    class EmptyMany(_FakeIngestion):
+        def resolve_document_ids(self, *, workspace, aliases):
+            return None
+
+    empty = _make_service(space_root=tmp_path / "empty", existing_spaces={"ks"}, ingestion=EmptyMany())
+    assert empty._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"]) == []
+
+    class InvalidMany(_FakeIngestion):
+        def resolve_document_ids(self, *, workspace, aliases):
+            return "invalid"
+
+    invalid = _make_service(space_root=tmp_path / "invalid", existing_spaces={"ks"}, ingestion=InvalidMany())
+    with pytest.raises(RagIngestionUnavailable):
+        invalid._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"])
+
+    legacy = _make_service(
+        space_root=tmp_path / "legacy", existing_spaces={"ks"},
+        ingestion=_ResolvingFakeIngestion(resolved_id=None),
+    )
+    assert legacy._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"]) == []
+
+
 def test_delete_resolves_multiple_duplicate_aliases_before_request(tmp_path: Path) -> None:
     ingestion = _MultiResolvingFakeIngestion(
         resolved_ids=["duplicate-marker", "original-doc"],

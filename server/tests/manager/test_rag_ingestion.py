@@ -323,6 +323,27 @@ def test_ingestion_reuses_original_for_duplicate_content():
     assert result.chunk_count is None
 
 
+def test_ingestion_accepts_flat_duplicate_metadata():
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/text"):
+            return httpx.Response(200, json={"status": "success", "track_id": "track-flat-duplicate"})
+        return httpx.Response(200, json={
+            "track_id": "track-flat-duplicate",
+            "documents": [{
+                "id": "dup-marker", "file_path": "doc-2", "status": "failed",
+                "is_duplicate": True, "original_doc_id": "doc-original",
+            }],
+            "total_count": 1,
+        })
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        result = client.ingest_text(workspace="derived", file_source="doc-2", text="same content")
+    finally:
+        client.close()
+    assert result.upstream_document_id == "doc-original"
+
+
 def test_ingestion_rejects_malformed_duplicate_metadata():
     def handler(request: httpx.Request):
         if request.url.path.endswith("/text"):

@@ -205,6 +205,15 @@ def test_model_thinking_level_must_match_operator_capabilities():
     assert accepted.model_policy.thinking_level == "high"
 
 
+def test_thinking_validation_accepts_off_and_maps_capabilities():
+    from manager_service.employee_config_service import _validate_thinking_level
+
+    _validate_thinking_level("off", {})
+    _validate_thinking_level("high", {"thinking_level_map": {"high": "high", "low": None}})
+    with pytest.raises(Conflict, match="does not support thinking"):
+        _validate_thinking_level("high", {"reasoning": False})
+
+
 def test_member_cannot_write_config():
     """配置写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
     svc = EmployeeConfigService(_FakeRepo())

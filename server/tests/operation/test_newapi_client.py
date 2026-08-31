@@ -227,6 +227,29 @@ def test_platform_provider_rejects_unsupported_template_thinking_level():
         service.validate_model_thinking_level(ref, "low", require_published=True)
 
 
+def test_platform_provider_thinking_validation_handles_map_and_non_reasoning_model():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    mapping_model = ModelRow(
+        "p1", "mapped", "Mapped", {"thinking_level_map": {"off": "none", "high": "high", "low": None}},
+        "published", "discovery", 1, now,
+    )
+    plain_model = ModelRow(
+        "p1", "plain", "Plain", {"reasoning": False}, "published", "discovery", 1, now,
+    )
+    rate = RateRow("r1", "p1", "mapped", 1, "known", "token", Decimal("1"), Decimal("2"), None, None, None, "USD", "manual", None, now, None, False)
+
+    class Repo:
+        def get_provider(self, _): return provider
+        def get_model(self, _provider_id, model_id): return mapping_model if model_id == "mapped" else plain_model
+        def current_rate(self, _provider_id, _model_id): return rate
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
+    service.validate_model_thinking_level(PlatformModelRef(provider_id="p1", provider_version=1, model_id="mapped", model_version=1), "high", require_published=True)
+    with pytest.raises(Conflict, match="does not support thinking"):
+        service.validate_model_thinking_level(PlatformModelRef(provider_id="p1", provider_version=1, model_id="plain", model_version=1), "high", require_published=True)
+
+
 def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_models():
     now = datetime.now(UTC)
     provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
