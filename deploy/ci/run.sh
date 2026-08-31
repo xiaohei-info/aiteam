@@ -101,6 +101,7 @@ PNPM_MJS="$(find "${COREPACK_HOME:-${HOME}/.cache/node/corepack}" -path "*/pnpm/
 PNPM_SHIM_DIR="$(mktemp -d)"
 ln -s "${PNPM_MJS}" "${PNPM_SHIM_DIR}/pnpm"
 export PATH="${PNPM_SHIM_DIR}:${PATH}"
+hash -r 2>/dev/null || true
 [[ "$(pnpm --version)" == "${PNPM_VERSION}" ]] || fail "pnpm version mismatch after Corepack setup"
 (cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
