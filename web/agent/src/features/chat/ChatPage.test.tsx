@@ -76,6 +76,7 @@ describe("ChatPage employee navigation", () => {
     expect(screen.getByRole("button", { name: "历史对话" })).toHaveTextContent(/^$/);
     expect(screen.getByRole("button", { name: "设置调度" })).toHaveTextContent(/^$/);
     expect(screen.getByRole("button", { name: "与系统测试员新建对话" })).not.toHaveTextContent("新建对话");
+    expect(screen.getByTestId("chat-conversation-workspace")).toContainElement(screen.getByTestId("conversation-files-panel"));
 
     fireEvent.click(screen.getByRole("button", { name: "历史对话" }));
     expect(await screen.findByTestId("history-c2")).toBeInTheDocument();

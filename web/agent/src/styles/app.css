@@ -274,11 +274,33 @@ body,
   flex-wrap: wrap;
 }
 
+[data-testid="chat-conversation-main"],
+[data-testid="group-conversation-main"] {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+[data-testid="chat-conversation-workspace"],
+[data-testid="group-conversation-workspace"] {
+  min-width: 0;
+}
+
 [data-testid="conversation-files-panel"] {
   width: min(19rem, 28vw);
   min-width: 16rem;
+  flex: 0 0 min(19rem, 28vw);
   align-self: stretch;
   overflow: auto;
+}
+
+[data-testid="conversation-files-panel"][data-collapsed="true"] {
+  width: 3.5rem;
+  min-width: 3.5rem;
+  flex-basis: 3.5rem;
+}
+
+[data-testid="conversation-files-panel"][data-collapsed="true"] > * {
+  min-width: 0;
 }
 
 [data-context-hud="true"] {
@@ -443,7 +465,15 @@ body,
   [data-testid="conversation-files-panel"] {
     width: 100%;
     min-width: 0;
+    flex-basis: auto;
     max-height: 24rem;
+  }
+
+  [data-testid="conversation-files-panel"][data-collapsed="true"] {
+    width: 100%;
+    min-width: 0;
+    flex-basis: auto;
+    max-height: none;
   }
 }
 

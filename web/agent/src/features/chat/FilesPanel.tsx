@@ -6,7 +6,9 @@ import { Card } from "@astryxdesign/core/Card";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
 import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { AgentApiClient } from "../../lib/api-client";
 import { downloadLocalFile, listLocalFiles, subscribePiEvents, type LocalFile } from "./useChatApi";
@@ -33,6 +35,8 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
   const previewUrl = useRef<string | null>(null);
   const requestGeneration = useRef(0);
 
@@ -55,6 +59,8 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
   useEffect(() => {
     requestGeneration.current += 1;
     releasePreview();
+    setFilter("");
+    setCollapsed(false);
     return () => { requestGeneration.current += 1; };
   }, [conversationId, releasePreview]);
   useEffect(() => { loadFiles(true); }, [loadFiles, refreshSignal]);
@@ -129,21 +135,53 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
     }
   }
 
+  const normalizedFilter = filter.trim().toLocaleLowerCase();
+  const visibleFiles = normalizedFilter
+    ? files.filter((file) => file.filename.toLocaleLowerCase().includes(normalizedFilter))
+    : files;
+
   return (
-    <Card data-testid="conversation-files-panel" role="region" aria-label="会话文件" padding={3}>
+    <Card
+      data-testid="conversation-files-panel"
+      data-collapsed={collapsed}
+      role="region"
+      aria-label="会话文件"
+      padding={3}
+    >
       <VStack gap={3}>
-        <HStack justify="between" align="center">
-          <Heading level={2}>会话文件</Heading>
+        <HStack justify="between" align="center" gap={2}>
+          {!collapsed ? <Heading level={2}>会话文件</Heading> : <span aria-hidden="true" />}
           <HStack gap={1} align="center">
             <Badge label={`${files.length}`} variant="neutral" />
-            <Button label="刷新文件" variant="ghost" size="sm" isLoading={loading} onClick={() => loadFiles(true)} />
+            {!collapsed ? <Button label="刷新文件" variant="ghost" size="sm" isLoading={loading} onClick={() => loadFiles(true)} /> : null}
+            <Button
+              label={collapsed ? "展开文件区" : "折叠文件区"}
+              tooltip={collapsed ? "展开文件区" : "折叠文件区"}
+              variant="ghost"
+              size="sm"
+              isIconOnly
+              icon={<Icon icon={collapsed ? "chevronLeft" : "chevronRight"} size="sm" />}
+              onClick={() => setCollapsed((value) => !value)}
+              aria-expanded={!collapsed}
+              data-testid="conversation-files-toggle"
+            />
           </HStack>
         </HStack>
-        {error ? <Banner status="error" title={error} /> : null}
-        {loading ? <Text type="supporting">加载中…</Text> : null}
-        {!loading && files.length === 0 ? <Text type="supporting">暂无附件或产物</Text> : null}
-        <div data-files-list="true">
-          {files.map((file) => (
+        {!collapsed ? <>
+          <TextInput
+            label="筛选文件"
+            isLabelHidden
+            value={filter}
+            onChange={setFilter}
+            placeholder="筛选文件…"
+            startIcon="search"
+          />
+          {error ? <Banner status="error" title={error} /> : null}
+          {loading ? <Text type="supporting">加载中…</Text> : null}
+          {!loading && files.length === 0 ? <Text type="supporting">暂无附件或产物</Text> : null}
+          {!loading && files.length > 0 && visibleFiles.length === 0 ? <Text type="supporting">没有匹配的文件</Text> : null}
+          <div data-files-list="true">
+          {visibleFiles.map((file) => (
             <div key={file.id} data-file-row="true">
               <div data-file-info="true">
                 <strong title={file.filename}>{file.filename}</strong>
@@ -155,7 +193,8 @@ export function FilesPanel({ client, conversationId, refreshSignal = 0, isPrompt
               </HStack>
             </div>
           ))}
-        </div>
+          </div>
+        </> : null}
       </VStack>
       {preview ? (
         <Dialog

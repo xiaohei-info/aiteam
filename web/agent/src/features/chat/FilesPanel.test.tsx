@@ -61,6 +61,18 @@ describe("FilesPanel", () => {
 
     expect(await screen.findByText("notes.md")).toBeInTheDocument();
     expect(screen.getByText("result.ts")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选文件" }), { target: { value: "chart" } });
+    expect(screen.getByText("chart.png")).toBeInTheDocument();
+    expect(screen.queryByText("result.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("conversation-files-toggle"));
+    expect(screen.getByTestId("conversation-files-panel")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.queryByRole("textbox", { name: "筛选文件" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("conversation-files-toggle"));
+    expect(screen.getByRole("textbox", { name: "筛选文件" })).toHaveValue("chart");
+    fireEvent.click(screen.getByRole("button", { name: "查看 chart.png" }));
+    expect(await screen.findByTestId("file-preview-image")).toHaveAttribute("src", "blob:test");
+    fireEvent.click(screen.getByRole("button", { name: "关闭预览" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选文件" }), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "查看 result.ts" }));
     expect(await screen.findByText("export const answer = 42;")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "下载 result.ts" }).at(-1)!);
