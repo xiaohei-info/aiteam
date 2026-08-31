@@ -42,6 +42,22 @@ describe("PlatformProvidersPage", () => {
     expect(screen.getByText(/新模型会自动补齐公开价格并发布/)).toBeInTheDocument();
   });
 
+  it("有价模型只保留价格维护入口，发布由后台自动完成", async () => {
+    providerApi.list.mockResolvedValue([{
+      provider_id: "p1", provider_code: "newapi", display_name: "LLM 网关",
+      relay_base_url: "http://127.0.0.1:9300/v1", api_protocol: "openai-completions",
+      status: "published", version: 1, updated_at: "2026-01-01T00:00:00Z",
+    }]);
+    providerApi.models.mockResolvedValue([{
+      model: { provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" },
+      rate: { rate_id: "r1", provider_id: "p1", model_id: "minimax-m3", pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "0.3", output_usd_per_million: "1.2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", source: "public_reference", effective_from: "2026-01-01T00:00:00Z" },
+    }]);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("MiniMax M3")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "设置价格" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "发布模型" })).not.toBeInTheDocument();
+  });
+
   it("在大模型服务页提供 LLM 网关超链接，并保留价格更新入口", async () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "打开 LLM 网关" })).toHaveAttribute("href", "http://localhost:9300/");
