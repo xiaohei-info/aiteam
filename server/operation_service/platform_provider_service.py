@@ -66,7 +66,7 @@ class PlatformProviderService:
         if provider.newapi_channel_id is None:
             raise Conflict("LLM 网关 channel is not configured")
         try:
-            model_ids = self._newapi.fetch_channel_models(provider.newapi_channel_id)
+            model_ids = self._newapi.get_channel_models(provider.newapi_channel_id)
         except NewApiError as exc:
             raise Conflict("LLM 网关 model discovery failed; check the gateway channel configuration") from exc
         if not model_ids:

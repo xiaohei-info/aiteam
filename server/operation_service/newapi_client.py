@@ -47,12 +47,17 @@ class NewApiAdminClient:
             raise NewApiError(detail)
         return payload
 
+    def get_channel_models(self, channel_id: int) -> list[str]:
+        payload = self._request("GET", f"/api/channel/{channel_id}")
+        data = payload.get("data")
+        raw = data.get("models") if isinstance(data, dict) else None
+        if not isinstance(raw, str):
+            raise NewApiError("LLM gateway returned an invalid configured model list")
+        return sorted(set(item.strip() for item in raw.split(",") if item.strip()))
+
     def fetch_channel_models(self, channel_id: int) -> list[str]:
-        payload = self._request("GET", f"/api/channel/fetch_models/{channel_id}")
-        raw = payload.get("data") or []
-        if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
-            raise NewApiError("NewAPI returned an invalid model list")
-        return sorted(set(item.strip() for item in raw if item.strip()))
+        """Compatibility alias for callers that used the old discovery name."""
+        return self.get_channel_models(channel_id)
 
     def pricing(self) -> dict:
         return self._request("GET", "/api/pricing", auth=False)

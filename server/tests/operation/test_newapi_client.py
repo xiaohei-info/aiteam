@@ -71,7 +71,7 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
             return [ModelRow("p1", "minimax-m3", "", {}, "draft", "discovery", 1, now)]
 
     class NewAPI:
-        def fetch_channel_models(self, channel_id):
+        def get_channel_models(self, channel_id):
             assert channel_id == 1
             return ["minimax-m3"]
 
@@ -92,7 +92,7 @@ def test_internal_provider_sync_reports_gateway_discovery_errors():
         def get_provider(self, _): return provider
 
     class NewAPI:
-        def fetch_channel_models(self, _): raise NewApiError("upstream unavailable")
+        def get_channel_models(self, _): raise NewApiError("upstream unavailable")
 
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     with pytest.raises(Conflict, match="LLM 网关 model discovery failed"):
@@ -106,7 +106,7 @@ def test_internal_provider_sync_rejects_an_empty_gateway_model_list():
         def get_provider(self, _): return provider
 
     class NewAPI:
-        def fetch_channel_models(self, _): return []
+        def get_channel_models(self, _): return []
 
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     with pytest.raises(Conflict, match="LLM 网关 discovered no models"):
@@ -164,7 +164,7 @@ def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_mo
             return [model]
 
     class NewAPI:
-        def fetch_channel_models(self, channel_id):
+        def get_channel_models(self, channel_id):
             assert channel_id == 1
             return ["gpt-5.5"]
 
@@ -198,7 +198,7 @@ def test_internal_provider_bootstrap_survives_public_price_source_outage():
             return []
 
     class NewAPI:
-        def fetch_channel_models(self, _): return ["unpriced"]
+        def get_channel_models(self, _): return ["unpriced"]
 
     class Pricing:
         def fetch(self): raise PublicPricingError("temporarily unavailable")
@@ -263,13 +263,23 @@ def test_newapi_client_uses_server_management_identity_and_normalizes_models():
     def handler(request: httpx.Request):
         seen["headers"] = request.headers
         seen["path"] = request.url.path
-        return httpx.Response(200, json={"success": True, "data": ["minimax-m3", "minimax-m3", " gpt-4o "]})
+        return httpx.Response(200, json={"success": True, "data": {"models": "minimax-m3,minimax-m3, gpt-4o "}})
 
     client = NewApiAdminClient("http://newapi.test", "admin-pat", "1", transport=httpx.MockTransport(handler))
+    assert client.get_channel_models(7) == ["gpt-4o", "minimax-m3"]
     assert client.fetch_channel_models(7) == ["gpt-4o", "minimax-m3"]
-    assert seen["path"] == "/api/channel/fetch_models/7"
+    assert seen["path"] == "/api/channel/7"
     assert seen["headers"]["authorization"] == "Bearer admin-pat"
     assert seen["headers"]["new-api-user"] == "1"
+
+
+def test_newapi_client_rejects_missing_configured_models():
+    client = NewApiAdminClient(
+        "http://newapi.test", "admin-pat", "1",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"success": True, "data": {}})),
+    )
+    with pytest.raises(NewApiError, match="configured model list"):
+        client.get_channel_models(7)
 
 
 def test_newapi_relay_token_reuses_existing_deterministic_name_without_posting_again():
