@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from run import get_app
 from shared.contracts.auth import TokenClaims
 from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
+from operation_service.routes_platform_provider import PlatformProviderCreate
 
 
 class FakePlatformProviders:
@@ -50,6 +51,14 @@ def auth() -> dict[str, str]:
     from operation_service.app import _auth
     token = _auth.signer.sign(TokenClaims(user_id="op1", roles=["system_admin"], exp=9999999999))
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_provider_creation_uses_the_deployment_owned_newapi_channel_by_default():
+    request = PlatformProviderCreate.model_validate({
+        "provider_code": "newapi", "display_name": "Internal NewAPI",
+        "api_protocol": "openai-completions",
+    })
+    assert request.newapi_channel_id == 1
 
 
 def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):

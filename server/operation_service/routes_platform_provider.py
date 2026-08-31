@@ -23,7 +23,10 @@ class PlatformProviderCreate(BaseModel):
     provider_code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     display_name: str = Field(min_length=1, max_length=120)
     api_protocol: Literal["openai-completions", "openai-responses", "anthropic-messages"] = "openai-completions"
-    newapi_channel_id: int = Field(gt=0)
+    # The deployment owns the single internal NewAPI channel. Keep its ID out of
+    # the operator form/API payload; this default preserves the channel mapping
+    # without exposing an infrastructure detail to users.
+    newapi_channel_id: int = Field(default=1, gt=0)
 
 
 class ModelRateCreate(BaseModel):

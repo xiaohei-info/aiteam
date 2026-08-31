@@ -102,10 +102,10 @@ export function PlatformProvidersPage() {
   );
 }
 
-function CreateProviderDialog({ busy, onClose, onCreate }: { busy: boolean; onClose: () => void; onCreate: (input: { provider_code: string; display_name: string; api_protocol: string; newapi_channel_id: number }) => Promise<void> }) {
-  const [code, setCode] = useState("newapi"); const [name, setName] = useState("内部 NewAPI"); const [channel, setChannel] = useState("1");
-  function submit(event: FormEvent) { event.preventDefault(); void onCreate({ provider_code: code.trim(), display_name: name.trim(), api_protocol: "openai-completions", newapi_channel_id: Number(channel) }); }
-  return <Dialog isOpen purpose="form" width={520} aria-label="新增大模型服务" onOpenChange={(open) => { if (!open && !busy) onClose(); }}><form onSubmit={submit}><VStack gap={3}><Heading level={2}>新增大模型服务</Heading><TextInput label="服务 code" value={code} onChange={setCode} isRequired /><TextInput label="显示名称" value={name} onChange={setName} isRequired /><TextInput label="内部 NewAPI channel ID" value={channel} onChange={setChannel} isRequired /><HStack justify="end" gap={2}><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="创建" type="submit" variant="primary" isLoading={busy} /></HStack></VStack></form></Dialog>;
+function CreateProviderDialog({ busy, onClose, onCreate }: { busy: boolean; onClose: () => void; onCreate: (input: { provider_code: string; display_name: string; api_protocol: string }) => Promise<void> }) {
+  const [code, setCode] = useState("newapi"); const [name, setName] = useState("内部 NewAPI");
+  function submit(event: FormEvent) { event.preventDefault(); void onCreate({ provider_code: code.trim(), display_name: name.trim(), api_protocol: "openai-completions" }); }
+  return <Dialog isOpen purpose="form" width={520} aria-label="新增大模型服务" onOpenChange={(open) => { if (!open && !busy) onClose(); }}><form onSubmit={submit}><VStack gap={3}><Heading level={2}>新增大模型服务</Heading><TextInput label="服务 code" value={code} onChange={setCode} isRequired /><TextInput label="显示名称" value={name} onChange={setName} isRequired /><Text type="supporting">内部 NewAPI 渠道由部署配置统一管理，无需手动填写。</Text><HStack justify="end" gap={2}><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="创建" type="submit" variant="primary" isLoading={busy} /></HStack></VStack></form></Dialog>;
 }
 
 function RateDialog({ item, busy, onClose, onSave }: { item: PlatformModelWithRate; busy: boolean; onClose: () => void; onSave: (input: Record<string, unknown>) => Promise<void> }) {
