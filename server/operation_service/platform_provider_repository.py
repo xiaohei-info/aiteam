@@ -1,6 +1,7 @@
 """PostgreSQL repository for Operator-owned platform Provider truth (D18)."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -164,6 +165,29 @@ class PlatformProviderRepository:
                     (provider_id,),
                 ).fetchall()
         return [self._model(row) for row in rows]
+
+    def update_model_metadata(
+        self,
+        provider_id: str,
+        model_id: str,
+        *,
+        display_name: str | None,
+        capabilities: dict[str, Any],
+    ) -> ModelRow | None:
+        """Fill one discovered model's non-sensitive metadata without invalidating pinned refs."""
+        if not capabilities:
+            return self.get_model(provider_id, model_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                """UPDATE platform_model SET
+                       display_name = CASE WHEN COALESCE(display_name, '') = '' THEN %s ELSE display_name END,
+                       capabilities = %s::jsonb,
+                       updated_at = now()
+                   WHERE provider_id=%s::uuid AND model_id=%s AND COALESCE(capabilities, '{}'::jsonb) = '{}'::jsonb
+                   RETURNING provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at""",
+                (display_name or "", json.dumps(capabilities), provider_id, model_id),
+            ).fetchone()
+        return self._model(row) if row else None
 
     def list_models(self, provider_id: str, *, published_only: bool = False) -> list[ModelRow]:
         suffix = " AND status='published'" if published_only else " AND status <> 'disabled'"

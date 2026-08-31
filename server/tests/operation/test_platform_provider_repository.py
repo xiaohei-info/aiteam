@@ -64,11 +64,30 @@ class _Connection:
     def execute(self, sql, params=None):
         sql = str(sql)
         self.executed.append((sql, params))
+        if "capabilities = %s::jsonb" in sql:
+            return _Result(one={**MODEL_ROW, "display_name": "MiniMax M3", "capabilities": {"reasoning": True}})
         if "RETURNING provider_id::text" in sql:
             return _Result(one=PROVIDER_ROW)
         if "SELECT provider_id::text,model_id" in sql:
             return _Result(many=[MODEL_ROW])
         return _Result()
+
+
+def test_update_model_metadata_fills_empty_capabilities(monkeypatch):
+    conn = _Connection()
+    monkeypatch.setattr(repository_module.psycopg, "connect", lambda *_args, **_kwargs: conn)
+    repo = PlatformProviderRepository("postgresql://test")
+
+    result = repo.update_model_metadata(
+        "p1", "minimax-m3", display_name="MiniMax M3", capabilities={"reasoning": True},
+    )
+
+    assert result is not None
+    assert result.capabilities == {"reasoning": True}
+    sql, params = next((sql, params) for sql, params in conn.executed if "capabilities = %s::jsonb" in sql)
+    assert "COALESCE(capabilities, '{}'::jsonb) = '{}'::jsonb" in sql
+    assert params[:2] == ("MiniMax M3", '{"reasoning": true}')
+    assert repo.update_model_metadata("p1", "minimax-m3", display_name=None, capabilities={}) is None
 
 
 def test_internal_provider_upsert_reconciles_discovered_models(monkeypatch):

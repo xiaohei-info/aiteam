@@ -405,6 +405,45 @@ def test_ingest_upload_happy_path(tmp_path: Path) -> None:
     assert job.chunk_count == 1
 
 
+def test_prepare_upload_returns_before_background_processing(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    doc, job = svc.prepare_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="报告", file_name="report.txt",
+        file_type="text/plain", content=b"hello knowledge intake",
+    )
+
+    assert doc.status == "uploaded"
+    assert job.status == "parsing"
+    svc.process_ingestion(
+        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id,
+    )
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "ready"
+    # A duplicate background delivery must not run a terminal document again.
+    svc.process_ingestion(
+        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id,
+    )
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "ready"
+
+
+def test_background_processing_persists_unexpected_failure(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    doc, job = svc.prepare_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="报告", file_name="report.txt",
+        file_type="text/plain", content=b"hello",
+    )
+
+    def fail(**_kwargs):
+        raise RuntimeError("worker failed")
+
+    svc._advance = fail  # type: ignore[method-assign]
+    svc.process_ingestion(
+        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id,
+    )
+    failed = svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id)
+    assert failed.status == "failed"
+    assert failed.error_code == "PROCESSING_FAILED"
+
+
 def test_binding_propagation_failure_fails_closed_without_ready_state(tmp_path: Path) -> None:
     class FailingBindingRepo(_FakeBindingRepo):
         def publish_ready(self, **kwargs):
@@ -513,6 +552,17 @@ def test_atomic_publish_rolls_back_when_document_ready_update_fails():
         )
     assert router.session_obj.exit is RuntimeError
     assert len(router.session_obj.sql) == 3
+
+
+def test_ingest_upload_empty_extracted_text_is_explicitly_failed(tmp_path: Path) -> None:
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
+    doc, job = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="空文档", file_name="empty.txt",
+        file_type="text/plain", content=b"\n  ",
+    )
+    assert doc.status == "failed"
+    assert doc.error_code == "EMPTY_TEXT"
+    assert job.status == "failed"
 
 
 def test_ingest_upload_unsupported_format_fails(tmp_path: Path) -> None:
@@ -952,6 +1002,62 @@ def test_import_url_offloads_sync_intake(monkeypatch: pytest.MonkeyPatch) -> Non
 
     asyncio.run(invoke())
     assert calls[0] == "ingest_url"
+
+
+def test_upload_persists_then_schedules_background_intake(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    import io
+    import manager_service.routes_knowledge_intake as routes
+    from fastapi import BackgroundTasks
+    from shared.auth import RejectingTokenVerifier
+    from manager_service.schemas import KnowledgeDocumentOut, KnowledgeIngestionJobOut
+    from starlette.datastructures import Headers, UploadFile
+
+    doc = KnowledgeDocumentOut(
+        id="doc-1", tenant_id="t", knowledge_space_id="ks", display_name="report.txt",
+        source_type="file", file_name="report.txt", file_type="text/plain", file_size=1,
+        storage_key="knowledge/t/ks/report.txt", status="uploaded",
+    )
+    job = KnowledgeIngestionJobOut(
+        id="job-1", tenant_id="t", knowledge_space_id="ks", document_id="doc-1", status="parsing",
+    )
+    calls = []
+
+    class Service:
+        def prepare_upload(self, *args, **kwargs):
+            calls.append(("prepare_upload", args, kwargs))
+            return doc, job
+
+        def process_ingestion(self, *args, **kwargs):
+            calls.append(("process_ingestion", args, kwargs))
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "_service", lambda request: Service())
+    monkeypatch.setattr(routes, "tenant_context_from", lambda claims: "ctx")
+    monkeypatch.setattr(routes.asyncio, "to_thread", fake_to_thread)
+    router = routes.build_knowledge_intake_router(RejectingTokenVerifier("x"))
+    endpoint = next(
+        r.endpoint for r in router.routes
+        if getattr(r, "path", "").endswith("/documents") and "{" in r.path and "POST" in r.methods
+    )
+    tasks = BackgroundTasks()
+
+    async def invoke():
+        return await endpoint(
+            "ks", object(), tasks,
+            UploadFile(file=io.BytesIO(b"x"), filename="report.txt", headers=Headers({"content-type": "text/plain"})),
+            object(),
+        )
+
+    response = asyncio.run(invoke())
+    assert response.data is doc
+    assert calls[0] == "prepare_upload"
+    assert len(tasks.tasks) == 1
+    assert tasks.tasks[0].func.__name__ == "process_ingestion"
+    assert tasks.tasks[0].kwargs == {"knowledge_space_id": "ks", "document_id": "doc-1", "job_id": "job-1"}
 
 
 def test_analytics_offloads_sync_probe(monkeypatch: pytest.MonkeyPatch) -> None:

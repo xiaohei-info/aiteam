@@ -122,10 +122,10 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
   const [pendingDelete, setPendingDelete] = useState<KnowledgeDocument | null>(null);
   const [detailDocument, setDetailDocument] = useState<KnowledgeDocument | null>(null);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options: { silent?: boolean } = {}) => {
     const requestedSpaceId = spaceId;
     const requestId = ++requestSequence.current;
-    setLoading(true);
+    if (!options.silent) setLoading(true);
     setError(null);
     try {
       const nextDocs = await api.listDocuments(requestedSpaceId);
@@ -136,7 +136,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
       setDocs([]);
       setError(errorMessage(err, "加载文档失败"));
     } finally {
-      if (requestId === requestSequence.current && currentSpaceId.current === requestedSpaceId) setLoading(false);
+      if (!options.silent && requestId === requestSequence.current && currentSpaceId.current === requestedSpaceId) setLoading(false);
     }
   }, [api, spaceId]);
 
@@ -153,6 +153,14 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
     return () => { requestSequence.current += 1; };
   }, [reload]);
 
+  useEffect(() => {
+    if (!docs.some((doc) => doc.status === "uploaded" || doc.status === "parsing" || doc.status === "indexing")) {
+      return;
+    }
+    const timer = window.setInterval(() => { void reload({ silent: true }); }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [docs, reload]);
+
   async function handleUpload(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!selectedFile || selectedFile.size === 0) {
@@ -168,6 +176,8 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
       setSelectedFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       await reload();
+      setActionNoticeStatus("info");
+      setActionNotice("文件已上传，正在解析和建立索引；状态会自动刷新");
       onChanged?.();
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) setError(errorMessage(err, "上传失败"));

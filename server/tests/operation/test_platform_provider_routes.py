@@ -52,6 +52,17 @@ def auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def test_service_catalog_preserves_model_and_rate_shape(client):
+    response = client.get(
+        "/api/operation/catalog/platform-providers",
+        headers={"X-Service-Token": "test-service-token"},
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()["data"]["models"][0]
+    assert item["model"]["model_id"] == "minimax-m3"
+    assert item["rate"]["pricing_status"] == "known"
+
+
 def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     listed = client.get("/api/operation/providers", headers=auth())
     assert listed.status_code == 200

@@ -116,7 +116,18 @@ function mockApis(
     list: vi.fn().mockResolvedValue({
       providers: providers.map((item) => ({ provider_id: item.provider_ref, provider_code: item.provider_ref, display_name: item.display_name, status: "published", version: item.version })),
       models: providers.flatMap((item) => (item.supported_models ?? []).map((model) => ({
-        model: { provider_id: item.provider_ref, model_id: model.model, display_name: model.display_name, status: "published", version: 1 },
+        model: {
+          provider_id: item.provider_ref,
+          model_id: model.model,
+          display_name: model.display_name,
+          status: "published",
+          version: 1,
+          capabilities: model.model === "minimax-m3"
+            ? { reasoning: true, thinking_levels: ["off", "high"] }
+            : model.model === "gpt-4o"
+              ? { reasoning: true, thinking_level_map: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null } }
+              : undefined,
+        },
         rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, currency: "USD" },
       }))),
     }),
@@ -204,15 +215,14 @@ describe("ExpertsPage", () => {
     await waitFor(() => expect(api.transitionEmployee).toHaveBeenCalledWith("emp-1", "activate"));
   });
 
-  it("编辑：点击编辑配置打开抽屉，修改 provider/model 后保存调用 updateEmployee 并保留未编辑字段", async () => {
+  it("编辑：点击编辑配置打开抽屉，修改模型后自动反推 provider 并保存", async () => {
     const { api, updateEmployee } = mockApis([employeeConfigured]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
 
     expect(await screen.findByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
-    const providerSelect = await screen.findByTestId("provider-select");
-    expect(within(providerSelect).getByRole("combobox")).toHaveTextContent("OpenAI");
+    expect(screen.queryByTestId("provider-select")).not.toBeInTheDocument();
     const modelSelect = screen.getByTestId("model-select");
     fireEvent.click(within(modelSelect).getByRole("combobox"));
     fireEvent.click(screen.getByRole("option", { name: /GPT-4o mini/, hidden: true }));
@@ -237,23 +247,95 @@ describe("ExpertsPage", () => {
     expect(calledCfg.persona).toBe("技术架构专家");
   });
 
-  it("级联清空：切换 provider 后，若当前 model 不在新 provider 目录内则清空 model", async () => {
-    mockApis([employeeConfigured], [provider, providerB]);
+  it("选择模型后自动反推其 provider", async () => {
+    const { updateEmployee } = mockApis([employeeConfigured], [provider, providerB]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const modelSelect = await screen.findByTestId("model-select");
+    fireEvent.click(within(modelSelect).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: /Claude 3.5 Sonnet/, hidden: true }));
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    expect(updateEmployee.mock.calls[0]![1].model_policy.provider_ref).toBe("anthropic-main");
+  });
 
-    const providerSelect = await screen.findByTestId("provider-select");
-    // 当前 gpt-4o 属于 openai-main 目录，合理。
-    expect(within(screen.getByTestId("model-select")).getByRole("combobox")).toHaveTextContent("GPT-4o");
-    // 切到 anthropic-main，目录只有 claude-3-5-sonnet → gpt-4o 被清空。
-    fireEvent.click(within(providerSelect).getByRole("combobox"));
-    fireEvent.click(screen.getByRole("option", { name: "Anthropic", hidden: true }));
-    await waitFor(() =>
-      expect(within(screen.getByTestId("model-select")).getByRole("combobox")).toHaveTextContent("选择模型"),
-    );
-    // 空 option 文案提示「选择模型」已出现
-    expect(screen.getByText("选择模型")).toBeInTheDocument();
+  it("按模型能力展示思考等级，而不是固定 basic/deep", async () => {
+    const minimaxProvider = { ...provider, supported_models: [{ model: "minimax-m3", display_name: "MiniMax M3", enabled: true }] };
+    mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, model: "minimax-m3", provider_ref: "openai-main", thinking_level: null } }], [minimaxProvider]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const thinking = await screen.findByRole("combobox", { name: "思考深度" });
+    fireEvent.click(thinking);
+    expect(screen.getByRole("option", { name: /high/, hidden: true })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /basic|deep/, hidden: true })).not.toBeInTheDocument();
+  });
+
+  it("兼容旧 deep 配置并映射为 high", async () => {
+    mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, thinking_level: "deep" } }]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const thinking = await screen.findByRole("combobox", { name: "思考深度" });
+    expect(thinking).toHaveTextContent("high");
+  });
+
+  it("保留模型支持的标准 thinking 档位", async () => {
+    mockApis([{ ...employeeConfigured, model_policy: { ...employeeConfigured.model_policy, thinking_level: "medium" } }]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const thinking = await screen.findByRole("combobox", { name: "思考深度" });
+    expect(thinking).toHaveTextContent("medium");
+  });
+
+  it("模型目录暂未关联服务时阻止保存", async () => {
+    const orphan = {
+      ...employeeConfigured,
+      model_policy: { ...employeeConfigured.model_policy, model: "orphan-model", provider_ref: null },
+    };
+    mockApis([orphan], []);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    await screen.findByTestId("model-select");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("模型尚未关联平台服务");
+  });
+
+  it("模型归属服务缺少展示信息时仍按模型保存", async () => {
+    const { updateEmployee } = mockApis([employeeUnconfigured], []);
+    (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      list: vi.fn().mockResolvedValue({
+        providers: [],
+        models: [{
+          model: { provider_id: "missing-provider", model_id: "orphan-model", display_name: "Orphan", status: "published", version: 1 },
+          rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, currency: "USD" },
+        }],
+      }),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const modelSelect = await screen.findByTestId("model-select");
+    fireEvent.click(within(modelSelect).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: /orphan-model/, hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    expect(updateEmployee.mock.calls[0]![1].model_policy.provider_ref).toBe("missing-provider");
+  });
+
+  it("切换到能力更窄的模型时清空不兼容的 thinking 档位", async () => {
+    const minimaxProvider = { ...provider, supported_models: [{ model: "minimax-m3", display_name: "MiniMax M3", enabled: true }] };
+    mockApis([employeeConfigured], [provider, minimaxProvider]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const modelSelect = await screen.findByTestId("model-select");
+    fireEvent.click(within(modelSelect).getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: /minimax-m3/, hidden: true }));
+    expect(screen.getByRole("combobox", { name: "思考深度" })).toHaveTextContent("关闭思考");
   });
 
   it("保存成功后关闭抽屉并刷新列表", async () => {
@@ -261,10 +343,10 @@ describe("ExpertsPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
-    await screen.findByTestId("provider-select");
+    await screen.findByTestId("model-select");
     fireEvent.click(screen.getByText("保存"));
     await waitFor(() =>
-      expect(screen.queryByTestId("provider-select")).not.toBeInTheDocument(),
+      expect(screen.queryByTestId("model-select")).not.toBeInTheDocument(),
     );
   });
 

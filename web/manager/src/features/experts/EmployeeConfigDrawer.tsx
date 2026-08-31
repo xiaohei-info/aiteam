@@ -28,7 +28,7 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "./DepartmentSelector";
 import { useExpertsApi } from "./useExpertsApi";
-import { usePlatformModelsApi } from "../platform-models/usePlatformModelsApi";
+import { usePlatformModelsApi, type PlatformModelItem, type ThinkingLevel } from "../platform-models/usePlatformModelsApi";
 import { useCapabilityApi } from "../capability/useCapabilityApi";
 import type { Department, EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
@@ -43,7 +43,8 @@ export interface EmployeeConfigDrawerProps {
   onSaved: (updated: EmployeeConfig) => void;
 }
 
-const THINKING_LEVELS = ["none", "basic", "deep"] as const;
+const DEFAULT_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 type Draft = {
   display_name: string;
@@ -52,14 +53,33 @@ type Draft = {
   provider_version: number | null;
   model: string;
   model_version: number | null;
-  thinking_level: (typeof THINKING_LEVELS)[number] | "";
+  thinking_level: string;
   timeout_seconds: string;
   skills: string[];
   department_ids: string[];
 };
 
+function normalizeLegacyThinkingLevel(value: string | null | undefined): string {
+  if (!value || value === "none") return "";
+  if (value === "basic") return "low";
+  if (value === "deep") return "high";
+  return value;
+}
+
+function thinkingLevelsForModel(item: PlatformModelItem | null): ThinkingLevel[] {
+  const configured = item?.model.capabilities?.thinking_levels;
+  if (configured?.length) return [...new Set(configured)];
+  const mapped = item?.model.capabilities?.thinking_level_map;
+  if (mapped) {
+    const levels = ALL_THINKING_LEVELS.filter((level) =>
+      mapped[level] !== null && (level === "off" || mapped[level] !== undefined),
+    );
+    if (levels.length) return levels;
+  }
+  return item?.model.capabilities?.reasoning === false ? ["off"] : DEFAULT_THINKING_LEVELS;
+}
+
 function toDraft(e: EmployeeConfig): Draft {
-  const tl = e.model_policy.thinking_level ?? "";
   return {
     display_name: e.display_name,
     persona: e.persona ?? "",
@@ -67,9 +87,7 @@ function toDraft(e: EmployeeConfig): Draft {
     provider_version: e.model_policy.provider_version ?? null,
     model: e.model_policy.model,
     model_version: e.model_policy.model_version ?? null,
-    thinking_level: (THINKING_LEVELS as readonly string[]).includes(tl)
-      ? (tl as (typeof THINKING_LEVELS)[number])
-      : "",
+    thinking_level: normalizeLegacyThinkingLevel(e.model_policy.thinking_level),
     timeout_seconds:
       e.execution_policy.timeout_seconds != null ? String(e.execution_policy.timeout_seconds) : "",
     skills: e.skills,
@@ -174,32 +192,46 @@ export function EmployeeConfigDrawer({
     return () => { alive = false; };
   }, [capabilityApi]);
 
-  const selectedProvider = useMemo(
-    () => catalog.providers.find((provider) => provider.provider_id === draft?.provider_ref) ?? null,
-    [catalog.providers, draft?.provider_ref],
-  );
-
-  /** D18：仅允许选择 Operator 发布且有生效价格的模型。 */
+  /** D18：选择 Operator 发布且有生效价格的模型；旧配置即使价格失效也保留可见。 */
   const availableModels = useMemo(
-    () => catalog.models.filter((item) => item.model.provider_id === selectedProvider?.provider_id && item.model.status === "published" && item.rate),
-    [catalog.models, selectedProvider?.provider_id],
+    () => catalog.models.filter((item) =>
+      item.model.status === "published"
+      && (item.rate?.pricing_status === "known" || item.model.model_id === draft?.model)
+    ),
+    [catalog.models, draft?.model],
   );
 
-  const providerOptions = useMemo(
-    () => catalog.providers.map((provider) => ({
-      value: provider.provider_id,
-      label: provider.display_name || "未命名 Provider",
-    })),
-    [catalog.providers],
+  const selectedModel = useMemo(
+    () => catalog.models.find((item) =>
+      item.model.model_id === draft?.model
+      && (!draft?.provider_ref || item.model.provider_id === draft.provider_ref)
+    ) ?? null,
+    [catalog.models, draft?.model, draft?.provider_ref],
   );
 
   const modelOptions = useMemo(
     () => availableModels.map((item) => ({
       value: item.model.model_id,
-      label: `${item.model.display_name || item.model.model_id || "未命名模型"} · $${item.rate?.input_usd_per_million}/$${item.rate?.output_usd_per_million}`,
+      label: `${item.model.display_name && item.model.display_name !== item.model.model_id
+        ? `${item.model.display_name} · `
+        : ""}${item.model.model_id || "未命名模型"}${item.rate?.pricing_status === "known"
+        ? ` · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}`
+        : " · 价格待确认"}`,
     })),
     [availableModels],
   );
+
+  const thinkingOptions = useMemo(() => {
+    const levels = thinkingLevelsForModel(selectedModel);
+    const current = draft?.thinking_level;
+    if (current && !levels.includes(current as ThinkingLevel) && ALL_THINKING_LEVELS.includes(current as ThinkingLevel)) {
+      levels.push(current as ThinkingLevel);
+    }
+    return levels.map((level) => ({
+      value: level,
+      label: i18n.t(`manager.experts.thinking_${level}`),
+    }));
+  }, [draft?.thinking_level, i18n, selectedModel]);
 
   if (!employeeId) return null;
 
@@ -213,9 +245,13 @@ export function EmployeeConfigDrawer({
     setSubmitting(true);
     setError(null);
 
-    // 防御：未选 provider 不允许带 model（模型目录归属不明）。
-    if (draft.model && !draft.provider_ref) {
-      setError(i18n.t("manager.experts.provider_required_for_model"));
+    const selected = availableModels.find((item) => item.model.model_id === draft.model) ?? selectedModel;
+    const selectedProvider = selected
+      ? catalog.providers.find((provider) => provider.provider_id === selected.model.provider_id)
+      : null;
+    const providerRef = selected?.model.provider_id ?? (draft.provider_ref.trim() || null);
+    if (draft.model && !providerRef) {
+      setError("模型尚未关联平台服务，请刷新目录后重试");
       setSubmitting(false);
       return;
     }
@@ -238,12 +274,12 @@ export function EmployeeConfigDrawer({
       persona: draft.persona.trim() === "" ? null : draft.persona,
       model_policy: {
         model: draft.model,
-        provider_ref: draft.provider_ref.trim() === "" ? null : draft.provider_ref,
-        provider_version: draft.provider_version,
-        model_version: draft.model_version,
+        provider_ref: providerRef,
+        provider_version: selectedProvider?.version ?? draft.provider_version,
+        model_version: selected?.model.version ?? draft.model_version,
         pricing: null,
         thinking_level:
-          draft.thinking_level === "" ? null : (draft.thinking_level as NonNullable<EmployeeConfig["model_policy"]["thinking_level"]>),
+          draft.thinking_level === "" || draft.thinking_level === "off" ? null : draft.thinking_level,
       },
       execution_policy: {
         timeout_seconds: timeout,
@@ -331,61 +367,41 @@ export function EmployeeConfigDrawer({
                       <Heading level={3}>{i18n.t("manager.experts.section_model")}</Heading>
                       <FormLayout>
                         <Selector
-                          label={i18n.t("manager.experts.provider_ref")}
-                          options={providerOptions}
-                          value={draft.provider_ref || undefined}
-                          placeholder={i18n.t("manager.experts.provider_pick")}
-                          isDisabled={submitting}
-                          isLoading={providersLoading}
-                          data-testid="provider-select"
-                          onChange={(next) => {
-                            setDraft((current) => {
-                              if (!current) return current;
-                              const provider = catalog.providers.find((item) => item.provider_id === next) ?? null;
-                              const models = catalog.models.filter((item) => item.model.provider_id === next && item.model.status === "published" && item.rate);
-                              const currentModel = models.find((item) => item.model.model_id === current.model);
-                              return {
-                                ...current,
-                                provider_ref: next,
-                                provider_version: provider?.version ?? null,
-                                model: currentModel?.model.model_id ?? "",
-                                model_version: currentModel?.model.version ?? null,
-                              };
-                            });
-                          }}
-                        />
-
-                        {draft.model && !draft.provider_ref && (
-                          <Banner status="warning" title={i18n.t("manager.experts.unverified_model_warn")} />
-                        )}
-
-                        <Selector
                           label={i18n.t("manager.experts.model")}
                           options={modelOptions}
                           value={modelOptions.some((model) => model.value === draft.model) ? draft.model : undefined}
-                          placeholder={draft.provider_ref
-                            ? modelOptions.length === 0
-                              ? i18n.t("manager.experts.no_models_for_provider")
-                              : i18n.t("manager.experts.model_pick")
-                            : i18n.t("manager.experts.provider_first")}
-                          isDisabled={submitting || !draft.provider_ref}
+                          placeholder={modelOptions.length === 0
+                            ? "暂无可用模型"
+                            : i18n.t("manager.experts.model_pick")}
+                          isDisabled={submitting || providersLoading || modelOptions.length === 0}
+                          isLoading={providersLoading}
                           data-testid="model-select"
                           onChange={(value) => {
-                            const selected = availableModels.find((item) => item.model.model_id === value);
-                            setDraft((current) => current ? { ...current, model: value, model_version: selected?.model.version ?? null } : current);
+                            const selected = availableModels.find((item) => item.model.model_id === value) ?? null;
+                            const provider = selected
+                              ? catalog.providers.find((item) => item.provider_id === selected.model.provider_id)
+                              : null;
+                            const levels = thinkingLevelsForModel(selected);
+                            setDraft((current) => current ? {
+                              ...current,
+                              provider_ref: selected?.model.provider_id ?? "",
+                              provider_version: provider?.version ?? null,
+                              model: value,
+                              model_version: selected?.model.version ?? null,
+                              thinking_level: current.thinking_level && levels.includes(current.thinking_level as ThinkingLevel)
+                                ? current.thinking_level
+                                : "",
+                            } : current);
                           }}
                         />
 
                         <Selector
                           label={i18n.t("manager.experts.thinking_level")}
-                          options={[
-                            { value: "basic", label: i18n.t("manager.experts.thinking_basic") },
-                            { value: "deep", label: i18n.t("manager.experts.thinking_deep") },
-                          ]}
-                          value={draft.thinking_level || undefined}
+                          options={thinkingOptions}
+                          value={thinkingOptions.some((option) => option.value === draft.thinking_level) ? draft.thinking_level : undefined}
                           placeholder={i18n.t("manager.experts.thinking_none")}
-                          isDisabled={submitting}
-                          onChange={(value) => update("thinking_level", value as Draft["thinking_level"])}
+                          isDisabled={submitting || !draft.model || thinkingOptions.length === 0}
+                          onChange={(value) => update("thinking_level", value)}
                         />
                       </FormLayout>
                     </VStack>

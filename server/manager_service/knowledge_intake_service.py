@@ -384,7 +384,38 @@ class KnowledgeIntakeService:
         file_type: str,
         content: bytes,
     ) -> tuple[KnowledgeDocumentOut, KnowledgeIngestionJobOut]:
-        """上传文件 intake：落盘 → 建文档+任务 → 推进状态机。"""
+        """兼容同步调用方：创建上传记录后立即推进完整 intake。"""
+        doc, job = self.prepare_upload(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            display_name=display_name,
+            file_name=file_name,
+            file_type=file_type,
+            content=content,
+        )
+        self.process_ingestion(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=doc.id,
+            job_id=job.id,
+        )
+        updated = self._doc_repo.get(ctx, document_id=doc.id)
+        latest = self._job_repo.get_latest_by_document(ctx, document_id=doc.id)
+        if updated is None or latest is None:
+            raise NotFound(f"document {doc.id!r} disappeared during intake")
+        return _to_doc_out(updated), _to_ing_out(latest)
+
+    def prepare_upload(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        display_name: str,
+        file_name: str,
+        file_type: str,
+        content: bytes,
+    ) -> tuple[KnowledgeDocumentOut, KnowledgeIngestionJobOut]:
+        """Persist an upload and return before parsing/indexing starts."""
         _ensure_can_write(ctx)
         self._require_space(ctx, knowledge_space_id)
         if len(content) > _MAX_UPLOAD_BYTES:
@@ -395,8 +426,10 @@ class KnowledgeIntakeService:
         display_name, file_name, file_type = _normalize_document_metadata(
             display_name, file_name, file_type
         )
-        storage_key = _store_bytes(self._storage_root, knowledge_space_id, file_name, content, tenant_id=ctx.tenant_id)
-        return self._create_and_advance(
+        storage_key = _store_bytes(
+            self._storage_root, knowledge_space_id, file_name, content, tenant_id=ctx.tenant_id,
+        )
+        doc = self._doc_repo.create(
             ctx,
             knowledge_space_id=knowledge_space_id,
             display_name=display_name,
@@ -405,7 +438,52 @@ class KnowledgeIntakeService:
             file_type=file_type,
             file_size=len(content),
             storage_key=storage_key,
+            status="uploaded",
         )
+        job = self._job_repo.create(
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=doc.id,
+            status="parsing",
+            started_at=datetime.now(timezone.utc),
+        )
+        return _to_doc_out(doc), _to_ing_out(job)
+
+    def process_ingestion(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        document_id: str,
+        job_id: str,
+    ) -> None:
+        """Run one persisted upload in a background worker and keep failures visible."""
+        if not self._transition_document(
+            ctx, document_id=document_id, expected=("uploaded",), status="parsing",
+            error_code=None, error_message=None,
+        ):
+            current = self._doc_repo.get(ctx, document_id=document_id)
+            if current is None or current.status in {"ready", "failed"}:
+                return
+        try:
+            self._advance(
+                ctx,
+                knowledge_space_id=knowledge_space_id,
+                document_id=document_id,
+                job_id=job_id,
+            )
+        except Exception:  # noqa: BLE001 - background failures must not disappear
+            logger.exception("[kb] background intake failed for %s", document_id)
+            try:
+                self._fail(
+                    ctx,
+                    document_id=document_id,
+                    job_id=job_id,
+                    error_code="PROCESSING_FAILED",
+                    message="knowledge processing failed",
+                )
+            except Exception:  # noqa: BLE001 - preserve the original background failure in logs
+                logger.exception("[kb] unable to persist background failure for %s", document_id)
 
     def ingest_url(
         self,
@@ -1250,6 +1328,15 @@ class KnowledgeIntakeService:
             logger.exception("[kb] parse failed for %s", document_id)
             self._fail(ctx, document_id=document_id, job_id=job_id,
                        error_code="PARSE_FAILED", message=str(exc)[:500])
+            return
+        if not text.strip():
+            self._fail(
+                ctx,
+                document_id=document_id,
+                job_id=job_id,
+                error_code="EMPTY_TEXT",
+                message="未能从文档中提取可索引文本（可能是扫描图片 PDF）",
+            )
             return
         self._doc_repo.update_status(ctx, document_id, status="indexing", text_chars=len(text))
         self._job_repo.update_status(ctx, job_id, status="indexing")

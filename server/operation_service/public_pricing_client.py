@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -20,6 +20,8 @@ class PublicModelPrice:
     cache_read_usd_per_million: Decimal | None = None
     cache_write_usd_per_million: Decimal | None = None
     source_version: str = "models.dev/api.json"
+    display_name: str | None = None
+    capabilities: dict[str, Any] = field(default_factory=dict)
 
 
 class ModelsDevPricingClient:
@@ -64,7 +66,7 @@ def _flatten_models(payload: dict[str, Any]) -> dict[str, PublicModelPrice]:
         for model_key, model in provider["models"].items():
             if not isinstance(model, dict):
                 continue
-            price = _parse_price(model.get("cost"))
+            price = _parse_price(model.get("cost"), model)
             if price is None:
                 continue
             model_ids = {str(model_key), str(model.get("id") or "")}
@@ -77,7 +79,7 @@ def _flatten_models(payload: dict[str, Any]) -> dict[str, PublicModelPrice]:
     return {model_id: price for model_id, (_, price) in candidates.items()}
 
 
-def _parse_price(raw: Any) -> PublicModelPrice | None:
+def _parse_price(raw: Any, model: Any = None) -> PublicModelPrice | None:
     if not isinstance(raw, dict):
         return None
     input_price = _decimal(raw.get("input"))
@@ -91,7 +93,74 @@ def _parse_price(raw: Any) -> PublicModelPrice | None:
         output_usd_per_million=output_price,
         cache_read_usd_per_million=_decimal(raw.get("cache_read")),
         cache_write_usd_per_million=_decimal(raw.get("cache_write")),
+        display_name=_model_display_name(model),
+        capabilities=_model_capabilities(model),
     )
+
+
+_THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def _model_display_name(model: Any) -> str | None:
+    value = model.get("name") if isinstance(model, dict) else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value[:256] or None
+
+
+def _model_capabilities(model: Any) -> dict[str, Any]:
+    """Normalize models.dev reasoning metadata to the levels understood by Pi."""
+    if not isinstance(model, dict) or not isinstance(model.get("reasoning"), bool):
+        return {}
+    reasoning = model["reasoning"]
+    levels = ["off"]
+    options = model.get("reasoning_options")
+    if reasoning and isinstance(options, list):
+        effort_values: list[str] = []
+        has_toggle = False
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            option_type = option.get("type")
+            if option_type == "toggle":
+                has_toggle = True
+            if option_type == "effort" and isinstance(option.get("values"), list):
+                effort_values.extend(
+                    value.strip().lower()
+                    for value in option["values"]
+                    if isinstance(value, str) and value.strip()
+                )
+        if effort_values:
+            levels.extend(_canonical_thinking_levels(effort_values))
+        elif has_toggle:
+            # A toggle has one enabled state; represent it by one standard
+            # enabled level so Manager and Agent expose the same two states.
+            levels.append("high")
+        else:
+            levels.extend(("minimal", "low", "medium", "high"))
+    elif reasoning:
+        levels.extend(("minimal", "low", "medium", "high"))
+
+    levels = list(dict.fromkeys(levels))
+    thinking_map = {
+        level: ("none" if level == "off" else level if level in levels else None)
+        for level in _THINKING_LEVELS
+    }
+    return {
+        "reasoning": reasoning,
+        "thinking_levels": levels,
+        "thinking_level_map": thinking_map,
+    }
+
+
+def _canonical_thinking_levels(values: list[str]) -> list[str]:
+    aliases = {"none": "off"}
+    return [
+        aliases.get(value, value)
+        for value in values
+        if aliases.get(value, value) in _THINKING_LEVELS
+    ]
 
 
 def _decimal(value: Any) -> Decimal | None:

@@ -9,7 +9,7 @@ from operation_service.newapi_client import NewApiAdminClient, NewApiError
 from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
 from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
 from shared.errors import Conflict
-from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError
+from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError, _model_capabilities
 
 
 def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
@@ -30,14 +30,36 @@ def test_models_dev_client_selects_canonical_prices_and_skips_free_entries():
     payload = {
         "thirdparty": {"models": {"gpt-5.5": {"id": "gpt-5.5", "cost": {"input": 1, "output": 2}}}},
         "openai": {"models": {"gpt-5.5": {"id": "gpt-5.5", "cost": {"input": 5, "output": 30, "cache_read": 0.5}}}},
-        "minimax": {"models": {"MiniMax-M3": {"id": "MiniMax-M3", "cost": {"input": 0.3, "output": 1.2}}}},
+        "minimax": {"models": {"MiniMax-M3": {
+            "id": "MiniMax-M3", "name": "MiniMax M3", "reasoning": True,
+            "reasoning_options": [{"type": "toggle"}],
+            "cost": {"input": 0.3, "output": 1.2},
+        }}},
         "free": {"models": {"free-model": {"id": "free-model", "cost": {"input": 0, "output": 0}}}},
     }
     client = ModelsDevPricingClient("https://models.dev/api.json", transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=payload)))
     prices = client.fetch()
     assert prices["gpt-5.5"].input_usd_per_million == 5
     assert prices["minimax-m3"].output_usd_per_million == Decimal("1.2")
+    assert prices["minimax-m3"].display_name == "MiniMax M3"
+    assert prices["minimax-m3"].capabilities["thinking_levels"] == ["off", "high"]
+    assert prices["minimax-m3"].capabilities["thinking_level_map"]["minimal"] is None
     assert "free-model" not in prices
+
+
+def test_models_dev_reasoning_metadata_normalizes_supported_levels():
+    assert _model_capabilities({}) == {}
+    assert _model_capabilities({"reasoning": False})["thinking_levels"] == ["off"]
+    assert _model_capabilities({
+        "reasoning": True,
+        "reasoning_options": [{"type": "effort", "values": ["none", "low", "high", "unsupported", 1]}],
+    })["thinking_levels"] == ["off", "low", "high"]
+    assert _model_capabilities({
+        "reasoning": True,
+        "reasoning_options": [{"type": "other"}, "bad"],
+    })["thinking_levels"] == ["off", "minimal", "low", "medium", "high"]
+    assert _model_capabilities({"reasoning": True})["thinking_levels"] == ["off", "minimal", "low", "medium", "high"]
+    assert _model_capabilities({"reasoning": True, "reasoning_options": [{"type": "toggle"}]})["thinking_levels"] == ["off", "high"]
 
 
 def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
@@ -146,6 +168,41 @@ def test_public_price_sync_only_fills_unpriced_models():
     assert captured[0]["input_usd_per_million"] == Decimal("5")
 
 
+def test_internal_provider_bootstrap_enriches_model_capabilities():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "minimax-m3", "", {}, "published", "discovery", 1, now)
+    missing = ModelRow("p1", "not-in-public-catalog", "", {}, "published", "discovery", 1, now)
+    rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
+    enriched = []
+
+    class Repo:
+        def ensure_internal_provider(self, **_): return provider
+        def get_provider(self, _): return provider
+        def upsert_discovered_models(self, *_): return [model, missing]
+        def current_rate(self, _provider_id, model_id): return rate if model_id == "minimax-m3" else rate
+        def update_model_metadata(self, provider_id, model_id, **values): enriched.append((provider_id, model_id, values)); return model
+        def publish_priced_models(self, _): return []
+
+    class NewAPI:
+        def get_channel_models(self, _): return ["minimax-m3"]
+
+    class Pricing:
+        def fetch(self):
+            return {"minimax-m3": PublicModelPrice(
+                Decimal("0.3"), Decimal("1.2"),
+                display_name="MiniMax M3",
+                capabilities={"reasoning": True, "thinking_levels": ["off", "high"]},
+            )}
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1", Pricing())
+    service.ensure_internal_provider()
+    assert enriched == [("p1", "minimax-m3", {
+        "display_name": "MiniMax M3",
+        "capabilities": {"reasoning": True, "thinking_levels": ["off", "high"]},
+    })]
+
+
 def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_models():
     now = datetime.now(UTC)
     provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
@@ -193,6 +250,7 @@ def test_internal_provider_bootstrap_survives_public_price_source_outage():
         def upsert_discovered_models(self, *_): return [model]
         def current_rate(self, *_): return None
         def list_models(self, *_args, **_kwargs): return [model]
+        def update_model_metadata(self, *_args, **_kwargs): raise AssertionError("metadata must not update on outage")
         def publish_priced_models(self, provider_id):
             published.append(provider_id)
             return []
@@ -357,7 +415,7 @@ def test_newapi_client_checks_business_failure_even_on_http_200():
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"success": False, "message": "denied"})),
     )
     with pytest.raises(NewApiError, match="denied"):
-        client.fetch_channel_models(7)
+        client.get_channel_models(7)
 
 
 def test_newapi_client_rejects_oversized_responses():
