@@ -87,7 +87,7 @@ class PlatformCatalogOut(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     providers: list[PlatformProvider] = Field(default_factory=list, description="已发布平台 Provider。")
-    models: list[PlatformModel] = Field(default_factory=list, description="已发布平台模型。")
+    models: list[PlatformModelWithRateOut] = Field(default_factory=list, description="已发布平台模型及价格。")
 
 
 class _ProviderNotConfigured(AppError):
@@ -159,7 +159,12 @@ def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_p
 def pull_platform_catalog(request: Request, _svc=Depends(verify_service_token)) -> Envelope[PlatformCatalogOut]:
     service = _service(request)
     providers = service.list_providers(published_only=True)
-    return Envelope(data=PlatformCatalogOut(providers=providers, models=[item for provider in providers for item in service.list_models(provider.provider_id, published_only=True)]))
+    model_items = [
+        item
+        for provider in providers
+        for item in service.list_models(provider.provider_id, published_only=True)
+    ]
+    return Envelope(data=PlatformCatalogOut(providers=providers, models=model_items))
 
 
 @router.post("/provider-access/resolve", operation_id="operation_tenant_provider_access_resolve")

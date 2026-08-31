@@ -11,8 +11,14 @@ export interface PlatformRate {
   cache_read_usd_per_million: string | null; cache_write_usd_per_million: string | null;
   currency: "USD";
 }
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export interface PlatformModelCapabilities {
+  reasoning?: boolean;
+  thinking_levels?: ThinkingLevel[];
+  thinking_level_map?: Partial<Record<ThinkingLevel, string | null>>;
+}
 export interface PlatformModelItem {
-  model: { provider_id: string; model_id: string; display_name: string; status: string; version: number };
+  model: { provider_id: string; model_id: string; display_name: string; status: string; version: number; capabilities?: PlatformModelCapabilities };
   rate: PlatformRate | null;
 }
 export interface PlatformCatalog { providers: PlatformProvider[]; models: PlatformModelItem[]; }

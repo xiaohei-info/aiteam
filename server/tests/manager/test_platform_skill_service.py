@@ -106,6 +106,27 @@ def test_market_state_is_current_when_any_installed_version_matches():
     assert market["update_available"] is False
 
 
+def test_market_projection_discards_operator_bookkeeping_fields():
+    class Operator:
+        def list_platform_skills(self):
+            return [{
+                "skill_id": "skill-1", "owner": "publisher", "slug": "skill-one",
+                "display_name": "Skill One", "summary": "summary",
+                "published_version": "1.0.0", "content_hash": "hash", "status": "published",
+                "latest_external_version": "1.0.1", "latest_internal_version": "1.0.1",
+                "latest_content_hash": "other", "latest_version_status": "published",
+                "version_id": None, "version": None,
+            }]
+
+    market = PlatformSkillService(operator=Operator(), catalog=FakeCatalog()).list_market(_ctx())[0]
+    assert market == {
+        "skill_id": "skill-1", "display_name": "Skill One", "summary": "summary",
+        "owner": "publisher", "slug": "skill-one", "published_version": "1.0.0",
+        "content_hash": "hash", "installed": False, "installed_version": None,
+        "installed_content_hash": None, "installed_versions": [], "update_available": False,
+    }
+
+
 def test_install_rejects_mismatched_hash():
     operator = FakeOperatorCatalogClient()
     remote = _package()

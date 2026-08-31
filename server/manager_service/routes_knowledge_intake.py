@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, File, Header, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, Request, UploadFile, status
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
@@ -131,6 +131,7 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
     async def upload_document(
         knowledge_space_id: str,
         request: Request,
+        background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeDocumentOut]:
@@ -139,14 +140,22 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         if not content:
             from shared.errors import ValidationProblem
             raise ValidationProblem(detail="empty file", errors=None)
-        doc, _job = await asyncio.to_thread(
-            svc.ingest_upload,
-            tenant_context_from(claims),
+        ctx = tenant_context_from(claims)
+        doc, job = await asyncio.to_thread(
+            svc.prepare_upload,
+            ctx,
             knowledge_space_id=knowledge_space_id,
             display_name=(file.filename or "untitled"),
             file_name=(file.filename or "untitled"),
             file_type=(file.content_type or "application/octet-stream"),
             content=content,
+        )
+        background_tasks.add_task(
+            svc.process_ingestion,
+            ctx,
+            knowledge_space_id=knowledge_space_id,
+            document_id=doc.id,
+            job_id=job.id,
         )
         return Envelope[KnowledgeDocumentOut](data=doc)
 

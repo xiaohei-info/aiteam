@@ -44,7 +44,10 @@ class PlatformProviderService:
         return self._provider_output(row)
 
     def _auto_prepare_models(self, provider: ProviderRow, models: list[PlatformModel]) -> None:
-        """Fill missing public rates and publish every model with a known rate."""
+        """Fill missing catalog metadata/prices and publish every priced model."""
+        metadata_updater = getattr(self._repo, "update_model_metadata", None)
+        if callable(metadata_updater) and any(not model.capabilities for model in models):
+            self._sync_model_capabilities(provider.provider_id, models, metadata_updater)
         needs_public_prices = any(
             (rate := self._repo.current_rate(provider.provider_id, model.model_id)) is None
             or rate.pricing_status != "known"
@@ -57,6 +60,23 @@ class PlatformProviderService:
                 # A pricing-source outage must not hide an otherwise healthy gateway.
                 pass
         self.publish_priced_models(provider.provider_id)
+
+    def _sync_model_capabilities(self, provider_id: str, models: list[PlatformModel], updater) -> None:
+        """Best-effort enrich discovered models from the same public catalog as prices."""
+        try:
+            prices = self._public_pricing.fetch()
+        except PublicPricingError:
+            return
+        for model in models:
+            price = prices.get(model.model_id.strip().lower())
+            if price is None or not price.capabilities:
+                continue
+            updater(
+                provider_id,
+                model.model_id,
+                display_name=model.display_name or price.display_name,
+                capabilities=price.capabilities,
+            )
 
     def list_providers(self, *, published_only: bool = False) -> list[PlatformProvider]:
         self.ensure_internal_provider()

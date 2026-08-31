@@ -191,7 +191,7 @@ function renderPage() {
 }
 
 describe("KnowledgePage Astryx contract", () => {
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it("renders a named knowledge-space table and explicit loading, error, and empty states", async () => {
     const pending = deferred<{ items: typeof SPACES; page: typeof PAGE }>();
@@ -271,6 +271,35 @@ describe("KnowledgePage Astryx contract", () => {
       "/api/manager/knowledge-spaces/enterprise_shared/documents/doc-failed/reindex",
       { idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/) },
     ));
+  });
+
+  it("自动刷新处理中间状态，直到文档就绪", async () => {
+    vi.useFakeTimers();
+    let documentLoads = 0;
+    const processing = { ...DOCUMENTS[1], id: "doc-processing", display_name: "处理中.md", status: "parsing" as const };
+    const ready = { ...processing, status: "ready" as const };
+    const client = makeClient({
+      listGet: (url) => {
+        if (url.endsWith("/documents")) {
+          documentLoads += 1;
+          return { items: [documentLoads === 1 ? processing : ready], page: PAGE };
+        }
+        return defaultListGet(url);
+      },
+    });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByLabelText("文档状态：解析中")).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByLabelText("文档状态：已就绪")).toBeTruthy();
+    expect(documentLoads).toBeGreaterThanOrEqual(2);
+    vi.useRealTimers();
+    expect(client.listGet).toHaveBeenCalled();
   });
 
   it("shows ready and failed status and rebuilds ready indexes", async () => {

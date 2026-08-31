@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.contracts.platform_provider import PlatformModel, PlatformProvider
+from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
 
 from .schemas import UsageRollupOut
 
@@ -59,10 +59,18 @@ class InstalledPlatformSkillOut(BaseModel):
     installed: bool = Field(description="本次是否实际写入安装。")
 
 
+class PlatformModelWithRateOut(BaseModel):
+    """Operator model plus its current price card used by Manager configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+    model: PlatformModel
+    rate: PlatformModelRate | None = None
+
+
 class PlatformCatalogOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     providers: list[PlatformProvider] = Field(default_factory=list, description="Operator 发布的 Provider 列表。")
-    models: list[PlatformModel] = Field(default_factory=list, description="Operator 发布的模型列表。")
+    models: list[PlatformModelWithRateOut] = Field(default_factory=list, description="Operator 发布的模型及价格列表。")
 
 
 class UsageUploadOut(BaseModel):

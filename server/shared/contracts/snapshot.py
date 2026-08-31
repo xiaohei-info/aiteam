@@ -22,7 +22,10 @@ class ModelPolicy(BaseModel):
     provider_version: int | None = Field(default=None, ge=1)
     model_version: int | None = Field(default=None, ge=1)
     pricing: PricingSnapshot | None = None
-    thinking_level: str | None = Field(default=None, description="思考深度：none/basic/deep")
+    thinking_level: str | None = Field(
+        default=None,
+        description="思考档位：由模型能力目录决定（off/minimal/low/medium/high/xhigh/max）。",
+    )
 
 
 class ExecutionPolicy(BaseModel):

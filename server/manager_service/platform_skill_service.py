@@ -42,8 +42,17 @@ class PlatformSkillService:
             published_version = item.get("published_version")
             content_hash = item.get("content_hash")
             current = next((row for row in rows if row.version == published_version and row.content_hash == content_hash), None)
+            # Operator's internal DTO also contains import/version bookkeeping fields;
+            # keep the Manager market response to the page contract instead of passing
+            # those fields into its strict response model.
             result.append({
-                **item,
+                "skill_id": skill_id,
+                "display_name": str(item.get("display_name") or ""),
+                "summary": str(item.get("summary") or ""),
+                "owner": item.get("owner"),
+                "slug": item.get("slug"),
+                "published_version": published_version,
+                "content_hash": content_hash,
                 "installed": bool(rows),
                 "installed_version": current.version if current else rows[-1].version if rows else None,
                 "installed_content_hash": current.content_hash if current else rows[-1].content_hash if rows else None,
