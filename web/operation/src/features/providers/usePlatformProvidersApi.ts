@@ -11,7 +11,7 @@ export function usePlatformProvidersApi() {
     const client = createOperationApiClient({ getToken: () => token });
     return {
       async list(): Promise<PlatformProvider[]> { return (await client.listGet<PlatformProvider>(BASE)).items; },
-      create(input: { provider_code: string; display_name: string; api_protocol: string; newapi_channel_id: number }) {
+      create(input: { provider_code: string; display_name: string; api_protocol: string }) {
         return client.post<PlatformProvider>(BASE, { body: input });
       },
       async models(providerId: string): Promise<PlatformModelWithRate[]> {
