@@ -147,17 +147,27 @@ class PlatformProviderRepository:
                 for model_id in model_ids:
                     conn.execute(
                         """INSERT INTO platform_model (provider_id,model_id,source) VALUES (%s::uuid,%s,'discovery')
-                           ON CONFLICT (provider_id,model_id) DO UPDATE SET updated_at=now()""",
+                           ON CONFLICT (provider_id,model_id) DO UPDATE SET
+                             status=CASE WHEN platform_model.status='disabled' THEN 'draft' ELSE platform_model.status END,
+                             version=CASE WHEN platform_model.status='disabled' THEN platform_model.version+1 ELSE platform_model.version END,
+                             updated_at=now()""",
                         (provider_id, model_id),
                     )
+                conn.execute(
+                    """UPDATE platform_model SET status='disabled',version=version+1,updated_at=now()
+                       WHERE provider_id=%s::uuid AND source='discovery' AND status <> 'disabled'
+                         AND NOT (model_id = ANY(%s))""",
+                    (provider_id, model_ids),
+                )
                 rows = conn.execute(
-                    "SELECT provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at FROM platform_model WHERE provider_id=%s::uuid ORDER BY model_id",
+                    """SELECT provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at
+                       FROM platform_model WHERE provider_id=%s::uuid AND status <> 'disabled' ORDER BY model_id""",
                     (provider_id,),
                 ).fetchall()
         return [self._model(row) for row in rows]
 
     def list_models(self, provider_id: str, *, published_only: bool = False) -> list[ModelRow]:
-        suffix = " AND status='published'" if published_only else ""
+        suffix = " AND status='published'" if published_only else " AND status <> 'disabled'"
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at FROM platform_model WHERE provider_id=%s::uuid" + suffix + " ORDER BY model_id",
