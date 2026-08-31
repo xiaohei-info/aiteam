@@ -314,17 +314,6 @@ body,
   max-width: 8rem;
 }
 
-[data-context-model="true"] {
-  max-width: 8rem;
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 [data-context-usage="true"] {
   white-space: nowrap;
 }

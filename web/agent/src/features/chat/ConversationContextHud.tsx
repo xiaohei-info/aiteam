@@ -113,13 +113,6 @@ export function ConversationContextHud({ client, conversationId, refreshSignal =
     >
       <ContextRing percentage={context.percentage} used={used} contextWindow={contextWindow} />
       <VStack gap={0} data-context-summary="true">
-        <Text
-          as="div"
-          data-context-model="true"
-          aria-label={providerDetail ? `${modelLabel}（${providerDetail}）` : modelLabel}
-        >
-          {modelLabel}
-        </Text>
         <Text as="div" type="supporting" data-context-usage="true" aria-label={`上下文：${used} / ${contextWindow}`}>
           {used} / {contextWindow}
         </Text>
