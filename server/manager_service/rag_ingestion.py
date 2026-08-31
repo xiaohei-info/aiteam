@@ -118,6 +118,8 @@ class RagIngestionPort(Protocol):
 
     def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]: ...
 
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]: ...
+
     def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None: ...
 
     def delete_document(
@@ -319,8 +321,8 @@ class LightRagIngestionClient:
             logger.warning("LightRAG document analytics failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
 
-    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
-        """Resolve Manager/source aliases to one workspace-local LightRAG id."""
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
+        """Resolve all workspace-local IDs behind Manager/source aliases."""
         settings = self.settings
         requested = _validated_aliases(aliases)
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
@@ -335,18 +337,22 @@ class LightRagIngestionClient:
             ):
                 matched = requested.intersection({document_id, file_path})
                 for alias in matched:
-                    if matches[alias]:
-                        raise RagIngestionUnavailable("knowledge deletion unavailable")
                     matches[alias].add(document_id)
-            resolved = {document_id for values in matches.values() for document_id in values}
-            if len(resolved) > 1:
+            if any(len(values) > 1 for values in matches.values()):
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
-            return next(iter(resolved), None)
+            return sorted({document_id for values in matches.values() for document_id in values})
         except RagIngestionUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
             logger.warning("LightRAG document alias resolution failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
+        """Backward-compatible single-ID resolver."""
+        resolved = self.resolve_document_ids(workspace=workspace, aliases=aliases)
+        if len(resolved) > 1:
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        return resolved[0] if resolved else None
 
     def delete_document(
         self,
@@ -602,6 +608,17 @@ class LightRagIngestionClient:
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             status = status.casefold()
             if status in {"failed", "failure", "error"}:
+                metadata = document.get("metadata")
+                duplicate_id = metadata.get("original_doc_id") if isinstance(metadata, dict) else None
+                is_duplicate = metadata.get("is_duplicate") is True if isinstance(metadata, dict) else False
+                if not is_duplicate and document.get("is_duplicate") is True:
+                    is_duplicate = True
+                    duplicate_id = document.get("original_doc_id")
+                if is_duplicate and _valid_document_alias(duplicate_id):
+                    # LightRAG creates a failed marker for duplicate content;
+                    # reuse the already indexed original instead of failing the
+                    # Manager document a second time.
+                    return None, duplicate_id
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             # LightRAG 1.5.6's per-document terminal state is PROCESSED.
             # Generic READY is not proof that this tracked insert completed.

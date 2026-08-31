@@ -99,6 +99,7 @@ class EmployeeConfigService:
             rate = item.get("rate") or {}
             if model.get("provider_id") == policy.provider_ref and model.get("model_id") == policy.model:
                 if model.get("status") == "published" and model.get("version") == policy.model_version and rate.get("pricing_status") == "known":
+                    _validate_thinking_level(policy.thinking_level, model.get("capabilities") or {})
                     return
                 break
         raise Conflict("selected model is not published for this tenant")
@@ -155,6 +156,24 @@ def _ensure_can_write(ctx: TenantContext) -> None:
     """配置写操作鉴权（03 §9.7）。非 owner/enterprise_admin → 403。"""
     if not set(ctx.roles) & set(_CONFIG_WRITE_ROLES):
         raise Forbidden("config write requires owner or enterprise_admin")
+
+
+def _validate_thinking_level(value: str | None, capabilities: dict) -> None:
+    if not value or value == "off":
+        return
+    levels = capabilities.get("thinking_levels")
+    if isinstance(levels, list) and levels:
+        supported = {level for level in levels if isinstance(level, str)}
+    else:
+        mapping = capabilities.get("thinking_level_map")
+        supported = {
+            level for level, mapped in mapping.items()
+            if isinstance(level, str) and mapped is not None
+        } if isinstance(mapping, dict) else set()
+    if supported and value not in supported:
+        raise Conflict(f"thinking level {value!r} is not supported by selected model")
+    if capabilities.get("reasoning") is False:
+        raise Conflict("selected model does not support thinking")
 
 
 def _platform_model_ref(policy: ModelPolicy) -> dict | None:

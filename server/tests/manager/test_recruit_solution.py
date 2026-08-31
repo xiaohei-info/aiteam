@@ -401,6 +401,7 @@ def test_recruit_expert_creates_employee_instance_from_template():
     assert row.display_name == "专家A"
     assert row.model == "claude-opus-4-8"
     assert row.provider_ref == "provider-1"
+    assert row.thinking_level == "high"
     assert row.platform_model_ref == _model_ref().model_dump(mode="json")
     assert row.status == "active"
     assert result.provider_match_status == "platform"

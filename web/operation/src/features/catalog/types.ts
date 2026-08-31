@@ -59,6 +59,7 @@ export interface CatalogItem {
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref?: PlatformModelRef;
+  thinking_level?: string | null;
   skill_ids?: string[];
   platform_skill_refs?: PlatformSkillRef[];
   tags?: string[];
@@ -84,6 +85,8 @@ export interface RegisterExpertTemplate {
   avatar_url?: string;
   system_prompt?: string;
   platform_model_ref: PlatformModelRef;
+  /** Default thinking level inherited by newly recruited Manager employees. */
+  thinking_level?: string | null;
   platform_skill_refs?: PlatformSkillRef[];
   description?: string;
 }

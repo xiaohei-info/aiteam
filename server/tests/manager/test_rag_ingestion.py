@@ -299,6 +299,74 @@ def test_deletion_rejects_ambiguous_response_without_claiming_success():
         client.close()
 
 
+def test_ingestion_reuses_original_for_duplicate_content():
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/text"):
+            return httpx.Response(200, json={"status": "success", "track_id": "track-duplicate"})
+        return httpx.Response(200, json={
+            "track_id": "track-duplicate",
+            "documents": [{
+                "id": "dup-marker", "file_path": "doc-2", "status": "failed",
+                "chunks_count": 0,
+                "metadata": {"is_duplicate": True, "original_doc_id": "doc-original"},
+            }],
+            "total_count": 1,
+        })
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        result = client.ingest_text(workspace="derived", file_source="doc-2", text="same content")
+    finally:
+        client.close()
+    assert result.rag_document_id == "doc-2"
+    assert result.upstream_document_id == "doc-original"
+    assert result.chunk_count is None
+
+
+def test_ingestion_rejects_malformed_duplicate_metadata():
+    def handler(request: httpx.Request):
+        if request.url.path.endswith("/text"):
+            return httpx.Response(200, json={"status": "success", "track_id": "track-duplicate"})
+        return httpx.Response(200, json={
+            "track_id": "track-duplicate",
+            "documents": [{
+                "id": "dup-marker", "file_path": "doc-2", "status": "failed",
+                "metadata": {"is_duplicate": True, "original_doc_id": "bad\noriginal"},
+            }],
+            "total_count": 1,
+        })
+
+    client = LightRagIngestionClient(_settings(), transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.ingest_text(workspace="derived", file_source="doc-2", text="same content")
+    finally:
+        client.close()
+
+
+def test_resolve_document_ids_returns_all_alias_targets():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [
+                {"id": "duplicate-marker", "file_path": "manager-uuid"},
+                {"id": "original-doc", "file_path": "original-manager-uuid"},
+            ],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 2, "total_pages": 1},
+        })),
+    )
+    try:
+        assert client.resolve_document_ids(
+            workspace="derived", aliases=["manager-uuid", "original-manager-uuid"]
+        ) == ["duplicate-marker", "original-doc"]
+        with pytest.raises(RagIngestionUnavailable):
+            client.resolve_document_id(
+                workspace="derived", aliases=["manager-uuid", "original-manager-uuid"]
+            )
+    finally:
+        client.close()
+
+
 def test_ingestion_fails_on_upstream_error_without_details():
     def handler(request: httpx.Request):
         return httpx.Response(502, text="provider token manager-secret")

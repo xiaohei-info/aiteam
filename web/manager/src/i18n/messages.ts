@@ -224,6 +224,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.experts.thinking_level": "思考深度",
     "manager.experts.thinking_none": "关闭思考",
     "manager.experts.thinking_off": "关闭思考",
+    "manager.experts.thinking_enabled": "开启思考（模型开关）",
     "manager.experts.thinking_minimal": "minimal（最小）",
     "manager.experts.thinking_low": "low（低）",
     "manager.experts.thinking_medium": "medium（中）",

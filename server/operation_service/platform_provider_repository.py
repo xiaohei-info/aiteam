@@ -183,7 +183,12 @@ class PlatformProviderRepository:
                        display_name = CASE WHEN COALESCE(display_name, '') = '' THEN %s ELSE display_name END,
                        capabilities = %s::jsonb,
                        updated_at = now()
-                   WHERE provider_id=%s::uuid AND model_id=%s AND COALESCE(capabilities, '{}'::jsonb) = '{}'::jsonb
+                   WHERE provider_id=%s::uuid AND model_id=%s
+                     AND (
+                       COALESCE(capabilities, '{}'::jsonb) = '{}'::jsonb
+                       OR NOT (capabilities ? 'thinking_levels')
+                       OR NOT (capabilities ? 'thinking_mode')
+                     )
                    RETURNING provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at""",
                 (display_name or "", json.dumps(capabilities), provider_id, model_id),
             ).fetchone()

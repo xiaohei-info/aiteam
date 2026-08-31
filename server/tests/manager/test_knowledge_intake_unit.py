@@ -358,6 +358,17 @@ class _ResolvingFakeIngestion(_FakeIngestion):
         return self.resolved_id
 
 
+class _MultiResolvingFakeIngestion(_FakeIngestion):
+    def __init__(self, *, resolved_ids=None, **kwargs):
+        super().__init__(**kwargs)
+        self.resolved_ids = list(resolved_ids or [])
+        self.resolve_calls = []
+
+    def resolve_document_ids(self, *, workspace, aliases):
+        self.resolve_calls.append((workspace, aliases))
+        return list(self.resolved_ids)
+
+
 class _FakeSpaceExists:
     def __init__(self, existing: set[str] | None = None):
         self._existing = existing or set()
@@ -632,6 +643,25 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
     ctx = _owner_ctx()
     with pytest.raises(Conflict):
         svc.retry(ctx, knowledge_space_id="ks", document_id="d1")
+
+
+def test_delete_resolves_multiple_duplicate_aliases_before_request(tmp_path: Path) -> None:
+    ingestion = _MultiResolvingFakeIngestion(
+        resolved_ids=["duplicate-marker", "original-doc"],
+        delete_result=RagDeletionResult(True, False),
+    )
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="duplicate", file_name="a.txt",
+        file_type="text/plain", content=b"text",
+    )
+
+    operation = svc.delete(
+        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="delete-multi",
+    )
+
+    assert operation.status == "pending"
+    assert ingestion.delete_calls[0][1] == ["duplicate-marker", "original-doc"]
 
 
 def test_delete_resolves_alias_before_request_and_keeps_document_deleting(tmp_path: Path) -> None:

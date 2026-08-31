@@ -116,6 +116,7 @@ def _model_capabilities(model: Any) -> dict[str, Any]:
     reasoning = model["reasoning"]
     levels = ["off"]
     options = model.get("reasoning_options")
+    thinking_mode = "none" if not reasoning else "effort"
     if reasoning and isinstance(options, list):
         effort_values: list[str] = []
         has_toggle = False
@@ -132,14 +133,18 @@ def _model_capabilities(model: Any) -> dict[str, Any]:
                     if isinstance(value, str) and value.strip()
                 )
         if effort_values:
+            thinking_mode = "effort"
             levels.extend(_canonical_thinking_levels(effort_values))
         elif has_toggle:
+            thinking_mode = "toggle"
             # A toggle has one enabled state; represent it by one standard
             # enabled level so Manager and Agent expose the same two states.
             levels.append("high")
         else:
+            thinking_mode = "budget"
             levels.extend(("minimal", "low", "medium", "high"))
     elif reasoning:
+        thinking_mode = "effort"
         levels.extend(("minimal", "low", "medium", "high"))
 
     levels = list(dict.fromkeys(levels))
@@ -149,6 +154,7 @@ def _model_capabilities(model: Any) -> dict[str, Any]:
     }
     return {
         "reasoning": reasoning,
+        "thinking_mode": thinking_mode,
         "thinking_levels": levels,
         "thinking_level_map": thinking_map,
     }

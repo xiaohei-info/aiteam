@@ -1244,22 +1244,33 @@ class KnowledgeIntakeService:
         return sorted(ids)
 
     def _resolve_rag_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
-        """Resolve aliases before a delete/probe; retain old fake-port compatibility."""
-        resolver = getattr(self._ingestion_client, "resolve_document_id", None)
-        if resolver is None:
-            return aliases
-        resolved = resolver(workspace=workspace, aliases=aliases)
-        if resolved is None:
-            return []
-        if (
-            not isinstance(resolved, str)
-            or not resolved.strip()
-            or resolved != resolved.strip()
-            or len(resolved) > 1_024
-            or any(char in resolved for char in "\x00\r\n")
+        """Resolve aliases before a delete/probe; support duplicate content aliases."""
+        resolver_many = getattr(self._ingestion_client, "resolve_document_ids", None)
+        if callable(resolver_many):
+            resolved = resolver_many(workspace=workspace, aliases=aliases)
+            if resolved is None:
+                return []
+            if not isinstance(resolved, (list, tuple, set, frozenset)):
+                raise RagIngestionUnavailable("knowledge deletion unavailable")
+            values = list(resolved)
+        else:
+            resolver = getattr(self._ingestion_client, "resolve_document_id", None)
+            if resolver is None:
+                return aliases
+            resolved = resolver(workspace=workspace, aliases=aliases)
+            if resolved is None:
+                return []
+            values = [resolved]
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            or len(value) > 1_024
+            or any(char in value for char in "\x00\r\n")
+            for value in values
         ):
             raise RagIngestionUnavailable("knowledge deletion unavailable")
-        return [resolved]
+        return sorted(set(values))
 
     def _create_and_advance(
         self,

@@ -8,6 +8,8 @@ export interface ExpertTemplateFieldsProps {
   systemPrompt: string;
   defaultModel: string;
   modelOptions: Array<{ value: string; label: string }>;
+  defaultThinkingLevel: string;
+  thinkingOptions: Array<{ value: string; label: string }>;
   description: string;
   disabled: boolean;
   systemPromptError?: string;
@@ -16,6 +18,7 @@ export interface ExpertTemplateFieldsProps {
   onAvatarUrlChange: (value: string) => void;
   onSystemPromptChange: (value: string) => void;
   onDefaultModelChange: (value: string) => void;
+  onDefaultThinkingLevelChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
 }
 
@@ -24,6 +27,8 @@ export function ExpertTemplateFields({
   systemPrompt,
   defaultModel,
   modelOptions,
+  defaultThinkingLevel,
+  thinkingOptions,
   description,
   disabled,
   systemPromptError,
@@ -32,6 +37,7 @@ export function ExpertTemplateFields({
   onAvatarUrlChange,
   onSystemPromptChange,
   onDefaultModelChange,
+  onDefaultThinkingLevelChange,
   onDescriptionChange,
 }: ExpertTemplateFieldsProps) {
   return (
@@ -57,6 +63,16 @@ export function ExpertTemplateFields({
         isRequired
         isDisabled={disabled}
         status={defaultModelError ? { type: "error", message: defaultModelError } : undefined}
+      />
+      <Selector
+        label="默认思考等级"
+        options={thinkingOptions}
+        value={defaultThinkingLevel || undefined}
+        onChange={onDefaultThinkingLevelChange}
+        placeholder="选择模型默认思考等级"
+        data-testid="default-thinking-level-select"
+        isRequired
+        isDisabled={disabled || !defaultModel || thinkingOptions.length === 0}
       />
       <TextArea
         label="岗位描述 (description, ≤200字)"

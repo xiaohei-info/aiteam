@@ -229,7 +229,9 @@ export function EmployeeConfigDrawer({
     }
     return levels.map((level) => ({
       value: level,
-      label: i18n.t(`manager.experts.thinking_${level}`),
+      label: selectedModel?.model.capabilities?.thinking_mode === "toggle" && level === "high"
+        ? i18n.t("manager.experts.thinking_enabled")
+        : i18n.t(`manager.experts.thinking_${level}`),
     }));
   }, [draft?.thinking_level, i18n, selectedModel]);
 

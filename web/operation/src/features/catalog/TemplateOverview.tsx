@@ -17,6 +17,13 @@ import type { CatalogItem } from "./types";
 import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
 import type { InternalSkill } from "../skill-market/types";
+import {
+  THINKING_LEVELS,
+  thinkingLabel,
+  thinkingLevelsForModel,
+  type ModelCapabilities,
+  type ThinkingLevel,
+} from "./register/thinking";
 
 function safeJson(value: unknown): string {
   if (value == null) return "";
@@ -116,6 +123,7 @@ type ModelOption = {
   value: string;
   label: string;
   ref: NonNullable<CatalogItem["platform_model_ref"]>;
+  capabilities?: ModelCapabilities;
 };
 
 function ExpertDetailSections({
@@ -131,6 +139,20 @@ function ExpertDetailSections({
   modelOptions: ModelOption[];
   modelLoading: boolean;
 }): ReactNode {
+  const selectedModel = modelOptions.find((option) => option.value === (
+    draft.platform_model_ref
+      ? `${draft.platform_model_ref.provider_id}::${draft.platform_model_ref.model_id}`
+      : ""
+  ));
+  const thinkingLevels = thinkingLevelsForModel(selectedModel?.capabilities);
+  const currentThinking = draft.thinking_level as ThinkingLevel | undefined;
+  if (currentThinking && THINKING_LEVELS.includes(currentThinking) && !thinkingLevels.includes(currentThinking)) {
+    thinkingLevels.push(currentThinking);
+  }
+  const thinkingOptions = thinkingLevels.map((level) => ({
+    value: level,
+    label: thinkingLabel(level, selectedModel?.capabilities),
+  }));
   return (
     <>
       <DetailSection title="分类 / 头像">
@@ -160,10 +182,17 @@ function ExpertDetailSections({
             label="大模型服务 / 模型"
             options={modelOptions}
             value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id}::${draft.platform_model_ref.model_id}` : undefined}
-            onChange={(value) => onChange({
-              ...draft,
-              platform_model_ref: modelOptions.find((option) => option.value === value)?.ref,
-            })}
+            onChange={(value) => {
+              const selected = modelOptions.find((option) => option.value === value);
+              const levels = thinkingLevelsForModel(selected?.capabilities);
+              onChange({
+                ...draft,
+                platform_model_ref: selected?.ref,
+                thinking_level: levels.includes(draft.thinking_level as ThinkingLevel)
+                  ? draft.thinking_level
+                  : "off",
+              });
+            }}
             placeholder={modelLoading ? "加载可用模型…" : "选择 Operator 已发布模型"}
             data-testid="edit-platform-model-select"
             isRequired
@@ -172,6 +201,19 @@ function ExpertDetailSections({
         ) : (
           <ReadonlyText value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id} / ${draft.platform_model_ref.model_id} · v${draft.platform_model_ref.model_version}` : "未配置"} />
         )}
+      </DetailSection>
+
+      <DetailSection title="默认思考等级">
+        {editing ? (
+          <Selector
+            label="默认思考等级"
+            options={thinkingOptions}
+            value={thinkingOptions.some((option) => option.value === (draft.thinking_level || "off")) ? (draft.thinking_level || "off") : "off"}
+            onChange={(thinking_level) => onChange({ ...draft, thinking_level })}
+            isDisabled={modelLoading || thinkingOptions.length === 0}
+            data-testid="edit-default-thinking-level-select"
+          />
+        ) : <ReadonlyText value={draft.thinking_level || "off"} />}
       </DetailSection>
 
       <DetailSection title="岗位描述 (description)">
@@ -258,10 +300,11 @@ export function TemplateOverview({ item, draft, editing, canWrite, visibilityCha
       const options: ModelOption[] = [];
       for (const { provider, models } of groups) {
         for (const item of models) {
-          if (item.model.status !== "published" || !item.rate) continue;
+          if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
           options.push({
             value: `${provider.provider_id}::${item.model.model_id}`,
             label: `${provider.display_name} / ${item.model.display_name || item.model.model_id} · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}`,
+            capabilities: item.model.capabilities as ModelCapabilities,
             ref: {
               provider_id: provider.provider_id,
               provider_version: provider.version,

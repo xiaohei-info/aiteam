@@ -176,6 +176,35 @@ def test_same_slug_across_tenants_allowed():
     assert created_b.employee_slug == "shared"
 
 
+def test_model_thinking_level_must_match_operator_capabilities():
+    class Operator:
+        def list_platform_catalog(self):
+            return {
+                "models": [{
+                    "model": {
+                        "provider_id": "p1", "model_id": "minimax-m3", "version": 1,
+                        "status": "published",
+                        "capabilities": {"reasoning": True, "thinking_levels": ["off", "high"]},
+                    },
+                    "rate": {"pricing_status": "known"},
+                }],
+            }
+
+    svc = EmployeeConfigService(_FakeRepo(), Operator())
+    body = _body(model_policy={
+        "model": "minimax-m3", "provider_ref": "p1",
+        "provider_version": 1, "model_version": 1, "thinking_level": "low",
+    })
+    with pytest.raises(Conflict, match="selected model"):
+        svc.create(_ctx("t-a"), body, employee_slug="minimax")
+
+    accepted = svc.create(
+        _ctx("t-a"), body.model_copy(update={"model_policy": body.model_policy.model_copy(update={"thinking_level": "high"})}),
+        employee_slug="minimax-high",
+    )
+    assert accepted.model_policy.thinking_level == "high"
+
+
 def test_member_cannot_write_config():
     """配置写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
     svc = EmployeeConfigService(_FakeRepo())

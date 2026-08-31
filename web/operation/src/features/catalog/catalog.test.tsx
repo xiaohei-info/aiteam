@@ -11,6 +11,7 @@ import {
   screen,
   waitFor,
   fireEvent,
+  within,
 } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { PlatformRole, ApiError } from "@aiteam/shared";
@@ -732,6 +733,7 @@ describe("注册表单", () => {
       avatar_url: "data:image/png;base64,iVBORw0KGgo=",
       system_prompt: "电商客服",
       platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
+      thinking_level: "off",
       description: "淘宝电商客服",
       platform_skill_refs: [],
     });
@@ -741,6 +743,24 @@ describe("注册表单", () => {
     fireEvent.click(screen.getByText("注册专家模板"));
     expect(screen.getByPlaceholderText("display_name")).toHaveValue("");
     expect(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）")).toHaveValue("");
+  });
+
+  it("注册专家模板按模型能力显示默认思考等级", async () => {
+    platformProvidersMock.models.mockResolvedValueOnce([{
+      model: {
+        provider_id: "provider-1", model_id: "minimax-m3", display_name: "MiniMax M3",
+        capabilities: { reasoning: true, thinking_mode: "toggle", thinking_levels: ["off", "high"] },
+        status: "published", source: "discovery", version: 1, updated_at: "now",
+      },
+      rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" },
+    }]);
+    renderCatalogPage(makeSystemAdminSession());
+    fireEvent.click(await screen.findByText("注册专家模板"));
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("minimax-m3"));
+    const thinking = screen.getByTestId("default-thinking-level-select");
+    expect(within(thinking).getByRole("combobox")).toHaveTextContent("关闭思考");
+    fireEvent.click(within(thinking).getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: "开启思考", hidden: true })).toBeInTheDocument();
   });
 
   it("注册专家模板不再展示手工技能 ID、标签、预置记忆和排序", async () => {
@@ -1268,6 +1288,40 @@ describe("详情页多 section", () => {
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新 system_prompt");
       expect(body.platform_model_ref).toEqual({ provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 });
+      expect(body.thinking_level).toBe("off");
+    });
+  });
+
+  it("编辑专家按模型能力调整默认思考等级", async () => {
+    const item = makeCatalogItem({
+      catalog_type: "expert_template",
+      template_id: "minimax-template",
+      display_name: "MiniMax 专家",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "minimax-m3", model_version: 3 },
+      thinking_level: "off",
+    });
+    mockFetch
+      .mockResolvedValueOnce(singleResponse(item))
+      .mockResolvedValueOnce(singleResponse({ ...item, thinking_level: "high" }));
+    platformProvidersMock.models.mockResolvedValue([
+      { model: { provider_id: "provider-1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: { reasoning: true, thinking_mode: "toggle", thinking_levels: ["off", "high"] }, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
+    ]);
+
+    renderCatalogDetail(makeSystemAdminSession(), "minimax-template", "expert_template");
+    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("编辑"));
+    const thinking = await screen.findByTestId("edit-default-thinking-level-select");
+    fireEvent.click(within(thinking).getByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: "开启思考" }));
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find((call: unknown[]) =>
+        (call[0] as string).includes("minimax-template") && call[1] && (call[1] as { method?: string }).method === "PATCH",
+      );
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.thinking_level).toBe("high");
     });
   });
 
