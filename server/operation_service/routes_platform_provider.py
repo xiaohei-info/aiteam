@@ -101,7 +101,7 @@ def _service(request: Request) -> PlatformProviderService:
     try:
         cache = build_platform_provider_service()
     except Exception as exc:
-        raise _ProviderNotConfigured("Operator Provider/NewAPI settings are incomplete") from exc
+        raise _ProviderNotConfigured("Operator LLM gateway settings are incomplete") from exc
     request.app.state._platform_provider_service = cache
     return cache
 
@@ -132,7 +132,10 @@ def list_models(provider_id: str, request: Request, _claims=Depends(_platform_ad
 
 @router.post("/providers/{provider_id}/sync-public-prices", operation_id="operation_platform_model_public_price_sync")
 def sync_public_prices(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PublicPricingSyncOut]:
-    return Envelope(data=_service(request).sync_public_prices(provider_id))
+    service = _service(request)
+    result = service.sync_public_prices(provider_id, force=True)
+    service.publish_priced_models(provider_id)
+    return Envelope(data=result)
 
 
 @router.post("/providers/{provider_id}/rates", status_code=status.HTTP_201_CREATED, operation_id="operation_platform_model_rate_create")

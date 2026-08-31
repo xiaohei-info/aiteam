@@ -8,7 +8,7 @@ NOW = datetime.now(UTC)
 PROVIDER_ROW = {
     "provider_id": "p1",
     "provider_code": "newapi",
-    "display_name": "内部 NewAPI",
+    "display_name": "LLM 网关",
     "relay_base_url": "http://relay/v1",
     "api_protocol": "openai-completions",
     "newapi_channel_id": 1,
@@ -78,19 +78,24 @@ def test_internal_provider_upsert_reconciles_discovered_models(monkeypatch):
 
     provider = repo.ensure_internal_provider(
         provider_code="newapi",
-        display_name="内部 NewAPI",
+        display_name="LLM 网关",
         relay_base_url="http://relay/v1",
         api_protocol="openai-completions",
         newapi_channel_id=1,
     )
     models = repo.upsert_discovered_models("p1", ["minimax-m3"])
+    repo.publish_priced_models("p1")
     repo.list_models("p1")
     repo.list_models("p1", published_only=True)
 
     assert provider.status == "published"
     assert models[0].model_id == "minimax-m3"
+    ensure_sql = next(sql for sql, _ in conn.executed if "INSERT INTO platform_provider" in sql)
     stale_update = next(sql for sql, _ in conn.executed if "UPDATE platform_model SET" in sql)
+    assert "display_name IS DISTINCT FROM" not in ensure_sql
+    publish_update = next(sql for sql, _ in conn.executed if "UPDATE platform_model AS m" in sql)
     assert "ANY" in stale_update
+    assert "m.status NOT IN ('published','disabled')" in publish_update
     assert ("p1", ["minimax-m3"]) in [params for sql, params in conn.executed if "status='disabled'" in sql]
     model_queries = [sql for sql, _ in conn.executed if "FROM platform_model WHERE provider_id" in sql]
     assert "status <> 'disabled'" in model_queries[-2]

@@ -9,7 +9,7 @@ from operation_service.newapi_client import NewApiAdminClient, NewApiError
 from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
 from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
 from shared.errors import Conflict
-from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice
+from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError
 
 
 def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
@@ -42,8 +42,10 @@ def test_models_dev_client_selects_canonical_prices_and_skips_free_entries():
 
 def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
     now = datetime.now(UTC)
-    provider = ProviderRow("p1", "newapi", "Internal NewAPI", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
     seen = {}
+    published = []
 
     class Repo:
         def ensure_internal_provider(self, **values):
@@ -55,6 +57,13 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
 
         def get_provider(self, _provider_id):
             return provider
+
+        def current_rate(self, *_):
+            return rate
+
+        def publish_priced_models(self, provider_id):
+            published.append(provider_id)
+            return []
 
         def upsert_discovered_models(self, provider_id, model_ids):
             assert provider_id == "p1"
@@ -71,24 +80,53 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
     assert result.provider_code == "newapi"
     assert service.list_providers()[0].provider_code == "newapi"
     assert service.sync_models("p1")[0].model_id == "minimax-m3"
-    assert seen["display_name"] == "内部 NewAPI"
+    assert seen["display_name"] == "LLM 网关"
     assert seen["newapi_channel_id"] == 1
+    assert published == ["p1", "p1"]
+
+
+def test_internal_provider_sync_reports_gateway_discovery_errors():
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, datetime.now(UTC))
+
+    class Repo:
+        def get_provider(self, _): return provider
+
+    class NewAPI:
+        def fetch_channel_models(self, _): raise NewApiError("upstream unavailable")
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
+    with pytest.raises(Conflict, match="LLM 网关 model discovery failed"):
+        service.sync_models("p1")
+
+
+def test_internal_provider_sync_rejects_an_empty_gateway_model_list():
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, datetime.now(UTC))
+
+    class Repo:
+        def get_provider(self, _): return provider
+
+    class NewAPI:
+        def fetch_channel_models(self, _): return []
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
+    with pytest.raises(Conflict, match="LLM 网关 discovered no models"):
+        service.sync_models("p1")
 
 
 def test_internal_provider_sync_requires_the_deployment_channel_mapping():
-    provider = ProviderRow("p1", "newapi", "Internal NewAPI", "http://relay/v1", "openai-completions", None, "published", 1, datetime.now(UTC))
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", None, "published", 1, datetime.now(UTC))
 
     class Repo:
         def get_provider(self, _provider_id):
             return provider
 
     service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
-    with pytest.raises(Conflict, match="internal NewAPI channel is not configured"):
+    with pytest.raises(Conflict, match="LLM 网关 channel is not configured"):
         service.sync_models("p1")
 
 
 def test_public_price_sync_only_fills_unpriced_models():
-    provider = ProviderRow("p1", "newapi", "NewAPI", "http://old/v1", "openai-completions", 1, "draft", 1, datetime.now(UTC))
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://old/v1", "openai-completions", 1, "draft", 1, datetime.now(UTC))
     model = ModelRow("p1", "gpt-5.5", "", {}, "draft", "discovery", 1, datetime.now(UTC))
 
     class Repo:
@@ -108,9 +146,114 @@ def test_public_price_sync_only_fills_unpriced_models():
     assert captured[0]["input_usd_per_million"] == Decimal("5")
 
 
+def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_models():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "gpt-5.5", "", {}, "draft", "discovery", 1, now)
+    seen: list[tuple[str, str]] = []
+
+    class Repo:
+        def ensure_internal_provider(self, **_): return provider
+        def list_providers(self, **_): return [provider]
+        def get_provider(self, _): return provider
+        def upsert_discovered_models(self, *_): return [model]
+        def list_models(self, *_args, **_kwargs): return [model]
+        def current_rate(self, *_): return None
+        def publish_priced_models(self, provider_id):
+            seen.append(("publish", provider_id))
+            return [model]
+
+    class NewAPI:
+        def fetch_channel_models(self, channel_id):
+            assert channel_id == 1
+            return ["gpt-5.5"]
+
+    class Pricing:
+        def fetch(self):
+            return {"gpt-5.5": PublicModelPrice(Decimal("5"), Decimal("30"))}
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1", Pricing())
+    captured = []
+    service.set_rate = lambda _provider_id, _model_id, **values: captured.append(values)
+    service.ensure_internal_provider()
+
+    assert captured[0]["source"] == "public_reference"
+    assert seen == [("publish", "p1")]
+
+
+def test_internal_provider_bootstrap_survives_public_price_source_outage():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "unpriced", "", {}, "draft", "discovery", 1, now)
+    published = []
+
+    class Repo:
+        def ensure_internal_provider(self, **_): return provider
+        def get_provider(self, _): return provider
+        def upsert_discovered_models(self, *_): return [model]
+        def current_rate(self, *_): return None
+        def list_models(self, *_args, **_kwargs): return [model]
+        def publish_priced_models(self, provider_id):
+            published.append(provider_id)
+            return []
+
+    class NewAPI:
+        def fetch_channel_models(self, _): return ["unpriced"]
+
+    class Pricing:
+        def fetch(self): raise PublicPricingError("temporarily unavailable")
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1", Pricing())
+    assert service.ensure_internal_provider().display_name == "LLM 网关"
+    assert published == ["p1"]
+
+
+def test_manual_public_price_sync_refreshes_changed_public_rates():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "gpt-5.5", "", {}, "published", "discovery", 1, now)
+    current = RateRow("r1", "p1", "gpt-5.5", 1, "known", "token", Decimal("5"), Decimal("30"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
+
+    class Repo:
+        def get_provider(self, _): return provider
+        def list_models(self, _provider_id, **_): return [model]
+        def current_rate(self, *_): return current
+
+    class Pricing:
+        def fetch(self):
+            return {"gpt-5.5": PublicModelPrice(Decimal("6"), Decimal("30"))}
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1", Pricing())
+    captured = []
+    service.set_rate = lambda _provider_id, _model_id, **values: captured.append(values)
+
+    result = service.sync_public_prices("p1", force=True)
+
+    assert result["updated"] == 1
+    assert captured[0]["input_usd_per_million"] == Decimal("6")
+
+
+def test_manual_public_price_sync_skips_unchanged_public_rates():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow("p1", "gpt-5.5", "", {}, "published", "discovery", 1, now)
+    current = RateRow("r1", "p1", "gpt-5.5", 1, "known", "token", Decimal("5"), Decimal("30"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
+
+    class Repo:
+        def get_provider(self, _): return provider
+        def list_models(self, _provider_id, **_): return [model]
+        def current_rate(self, *_): return current
+
+    class Pricing:
+        def fetch(self): return {"gpt-5.5": PublicModelPrice(Decimal("5"), Decimal("30"))}
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1", Pricing())
+    assert service.sync_public_prices("p1", force=True)["skipped_known"] == 1
+
+
 def test_existing_provider_output_uses_current_configured_relay_url():
     service = PlatformProviderService(None, None, None, "https://relay.example/new/v1")
-    row = ProviderRow("p1", "newapi", "NewAPI", "http://127.0.0.1:9300/v1", "openai-completions", 1, "published", 2, datetime.now(UTC))
+    row = ProviderRow("p1", "newapi", "LLM 网关", "http://127.0.0.1:9300/v1", "openai-completions", 1, "published", 2, datetime.now(UTC))
     assert service._provider_output(row).relay_base_url == "https://relay.example/new/v1"
 
 
@@ -175,7 +318,7 @@ def test_newapi_relay_token_fails_closed_on_preexisting_duplicate_names():
 
 def test_platform_provider_service_maps_relay_token_ambiguity_to_conflict():
     now = datetime.now(UTC)
-    provider = ProviderRow("p1", "internal-newapi", "NewAPI", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    provider = ProviderRow("p1", "internal-newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
     model = ModelRow("p1", "minimax-m3", "MiniMax M3", {}, "published", "discovery", 1, now)
     rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "manual", None, now, None, True)
     access = AccessRow("a1", "tenant-1", "p1", b"token", b"management", ["minimax-m3"], "at-tenant", 7, 8, "expired", 1, None)

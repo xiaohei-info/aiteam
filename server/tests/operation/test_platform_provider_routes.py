@@ -3,7 +3,9 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+from operation_service import routes_platform_provider
 from run import get_app
 from shared.contracts.auth import TokenClaims
 from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
@@ -12,7 +14,7 @@ from shared.contracts.platform_provider import PlatformModel, PlatformModelRate,
 class FakePlatformProviders:
     def __init__(self):
         self.provider = PlatformProvider(
-            provider_id="p1", provider_code="newapi", display_name="Internal NewAPI",
+            provider_id="p1", provider_code="newapi", display_name="LLM 网关",
             relay_base_url="https://relay.example/v1", api_protocol="openai-completions",
             status="published", version=1, updated_at=datetime.now(UTC),
         )
@@ -31,7 +33,7 @@ class FakePlatformProviders:
     def sync_models(self, _provider_id): return [self.model]
     def list_models(self, _provider_id, **_): return [{"model": self.model, "rate": self.rate}]
     def set_rate(self, _provider_id, _model_id, **_): return self.rate
-    def sync_public_prices(self, _provider_id): return {"source": "models.dev", "updated": 1, "skipped_known": 0, "skipped_manual": 0, "unmatched": 0}
+    def sync_public_prices(self, _provider_id, **_): return {"source": "models.dev", "updated": 1, "skipped_known": 0, "skipped_manual": 0, "unmatched": 0}
     def publish_model(self, _provider_id, _model_id): return self.model.model_copy(update={"status": "published", "version": 2})
     def publish_priced_models(self, _provider_id): return {"published": 26}
 
@@ -83,6 +85,16 @@ def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     published_priced = client.post("/api/operation/providers/p1/models/publish-priced", headers=auth())
     assert published_priced.status_code == 200
     assert published_priced.json()["data"]["published"] == 26
+
+
+def test_provider_configuration_error_uses_llm_gateway_label(monkeypatch):
+    app = get_app("operation")
+    app.state._platform_provider_service = None
+    monkeypatch.setattr(routes_platform_provider, "build_platform_provider_service", lambda: (_ for _ in ()).throw(RuntimeError("missing configuration")))
+    request = Request({"type": "http", "app": app})
+
+    with pytest.raises(routes_platform_provider._ProviderNotConfigured, match="Operator LLM gateway settings are incomplete"):
+        routes_platform_provider._service(request)
 
 
 def test_provider_creation_route_is_not_available(client):

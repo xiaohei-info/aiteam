@@ -15,11 +15,11 @@ from shared.errors import Conflict, NotFound
 
 from .newapi_client import NewApiAdminClient, NewApiError
 from .platform_provider_repository import PlatformProviderRepository, ProviderRow, ModelRow, RateRow, AccessRow
-from .public_pricing_client import ModelsDevPricingClient, PublicPricingError
+from .public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError
 
 
 INTERNAL_PROVIDER_CODE = "newapi"
-INTERNAL_PROVIDER_NAME = "内部 NewAPI"
+INTERNAL_PROVIDER_NAME = "LLM 网关"
 INTERNAL_NEWAPI_CHANNEL_ID = 1
 
 
@@ -40,8 +40,23 @@ class PlatformProviderService:
             newapi_channel_id=INTERNAL_NEWAPI_CHANNEL_ID,
         )
         if sync_models:
-            self._sync_models(row)
+            self._auto_prepare_models(row, self._sync_models(row))
         return self._provider_output(row)
+
+    def _auto_prepare_models(self, provider: ProviderRow, models: list[PlatformModel]) -> None:
+        """Fill missing public rates and publish every model with a known rate."""
+        needs_public_prices = any(
+            (rate := self._repo.current_rate(provider.provider_id, model.model_id)) is None
+            or rate.pricing_status != "known"
+            for model in models
+        )
+        if needs_public_prices:
+            try:
+                self.sync_public_prices(provider.provider_id)
+            except Conflict:
+                # A pricing-source outage must not hide an otherwise healthy gateway.
+                pass
+        self.publish_priced_models(provider.provider_id)
 
     def list_providers(self, *, published_only: bool = False) -> list[PlatformProvider]:
         self.ensure_internal_provider()
@@ -49,13 +64,13 @@ class PlatformProviderService:
 
     def _sync_models(self, provider: ProviderRow) -> list[PlatformModel]:
         if provider.newapi_channel_id is None:
-            raise Conflict("internal NewAPI channel is not configured")
+            raise Conflict("LLM 网关 channel is not configured")
         try:
             model_ids = self._newapi.fetch_channel_models(provider.newapi_channel_id)
         except NewApiError as exc:
-            raise Conflict(f"NewAPI model discovery failed: {exc}") from exc
+            raise Conflict("LLM 网关 model discovery failed; check the gateway channel configuration") from exc
         if not model_ids:
-            raise Conflict("NewAPI discovered no models")
+            raise Conflict("LLM 网关 discovered no models")
         return [_model(row) for row in self._repo.upsert_discovered_models(provider.provider_id, model_ids)]
 
     def sync_models(self, provider_id: str) -> list[PlatformModel]:
@@ -69,7 +84,7 @@ class PlatformProviderService:
             result.append({"model": _model(row), "rate": _rate(rate) if rate else None})
         return result
 
-    def sync_public_prices(self, provider_id: str) -> dict[str, int | str]:
+    def sync_public_prices(self, provider_id: str, *, force: bool = False) -> dict[str, int | str]:
         self._require_provider(provider_id)
         try:
             prices = self._public_pricing.fetch()
@@ -82,12 +97,13 @@ class PlatformProviderService:
                 unmatched += 1
                 continue
             current = self._repo.current_rate(provider_id, model.model_id)
-            if current and current.pricing_status == "known":
-                skipped_known += 1
-                continue
             if current and current.manually_overridden:
                 skipped_manual += 1
                 continue
+            if current and current.pricing_status == "known":
+                if not force or current.source != "public_reference" or _same_public_price(current, price):
+                    skipped_known += 1
+                    continue
             self.set_rate(
                 provider_id,
                 model.model_id,
@@ -253,7 +269,7 @@ def build_platform_provider_service() -> PlatformProviderService:
     admin_user_id = os.getenv("NEWAPI_ADMIN_USER_ID")
     encryption_key = os.getenv("OPERATION_PROVIDER_CREDENTIAL_KEY")
     if not all((settings.admin_db_url, admin_url, public_url, admin_token, admin_user_id, encryption_key)):
-        raise RuntimeError("Operator Provider/NewAPI settings are incomplete")
+        raise RuntimeError("Operator LLM gateway settings are incomplete")
     return PlatformProviderService(
         PlatformProviderRepository(settings.admin_db_url),
         NewApiAdminClient(admin_url, admin_token, admin_user_id, timeout=settings.service_client_timeout_ms / 1000),
@@ -273,6 +289,15 @@ def _model(row: ModelRow) -> PlatformModel:
 
 def _rate(row: RateRow) -> PlatformModelRate:
     return PlatformModelRate(**{key: getattr(row, key) for key in PlatformModelRate.model_fields})
+
+
+def _same_public_price(rate: RateRow, price: PublicModelPrice) -> bool:
+    return (
+        rate.input_usd_per_million == price.input_usd_per_million
+        and rate.output_usd_per_million == price.output_usd_per_million
+        and rate.cache_read_usd_per_million == price.cache_read_usd_per_million
+        and rate.cache_write_usd_per_million == price.cache_write_usd_per_million
+    )
 
 
 def _access(row: AccessRow) -> TenantProviderAccess:
