@@ -50,6 +50,12 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
             seen.update(values)
             return provider
 
+        def list_providers(self, **_):
+            return [provider]
+
+        def get_provider(self, _provider_id):
+            return provider
+
         def upsert_discovered_models(self, provider_id, model_ids):
             assert provider_id == "p1"
             assert model_ids == ["minimax-m3"]
@@ -62,6 +68,8 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     result = service.ensure_internal_provider()
     assert result.provider_code == "newapi"
+    assert service.list_providers()[0].provider_code == "newapi"
+    assert service.sync_models("p1")[0].model_id == "minimax-m3"
     assert seen["display_name"] == "内部 NewAPI"
     assert "newapi_channel_id" not in seen
 
@@ -103,6 +111,16 @@ def test_newapi_client_reads_available_models_from_internal_catalog():
     client = NewApiAdminClient("http://newapi.test", "admin-pat", "1", transport=httpx.MockTransport(handler))
     assert client.fetch_available_models() == ["gpt-5.5", "minimax-m3"]
     assert seen["path"] == "/api/models"
+
+
+def test_newapi_client_rejects_invalid_available_model_catalog():
+    for data in (None, {"1": ["ok", 1]}):
+        client = NewApiAdminClient(
+            "http://newapi.test", "admin-pat", "1",
+            transport=httpx.MockTransport(lambda _request, data=data: httpx.Response(200, json={"success": True, "data": data})),
+        )
+        with pytest.raises(NewApiError, match="invalid model catalog"):
+            client.fetch_available_models()
 
 
 def test_newapi_client_uses_server_management_identity_and_normalizes_models():
