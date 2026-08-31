@@ -18,17 +18,6 @@ from shared.service_token import verify_service_token
 from .platform_provider_service import PlatformProviderService, build_platform_provider_service
 
 
-class PlatformProviderCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    provider_code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    display_name: str = Field(min_length=1, max_length=120)
-    api_protocol: Literal["openai-completions", "openai-responses", "anthropic-messages"] = "openai-completions"
-    # The deployment owns the single internal NewAPI channel. Keep its ID out of
-    # the operator form/API payload; this default preserves the channel mapping
-    # without exposing an infrastructure detail to users.
-    newapi_channel_id: int = Field(default=1, gt=0)
-
-
 class ModelRateCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model_id: str = Field(min_length=1, max_length=256)
@@ -118,11 +107,6 @@ def _platform_admin(request: Request) -> TokenClaims:
 router = APIRouter(prefix="/api/operation", tags=["operation-platform-provider"])
 
 
-@router.post("/providers", status_code=status.HTTP_201_CREATED, operation_id="operation_platform_provider_create")
-def create_provider(body: PlatformProviderCreate, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PlatformProvider]:
-    return Envelope(data=_service(request).create_provider(**body.model_dump()))
-
-
 @router.get("/providers", operation_id="operation_platform_provider_list")
 def list_providers(request: Request, _claims=Depends(_platform_admin)) -> ListEnvelope[PlatformProvider]:
     return ListEnvelope(data=_service(request).list_providers())
@@ -131,11 +115,6 @@ def list_providers(request: Request, _claims=Depends(_platform_admin)) -> ListEn
 @router.post("/providers/{provider_id}/sync-models", operation_id="operation_platform_provider_sync_models")
 def sync_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> ListEnvelope[PlatformModel]:
     return ListEnvelope(data=_service(request).sync_models(provider_id))
-
-
-@router.post("/providers/{provider_id}/publish", operation_id="operation_platform_provider_publish")
-def publish_provider(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PlatformProvider]:
-    return Envelope(data=_service(request).publish_provider(provider_id))
 
 
 @router.get("/providers/{provider_id}/models", operation_id="operation_platform_model_list")

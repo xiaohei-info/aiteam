@@ -40,6 +40,40 @@ def test_models_dev_client_selects_canonical_prices_and_skips_free_entries():
     assert "free-model" not in prices
 
 
+def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "Internal NewAPI", "http://relay/v1", "openai-completions", None, "draft", 1, now)
+    seen = {}
+
+    class Repo:
+        def ensure_internal_provider(self, **values):
+            seen.update(values)
+            return provider
+
+        def list_providers(self, **_):
+            return [provider]
+
+        def get_provider(self, _provider_id):
+            return provider
+
+        def upsert_discovered_models(self, provider_id, model_ids):
+            assert provider_id == "p1"
+            assert model_ids == ["minimax-m3"]
+            return [ModelRow("p1", "minimax-m3", "", {}, "draft", "discovery", 1, now)]
+
+    class NewAPI:
+        def fetch_available_models(self):
+            return ["minimax-m3"]
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
+    result = service.ensure_internal_provider()
+    assert result.provider_code == "newapi"
+    assert service.list_providers()[0].provider_code == "newapi"
+    assert service.sync_models("p1")[0].model_id == "minimax-m3"
+    assert seen["display_name"] == "内部 NewAPI"
+    assert "newapi_channel_id" not in seen
+
+
 def test_public_price_sync_only_fills_unpriced_models():
     provider = ProviderRow("p1", "newapi", "NewAPI", "http://old/v1", "openai-completions", 1, "draft", 1, datetime.now(UTC))
     model = ModelRow("p1", "gpt-5.5", "", {}, "draft", "discovery", 1, datetime.now(UTC))
@@ -65,6 +99,28 @@ def test_existing_provider_output_uses_current_configured_relay_url():
     service = PlatformProviderService(None, None, None, "https://relay.example/new/v1")
     row = ProviderRow("p1", "newapi", "NewAPI", "http://127.0.0.1:9300/v1", "openai-completions", 1, "published", 2, datetime.now(UTC))
     assert service._provider_output(row).relay_base_url == "https://relay.example/new/v1"
+
+
+def test_newapi_client_reads_available_models_from_internal_catalog():
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"success": True, "data": {"1": [" minimax-m3", "gpt-5.5"], "2": ["gpt-5.5"]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin-pat", "1", transport=httpx.MockTransport(handler))
+    assert client.fetch_available_models() == ["gpt-5.5", "minimax-m3"]
+    assert seen["path"] == "/api/models"
+
+
+def test_newapi_client_rejects_invalid_available_model_catalog():
+    for data in (None, {"1": ["ok", 1]}):
+        client = NewApiAdminClient(
+            "http://newapi.test", "admin-pat", "1",
+            transport=httpx.MockTransport(lambda _request, data=data: httpx.Response(200, json={"success": True, "data": data})),
+        )
+        with pytest.raises(NewApiError, match="invalid model catalog"):
+            client.fetch_available_models()
 
 
 def test_newapi_client_uses_server_management_identity_and_normalizes_models():
