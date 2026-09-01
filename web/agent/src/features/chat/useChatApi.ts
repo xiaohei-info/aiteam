@@ -131,6 +131,8 @@ export interface LocalFile {
 }
 
 const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_AUDIO_MIMES = new Set(["audio/aac", "audio/flac", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/opus", "audio/wav", "audio/webm", "audio/x-wav"]);
+
 const SUPPORTED_ATTACHMENT_MIMES = new Set([
   "application/json", "application/msword", "application/octet-stream", "application/pdf", "application/rtf",
   "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -160,15 +162,44 @@ export function isSupportedAttachmentMime(mimeType: string): boolean {
   return SUPPORTED_ATTACHMENT_MIMES.has(mimeType);
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let data = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) data += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return btoa(data);
+}
+
+export function audioMimeType(file: Pick<File, "type">): string {
+  const mimeType = (typeof file.type === "string" ? file.type : "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return mimeType;
+}
+
+export function isSupportedAudioMime(mimeType: string): boolean {
+  return SUPPORTED_AUDIO_MIMES.has(mimeType);
+}
+
+export interface AudioTranscription {
+  text: string;
+  duration?: number;
+}
+
+export async function transcribeAudio(client: AgentApiClient, file: File): Promise<AudioTranscription> {
+  if (file.size > MAX_LOCAL_FILE_BYTES) throw new Error("Audio files must be 5 MiB or smaller");
+  const mimeType = audioMimeType(file);
+  if (!isSupportedAudioMime(mimeType)) throw new Error("Unsupported audio type");
+  const result = await client.post<AudioTranscription>("/api/agent/audio/transcriptions", {
+    body: { filename: file.name, mime_type: mimeType, data: await fileToBase64(file) },
+  });
+  if (!result || typeof result.text !== "string") throw new Error("audio transcription: invalid response");
+  return result;
+}
+
 export async function uploadAttachment(client: AgentApiClient, conversationId: string, file: File): Promise<LocalFile> {
   if (file.size > MAX_LOCAL_FILE_BYTES) throw new Error("Local files must be 5 MiB or smaller");
   const mimeType = attachmentMimeType(file);
   if (!SUPPORTED_ATTACHMENT_MIMES.has(mimeType)) throw new Error("Unsupported local attachment type");
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  let data = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) data += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   const result = await client.post<LocalFile>(`/api/agent/conversations/${encodeURIComponent(conversationId)}/attachments`, {
-    body: { filename: file.name, mime_type: mimeType, data: btoa(data) },
+    body: { filename: file.name, mime_type: mimeType, data: await fileToBase64(file) },
   });
   if (!result) throw new Error("attachment upload: empty response");
   return result;

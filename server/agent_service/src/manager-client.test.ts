@@ -50,6 +50,23 @@ test("HttpManagerClient pulls only the employee-scoped runtime provider config",
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
 });
 
+test("HttpManagerClient pulls member-scoped speech runtime config without employee input", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    request = { url: String(input), init: init ?? {} };
+    return new Response(JSON.stringify({ data: {
+      base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "secret",
+      model: "XingChenAGI/XingChenASR-V3.2-Ultra", provider_ref: "p1", provider_version: 1, model_version: 1, version: 2,
+      pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "request", input_usd_per_million: null, output_usd_per_million: null, cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: "0", currency: "USD", effective_from: new Date().toISOString() },
+    } }), { status: 200 });
+  });
+  const config = await client.pullSpeechRuntimeConfig(caller);
+  assert.equal(config.model, "XingChenAGI/XingChenASR-V3.2-Ultra");
+  assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/speech/runtime-config");
+  assert.equal(request?.init.body, JSON.stringify({}));
+  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+});
+
 test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank input", async () => {
   let request: { url: string; init: RequestInit } | undefined;
   const expiresAt = new Date(Date.now() + 60_000).toISOString();

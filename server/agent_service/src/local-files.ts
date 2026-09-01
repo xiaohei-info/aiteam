@@ -2,6 +2,9 @@ import { basename, extname } from "node:path";
 
 export const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
+export const AUDIO_MIMES = new Set([
+  "audio/aac", "audio/flac", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/opus", "audio/wav", "audio/webm", "audio/x-wav",
+]);
 
 /** MIME types that stay local to the Agent file store. */
 export const ALLOWED_FILE_MIMES = new Set([

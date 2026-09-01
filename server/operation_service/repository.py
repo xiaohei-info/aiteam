@@ -1,6 +1,6 @@
 """运营端企业账号仓储（oper 库）。
 
-只持「企业账号 + 负责人 bootstrap 校验材料(hash/一次性)」——03 §9.2：Operator 永不持企业
+持「企业账号 + 负责人 bootstrap 校验材料(hash/一次性) + 平台模型 allow-list」——03 §9.2：Operator 永不持企业
 长期密码。提供内存实现（dev/测试）与 PostgreSQL 实现（生产）。
 
 单写者：企业账号表唯一写端是 Operator（CLAUDE/AGENTS §3.2）。
@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-import os
+import json
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -27,6 +27,8 @@ class EnterpriseAccount:
     enterprise_code: str | None
     owner_phone: str
     owner_bootstrap_hash: str
+    # None keeps legacy enterprises unrestricted; [] is an explicit deny-all policy.
+    allowed_model_refs: list[dict] | None = None
 
 
 class EnterpriseRepository(ABC):
@@ -45,6 +47,18 @@ class EnterpriseRepository(ABC):
     @abstractmethod
     def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
         """更新负责人 bootstrap 校验材料。不存在 -> NotFound。"""
+        ...
+
+    @abstractmethod
+    def get_by_tenant_id(self, tenant_id: str) -> EnterpriseAccount:
+        """按 Manager tenant_id 查询企业。不存在 -> NotFound。"""
+        ...
+
+    @abstractmethod
+    def update_allowed_model_refs(
+        self, enterprise_id: str, allowed_model_refs: list[dict] | None
+    ) -> EnterpriseAccount:
+        """更新企业级平台模型允许列表。None=不限制，[] = 不开放任何模型。"""
         ...
 
 
@@ -80,6 +94,29 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
             enterprise_code=account.enterprise_code,
             owner_phone=account.owner_phone,
             owner_bootstrap_hash=bootstrap_hash,
+            allowed_model_refs=account.allowed_model_refs,
+        )
+        self._by_id[enterprise_id] = updated
+        return updated
+
+    def get_by_tenant_id(self, tenant_id: str) -> EnterpriseAccount:
+        for account in self._by_id.values():
+            if account.tenant_id == tenant_id:
+                return account
+        raise NotFound(f"enterprise not found for tenant: {tenant_id}")
+
+    def update_allowed_model_refs(
+        self, enterprise_id: str, allowed_model_refs: list[dict] | None
+    ) -> EnterpriseAccount:
+        account = self.get(enterprise_id)
+        updated = EnterpriseAccount(
+            enterprise_id=account.enterprise_id,
+            tenant_id=account.tenant_id,
+            enterprise_name=account.enterprise_name,
+            enterprise_code=account.enterprise_code,
+            owner_phone=account.owner_phone,
+            owner_bootstrap_hash=account.owner_bootstrap_hash,
+            allowed_model_refs=allowed_model_refs,
         )
         self._by_id[enterprise_id] = updated
         return updated
@@ -116,8 +153,8 @@ class PgEnterpriseRepository(EnterpriseRepository):
                         """
                         INSERT INTO enterprise_account
                             (enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                             owner_phone, owner_bootstrap_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                             owner_phone, owner_bootstrap_hash, allowed_model_refs)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             account.enterprise_id,
@@ -126,6 +163,7 @@ class PgEnterpriseRepository(EnterpriseRepository):
                             account.enterprise_code,
                             account.owner_phone,
                             account.owner_bootstrap_hash,
+                            json.dumps(account.allowed_model_refs) if account.allowed_model_refs is not None else None,
                         ),
                     )
             return account
@@ -145,7 +183,7 @@ class PgEnterpriseRepository(EnterpriseRepository):
                 cur.execute(
                     """
                     SELECT enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                           owner_phone, owner_bootstrap_hash
+                           owner_phone, owner_bootstrap_hash, allowed_model_refs
                     FROM enterprise_account
                     WHERE enterprise_id = %s
                     """,
@@ -163,7 +201,54 @@ class PgEnterpriseRepository(EnterpriseRepository):
             enterprise_code=row[3],
             owner_phone=row[4],
             owner_bootstrap_hash=row[5],
+            allowed_model_refs=list(row[6]) if row[6] is not None else None,
         )
+
+    def get_by_tenant_id(self, tenant_id: str) -> EnterpriseAccount:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT enterprise_id, tenant_id, enterprise_name, enterprise_code,
+                           owner_phone, owner_bootstrap_hash, allowed_model_refs
+                    FROM enterprise_account
+                    WHERE tenant_id = %s
+                    """,
+                    (tenant_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise NotFound(f"enterprise not found for tenant: {tenant_id}")
+        return EnterpriseAccount(
+            enterprise_id=str(row[0]),
+            tenant_id=str(row[1]),
+            enterprise_name=row[2],
+            enterprise_code=row[3],
+            owner_phone=row[4],
+            owner_bootstrap_hash=row[5],
+            allowed_model_refs=list(row[6]) if row[6] is not None else None,
+        )
+
+    def update_allowed_model_refs(
+        self, enterprise_id: str, allowed_model_refs: list[dict] | None
+    ) -> EnterpriseAccount:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE enterprise_account
+                    SET allowed_model_refs = %s, updated_at = now()
+                    WHERE enterprise_id = %s
+                    """,
+                    (json.dumps(allowed_model_refs) if allowed_model_refs is not None else None, enterprise_id),
+                )
+                if cur.rowcount == 0:
+                    raise NotFound(f"enterprise not found: {enterprise_id}")
+        return self.get(enterprise_id)
 
     def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
         import psycopg

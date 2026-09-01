@@ -467,6 +467,22 @@ def test_recruit_expert_slug_conflict_in_tenant():
         svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="dup"))
 
 
+def test_recruit_expert_rejects_model_outside_enterprise_allow_list():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    catalog.seed_platform_catalog({
+        "allowed_models_by_tenant": {
+            "t-a": [{"provider_id": "provider-1", "model_id": "another-model"}],
+        },
+    })
+    svc, emp, _grant, _recruit, orders = _build_service(catalog)
+
+    with pytest.raises(NotFound, match="platform model not found"):
+        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="blocked"))
+    assert emp._bucket(_ctx("t-a")) == {}
+    assert orders.list_orders(_ctx("t-a"))[0].status == "failed"
+
+
 def test_recruit_expert_member_forbidden():
     """招募写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
     catalog = FakeOperatorCatalogClient()

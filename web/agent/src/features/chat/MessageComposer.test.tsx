@@ -18,6 +18,11 @@ vi.mock("./useChatApi", () => ({
   uploadAttachment: vi.fn().mockResolvedValue({ id: "uploaded", kind: "attachment", filename: "notes.txt", mime_type: "text/plain", conversation_id: "c1", tenant_id: "t1", member_id: "m1", byte_size: 1, sha256: "hash", created_at: "2026-01-01T00:00:00Z", referenced_at: null }),
 }));
 vi.mock("../group/useGroupApi", () => ({ listLoadedExperts: vi.fn(() => new Promise(() => undefined)) }));
+vi.mock("./VoiceInputButton", () => ({
+  VoiceInputButton: ({ onText }: { onText: (text: string) => void }) => (
+    <button type="button" aria-label="测试语音输入" onClick={() => onText("语音文本")}>测试语音输入</button>
+  ),
+}));
 
 afterEach(() => vi.clearAllMocks());
 
@@ -33,6 +38,14 @@ function placeCaretAtEnd(element: HTMLElement): void {
 }
 
 describe("MessageComposer runtime state", () => {
+  it("把语音转写文本追加到当前输入", () => {
+    render(<MessageComposer conversationId="c1" isPrompting={false} onPromptingChange={vi.fn()} onSent={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "测试语音输入" }));
+
+    expect(screen.getByLabelText("消息内容")).toHaveTextContent("语音文本");
+  });
+
   it("submits solution-scoped group mentions through the shared composer", async () => {
     const onSent = vi.fn();
     const inputRoster = [{ employee_id: "e1", tenant_id: "t1", version: "v1", handle: "alice", display_name: "Alice", revoked: false }];

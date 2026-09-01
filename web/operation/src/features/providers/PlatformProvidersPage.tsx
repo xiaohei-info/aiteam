@@ -80,13 +80,18 @@ export function PlatformProvidersPage() {
               <VStack gap={1}><Heading level={2}>{selected.display_name}</Heading><Text type="code">{selected.relay_base_url}</Text></VStack>
               <HStack gap={2}>
                 <Button label="同步价格更新" variant="secondary" isLoading={busy} onClick={() => void action(() => api.syncPublicPrices(selected.provider_id))} />
-                <Text type="supporting">新模型会自动补齐公开价格并发布；价格变更时再手动同步。</Text>
+                <Text type="supporting">新模型会自动补齐公开价格并发布；无公开价格的模型请先录入价格再发布。</Text>
               </HStack>
             </HStack>
             {models.length === 0 ? <EmptyState title="LLM 网关暂无可用模型" description="请先在 LLM 网关管理面配置并启用上游渠道。" /> : models.map((item) => (
               <Card key={item.model.model_id} variant="muted"><HStack justify="between" align="center" gap={3}>
                 <VStack gap={1}><Text weight="semibold">{item.model.display_name || item.model.model_id}</Text><HStack gap={1}><Badge label={item.model.status} /><Badge label={item.rate ? `$${item.rate.input_usd_per_million ?? "—"} / $${item.rate.output_usd_per_million ?? "—"} / 1M` : "价格未知"} variant={item.rate ? "info" : "warning"} /></HStack></VStack>
-                <HStack gap={1}><Button label="设置价格" size="sm" variant="ghost" onClick={() => setRateModel(item)} /></HStack>
+                <HStack gap={1}>
+                  <Button label="设置价格" size="sm" variant="ghost" onClick={() => setRateModel(item)} />
+                  {item.model.status !== "published" && item.rate?.pricing_status === "known" && (
+                    <Button label="发布模型" size="sm" variant="secondary" isLoading={busy} onClick={() => void action(() => api.publishModel(selected.provider_id, item.model.model_id))} />
+                  )}
+                </HStack>
               </HStack></Card>
             ))}
           </> : <EmptyState title="LLM 网关尚未就绪" description="请先检查 Operation 的 LLM 网关连接配置。" />}

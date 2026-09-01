@@ -1,7 +1,8 @@
 """Manager protected runtime access for Operator-owned platform Providers (D18).
 
-Manager has no Provider CRUD. The only secret-bearing response is employee-scoped,
-authorization-checked, and `Cache-Control: no-store`.
+Manager has no Provider CRUD. Secret-bearing runtime responses are scoped to the
+current member (and, for expert execution, the employee), authorization-checked,
+and `Cache-Control: no-store`.
 """
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
@@ -18,7 +19,7 @@ from .employee_config_service import build_employee_config_service
 from .member_service import GrantService, MemberDeptService
 from .provider_credential_service import ProviderCredentialService, build_provider_credential_service
 from .repository_member import GrantRepository, MemberDeptRepository
-from .schemas_provider import RuntimeProviderConfigOut, RuntimeProviderConfigRequest
+from .schemas_provider import RuntimeProviderConfigOut, RuntimeProviderConfigRequest, SpeechRuntimeConfigRequest
 from .snapshot_service import build_snapshot_service
 
 
@@ -76,5 +77,24 @@ def build_provider_credential_router(verifier) -> APIRouter:
     ) -> Envelope[RuntimeProviderConfigOut]:
         response.headers["Cache-Control"] = "no-store"
         return Envelope(data=_service(request).runtime_config(tenant_context_from(claims), employee_id=body.employee_id))
+
+    @router.post(
+        "/speech/runtime-config",
+        operation_id="manager_speech_runtime_config",
+        summary="获取企业语音模型运行配置（不绑定 employee）",
+        description="按当前成员所在企业的模型开放列表返回 ASR 运行配置；语音输入不属于某个专家，因此不要求 employee_id。",
+    )
+    async def get_speech_runtime_config(
+        body: SpeechRuntimeConfigRequest,
+        request: Request,
+        response: Response,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[RuntimeProviderConfigOut]:
+        response.headers["Cache-Control"] = "no-store"
+        return Envelope(
+            data=_service(request).speech_runtime_config(
+                tenant_context_from(claims), model=body.model
+            )
+        )
 
     return router

@@ -39,7 +39,7 @@ def runtime_out():
     )
 
 
-def test_runtime_config_is_the_only_manager_provider_route_and_is_no_store():
+def test_runtime_config_is_protected_and_is_no_store():
     fake = MagicMock(); fake.runtime_config.return_value = runtime_out()
     c, _ = client(fake)
     with patch("manager_service.routes_provider._service", return_value=fake):
@@ -50,6 +50,17 @@ def test_runtime_config_is_the_only_manager_provider_route_and_is_no_store():
     assert response.json()["data"]["api_key"] == "tenant-token"
     assert c.get("/api/manager/provider-credentials", headers=auth()).status_code == 404
     assert c.post("/api/manager/provider-credentials", headers=auth(), json={}).status_code == 404
+
+
+def test_speech_runtime_config_is_member_scoped_and_does_not_require_employee():
+    fake = MagicMock(); fake.speech_runtime_config.return_value = runtime_out()
+    c, _ = client(fake)
+    with patch("manager_service.routes_provider._service", return_value=fake):
+        response = c.post("/api/manager/provider-credentials/speech/runtime-config", headers=auth(), json={})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["data"]["model"] == "minimax-m3"
+    fake.speech_runtime_config.assert_called_once()
 
 
 def test_runtime_config_requires_authentication():

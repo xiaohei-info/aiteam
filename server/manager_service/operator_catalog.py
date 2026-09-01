@@ -17,6 +17,7 @@ Operator 持模板真相，Manager 不写、不改）。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from urllib.parse import quote
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.platform_skill import PlatformSkillPackage
@@ -60,7 +61,7 @@ class OperatorCatalogPort(ABC):
         from shared.errors import NotFound
         raise NotFound(f"platform skill not found: {skill_id}@{version}")
 
-    def list_platform_catalog(self) -> dict:
+    def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
         return {"providers": [], "models": []}
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
@@ -137,8 +138,12 @@ class OperatorCatalogClient(OperatorCatalogPort):
     def list_platform_skills(self) -> list[dict]:
         return self._get("/api/operation/skill-market/pull/skills").get("data", [])
 
-    def list_platform_catalog(self) -> dict:
-        return self._get("/api/operation/catalog/platform-providers").get("data", {})
+    def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
+        """Pull the catalog scoped to one enterprise when a tenant is supplied."""
+        path = "/api/operation/catalog/platform-providers"
+        if tenant_id:
+            path += f"?tenant_id={quote(tenant_id, safe='')}"
+        return self._get(path).get("data", {})
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         try:
@@ -262,10 +267,33 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
             raise NotFound(f"platform skill not found: {skill_id}@{version}")
         return package.model_copy(deep=True)
 
-    def list_platform_catalog(self) -> dict:
-        return dict(self._platform_catalog)
+    def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
+        catalog = dict(self._platform_catalog)
+        # Tests may provide an explicit per-tenant projection without making the
+        # fake pretend to be an Operator database.
+        by_tenant = catalog.pop("allowed_models_by_tenant", None)
+        if tenant_id and isinstance(by_tenant, dict):
+            allowed = {(str(ref.get("provider_id")), str(ref.get("model_id"))) for ref in by_tenant.get(tenant_id, []) if isinstance(ref, dict)}
+            catalog["models"] = [
+                item for item in catalog.get("models", [])
+                if isinstance(item, dict)
+                and isinstance(item.get("model"), dict)
+                and (str(item["model"].get("provider_id")), str(item["model"].get("model_id"))) in allowed
+            ]
+            catalog["model_access_configured"] = True
+        return catalog
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
+        by_tenant = self._platform_catalog.get("allowed_models_by_tenant")
+        if tenant_id and isinstance(by_tenant, dict):
+            allowed = {
+                (str(ref.get("provider_id")), str(ref.get("model_id")))
+                for ref in by_tenant.get(tenant_id, [])
+                if isinstance(ref, dict)
+            }
+            if any((provider_id, model_id) not in allowed for model_id in model_ids):
+                from shared.errors import NotFound
+                raise NotFound("platform model not found")
         return {
             "access": {"access_id": f"access-{tenant_id}-{provider_id}", "tenant_id": tenant_id, "provider_id": provider_id,
                        "allowed_model_ids": model_ids, "status": "active", "version": 1, "expires_at": None},

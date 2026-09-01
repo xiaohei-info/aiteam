@@ -19,7 +19,7 @@ import { normalizePermissionMode, type ConversationPermissionMode, type Conversa
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
-import { ALLOWED_FILE_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
+import { ALLOWED_FILE_MIMES, AUDIO_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -27,6 +27,7 @@ const MAX_LOCAL_FILE_NAME = 255;
 const MAX_PROMPT_IMAGES = 8;
 const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_UPLOAD_JSON_BYTES = Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4 + 64 * 1024;
+const MAX_AUDIO_RESPONSE_BYTES = 2 * 1024 * 1024;
 const require = createRequire(import.meta.url);
 const REDOC_BUNDLE = readFileSync(require.resolve("redoc/bundles/redoc.standalone.js"), "utf8");
 const FASTIFY_BODY = Symbol("fastifyBody");
@@ -231,6 +232,16 @@ const PromptRequest = Type.Object({
 const PromptAccepted = Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), accepted: Type.Boolean({ description: "是否已接受执行。" }), state: Type.String({ enum: ["accepted", "completed"], description: "幂等收据状态。" }), idempotency_key: Type.String({ description: "幂等键。" }) }, { $id: "PromptAccepted", description: "提示提交收据。" });
 const PromptAcceptedEnvelope = Type.Object({ data: Type.Ref("PromptAccepted") }, { $id: "PromptAcceptedEnvelope" });
 const LocalFileUpload = Type.Object({ filename: Type.String({ maxLength: MAX_LOCAL_FILE_NAME, description: "安全的文件名，不含路径分隔符。" }), mime_type: Type.String({ description: "文件 MIME 类型。" }), data: Type.String({ contentEncoding: "base64", description: "base64 编码的文件内容。" }) }, { $id: "LocalFileUpload", additionalProperties: false, description: "本地附件/产物上传请求。" });
+const AudioTranscriptionRequest = Type.Object({
+  filename: Type.String({ minLength: 1, maxLength: MAX_LOCAL_FILE_NAME, description: "录音文件名，不含路径分隔符。" }),
+  mime_type: Type.String({ minLength: 1, maxLength: 128, description: "录音 MIME 类型。" }),
+  data: Type.String({ minLength: 1, contentEncoding: "base64", description: "base64 编码的录音内容。" }),
+}, { $id: "AudioTranscriptionRequest", additionalProperties: false, description: "本地语音转写请求；Agent 会使用当前成员企业的受限 ASR 配置。" });
+const AudioTranscriptionResponse = Type.Object({
+  text: Type.String({ description: "语音识别文本。" }),
+  duration: Type.Optional(Type.Number({ minimum: 0, description: "音频时长（秒）。" })),
+}, { $id: "AudioTranscriptionResponse", additionalProperties: false, description: "语音识别结果。" });
+const AudioTranscriptionEnvelope = Type.Object({ data: Type.Ref("AudioTranscriptionResponse") }, { $id: "AudioTranscriptionEnvelope", description: "语音识别响应。" });
 const LocalFileMetadata = Type.Object({
   id: Type.String({ description: "文件 ID。" }), conversation_id: Type.String({ description: "所属会话 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.String({ description: "所属成员 ID。" }), kind: Type.String({ enum: ["attachment", "artifact"], description: "文件类型。" }), filename: Type.String({ description: "文件名。" }), mime_type: Type.String({ description: "文件 MIME 类型。" }), byte_size: Type.Integer({ minimum: 0, description: "文件字节数。" }), sha256: Type.String({ description: "SHA-256 摘要。" }), created_at: Type.String({ format: "date-time", description: "创建时间。" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "被提示引用的时间。" })),
 }, { $id: "LocalFileMetadata", description: "本地文件元数据。" });
@@ -246,7 +257,7 @@ const UsageOutboxItem = Type.Object({ summary_id: Type.String({ description: "�
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
 function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { operationId, ...fields };
@@ -263,6 +274,8 @@ export interface AgentHttpServerOptions {
   spaRoot?: string;
   usageFlush?: UsageFlushService;
   skillCache?: SkillCache;
+  /** Injected for deterministic upstream transcription tests. */
+  fetch?: typeof fetch;
 }
 
 export class HttpProblem extends Error {
@@ -278,8 +291,10 @@ export class AgentHttpServer {
   private requests = 0;
   private errors = 0;
   private readonly promptWorkers = new Set<Promise<void>>();
+  private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: AgentHttpServerOptions) {
+    this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.app = Fastify({
       bodyLimit: MAX_UPLOAD_JSON_BYTES,
       requestIdHeader: "x-request-id",
@@ -438,6 +453,7 @@ export class AgentHttpServer {
     this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { summary: "解析员工账号所属企业", description: "在登录前根据员工账号解析唯一企业租户。", body: Type.Ref("ResolveTenantRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("TenantResolution") })), 400: problemResponse("ValidationError") } }), false);
     this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { summary: "Agent 登录", description: "使用 Manager 返回的企业租户、账号和密码建立本地会话。", body: Type.Ref("AgentLoginRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
     this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { summary: "重置负责人密码", description: "使用当前凭据向 Manager 请求重置密码。", body: Type.Ref("AgentResetPasswordRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
+    this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 503: problemResponse("ManagerUnavailable") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
@@ -1047,6 +1063,82 @@ export class AgentHttpServer {
     this.requireOwnedConversation(route.conversationId, caller);
     const items = this.options.store.listOwnedLocalFiles(route.conversationId, caller.tenantId!, caller.userId ?? caller.callerId, route.kind);
     this.writeJson(response, 200, { data: items, page: { next_cursor: null, has_more: false } });
+  }
+
+  private async transcribeAudio(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
+    if (!this.options.managerClient?.pullSpeechRuntimeConfig) {
+      throw new HttpProblem(503, "manager_unavailable", "Manager speech runtime config is not configured");
+    }
+    const body = await this.readJson(request, MAX_UPLOAD_JSON_BYTES);
+    const filename = this.stringField(body.filename, "filename", MAX_LOCAL_FILE_NAME);
+    if (filename.includes("/") || filename.includes("\\") || /[\x00-\x1f\x7f]/u.test(filename)) {
+      throw new HttpProblem(422, "invalid_filename", "filename must be a safe basename");
+    }
+    const rawMime = this.stringField(body.mime_type, "mime_type", 128);
+    const mimeType = rawMime.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    if (!AUDIO_MIMES.has(mimeType)) throw new HttpProblem(422, "invalid_audio_mime_type", "Unsupported audio MIME type");
+    const encoded = this.stringField(body.data, "data", Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4);
+    const audio = decodeBase64(encoded);
+    if (!audio) throw new HttpProblem(422, "invalid_audio_data", "data must be canonical base64");
+    if (audio.byteLength > MAX_LOCAL_FILE_BYTES) throw new HttpProblem(413, "audio_too_large", "Decoded audio exceeds 5 MiB");
+
+    let config;
+    try {
+      config = await this.options.managerClient.pullSpeechRuntimeConfig(caller);
+    } catch (error) {
+      if (error instanceof ManagerAuthorizationError) {
+        throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
+      }
+      if (error instanceof ManagerUnavailableError) {
+        throw new HttpProblem(503, "manager_unavailable", "Manager speech runtime config is unavailable");
+      }
+      throw error;
+    }
+
+    let endpoint: string;
+    try {
+      const base = new URL(config.base_url);
+      if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("unsupported relay protocol");
+      endpoint = new URL("audio/transcriptions", `${base.toString().replace(/\/+$/u, "")}/`).toString();
+    } catch {
+      throw new HttpProblem(503, "manager_unavailable", "Manager returned an invalid speech relay URL");
+    }
+
+    const form = new FormData();
+    form.set("model", config.model);
+    form.set("file", new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
+    let upstream: Response;
+    try {
+      upstream = await this.fetchImpl(endpoint, {
+        method: "POST",
+        headers: { Accept: "application/json", Authorization: `Bearer ${config.api_key}` },
+        body: form,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      throw new HttpProblem(502, "speech_upstream_unavailable", "Speech transcription service is unavailable");
+    }
+    let textBody: string;
+    try {
+      textBody = await upstream.text();
+    } catch {
+      throw new HttpProblem(502, "speech_upstream_invalid", "Speech transcription response could not be read");
+    }
+    if (Buffer.byteLength(textBody, "utf8") > MAX_AUDIO_RESPONSE_BYTES) {
+      throw new HttpProblem(502, "speech_upstream_invalid", "Speech transcription response is too large");
+    }
+    let payload: unknown;
+    try { payload = JSON.parse(textBody); } catch { payload = undefined; }
+    if (!upstream.ok) throw new HttpProblem(502, "speech_upstream_error", "Speech transcription failed");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || typeof (payload as Record<string, unknown>).text !== "string") {
+      throw new HttpProblem(502, "speech_upstream_invalid", "Speech transcription response is invalid");
+    }
+    const result = payload as Record<string, unknown>;
+    const duration = typeof result.duration === "number" && Number.isFinite(result.duration) && result.duration >= 0
+      ? result.duration
+      : undefined;
+    response.setHeader("Cache-Control", "no-store");
+    this.writeJson(response, 200, { data: { text: result.text, ...(duration === undefined ? {} : { duration }) } });
   }
 
   private async uploadLocalFile(request: IncomingMessage, response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): Promise<void> {

@@ -14,6 +14,15 @@ import { operationMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { EnterprisePage } from "../EnterprisePage";
 
+const providerApiMocks = vi.hoisted(() => ({
+  list: vi.fn(),
+  models: vi.fn(),
+}));
+
+vi.mock("../../providers/usePlatformProvidersApi", () => ({
+  usePlatformProvidersApi: () => providerApiMocks,
+}));
+
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
   i18n.extend("zh-CN", operationMessages["zh-CN"]!);
@@ -54,7 +63,11 @@ function renderEnterprisePage(client: ApiClient) {
 }
 
 describe("EnterprisePage 企业开通", () => {
-  beforeEach(() => { localStorage.clear(); });
+  beforeEach(() => {
+    localStorage.clear();
+    providerApiMocks.list.mockResolvedValue([]);
+    providerApiMocks.models.mockResolvedValue([]);
+  });
   afterEach(() => { localStorage.clear(); });
 
   it("渲染开通表单（企业名称 + 负责人手机号 + 提交按钮）", () => {
@@ -65,6 +78,42 @@ describe("EnterprisePage 企业开通", () => {
     expect(screen.getByText("企业名称")).toBeInTheDocument();
     expect(screen.getByText("负责人手机号")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开通" })).toBeInTheDocument();
+  });
+
+  it("加载已发布且已定价模型，并在开通时提交企业开放范围", async () => {
+    providerApiMocks.list.mockResolvedValue([
+      { provider_id: "p1", display_name: "测试网关", status: "published", version: 1 },
+      { provider_id: "p2", display_name: "草稿网关", status: "draft", version: 1 },
+    ]);
+    providerApiMocks.models.mockResolvedValue([
+      {
+        model: { provider_id: "p1", model_id: "m1", display_name: "模型一", status: "published", version: 2 },
+        rate: { pricing_status: "known" },
+      },
+      {
+        model: { provider_id: "p1", model_id: "m2", display_name: "未定价模型", status: "published", version: 1 },
+        rate: { pricing_status: "unknown" },
+      },
+    ]);
+    const client = mockClient({
+      post: vi.fn().mockResolvedValue({
+        enterprise_id: "ent_001", tenant_id: "t_001", enterprise_name: "测试企业",
+        owner_phone: "13800138000", owner_bootstrap_secret: "secret", must_reset: true,
+      }),
+    });
+    renderEnterprisePage(client);
+
+    await waitFor(() => expect(providerApiMocks.models).toHaveBeenCalledWith("p1"));
+    fireEvent.change(screen.getByPlaceholderText("企业名称"), { target: { value: "测试企业" } });
+    fireEvent.change(screen.getByPlaceholderText("负责人手机号"), { target: { value: "13800138000" } });
+    fireEvent.click(screen.getByRole("button", { name: "开通" }));
+
+    await waitFor(() => expect(client.post).toHaveBeenCalledWith(
+      "/api/operation/enterprises",
+      expect.objectContaining({ body: expect.objectContaining({
+        allowed_model_refs: [{ provider_id: "p1", provider_version: 1, model_id: "m1", model_version: 2 }],
+      }) }),
+    ));
   });
 
   it("空字段提交显示校验提示", async () => {

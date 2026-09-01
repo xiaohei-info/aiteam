@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentApiClient } from "../../lib/api-client";
 import { ApiError } from "@aiteam/shared/api-client";
-import { attachmentMimeType, createConversation, deleteAttachment, downloadLocalFile, getConversationContext, getConversationRuntimeState, getEntries, isSupportedAttachmentMime, listConversations, listLocalFiles, setConversationState, setConversationThinkingLevel, submitPrompt, subscribePiEvents, type LocalFile, uploadAttachment } from "./useChatApi";
+import { attachmentMimeType, audioMimeType, createConversation, deleteAttachment, downloadLocalFile, getConversationContext, getConversationRuntimeState, getEntries, isSupportedAttachmentMime, isSupportedAudioMime, listConversations, listLocalFiles, setConversationState, setConversationThinkingLevel, submitPrompt, subscribePiEvents, transcribeAudio, type LocalFile, uploadAttachment } from "./useChatApi";
 import { isIdempotencyUnknownError, resetPendingSubmissionKey, type PendingSubmission } from "./MessageComposer";
 
 afterEach(() => {
@@ -51,6 +51,18 @@ describe("Pi chat contract", () => {
     expect(attachmentMimeType({ name: "unknown.bin", type: "application/octet-stream" })).toBe("application/octet-stream");
     expect(isSupportedAttachmentMime("text/plain")).toBe(true);
     expect(isSupportedAttachmentMime("application/x-custom")).toBe(false);
+  });
+
+  it("posts local audio to the Agent transcription endpoint", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ filename: "recording.webm", mime_type: "audio/webm", data: "YXVkaW8=" });
+      return new Response(JSON.stringify({ data: { text: "hello" } }), { headers: { "content-type": "application/json" } });
+    });
+    const file = { name: "recording.webm", type: "audio/webm", size: 5, arrayBuffer: async () => new TextEncoder().encode("audio").buffer } as unknown as File;
+    await expect(transcribeAudio(client(fetchMock as unknown as typeof fetch), file)).resolves.toEqual({ text: "hello" });
+    expect(audioMimeType(file)).toBe("audio/webm");
+    expect(isSupportedAudioMime("audio/webm")).toBe(true);
+    expect(isSupportedAudioMime("text/plain")).toBe(false);
   });
 
   it("lists authenticated attachments and artifacts and downloads through the local client", async () => {

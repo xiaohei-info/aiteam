@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { createI18n } from "@aiteam/shared";
 import { I18nContext } from "../../i18n/context";
 import { operationMessages } from "../../i18n/messages";
+import { SessionContext, type SessionContextValue } from "../../auth/session";
 import { EnterpriseActions } from "./EnterpriseActions";
 import type { EnterpriseAccount } from "./types";
 import type { AccountsApi } from "./useAccountsApi";
@@ -45,12 +46,22 @@ function makeApi(overrides: Partial<AccountsApi> = {}): AccountsApi {
   };
 }
 
+const session: SessionContextValue = {
+  session: null,
+  token: "token",
+  signIn: () => {},
+  signOut: () => {},
+  onUnauthorized: () => {},
+};
+
 function renderActions(api = makeApi(), enterprise = makeEnterprise(), onDone = vi.fn()) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
-      <MemoryRouter>
-        <EnterpriseActions api={api} enterprise={enterprise} onDone={onDone} />
-      </MemoryRouter>
+      <SessionContext.Provider value={session}>
+        <MemoryRouter>
+          <EnterpriseActions api={api} enterprise={enterprise} onDone={onDone} />
+        </MemoryRouter>
+      </SessionContext.Provider>
     </I18nContext.Provider>,
   );
 }
@@ -113,6 +124,13 @@ describe("EnterpriseActions", () => {
     expect(amount).toHaveValue(88);
   });
 
+  it("打开企业模型开放配置 Dialog", async () => {
+    renderActions();
+    fireEvent.click(screen.getByRole("button", { name: "操作" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "配置可用模型" }));
+    expect(await screen.findByRole("dialog", { name: "配置测试企业可用模型" })).toBeInTheDocument();
+  });
+
   it("通知与配额使用命名 Dialog 并提交 exact payload", async () => {
     const api = makeApi();
     renderActions(api);
@@ -143,9 +161,11 @@ describe("EnterpriseActions", () => {
 
     rerender(
       <I18nContext.Provider value={makeI18n()}>
-        <MemoryRouter>
-          <EnterpriseActions api={api} enterprise={makeEnterprise({ status: "banned" })} onDone={vi.fn()} />
-        </MemoryRouter>
+        <SessionContext.Provider value={session}>
+          <MemoryRouter>
+            <EnterpriseActions api={api} enterprise={makeEnterprise({ status: "banned" })} onDone={vi.fn()} />
+          </MemoryRouter>
+        </SessionContext.Provider>
       </I18nContext.Provider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "操作" }));

@@ -138,8 +138,15 @@ class RecruitService:
         idem = _idempotency_key(template.template_id, slug)
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
-        recommended, match = _resolve_platform_model(self._catalog, ctx, template)
-        skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
+        try:
+            recommended, match = _resolve_platform_model(self._catalog, ctx, template)
+            skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended)
+        except Exception as exc:
+            failed = order.mark_failed(
+                error_code=_error_code(exc), error_message=str(exc)[:1000]
+            )
+            self._orders.update(ctx, failed)
+            raise
         try:
             row = self._employees.create(
                 ctx,

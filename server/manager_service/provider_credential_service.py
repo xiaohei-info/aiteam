@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from shared.contracts.enums import EnterpriseRole
+from shared.contracts.platform_provider import PricingSnapshot
 from shared.contracts.tenancy import TenantContext
 from shared.crypto import CryptoService
 from shared.db import PgTenantRouter
@@ -36,6 +37,11 @@ _CRED_WRITE_ROLES = [
     EnterpriseRole.OWNER.value,
     EnterpriseRole.ENTERPRISE_ADMIN.value,
 ]
+
+_DEFAULT_SPEECH_MODELS = (
+    "XingChenAGI/XingChenASR-V3.2-Ultra",
+    "XingChenAGI/XingChenGSR-V1.0",
+)
 
 
 def _capability_to_dict(cap: ProviderModelCapability) -> dict[str, Any]:
@@ -167,12 +173,107 @@ class ProviderCredentialService:
                 model_version=policy.model_version,
                 pricing=policy.pricing,
                 version=int(access["version"]),
-                model_capabilities=_runtime_model_capabilities(self._operator, provider_ref, model, policy.model_version),
+                model_capabilities=_runtime_model_capabilities(
+                    self._operator, provider_ref, model, policy.model_version, tenant_id=ctx.tenant_id,
+                ),
             )
         except NotFound:
             raise
         except Exception as exc:  # noqa: BLE001 - fail closed without exposing upstream details
             raise NotFound("runtime provider config is unavailable") from exc
+
+    def speech_runtime_config(
+        self, ctx: TenantContext, *, model: str | None = None
+    ) -> RuntimeProviderConfigOut:
+        """Return an enterprise-scoped ASR config without binding it to an employee."""
+        if self._operator is None:
+            raise NotFound("speech model is unavailable")
+        catalog = _list_platform_catalog(self._operator, ctx.tenant_id)
+        raw_models = catalog.get("models", [])
+        raw_providers = catalog.get("providers", [])
+        if not isinstance(raw_models, list) or not isinstance(raw_providers, list):
+            raise NotFound("speech model is unavailable")
+        items = [
+            item for item in raw_models
+            if isinstance(item, dict) and isinstance(item.get("model"), dict)
+        ]
+        requested = model.strip() if isinstance(model, str) and model.strip() else None
+        selected = next(
+            (item for item in items if item["model"].get("model_id") == requested),
+            None,
+        ) if requested else None
+        if requested and (selected is None or not _is_speech_model(requested)):
+            raise NotFound("speech model not found")
+        if selected is None:
+            for preferred in _DEFAULT_SPEECH_MODELS:
+                selected = next(
+                    (item for item in items if item["model"].get("model_id") == preferred),
+                    None,
+                )
+                if selected is not None:
+                    break
+        if selected is None:
+            selected = next(
+                (item for item in items if _is_speech_model(item["model"].get("model_id"))),
+                None,
+            )
+        if selected is None:
+            raise NotFound("speech model not found")
+
+        model_data = selected["model"]
+        rate = selected.get("rate") or {}
+        if not isinstance(rate, dict):
+            raise NotFound("speech model is unavailable")
+        provider_ref = model_data.get("provider_id")
+        model_id = model_data.get("model_id")
+        provider = next(
+            (item for item in raw_providers
+             if isinstance(item, dict) and item.get("provider_id") == provider_ref),
+            None,
+        )
+        if (
+            not isinstance(provider_ref, str)
+            or not isinstance(model_id, str)
+            or not provider
+            or model_data.get("status") != "published"
+            or rate.get("pricing_status") != "known"
+        ):
+            raise NotFound("speech model not found")
+        try:
+            resolved = self._operator.resolve_tenant_access(
+                tenant_id=ctx.tenant_id, provider_id=provider_ref, model_ids=[model_id]
+            )
+            access = resolved.get("access") if isinstance(resolved, dict) else None
+            allowed = access.get("allowed_model_ids") if isinstance(access, dict) else None
+            if (
+                not isinstance(access, dict)
+                or not isinstance(allowed, list)
+                or model_id not in allowed
+                or resolved.get("api_protocol") != "openai-completions"
+            ):
+                raise NotFound("speech model not found")
+            pricing = PricingSnapshot(**{
+                key: rate.get(key) for key in PricingSnapshot.model_fields
+            })
+            return RuntimeProviderConfigOut(
+                base_url=str(resolved["relay_base_url"]),
+                api_protocol=str(resolved["api_protocol"]),
+                api_key=str(resolved["relay_token"]),
+                model=model_id,
+                provider_ref=provider_ref,
+                provider_version=int(provider.get("version")),
+                model_version=int(model_data.get("version")),
+                pricing=pricing,
+                version=int(access["version"]),
+                model_capabilities=_runtime_model_capabilities(
+                    self._operator, provider_ref, model_id, int(model_data.get("version")),
+                    tenant_id=ctx.tenant_id, catalog=catalog,
+                ),
+            )
+        except NotFound:
+            raise
+        except Exception as exc:  # noqa: BLE001 — do not expose relay details
+            raise NotFound("speech model is unavailable") from exc
 
     def _require(self, ctx: TenantContext, credential_id: str) -> ProviderCredentialRow:
         row = self._repo.get(ctx, credential_id=credential_id)
@@ -216,12 +317,35 @@ def _visible_rows(
     return [row for row in rows if _is_visible(ctx, row)]
 
 
-def _runtime_model_capabilities(operator, provider_ref: str, model_id: str, model_version: int) -> dict[str, Any]:
-    """Expose only non-sensitive capability fields needed by the local Pi model."""
+def _list_platform_catalog(operator, tenant_id: str) -> dict[str, Any]:
     try:
+        catalog = operator.list_platform_catalog(tenant_id=tenant_id)
+    except TypeError:
         catalog = operator.list_platform_catalog()
-    except Exception:  # noqa: BLE001 - runtime config remains compatible with older catalogs
-        return {}
+    return catalog if isinstance(catalog, dict) else {}
+
+
+def _is_speech_model(model_id: Any) -> bool:
+    if not isinstance(model_id, str):
+        return False
+    value = model_id.casefold()
+    return "asr" in value or "gsr" in value or "speech-recognition" in value
+
+
+def _runtime_model_capabilities(
+    operator, provider_ref: str, model_id: str, model_version: int, *, tenant_id: str | None = None,
+    catalog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Expose only non-sensitive capability fields needed by the local Pi model."""
+    if catalog is None:
+        try:
+            try:
+                catalog = operator.list_platform_catalog(tenant_id=tenant_id)
+            except TypeError:
+                # Keep lightweight test doubles compatible with the pre-policy seam.
+                catalog = operator.list_platform_catalog()
+        except Exception:  # noqa: BLE001 - runtime config remains compatible with older catalogs
+            return {}
     models = catalog.get("models", []) if isinstance(catalog, dict) else []
     if not isinstance(models, list):
         return {}

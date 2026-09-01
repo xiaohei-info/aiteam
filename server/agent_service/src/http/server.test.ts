@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { AgentHttpServer } from "./server.js";
+import { HttpManagerClient } from "../manager-client.js";
 import { createFixture } from "../test-fixture.js";
 
 function pngBytes(size = 8): Buffer {
@@ -67,6 +68,79 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
     const missing = await fetch(`${base}/api/agent/conversations/c1/attachments/${uploaded.data.id}`, { method: "DELETE", headers: { Authorization: "Bearer test" } });
     assert.equal(missing.status, 200);
     assert.equal((await missing.json() as { data: { deleted: boolean } }).data.deleted, true);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("Agent speech transcription pulls Manager config and forwards only a local audio file", async () => {
+  const fixture = await createFixture();
+  const managerRequests: { url: string; init: RequestInit }[] = [];
+  const upstreamRequests: { url: string; init: RequestInit }[] = [];
+  const managerClient = new HttpManagerClient("https://manager.test", async (input, init) => {
+    managerRequests.push({ url: String(input), init: init ?? {} });
+    return new Response(JSON.stringify({ data: {
+      base_url: "https://relay.test/v1", api_protocol: "openai-completions", api_key: "tenant-token",
+      model: "XingChenAGI/XingChenASR-V3.2-Ultra", provider_ref: "provider-1", provider_version: 1, model_version: 1, version: 1,
+      pricing: { pricing_version: 1, pricing_status: "known", billing_mode: "request", input_usd_per_million: null, output_usd_per_million: null, cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: "0", currency: "USD", effective_from: new Date().toISOString() },
+    } }), { status: 200 });
+  });
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient,
+    fetch: async (input, init) => {
+      upstreamRequests.push({ url: String(input), init: init ?? {} });
+      return new Response(JSON.stringify({ text: "你好，世界", duration: 0.5 }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const response = await fetch(`${base}/api/agent/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "recording.webm", mime_type: "audio/webm;codecs=opus", data: Buffer.from("local-audio").toString("base64") }),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual((await response.json() as { data: { text: string; duration: number } }).data, { text: "你好，世界", duration: 0.5 });
+    assert.equal(managerRequests[0]?.url, "https://manager.test/api/manager/provider-credentials/speech/runtime-config");
+    assert.equal(managerRequests[0]?.init.body, JSON.stringify({}));
+    assert.equal(upstreamRequests[0]?.url, "https://relay.test/v1/audio/transcriptions");
+    assert.equal((upstreamRequests[0]?.init.headers as Record<string, string>).Authorization, "Bearer tenant-token");
+    const form = upstreamRequests[0]?.init.body as FormData;
+    assert.equal(form.get("model"), "XingChenAGI/XingChenASR-V3.2-Ultra");
+    assert.equal((form.get("file") as File).name, "recording.webm");
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("Agent speech transcription rejects unsupported MIME types before Manager access", async () => {
+  const fixture = await createFixture();
+  let managerCalls = 0;
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient: { pullSpeechRuntimeConfig: async () => { managerCalls += 1; throw new Error("must not call"); } } as any,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/agent/audio/transcriptions`, {
+      method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "x.txt", mime_type: "text/plain", data: "eA==" }),
+    });
+    assert.equal(response.status, 422);
+    assert.equal(managerCalls, 0);
   } finally {
     await http.close();
     await fixture.close();
@@ -307,6 +381,8 @@ test("Agent OpenAPI documents local attachment and artifact contracts", async ()
       assert.equal(item.delete.responses["404"].$ref, "#/components/responses/NotFound");
     }
     assert.deepEqual(document.components.schemas.LocalFileUpload.required, ["filename", "mime_type", "data"]);
+    assert.deepEqual(document.components.schemas.AudioTranscriptionRequest.required, ["filename", "mime_type", "data"]);
+    assert.equal(document.paths["/api/agent/audio/transcriptions"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/AudioTranscriptionRequest");
     assert.equal(document.components.schemas.LocalFileMetadata.properties.kind.enum.includes("attachment"), true);
     const prompt = document.paths["/api/agent/conversations/{conversation_id}/prompt"].post;
     assert.deepEqual(prompt.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/PromptRequest" });

@@ -607,6 +607,56 @@ class TestPgSolutionRepository:
 
 
 # ===========================================================================
+# EnterpriseRepository model-access PG methods
+# ===========================================================================
+
+
+class TestPgEnterpriseModelAccess:
+    @pytest.fixture
+    def repo(self, monkeypatch):
+        from operation_service.repository import PgEnterpriseRepository
+
+        self.cursor = _FakeCursor()
+        self.conn = _FakeConn(self.cursor)
+        _install_psycopg(monkeypatch, self.conn)
+        return PgEnterpriseRepository("postgresql://test")
+
+    @staticmethod
+    def _row(refs=None):
+        return ("ent-1", "tenant-1", "Acme", None, "1", "hash", refs)
+
+    def test_get_by_tenant_id_returns_account(self, repo):
+        _set_one(self.cursor, self._row([{"provider_id": "p1", "model_id": "m1"}]))
+
+        account = repo.get_by_tenant_id("tenant-1")
+
+        assert account.tenant_id == "tenant-1"
+        assert account.allowed_model_refs == [{"provider_id": "p1", "model_id": "m1"}]
+        assert "WHERE tenant_id = %s" in self.cursor.calls[0][0]
+
+    def test_get_by_tenant_id_not_found(self, repo):
+        _set_one(self.cursor, None)
+
+        with pytest.raises(NotFound, match="enterprise not found"):
+            repo.get_by_tenant_id("missing")
+
+    def test_update_allowed_model_refs_updates_and_reads_account(self, repo):
+        self.cursor.rowcount = 1
+        _set_one(self.cursor, self._row([]))
+
+        account = repo.update_allowed_model_refs("ent-1", [])
+
+        assert account.allowed_model_refs == []
+        assert "allowed_model_refs = %s" in self.cursor.calls[0][0]
+
+    def test_update_allowed_model_refs_not_found(self, repo):
+        self.cursor.rowcount = 0
+
+        with pytest.raises(NotFound, match="enterprise not found"):
+            repo.update_allowed_model_refs("missing", None)
+
+
+# ===========================================================================
 # DI factory 切换（内存 ↔ PG）
 # ===========================================================================
 

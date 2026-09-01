@@ -18,6 +18,7 @@ import string
 import uuid
 
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.platform_provider import PlatformModelRef
 
 from .admin_repository import AdminRepository
 from .manager_gateway import ManagerGateway
@@ -26,6 +27,7 @@ from .schemas import (
     EnterpriseProvisioned,
     OwnerBootstrapResetResult,
     ProvisionEnterpriseRequest,
+    EnterpriseModelAccessOut,
 )
 
 
@@ -54,6 +56,19 @@ def _new_bootstrap_secret() -> str:
     return "".join(picks)
 
 
+def _dedupe_model_refs(refs: list[PlatformModelRef]) -> list[PlatformModelRef]:
+    """Keep one current reference per provider/model pair for a stable allow-list."""
+    seen: set[tuple[str, str]] = set()
+    result: list[PlatformModelRef] = []
+    for ref in refs:
+        key = (ref.provider_id, ref.model_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(ref)
+    return result
+
+
 def _hash_bootstrap_local(secret: str) -> str:
     """Operator 本端只存的校验材料（sha256），绝不存长期/明文密码（03 §9.2）。
 
@@ -72,12 +87,16 @@ class ProvisioningService:
         repo: EnterpriseRepository,
         manager: ManagerGateway,
         admin_repo: AdminRepository | None = None,
+        platform_provider_service=None,
     ):
         self._repo = repo
         self._manager = manager
         self._admin = admin_repo
+        self._platform_providers = platform_provider_service
 
     def provision_enterprise(self, req: ProvisionEnterpriseRequest) -> EnterpriseProvisioned:
+        allowed_model_refs = None if req.allowed_model_refs is None else _dedupe_model_refs(req.allowed_model_refs)
+        self._validate_allowed_model_refs(allowed_model_refs)
         enterprise_id = str(uuid.uuid4())
         tenant_id = str(uuid.uuid4())
         secret = _new_bootstrap_secret()
@@ -92,6 +111,7 @@ class ProvisioningService:
                 enterprise_code=req.enterprise_code,
                 initial_quota_policy=req.initial_quota_policy,
                 visible_catalog_policy=req.visible_catalog_policy,
+                allowed_model_refs=allowed_model_refs,
             ),
             idempotency_key=f"provision:{enterprise_id}",
         )
@@ -116,6 +136,10 @@ class ProvisioningService:
                 enterprise_code=req.enterprise_code,
                 owner_phone=req.owner_phone,
                 owner_bootstrap_hash=local_hash,
+                allowed_model_refs=(
+                    [ref.model_dump(mode="json") for ref in allowed_model_refs]
+                    if allowed_model_refs is not None else None
+                ),
             )
         )
 
@@ -136,7 +160,45 @@ class ProvisioningService:
             owner_phone=req.owner_phone,
             owner_bootstrap_secret=secret,
             must_reset=True,
+            allowed_model_refs=allowed_model_refs,
         )
+
+    def get_model_access(self, enterprise_id: str) -> EnterpriseModelAccessOut:
+        account = self._repo.get(enterprise_id)
+        return EnterpriseModelAccessOut(
+            enterprise_id=account.enterprise_id,
+            tenant_id=account.tenant_id,
+            allowed_model_refs=(
+                [PlatformModelRef.model_validate(ref) for ref in account.allowed_model_refs]
+                if account.allowed_model_refs is not None else None
+            ),
+        )
+
+    def set_model_access(
+        self, enterprise_id: str, allowed_model_refs: list[PlatformModelRef] | None
+    ) -> EnterpriseModelAccessOut:
+        self._validate_allowed_model_refs(allowed_model_refs)
+        # Keep first occurrence order while rejecting duplicate model refs only by
+        # canonical provider/model identity; versions are refreshed on the next edit.
+        refs = None if allowed_model_refs is None else _dedupe_model_refs(allowed_model_refs)
+        account = self._repo.update_allowed_model_refs(
+            enterprise_id,
+            [ref.model_dump(mode="json") for ref in refs] if refs is not None else None,
+        )
+        return EnterpriseModelAccessOut(
+            enterprise_id=account.enterprise_id,
+            tenant_id=account.tenant_id,
+            allowed_model_refs=(
+                [PlatformModelRef.model_validate(ref) for ref in account.allowed_model_refs]
+                if account.allowed_model_refs is not None else None
+            ),
+        )
+
+    def _validate_allowed_model_refs(self, refs: list[PlatformModelRef] | None) -> None:
+        if refs is None or self._platform_providers is None:
+            return
+        for ref in refs:
+            self._platform_providers.validate_model_ref(ref, require_published=True)
 
     def reset_owner_bootstrap(self, enterprise_id: str) -> OwnerBootstrapResetResult:
         account = self._repo.get(enterprise_id)  # NotFound -> 404

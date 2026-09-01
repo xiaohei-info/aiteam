@@ -57,6 +57,22 @@ def client(mock_transport):
     return catalog_client, mock_transport
 
 
+# ---- platform catalog ----
+
+def test_list_platform_catalog_sends_tenant_scope(client):
+    catalog_client, transport = client
+    transport.seed(
+        "GET",
+        "/api/operation/catalog/platform-providers",
+        200,
+        {"data": {"providers": [], "models": [], "model_access_configured": True}},
+    )
+
+    result = catalog_client.list_platform_catalog(tenant_id="tenant/a")
+    assert result["model_access_configured"] is True
+    assert str(transport.requests[0].url).endswith("?tenant_id=tenant%2Fa")
+
+
 # ---- pull_expert_template ----
 
 def test_pull_expert_template_success(client):

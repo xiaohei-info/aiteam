@@ -46,6 +46,56 @@ class _OperatorUnavailable(AppError):
     status, code, title = 503, "operator_unavailable", "Operator catalog unavailable"
 
 
+def _list_platform_catalog(catalog: OperatorCatalogPort, tenant_id: str) -> dict:
+    try:
+        try:
+            return catalog.list_platform_catalog(tenant_id=tenant_id)
+        except TypeError:
+            return catalog.list_platform_catalog()
+    except AppError as exc:
+        # The model directory is optional for browse-only flows. Keep templates
+        # visible when Operator has not bootstrapped its gateway yet; writes still
+        # validate the model through RecruitService and fail closed.
+        if exc.status >= 500:
+            return {}
+        raise
+
+
+def _filter_templates_by_model_access(templates: list[ExpertTemplateDetail], catalog: dict) -> list[ExpertTemplateDetail]:
+    if not catalog.get("model_access_configured"):
+        return templates
+    allowed = {
+        (model.get("provider_id"), model.get("model_id"))
+        for item in catalog.get("models", [])
+        if isinstance(item, dict)
+        for model in [item.get("model") or {}]
+        if isinstance(model, dict)
+    }
+    return [
+        template for template in templates
+        if (template.platform_model_ref.provider_id, template.platform_model_ref.model_id) in allowed
+    ]
+
+
+def _filter_solution_packages_by_model_access(packages: list[SolutionPackage], catalog: dict) -> list[SolutionPackage]:
+    if not catalog.get("model_access_configured"):
+        return packages
+    allowed = {
+        (model.get("provider_id"), model.get("model_id"))
+        for item in catalog.get("models", [])
+        if isinstance(item, dict)
+        for model in [item.get("model") or {}]
+        if isinstance(model, dict)
+    }
+    return [
+        package for package in packages
+        if all(
+            (expert.platform_model_ref.provider_id, expert.platform_model_ref.model_id) in allowed
+            for expert in package.experts if expert.enabled
+        )
+    ]
+
+
 def _service(request: Request) -> RecruitService:
     """从端配置构造 RecruitService；未配置业务 DB → 503（不静默，与 employee/auth 路由一致）。
 
@@ -78,12 +128,16 @@ def build_recruit_router(verifier) -> APIRouter:
         # 浏览是 Operator 目录只读；is_recruited 再查本 tenant 已落地实例。
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
-            templates = catalog.list_expert_templates()
+            ctx = tenant_context_from(claims)
+            templates = _filter_templates_by_model_access(
+                catalog.list_expert_templates(),
+                _list_platform_catalog(catalog, ctx.tenant_id),
+            )
         except AppError:
             raise
         except Exception as exc:
             raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
-        recruited = _service(request).recruited_template_ids(tenant_context_from(claims))
+        recruited = _service(request).recruited_template_ids(ctx)
         return ListEnvelope[RecruitableExpertOut](
             data=[
                 RecruitableExpertOut(**item.model_dump(), is_recruited=item.template_id in recruited)
@@ -101,7 +155,12 @@ def build_recruit_router(verifier) -> APIRouter:
     ) -> ListEnvelope[SolutionPackage]:
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
-            return ListEnvelope[SolutionPackage](data=catalog.list_solution_packages())
+            ctx = tenant_context_from(claims)
+            packages = _filter_solution_packages_by_model_access(
+                catalog.list_solution_packages(),
+                _list_platform_catalog(catalog, ctx.tenant_id),
+            )
+            return ListEnvelope[SolutionPackage](data=packages)
         except AppError:
             raise
         except Exception as exc:

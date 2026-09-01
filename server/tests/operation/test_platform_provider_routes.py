@@ -63,6 +63,24 @@ def test_service_catalog_preserves_model_and_rate_shape(client):
     assert item["rate"]["pricing_status"] == "known"
 
 
+def test_service_catalog_supports_legacy_service_signature(client):
+    class LegacyPlatformProviders(FakePlatformProviders):
+        def list_platform_catalog(self):
+            return {
+                "providers": [self.provider],
+                "models": [{"model": self.model, "rate": self.rate}],
+            }
+
+    client.app.state._platform_provider_service = LegacyPlatformProviders()
+    response = client.get(
+        "/api/operation/catalog/platform-providers?tenant_id=tenant-1",
+        headers={"X-Service-Token": "test-service-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["models"][0]["model"]["model_id"] == "minimax-m3"
+
+
 def test_platform_provider_admin_flow_is_versioned_and_secret_free(client):
     listed = client.get("/api/operation/providers", headers=auth())
     assert listed.status_code == 200

@@ -15,6 +15,10 @@ const catalogItem = {
 };
 
 async function mockOperationReadModels(page: Page): Promise<void> {
+  await page.route("**/api/operation/providers", (route) => route.fulfill({ json: {
+    data: [],
+    page: { next_cursor: null, has_more: false },
+  } }));
   await page.route("**/api/operation/rollups/board", (route) => route.fulfill({ json: {
     data: {
       enterprise_count: 3,

@@ -23,11 +23,12 @@ NEWAPI_DB_NAME=newapi
 NEWAPI_REDIS_PASSWORD=<strong-random>
 NEWAPI_SESSION_SECRET=<openssl-rand-hex-32>
 NEWAPI_CRYPTO_SECRET=<openssl-rand-hex-32>
-# NewAPI 基础地址，像 HINDSIGHT_URL/LIGHTRAG_URL 一样按环境配置。
+# NewAPI 私有管理地址，仅供 Operator 访问 channel/token 管理面。
 NEWAPI_URL=http://127.0.0.1:9300
-# 可选：管理面/推理面分离时分别覆盖；否则自动使用 NEWAPI_URL 和 NEWAPI_URL/v1。
+# 管理面可覆盖；不设置时使用 NEWAPI_URL。
 NEWAPI_ADMIN_BASE_URL=
-NEWAPI_PUBLIC_BASE_URL=
+# Manager/Agent/自定义客户端唯一使用的外部 /v1 地址（必须可从请求方访问）。
+NEWAPI_PUBLIC_BASE_URL=https://<newapi-public-host>/v1
 # Operator 页面直接打开当前访问 host:${NEWAPI_PORT}；NewAPI 自己负责账号密码登录。
 # NEWAPI_ADMIN_TOKEN 仅用于 Operator 的服务端 relay 管理调用，不放进超链接或前端。
 ```
@@ -65,7 +66,7 @@ curl -fsS "${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT
 
 ```text
 base_url = https://newapi.xiaohei.tech
-models   = 通过 /api/channel/fetch_models 或上游 /v1/models 发现
+models   = 通过 NewAPI 管理面配置（Operator 使用 /api/channel/{id} 读取）或上游 /v1/models 发现
 key      = 当前上游推理 key（只写入 NewAPI 管理面）
 ```
 
@@ -75,6 +76,19 @@ key      = 当前上游推理 key（只写入 NewAPI 管理面）
 2. `/v1/models` 包含 `minimax-m3`。
 3. 使用临时模型受限 token 完成一次真实 `/v1/chat/completions`。
 4. 删除临时 token，后续由 Operator tenant-access 流程签发。
+
+测试环境需要启用星辰语音识别模型时，使用 Operator-only 管理凭据执行幂等更新（不会回显或保存 channel key）：
+
+```bash
+scripts/newapi-channel-models.sh \
+  --env-file .env.test \
+  --channel-id 1 \
+  --model XingChenAGI/XingChenASR-V3.2-Ultra
+```
+
+更新后应确认 `/v1/models` 包含 `XingChenAGI/XingChenASR-V3.2-Ultra`；随后在 Operator「大模型服务」页同步模型，给该免费模型录入输入/输出价格 `0` 并发布，才能出现在企业可开放目录中。该模型的音频请求使用
+`POST /v1/audio/transcriptions`，不是 Pi 的普通 chat completion。Agent 麦克风按钮通过本地
+`POST /api/agent/audio/transcriptions` 获取当前成员企业已开放的 ASR 配置并转发录音；Agent 不允许选择或修改模型。
 
 ## 6. 备份
 

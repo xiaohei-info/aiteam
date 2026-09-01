@@ -7,6 +7,7 @@ import type {
   EnterpriseAccountDetail,
   EnterpriseActionBody,
   EnterpriseStats,
+  EnterpriseModelAccess,
   EnrichedAudit,
   LifecycleCommand,
   QuotaSnapshot,
@@ -54,6 +55,9 @@ export interface AccountsApi {
   ) => Promise<{ org_id: string; action: string; operation_status: string; detail: string } | null>;
   getQuota: (orgId: string) => Promise<QuotaSnapshot | null>;
   setQuota: (orgId: string, body: QuotaChangePayload) => Promise<QuotaSnapshot | null>;
+  /** Optional for older injected test clients; production hook always provides both. */
+  getModelAccess?: (orgId: string) => Promise<EnterpriseModelAccess | null>;
+  setModelAccess?: (orgId: string, allowedModelRefs: EnterpriseModelAccess["allowed_model_refs"]) => Promise<EnterpriseModelAccess | null>;
   listAudits: (params: {
     enterpriseId?: string;
     severity?: string;
@@ -118,6 +122,17 @@ function createApi(client: ApiClient): AccountsApi {
       return client.patch<QuotaSnapshot>(
         `/api/operation/admin/enterprises/${orgId}/quota`,
         { body },
+      );
+    },
+    getModelAccess(orgId) {
+      return client.get<EnterpriseModelAccess>(
+        `/api/operation/admin/enterprises/${orgId}/model-access`,
+      );
+    },
+    setModelAccess(orgId, allowedModelRefs) {
+      return client.patch<EnterpriseModelAccess>(
+        `/api/operation/admin/enterprises/${orgId}/model-access`,
+        { body: { allowed_model_refs: allowedModelRefs } },
       );
     },
     async listAudits(params) {

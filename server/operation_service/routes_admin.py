@@ -20,6 +20,9 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 
 from .admin_dependencies import get_admin_service
 from .admin_service import AdminService
+from .dependencies import get_provisioning_service
+from .service import ProvisioningService
+from .schemas import EnterpriseModelAccessOut, EnterpriseModelAccessRequest
 
 
 # ---- S01 账号管理 ----
@@ -311,6 +314,35 @@ def build_admin_router(verifier) -> APIRouter:
             operation_status=new_status,
             detail=f"operation_status changed to {new_status}" + (f" (reason: {body.reason})" if body.reason else ""),
         ))
+
+    # ---------------------------------------------------------------------------------
+    # Enterprise platform model allow-list
+    # ---------------------------------------------------------------------------------
+
+    @router.get(
+        "/enterprises/{org_id}/model-access",
+        summary="查看企业允许的平台模型",
+        operation_id="operation_admin_enterprise_model_access_get",
+    )
+    async def get_model_access(
+        org_id: str,
+        _claims: TokenClaims = Depends(require_op),
+        service: ProvisioningService = Depends(get_provisioning_service),
+    ) -> Envelope[EnterpriseModelAccessOut]:
+        return Envelope(data=service.get_model_access(org_id))
+
+    @router.patch(
+        "/enterprises/{org_id}/model-access",
+        summary="修改企业允许的平台模型",
+        operation_id="operation_admin_enterprise_model_access_update",
+    )
+    async def update_model_access(
+        org_id: str,
+        body: EnterpriseModelAccessRequest,
+        _claims: TokenClaims = Depends(require_op),
+        service: ProvisioningService = Depends(get_provisioning_service),
+    ) -> Envelope[EnterpriseModelAccessOut]:
+        return Envelope(data=service.set_model_access(org_id, body.allowed_model_refs))
 
     # ---------------------------------------------------------------------------------
     # S01 quota (issue #413)

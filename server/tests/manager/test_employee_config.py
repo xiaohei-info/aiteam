@@ -10,7 +10,6 @@ integration（真 PG）：CRUD 端到端 + 跨租户 RLS 隔离 + version 自增
 
 import pytest
 
-from shared.contracts.auth import TokenClaims
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Conflict, Forbidden, NotFound
 
@@ -212,6 +211,57 @@ def test_thinking_validation_accepts_off_and_maps_capabilities():
     _validate_thinking_level("high", {"thinking_level_map": {"high": "high", "low": None}})
     with pytest.raises(Conflict, match="does not support thinking"):
         _validate_thinking_level("high", {"reasoning": False})
+
+
+def test_unopened_model_is_reported_as_not_found():
+    class Operator:
+        def list_platform_catalog(self, *, tenant_id):
+            assert tenant_id == "t-a"
+            return {
+                "model_access_configured": True,
+                "models": [{
+                    "model": {
+                        "provider_id": "p1", "model_id": "allowed", "version": 1,
+                        "status": "published", "capabilities": {"thinking_levels": ["off"]},
+                    },
+                    "rate": {"pricing_status": "known"},
+                }],
+            }
+
+    svc = EmployeeConfigService(_FakeRepo(), Operator())
+    body = _body(model_policy={
+        "model": "blocked", "provider_ref": "p1",
+        "provider_version": 1, "model_version": 1,
+    })
+    with pytest.raises(NotFound, match="platform model not found"):
+        svc.create(_ctx("t-a"), body, employee_slug="blocked")
+
+
+def test_model_access_resolver_rejects_unopened_model():
+    class Operator:
+        def list_platform_catalog(self, *, tenant_id):
+            assert tenant_id == "t-a"
+            return {
+                "models": [{
+                    "model": {
+                        "provider_id": "p1", "model_id": "allowed", "version": 1,
+                        "status": "published", "capabilities": {"thinking_levels": ["off"]},
+                    },
+                    "rate": {"pricing_status": "known"},
+                }],
+            }
+
+        def resolve_tenant_access(self, **kwargs):
+            assert kwargs == {"tenant_id": "t-a", "provider_id": "p1", "model_ids": ["allowed"]}
+            return {"access": {"allowed_model_ids": []}}
+
+    svc = EmployeeConfigService(_FakeRepo(), Operator())
+    body = _body(model_policy={
+        "model": "allowed", "provider_ref": "p1",
+        "provider_version": 1, "model_version": 1,
+    })
+    with pytest.raises(NotFound, match="platform model not found"):
+        svc.create(_ctx("t-a"), body, employee_slug="blocked")
 
 
 def test_member_cannot_write_config():

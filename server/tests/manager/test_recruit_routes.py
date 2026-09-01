@@ -7,6 +7,7 @@ integration（真 PG）的端到端 CRUD 留 reviewer 环境（与本卡 mock Op
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 from unittest.mock import MagicMock, patch
 
 from shared.config import Settings
@@ -146,6 +147,118 @@ def test_browse_experts_empty_when_unseeded():
         resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
     assert resp.status_code == 200
     assert resp.json()["data"] == []
+
+
+def test_browse_experts_keeps_templates_when_platform_catalog_is_unavailable():
+    """尚未初始化 Operator 网关时，浏览目录仍可展示模板。"""
+    from shared.contracts.crosstier import ExpertTemplateDetail
+    from shared.errors import AppError
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+
+    class UnavailableCatalog(FakeOperatorCatalogClient):
+        def list_platform_catalog(self, *, tenant_id=None):
+            raise AppError("gateway not bootstrapped")
+
+    service = MagicMock()
+    service.recruited_template_ids.return_value = set()
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
+        client = _client("postgresql://fake/fake")
+        client.app.state._operator_catalog = UnavailableCatalog()
+        client.app.state._operator_catalog.seed_expert(
+            ExpertTemplateDetail(
+                template_id="tpl-1", version="1", display_name="测试专家",
+                platform_model_ref={
+                    "provider_id": "p1", "provider_version": 1,
+                    "model_id": "m1", "model_version": 1,
+                },
+            )
+        )
+        resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+    assert resp.status_code == 200, resp.text
+    assert [item["template_id"] for item in resp.json()["data"]] == ["tpl-1"]
+
+
+def test_browse_catalog_supports_legacy_signature_and_propagates_client_errors():
+    from manager_service.routes_recruit import _list_platform_catalog
+    from shared.errors import NotFound
+
+    class LegacyCatalog:
+        def list_platform_catalog(self):
+            return {"providers": [], "models": []}
+
+    assert _list_platform_catalog(LegacyCatalog(), "tenant-1")["models"] == []
+
+    class MissingCatalog:
+        def list_platform_catalog(self, *, tenant_id):
+            raise NotFound(f"tenant not found: {tenant_id}")
+
+    with pytest.raises(NotFound, match="tenant not found"):
+        _list_platform_catalog(MissingCatalog(), "tenant-1")
+
+
+def test_browse_experts_filters_unopened_models():
+    from shared.contracts.crosstier import ExpertTemplateDetail
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+
+    def expert(template_id, model_id):
+        return ExpertTemplateDetail(
+            template_id=template_id, version="1", display_name=template_id,
+            platform_model_ref={
+                "provider_id": "p1", "provider_version": 1,
+                "model_id": model_id, "model_version": 1,
+            },
+        )
+
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(expert("allowed", "m1"))
+    catalog.seed_expert(expert("blocked", "m2"))
+    catalog.seed_platform_catalog({
+        "model_access_configured": True,
+        "models": [{"model": {"provider_id": "p1", "model_id": "m1"}}],
+    })
+    service = MagicMock()
+    service.recruited_template_ids.return_value = set()
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
+        client = _client("postgresql://fake/fake")
+        client.app.state._operator_catalog = catalog
+        resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
+
+    assert resp.status_code == 200, resp.text
+    assert [item["template_id"] for item in resp.json()["data"]] == ["allowed"]
+
+
+def test_browse_solutions_filters_unopened_models():
+    from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+
+    def expert(template_id, model_id):
+        return ExpertTemplateDetail(
+            template_id=template_id, version="1", display_name=template_id,
+            platform_model_ref={
+                "provider_id": "p1", "provider_version": 1,
+                "model_id": model_id, "model_version": 1,
+            },
+        )
+
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(SolutionPackage(
+        solution_id="allowed", version="1", display_name="Allowed",
+        experts=[expert("tpl-allowed", "m1")],
+    ))
+    catalog.seed_solution(SolutionPackage(
+        solution_id="blocked", version="1", display_name="Blocked",
+        experts=[expert("tpl-blocked", "m2")],
+    ))
+    catalog.seed_platform_catalog({
+        "model_access_configured": True,
+        "models": [{"model": {"provider_id": "p1", "model_id": "m1"}}],
+    })
+    client = _client(None)
+    client.app.state._operator_catalog = catalog
+    response = client.get("/api/manager/recruit/catalog/solutions", headers=_auth_header())
+
+    assert response.status_code == 200, response.text
+    assert [item["solution_id"] for item in response.json()["data"]] == ["allowed"]
 
 
 def test_browse_experts_unconfigured_db_returns_503():

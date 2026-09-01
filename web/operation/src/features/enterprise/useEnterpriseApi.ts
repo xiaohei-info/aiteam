@@ -7,11 +7,14 @@
  *   POST /enterprises/{id}/owner-bootstrap/reset（重置负责人凭据）
  */
 import type { ApiClient } from "../../api";
+import type { PlatformModelRef } from "../catalog/types";
 
 export interface ProvisionInput {
   enterprise_name: string;
   owner_phone: string;
   enterprise_code?: string;
+  /** null keeps all published models; [] explicitly opens none. */
+  allowed_model_refs?: PlatformModelRef[] | null;
 }
 
 export interface ProvisionOutput {
@@ -22,6 +25,13 @@ export interface ProvisionOutput {
   owner_phone: string;
   owner_bootstrap_secret: string;
   must_reset: boolean;
+  allowed_model_refs?: PlatformModelRef[] | null;
+}
+
+export interface EnterpriseModelAccess {
+  enterprise_id: string;
+  tenant_id: string;
+  allowed_model_refs: PlatformModelRef[] | null;
 }
 
 export interface ResetOutput {
@@ -53,5 +63,25 @@ export function useEnterpriseApi(client: ApiClient) {
     return data;
   }
 
-  return { provision, resetBootstrap };
+  async function getModelAccess(enterpriseId: string): Promise<EnterpriseModelAccess> {
+    const data = await client.get<EnterpriseModelAccess>(
+      `/api/operation/admin/enterprises/${enterpriseId}/model-access`,
+    );
+    if (!data) throw new Error("model access 返回空");
+    return data;
+  }
+
+  async function setModelAccess(
+    enterpriseId: string,
+    allowedModelRefs: PlatformModelRef[] | null,
+  ): Promise<EnterpriseModelAccess> {
+    const data = await client.patch<EnterpriseModelAccess>(
+      `/api/operation/admin/enterprises/${enterpriseId}/model-access`,
+      { body: { allowed_model_refs: allowedModelRefs } },
+    );
+    if (!data) throw new Error("model access 返回空");
+    return data;
+  }
+
+  return { provision, resetBootstrap, getModelAccess, setModelAccess };
 }
