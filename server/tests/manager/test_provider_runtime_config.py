@@ -142,3 +142,129 @@ def test_speech_runtime_config_rejects_non_speech_models():
 
     with pytest.raises(NotFound):
         svc.speech_runtime_config(ctx, model="minimax-m3")
+
+
+def _speech_catalog(*, model_id="custom-asr", model_status="published", rate=None):
+    return {
+        "providers": [{"provider_id": "provider-1", "version": 2}],
+        "models": [{
+            "model": {
+                "provider_id": "provider-1", "model_id": model_id,
+                "version": 3, "status": model_status,
+            },
+            "rate": rate or {
+                "pricing_version": 1, "pricing_status": "known",
+                "billing_mode": "request", "request_usd": "0",
+                "currency": "USD", "effective_from": datetime.now(UTC),
+            },
+        }],
+    }
+
+
+def _speech_operator(catalog, *, resolve=None):
+    class Operator:
+        def list_platform_catalog(self, *, tenant_id=None):
+            return catalog
+
+        def resolve_tenant_access(self, **kwargs):
+            if resolve is not None:
+                return resolve(**kwargs)
+            return {
+                "access": {"allowed_model_ids": ["custom-asr"], "version": 4},
+                "relay_base_url": "https://relay.test/v1",
+                "api_protocol": "openai-completions",
+                "relay_token": "tenant-scoped-token",
+            }
+
+    return Operator()
+
+
+def test_speech_runtime_config_requires_operator_and_well_shaped_catalog():
+    ctx = TenantContext(tenant_id="t1", user_id="m1", roles=["member"])
+    with pytest.raises(NotFound, match="speech model is unavailable"):
+        ProviderCredentialService(object(), object(), _Snapshot(), None).speech_runtime_config(ctx)
+
+    class BadCatalog:
+        def list_platform_catalog(self, *, tenant_id=None):
+            return {"providers": [], "models": {}}
+
+    with pytest.raises(NotFound, match="speech model is unavailable"):
+        ProviderCredentialService(object(), object(), _Snapshot(), BadCatalog()).speech_runtime_config(ctx)
+
+
+def test_speech_runtime_config_uses_generic_speech_fallback_and_legacy_catalog():
+    catalog = _speech_catalog()
+
+    class LegacyOperator:
+        def list_platform_catalog(self):
+            return catalog
+
+        def resolve_tenant_access(self, **_kwargs):
+            return {
+                "access": {"allowed_model_ids": ["custom-asr"], "version": 4},
+                "relay_base_url": "https://relay.test/v1",
+                "api_protocol": "openai-completions",
+                "relay_token": "tenant-scoped-token",
+            }
+
+    result = ProviderCredentialService(
+        object(), object(), _Snapshot(), LegacyOperator()
+    ).speech_runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]))
+    assert result.model == "custom-asr"
+
+
+def test_speech_runtime_config_rejects_invalid_model_metadata_and_access():
+    ctx = TenantContext(tenant_id="t1", user_id="m1", roles=["member"])
+    with pytest.raises(NotFound, match="speech model is unavailable"):
+        ProviderCredentialService(
+            object(), object(), _Snapshot(),
+            _speech_operator(_speech_catalog(rate="invalid")),
+        ).speech_runtime_config(ctx)
+
+    with pytest.raises(NotFound, match="speech model not found"):
+        ProviderCredentialService(
+            object(), object(), _Snapshot(),
+            _speech_operator(_speech_catalog(model_status="draft")),
+        ).speech_runtime_config(ctx)
+
+    with pytest.raises(NotFound, match="speech model not found"):
+        ProviderCredentialService(
+            object(), object(), _Snapshot(),
+            _speech_operator(_speech_catalog(model_id=None)),
+        ).speech_runtime_config(ctx)
+
+    def deny(**_kwargs):
+        return {
+            "access": {"allowed_model_ids": [], "version": 4},
+            "relay_base_url": "https://relay.test/v1",
+            "api_protocol": "openai-completions",
+            "relay_token": "tenant-scoped-token",
+        }
+
+    with pytest.raises(NotFound, match="speech model not found"):
+        ProviderCredentialService(
+            object(), object(), _Snapshot(),
+            _speech_operator(_speech_catalog(), resolve=deny),
+        ).speech_runtime_config(ctx)
+
+
+def test_speech_runtime_config_hides_resolver_failures():
+    def broken(**_kwargs):
+        raise RuntimeError("relay unavailable")
+
+    with pytest.raises(NotFound, match="speech model is unavailable"):
+        ProviderCredentialService(
+            object(), object(), _Snapshot(),
+            _speech_operator(_speech_catalog(), resolve=broken),
+        ).speech_runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]))
+
+
+def test_runtime_config_hides_capability_catalog_failures():
+    class BrokenOperator(_Operator):
+        def list_platform_catalog(self, **_kwargs):
+            raise RuntimeError("catalog unavailable")
+
+    result = ProviderCredentialService(
+        object(), object(), _Snapshot(), BrokenOperator()
+    ).runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]), employee_id="e1")
+    assert result.model_capabilities == {}

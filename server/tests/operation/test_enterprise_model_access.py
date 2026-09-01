@@ -47,6 +47,48 @@ def test_provision_persists_and_forwards_allowed_model_refs():
     assert result.allowed_model_refs == [REF]
 
 
+def test_model_access_deduplicates_refs_and_validates_published_models():
+    repository = InMemoryEnterpriseRepository()
+    repository.create(EnterpriseAccount(
+        enterprise_id="enterprise-1", tenant_id="tenant-1", enterprise_name="Acme",
+        enterprise_code=None, owner_phone="1", owner_bootstrap_hash="hash",
+    ))
+
+    class Validator:
+        def __init__(self):
+            self.calls = []
+
+        def validate_model_ref(self, ref, *, require_published):
+            self.calls.append((ref, require_published))
+
+    validator = Validator()
+    service = ProvisioningService(repository, _Manager(), platform_provider_service=validator)
+    updated = service.set_model_access("enterprise-1", [REF, REF])
+
+    assert updated.allowed_model_refs == [REF]
+    assert validator.calls == [(REF, True), (REF, True)]
+
+
+def test_model_access_lookup_handles_legacy_enterprise_repositories():
+    repository = InMemoryEnterpriseRepository()
+    with pytest.raises(NotFound, match="enterprise not found"):
+        repository.get_by_tenant_id("tenant-1")
+
+    service = PlatformProviderService(
+        None, None, None, "https://relay.test/v1", enterprise_repository=object()
+    )
+    assert service._allowed_model_refs("tenant-1") is None
+
+    class MissingEnterprise:
+        def get_by_tenant_id(self, _tenant_id):
+            raise NotFound("missing tenant")
+
+    service = PlatformProviderService(
+        None, None, None, "https://relay.test/v1", enterprise_repository=MissingEnterprise()
+    )
+    assert service._allowed_model_refs("tenant-1") == []
+
+
 def test_model_access_route_reads_and_updates_allow_list():
     app = get_app("operation")
     repository = InMemoryEnterpriseRepository()
@@ -101,6 +143,7 @@ def test_platform_catalog_and_tenant_access_hide_unopened_models():
         def list_providers(self, **_): return [provider]
         def get_provider(self, _): return provider
         def list_models(self, _provider_id, **_): return [allowed_model, blocked_model]
+        def get_access(self, _tenant_id, _provider_id): return None
         def current_rate(self, _provider_id, _model_id):
             return type("Rate", (), {
                 "rate_id": "r", "provider_id": "provider-1", "model_id": "model-a",
@@ -124,3 +167,33 @@ def test_platform_catalog_and_tenant_access_hide_unopened_models():
     assert catalog["model_access_configured"] is True
     with pytest.raises(NotFound, match="platform model not found"):
         service.resolve_tenant_access(tenant_id="tenant-1", provider_id="provider-1", model_ids=["model-b"])
+    # The allowed path refreshes the enterprise-filtered list before provisioning
+    # a new relay access record (the fake omits NewAPI, so it stops afterward).
+    with pytest.raises(AttributeError):
+        service.resolve_tenant_access(tenant_id="tenant-1", provider_id="provider-1", model_ids=["model-a"])
+
+
+def test_platform_provider_builder_wires_enterprise_repository(monkeypatch):
+    import operation_service.platform_provider_service as module
+    import operation_service.repository as repository_module
+
+    monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin.test/operation")
+    monkeypatch.setenv("NEWAPI_URL", "http://newapi.test")
+    monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://relay.test/v1")
+    monkeypatch.setenv("NEWAPI_ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("NEWAPI_ADMIN_USER_ID", "1")
+    monkeypatch.setenv("OPERATION_PROVIDER_CREDENTIAL_KEY", "test-key")
+    enterprise = object()
+    monkeypatch.setattr(repository_module, "PgEnterpriseRepository", lambda dsn: enterprise)
+    monkeypatch.setattr(module, "PlatformProviderRepository", lambda dsn: ("provider", dsn))
+    monkeypatch.setattr(module, "NewApiAdminClient", lambda *args, **kwargs: ("newapi", args, kwargs))
+    monkeypatch.setattr(module, "CryptoService", lambda *_args, **_kwargs: "crypto")
+    monkeypatch.setattr(module, "ModelsDevPricingClient", lambda *args, **kwargs: ("pricing", args, kwargs))
+    monkeypatch.setattr(module, "Fernet", lambda _key: "fernet")
+    module.build_platform_provider_service.cache_clear()
+    try:
+        service = module.build_platform_provider_service()
+    finally:
+        module.build_platform_provider_service.cache_clear()
+
+    assert service._enterprise is enterprise

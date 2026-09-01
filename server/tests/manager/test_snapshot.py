@@ -21,7 +21,7 @@ from shared.errors import Forbidden, NotFound
 
 from manager_service.employee_config_service import EmployeeConfigService
 from manager_service.repository_member import GrantRow, MemberRow
-from manager_service.schemas import EmployeeConfigIn
+from manager_service.schemas import EmployeeConfigIn, EmployeeConfigOut
 from manager_service.snapshot_service import SnapshotService
 
 from .test_employee_config import _FakeRepo
@@ -273,6 +273,58 @@ def test_admin_roles_exempt_from_grant(role):
 
 
 # ---- 正常派生：employee 配置 → EmployeeExecutionSnapshot 全字段映射 ----
+
+
+def test_generate_resolves_pricing_with_legacy_catalog_signature():
+    from shared.contracts.platform_provider import PricingSnapshot
+    from shared.contracts.snapshot import ModelPolicy
+
+    class LegacyCatalog:
+        def list_platform_catalog(self):
+            return {
+                "providers": [{"provider_id": "p1", "status": "published", "version": 2}],
+                "models": [{
+                    "model": {
+                        "provider_id": "p1", "model_id": "m1",
+                        "status": "published", "version": 3,
+                    },
+                    "rate": {
+                        "pricing_version": 4, "pricing_status": "known",
+                        "billing_mode": "token", "input_usd_per_million": "1",
+                        "output_usd_per_million": "2", "currency": "USD",
+                        "effective_from": "2026-01-01T00:00:00Z",
+                    },
+                }],
+            }
+
+    config = EmployeeConfigOut(
+        employee_id="e-priced", employee_slug="priced", version=1, status="active",
+        display_name="Priced", model_policy=ModelPolicy(
+            model="m1", provider_ref="p1", provider_version=2,
+            model_version=3,
+        ),
+    )
+
+    class ConfigService:
+        def get(self, _ctx, *, employee_id):
+            assert employee_id == "e-priced"
+            return config
+
+    snap_svc = SnapshotService(
+        config_service=ConfigService(),
+        grant_service=_FakeGrantService(),
+        member_service=_FakeMemberService(),
+        platform_catalog=LegacyCatalog(),
+    )
+    ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
+
+    snapshot = snap_svc.generate(ctx, member_id="admin-1", employee_id="e-priced")
+
+    assert snapshot.model_policy.pricing == PricingSnapshot(
+        pricing_version=4, pricing_status="known", billing_mode="token",
+        input_usd_per_million="1", output_usd_per_million="2", currency="USD",
+        effective_from="2026-01-01T00:00:00Z",
+    )
 
 
 def test_generate_maps_all_fields():

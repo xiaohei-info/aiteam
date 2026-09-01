@@ -237,6 +237,33 @@ def test_unopened_model_is_reported_as_not_found():
         svc.create(_ctx("t-a"), body, employee_slug="blocked")
 
 
+def test_model_access_resolver_rejects_unopened_model():
+    class Operator:
+        def list_platform_catalog(self, *, tenant_id):
+            assert tenant_id == "t-a"
+            return {
+                "models": [{
+                    "model": {
+                        "provider_id": "p1", "model_id": "allowed", "version": 1,
+                        "status": "published", "capabilities": {"thinking_levels": ["off"]},
+                    },
+                    "rate": {"pricing_status": "known"},
+                }],
+            }
+
+        def resolve_tenant_access(self, **kwargs):
+            assert kwargs == {"tenant_id": "t-a", "provider_id": "p1", "model_ids": ["allowed"]}
+            return {"access": {"allowed_model_ids": []}}
+
+    svc = EmployeeConfigService(_FakeRepo(), Operator())
+    body = _body(model_policy={
+        "model": "allowed", "provider_ref": "p1",
+        "provider_version": 1, "model_version": 1,
+    })
+    with pytest.raises(NotFound, match="platform model not found"):
+        svc.create(_ctx("t-a"), body, employee_slug="blocked")
+
+
 def test_member_cannot_write_config():
     """配置写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
     svc = EmployeeConfigService(_FakeRepo())

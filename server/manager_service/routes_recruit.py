@@ -48,9 +48,17 @@ class _OperatorUnavailable(AppError):
 
 def _list_platform_catalog(catalog: OperatorCatalogPort, tenant_id: str) -> dict:
     try:
-        return catalog.list_platform_catalog(tenant_id=tenant_id)
-    except TypeError:
-        return catalog.list_platform_catalog()
+        try:
+            return catalog.list_platform_catalog(tenant_id=tenant_id)
+        except TypeError:
+            return catalog.list_platform_catalog()
+    except AppError as exc:
+        # The model directory is optional for browse-only flows. Keep templates
+        # visible when Operator has not bootstrapped its gateway yet; writes still
+        # validate the model through RecruitService and fail closed.
+        if exc.status >= 500:
+            return {}
+        raise
 
 
 def _filter_templates_by_model_access(templates: list[ExpertTemplateDetail], catalog: dict) -> list[ExpertTemplateDetail]:
