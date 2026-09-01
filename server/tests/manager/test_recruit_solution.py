@@ -555,6 +555,116 @@ def test_apply_solution_reuses_existing_template_and_recruits_only_missing_exper
     assert len(orders.list_orders(_ctx("t-a"))) == 2  # manual recruit + one new solution expert
 
 
+def test_apply_solution_rejects_duplicate_template_ids():
+    catalog = FakeOperatorCatalogClient()
+    package = _solution_package().model_copy(update={
+        "coordinator_template_id": "tpl-a",
+        "experts": [_solution_package().experts[0], _solution_package().experts[0]],
+    })
+    catalog.seed_solution(package)
+    svc, _, _, _, _ = _build_service(catalog)
+
+    with pytest.raises(Conflict, match="duplicate expert template"):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+
+
+def test_apply_solution_rolls_back_when_order_tracking_fails():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+
+    class FailingOrderRepo(_FakeOrderRepo):
+        def create(self, ctx, **kwargs):
+            raise RuntimeError("order tracking failure")
+
+    svc = RecruitService(
+        catalog=catalog,
+        employees=_FakeEmployeeRepo(),
+        grants=_FakeGrantRepo(),
+        recruit=_FakeRecruitRepo(),
+        orders=FailingOrderRepo(),
+    )
+    with pytest.raises(RuntimeError, match="order tracking failure"):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+
+
+def test_apply_solution_rolls_back_when_expert_grant_fails():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+
+    class FailingGrantRepo(_FakeGrantRepo):
+        def upsert(self, ctx, **kwargs):
+            raise RuntimeError("expert grant failure")
+
+    emp, recruit, orders = _FakeEmployeeRepo(), _FakeRecruitRepo(), _FakeOrderRepo()
+    svc = RecruitService(
+        catalog=catalog, employees=emp, grants=FailingGrantRepo(),
+        recruit=recruit, orders=orders,
+    )
+    with pytest.raises(RuntimeError, match="expert grant failure"):
+        svc.apply_solution(
+            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"]),
+        )
+    assert emp._bucket(_ctx("t-a")) == {}
+
+
+def test_apply_solution_rolls_back_when_instance_creation_fails():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+
+    class FailingRecruitRepo(_FakeRecruitRepo):
+        def create_solution_instance(self, ctx, **kwargs):
+            raise RuntimeError("instance creation failure")
+
+    emp, recruit, orders = _FakeEmployeeRepo(), FailingRecruitRepo(), _FakeOrderRepo()
+    svc = RecruitService(
+        catalog=catalog, employees=emp, grants=_FakeGrantRepo(),
+        recruit=recruit, orders=orders,
+    )
+    with pytest.raises(RuntimeError, match="instance creation failure"):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    assert emp._bucket(_ctx("t-a")) == {}
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
+
+
+def test_apply_solution_rolls_back_when_solution_grant_fails():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+
+    class FailingSolutionGrantRepo(_FakeGrantRepo):
+        def upsert(self, ctx, **kwargs):
+            if kwargs["resource_type"] == "solution":
+                raise RuntimeError("solution grant failure")
+            return super().upsert(ctx, **kwargs)
+
+    emp, grant, recruit, orders = _FakeEmployeeRepo(), FailingSolutionGrantRepo(), _FakeRecruitRepo(), _FakeOrderRepo()
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+    with pytest.raises(RuntimeError, match="solution grant failure"):
+        svc.apply_solution(
+            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"]),
+        )
+    assert emp._bucket(_ctx("t-a")) == {}
+    assert grant._bucket(_ctx("t-a")) == {}
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
+
+
+def test_apply_solution_rolls_back_when_apply_record_fails():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+
+    class FailingRecordRepo(_FakeRecruitRepo):
+        def append_recruit_event(self, ctx, **kwargs):
+            raise RuntimeError("apply record failure")
+
+    recruit = FailingRecordRepo()
+    svc = RecruitService(
+        catalog=catalog, employees=_FakeEmployeeRepo(), grants=_FakeGrantRepo(),
+        recruit=recruit, orders=_FakeOrderRepo(),
+    )
+    with pytest.raises(RuntimeError, match="apply record failure"):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
+
+
 def test_apply_solution_rolls_back_partial_employee_creation():
     """方案展开中途失败不留下已创建员工或授权。"""
     catalog = FakeOperatorCatalogClient()
