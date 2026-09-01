@@ -640,7 +640,7 @@ start_service_local() {
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
-        AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}/api/manager/rag/mcp}" \
+        AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-${agent_manager_url%/}/api/manager/rag/mcp}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEYS="${AITEAM_SKILL_SIGNING_PUBLIC_KEYS:-}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev-current}" \
