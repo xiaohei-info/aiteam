@@ -324,18 +324,7 @@ const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类�
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
-const PI_EVENT_STREAM_DESCRIPTION = [
-  "以 Server-Sent Events（SSE）返回本地 Pi 事件。连接建立后先发送 `: connected`，每条业务消息固定为 `id`、`event: pi` 和一个 `data` JSON 行；前端应解析 data 后按 `data.type` 及其嵌套字段分类展示。",
-  "",
-  "**data 事件分类**",
-  "- **消息与思考**：`message_update` / `message_end`。`message.content[]` 的 `type` 可为 `text`、`thinking`、`toolCall` 或 `image`；思考增量还会出现在 `assistantMessageEvent.type=thinking_start|thinking_delta|thinking_end`。",
-  "- **工具调用与执行**：模型工具调用位于 `message.content[]` 的 `type=toolCall` 片段（字段为 `id`、`name`、`arguments`），或 `assistantMessageEvent.type=toolcall_*`；执行过程使用 `tool_execution_start`、`tool_execution_update`、`tool_execution_end`，通过 `toolCallId` 关联，分别提供 `args`、`partialResult`、`result` 和 `isError`。",
-  "- **待办列表**：`toolName=todo_update` 且 `tool_kind=todo`。待办项位于 `args.items` 或结束事件的 `result.items`，字段为 `id`、`title`、`status`；status 为 `pending`、`in_progress` 或 `completed`。",
-  "- **其他 Agent 能力**：`hindsight_recall|hindsight_retain`（`tool_kind=memory`）、`knowledge_search|knowledge_get`（`tool_kind=rag`）以及 `approval_required`。",
-  "- **运行控制**：`agent_start`、`agent_end`、`agent_settled`、`auto_retry_*`、`compaction_*`。这些事件通常只有状态或摘要字段，不包含完整模型消息。",
-  "",
-  "完整的 data 字段定义见 [PiSseEventData](#/components/schemas/PiSseEventData)，消息和内容片段见 [ConversationMessage](#/components/schemas/ConversationMessage)。事件经过敏感信息脱敏和大小限制，超大事件可能只保留元数据。该接口主要推送订阅建立后的实时事件；历史正文请使用同一会话的 `/entries` 接口，`after` 或 `Last-Event-ID` 仅作为客户端游标传递。",
-].join("\n");
+const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
 
 const PI_EVENT_STREAM_EXAMPLES = {
   thinking: {

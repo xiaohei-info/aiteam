@@ -389,6 +389,7 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").required, true);
 
     const eventOperation = document.paths["/api/agent/conversations/{conversation_id}/events"].get;
+    assert.equal(eventOperation.description, "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。");
     const eventStream = eventOperation.responses["200"].content["text/event-stream"];
     assert.equal(eventOperation.parameters.find((parameter: any) => parameter.name === "Last-Event-ID").in, "header");
     assert.equal(eventStream["x-event-data-schema"].$ref, "#/components/schemas/PiSseEventData");
