@@ -388,6 +388,69 @@ def test_resolve_document_ids_returns_all_alias_targets():
         client.close()
 
 
+def test_resolve_document_ids_expands_duplicate_marker_to_original_document():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [{
+                "id": "duplicate-marker",
+                "file_path": "manager-uuid",
+                "status": "failed",
+                "metadata": {"is_duplicate": True, "original_doc_id": "original-doc"},
+            }],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })),
+    )
+    try:
+        assert client.resolve_document_ids(
+            workspace="derived", aliases=["manager-uuid"]
+        ) == ["duplicate-marker", "original-doc"]
+    finally:
+        client.close()
+
+
+def test_resolve_document_ids_expands_flat_duplicate_marker_metadata():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [{
+                "id": "duplicate-marker",
+                "file_path": "manager-uuid",
+                "status": "failed",
+                "is_duplicate": True,
+                "original_doc_id": "original-doc",
+            }],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })),
+    )
+    try:
+        assert client.resolve_document_ids(
+            workspace="derived", aliases=["manager-uuid"]
+        ) == ["duplicate-marker", "original-doc"]
+    finally:
+        client.close()
+
+
+def test_resolve_document_ids_rejects_malformed_duplicate_metadata():
+    client = LightRagIngestionClient(
+        _settings(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "documents": [{
+                "id": "duplicate-marker",
+                "file_path": "manager-uuid",
+                "status": "failed",
+                "metadata": {"is_duplicate": True, "original_doc_id": "bad\noriginal"},
+            }],
+            "pagination": {"page": 1, "page_size": 200, "total_count": 1, "total_pages": 1},
+        })),
+    )
+    try:
+        with pytest.raises(RagIngestionUnavailable):
+            client.resolve_document_ids(workspace="derived", aliases=["manager-uuid"])
+    finally:
+        client.close()
+
+
 def test_ingestion_fails_on_upstream_error_without_details():
     def handler(request: httpx.Request):
         return httpx.Response(502, text="provider token manager-secret")

@@ -373,7 +373,45 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.queryByRole("button", { name: "检查删除状态删除中.md" })).toBeNull();
   });
 
-  it("shows problem detail and a retry affordance for busy and unavailable deletion", async () => {
+  it("automatically retries deleting documents and marks them deleted after reconciliation", async () => {
+    vi.useFakeTimers();
+    let documentLoads = 0;
+    let reconcileCalls = 0;
+    const deleting = { ...DOCUMENTS[1], id: "doc-deleting", display_name: "删除中.md", status: "deleting" as const };
+    const deleted = { ...deleting, status: "deleted" as const };
+    const client = makeClient({
+      listGet: (url) => {
+        if (url.endsWith("/documents")) {
+          documentLoads += 1;
+          return { items: [reconcileCalls > 0 ? deleted : deleting], page: PAGE };
+        }
+        return defaultListGet(url);
+      },
+      post: (url) => {
+        if (url.endsWith("/reconcile-delete")) {
+          reconcileCalls += 1;
+          return { ...RECONCILE_COMPLETED_OPERATION, document_id: "doc-deleting" };
+        }
+        return undefined;
+      },
+    });
+    render(<DocumentsPanel spaceId="ks-sales" spaceName="销售知识库" canWrite onClose={() => {}} />, { wrapper: Providers });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByLabelText("文档状态：删除处理中")).toBeTruthy();
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(reconcileCalls).toBe(1);
+    expect(documentLoads).toBeGreaterThanOrEqual(2);
+    expect(screen.getByLabelText("文档状态：已删除")).toBeTruthy();
+    vi.useRealTimers();
+  });
+
+  it("treats a busy deletion as pending and keeps hard failures retryable", async () => {
     const problems = [
       new ApiError("fallback", 409, "knowledge_deletion_busy", {
         type: "about:blank", title: "busy", status: 409, code: "knowledge_deletion_busy", detail: "LightRAG 删除仍在处理中",
@@ -388,7 +426,7 @@ describe("KnowledgePage Astryx contract", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "删除销售 FAQ.md" }));
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("LightRAG 删除仍在处理中；可重试");
+    expect(await screen.findByText("删除请求已接受，LightRAG 正忙，系统会自动重试")).toBeTruthy();
     expect(screen.getByRole("button", { name: "删除销售 FAQ.md" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "删除销售 FAQ.md" }));

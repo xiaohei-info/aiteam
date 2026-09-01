@@ -780,13 +780,49 @@ class KnowledgeIntakeService:
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
 
         if present_ids:
+            # A first delete can legitimately receive LightRAG's ``busy`` response.
+            # Reconciliation is also the retry path; otherwise a busy operation
+            # could remain in ``deleting`` forever while the UI only probes it.
+            try:
+                retry = self._ingestion_client.delete_document(
+                    workspace=handle.workspace,
+                    doc_ids=resolved_ids,
+                    delete_file=False,
+                    delete_llm_cache=True,
+                )
+                started = _result_flag(retry, "deletion_started")
+                busy = _result_flag(retry, "busy")
+                if not started and not busy:
+                    raise RagIngestionUnavailable("knowledge deletion unavailable")
+            except RagIngestionUnavailable as exc:
+                operation = self._mark_reconcile_failed(
+                    ctx, operation, upstream_status="unavailable",
+                    error_code="LIGHTRAG_UNAVAILABLE",
+                )
+                self._record_audit(
+                    ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                    detail="LightRAG deletion retry unavailable; document remains deleting",
+                )
+                raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+            except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
+                logger.warning("[kb] delete retry failed: %s", type(exc).__name__)
+                operation = self._mark_reconcile_failed(
+                    ctx, operation, upstream_status="unavailable",
+                    error_code="LIGHTRAG_UNAVAILABLE",
+                )
+                self._record_audit(
+                    ctx, action="knowledge_document_delete_reconcile_failed", resource_id=document_id,
+                    detail="LightRAG deletion retry unavailable; document remains deleting",
+                )
+                raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+            upstream_status = "deletion_started" if started else "busy"
             operation = self._update_operation_or_replace(
-                ctx, operation, status="pending", upstream_status="present",
+                ctx, operation, status="pending", upstream_status=upstream_status,
                 error_code=None, error_message=None,
             )
             self._record_audit(
                 ctx, action="knowledge_document_delete_reconcile_pending", resource_id=document_id,
-                detail="LightRAG document is still present; document remains deleting",
+                detail=f"LightRAG document is still present; retry response={upstream_status}",
             )
             return self._operation_out(ctx, operation)
 

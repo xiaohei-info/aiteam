@@ -836,7 +836,7 @@ def test_reconcile_delete_records_sanitized_audit_lifecycle(tmp_path: Path) -> N
     assert all("audit me" not in str(record) for record in audit.records)
 
 
-def test_reconcile_delete_present_keeps_pending_and_source(tmp_path: Path) -> None:
+def test_reconcile_delete_present_retries_and_keeps_pending_and_source(tmp_path: Path) -> None:
     ingestion = _FakeIngestion(present={"doc-placeholder"})
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
     ctx = _owner_ctx()
@@ -853,8 +853,32 @@ def test_reconcile_delete_present_keeps_pending_and_source(tmp_path: Path) -> No
     )
     assert pending.status == "pending"
     assert pending.document_status == "deleting"
-    assert pending.upstream_status == "present"
+    assert pending.upstream_status == "deletion_started"
     assert source.exists()
+    assert len(ingestion.delete_calls) == 2
+
+
+def test_reconcile_delete_present_retries_busy_without_claiming_completion(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(
+        present={"doc-placeholder"}, delete_result=RagDeletionResult(False, True),
+    )
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="busy", file_name="a.txt",
+        file_type="text/plain", content=b"busy",
+    )
+    ingestion.present = {doc.id}
+    with pytest.raises(RagDeletionBusy):
+        svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-busy")
+
+    pending = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-busy"
+    )
+    assert pending.status == "pending"
+    assert pending.document_status == "deleting"
+    assert pending.upstream_status == "busy"
+    assert len(ingestion.delete_calls) == 2
 
 
 def test_reconcile_delete_probe_failure_is_retryable_without_claiming_deleted(tmp_path: Path) -> None:

@@ -161,6 +161,18 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
     return () => window.clearInterval(timer);
   }, [docs, reload]);
 
+  useEffect(() => {
+    if (!docs.some((doc) => doc.status === "deleting")) return;
+    const timer = window.setInterval(() => {
+      const actionSpaceId = currentSpaceId.current;
+      const deleting = docs.filter((doc) => doc.status === "deleting");
+      void Promise.all(
+        deleting.map((doc) => api.reconcileDeleteDocument(actionSpaceId, doc.id).catch(() => null)),
+      ).then(() => reload({ silent: true }));
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [api, docs, reload]);
+
   async function handleUpload(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!selectedFile || selectedFile.size === 0) {
@@ -233,7 +245,13 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
     } catch (err) {
       if (currentSpaceId.current === actionSpaceId) {
         setPendingDelete(null);
-        setError(retryableMessage(err, "删除失败"));
+        if (err instanceof ApiError && err.problem?.code === "knowledge_deletion_busy") {
+          setActionNoticeStatus("info");
+          setActionNotice("删除请求已接受，LightRAG 正忙，系统会自动重试");
+          await reload({ silent: true });
+        } else {
+          setError(retryableMessage(err, "删除失败"));
+        }
       }
     } finally {
       if (currentSpaceId.current === actionSpaceId) setBusy(false);

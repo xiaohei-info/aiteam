@@ -98,6 +98,8 @@ class RagDocumentInfo:
     content_length: int | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    is_duplicate: bool = False
+    original_document_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +211,15 @@ def _document_info(document: Any, *, workspace: str) -> RagDocumentInfo:
             return None
         return value
 
+    duplicate = False
+    original_document_id: str | None = None
+    duplicate_source: dict[str, Any] = metadata if isinstance(metadata, dict) else document
+    if duplicate_source.get("is_duplicate") is True:
+        duplicate = True
+        candidate = duplicate_source.get("original_doc_id")
+        if _valid_document_alias(candidate):
+            original_document_id = candidate
+
     return RagDocumentInfo(
         upstream_document_id=document_id,
         file_path=file_path,
@@ -217,6 +228,8 @@ def _document_info(document: Any, *, workspace: str) -> RagDocumentInfo:
         content_length=nonnegative_int(document.get("content_length")),
         created_at=safe_timestamp(document.get("created_at")),
         updated_at=safe_timestamp(document.get("updated_at")),
+        is_duplicate=duplicate,
+        original_document_id=original_document_id,
     )
 
 class LightRagIngestionClient:
@@ -331,18 +344,28 @@ class LightRagIngestionClient:
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
         timeout = settings.request_timeout_ms / 1000
         matches: dict[str, set[str]] = {alias: set() for alias in requested}
+        direct_matches: dict[str, set[str]] = {alias: set() for alias in requested}
         try:
-            for document_id, file_path in self._paginated_document_identities(
-                instance, headers=headers, timeout=timeout
-            ):
+            for document in self._paginated_documents(instance, headers=headers, timeout=timeout):
+                document_id = document.upstream_document_id
+                file_path = document.file_path
                 matched = requested.intersection({document_id, file_path})
                 for alias in matched:
+                    direct_matches[alias].add(document_id)
                     matches[alias].add(document_id)
-            if any(len(values) > 1 for values in matches.values()):
+                    if document.is_duplicate:
+                        # A duplicate marker is a failed LightRAG row that points
+                        # at the already indexed source. Deleting only the marker
+                        # leaves the real index behind and makes Manager appear to
+                        # delete successfully while citations remain searchable.
+                        if document.original_document_id is None:
+                            raise RagIngestionUnavailable("knowledge deletion unavailable")
+                        matches[alias].add(document.original_document_id)
+            if any(len(values) > 1 for values in direct_matches.values()):
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
             return sorted({document_id for values in matches.values() for document_id in values})
-        except RagIngestionUnavailable:
-            raise
+        except RagIngestionUnavailable as exc:
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
         except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
             logger.warning("LightRAG document alias resolution failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
