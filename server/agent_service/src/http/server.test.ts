@@ -398,6 +398,9 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
     assert(eventStream.examples.thinking.value.includes('"thinking"'));
     assert(eventStream.examples.toolCall.value.includes('"toolcall_end"'));
     assert(eventStream.examples.todoUpdate.value.includes('"tool_kind":"todo"'));
+    const navigationScript = await (await fetch(`http://127.0.0.1:${address.port}/docs/static/theme/aiteam-sse-schema-navigation.js`)).text();
+    assert(navigationScript.includes("preventDefault"));
+    assert(navigationScript.includes("scrollIntoView"));
     const eventSchema = document.components.schemas.PiSseEventData;
     assert.deepEqual(eventSchema.properties.type.enum, [
       "agent_start", "agent_end", "agent_settled", "message_update", "message_end",

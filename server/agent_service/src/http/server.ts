@@ -389,6 +389,37 @@ const PI_EVENT_STREAM_EXAMPLES = {
   },
 } as const;
 
+const SWAGGER_SSE_SCHEMA_NAVIGATION_JS = String.raw`(() => {
+  const href = "#/components/schemas/PiSseEventData";
+  const title = "PiSseEventData";
+
+  function findSchema() {
+    return Array.from(document.querySelectorAll("article.json-schema-2020-12"))
+      .find((article) => article.querySelector(".json-schema-2020-12__title")?.textContent?.trim() === title);
+  }
+
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const link = target instanceof Element ? target.closest("a[href='" + href + "']") : null;
+    if (!link) return;
+    const schemaSection = document.querySelector(".models");
+    const schemaToggle = schemaSection?.querySelector("button.models-control");
+    if (schemaToggle?.getAttribute("aria-expanded") === "false") schemaToggle.click();
+    const expandSchema = () => {
+      const schema = findSchema();
+      if (!schema) return;
+      const accordion = schema.querySelector("button.json-schema-2020-12-accordion");
+      const collapsed = accordion?.getAttribute("aria-expanded") === "false"
+        || accordion?.querySelector(".json-schema-2020-12-accordion__icon--collapsed") !== null;
+      if (accordion && collapsed) accordion.click();
+      schema.scrollIntoView({ block: "center", behavior: "auto" });
+    };
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    requestAnimationFrame(() => requestAnimationFrame(expandSchema));
+  }, true);
+})();`;
+
 function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { operationId, ...fields };
 }
@@ -549,7 +580,11 @@ export class AgentHttpServer {
       this.registerRoutes();
       // Do not emit `upgrade-insecure-requests`: taiyi/dev serves HTTP directly;
       // TLS termination can add that policy at the edge without breaking local docs.
-      this.app.register(swaggerUi, { routePrefix: "/docs", uiConfig: { url: "/openapi.json", docExpansion: "list" } });
+      this.app.register(swaggerUi, {
+        routePrefix: "/docs",
+        uiConfig: { url: "/openapi.json", docExpansion: "list" },
+        theme: { js: [{ filename: "aiteam-sse-schema-navigation.js", content: SWAGGER_SSE_SCHEMA_NAVIGATION_JS }] },
+      });
     });
   }
 
