@@ -1,5 +1,5 @@
 import React from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
@@ -193,7 +193,7 @@ function renderPage() {
 describe("KnowledgePage Astryx contract", () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-  it("renders a named knowledge-space table and explicit loading, error, and empty states", async () => {
+  it("renders inline enterprise documents and explicit loading, error, and empty states", async () => {
     const pending = deferred<{ items: typeof SPACES; page: typeof PAGE }>();
     makeClient({ listGet: (url) => url === "/api/manager/knowledge-spaces" ? pending.promise : defaultListGet(url) });
     const view = renderPage();
@@ -229,8 +229,10 @@ describe("KnowledgePage Astryx contract", () => {
   it("只展示企业知识库，不暴露空间 CRUD", async () => {
     makeClient();
     renderPage();
-    await screen.findByRole("table", { name: "企业知识库" });
+    await screen.findByRole("table", { name: "文档列表" });
+    expect(screen.getByTestId("embedded-documents-panel")).toBeInTheDocument();
     expect(screen.getAllByText("企业知识库").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeNull();
     expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除企业知识库" })).toBeNull();
     expect(screen.getByRole("link", { name: "打开 LightRAG 控制台" })).toHaveAttribute("href", "http://localhost:9621/webui/");
@@ -238,14 +240,11 @@ describe("KnowledgePage Astryx contract", () => {
     expect(screen.getByRole("link", { name: "打开 LightRAG 控制台" })).toHaveAttribute("title", expect.stringContaining("LIGHTRAG_AUTH_ACCOUNTS"));
   });
 
-  it("loads the enterprise document dialog and supports URL import, upload, and retry", async () => {
+  it("shows enterprise documents inline and supports URL import, upload, and retry", async () => {
     const client = makeClient();
     renderPage();
-    await screen.findByRole("table", { name: "企业知识库" });
-    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
-
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
     expect(await screen.findByRole("table", { name: "文档列表" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeNull();
     expect(screen.getByText("销售手册.pdf")).toBeTruthy();
 
     fireEvent.change(screen.getByRole("textbox", { name: /URL/ }), { target: { value: "https://example.com/guide" } });
@@ -488,9 +487,8 @@ describe("KnowledgePage Astryx contract", () => {
         </SessionContext.Provider>
       </I18nContext.Provider>
     ) });
-    await screen.findByRole("table", { name: "企业知识库" });
-    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
+    await screen.findByRole("table", { name: "文档列表" });
+    expect(screen.queryByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeNull();
     expect(screen.getByRole("form", { name: "上传文件" })).toBeTruthy();
     expect(screen.getByRole("form", { name: "从 URL 导入" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "删除销售手册.pdf" })).toBeTruthy();
@@ -534,9 +532,8 @@ describe("KnowledgePage Astryx contract", () => {
     };
     const client = makeClient({ listGet: (url) => url.endsWith("/analytics") ? { items: [analytics], page: PAGE } : defaultListGet(url) });
     renderPage();
-    expect(await screen.findByText("文档总数")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
+    expect(await screen.findByLabelText("文档摄入统计")).toBeTruthy();
+    expect(screen.getByText("2 个")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "查看详情销售 FAQ.md" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "查看详情销售 FAQ.md" }));
     expect(await screen.findByRole("dialog", { name: "文档详情 · 销售 FAQ.md" })).toBeTruthy();
@@ -553,11 +550,10 @@ describe("KnowledgePage Astryx contract", () => {
         </SessionContext.Provider>
       </I18nContext.Provider>
     ) });
-    await screen.findByRole("table", { name: "企业知识库" });
+    await screen.findByRole("table", { name: "文档列表" });
     expect(screen.queryByRole("button", { name: "新建知识空间" })).toBeNull();
     expect(screen.queryByRole("link", { name: "打开 LightRAG 控制台" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "管理企业知识库文档" }));
-    expect(await screen.findByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "文档摄入 · 企业知识库" })).toBeNull();
     expect(screen.queryByRole("form", { name: "上传文件" })).toBeNull();
     expect(screen.queryByRole("form", { name: "从 URL 导入" })).toBeNull();
     expect(screen.queryByRole("button", { name: /重试|重建索引/ })).toBeNull();

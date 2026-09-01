@@ -39,6 +39,7 @@ export function MemoryPage(): ReactNode {
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Array<{ employee_id: string; display_name: string }>>([]);
   const [selectedEmployee, setSelectedEmployee] = useState("");
+  const [detailEmployeeId, setDetailEmployeeId] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +49,6 @@ export function MemoryPage(): ReactNode {
   const [newEmployee, setNewEmployee] = useState("");
   const [editing, setEditing] = useState<MemoryItem | null>(null);
   const [editContent, setEditContent] = useState("");
-  const [detailItem, setDetailItem] = useState<MemoryItem | null>(null);
   const [pendingDelete, setPendingDelete] = useState<MemoryItem | null>(null);
 
   const load = useCallback(async () => {
@@ -57,7 +57,7 @@ export function MemoryPage(): ReactNode {
       setLoading(false);
       return;
     }
-    if (!selectedEmployee) {
+    if (!selectedEmployee || !detailEmployeeId) {
       setItems([]);
       setLoading(false);
       return;
@@ -67,7 +67,7 @@ export function MemoryPage(): ReactNode {
     try { setItems(await api.list({ employee_id: selectedEmployee, keyword: keyword || undefined })); } catch (err) {
       setError(err instanceof ApiError ? err.message : "记忆数据加载失败");
     } finally { setLoading(false); }
-  }, [api, canManage, keyword, selectedEmployee]);
+  }, [api, canManage, detailEmployeeId, keyword, selectedEmployee]);
 
   useEffect(() => { void load(); }, [load]);
   const refreshAnalytics = useCallback(async (): Promise<void> => {
@@ -167,8 +167,12 @@ export function MemoryPage(): ReactNode {
           placeholder={employees.length === 0 ? "暂无可用专家" : "请选择专家"}
           isDisabled={employees.length === 0}
         />
-        <TextInput label="搜索记忆内容" isLabelHidden placeholder="搜索记忆内容…" value={keyword} onChange={setKeyword} width="100%" />
-        <Button label="搜索" variant="secondary" onClick={() => void load()} />
+        <Button
+          label="查看当前员工记忆"
+          variant="secondary"
+          onClick={() => setDetailEmployeeId(selectedEmployee || null)}
+          isDisabled={!selectedEmployee}
+        />
       </HStack>
       {error && <Banner status="error" title={error} />}
       {actionError && <Banner status="error" title={actionError} />}
@@ -196,7 +200,7 @@ export function MemoryPage(): ReactNode {
                     {employee.total_nodes != null && <Text type="supporting">图谱 {employee.total_nodes} 节点 · {employee.total_links ?? 0} 关系 · 观察 {employee.total_observations ?? 0}</Text>}
                     {employee.pending_operations != null && <Text type="supporting">后台任务：待处理 {employee.pending_operations} · 失败 {employee.failed_operations ?? 0}</Text>}
                     {employee.pending_consolidation != null && <Text type="supporting">归纳：待处理 {employee.pending_consolidation} · 失败 {employee.failed_consolidation ?? 0}</Text>}
-                    <Button label={`查看${employee.display_name}记忆`} variant="ghost" size="sm" onClick={() => setSelectedEmployee(employee.employee_id)} />
+                    <Button label={`查看${employee.display_name}记忆`} variant="ghost" size="sm" onClick={() => { setSelectedEmployee(employee.employee_id); setDetailEmployeeId(employee.employee_id); }} />
                   </VStack>
                 </Card>
               ))}
@@ -216,28 +220,35 @@ export function MemoryPage(): ReactNode {
         /><TextInput label="记忆内容" value={newContent} onChange={setNewContent} /></FormLayout><HStack gap={2}><Button label="保存" variant="primary" size="sm" onClick={() => void handleCreate()} isDisabled={!newEmployee || !newContent} /><Button label="取消" variant="secondary" size="sm" onClick={() => setShowForm(false)} /></HStack></VStack></Card>
       )}
 
-      {loading ? <Card padding={4} role="status" aria-label="记忆加载中"><Skeleton height={80} /></Card> : items.length === 0 ? <EmptyState title="暂无记忆条目" /> : <VStack gap={2}>{items.map((m) => (
-        <Card key={m.memory_id} padding={4} data-testid="memory-item"><HStack justify="between" align="start"><VStack gap={1}>
-          {editing?.memory_id === m.memory_id ? <VStack gap={2}><TextInput label="记忆内容" value={editContent} onChange={setEditContent} /><HStack gap={2}><Button label="保存" variant="primary" size="sm" onClick={() => void handleUpdate()} isDisabled={!editContent.trim()} /><Button label="取消" variant="secondary" size="sm" onClick={() => setEditing(null)} /></HStack></VStack> : <>
-            <Text>{m.content}</Text>
-            <Text type="supporting">专家：{employees.find((employee) => employee.employee_id === m.employee_id)?.display_name || "已删除专家"}</Text>
-            <Text type="supporting">{[m.category, m.importance == null ? null : `重要度 ${formatImportance(m.importance)}`, m.state || "valid", m.source, formatDate(m.created_at)].filter(Boolean).join(" · ")}</Text>
-          </>}
-        </VStack>{editing?.memory_id !== m.memory_id && <HStack gap={2}><Button label={`查看详情${m.memory_id}`} variant="ghost" size="sm" onClick={() => setDetailItem(m)} />{canManage && <><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => setPendingDelete(m)} /></>}</HStack>}</HStack></Card>
-      ))}</VStack>}
-
-      {detailItem && (
-        <Dialog isOpen aria-label={`记忆详情 · ${detailItem.memory_id}`} onOpenChange={(open) => { if (!open) setDetailItem(null); }} width={620} maxHeight="80vh" purpose="form">
+      {detailEmployeeId && (
+        <Dialog
+          isOpen
+          aria-label={`记忆列表 · ${employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || analytics?.employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || "员工"}`}
+          onOpenChange={(open) => { if (!open) { setDetailEmployeeId(null); setEditing(null); } }}
+          width={760}
+          maxHeight="85vh"
+          purpose="form"
+        >
           <VStack gap={3}>
-            <DialogHeader title="记忆详情" subtitle={detailItem.memory_id} onOpenChange={(open) => { if (!open) setDetailItem(null); }} />
-            <Card><VStack gap={2}>
-              <Text>{detailItem.content}</Text>
-              <Text type="supporting">专家：{employees.find((employee) => employee.employee_id === detailItem.employee_id)?.display_name || "已删除专家"}</Text>
-              <Text type="supporting">分类：{detailItem.category || "memory"} · 来源：{detailItem.source || "hindsight"}</Text>
-              <Text type="supporting">重要度：{formatImportance(detailItem.importance)} · 状态：{detailItem.state || "valid"}</Text>
-              <Text type="supporting">创建：{formatDate(detailItem.created_at)} · 最近使用：{formatDate(detailItem.last_used_at)}</Text>
-            </VStack></Card>
-            <HStack justify="end"><Button label="关闭" variant="secondary" onClick={() => setDetailItem(null)} /></HStack>
+            <DialogHeader
+              title={`记忆 · ${employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || analytics?.employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || "员工"}`}
+              subtitle={`${items.length} 条记忆`}
+              onOpenChange={(open) => { if (!open) { setDetailEmployeeId(null); setEditing(null); } }}
+            />
+            <HStack gap={2} align="end">
+              <TextInput label="搜索记忆内容" placeholder="搜索记忆内容…" value={keyword} onChange={setKeyword} width="100%" />
+              <Button label="搜索" variant="secondary" onClick={() => void load()} />
+            </HStack>
+            {loading ? <Card padding={4} role="status" aria-label="记忆加载中"><Skeleton height={80} /></Card> : items.length === 0 ? <EmptyState title="暂无记忆条目" /> : <VStack gap={2}>{items.map((m) => (
+              <Card key={m.memory_id} padding={4} data-testid="memory-item"><HStack justify="between" align="start"><VStack gap={1}>
+                {editing?.memory_id === m.memory_id ? <VStack gap={2}><TextInput label="记忆内容" value={editContent} onChange={setEditContent} /><HStack gap={2}><Button label="保存" variant="primary" size="sm" onClick={() => void handleUpdate()} isDisabled={!editContent.trim()} /><Button label="取消" variant="secondary" size="sm" onClick={() => setEditing(null)} /></HStack></VStack> : <>
+                  <Text>{m.content}</Text>
+                  <Text type="supporting">专家：{employees.find((employee) => employee.employee_id === m.employee_id)?.display_name || "已删除专家"}</Text>
+                  <Text type="supporting">{[m.category, m.importance == null ? null : `重要度 ${formatImportance(m.importance)}`, m.state || "valid", m.source, formatDate(m.created_at)].filter(Boolean).join(" · ")}</Text>
+                </>}
+              </VStack>{editing?.memory_id !== m.memory_id && canManage && <HStack gap={2}><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => setPendingDelete(m)} /></HStack>}</HStack></Card>
+            ))}</VStack>}
+            <HStack justify="end"><Button label="关闭" variant="secondary" onClick={() => { setDetailEmployeeId(null); setEditing(null); }} /></HStack>
           </VStack>
         </Dialog>
       )}

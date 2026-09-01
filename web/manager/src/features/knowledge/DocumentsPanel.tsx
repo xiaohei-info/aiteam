@@ -62,10 +62,12 @@ interface Props {
   spaceId: string;
   spaceName: string;
   canWrite: boolean;
+  /** Render inside the page instead of an outer modal. */
+  embedded?: boolean;
   /** Initial page projection; standalone panel usage can omit it. */
   analytics?: KnowledgeAnalytics | null;
   onChanged?: () => void;
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -103,7 +105,7 @@ function citationStatus(document: KnowledgeDocument): {
   return { label: "等待就绪", description: "文档处理完成后才可获取引用", variant: "neutral" };
 }
 
-export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChanged, onClose }: Props): ReactNode {
+export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false, analytics, onChanged, onClose = () => {} }: Props): ReactNode {
   const api = useKnowledgeApi();
   const fileInputId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -400,17 +402,10 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
   }, [busy, canWrite, handleReconcile, handleReindex]);
 
   return (
-    <Dialog
-      isOpen
-      aria-label={`文档摄入 · ${spaceName}`}
-      onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
-      width={960}
-      maxHeight="90vh"
-      purpose="form"
-    >
+    <DocumentsPanelFrame embedded={embedded} spaceName={spaceName} onClose={onClose}>
       <Layout
         height="auto"
-        header={<DialogHeader title={`文档摄入 · ${spaceName}`} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }} />}
+        header={embedded ? undefined : <DialogHeader title={`文档摄入 · ${spaceName}`} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }} />}
         content={
           <LayoutContent>
             <VStack gap={4}>
@@ -482,7 +477,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
             </VStack>
           </LayoutContent>
         }
-        footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack></LayoutFooter>}
+        footer={embedded ? undefined : <LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack></LayoutFooter>}
       />
 
       {detailDocument && (
@@ -503,6 +498,34 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, analytics, onChan
         isActionLoading={busy}
         onAction={() => void handleDelete()}
       />
+    </DocumentsPanelFrame>
+  );
+}
+
+function DocumentsPanelFrame({
+  embedded,
+  spaceName,
+  onClose,
+  children,
+}: {
+  embedded: boolean;
+  spaceName: string;
+  onClose: () => void;
+  children: ReactNode;
+}): ReactNode {
+  if (embedded) {
+    return <section aria-label={`文档摄入 · ${spaceName}`} data-testid="embedded-documents-panel">{children}</section>;
+  }
+  return (
+    <Dialog
+      isOpen
+      aria-label={`文档摄入 · ${spaceName}`}
+      onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}
+      width={960}
+      maxHeight="90vh"
+      purpose="form"
+    >
+      {children}
     </Dialog>
   );
 }
