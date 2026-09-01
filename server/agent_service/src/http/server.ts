@@ -347,16 +347,25 @@ const PI_EVENT_STREAM_EXAMPLES = {
       "",
     ].join("\n"),
   },
+  toolCall: {
+    summary: "模型发起工具调用事件",
+    value: [
+      "id: employee-1:assistant-1",
+      "event: pi",
+      'data: {"type":"message_update","conversation_id":"conversation-1","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"printf \'hello\'"}}]},"assistantMessageEvent":{"type":"toolcall_end","contentIndex":0,"toolCall":{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"printf \'hello\'"}}}}',
+      "",
+    ].join("\n"),
+  },
   toolExecution: {
     summary: "普通工具执行事件",
     value: [
       "id: employee-1:call-1",
       "event: pi",
-      'data: {"type":"tool_execution_start","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"read","args":{"path":"src/index.ts"}}',
+      'data: {"type":"tool_execution_start","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"bash","args":{"command":"printf \'hello\'"}}',
       "",
       "id: employee-1:call-1-end",
       "event: pi",
-      'data: {"type":"tool_execution_end","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"read","result":{"text":"文件内容摘要"},"isError":false}',
+      'data: {"type":"tool_execution_end","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"bash","result":{"text":"hello"},"isError":false}',
       "",
     ].join("\n"),
   },
@@ -601,10 +610,11 @@ export class AgentHttpServer {
       summary: "订阅会话事件流",
       description: PI_EVENT_STREAM_DESCRIPTION,
       params: ConversationParams,
-      querystring: Type.Object({ after: Type.Optional(Type.String({ description: "客户端上次收到的事件 ID；历史正文请通过 /entries 获取。" })) }, { additionalProperties: false }),
+      querystring: Type.Object({ after: Type.Optional(Type.String({ description: "客户端上次收到的事件 ID；历史正文请通过 /entries 获取。优先于 Last-Event-ID。" })) }, { additionalProperties: false }),
+      headers: Type.Object({ "Last-Event-ID": Type.Optional(Type.String({ description: "SSE 客户端自动携带的上次事件 ID；未提供 after 查询参数时使用。" })) }, { additionalProperties: true, description: "SSE 断线重连游标。" }),
       response: {
         200: {
-          description: "Pi SSE event stream. Each event uses `event: pi` and carries a JSON object in the `data` line.",
+          description: "Pi SSE 事件流。每条事件使用 `event: pi`，并在 `data` 行携带一个 JSON 对象。",
           content: {
             "text/event-stream": {
               schema: Type.String({ description: "SSE 事件流文本；每个 data 行的 JSON 结构见 PiSseEventData。" }),

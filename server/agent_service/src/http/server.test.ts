@@ -364,7 +364,7 @@ test("Agent prompt rejects aggregate decoded image bytes over 20 MiB", async () 
   }
 });
 
-test("Agent OpenAPI documents local attachment and artifact contracts", async () => {
+test("Agent OpenAPI documents local attachment, artifact, and SSE event contracts", async () => {
   const fixture = await createFixture();
   const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
   await http.listen(0);
@@ -390,11 +390,13 @@ test("Agent OpenAPI documents local attachment and artifact contracts", async ()
 
     const eventOperation = document.paths["/api/agent/conversations/{conversation_id}/events"].get;
     const eventStream = eventOperation.responses["200"].content["text/event-stream"];
+    assert.equal(eventOperation.parameters.find((parameter: any) => parameter.name === "Last-Event-ID").in, "header");
     assert.equal(eventStream["x-event-data-schema"].$ref, "#/components/schemas/PiSseEventData");
     assert(eventStream.schema.description.includes("PiSseEventData"));
     assert(eventOperation.responses["200"].description.includes("data"));
-    assert.deepEqual(Object.keys(eventStream.examples).sort(), ["lifecycle", "thinking", "todoUpdate", "toolExecution"]);
+    assert.deepEqual(Object.keys(eventStream.examples).sort(), ["lifecycle", "thinking", "todoUpdate", "toolCall", "toolExecution"]);
     assert(eventStream.examples.thinking.value.includes('"thinking"'));
+    assert(eventStream.examples.toolCall.value.includes('"toolcall_end"'));
     assert(eventStream.examples.todoUpdate.value.includes('"tool_kind":"todo"'));
     const eventSchema = document.components.schemas.PiSseEventData;
     assert.deepEqual(eventSchema.properties.type.enum, [
