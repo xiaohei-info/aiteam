@@ -17,7 +17,14 @@ def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
     monkeypatch.setenv("NEWAPI_URL", "https://relay.example/ai")
     monkeypatch.delenv("NEWAPI_ADMIN_BASE_URL", raising=False)
     monkeypatch.delenv("NEWAPI_PUBLIC_BASE_URL", raising=False)
-    assert newapi_urls() == ("https://relay.example/ai", "https://relay.example/ai/v1")
+    assert newapi_urls() == ("https://relay.example/ai", None)
+
+
+def test_public_relay_url_never_falls_back_to_private_newapi_url(monkeypatch):
+    monkeypatch.setenv("NEWAPI_URL", "http://newapi:3000")
+    monkeypatch.delenv("NEWAPI_ADMIN_BASE_URL", raising=False)
+    monkeypatch.delenv("NEWAPI_PUBLIC_BASE_URL", raising=False)
+    assert newapi_urls() == ("http://newapi:3000", None)
 
 
 def test_explicit_newapi_urls_override_common_base(monkeypatch):

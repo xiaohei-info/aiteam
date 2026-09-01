@@ -34,7 +34,7 @@ class EmployeeConfigService:
         _ensure_can_write(ctx)
         if self._repo.get_by_slug(ctx, employee_slug=employee_slug) is not None:
             raise Conflict("employee slug already exists in this tenant")
-        self._validate_platform_model(body.model_policy)
+        self._validate_platform_model(ctx, body.model_policy)
         row = self._repo.create(
             ctx,
             employee_slug=employee_slug,
@@ -63,7 +63,7 @@ class EmployeeConfigService:
         _ensure_can_write(ctx)
         if self._require(ctx, employee_id) is None:
             raise NotFound("employee not found in this tenant")
-        self._validate_platform_model(body.model_policy)
+        self._validate_platform_model(ctx, body.model_policy)
         row = self._repo.update(
             ctx,
             employee_id=employee_id,
@@ -86,23 +86,43 @@ class EmployeeConfigService:
             raise NotFound("employee not found in this tenant")
         return _to_out(row)
 
-    def _validate_platform_model(self, policy: ModelPolicy) -> None:
+    def _validate_platform_model(self, ctx: TenantContext, policy: ModelPolicy) -> None:
         if self._operator is None:  # isolated domain tests/read-only services; production write routes inject Operator client
             return
         if not policy.model and not policy.provider_ref:
             return
         if not all((policy.model, policy.provider_ref, policy.provider_version, policy.model_version)):
             raise Conflict("employee model must reference an Operator-published platform model")
-        catalog = self._operator.list_platform_catalog()
+        try:
+            catalog = self._operator.list_platform_catalog(tenant_id=ctx.tenant_id)
+        except TypeError:
+            # Keep lightweight test doubles compatible with the pre-policy seam.
+            catalog = self._operator.list_platform_catalog()
         for item in catalog.get("models", []):
             model = item.get("model") or {}
             rate = item.get("rate") or {}
             if model.get("provider_id") == policy.provider_ref and model.get("model_id") == policy.model:
                 if model.get("status") == "published" and model.get("version") == policy.model_version and rate.get("pricing_status") == "known":
                     _validate_thinking_level(policy.thinking_level, model.get("capabilities") or {})
+                    resolver = getattr(self._operator, "resolve_tenant_access", None)
+                    if callable(resolver):
+                        # The Operator is the final allow-list authority; this
+                        # also protects Manager instances talking to an older
+                        # unfiltered catalog endpoint.
+                        resolved = resolver(
+                            tenant_id=ctx.tenant_id,
+                            provider_id=policy.provider_ref,
+                            model_ids=[policy.model],
+                        )
+                        access = resolved.get("access") if isinstance(resolved, dict) else None
+                        allowed_models = access.get("allowed_model_ids") if isinstance(access, dict) else None
+                        if isinstance(allowed_models, list) and policy.model not in allowed_models:
+                            raise NotFound("platform model not found")
                     return
                 break
-        raise Conflict("selected model is not published for this tenant")
+        # Keep enterprise policy private: an unopened or unknown model is
+        # intentionally indistinguishable from a missing model.
+        raise NotFound("platform model not found")
 
     def delete(self, ctx: TenantContext, *, employee_id: str) -> None:
         _ensure_can_write(ctx)

@@ -1,5 +1,12 @@
 /** S01 账号管理 — 类型定义（issue #413 extends with lifecycle/quota/audit）。 */
 
+export interface PlatformModelRef {
+  provider_id: string;
+  provider_version: number;
+  model_id: string;
+  model_version: number;
+}
+
 export interface EnterpriseAccount {
   org_id: string;
   enterprise_name: string;
@@ -37,6 +44,12 @@ export interface EnrichedAudit {
   ip_address?: string | null;
   user_agent?: string | null;
   created_at: string;
+}
+
+export interface EnterpriseModelAccess {
+  enterprise_id: string;
+  tenant_id: string;
+  allowed_model_refs: PlatformModelRef[] | null;
 }
 
 export interface EnterpriseAccountDetail extends EnterpriseAccount {

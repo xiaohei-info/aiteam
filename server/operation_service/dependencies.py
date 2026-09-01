@@ -22,6 +22,7 @@ from .repository import (
 from .rollup_repository import CrossEnterpriseRollupRepository, PgRollupRepository
 from .rollup_service import RollupService
 from .service import ProvisioningService
+from .platform_provider_service import build_platform_provider_service
 
 
 @lru_cache(maxsize=1)
@@ -77,10 +78,18 @@ def get_manager_gateway() -> ManagerGateway:
 
 
 def get_provisioning_service() -> ProvisioningService:
+    try:
+        platform_providers = build_platform_provider_service()
+    except Exception:
+        # Enterprise registration remains available before the optional NewAPI
+        # admin credentials are bootstrapped; model refs are checked when the
+        # platform catalog is available.
+        platform_providers = None
     return ProvisioningService(
         get_repository(),
         get_manager_gateway(),
         admin_repo=get_admin_repository(),
+        platform_provider_service=platform_providers,
     )
 
 

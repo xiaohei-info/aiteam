@@ -191,7 +191,9 @@ services:
       # NEWAPI_URL is the environment-level base address, like HINDSIGHT_URL/LIGHTRAG_URL.
       NEWAPI_URL: ${NEWAPI_URL:-http://newapi:3000}
       NEWAPI_ADMIN_BASE_URL: ${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}}
-      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:-http://newapi:3000}/v1}
+      # Must be the externally reachable HTTPS/host URL used by Manager/Agent;
+      # never fall back to the private Docker service name.
+      NEWAPI_PUBLIC_BASE_URL: ${NEWAPI_PUBLIC_BASE_URL:-}
       MODEL_PRICING_URL: ${MODEL_PRICING_URL:-https://models.dev/api.json}
       NEWAPI_ADMIN_USER_ID: ${NEWAPI_ADMIN_USER_ID:-}
       NEWAPI_ADMIN_TOKEN: ${NEWAPI_ADMIN_TOKEN:-}

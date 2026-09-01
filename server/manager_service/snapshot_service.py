@@ -22,7 +22,7 @@ from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.platform_provider import PricingSnapshot
-from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy, ModelPolicy
+from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
 
@@ -137,16 +137,20 @@ class SnapshotService:
             ]
         return _to_snapshot(
             config, version=current_version, knowledge_refs=knowledge_refs,
-            pricing=self._resolve_pricing(config),
+            pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
         )
 
-    def _resolve_pricing(self, config: EmployeeConfigOut) -> PricingSnapshot | None:
+    def _resolve_pricing(self, config: EmployeeConfigOut, *, tenant_id: str) -> PricingSnapshot | None:
         policy = config.model_policy
         if not all((policy.provider_ref, policy.model, policy.provider_version, policy.model_version)):
             return None
         if self._platform_catalog is None:
             raise NotFound("platform model catalog is unavailable")
-        catalog = self._platform_catalog.list_platform_catalog()
+        try:
+            catalog = self._platform_catalog.list_platform_catalog(tenant_id=tenant_id)
+        except TypeError:
+            # Keep lightweight test doubles compatible with the pre-policy seam.
+            catalog = self._platform_catalog.list_platform_catalog()
         provider = next((item for item in catalog.get("providers", []) if item.get("provider_id") == policy.provider_ref), None)
         if not provider or provider.get("status") != "published" or provider.get("version") != policy.provider_version:
             raise NotFound("platform provider version is no longer available")

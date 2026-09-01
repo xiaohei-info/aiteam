@@ -71,6 +71,7 @@ class PlatformCatalogOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     providers: list[PlatformProvider] = Field(default_factory=list, description="Operator 发布的 Provider 列表。")
     models: list[PlatformModelWithRateOut] = Field(default_factory=list, description="Operator 发布的模型及价格列表。")
+    model_access_configured: bool = Field(default=False, description="是否存在企业级模型 allow-list；false=兼容旧企业全量可见。")
 
 
 class UsageUploadOut(BaseModel):

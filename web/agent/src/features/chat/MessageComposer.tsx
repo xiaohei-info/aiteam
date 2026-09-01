@@ -44,6 +44,7 @@ import { ConversationPermissionControl } from "./ConversationPermissionControl";
 import { ConversationContextHud } from "./ConversationContextHud";
 import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
+import { VoiceInputButton } from "./VoiceInputButton";
 
 const SKILL_OPTIONS = [
   { id: "writer", label: "写作助手" },
@@ -251,6 +252,10 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     showToast("截图工具即将上线");
   }
 
+  function appendVoiceText(text: string) {
+    setContent((current) => current.trim() ? `${current.trim()} ${text}` : text);
+  }
+
   async function submitCurrentContent(): Promise<void> {
     const text = content.trim();
     const attachedNote =
@@ -420,6 +425,8 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
           isDisabled={sending}
         />
       </Popover>
+
+      <VoiceInputButton disabled={sending} onText={appendVoiceText} onError={(message) => setError(message || null)} />
 
       <Button
         label="截图工具"

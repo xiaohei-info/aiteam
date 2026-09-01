@@ -5,6 +5,7 @@ export { ConversationStateControl } from "./ConversationStateControl";
 export { ScheduleControl } from "./ScheduleControl";
 export { TimelineView } from "./TimelineView";
 export { MessageComposer } from "./MessageComposer";
+export { VoiceInputButton } from "./VoiceInputButton";
 export { RosterPicker } from "./RosterPicker";
 export {
   listConversations,
@@ -13,11 +14,15 @@ export {
   getEntries,
   subscribePiEvents,
   abortPrompt,
+  audioMimeType,
+  isSupportedAudioMime,
+  transcribeAudio,
   updateConversation,
   setConversationState,
   type Conversation,
   type ConversationPermissionMode,
   type PromptInput,
+  type AudioTranscription,
   type PromptAccepted,
 } from "./useChatApi";
 export {

@@ -14,6 +14,36 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inme
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
+def test_platform_model_route_filters_by_tenant_allow_list() -> None:
+    from fastapi import APIRouter
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+
+    app = create_app(Settings(tier="manager", service_name="manager"), APIRouter())
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_platform_catalog({
+        "providers": [],
+        "models": [
+            {"model": {"provider_id": "p1", "model_id": "open", "display_name": "Open", "status": "published", "version": 1, "updated_at": datetime.now(UTC)}, "rate": None},
+            {"model": {"provider_id": "p1", "model_id": "closed", "display_name": "Closed", "status": "published", "version": 1, "updated_at": datetime.now(UTC)}, "rate": None},
+        ],
+        "allowed_models_by_tenant": {
+            "tenant-a": [{"provider_id": "p1", "model_id": "open"}],
+        },
+    })
+    app.state._operator_catalog = catalog
+    app.include_router(build_platform_model_router(_VERIFIER))
+    token = sign_inmem_token(_SIGNER, "tenant-a", ["owner"], user_id="owner-a")
+
+    response = TestClient(app).get(
+        "/api/manager/platform-models",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [item["model"]["model_id"] for item in response.json()["data"]["models"]] == ["open"]
+    assert response.json()["data"]["model_access_configured"] is True
+
+
 def test_platform_model_route_accepts_model_and_rate_projection() -> None:
     from fastapi import APIRouter
 

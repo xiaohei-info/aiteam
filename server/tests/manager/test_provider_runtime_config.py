@@ -99,3 +99,46 @@ def test_runtime_config_fails_closed_without_pricing_snapshot():
     svc = ProviderCredentialService(object(), object(), snapshot, _Operator())
     with pytest.raises(NotFound):
         svc.runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]), employee_id="e1")
+
+
+def test_speech_runtime_config_is_tenant_scoped_and_does_not_require_employee():
+    operator = _Operator()
+    now = datetime.now(UTC)
+    operator.list_platform_catalog = lambda *, tenant_id=None: {
+        "providers": [{"provider_id": "provider-1", "version": 2}],
+        "models": [{
+            "model": {"provider_id": "provider-1", "model_id": "XingChenAGI/XingChenASR-V3.2-Ultra", "version": 3, "status": "published"},
+            "rate": {"pricing_version": 1, "pricing_status": "known", "billing_mode": "request", "request_usd": "0", "currency": "USD", "effective_from": now},
+        }],
+    }
+    def resolve_speech(**kwargs):
+        operator.calls.append(kwargs)
+        return {
+            "access": {"allowed_model_ids": ["XingChenAGI/XingChenASR-V3.2-Ultra"], "version": 4},
+            "relay_base_url": "https://relay.test/v1", "api_protocol": "openai-completions", "relay_token": "tenant-scoped-token",
+        }
+    operator.resolve_tenant_access = resolve_speech
+    svc = ProviderCredentialService(object(), object(), _Snapshot(), operator)
+
+    result = svc.speech_runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]))
+
+    assert result.model == "XingChenAGI/XingChenASR-V3.2-Ultra"
+    assert result.api_key == "tenant-scoped-token"
+    assert result.pricing.billing_mode == "request"
+    assert operator.calls == [{"tenant_id": "t1", "provider_id": "provider-1", "model_ids": ["XingChenAGI/XingChenASR-V3.2-Ultra"]}]
+
+
+def test_speech_runtime_config_rejects_non_speech_models():
+    operator = _Operator()
+    operator.list_platform_catalog = lambda *, tenant_id=None: {
+        "providers": [{"provider_id": "provider-1", "version": 2}],
+        "models": [{
+            "model": {"provider_id": "provider-1", "model_id": "minimax-m3", "version": 3, "status": "published"},
+            "rate": {"pricing_version": 1, "pricing_status": "known", "effective_from": datetime.now(UTC)},
+        }],
+    }
+    svc = ProviderCredentialService(object(), object(), _Snapshot(), operator)
+    ctx = TenantContext(tenant_id="t1", user_id="m1", roles=["member"])
+
+    with pytest.raises(NotFound):
+        svc.speech_runtime_config(ctx, model="minimax-m3")

@@ -58,6 +58,8 @@ export interface ManagerClient {
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
   pullRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig>;
+  /** Member-scoped ASR config; intentionally does not require an employee id. */
+  pullSpeechRuntimeConfig?(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig>;
   pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
@@ -111,6 +113,15 @@ export class HttpManagerClient implements ManagerClient {
 
   async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
     const response = await this.request("/api/manager/provider-credentials/runtime-config", caller, { employee_id: employeeId });
+    return normalizeRuntimeProviderConfig(this.unwrap(response));
+  }
+
+  async pullSpeechRuntimeConfig(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig> {
+    const response = await this.request(
+      "/api/manager/provider-credentials/speech/runtime-config",
+      caller,
+      model ? { model } : {},
+    );
     return normalizeRuntimeProviderConfig(this.unwrap(response));
   }
 

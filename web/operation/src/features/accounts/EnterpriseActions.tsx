@@ -7,8 +7,9 @@ import { RechargeDialog } from "./RechargeDialog";
 import { NotificationDialog } from "./NotificationDialog";
 import { QuotaDialog } from "./QuotaDialog";
 import { LifecycleDialogs, type LifecycleAction } from "./LifecycleDialogs";
+import { EnterpriseModelAccessDialog } from "./EnterpriseModelAccessDialog";
 
-type ActionKind = EnterpriseActionBody["action"];
+type ActionKind = EnterpriseActionBody["action"] | "model_access";
 
 interface Props {
   api: AccountsApi;
@@ -69,6 +70,7 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
           <DropdownMenuItem label={i18n.t("operation.lifecycle.close")} onClick={() => setActive("close")} />
         )}
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.adjust_quota")} onClick={() => setActive("adjust_quota")} />
+        <DropdownMenuItem label="配置可用模型" onClick={() => setActive("model_access")} />
       </DropdownMenu>
 
       {active === "recharge" && (
@@ -96,6 +98,14 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
           isSubmitting={submitting}
           onClose={() => setActive(null)}
           onSubmit={(quota) => runAction({ action: "adjust_quota", quota })}
+        />
+      )}
+      {active === "model_access" && (
+        <EnterpriseModelAccessDialog
+          enterprise={enterprise}
+          api={api}
+          onClose={() => setActive(null)}
+          onDone={onDone}
         />
       )}
       {lifecycleActive && (

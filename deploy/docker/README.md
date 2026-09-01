@@ -129,9 +129,9 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
-| `NEWAPI_URL` | NewAPI 基础地址，像 `HINDSIGHT_URL`/`LIGHTRAG_URL` 一样按环境配置 | `http://newapi:3000` |
+| `NEWAPI_URL` | NewAPI 私有管理地址，仅供 Operator 访问 channel/token 管理面 | `http://newapi:3000` |
 | `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址（可覆盖 `NEWAPI_URL`） | `http://newapi:3000` |
-| `NEWAPI_PUBLIC_BASE_URL` | 下发 tenant token 使用的推理地址（可覆盖 `NEWAPI_URL/v1`） | `https://relay.example.com/v1` |
+| `NEWAPI_PUBLIC_BASE_URL` | **Manager/Agent/自定义客户端唯一使用的外部推理地址**；必须是可访问的 `/v1` URL | `https://relay.example.com/v1` |
 | `MODEL_PRICING_URL` | Operator 公开模型价格源（仅补齐未知价格） | `https://models.dev/api.json` |
 | `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
 | `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
@@ -158,7 +158,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
-> NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布主机端口。NewAPI 原生 UI 由 Operator「大模型服务」页以当前访问 host + `NEWAPI_PORT` 打开；默认绑定 loopback，若需从浏览器访问必须将 `NEWAPI_BIND_HOST` 配置为受防火墙/TLS 保护的地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
+> NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布公网。`NEWAPI_URL`/`NEWAPI_ADMIN_BASE_URL` 只给 Operator 管理面使用；`NEWAPI_PUBLIC_BASE_URL` 是 Manager、Agent 和自定义客户端访问推理的唯一地址，不能填 `http://newapi:3000` 等 Docker 内部地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
 >
 > LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role 和固定企业 workspace；Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
 >

@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import authorize, require_claims
@@ -88,6 +88,7 @@ class PlatformCatalogOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     providers: list[PlatformProvider] = Field(default_factory=list, description="已发布平台 Provider。")
     models: list[PlatformModelWithRateOut] = Field(default_factory=list, description="已发布平台模型及价格。")
+    model_access_configured: bool = Field(default=False, description="是否存在企业级模型 allow-list；false=兼容旧企业全量可见。")
 
 
 class _ProviderNotConfigured(AppError):
@@ -156,15 +157,30 @@ def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_p
 
 
 @router.get("/catalog/platform-providers", operation_id="operation_platform_provider_pull")
-def pull_platform_catalog(request: Request, _svc=Depends(verify_service_token)) -> Envelope[PlatformCatalogOut]:
+def pull_platform_catalog(
+    request: Request,
+    tenant_id: str | None = Query(default=None, min_length=1),
+    _svc=Depends(verify_service_token),
+) -> Envelope[PlatformCatalogOut]:
     service = _service(request)
-    providers = service.list_providers(published_only=True)
-    model_items = [
-        item
-        for provider in providers
-        for item in service.list_models(provider.provider_id, published_only=True)
-    ]
-    return Envelope(data=PlatformCatalogOut(providers=providers, models=model_items))
+    list_catalog = getattr(service, "list_platform_catalog", None)
+    if callable(list_catalog):
+        try:
+            catalog = list_catalog(tenant_id=tenant_id)
+        except TypeError:
+            catalog = list_catalog()
+    else:
+        # Keep lightweight injected test doubles compatible with the service contract.
+        providers = service.list_providers(published_only=True)
+        catalog = {
+            "providers": providers,
+            "models": [
+                item
+                for provider in providers
+                for item in service.list_models(provider.provider_id, published_only=True)
+            ],
+        }
+    return Envelope(data=PlatformCatalogOut(**catalog))
 
 
 @router.post("/provider-access/resolve", operation_id="operation_tenant_provider_access_resolve")

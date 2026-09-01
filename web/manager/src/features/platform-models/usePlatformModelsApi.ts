@@ -22,7 +22,12 @@ export interface PlatformModelItem {
   model: { provider_id: string; model_id: string; display_name: string; status: string; version: number; capabilities?: PlatformModelCapabilities };
   rate: PlatformRate | null;
 }
-export interface PlatformCatalog { providers: PlatformProvider[]; models: PlatformModelItem[]; }
+export interface PlatformCatalog {
+  providers: PlatformProvider[];
+  models: PlatformModelItem[];
+  /** true when Operator applied an enterprise model allow-list. */
+  model_access_configured?: boolean;
+}
 
 export function usePlatformModelsApi() {
   const { token, onUnauthorized } = useSession();

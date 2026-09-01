@@ -11,7 +11,6 @@ from operation_service.admin_dependencies import get_admin_service
 from operation_service.admin_repository import AdminRepository
 from operation_service.admin_service import AdminService
 from operation_service.catalog_repository import CatalogRepository
-from operation_service.dependencies import get_repository, get_rollup_repository
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.rollup_repository import CrossEnterpriseRollupRepository
 from run import get_app
@@ -135,6 +134,7 @@ def test_openapi_exposes_admin_routes(client):
     assert "/api/operation/admin/enterprises/{org_id}" in paths
     assert "/api/operation/admin/enterprises/export/all" in paths
     assert "/api/operation/admin/enterprises/{org_id}/actions" in paths
+    assert "/api/operation/admin/enterprises/{org_id}/model-access" in paths
     assert "/api/operation/admin/stats" in paths
     assert "/api/operation/admin/solutions/stats" in paths
     assert "/api/operation/admin/finance/overview" in paths

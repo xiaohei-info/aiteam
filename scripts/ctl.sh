@@ -190,7 +190,7 @@ validate_lightrag_production_env() {
 
 validate_newapi_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
-  local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-${NEWAPI_URL:+${NEWAPI_URL%/}/v1}}"
+  local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-}"
   for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
   done
@@ -202,7 +202,7 @@ validate_newapi_production_env() {
       [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
     done
   fi
-  [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_URL or NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
+  [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
   [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || {
     echo "[ctl] ERROR: NEWAPI_IMAGE must use a fixed version tag or sha256 digest" >&2; exit 1;
   }
@@ -213,7 +213,7 @@ validate_newapi_production_env() {
     }
   done
   [[ "${newapi_public_url}" =~ ^https://[^[:space:]]+/v1/?$ ]] || {
-    echo "[ctl] ERROR: production NEWAPI_URL/NEWAPI_PUBLIC_BASE_URL must resolve to an absolute HTTPS /v1 URL" >&2; exit 1;
+    echo "[ctl] ERROR: production NEWAPI_PUBLIC_BASE_URL must resolve to an absolute HTTPS /v1 URL" >&2; exit 1;
   }
 }
 
@@ -569,7 +569,7 @@ start_service_local() {
       echo "[ctl] Starting operation on port ${OPERATION_PORT}..."
       local newapi_url="${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}"
       local newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${newapi_url}}"
-      local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-${newapi_url%/}/v1}"
+      local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-}"
       nohup setsid env \
         -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \

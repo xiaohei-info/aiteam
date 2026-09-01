@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from shared.contracts.platform_provider import PlatformModelRef
+
 
 class ProvisionEnterpriseRequest(BaseModel):
     """F01 开通企业（北向请求）：系统操作员发起。"""
@@ -24,6 +26,10 @@ class ProvisionEnterpriseRequest(BaseModel):
     enterprise_code: str | None = Field(default=None, description="可读 slug，可选，需唯一")
     initial_quota_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的默认配额策略。")
     visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的目录可见范围策略。")
+    allowed_model_refs: list[PlatformModelRef] | None = Field(
+        default=None,
+        description="企业允许使用的平台模型引用；null=不限制，空列表=不开放模型。",
+    )
 
 
 class EnterpriseProvisioned(BaseModel):
@@ -38,6 +44,30 @@ class EnterpriseProvisioned(BaseModel):
     owner_phone: str = Field(description="负责人手机号。")
     owner_bootstrap_secret: str = Field(description="一次性明文 bootstrap，仅本次返回；Operator 只持 hash")
     must_reset: bool = Field(default=True, description="负责人首登强制重置")
+    allowed_model_refs: list[PlatformModelRef] | None = Field(
+        default=None,
+        description="企业允许使用的平台模型引用；null=不限制，空列表=不开放模型。",
+    )
+
+
+class EnterpriseModelAccessRequest(BaseModel):
+    """企业平台模型 allow-list；null 表示兼容旧行为的全量开放。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_model_refs: list[PlatformModelRef] | None = Field(
+        description="允许的平台模型引用；null=全部已发布模型，空列表=不开放模型。",
+    )
+
+
+class EnterpriseModelAccessOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str
+    tenant_id: str
+    allowed_model_refs: list[PlatformModelRef] | None = Field(
+        description="允许的平台模型引用；null=全部已发布模型，空列表=不开放模型。",
+    )
 
 
 class OwnerBootstrapResetResult(BaseModel):

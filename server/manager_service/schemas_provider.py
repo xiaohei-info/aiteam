@@ -109,6 +109,14 @@ class RuntimeProviderConfigRequest(BaseModel):
     employee_id: str
 
 
+class SpeechRuntimeConfigRequest(BaseModel):
+    """Member-scoped speech model request; it intentionally has no employee_id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, max_length=256, description="可选 ASR 模型标识；省略时由 Manager 选择企业已开放的默认语音模型。")
+
+
 class RuntimeProviderConfigOut(BaseModel):
     """最小运行时配置；仅受保护 runtime-config 端点可返回 api_key。"""
 

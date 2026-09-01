@@ -24,10 +24,20 @@ INTERNAL_NEWAPI_CHANNEL_ID = 1
 
 
 class PlatformProviderService:
-    def __init__(self, repo: PlatformProviderRepository, newapi: NewApiAdminClient, crypto: CryptoService, public_relay_url: str, public_pricing: ModelsDevPricingClient | None = None):
+    def __init__(
+        self,
+        repo: PlatformProviderRepository,
+        newapi: NewApiAdminClient,
+        crypto: CryptoService,
+        public_relay_url: str,
+        public_pricing: ModelsDevPricingClient | None = None,
+        *,
+        enterprise_repository=None,
+    ):
         self._repo = repo
         self._newapi = newapi
         self._crypto = crypto
+        self._enterprise = enterprise_repository
         self._public_relay_url = public_relay_url.rstrip("/")
         self._public_pricing = public_pricing or ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"))
 
@@ -107,6 +117,37 @@ class PlatformProviderService:
             rate = self._repo.current_rate(provider_id, row.model_id)
             result.append({"model": _model(row), "rate": _rate(rate) if rate else None})
         return result
+
+    def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
+        """Return the published platform catalog, optionally tenant-filtered."""
+        providers = self.list_providers(published_only=True)
+        allowed = self._allowed_model_refs(tenant_id)
+        models = [
+            item
+            for provider in providers
+            for item in self.list_models(provider.provider_id, published_only=True)
+            if allowed is None or _model_ref_allowed(item["model"], allowed)
+        ]
+        return {
+            "providers": providers,
+            "models": models,
+            "model_access_configured": allowed is not None,
+        }
+
+    def _allowed_model_refs(self, tenant_id: str | None) -> list[dict] | None:
+        if not tenant_id or self._enterprise is None:
+            return None
+        getter = getattr(self._enterprise, "get_by_tenant_id", None)
+        if not callable(getter):
+            return None
+        try:
+            account = getter(tenant_id)
+        except NotFound:
+            # A tenant-scoped service request must fail closed rather than
+            # silently inheriting the unrestricted legacy view.
+            return []
+        refs = getattr(account, "allowed_model_refs", None)
+        return refs if refs is None else [ref for ref in refs if isinstance(ref, dict)]
 
     def sync_public_prices(self, provider_id: str, *, force: bool = False) -> dict[str, int | str]:
         self._require_provider(provider_id)
@@ -238,10 +279,28 @@ class PlatformProviderService:
         published = {model.model_id for model in self._repo.list_models(provider_id, published_only=True)}
         if not set(allowed) <= published:
             raise Conflict("tenant access may only include published platform models")
+        allowed_refs = self._allowed_model_refs(tenant_id)
+        if allowed_refs is not None:
+            if any(
+                not _model_ref_allowed_by_id(provider_id, model_id, allowed_refs)
+                for model_id in allowed
+            ):
+                # Hide enterprise policy details and make an unopened model
+                # indistinguishable from a missing platform model.
+                raise NotFound("platform model not found")
+            # Keep relay token limits aligned with the current enterprise policy,
+            # including removals made after an older token was issued.
+            allowed = sorted({
+                ref.get("model_id")
+                for ref in allowed_refs
+                if ref.get("provider_id") == provider_id
+                and isinstance(ref.get("model_id"), str)
+                and ref.get("model_id") in published
+            })
         existing = self._repo.get_access(tenant_id, provider_id)
-        if existing:
+        if allowed_refs is None and existing:
             allowed = sorted(set(allowed) | set(existing.allowed_model_ids))
-        if existing and existing.status == "active" and set(allowed) <= set(existing.allowed_model_ids):
+        if existing and existing.status == "active" and set(allowed) == set(existing.allowed_model_ids):
             return self._runtime_access(provider, existing)
         if existing:
             management_token = self._crypto.decrypt(existing.encrypted_management_token)
@@ -305,10 +364,14 @@ class PlatformProviderService:
 
 
 def newapi_urls() -> tuple[str | None, str | None]:
-    """Resolve the configurable NewAPI base URL and its OpenAI-compatible path."""
+    """Resolve separate NewAPI admin and externally reachable relay URLs.
+
+    NEWAPI_URL is allowed to point at the private Operator→NewAPI network. It
+    is never used as a fallback for the URL returned to Manager/Agent.
+    """
     base_url = (os.getenv("NEWAPI_URL") or "").rstrip("/") or None
     admin_url = (os.getenv("NEWAPI_ADMIN_BASE_URL") or base_url or "").rstrip("/") or None
-    public_url = (os.getenv("NEWAPI_PUBLIC_BASE_URL") or (f"{base_url}/v1" if base_url else "")).rstrip("/") or None
+    public_url = (os.getenv("NEWAPI_PUBLIC_BASE_URL") or "").rstrip("/") or None
     return admin_url, public_url
 
 
@@ -321,12 +384,15 @@ def build_platform_provider_service() -> PlatformProviderService:
     encryption_key = os.getenv("OPERATION_PROVIDER_CREDENTIAL_KEY")
     if not all((settings.admin_db_url, admin_url, public_url, admin_token, admin_user_id, encryption_key)):
         raise RuntimeError("Operator LLM gateway settings are incomplete")
+    from .repository import PgEnterpriseRepository
+
     return PlatformProviderService(
         PlatformProviderRepository(settings.admin_db_url),
         NewApiAdminClient(admin_url, admin_token, admin_user_id, timeout=settings.service_client_timeout_ms / 1000),
         CryptoService(Fernet(encryption_key.encode())),
         public_url,
         ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"), timeout=settings.service_client_timeout_ms / 1000),
+        enterprise_repository=PgEnterpriseRepository(settings.admin_db_url),
     )
 
 
@@ -340,6 +406,17 @@ def _model(row: ModelRow) -> PlatformModel:
 
 def _rate(row: RateRow) -> PlatformModelRate:
     return PlatformModelRate(**{key: getattr(row, key) for key in PlatformModelRate.model_fields})
+
+
+def _model_ref_allowed(model: PlatformModel, refs: list[dict]) -> bool:
+    return _model_ref_allowed_by_id(model.provider_id, model.model_id, refs)
+
+
+def _model_ref_allowed_by_id(provider_id: str, model_id: str, refs: list[dict]) -> bool:
+    return any(
+        ref.get("provider_id") == provider_id and ref.get("model_id") == model_id
+        for ref in refs
+    )
 
 
 def _same_public_price(rate: RateRow, price: PublicModelPrice) -> bool:
