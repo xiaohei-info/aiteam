@@ -54,6 +54,7 @@ const JsonObject = Type.Record(
   Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()], { description: "扩展 JSON 值。" }),
   { description: "扩展 JSON 对象；仅用于 runtime 不稳定的受控元数据。", "x-dynamic-json": true },
 );
+const PiSseJsonValue = Type.Any({ description: "经边界清洗后的 JSON 值；可为对象、数组、字符串、数字、布尔值或 null。" });
 const ConversationSchedule = Type.Object({
   schedule_id: Type.String({ minLength: 1, maxLength: 128, description: "调度稳定标识。" }),
   revision: Type.Optional(Type.Integer({ minimum: 1, description: "调度配置修订号。" })),
@@ -118,21 +119,30 @@ const ConversationContextEnvelope = Type.Object({ data: Type.Ref("ConversationCo
 const ConversationThinkingLevelRequest = Type.Object({ thinking_level: Type.Ref("ThinkingLevel") }, { $id: "ConversationThinkingLevelRequest", additionalProperties: false, description: "更新本地会话思考档位请求。" });
 const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ description: "是否删除成功。" }) }, { additionalProperties: false }) }, { $id: "ConversationDeleteEnvelope" });
 const ConversationContentPart = Type.Object({
-  type: Type.String({ description: "消息内容片段类型。" }),
-  text: Type.Optional(Type.String({ description: "文本片段。" })),
-  thinking: Type.Optional(Type.String({ description: "受控思考摘要片段。" })),
-  id: Type.Optional(Type.String({ description: "工具调用 ID。" })),
-  name: Type.Optional(Type.String({ description: "工具名称。" })),
-  arguments: Type.Optional(JsonObject),
-}, { $id: "ConversationContentPart", additionalProperties: true, description: "消息内容片段。", "x-dynamic-json": true });
+  type: Type.Union([
+    Type.Literal("text", { description: "普通文本片段。" }),
+    Type.Literal("thinking", { description: "模型思考片段。" }),
+    Type.Literal("toolCall", { description: "模型发起的工具调用片段。" }),
+    Type.Literal("image", { description: "图片占位片段；图片字节不会通过事件接口返回。" }),
+  ], { description: "消息内容片段类别；前端按此字段分类展示。" }),
+  text: Type.Optional(Type.String({ description: "文本片段（type=text）。" })),
+  thinking: Type.Optional(Type.String({ description: "思考文本（type=thinking）；已做长度限制和敏感信息脱敏。" })),
+  id: Type.Optional(Type.String({ description: "工具调用 ID（type=toolCall）。" })),
+  name: Type.Optional(Type.String({ description: "工具名称（type=toolCall）。" })),
+  arguments: Type.Optional(PiSseJsonValue),
+}, { $id: "ConversationContentPart", additionalProperties: true, description: "脱敏消息内容片段；根据 type 选择 text、thinking、toolCall 或 image 字段。", "x-dynamic-json": true });
 const ConversationMessage = Type.Object({
-  role: Type.String({ description: "消息角色。" }),
+  role: Type.Union([
+    Type.Literal("user", { description: "用户消息。" }),
+    Type.Literal("assistant", { description: "员工/模型消息。" }),
+    Type.Literal("toolResult", { description: "工具执行结果消息。" }),
+  ], { description: "消息角色。" }),
   timestamp: Type.Optional(Type.Integer({ description: "消息时间戳（Unix 毫秒）。" })),
-  content: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Ref("ConversationContentPart"))], { description: "消息内容。" })),
+  content: Type.Optional(Type.Union([Type.String(), Type.Array(Type.Ref("ConversationContentPart"))], { description: "消息内容；可为纯文本或有序内容片段。" })),
   toolCallId: Type.Optional(Type.String({ description: "工具调用 ID。" })),
   toolName: Type.Optional(Type.String({ description: "工具名称。" })),
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
-}, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息。", "x-dynamic-json": true });
+}, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可同时包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
   id: Type.String({ description: "条目 ID。" }),
   type: Type.String({ description: "条目类型。" }),
@@ -148,6 +158,61 @@ const ConversationEntry = Type.Object({
   source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "消息来源角色。" })),
 }, { $id: "ConversationEntry", additionalProperties: true, description: "会话历史条目（仅返回脱敏后的持久化视图）。", "x-dynamic-json": true });
 const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "会话条目列表。" }) }, { additionalProperties: false }) }, { $id: "ConversationEntriesEnvelope" });
+const PiSseToolCall = Type.Object({
+  type: Type.Optional(Type.Union([
+    Type.Literal("toolCall", { description: "Pi 工具调用片段。" }),
+    Type.Literal("tool_call", { description: "兼容工具调用片段。" }),
+    Type.Literal("toolUse", { description: "兼容工具使用片段。" }),
+    Type.Literal("tool_use", { description: "兼容工具使用片段。" }),
+  ], { description: "工具调用片段类型。" })),
+  id: Type.Optional(Type.String({ description: "工具调用 ID；用于关联执行开始、更新和结束事件。" })),
+  name: Type.Optional(Type.String({ description: "工具名称，例如 bash、read、todo_update。" })),
+  arguments: Type.Optional(PiSseJsonValue),
+}, { $id: "PiSseToolCall", additionalProperties: true, description: "SSE 中脱敏后的模型工具调用片段。", "x-dynamic-json": true });
+const PiSseAssistantMessageEvent = Type.Object({
+  type: Type.String({ enum: [
+    "start", "text_start", "text_delta", "text_end",
+    "thinking_start", "thinking_delta", "thinking_end",
+    "toolcall_start", "toolcall_delta", "toolcall_end", "done", "error",
+  ], description: "模型消息增量类别；前端按 thinking/text/toolcall 前缀分类。" }),
+  contentIndex: Type.Optional(Type.Integer({ minimum: 0, description: "对应 assistant message content 数组的下标。" })),
+  delta: Type.Optional(Type.String({ description: "文本或思考增量；thinking_delta 表示思考文本增量。" })),
+  content: Type.Optional(Type.String({ description: "一个内容片段结束时的完整文本。" })),
+  reason: Type.Optional(Type.String({ enum: ["stop", "length", "toolUse", "deferred", "aborted", "error"], description: "消息结束或错误原因。" })),
+  toolCall: Type.Optional(Type.Ref("PiSseToolCall")),
+}, { $id: "PiSseAssistantMessageEvent", additionalProperties: true, description: "message_update.assistantMessageEvent 的脱敏结构。", "x-dynamic-json": true });
+const PiSseEventData = Type.Object({
+  type: Type.String({ enum: [
+    "agent_start", "agent_end", "agent_settled", "message_update", "message_end",
+    "tool_execution_start", "tool_execution_update", "tool_execution_end",
+    "auto_retry_start", "auto_retry_end", "compaction_start", "compaction_end", "approval_required",
+  ], description: "SSE data 的顶层事件类别；前端首先按此字段分流。" }),
+  conversation_id: Type.Optional(Type.String({ description: "会话 ID。" })),
+  source_ref: Type.Optional(Type.String({ description: "群聊/子员工来源引用。" })),
+  tool_call_id: Type.Optional(Type.String({ description: "平台附加的工具调用来源 ID。" })),
+  source_employee_id: Type.Optional(Type.String({ description: "产生该事件的员工 ID。" })),
+  source_employee_display_name: Type.Optional(Type.String({ description: "产生该事件的员工展示名。" })),
+  source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "事件来源角色。" })),
+  message: Type.Optional(Type.Ref("ConversationMessage")),
+  assistantMessageEvent: Type.Optional(Type.Ref("PiSseAssistantMessageEvent")),
+  toolCallId: Type.Optional(Type.String({ description: "Pi 工具调用 ID；与 toolName、执行事件关联。" })),
+  toolName: Type.Optional(Type.String({ description: "工具名称。" })),
+  tool_kind: Type.Optional(Type.String({ enum: ["memory", "rag", "todo"], description: "Agent 专用工具类别；普通工具不返回此字段。" })),
+  args: Type.Optional(PiSseJsonValue),
+  partialResult: Type.Optional(PiSseJsonValue),
+  result: Type.Optional(PiSseJsonValue),
+  isError: Type.Optional(Type.Boolean({ description: "工具执行是否失败。" })),
+  message_count: Type.Optional(Type.Integer({ minimum: 0, description: "agent_end 中的消息数量摘要。" })),
+  attempt: Type.Optional(Type.Integer({ minimum: 0, description: "自动重试次数。" })),
+  maxAttempts: Type.Optional(Type.Integer({ minimum: 0, description: "自动重试最大次数。" })),
+  delayMs: Type.Optional(Type.Integer({ minimum: 0, description: "自动重试等待毫秒数。" })),
+  errorMessage: Type.Optional(Type.String({ description: "重试、压缩或运行错误摘要。" })),
+  success: Type.Optional(Type.Boolean({ description: "自动重试是否成功。" })),
+  finalError: Type.Optional(Type.String({ description: "自动重试结束时的最终错误摘要。" })),
+  reason: Type.Optional(Type.String({ enum: ["manual", "threshold", "overflow", "stop", "length", "toolUse", "deferred", "aborted", "error"], description: "压缩、消息结束或错误原因。" })),
+  aborted: Type.Optional(Type.Boolean({ description: "上下文压缩是否中止。" })),
+  willRetry: Type.Optional(Type.Boolean({ description: "上下文压缩后是否重试。" })),
+}, { $id: "PiSseEventData", additionalProperties: true, description: "text/event-stream 中每个 data 行对应的脱敏 JSON。SSE 每条 data 只会包含与其 type 相关的字段。", "x-dynamic-json": true });
 const AbortEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ description: "会话 ID。" }), aborted: Type.Boolean({ description: "是否发现并终止活动执行。" }) }, { additionalProperties: false }) }, { $id: "AbortEnvelope" });
 const AuthClaims = Type.Object({
   user_id: Type.String({ description: "成员账号 ID。" }),
@@ -257,7 +322,63 @@ const UsageOutboxItem = Type.Object({ summary_id: Type.String({ description: "�
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationSchedule, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+
+const PI_EVENT_STREAM_DESCRIPTION = [
+  "以 Server-Sent Events（SSE）返回本地 Pi 事件。连接建立后先发送 `: connected`，每条业务消息固定为 `id`、`event: pi` 和一个 `data` JSON 行；前端应解析 data 后按 `data.type` 及其嵌套字段分类展示。",
+  "",
+  "**data 事件分类**",
+  "- **消息与思考**：`message_update` / `message_end`。`message.content[]` 的 `type` 可为 `text`、`thinking`、`toolCall` 或 `image`；思考增量还会出现在 `assistantMessageEvent.type=thinking_start|thinking_delta|thinking_end`。",
+  "- **工具调用与执行**：模型工具调用位于 `message.content[]` 的 `type=toolCall` 片段（字段为 `id`、`name`、`arguments`），或 `assistantMessageEvent.type=toolcall_*`；执行过程使用 `tool_execution_start`、`tool_execution_update`、`tool_execution_end`，通过 `toolCallId` 关联，分别提供 `args`、`partialResult`、`result` 和 `isError`。",
+  "- **待办列表**：`toolName=todo_update` 且 `tool_kind=todo`。待办项位于 `args.items` 或结束事件的 `result.items`，字段为 `id`、`title`、`status`；status 为 `pending`、`in_progress` 或 `completed`。",
+  "- **其他 Agent 能力**：`hindsight_recall|hindsight_retain`（`tool_kind=memory`）、`knowledge_search|knowledge_get`（`tool_kind=rag`）以及 `approval_required`。",
+  "- **运行控制**：`agent_start`、`agent_end`、`agent_settled`、`auto_retry_*`、`compaction_*`。这些事件通常只有状态或摘要字段，不包含完整模型消息。",
+  "",
+  "完整的 data 字段定义见 [PiSseEventData](#/components/schemas/PiSseEventData)，消息和内容片段见 [ConversationMessage](#/components/schemas/ConversationMessage)。事件经过敏感信息脱敏和大小限制，超大事件可能只保留元数据。该接口主要推送订阅建立后的实时事件；历史正文请使用同一会话的 `/entries` 接口，`after` 或 `Last-Event-ID` 仅作为客户端游标传递。",
+].join("\n");
+
+const PI_EVENT_STREAM_EXAMPLES = {
+  thinking: {
+    summary: "思考增量事件",
+    value: [
+      "id: employee-1:assistant-1",
+      "event: pi",
+      'data: {"type":"message_update","conversation_id":"conversation-1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先分析用户请求"}]},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"先分析用户请求"}}',
+      "",
+    ].join("\n"),
+  },
+  toolExecution: {
+    summary: "普通工具执行事件",
+    value: [
+      "id: employee-1:call-1",
+      "event: pi",
+      'data: {"type":"tool_execution_start","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"read","args":{"path":"src/index.ts"}}',
+      "",
+      "id: employee-1:call-1-end",
+      "event: pi",
+      'data: {"type":"tool_execution_end","conversation_id":"conversation-1","toolCallId":"call-1","toolName":"read","result":{"text":"文件内容摘要"},"isError":false}',
+      "",
+    ].join("\n"),
+  },
+  todoUpdate: {
+    summary: "todo_update 待办列表事件",
+    value: [
+      "id: employee-1:todo-1",
+      "event: pi",
+      'data: {"type":"tool_execution_start","conversation_id":"conversation-1","toolCallId":"todo-1","toolName":"todo_update","tool_kind":"todo","args":{"items":[{"id":"task-1","title":"完成调研","status":"in_progress"}]}}',
+      "",
+    ].join("\n"),
+  },
+  lifecycle: {
+    summary: "Agent 生命周期事件",
+    value: [
+      "id: conversation-1:1",
+      "event: pi",
+      'data: {"type":"agent_start","conversation_id":"conversation-1","source_employee_id":"employee-1","source_role":"participant"}',
+      "",
+    ].join("\n"),
+  },
+} as const;
 
 function routeSchema(operationId: string, fields: Record<string, unknown> = {}): Record<string, unknown> {
   return { operationId, ...fields };
@@ -476,7 +597,24 @@ export class AgentHttpServer {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
       return this.events(request, response, conversationId, new URL(request.url ?? "/", "http://localhost").searchParams.get("after"));
-    }, routeSchema("subscribeConversationEvents", { summary: "订阅会话事件流", description: "以 Server-Sent Events 形式读取本地 Pi 事件；after 可用于断点续读。", params: ConversationParams, querystring: Type.Object({ after: Type.Optional(Type.String({ description: "从指定事件 ID 之后续读。" })) }, { additionalProperties: false }), response: { 200: { description: "Pi event stream", content: { "text/event-stream": { schema: Type.String({ description: "SSE 事件流文本。" }) } } } } }));
+    }, routeSchema("subscribeConversationEvents", {
+      summary: "订阅会话事件流",
+      description: PI_EVENT_STREAM_DESCRIPTION,
+      params: ConversationParams,
+      querystring: Type.Object({ after: Type.Optional(Type.String({ description: "客户端上次收到的事件 ID；历史正文请通过 /entries 获取。" })) }, { additionalProperties: false }),
+      response: {
+        200: {
+          description: "Pi SSE event stream. Each event uses `event: pi` and carries a JSON object in the `data` line.",
+          content: {
+            "text/event-stream": {
+              schema: Type.String({ description: "SSE 事件流文本；每个 data 行的 JSON 结构见 PiSseEventData。" }),
+              examples: PI_EVENT_STREAM_EXAMPLES,
+              "x-event-data-schema": { $ref: "#/components/schemas/PiSseEventData" },
+            },
+          },
+        },
+      },
+    }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/entries", async (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);

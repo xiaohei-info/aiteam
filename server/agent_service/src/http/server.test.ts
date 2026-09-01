@@ -387,6 +387,24 @@ test("Agent OpenAPI documents local attachment and artifact contracts", async ()
     const prompt = document.paths["/api/agent/conversations/{conversation_id}/prompt"].post;
     assert.deepEqual(prompt.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/PromptRequest" });
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").required, true);
+
+    const eventOperation = document.paths["/api/agent/conversations/{conversation_id}/events"].get;
+    const eventStream = eventOperation.responses["200"].content["text/event-stream"];
+    assert.equal(eventStream["x-event-data-schema"].$ref, "#/components/schemas/PiSseEventData");
+    assert(eventStream.schema.description.includes("PiSseEventData"));
+    assert(eventOperation.responses["200"].description.includes("data"));
+    assert.deepEqual(Object.keys(eventStream.examples).sort(), ["lifecycle", "thinking", "todoUpdate", "toolExecution"]);
+    assert(eventStream.examples.thinking.value.includes('"thinking"'));
+    assert(eventStream.examples.todoUpdate.value.includes('"tool_kind":"todo"'));
+    const eventSchema = document.components.schemas.PiSseEventData;
+    assert.deepEqual(eventSchema.properties.type.enum, [
+      "agent_start", "agent_end", "agent_settled", "message_update", "message_end",
+      "tool_execution_start", "tool_execution_update", "tool_execution_end",
+      "auto_retry_start", "auto_retry_end", "compaction_start", "compaction_end", "approval_required",
+    ]);
+    assert.equal(eventSchema.properties.message.$ref, "#/components/schemas/ConversationMessage");
+    assert.equal(eventSchema.properties.assistantMessageEvent.$ref, "#/components/schemas/PiSseAssistantMessageEvent");
+    assert.deepEqual(eventSchema.properties.tool_kind.enum, ["memory", "rag", "todo"]);
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").schema.maxLength, 256);
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "conversation_id").schema.type, "string");
     assert.deepEqual(Object.keys(document.paths["/api/agent/conversations/{conversation_id}/attachments/{attachment_id}"].get.responses["200"].content).sort(), ["application/json", "application/msword", "application/octet-stream", "application/pdf", "application/rtf", "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/xml", "application/yaml", "image/gif", "image/jpeg", "image/png", "image/webp", "text/css", "text/csv", "text/html", "text/javascript", "text/markdown", "text/plain", "text/typescript", "text/xml", "text/yaml"]);
