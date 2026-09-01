@@ -15,6 +15,8 @@ PLACEHOLDERS = {
     "执行接口摘要所述业务操作；成功响应遵循统一 envelope，失败返回 problem+json。",
 }
 PUBLIC_PREFIXES = ("/api/auth/",)
+MINIMUM_OPERATION_COUNTS = {"operation.json": 55, "manager.json": 174}
+
 SERVICE_OPERATION_IDS = {
     "operation_ingest_rollup",
     "operation_platform_provider_pull",
@@ -73,6 +75,18 @@ def data_schema(schema: Any, components: dict[str, Any]) -> Any:
     return schema
 
 
+def resolve_response(response: Any, components: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(response, dict) or "$ref" not in response:
+        return response if isinstance(response, dict) else {}
+    name = str(response["$ref"]).rsplit("/", 1)[-1]
+    candidate = components.get("responses", {}).get(name, {})
+    return candidate if isinstance(candidate, dict) else {}
+
+
+def has_example(value: Any) -> bool:
+    return isinstance(value, dict) and (value.get("example") is not None or bool(value.get("examples")))
+
+
 def security_kind(path: str, operation: dict[str, Any]) -> str | None:
     operation_id = str(operation.get("operationId", ""))
     if path.endswith("/ping") or path.startswith(PUBLIC_PREFIXES) or path in {"/api/operation/auth/login", "/api/agent/login", "/api/agent/reset-password"}:
@@ -105,8 +119,15 @@ def check(path: Path) -> list[str]:
                 scan_schema_nodes(child, f"{label}[{index}]")
 
     scan_schema_nodes(document.get("components", {}).get("schemas", {}), "components.schemas")
+    for tag in document.get("tags", []):
+        if isinstance(tag, dict) and not tag.get("description"):
+            errors.append(f"tag {tag.get('name')}: missing description")
+    operation_rows = list(operations(document))
+    minimum_count = MINIMUM_OPERATION_COUNTS.get(path.name)
+    if minimum_count is not None and len(operation_rows) < minimum_count:
+        errors.append(f"{path.name}: expected at least {minimum_count} API operations, found {len(operation_rows)}")
     seen_operation_ids: set[str] = set()
-    for route, method, operation in operations(document):
+    for route, method, operation in operation_rows:
         label = f"{method.upper()} {route}"
         operation_id = operation.get("operationId")
         for key in ("summary", "description", "operationId"):
@@ -129,33 +150,66 @@ def check(path: Path) -> list[str]:
         for parameter in operation.get("parameters", []):
             if not parameter.get("description"):
                 errors.append(f"{label}: parameter {parameter.get('name')} missing description")
+            if not has_example(parameter):
+                errors.append(f"{label}: parameter {parameter.get('name')} missing example")
+            if parameter.get("in") == "path" and parameter.get("required") is not True:
+                errors.append(f"{label}: path parameter {parameter.get('name')} must be required")
 
         if "requestBody" in operation:
-            content = operation["requestBody"].get("content", {})
+            body = operation["requestBody"]
+            if not body.get("description") and "agent" not in path.name:
+                errors.append(f"{label}: requestBody missing description")
+            content = body.get("content", {})
             if not content:
                 errors.append(f"{label}: requestBody has no content")
             for media, value in content.items():
                 if has_empty_schema(value.get("schema"), components):
                     errors.append(f"{label}: request {media} has empty/Any schema")
+                if not has_example(value):
+                    errors.append(f"{label}: request {media} missing example")
 
         responses = operation.get("responses", {})
-        if "422" not in responses:
+        if "422" not in responses and operation.get("x-protocol") != "mcp":
             errors.append(f"{label}: missing 422 response")
         if kind == "bearer" and not {"401", "403"} <= responses.keys():
             errors.append(f"{label}: missing bearer error responses")
-        if kind == "service" and "401" not in responses:
-            errors.append(f"{label}: missing service authentication response")
-        for status, response in responses.items():
-            if not str(status).startswith("2") or status == "204":
-                continue
-            for media, value in response.get("content", {}).items():
-                schema = value.get("schema")
-                if media.startswith(("text/event-stream", "text/csv", "application/octet-stream", "image/", "application/pdf", "text/markdown")):
-                    if has_empty_schema(schema, components) and media != "text/event-stream":
-                        errors.append(f"{label}: binary/text response {status} {media} has empty schema")
+        if kind == "service":
+            if "401" not in responses:
+                errors.append(f"{label}: missing service authentication response")
+            if "403" in responses:
+                errors.append(f"{label}: service-token route must not claim role-based 403")
+        for status, raw_response in responses.items():
+            response = resolve_response(raw_response, components)
+            if str(status).startswith("2"):
+                required_headers = {"X-Request-ID"} if "agent" in path.name else {"X-Request-ID", "X-Trace-ID"}
+                if not required_headers <= set(response.get("headers", {})):
+                    errors.append(f"{label}: success response {status} missing request/trace headers")
+                if status == "204":
                     continue
-                if has_empty_schema(data_schema(schema, components), components):
-                    errors.append(f"{label}: success response {status} {media} has empty/Any data schema")
+                for media, value in response.get("content", {}).items():
+                    schema = value.get("schema")
+                    if media.startswith(("text/event-stream", "text/csv", "application/octet-stream", "image/", "application/pdf", "text/markdown")):
+                        if has_empty_schema(schema, components) and media != "text/event-stream":
+                            errors.append(f"{label}: binary/text response {status} {media} has empty schema")
+                    elif has_empty_schema(data_schema(schema, components), components):
+                        errors.append(f"{label}: success response {status} {media} has empty/Any data schema")
+                    if not has_example(value):
+                        errors.append(f"{label}: success response {status} {media} missing example")
+                continue
+            if str(status) in {"400", "401", "403", "404", "405", "406", "409", "410", "413", "415", "422", "429", "500", "502", "503"}:
+                if str(operation_id).startswith("manager_rag_mcp_") and str(status) in {"400", "404", "405", "406", "409", "415", "500"}:
+                    protocol_content = response.get("content", {}).get("application/json")
+                    if not isinstance(protocol_content, dict) or not has_example(protocol_content):
+                        errors.append(f"{label}: MCP protocol error {status} missing JSON-RPC example")
+                    continue
+                problem = response.get("content", {}).get("application/problem+json")
+                if not isinstance(problem, dict) or problem.get("schema", {}).get("$ref") != "#/components/schemas/Problem":
+                    errors.append(f"{label}: error response {status} must use Problem application/problem+json")
+                elif not has_example(problem):
+                    errors.append(f"{label}: error response {status} missing example")
+                required_headers = {"X-Request-ID"} if "agent" in path.name else {"X-Request-ID", "X-Trace-ID"}
+                if not required_headers <= set(response.get("headers", {})):
+                    errors.append(f"{label}: error response {status} missing request/trace headers")
 
     def check_schema(name: str, schema: Any) -> None:
         if not isinstance(schema, dict):

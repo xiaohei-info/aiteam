@@ -14,6 +14,124 @@ from typing import Any
 
 from fastapi import FastAPI
 
+
+# OpenAPI examples are documentation-only values. Keep them deterministic,
+# bounded, and obviously synthetic so Swagger never encourages copying a real
+# credential or an unbounded dynamic payload.
+_EXAMPLE_MAX_DEPTH = 3
+_EXAMPLE_MAX_PROPERTIES = 24
+_EXAMPLE_VALUES: dict[str, Any] = {
+    "account": "13800000000",
+    "owner_phone": "13800000000",
+    "file": "policy.md (binary)",
+    "phone": "13800000000",
+    "username": "sysadmin",
+    "password": "••••••••",
+    "old_password": "••••••••",
+    "new_password": "••••••••",
+    "initial_password": "••••••••",
+    "secret": "••••••••",
+    "api_key": "sk-example-redacted",
+    "relay_token": "relay-example-redacted",
+    "token": "eyJ...redacted",
+    "access_token": "eyJ...redacted",
+    "owner_bootstrap_secret": "bootstrap-example-redacted",
+    "bootstrap_secret": "bootstrap-example-redacted",
+    "email": "operator@example.com",
+    "url": "https://docs.example.invalid/policy",
+    "endpoint": "https://relay.example.invalid/v1",
+    "base_url": "https://relay.example.invalid/v1",
+    "redirect_uri": "https://manager.example.invalid/oauth/callback",
+    "display_name": "示例资源",
+    "enterprise_name": "示例企业",
+    "enterprise_code": "example-co",
+    "enterprise_id": "enterprise-1",
+    "tenant_id": "tenant-1",
+    "org_id": "enterprise-1",
+    "employee_id": "employee-1",
+    "employee_slug": "research-assistant",
+    "member_id": "member-1",
+    "member_ids": "member-1",
+    "department_id": "department-1",
+    "department_ids": "department-1",
+    "employee_ids": "employee-1",
+    "skill_ids": "skill-1",
+    "knowledge_refs": "knowledge-space-1",
+    "connector_refs": "connector-1",
+    "provider_id": "provider-1",
+    "provider_ref": "provider-main",
+    "model_id": "model-1",
+    "model_uid": "gpt-4o-mini",
+    "catalog_id": "catalog-1",
+    "catalog_type": "expert_template",
+    "template_id": "template-1",
+    "solution_id": "solution-1",
+    "instance_id": "solution-instance-1",
+    "order_id": "order-1",
+    "policy_id": "policy-1",
+    "knowledge_space_id": "knowledge-space-1",
+    "document_id": "document-1",
+    "memory_id": "memory-1",
+    "credential_id": "credential-1",
+    "lease_id": "lease-1",
+    "skill_id": "skill-1",
+    "resource_id": "resource-1",
+    "grant_id": "grant-1",
+    "version": "1",
+    "revision": 1,
+    "page": 1,
+    "page_size": 20,
+    "limit": 20,
+    "offset": 0,
+    "total": 1,
+    "count": 1,
+    "amount": "100.00",
+    "currency": "CNY",
+    "reason": "例行配置变更",
+    "message": "这是一条示例通知。",
+    "query": "采购政策",
+    "keyword": "research",
+    "cursor": "next-page-cursor",
+    "after": "previous-event-id",
+    "Idempotency-Key": "idem-example-1",
+    "Mcp-Session-Id": "session-example-1",
+    "X-AITeam-Employee-ID": "employee-1",
+    "period": "month",
+    "metric": "token_total",
+    "status": "active",
+    "operation_status": "active",
+    "transition": "activate",
+    "action": "activate",
+    "title": "示例标题",
+    "description": "用于展示 OpenAPI 结构的示例描述。",
+    "summary": "示例摘要",
+    "persona": "你是一名严谨的研究助手。",
+    "system_prompt": "请以简洁、可核验的方式回答。",
+    "content": "示例文本内容",
+    "text": "示例文本内容",
+    "file_name": "policy.md",
+    "filename": "policy.md",
+    "file_type": "text/markdown",
+    "mime_type": "text/markdown",
+    "source_type": "file",
+    "provider_key": "openai",
+    "model": "gpt-4o-mini",
+    "model_name": "GPT-4o mini",
+    "api_protocol": "openai-completions",
+    "visibility": "tenant",
+    "scope": "tenant",
+    "role": "member",
+    "roles": "member",
+    "thinking_level": "medium",
+    "severity": "info",
+    "result": "success",
+    "created_at": "2026-09-01T08:00:00Z",
+    "updated_at": "2026-09-01T08:00:00Z",
+    "occurred_at": "2026-09-01T08:00:00Z",
+    "issued_at": "2026-09-01T08:00:00Z",
+    "expires_at": "2026-09-01T09:00:00Z",
+}
+
 _PLACEHOLDER_DESCRIPTION = "请查看接口名称了解用途"
 _GENERATED_DESCRIPTION = "执行接口摘要所述业务操作；成功响应遵循统一 envelope，失败返回 problem+json。"
 _HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
@@ -187,6 +305,230 @@ def _description_for(name: str, *, location: str | None = None) -> str:
     return f"业务字段：{_humanize(name)}。"
 
 
+def _resolve_schema(schema: Any, components: dict[str, Any], seen: set[str] | None = None) -> dict[str, Any]:
+    """Resolve one local component reference for documentation examples only."""
+    if not isinstance(schema, dict):
+        return {}
+    ref = schema.get("$ref")
+    if not isinstance(ref, str):
+        return schema
+    seen = seen or set()
+    if ref in seen:
+        return {}
+    target = components.get("schemas", {}).get(ref.rsplit("/", 1)[-1])
+    if not isinstance(target, dict):
+        return {}
+    return _resolve_schema(target, components, seen | {ref})
+
+
+def _allows_null(schema: Any, components: dict[str, Any]) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    resolved = _resolve_schema(schema, components)
+    if resolved.get("type") == "null":
+        return True
+    return any(_resolve_schema(branch, components).get("type") == "null" for branch in resolved.get("anyOf", []))
+
+
+def _example_scalar(field_name: str | None, schema: dict[str, Any]) -> Any:
+    """Return a safe scalar for a schema after enum/default handling."""
+    if schema.get("enum"):
+        return schema["enum"][0]
+    schema_type = schema.get("type")
+    schema_types = set(schema_type) if isinstance(schema_type, list) else {schema_type}
+    if field_name:
+        if field_name in _EXAMPLE_VALUES:
+            value = _EXAMPLE_VALUES[field_name]
+            if (schema_type is None or "string" in schema_types) and isinstance(value, str):
+                return value
+            if "boolean" in schema_types and isinstance(value, bool):
+                return value
+            if schema_types & {"integer", "number"} and isinstance(value, (int, float)):
+                return value
+        lowered = field_name.casefold()
+        if lowered.endswith(("_at", "_time", "_date")):
+            return "2026-09-01T08:00:00Z"
+        if lowered.endswith("_id"):
+            return f"{lowered[:-3].rstrip('_') or 'resource'}-1"
+        if "email" in lowered:
+            return "operator@example.com"
+        if "phone" in lowered or lowered == "mobile":
+            return "13800000000"
+        if lowered.endswith("_url") or lowered in {"url", "uri"}:
+            return "https://example.invalid/resource"
+        if lowered.startswith(("is_", "has_", "can_")):
+            return True
+    fmt = schema.get("format")
+    if fmt == "date-time":
+        return "2026-09-01T08:00:00Z"
+    if fmt == "date":
+        return "2026-09-01"
+    if fmt in {"uri", "url"}:
+        return "https://example.invalid/resource"
+    if fmt == "email":
+        return "operator@example.com"
+    if fmt in {"byte", "binary"}:
+        return "ZXhhbXBsZQ=="
+    scalar_type = next((item for item in schema_types if item != "null"), None)
+    if scalar_type == "integer":
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)):
+            return int(max(minimum, 0))
+        return 1
+    if scalar_type == "number":
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)):
+            return max(minimum, 0)
+        return 1.0
+    if scalar_type == "boolean":
+        return True
+    return "string"
+
+
+def _example_for_schema(
+    schema: Any,
+    components: dict[str, Any],
+    *,
+    field_name: str | None = None,
+    depth: int = 0,
+    seen_refs: set[str] | None = None,
+) -> Any:
+    """Build a bounded, deterministic example from an OpenAPI schema."""
+    if not isinstance(schema, dict):
+        return None
+    if "example" in schema:
+        return schema["example"]
+    if isinstance(schema.get("examples"), list) and schema["examples"]:
+        return schema["examples"][0]
+    if "default" in schema and schema["default"] not in (None, ""):
+        return schema["default"]
+
+    seen_refs = seen_refs or set()
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        if ref in seen_refs:
+            return None
+        target = components.get("schemas", {}).get(ref.rsplit("/", 1)[-1])
+        return _example_for_schema(target, components, field_name=field_name, depth=depth, seen_refs=seen_refs | {ref})
+
+    for key in ("oneOf", "anyOf"):
+        branches = schema.get(key)
+        if isinstance(branches, list):
+            for branch in branches:
+                if _resolve_schema(branch, components).get("type") == "null":
+                    continue
+                value = _example_for_schema(branch, components, field_name=field_name, depth=depth, seen_refs=seen_refs)
+                if value is not None:
+                    return value
+            return None
+
+    if isinstance(schema.get("allOf"), list):
+        merged: dict[str, Any] = {}
+        first_value: Any = None
+        for branch in schema["allOf"]:
+            value = _example_for_schema(branch, components, field_name=field_name, depth=depth, seen_refs=seen_refs)
+            if isinstance(value, dict):
+                merged.update(value)
+            elif first_value is None and value is not None:
+                first_value = value
+        return merged if merged else first_value
+
+    resolved = _resolve_schema(schema, components, seen_refs)
+    if resolved is not schema and resolved:
+        return _example_for_schema(resolved, components, field_name=field_name, depth=depth, seen_refs=seen_refs)
+    if depth > _EXAMPLE_MAX_DEPTH:
+        return _example_scalar(field_name, resolved)
+
+    schema_type = resolved.get("type")
+    if isinstance(schema_type, list):
+        schema_type = next((item for item in schema_type if item != "null"), "string")
+    if schema_type == "object" or "properties" in resolved:
+        properties = resolved.get("properties")
+        if isinstance(properties, dict):
+            result: dict[str, Any] = {}
+            for name, child in list(properties.items())[:_EXAMPLE_MAX_PROPERTIES]:
+                value = _example_for_schema(
+                    child,
+                    components,
+                    field_name=str(name),
+                    depth=depth + 1,
+                    seen_refs=seen_refs,
+                )
+                if value is not None or _allows_null(child, components):
+                    result[str(name)] = value
+            if result:
+                return result
+        additional = resolved.get("additionalProperties")
+        if isinstance(additional, dict) and depth < _EXAMPLE_MAX_DEPTH:
+            return {"key": _example_for_schema(additional, components, field_name="value", depth=depth + 1, seen_refs=seen_refs)}
+        return {}
+    if schema_type == "array":
+        if resolved.get("maxItems") == 0:
+            return []
+        item_schema = resolved.get("items", {})
+        item = _example_for_schema(item_schema, components, field_name=field_name, depth=depth + 1, seen_refs=seen_refs)
+        return [] if item is None and _allows_null(item_schema, components) else [item]
+    if schema_type == "null":
+        return None
+    return _example_scalar(field_name, resolved)
+
+
+def _response_uses_envelope(schema: Any, components: dict[str, Any]) -> bool:
+    resolved = _resolve_schema(schema, components)
+    properties = resolved.get("properties", {}) if isinstance(resolved, dict) else {}
+    return isinstance(properties, dict) and "data" in properties and bool({"meta", "page"} & set(properties))
+
+
+def _example_for_media(schema: Any, media_type: str, components: dict[str, Any], *, field_name: str | None = None) -> Any:
+    if media_type.startswith("text/event-stream"):
+        return "event: message\\ndata: {\\\"type\\\":\\\"heartbeat\\\"}\\n\\n"
+    if media_type == "text/csv":
+        return "id,name\\nresource-1,示例资源\\n"
+    if media_type.startswith(("application/octet-stream", "application/pdf", "image/")):
+        return "ZXhhbXBsZQ=="
+    return _example_for_schema(schema, components, field_name=field_name)
+
+
+def _request_id_header() -> dict[str, Any]:
+    return {
+        "description": "服务端生成的请求关联 ID；可用于日志排查。",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+    }
+
+
+def _mcp_session_header() -> dict[str, Any]:
+    return {
+        "description": "FastMCP 会话 ID；initialize 后返回，后续请求通过 Mcp-Session-Id 头回传。",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 256},
+    }
+
+
+def _trace_id_header() -> dict[str, Any]:
+    return {
+        "description": "跨服务追踪 ID；用于关联同一请求在 Operator/Manager 中的链路日志。",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+    }
+
+
+def _cache_control_header() -> dict[str, Any]:
+    return {
+        "description": "缓存策略；含 token、密钥或租约的响应必须禁止缓存。",
+        "schema": {"type": "string", "example": "no-store"},
+    }
+
+
+def _problem_example(status: int, code: str, detail: str) -> dict[str, Any]:
+    return {
+        "type": f"https://docs.aiteam.local/problems/{code}",
+        "title": code.replace("_", " ").title(),
+        "status": status,
+        "code": code,
+        "detail": detail,
+        "instance": "/api/example",
+        "request_id": "req-example",
+    }
+
+
 def _problem_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -218,15 +560,32 @@ def _problem_schema() -> dict[str, Any]:
     }
 
 
-def _problem_response(description: str) -> dict[str, Any]:
+def _problem_response(
+    description: str,
+    *,
+    status: int,
+    code: str,
+    detail: str,
+) -> dict[str, Any]:
     return {
         "description": description,
-        "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}},
+        "content": {
+            "application/problem+json": {
+                "schema": {"$ref": "#/components/schemas/Problem"},
+                "examples": {"problem": {"summary": description, "value": _problem_example(status, code, detail)}},
+            }
+        },
+        "headers": {
+            "X-Request-ID": {"$ref": "#/components/headers/RequestId"},
+            "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
+        },
     }
 
 
 def _security_kind(path: str, operation_id: str) -> str | None:
     """Return bearer/service/public for the known v1 route boundaries."""
+    if path in {"/healthz", "/readyz", "/metrics", "/openapi.json"}:
+        return None
     if path.endswith("/ping") or path in {"/api/operation/auth/login"}:
         return None
     if path.startswith("/api/auth/"):
@@ -274,11 +633,771 @@ def _enrich_schema_node(node: Any, *, field_name: str | None = None, location: s
             _enrich_schema_node(child, field_name=None, location=location, seen=seen)
 
 
+_MCP_COMPONENTS = {
+    "McpJsonRpcRequest": {
+        "type": "object",
+        "description": "Manager RAG MCP Streamable HTTP 的 JSON-RPC 2.0 请求；params 由具体 MCP 方法定义。",
+        "required": ["jsonrpc", "id", "method"],
+        "properties": {
+            "jsonrpc": {"type": "string", "const": "2.0", "description": "JSON-RPC 协议版本。"},
+            "id": {"type": ["string", "integer"], "description": "请求 ID。"},
+            "method": {"type": "string", "description": "MCP 方法，如 initialize、tools/list、tools/call。"},
+            "params": {"type": "object", "additionalProperties": True, "x-dynamic-json": True, "description": "方法参数；由 MCP 工具 schema 约束。"},
+        },
+        "additionalProperties": False,
+        "x-dynamic-json": True,
+    },
+    "McpJsonRpcResponse": {
+        "type": "object",
+        "description": "Manager RAG MCP Streamable HTTP 的 JSON-RPC 2.0 响应或错误。",
+        "required": ["jsonrpc", "id"],
+        "properties": {
+            "jsonrpc": {"type": "string", "const": "2.0", "description": "JSON-RPC 协议版本。"},
+            "id": {"type": ["string", "integer", "null"], "description": "对应请求 ID。"},
+            "result": {"type": "object", "additionalProperties": True, "x-dynamic-json": True, "description": "MCP 方法结果。"},
+            "error": {"type": "object", "additionalProperties": True, "x-dynamic-json": True, "description": "JSON-RPC 错误对象。"},
+        },
+        "additionalProperties": True,
+        "x-dynamic-json": True,
+    },
+}
+
+
+_OPERATION_PROJECTION_COMPONENTS = {
+    "EnterpriseRechargeRecord": {
+        "type": "object", "description": "企业充值记录摘要。", "additionalProperties": False,
+        "properties": {
+            "recharge_id": {"type": "string", "description": "充值记录 ID。"},
+            "amount": {"type": "string", "description": "充值金额；decimal string。"},
+            "created_at": {"type": "string", "format": "date-time", "description": "充值时间。"},
+        },
+        "required": ["recharge_id", "amount", "created_at"],
+    },
+    "EnterpriseAuditRecord": {
+        "type": "object", "description": "企业脱敏审计事件摘要。", "additionalProperties": False,
+        "properties": {
+            "event_id": {"type": "string", "description": "审计事件 ID。"},
+            "action": {"type": "string", "description": "审计动作。"},
+            "detail": {"type": "string", "description": "脱敏操作说明。"},
+            "severity": {"type": "string", "enum": ["info", "warning", "critical"], "description": "严重级别。"},
+            "result": {"type": "string", "enum": ["success", "failure"], "description": "操作结果。"},
+            "ip_address": {"type": ["string", "null"], "description": "来源 IP（如可用）。"},
+            "user_agent": {"type": ["string", "null"], "description": "来源 User-Agent（如可用）。"},
+            "created_at": {"type": "string", "format": "date-time", "description": "事件时间。"},
+        },
+        "required": ["event_id", "action", "detail", "severity", "result", "created_at"],
+    },
+    "EnterpriseTokenHistory": {
+        "type": "object", "description": "企业脱敏用量历史摘要。", "additionalProperties": False,
+        "properties": {
+            "run_count": {"type": "integer", "minimum": 0, "description": "运行次数。"},
+            "token_total": {"type": "integer", "minimum": 0, "description": "token 总数。"},
+            "cost_total": {"type": "string", "description": "总费用；decimal string。"},
+            "error_count": {"type": "integer", "minimum": 0, "description": "错误次数。"},
+            "window_start": {"type": ["string", "null"], "format": "date-time", "description": "窗口起点。"},
+            "window_end": {"type": ["string", "null"], "format": "date-time", "description": "窗口终点。"},
+        },
+        "required": ["run_count", "token_total", "cost_total", "error_count"],
+    },
+    "EnterpriseQuotaSnapshot": {
+        "type": "object", "description": "企业配额上限与使用量快照。", "additionalProperties": False,
+        "properties": {
+            "employee_limit": {"type": "integer", "description": "员工上限；-1 表示不限。"},
+            "employee_used": {"type": "integer", "minimum": 0, "description": "已使用员工数。"},
+            "storage_limit_mb": {"type": "integer", "description": "存储上限 MB；-1 表示不限。"},
+            "storage_used_mb": {"type": "integer", "minimum": 0, "description": "已使用存储 MB。"},
+            "api_rate_limit": {"type": "integer", "description": "API 每分钟上限；-1 表示不限。"},
+            "api_rate_used": {"type": "integer", "minimum": 0, "description": "当前 API 使用量。"},
+            "token_quota_limit": {"type": "integer", "description": "月度 token 配额；-1 表示不限。"},
+            "token_quota_used": {"type": "integer", "minimum": 0, "description": "当前月度 token 使用量。"},
+        },
+        "required": ["employee_limit", "employee_used", "storage_limit_mb", "storage_used_mb", "api_rate_limit", "api_rate_used", "token_quota_limit", "token_quota_used"],
+    },
+    "EnterpriseExportRow": {
+        "type": "object", "description": "企业导出行；不含凭据和会话内容。", "additionalProperties": False,
+        "properties": {
+            "org_id": {"type": "string", "description": "企业 ID。"},
+            "enterprise_name": {"type": "string", "description": "企业名称。"},
+            "status": {"type": "string", "enum": ["active", "suspended", "banned", "closed"], "description": "企业生命周期。"},
+            "total_recharged": {"type": "string", "description": "累计充值；decimal string。"},
+            "token_consumed": {"type": "integer", "minimum": 0, "description": "累计消耗 token。"},
+            "registered_at": {"type": "string", "format": "date-time", "description": "注册时间。"},
+        },
+        "required": ["org_id", "enterprise_name", "status", "total_recharged", "token_consumed", "registered_at"],
+    },
+    "UsageTrendPoint": {
+        "type": "object", "description": "按天聚合的员工用量趋势点。", "additionalProperties": False,
+        "properties": {
+            "day": {"type": "string", "format": "date", "description": "UTC 日期。"},
+            "tokens": {"type": "integer", "minimum": 0, "description": "该日 token 数。"},
+            "cost": {"type": "string", "description": "该日成本；decimal string。"},
+        },
+        "required": ["day", "tokens", "cost"],
+    },
+    "UsageRankingPoint": {
+        "type": "object", "description": "员工用量排名点。", "additionalProperties": False,
+        "properties": {
+            "employee_id": {"type": "string", "description": "员工 ID。"},
+            "tokens": {"type": "integer", "minimum": 0, "description": "员工 token 数。"},
+            "cost": {"type": "string", "description": "员工成本；decimal string。"},
+        },
+        "required": ["employee_id", "tokens", "cost"],
+    },
+    "FinanceTrendPoint": {
+        "type": "object", "description": "财务周期趋势点。", "additionalProperties": False,
+        "properties": {
+            "period": {"type": "string", "description": "趋势时间桶。"},
+            "amount": {"type": "string", "description": "该桶充值金额；decimal string。"},
+        },
+        "required": ["period", "amount"],
+    },
+    "FinanceConsumerPoint": {
+        "type": "object", "description": "企业用量成本排名摘要。", "additionalProperties": False,
+        "properties": {
+            "org_id": {"type": "string", "description": "企业 ID。"},
+            "enterprise_name": {"type": "string", "description": "企业名称。"},
+            "cost_total": {"type": "string", "description": "总成本；decimal string。"},
+            "token_total": {"type": "integer", "minimum": 0, "description": "token 总数。"},
+            "pricing_status": {"type": "string", "enum": ["known", "partial"], "description": "价格完整性。"},
+            "unknown_pricing_tokens": {"type": "integer", "minimum": 0, "description": "未知价格 token 数。"},
+        },
+        "required": ["org_id", "enterprise_name", "cost_total", "token_total", "pricing_status", "unknown_pricing_tokens"],
+    },
+    "FinanceRechargeDetail": {
+        "type": "object", "description": "财务充值明细。", "additionalProperties": False,
+        "properties": {
+            "recharge_id": {"type": "string", "description": "充值记录 ID。"},
+            "enterprise_id": {"type": "string", "description": "企业 ID。"},
+            "amount": {"type": "string", "description": "充值金额；decimal string。"},
+            "created_at": {"type": "string", "format": "date-time", "description": "充值时间。"},
+            "currency": {"type": "string", "enum": ["CNY"], "description": "收入币种。"},
+        },
+        "required": ["recharge_id", "enterprise_id", "amount", "created_at", "currency"],
+    },
+    "FinanceConsumptionDetail": {
+        "type": "object", "description": "财务用量消耗明细。", "additionalProperties": False,
+        "properties": {
+            "enterprise_id": {"type": "string", "description": "企业 ID。"},
+            "token_total": {"type": "integer", "minimum": 0, "description": "token 总数。"},
+            "cost_total": {"type": "string", "description": "模型成本；decimal string。"},
+            "run_count": {"type": "integer", "minimum": 0, "description": "运行次数。"},
+            "pricing_status": {"type": "string", "enum": ["known", "partial"], "description": "价格完整性。"},
+            "unknown_pricing_tokens": {"type": "integer", "minimum": 0, "description": "未知价格 token 数。"},
+            "currency": {"type": "string", "enum": ["USD"], "description": "成本币种。"},
+        },
+        "required": ["enterprise_id", "token_total", "cost_total", "run_count", "pricing_status", "unknown_pricing_tokens", "currency"],
+    },
+    "FinanceProfitDetail": {
+        "type": "object", "description": "财务利润明细；币种不一致时利润为空。", "additionalProperties": False,
+        "properties": {
+            "total_revenue": {"type": "string", "description": "总收入；decimal string。"},
+            "revenue_currency": {"type": "string", "enum": ["CNY"], "description": "收入币种。"},
+            "total_cost": {"type": "string", "description": "总成本；decimal string。"},
+            "cost_currency": {"type": "string", "enum": ["USD"], "description": "成本币种。"},
+            "gross_profit": {"type": ["string", "null"], "description": "毛利；无 FX 时为 null。"},
+            "profit_status": {"type": "string", "description": "利润可用性状态。"},
+            "period": {"type": "string", "description": "财务周期。"},
+        },
+        "required": ["total_revenue", "revenue_currency", "total_cost", "cost_currency", "gross_profit", "profit_status", "period"],
+    },
+    "ServiceHealthMap": {
+        "type": "object", "description": "依赖服务健康状态映射。", "additionalProperties": {"type": "string", "enum": ["up", "degraded"]},
+    },
+}
+
+
+_SUMMARY_COMPONENTS = {
+    "UsageSummary": {
+        "type": "object",
+        "description": "脱敏用量聚合摘要；不含会话内容、文件内容或逐 token 明细。",
+        "required": ["summary_id", "tenant_id", "window_start", "window_end"],
+        "properties": {
+            "summary_id": {"type": "string", "description": "幂等摘要 ID。"},
+            "tenant_id": {"type": "string", "description": "企业租户 ID。"},
+            "employee_id": {"type": ["string", "null"], "description": "员工 ID；可为空表示企业级聚合。"},
+            "window_start": {"type": "string", "format": "date-time", "description": "聚合窗口起点。"},
+            "window_end": {"type": "string", "format": "date-time", "description": "聚合窗口终点。"},
+            "run_count": {"type": "integer", "minimum": 0, "default": 0, "description": "运行次数。"},
+            "token_total": {"type": "integer", "minimum": 0, "default": 0, "description": "token 总数。"},
+            "cost_total": {"type": "string", "description": "USD 总费用；使用 decimal string。"},
+            "currency": {"type": "string", "enum": ["USD"], "default": "USD", "description": "费用币种。"},
+            "pricing_version": {"type": ["integer", "null"], "minimum": 1, "description": "计价版本。"},
+            "pricing_status": {"type": "string", "enum": ["known", "unknown"], "default": "unknown", "description": "价格是否已知。"},
+            "error_count": {"type": "integer", "minimum": 0, "default": 0, "description": "错误次数。"},
+            "duration_seconds_total": {"type": "integer", "minimum": 0, "default": 0, "description": "总耗时（秒）。"},
+        },
+        "additionalProperties": False,
+    },
+    "AuditSummaryEvent": {
+        "type": "object",
+        "description": "脱敏审计摘要；不含会话正文或运行时原始事件。",
+        "required": ["summary_id", "tenant_id", "actor", "action", "occurred_at"],
+        "properties": {
+            "summary_id": {"type": "string", "description": "幂等摘要 ID。"},
+            "tenant_id": {"type": "string", "description": "企业租户 ID。"},
+            "actor": {"type": "string", "description": "用户 ID 或服务身份。"},
+            "action": {"type": "string", "description": "审计动作，例如 login、grant_change。"},
+            "resource_type": {"type": ["string", "null"], "description": "资源类型。"},
+            "resource_id": {"type": ["string", "null"], "description": "资源 ID。"},
+            "occurred_at": {"type": "string", "format": "date-time", "description": "事件发生时间。"},
+        },
+        "additionalProperties": False,
+    },
+}
+
+
+def _install_manager_mcp_documentation(schema: dict[str, Any], components: dict[str, Any]) -> None:
+    """Expose the mounted RAG Streamable HTTP protocol beside REST routes."""
+    schemas = components.setdefault("schemas", {})
+    for name, model in _MCP_COMPONENTS.items():
+        schemas.setdefault(name, model)
+    components.setdefault("headers", {}).setdefault("McpSessionId", _mcp_session_header())
+    session_header = {
+        "name": "Mcp-Session-Id",
+        "in": "header",
+        "required": False,
+        "description": "FastMCP 会话 ID；initialize 成功后由服务端返回，后续请求原样回传。",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 256},
+        "example": "session-example-1",
+    }
+    employee_header = {
+        "name": "X-AITeam-Employee-ID",
+        "in": "header",
+        "required": True,
+        "description": "要执行知识检索的 employee ID；Manager 会再次按当前 snapshot/绑定授权校验。",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 256},
+        "example": "employee-1",
+    }
+    accept_header = {
+        "name": "Accept",
+        "in": "header",
+        "required": True,
+        "description": "Streamable HTTP 必须同时接受 application/json 和 text/event-stream。",
+        "schema": {"type": "string"},
+        "example": "application/json, text/event-stream",
+    }
+    request_example = {
+        "initialize": {
+            "summary": "初始化会话",
+            "value": {"jsonrpc": "2.0", "id": "request-1", "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+        },
+        "knowledgeSearch": {
+            "summary": "调用 knowledge_search",
+            "value": {"jsonrpc": "2.0", "id": "request-2", "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"query": "采购政策", "limit": 10}}},
+        },
+    }
+    response_examples = {
+        "toolsCall": {
+            "summary": "工具调用结果",
+            "value": {"jsonrpc": "2.0", "id": "request-2", "result": {"content": [{"type": "text", "text": "[\\\"citation:knowledge-space-1:document-1\\\"]"}], "isError": False}},
+        }
+    }
+    mcp_path = schema.setdefault("paths", {}).setdefault("/api/manager/rag/mcp", {})
+    mcp_path["x-mcp-tools"] = [
+        {"name": "knowledge_search", "description": "检索当前 employee 有权访问的企业知识空间，返回有界 citation。", "arguments": {"query": "string", "limit": "integer 1..20"}},
+        {"name": "knowledge_get", "description": "读取当前 employee 有权访问的 citation 文本，返回有界片段。", "arguments": {"citation_id": "string"}},
+    ]
+    mcp_path.setdefault("get", {
+        "tags": ["manager", "rag-mcp"],
+        "summary": "建立 RAG MCP SSE 流",
+        "description": "Manager-owned Streamable HTTP MCP 长连接；需要 Bearer token、X-AITeam-Employee-ID 和 text/event-stream Accept。",
+        "operationId": "manager_rag_mcp_stream",
+        "x-protocol": "mcp",
+        "parameters": [employee_header, session_header, accept_header],
+        "responses": {
+            "200": {"description": "MCP SSE 事件流。", "content": {"text/event-stream": {"schema": {"type": "string"}, "examples": {"event": {"summary": "JSON-RPC SSE 事件", "value": "event: message\\ndata: {\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"notifications/tools/list_changed\\\"}\\n\\n"}}}}},
+            "404": {"description": "MCP session 不存在或已终止；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"notFound": {"summary": "会话不存在", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Session not found"}}}}}}},
+            "406": {"description": "Accept 未包含 text/event-stream；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"notAcceptable": {"summary": "Accept 不支持", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": "Not Acceptable"}}}}}}},
+            "409": {"description": "当前 session 已有 SSE stream；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"conflict": {"summary": "流冲突", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": "Only one SSE stream is allowed"}}}}}}},
+            "500": {"description": "MCP 内部处理错误；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"internal": {"summary": "内部错误", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "Internal error"}}}}}}},
+        },
+    })
+    mcp_path.setdefault("post", {
+        "tags": ["manager", "rag-mcp"],
+        "summary": "调用 RAG MCP 方法",
+        "description": "向 Manager RAG MCP 发送 JSON-RPC 2.0 请求；支持 initialize、tools/list、knowledge_search 和 knowledge_get。",
+        "operationId": "manager_rag_mcp_call",
+        "x-protocol": "mcp",
+        "parameters": [employee_header, session_header, {**accept_header, "description": "必须同时接受 application/json 和 text/event-stream。"}],
+        "requestBody": {"required": True, "description": "JSON-RPC 2.0 请求；params 由具体 MCP 方法约束。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcRequest"}, "examples": request_example}}},
+        "responses": {
+            "200": {"description": "JSON-RPC 响应或 SSE 事件流。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": response_examples}, "text/event-stream": {"schema": {"type": "string"}, "examples": {"event": {"summary": "JSON-RPC SSE 事件", "value": "event: message\\ndata: {\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":\\\"request-2\\\",\\\"result\\\":{}}\\n\\n"}}}}},
+            "202": {"description": "JSON-RPC notification/response 已接受；响应体可能为空。", "content": {"application/json": {"schema": {"anyOf": [{"$ref": "#/components/schemas/McpJsonRpcResponse"}, {"type": "null"}]}, "examples": {"accepted": {"summary": "通知已接受", "value": None}}}}},
+            "400": {"description": "MCP JSON-RPC 请求格式无效；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"invalid": {"summary": "请求无效", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}}}}}},
+            "406": {"description": "Accept 未同时包含 JSON 和 SSE；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}}}},
+            "415": {"description": "Content-Type 必须为 application/json；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}}}},
+        },
+    })
+    mcp_path.setdefault("delete", {
+        "tags": ["manager", "rag-mcp"],
+        "summary": "终止 RAG MCP 会话",
+        "description": "使用当前 Mcp-Session-Id 显式终止 Streamable HTTP 会话。",
+        "operationId": "manager_rag_mcp_terminate",
+        "x-protocol": "mcp",
+        "parameters": [employee_header, session_header],
+        "responses": {"200": {"description": "会话已终止；响应体为空。", "content": {"application/json": {"schema": {"anyOf": [{"$ref": "#/components/schemas/McpJsonRpcResponse"}, {"type": "null"}]}, "examples": {"terminated": {"summary": "会话已终止", "value": None}}}}}, "404": {"description": "MCP session 不存在或已终止；返回 JSON-RPC error。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"notFound": {"summary": "会话不存在", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32001, "message": "Session not found"}}}}}}}, "405": {"description": "当前没有可终止的 MCP 会话。", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/McpJsonRpcResponse"}, "examples": {"methodNotAllowed": {"summary": "无可终止会话", "value": {"jsonrpc": "2.0", "id": None, "error": {"code": -32000, "message": "Method Not Allowed"}}}}}}}},
+    })
+    for method in ("get", "post", "delete"):
+        operation = mcp_path.get(method)
+        if not isinstance(operation, dict):
+            continue
+        for response in operation.get("responses", {}).values():
+            if isinstance(response, dict) and "$ref" not in response and response.get("description"):
+                response.setdefault("headers", {})["Mcp-Session-Id"] = {"$ref": "#/components/headers/McpSessionId"}
+
+    schema.setdefault("info", {}).setdefault("x-manager-protocols", {})["rag_mcp"] = {
+        "endpoint": "/api/manager/rag/mcp",
+        "transport": "Streamable HTTP",
+        "auth": "Bearer + X-AITeam-Employee-ID",
+        "tools": ["knowledge_search(query, limit)", "knowledge_get(citation_id)"],
+    }
+
+
+def _install_control_plane_schema_overrides(schemas: dict[str, Any]) -> None:
+    """Tighten docs for known projection fields without changing validation."""
+    for name, model in {**_SUMMARY_COMPONENTS, **_OPERATION_PROJECTION_COMPONENTS}.items():
+        schemas.setdefault(name, model)
+
+    admin_detail = schemas.get("EnterpriseAccountDetail")
+    if isinstance(admin_detail, dict):
+        properties = admin_detail.setdefault("properties", {})
+        for field, ref in {
+            "recharge_records": "EnterpriseRechargeRecord",
+            "audit_events": "EnterpriseAuditRecord",
+            "token_history": "EnterpriseTokenHistory",
+        }.items():
+            if isinstance(properties.get(field), dict):
+                properties[field]["items"] = {"$ref": f"#/components/schemas/{ref}"}
+        if isinstance(properties.get("quota"), dict):
+            properties["quota"] = {
+                "anyOf": [{"$ref": "#/components/schemas/EnterpriseQuotaSnapshot"}, {"type": "null"}],
+                "description": "企业配额上限与使用量快照；未初始化时为 null。",
+            }
+
+    export = schemas.get("EnterpriseExportResponse")
+    if isinstance(export, dict) and isinstance(export.get("properties", {}).get("rows"), dict):
+        export["properties"]["rows"]["items"] = {"$ref": "#/components/schemas/EnterpriseExportRow"}
+
+    finance = schemas.get("FinanceOverviewOut")
+    if isinstance(finance, dict):
+        properties = finance.setdefault("properties", {})
+        for field, ref in {"monthly_trend": "FinanceTrendPoint", "top5_consumers": "FinanceConsumerPoint"}.items():
+            if isinstance(properties.get(field), dict):
+                properties[field]["items"] = {"$ref": f"#/components/schemas/{ref}"}
+
+    usage_overview = schemas.get("UsageOverviewOut")
+    if isinstance(usage_overview, dict):
+        properties = usage_overview.setdefault("properties", {})
+        for field, ref in {"trend": "UsageTrendPoint", "ranking": "UsageRankingPoint"}.items():
+            if isinstance(properties.get(field), dict):
+                properties[field]["items"] = {"$ref": f"#/components/schemas/{ref}"}
+
+    reports = schemas.get("FinanceReportOut")
+    if isinstance(reports, dict):
+        properties = reports.setdefault("properties", {})
+        for field, ref in {
+            "recharge_details": "FinanceRechargeDetail",
+            "consumption_details": "FinanceConsumptionDetail",
+            "profit_details": "FinanceProfitDetail",
+        }.items():
+            if isinstance(properties.get(field), dict):
+                properties[field]["items"] = {"$ref": f"#/components/schemas/{ref}"}
+
+    health = schemas.get("SystemHealthOut")
+    if isinstance(health, dict) and isinstance(health.get("properties", {}).get("services"), dict):
+        health["properties"]["services"] = {"$ref": "#/components/schemas/ServiceHealthMap"}
+
+    health_response = schemas.get("HealthResponse")
+    if isinstance(health_response, dict) and isinstance(health_response.get("properties", {}).get("status"), dict):
+        health_response["properties"]["status"]["enum"] = ["ok", "ready", "degraded", "blocked"]
+        health_response["properties"]["status"]["description"] = "服务状态：ok=存活、ready=依赖就绪、degraded/blocked=不可完全提供能力。"
+
+    for schema_name, field_name, values in (
+        ("EnterpriseAccountOut", "status", ["active", "suspended", "banned", "closed"]),
+        ("EnterpriseAccountOut", "operation_status", ["active", "suspended", "banned", "closed"]),
+        ("LifecycleStatusOut", "operation_status", ["active", "suspended", "banned", "closed"]),
+        ("LifecycleResponse", "operation_status", ["active", "suspended", "banned", "closed"]),
+        ("EnrichedAuditOut", "severity", ["info", "warning", "critical"]),
+        ("EnrichedAuditOut", "result", ["success", "failure"]),
+        ("PlatformSkillOut", "status", ["draft", "published", "unpublished", "blocked"]),
+        ("PlatformSkillImportOut", "status", ["draft", "published", "unpublished", "blocked"]),
+        ("EmployeeConfigOut", "status", ["draft", "provisioning", "active", "paused", "provisioning_failed", "archived"]),
+        ("SolutionInstanceOut", "status", ["draft", "applied", "archived"]),
+        ("RecruitmentOrderOut", "status", ["pending", "provisioning", "succeeded", "failed", "cancelled"]),
+        ("MemberOut", "status", ["active", "disabled"]),
+    ):
+        model = schemas.get(schema_name)
+        field = model.get("properties", {}).get(field_name) if isinstance(model, dict) else None
+        if isinstance(field, dict):
+            field["enum"] = values
+
+    transition = schemas.get("EmployeeTransitionIn")
+    if isinstance(transition, dict) and isinstance(transition.get("properties", {}).get("reason"), dict):
+        transition["properties"]["reason"]["description"] = "archive 转换必填；其他转换可省略。"
+
+    solution_create = schemas.get("RegisterSolutionTemplateRequest")
+    if isinstance(solution_create, dict):
+        properties = solution_create.setdefault("properties", {})
+        if isinstance(properties.get("expert_template_ids"), dict):
+            properties["expert_template_ids"]["description"] = "包含的专家模板 ID；至少一个，且至少一个启用专家。"
+            properties["expert_template_ids"]["minItems"] = 1
+        if isinstance(properties.get("coordinator_template_id"), dict):
+            properties["coordinator_template_id"]["description"] = "协调专家模板 ID；必须是已启用专家之一。"
+            properties["coordinator_template_id"]["minLength"] = 1
+
+    solution_update = schemas.get("UpdateSolutionTemplateRequest")
+    if isinstance(solution_update, dict):
+        properties = solution_update.setdefault("properties", {})
+        if isinstance(properties.get("expert_template_ids"), dict):
+            properties["expert_template_ids"]["description"] = "替换专家模板 ID 列表；提供时至少一个。"
+        if isinstance(properties.get("coordinator_template_id"), dict):
+            properties["coordinator_template_id"]["description"] = "协调专家模板 ID；提供时必须属于启用专家。"
+
+    usage = schemas.get("UsageSummaryUploadIn")
+    if isinstance(usage, dict):
+        properties = usage.setdefault("properties", {})
+        required = usage.setdefault("required", [])
+        if isinstance(required, list) and "tenant_id" not in required:
+            required.append("tenant_id")
+        if isinstance(properties.get("tenant_id"), dict):
+            properties["tenant_id"]["description"] = "企业租户 ID；必须与当前服务身份 claim 一致。"
+        if isinstance(properties.get("usage"), dict):
+            properties["usage"]["items"] = {"$ref": "#/components/schemas/UsageSummary"}
+        if isinstance(properties.get("audits"), dict):
+            properties["audits"]["items"] = {"$ref": "#/components/schemas/AuditSummaryEvent"}
+
+    authorized = schemas.get("AuthorizedConfigPullResponse")
+    if isinstance(authorized, dict):
+        properties = authorized.setdefault("properties", {})
+        if isinstance(properties.get("experts"), dict) and "EmployeeConfigOut" in schemas:
+            properties["experts"]["items"] = {"$ref": "#/components/schemas/EmployeeConfigOut"}
+        if isinstance(properties.get("solutions"), dict) and "SolutionInstanceOut" in schemas:
+            properties["solutions"]["items"] = {"$ref": "#/components/schemas/SolutionInstanceOut"}
+
+
+_BODY_NOT_FOUND_OPERATION_IDS = frozenset({
+    "manager_owner_bootstrap",
+    "manager_employee_config_create",
+    "manager_recruit_expert",
+    "manager_apply_solution",
+    "manager_snapshot_generate",
+    "manager_provider_runtime_config",
+    "manager_speech_runtime_config",
+    "manager_hindsight_runtime_config",
+    "manager_memory_list",
+    "manager_memory_recall",
+    "manager_memory_create",
+    "manager_memory_retain",
+    "manager_grants_authorized_config_pull",
+    "operation_tenant_provider_access_resolve",
+})
+
+
+_NO_NOT_FOUND_OPERATION_IDS = frozenset({
+    "operation_enterprise_rollup",
+    "manager_connector_status",
+    "manager_connector_test",
+    "manager_connector_grants",
+    "manager_oauth_unlink",
+})
+
+
+_NO_CONFLICT_OPERATION_IDS = frozenset({
+    "operation_system_login",
+    "operation_reset_owner_bootstrap",
+    "operation_ingest_rollup",
+    "operation_skill_market_settings_update",
+    "operation_admin_enterprise_model_access_update",
+    "operation_admin_quota_change",
+    "manager_login",
+    "manager_owner_reset",
+    "manager_resolve_tenant",
+    "manager_owner_bootstrap",
+    "manager_catalog_notify",
+    "manager_inbox_deliver_from_operation",
+    "manager_passkey_login",
+    "manager_passkey_registration_options",
+    "manager_oauth_authorize",
+    "manager_oauth_callback",
+    "manager_provider_runtime_config",
+    "manager_speech_runtime_config",
+    "manager_hindsight_runtime_config",
+    "manager_hindsight_lease_revoke",
+    "manager_grants_authorized_config_pull",
+    "manager_snapshot_generate",
+    "manager_usage_upload",
+    "manager_memory_create",
+    "manager_memory_retain",
+    "manager_connector_test",
+    "manager_connector_grants",
+    "manager_oauth_unlink",
+})
+
+
+_OPERATION_429_OPERATION_IDS = frozenset({
+    "operation_skill_market_external_list",
+    "operation_skill_market_external_download",
+})
+
+
+_OPERATION_SUMMARY_OVERRIDES = {
+    "operation_platform_provider_list": "列出平台 Provider",
+    "operation_platform_provider_sync_models": "同步 Provider 模型目录",
+    "operation_platform_model_list": "列出 Provider 模型及价格",
+    "operation_platform_model_public_price_sync": "同步公开模型价格",
+    "operation_platform_model_rate_create": "创建模型价格卡",
+    "operation_platform_model_publish": "发布平台模型",
+    "operation_platform_models_publish_priced": "批量发布有价格模型",
+    "manager_provider_runtime_config": "获取 Provider 运行配置",
+    "manager_platform_model_list": "列出平台模型目录",
+}
+
+
+_OPERATION_DESCRIPTION_OVERRIDES = {
+    "operation_system_login": "系统管理员使用运营端账号密码登录，返回短期 RS256 access token；密码仅用于本次请求，不会回显。",
+    "operation_provision_enterprise": "创建企业在 Operator 的主记录，并通过 Manager 建立 tenant；响应中的 bootstrap 仅一次性返回。",
+    "operation_reset_owner_bootstrap": "为指定企业重新签发一次性负责人 bootstrap；旧 bootstrap 立即失效。",
+    "operation_platform_provider_list": "列出 Operator 维护的平台 Provider；仅返回非敏感目录和状态，不返回 provider secret。",
+    "operation_platform_provider_sync_models": "从指定 Provider 同步模型目录；同步不会把 provider 凭据写入响应。",
+    "operation_platform_model_list": "列出指定 Provider 的模型及当前价格卡。",
+    "operation_platform_model_public_price_sync": "同步公开价格并保留手工价格优先级；响应返回更新、跳过和未匹配计数。",
+    "operation_platform_model_rate_create": "为平台模型创建或更新价格卡；价格单位和生效范围见请求 schema。",
+    "operation_platform_model_publish": "发布指定模型，使其进入 Manager 可见的平台目录。",
+    "operation_platform_models_publish_priced": "批量发布已具备价格卡的平台模型。",
+    "operation_tenant_provider_access_resolve": "为指定企业解析受限的 Provider/模型访问配置；响应含企业作用域 relay_token，仅供受控运行时使用且禁止缓存。",
+    "operation_whoami": "返回当前运营端 access token 的身份声明；不读取或返回系统密码。",
+    "operation_list_catalog": "按目录类型和发布状态筛选 Operator 专家模板与行业方案目录。",
+    "operation_get_catalog_entry": "读取单个专家模板或行业方案模板的完整非敏感目录信息。",
+    "operation_update_catalog_entry": "局部更新专家模板或行业方案目录项；发布状态和可见范围使用专用操作。",
+    "operation_publish_catalog_entry": "发布专家模板或行业方案，并通知 Manager 刷新目录投影。",
+    "operation_unpublish_catalog_entry": "下架目录项并通知 Manager；已存在的企业实例不在此接口删除。",
+    "operation_set_catalog_visibility": "更新目录项可见范围并通知 Manager。",
+    "operation_ingest_rollup": "接收 Manager 上报的脱敏企业计量/审计聚合；不接收会话内容或逐 token 明细。",
+    "operation_cross_enterprise_board": "读取跨企业脱敏聚合看板；结果只包含平台汇总和企业级统计。",
+    "operation_rollup_report": "按时间桶、指标和窗口生成跨企业治理汇总报表。",
+    "operation_enterprise_rollup": "读取单企业脱敏聚合视图，不下钻租户会话或执行明细。",
+    "operation_skill_market_external_list": "浏览可导入的外部纯文本技能市场，并返回安全检查和版本信息；响应为兼容的 {data,next_cursor} 结构，不含 page。",
+    "operation_skill_market_external_download": "校验并导入外部技能；仅允许安全清单内的纯文本技能文件。",
+    "operation_skill_market_internal_list": "列出 Operator 已导入的平台技能及发布状态。",
+    "operation_skill_market_settings_get": "读取外部技能下载后的自动发布策略。",
+    "operation_skill_market_settings_update": "更新外部技能下载后的自动发布策略。",
+    "operation_skill_market_internal_publish": "发布指定平台技能的当前导入版本，使 Manager 可以拉取。",
+    "operation_skill_market_internal_unpublish": "下架指定平台技能，阻止新的 Manager 拉取。",
+    "operation_admin_enterprise_list": "分页列出企业运营账号，支持关键词、生命周期、页码和每页条数筛选。",
+    "operation_admin_enterprise_detail": "读取企业运营详情，包含生命周期、配额、审计和计量摘要。",
+    "operation_admin_enterprise_export": "导出企业列表摘要；导出内容不包含密码、token 或会话内容。",
+    "operation_admin_lifecycle_status": "读取企业当前生命周期状态及暂停、封禁、关闭时间。",
+    "operation_admin_lifecycle_change": "驱动企业生命周期状态转换；关闭后不可恢复为其他状态。",
+    "operation_admin_enterprise_model_access_get": "读取企业允许使用的平台模型 allow-list。",
+    "operation_admin_enterprise_model_access_update": "更新企业平台模型 allow-list；null 表示全部已发布模型，空列表表示不开放。",
+    "operation_admin_quota_get": "读取企业配额上限与当前使用量。",
+    "operation_admin_quota_change": "局部更新企业配额维度；未提供的维度保持不变。",
+    "operation_admin_enterprise_action": "执行企业运营动作，如充值、通知、暂停、封禁、解封或关闭；请求体仅支持 action、amount 和 message。",
+    "operation_admin_stats": "读取平台企业统计卡片及生命周期分布。",
+    "operation_admin_solution_stats": "读取行业方案应用次数和活跃企业统计。",
+    "operation_admin_finance_overview": "读取指定财务周期的充值、用量成本和利润概览。",
+    "operation_admin_finance_reports": "读取财务充值、消耗和利润明细报表。",
+    "operation_admin_audit_events": "分页查询平台运营审计事件，可按企业、严重级别和动作筛选；响应为 data 内含 total/items/next_cursor 的兼容结构。",
+    "operation_admin_health": "读取 Operator 依赖服务健康状态。",
+    "manager_resolve_tenant_by_account": "根据成员账号解析所属 tenant；登录前使用，不返回密码或 token。",
+    "manager_login": "成员或负责人使用 tenant、账号和密码登录，返回短期 RS256 access token。",
+    "manager_owner_reset": "负责人首次登录时重置 bootstrap 密码并获取新的短期 access token。",
+    "manager_jwks": "返回指定 tenant 当前有效的公开 JWKS；不包含私钥或对称签名密钥。",
+    "manager_resolve_tenant": "根据企业代码或名称解析 tenant_id；登录前使用。",
+    "manager_employee_config_create": "创建 runtime 中立的 employee 配置；不会写入任何 runtime 原生文件。",
+    "manager_employee_config_update": "全量更新 employee 配置并递增 version；旧版本用于并发控制。",
+    "manager_employee_lifecycle_transition": "执行 employee 生命周期状态转换；archive 转换必须提供 reason，其余转换按状态机约束执行。",
+    "manager_grants_authorized_config_pull": "按当前成员权限生成 Agent 授权配置投影；只返回授权的专家、方案和能力引用。",
+    "manager_knowledge_intake_upload": "上传知识文档并创建 intake 任务；文件随后异步解析和索引，响应不接受 workspace。",
+    "manager_knowledge_intake_import_url": "抓取并导入 HTTP(S) 文档，创建异步 intake 任务；URL 内容受大小和重定向限制。",
+    "manager_knowledge_analytics": "返回企业固定知识空间的 LightRAG 统计；响应使用单元素 ListEnvelope 以兼容列表型前端。",
+    "manager_knowledge_intake_delete": "请求异步删除知识文档索引；使用 Idempotency-Key 可安全重试。",
+    "manager_knowledge_intake_reindex": "请求异步重建知识文档索引；失败时可用同一幂等键重试。",
+    "manager_provider_runtime_config": "按当前成员和 employee 快照返回最小 Provider 运行配置；响应含敏感 api_key，必须 no-store。",
+    "manager_speech_runtime_config": "按当前成员的企业模型 allow-list 返回语音模型运行配置；响应必须 no-store。",
+    "manager_hindsight_runtime_config": "按当前 employee 快照签发短期 Hindsight facade lease；lease token 仅本次返回且必须 no-store。",
+    "manager_hindsight_lease_revoke": "撤销当前成员可见的 Hindsight lease；响应不返回原 lease token。",
+    "manager_snapshot_generate": "生成供 Agent 拉取并本地冻结的 employee 执行快照；快照只含授权投影。",
+    "manager_usage_upload": "接收 Agent 上报的脱敏 usage/audit 摘要并写入企业级聚合；不接收会话内容。",
+    "manager_usage_rollup": "查询企业 usage 聚合；同时提供窗口聚合视图和未指定完整窗口时的明细列表分支。",
+    "manager_audit_list": "读取本租户脱敏审计摘要；不返回会话正文或 runtime 原始事件。",
+    "manager_memory_analytics": "返回各员工 Hindsight 记忆统计；响应使用单元素 ListEnvelope，记忆正文不在统计接口返回。",
+    "manager_org_tree": "读取当前企业组织树及员工部门分配。",
+    "manager_settings_get": "读取当前企业设置和功能开关。",
+    "manager_settings_patch": "局部更新企业设置；未提供的字段保持不变。",
+    "manager_passkey_login": "使用 WebAuthn assertion 完成公开 Passkey 登录并返回短期 access token。",
+    "manager_oauth_callback": "处理 OAuth 提供方回调并完成登录；state 仅一次有效。",
+}
+
+
+def _apply_known_documentation_constraints(
+    operation_id: str,
+    operation: dict[str, Any],
+    components: dict[str, Any],
+) -> None:
+    """Add constraints that are enforced outside Pydantic without changing code paths."""
+    for parameter in operation.get("parameters", []):
+        if not isinstance(parameter, dict):
+            continue
+        name = str(parameter.get("name", ""))
+        parameter_schema = parameter.get("schema")
+        if not isinstance(parameter_schema, dict):
+            continue
+        if name.casefold() in {"idempotency-key", "idempotency_key"}:
+            parameter_schema.update({"minLength": 1, "maxLength": 256, "pattern": r"^[^\r\n]{1,256}$"})
+        if operation_id == "operation_rollup_report" and name == "period":
+            parameter_schema.update({"enum": ["day", "week", "month"], "default": "day"})
+        if operation_id == "operation_rollup_report" and name == "metric":
+            parameter_schema.update({
+                "enum": ["run_count", "token_total", "cost_total", "error_count", "duration_seconds_total"],
+                "default": "token_total",
+            })
+        if operation_id in {"manager_billing_usage_overview", "manager_billing_usage_records"} and name == "period":
+            parameter_schema.update({"enum": ["month", "last_month", "all"], "default": "month"})
+        if operation_id == "manager_admin_invite_list" and name == "status":
+            parameter_schema.update({"enum": ["pending", "accepted", "revoked", "expired"]})
+        if operation_id == "manager_employee_lifecycle_transition" and name == "transition":
+            parameter_schema.update({
+                "enum": ["provision", "activate", "pause", "resume", "archive", "retry_provision", "mark_provisioning_failed"],
+            })
+        if operation_id in {"operation_list_catalog", "operation_get_catalog_entry", "operation_update_catalog_entry", "operation_publish_catalog_entry", "operation_unpublish_catalog_entry", "operation_set_catalog_visibility"} and name == "catalog_type":
+            parameter_schema.update({"enum": ["expert_template", "solution_template"]})
+        if operation_id == "operation_list_catalog" and name == "status":
+            parameter_schema.update({"enum": ["draft", "published", "unpublished"]})
+        if operation_id == "operation_admin_enterprise_list" and name == "status":
+            parameter_schema.update({"enum": ["active", "suspended", "banned", "closed"]})
+        if operation_id == "operation_admin_audit_events" and name == "severity":
+            parameter_schema.update({"enum": ["info", "warning", "critical"]})
+
+    request_body = operation.get("requestBody")
+    if not isinstance(request_body, dict):
+        return
+    request_content = request_body.get("content")
+    if not isinstance(request_content, dict):
+        return
+    if operation_id == "manager_knowledge_intake_upload":
+        media = request_content.get("multipart/form-data")
+        if isinstance(media, dict):
+            body_schema = _resolve_schema(media.get("schema"), components)
+            file_schema = body_schema.get("properties", {}).get("file")
+            if isinstance(file_schema, dict):
+                file_schema.update({
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream",
+                    "description": "知识文档文件；非空，最大 4 MiB。",
+                })
+            media["encoding"] = {
+                "file": {"contentType": "text/plain, text/markdown, application/pdf, application/json"}
+            }
+            request_body["description"] = "multipart/form-data 文件上传；文件非空，最大 4 MiB，随后异步解析和索引。"
+    elif operation_id == "manager_knowledge_intake_import_url":
+        body_schema = _resolve_schema(
+            next(iter(request_content.values()), {}).get("schema"), components
+        )
+        url_schema = body_schema.get("properties", {}).get("url")
+        if isinstance(url_schema, dict):
+            url_schema.update({"maxLength": 2048, "format": "uri", "description": "HTTP(S) 文档 URL，最长 2048 字符。"})
+
+
+def _apply_known_documentation_examples(operation_id: str, operation: dict[str, Any]) -> None:
+    """Replace heuristic examples where a cross-field business invariant matters."""
+    request_body = operation.get("requestBody")
+    if not isinstance(request_body, dict):
+        return
+    content = request_body.get("content")
+    if not isinstance(content, dict):
+        return
+    media = content.get("application/json")
+    if not isinstance(media, dict):
+        return
+    if operation_id == "operation_register_solution_template":
+        request_body["description"] = "行业方案模板请求；至少一个启用专家，coordinator_template_id 必须属于启用专家。"
+        media["examples"] = {
+            "solution": {
+                "summary": "行业方案模板",
+                "value": {
+                    "display_name": "市场研究方案",
+                    "description": "由研究助手和分析助手协同完成市场研究。",
+                    "expert_template_ids": ["research-assistant"],
+                    "coordinator_template_id": "research-assistant",
+                    "coordinator_instructions": "先研究，再由协调专家汇总结论。",
+                    "tags": ["research"],
+                },
+            }
+        }
+    elif operation_id == "operation_update_catalog_entry":
+        request_body["description"] = "目录项局部更新请求；expert_template 使用专家字段，solution_template 使用方案字段。"
+        media["examples"] = {
+            "expert": {
+                "summary": "更新专家模板",
+                "value": {
+                    "display_name": "更新后的研究助手",
+                    "thinking_level": "medium",
+                    "description": "更新后的职位描述。",
+                },
+            },
+            "solution": {
+                "summary": "更新行业方案",
+                "value": {
+                    "description": "更新后的市场研究方案描述。",
+                    "expert_template_ids": ["research-assistant"],
+                    "coordinator_template_id": "research-assistant",
+                },
+            },
+        }
+
+
+def _apply_known_response_examples(operation_id: str, operation: dict[str, Any], components: dict[str, Any]) -> None:
+    """Show both branches for responses whose wire shape depends on query inputs."""
+    response = operation.get("responses", {}).get("200")
+    media = response.get("content", {}).get("application/json") if isinstance(response, dict) else None
+    if operation_id == "healthz_healthz_get" and isinstance(media, dict):
+        media["examples"] = {"ok": {"summary": "服务存活", "value": {"status": "ok", "service": "aiteam-service"}}}
+    elif operation_id == "readyz_readyz_get" and isinstance(media, dict):
+        media["examples"] = {"ready": {"summary": "服务就绪", "value": {"status": "ready", "service": "aiteam-service"}}}
+    elif operation_id == "operation_system_login" and isinstance(media, dict):
+        media["examples"] = {"loggedIn": {"summary": "系统账号登录成功", "value": {"data": {"token": "eyJ...redacted", "claims": {"tenant_id": None, "enterprise_id": None, "user_id": "sysadmin", "roles": ["system_admin"], "iss": "aiteam-operation", "aud": "aiteam-operation", "iat": 1790000000, "exp": 1790003600}}}}}
+    elif operation_id == "manager_login" and isinstance(media, dict):
+        media["examples"] = {"loggedIn": {"summary": "企业成员登录成功", "value": {"data": {"token": "eyJ...redacted", "claims": {"tenant_id": "tenant-1", "enterprise_id": "tenant-1", "user_id": "member-1", "roles": ["member"], "iss": "aiteam-manager", "aud": "aiteam-agent", "iat": 1790000000, "exp": 1790003600}}}}}
+    if operation_id == "manager_usage_rollup":
+        response = operation.get("responses", {}).get("200")
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {
+                    "aggregate": {
+                        "summary": "提供完整窗口时返回聚合",
+                        "value": {"data": {"rollup_count": 2, "run_count": 12, "token_total": 4800, "cost_total": "0.240000", "unknown_pricing_tokens": 0, "unknown_pricing_runs": 0, "error_count": 1, "duration_seconds_total": 95}},
+                    },
+                    "details": {
+                        "summary": "未提供完整窗口时返回明细列表",
+                        "value": {"data": {"items": [{"rollup_id": "rollup-1", "summary_id": "summary-1", "employee_id": "employee-1", "window_start": "2026-09-01T08:00:00Z", "window_end": "2026-09-01T09:00:00Z", "run_count": 6, "token_total": 2400, "cost_total": "0.120000", "pricing_version": 1, "pricing_status": "known", "currency": "USD", "error_count": 0, "duration_seconds_total": 40}]}},
+                    },
+                }
+    elif operation_id == "operation_skill_market_external_list":
+        response = operation.get("responses", {}).get("200")
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {"browse": {"summary": "外部技能分页结果（兼容结构）", "value": {"data": [{"owner": "example-owner", "slug": "research-skill", "display_name": "Research Skill", "summary": "示例技能", "version": "1.0.0", "latest_version": "1.0.0", "updated_at": 1790000000, "downloads": 12, "canonical_url": "https://skills.example.invalid/research-skill", "security_ok": True}], "next_cursor": "next-page-cursor"}}}
+    elif operation_id == "operation_admin_audit_events":
+        response = operation.get("responses", {}).get("200")
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {"auditPage": {"summary": "审计分页结果（兼容结构）", "value": {"data": {"total": 1, "items": [{"event_id": "audit-1", "enterprise_id": "enterprise-1", "action": "login", "detail": "登录成功", "actor_id": "member-1", "actor_name": "示例用户", "severity": "info", "result": "success", "ip_address": "203.0.113.10", "user_agent": "ExampleClient/1.0", "created_at": "2026-09-01T08:00:00Z"}], "next_cursor": None}}}}
+
+
 def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
     """Apply common documentation policy to an already-generated OpenAPI document."""
     components = schema.setdefault("components", {})
     schemas = components.setdefault("schemas", {})
     schemas.setdefault("Problem", _problem_schema())
+    if tier in {"operation", "manager"}:
+        _install_control_plane_schema_overrides(schemas)
+    if tier == "manager":
+        _install_manager_mcp_documentation(schema, components)
     components.setdefault("securitySchemes", {})
     components["securitySchemes"].setdefault(
         "bearerAuth",
@@ -298,31 +1417,62 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "description": "仅用于 Operator↔Manager 服务间窄通信；不是用户登录 token。",
         },
     )
+    components.setdefault("headers", {})
+    components["headers"].setdefault("RequestId", _request_id_header())
+    components["headers"].setdefault("TraceId", _trace_id_header())
+    if tier == "manager":
+        components["headers"].setdefault("McpSessionId", _mcp_session_header())
+    components["headers"].setdefault("CacheControl", _cache_control_header())
     components.setdefault("responses", {})
     components["responses"].update(
         {
-            "Unauthorized": _problem_response("认证失败；需要有效凭据。"),
-            "Forbidden": _problem_response("鉴权失败；当前身份无权执行该操作。"),
-            "NotFound": _problem_response("请求的资源不存在。"),
-            "Conflict": _problem_response("请求与当前资源状态冲突。"),
-            "ValidationError": _problem_response("请求参数校验失败。"),
-            "TooManyRequests": _problem_response("请求过于频繁，请稍后重试。"),
-            "ServiceUnavailable": _problem_response("依赖服务暂时不可用。"),
+            "BadRequest": _problem_response(
+                "请求格式无效。", status=400, code="http_error", detail="Request format is invalid."
+            ),
+            "Unauthorized": _problem_response(
+                "认证失败；需要有效凭据。", status=401, code="unauthorized", detail="Authentication is required."
+            ),
+            "Forbidden": _problem_response(
+                "鉴权失败；当前身份无权执行该操作。", status=403, code="forbidden", detail="The caller is not authorized."
+            ),
+            "NotFound": _problem_response(
+                "请求的资源不存在。", status=404, code="not_found", detail="The requested resource was not found."
+            ),
+            "Conflict": _problem_response(
+                "请求与当前资源状态冲突。", status=409, code="conflict", detail="The request conflicts with current state."
+            ),
+            "ValidationError": _problem_response(
+                "请求参数校验失败。", status=422, code="validation_error", detail="Request validation failed."
+            ),
+            "TooManyRequests": _problem_response(
+                "请求过于频繁，请稍后重试。", status=429, code="rate_limited", detail="Too many requests."
+            ),
+            "ServiceUnavailable": _problem_response(
+                "依赖服务暂时不可用。", status=503, code="service_unavailable", detail="A required service is unavailable."
+            ),
+            "InternalError": _problem_response(
+                "服务内部错误；详细信息只写入受控日志。", status=500, code="internal_error", detail="Unexpected server error."
+            ),
         }
     )
 
     for path, path_item in schema.get("paths", {}).items():
-        if not isinstance(path_item, dict) or not path.startswith("/api/"):
+        is_api = path.startswith("/api/")
+        if not isinstance(path_item, dict) or (not is_api and path not in {"/healthz", "/readyz", "/metrics", "/openapi.json"}):
             continue
         for method, operation in path_item.items():
             if method not in _HTTP_METHODS or not isinstance(operation, dict):
                 continue
             operation_id = str(operation.get("operationId") or f"{method}_{path}")
+            if operation_id in _OPERATION_SUMMARY_OVERRIDES:
+                operation["summary"] = _OPERATION_SUMMARY_OVERRIDES[operation_id]
             summary = str(operation.get("summary") or _humanize(operation_id))
             if not operation.get("summary"):
                 operation["summary"] = summary
             description = operation.get("description")
-            if not description or description in {_PLACEHOLDER_DESCRIPTION, _GENERATED_DESCRIPTION}:
+            if operation_id in _OPERATION_DESCRIPTION_OVERRIDES:
+                operation["description"] = _OPERATION_DESCRIPTION_OVERRIDES[operation_id]
+            elif not description or description in {_PLACEHOLDER_DESCRIPTION, _GENERATED_DESCRIPTION}:
                 operation["description"] = (
                     f"{summary}。成功响应遵循本端统一 envelope；失败响应使用 application/problem+json。"
                 )
@@ -333,43 +1483,168 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 name = str(parameter.get("name") or "parameter")
                 if not parameter.get("description"):
                     parameter["description"] = _description_for(name, location=parameter.get("in"))
-                if isinstance(parameter.get("schema"), dict) and not parameter["schema"].get("description"):
-                    parameter["schema"]["description"] = parameter["description"]
+                parameter_schema = parameter.get("schema")
+                if isinstance(parameter_schema, dict):
+                    if not parameter_schema.get("description"):
+                        parameter_schema["description"] = parameter["description"]
+                    if "example" not in parameter and "examples" not in parameter:
+                        parameter["example"] = _example_for_schema(
+                            parameter_schema, components, field_name=name
+                        )
+
+            request_body = operation.get("requestBody")
+            if isinstance(request_body, dict):
+                request_body.setdefault("description", f"{summary} 请求体；字段约束见对应 schema。")
+                request_content = request_body.get("content")
+                if isinstance(request_content, dict):
+                    for media_type, media in request_content.items():
+                        if not isinstance(media, dict) or "examples" in media or "example" in media:
+                            continue
+                        media["examples"] = {
+                            "request": {
+                                "summary": f"{summary} 请求示例（仅含文档占位值）",
+                                "value": _example_for_media(
+                                    media.get("schema"), media_type, components
+                                ),
+                            }
+                        }
+            _apply_known_documentation_constraints(operation_id, operation, components)
+            _apply_known_documentation_examples(operation_id, operation)
 
             kind = _security_kind(path, operation_id)
+            is_mcp = operation.get("x-protocol") == "mcp"
             operation["security"] = [] if kind is None else [{"serviceToken": []}] if kind == "service" else [{"bearerAuth": []}]
             responses = operation.setdefault("responses", {})
-            if kind in {"bearer", "service"}:
+            if kind == "bearer":
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
                 responses.setdefault("403", {"$ref": "#/components/responses/Forbidden"})
+            elif kind == "service":
+                responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
+                responses.pop("403", None)
             # FastAPI's default HTTPValidationError is an internal shape; the
-            # public contract always uses Problem (application/problem+json).
-            responses["422"] = {"$ref": "#/components/responses/ValidationError"}
-            if method in {"get", "put", "patch", "delete", "post"} and path.count("{"):
+            # public REST contract always uses Problem (application/problem+json).
+            if is_api and not is_mcp:
+                responses["422"] = {"$ref": "#/components/responses/ValidationError"}
+            if operation_id == "manager_knowledge_intake_import_url":
+                # This route deliberately translates URL parser failures to HTTP 400;
+                # ordinary FastAPI body validation remains the documented 422 contract.
+                responses.setdefault("400", {"$ref": "#/components/responses/BadRequest"})
+            if is_api and not is_mcp and operation_id not in _NO_NOT_FOUND_OPERATION_IDS and (path.count("{") or operation_id in _BODY_NOT_FOUND_OPERATION_IDS or operation_id in {"manager_resolve_tenant", "manager_resolve_tenant_by_account"}):
                 responses.setdefault("404", {"$ref": "#/components/responses/NotFound"})
-            if operation_id in {"manager_resolve_tenant", "manager_resolve_tenant_by_account"}:
-                responses.setdefault("404", {"$ref": "#/components/responses/NotFound"})
-            if method in {"post", "put", "patch", "delete"}:
+            if is_api and not is_mcp and method in {"post", "put", "patch", "delete"} and operation_id not in _NO_CONFLICT_OPERATION_IDS:
                 responses.setdefault("409", {"$ref": "#/components/responses/Conflict"})
-            if kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}:
+            if operation_id in _OPERATION_429_OPERATION_IDS:
+                responses.setdefault("429", {"$ref": "#/components/responses/TooManyRequests"})
+            if is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
                 responses.setdefault("503", {"$ref": "#/components/responses/ServiceUnavailable"})
             if operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}:
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
+            if is_api and not is_mcp:
+                responses.setdefault("500", {"$ref": "#/components/responses/InternalError"})
+
             # FastAPI adds an empty application/json branch for handlers that
             # return Response. Keep the declared CSV/binary representation only.
-            for response in responses.values():
-                content = response.get("content") if isinstance(response, dict) else None
-                if not isinstance(content, dict) or "application/json" not in content or len(content) < 2:
+            for status, response in list(responses.items()):
+                if not isinstance(response, dict) or "$ref" in response:
                     continue
-                if not content["application/json"].get("schema") and any(media != "application/json" for media in content):
-                    content.pop("application/json", None)
+                content = response.get("content")
+                if isinstance(content, dict) and "application/json" in content and len(content) >= 2:
+                    if not content["application/json"].get("schema") and any(media != "application/json" for media in content):
+                        content.pop("application/json", None)
+                if status.startswith("2") and response.get("description") in {None, "", "Successful Response"}:
+                    response_schema = next(
+                        (
+                            media.get("schema")
+                            for media in (content or {}).values()
+                            if isinstance(media, dict) and media.get("schema") is not None
+                        ),
+                        None,
+                    ) if isinstance(content, dict) else None
+                    result_kind = "统一 envelope" if _response_uses_envelope(response_schema, components) else "响应 schema"
+                    if status == "201":
+                        response["description"] = f"{summary} 成功创建资源；返回{result_kind}。"
+                    elif status == "202":
+                        response["description"] = f"{summary} 已接受；异步结果按响应中的 operation/status 查询。"
+                    elif status == "204":
+                        response["description"] = "操作成功；响应无消息体。"
+                    else:
+                        response["description"] = f"{summary} 成功；返回{result_kind}。"
+                response.setdefault("headers", {})
+                response["headers"].setdefault("X-Request-ID", {"$ref": "#/components/headers/RequestId"})
+                response["headers"].setdefault("X-Trace-ID", {"$ref": "#/components/headers/TraceId"})
+                if status != "204":
+                    if isinstance(content, dict):
+                        for media_type, media in content.items():
+                            if not isinstance(media, dict) or "examples" in media or "example" in media:
+                                continue
+                            media["examples"] = {
+                                "response": {
+                                    "summary": f"{summary} 成功响应示例（仅含文档占位值）",
+                                    "value": _example_for_media(
+                                        media.get("schema"), media_type, components
+                                    ),
+                                }
+                            }
+            _apply_known_response_examples(operation_id, operation, components)
 
-    for name, model in schemas.items():
+            if operation_id in {
+                "manager_provider_runtime_config",
+                "manager_speech_runtime_config",
+                "manager_hindsight_runtime_config",
+                "manager_hindsight_lease_revoke",
+                "operation_tenant_provider_access_resolve",
+            }:
+                for status, response in responses.items():
+                    if status.startswith("2") and isinstance(response, dict) and "$ref" not in response:
+                        response.setdefault("headers", {})["Cache-Control"] = {"$ref": "#/components/headers/CacheControl"}
+
+    for name, model in list(schemas.items()):
         if isinstance(model, dict) and not model.get("description"):
             model["description"] = f"{_humanize(name)} 数据结构。"
         _enrich_schema_node(model)
+    schema.setdefault("info", {})
+    schema["info"]["description"] = (
+        "AI Team v1 "
+        + ("运营端 Operator" if tier == "operation" else "企业端 Manager")
+        + " API。成功响应默认遵循统一 envelope；JWKS、CSV、二进制以及明确标注的兼容列表响应使用各自 schema。"
+        "示例中的 token、密钥、企业和资源 ID 均为不可用占位值。"
+    )
     schema.setdefault("tags", [])
     existing_tags = {item.get("name") for item in schema["tags"] if isinstance(item, dict)}
+    tag_descriptions = {
+        "operation-enterprise": "企业开通、负责人 bootstrap 与企业级配置。",
+        "operation-platform-provider": "Operator 平台 Provider、模型和价格卡。",
+        "operation-catalog": "专家模板和行业方案目录管理。",
+        "operation-catalog-pull": "Manager 服务间拉取的已发布目录。",
+        "operation-rollup": "脱敏计量与跨企业治理汇总。",
+        "skill-market": "平台技能市场浏览、导入和发布。",
+        "employee-config": "企业 employee/expert 中立配置与生命周期。",
+        "employee-prompt": "员工提示词及版本历史。",
+        "employee-bindings": "员工与技能、知识、连接器和记忆策略绑定。",
+        "member": "企业成员、部门与角色管理。",
+        "grant": "成员级资源授权和 Agent 授权投影。",
+        "knowledge-space": "企业知识空间元数据和绑定。",
+        "knowledge-intake": "知识文档上传、解析、索引和删除生命周期。",
+        "capability-catalog": "租户技能、连接器和记忆策略目录。",
+        "platform-provider-runtime": "按成员授权返回 Provider 运行配置；敏感响应禁止缓存。",
+        "recruit-solution": "从 Operator 目录招募专家和应用行业方案。",
+        "usage-audit-quota": "脱敏用量、审计摘要和软配额治理。",
+        "control-plane": "Operator 与 Manager 的服务间窄通信。",
+        "inbox": "运营通知与企业站内信收件箱。",
+        "billing": "企业余额、充值和用量账单。",
+        "llm": "企业 LLM Provider/Model 配置。",
+        "hindsight": "企业记忆管理和 Hindsight facade lease。",
+        "org": "组织树和员工部门分配。",
+        "settings": "企业设置和子管理员邀请。",
+        "audit": "企业审计事件查询。",
+        "mfa": "多因素登录与 OAuth/Passkey 流程。",
+        "passkey": "WebAuthn Passkey 注册和登录。",
+        "oauth": "第三方 OAuth 连接管理。",
+    }
+    for tag in schema["tags"]:
+        if isinstance(tag, dict) and not tag.get("description"):
+            name = str(tag.get("name") or "api")
+            tag["description"] = tag_descriptions.get(name, f"{_humanize(name)} 接口。")
     for name, description in {
         "infra": "服务存活、就绪和运行指标。",
         "auth": "登录、身份解析和公钥分发。",
