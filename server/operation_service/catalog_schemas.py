@@ -10,7 +10,7 @@ SolutionPackage）一律从 shared.contracts.crosstier import，**禁在此重�
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -35,6 +35,9 @@ class ExpertBinding(BaseModel):
 
 
 # ---- 专家模板（对齐 PRD-v2 S02 专家模板字段规范）----
+
+ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 
 class RegisterExpertTemplateRequest(BaseModel):
     """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。
@@ -69,6 +72,10 @@ class RegisterExpertTemplateRequest(BaseModel):
     def validate_avatar(cls, value: str) -> str:
         return validate_avatar_value(value)
     platform_model_ref: PlatformModelRef = Field(description="Operator 已发布平台 Provider/模型固定引用")
+    thinking_level: ThinkingLevel = Field(
+        default="off",
+        description="招募后默认思考档位；Manager 可按需覆盖。",
+    )
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection; use platform_skill_refs")
     description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
@@ -140,6 +147,10 @@ class UpdateExpertTemplateRequest(BaseModel):
     def validate_avatar(cls, value: str | None) -> str | None:
         return None if value is None else validate_avatar_value(value)
     system_prompt: str | None = None
+    thinking_level: ThinkingLevel | None = Field(
+        default=None,
+        description="更新招募后默认思考档位；None 表示沿用现有配置。",
+    )
     platform_model_ref: PlatformModelRef | None = None
     platform_skill_refs: list[PlatformSkillRef] | None = None
     skill_ids: list[str] | None = None
@@ -177,6 +188,7 @@ class CatalogEntryResponse(BaseModel):
     )
     system_prompt: str = Field(default="")
     platform_model_ref: PlatformModelRef | None = None
+    thinking_level: ThinkingLevel = Field(default="off", description="招募后默认思考档位。")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

@@ -98,6 +98,8 @@ class RagDocumentInfo:
     content_length: int | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    is_duplicate: bool = False
+    original_document_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,8 @@ class RagIngestionPort(Protocol):
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult: ...
 
     def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]: ...
+
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]: ...
 
     def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None: ...
 
@@ -207,6 +211,15 @@ def _document_info(document: Any, *, workspace: str) -> RagDocumentInfo:
             return None
         return value
 
+    duplicate = False
+    original_document_id: str | None = None
+    duplicate_source: dict[str, Any] = metadata if isinstance(metadata, dict) else document
+    if duplicate_source.get("is_duplicate") is True:
+        duplicate = True
+        candidate = duplicate_source.get("original_doc_id")
+        if _valid_document_alias(candidate):
+            original_document_id = candidate
+
     return RagDocumentInfo(
         upstream_document_id=document_id,
         file_path=file_path,
@@ -215,6 +228,8 @@ def _document_info(document: Any, *, workspace: str) -> RagDocumentInfo:
         content_length=nonnegative_int(document.get("content_length")),
         created_at=safe_timestamp(document.get("created_at")),
         updated_at=safe_timestamp(document.get("updated_at")),
+        is_duplicate=duplicate,
+        original_document_id=original_document_id,
     )
 
 class LightRagIngestionClient:
@@ -319,8 +334,8 @@ class LightRagIngestionClient:
             logger.warning("LightRAG document analytics failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
 
-    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
-        """Resolve Manager/source aliases to one workspace-local LightRAG id."""
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
+        """Resolve all workspace-local IDs behind Manager/source aliases."""
         settings = self.settings
         requested = _validated_aliases(aliases)
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
@@ -329,24 +344,38 @@ class LightRagIngestionClient:
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
         timeout = settings.request_timeout_ms / 1000
         matches: dict[str, set[str]] = {alias: set() for alias in requested}
+        direct_matches: dict[str, set[str]] = {alias: set() for alias in requested}
         try:
-            for document_id, file_path in self._paginated_document_identities(
-                instance, headers=headers, timeout=timeout
-            ):
+            for document in self._paginated_documents(instance, headers=headers, timeout=timeout):
+                document_id = document.upstream_document_id
+                file_path = document.file_path
                 matched = requested.intersection({document_id, file_path})
                 for alias in matched:
-                    if matches[alias]:
-                        raise RagIngestionUnavailable("knowledge deletion unavailable")
+                    direct_matches[alias].add(document_id)
                     matches[alias].add(document_id)
-            resolved = {document_id for values in matches.values() for document_id in values}
-            if len(resolved) > 1:
+                    if document.is_duplicate:
+                        # A duplicate marker is a failed LightRAG row that points
+                        # at the already indexed source. Deleting only the marker
+                        # leaves the real index behind and makes Manager appear to
+                        # delete successfully while citations remain searchable.
+                        if document.original_document_id is None:
+                            raise RagIngestionUnavailable("knowledge deletion unavailable")
+                        matches[alias].add(document.original_document_id)
+            if any(len(values) > 1 for values in direct_matches.values()):
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
-            return next(iter(resolved), None)
-        except RagIngestionUnavailable:
-            raise
+            return sorted({document_id for values in matches.values() for document_id in values})
+        except RagIngestionUnavailable as exc:
+            raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
         except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
             logger.warning("LightRAG document alias resolution failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
+
+    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
+        """Backward-compatible single-ID resolver."""
+        resolved = self.resolve_document_ids(workspace=workspace, aliases=aliases)
+        if len(resolved) > 1:
+            raise RagIngestionUnavailable("knowledge deletion unavailable")
+        return resolved[0] if resolved else None
 
     def delete_document(
         self,
@@ -602,6 +631,17 @@ class LightRagIngestionClient:
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             status = status.casefold()
             if status in {"failed", "failure", "error"}:
+                metadata = document.get("metadata")
+                duplicate_id = metadata.get("original_doc_id") if isinstance(metadata, dict) else None
+                is_duplicate = metadata.get("is_duplicate") is True if isinstance(metadata, dict) else False
+                if not is_duplicate and document.get("is_duplicate") is True:
+                    is_duplicate = True
+                    duplicate_id = document.get("original_doc_id")
+                if is_duplicate and _valid_document_alias(duplicate_id):
+                    # LightRAG creates a failed marker for duplicate content;
+                    # reuse the already indexed original instead of failing the
+                    # Manager document a second time.
+                    return None, duplicate_id
                 raise RagIngestionUnavailable("knowledge indexing unavailable")
             # LightRAG 1.5.6's per-document terminal state is PROCESSED.
             # Generic READY is not proof that this tracked insert completed.

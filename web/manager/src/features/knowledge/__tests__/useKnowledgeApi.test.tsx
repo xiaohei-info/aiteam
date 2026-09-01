@@ -131,6 +131,18 @@ describe("useKnowledgeApi document lifecycle", () => {
     );
   });
 
+  it("accepts pending reconciliation acknowledgements from LightRAG retries", async () => {
+    const { client, wrapper } = setup();
+    client.post.mockResolvedValue({ ...OPERATION, upstream_status: "busy" });
+    const { result } = renderHook(() => useKnowledgeApi(), { wrapper });
+
+    await expect(result.current.reconcileDeleteDocument("ks-sales", "doc-1")).resolves.toMatchObject({
+      status: "pending",
+      document_status: "deleting",
+      upstream_status: "busy",
+    });
+  });
+
   it("rejects an invalid reconciliation result instead of treating it as completed", async () => {
     const { client, wrapper } = setup();
     client.post.mockResolvedValue({ ...OPERATION, status: "completed", document_status: "deleting", upstream_status: "present" });

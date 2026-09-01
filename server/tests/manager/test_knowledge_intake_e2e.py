@@ -1,6 +1,6 @@
 """知识文档 intake HTTP e2e（真 PG；issue #416；02 + 04；D21/D22）。
 
-验：owner 全链路（建空间 → 上传 → status=ready + ingestion=done + 列表/查询 → 重试 → URL 导入非法 URL 400）、
+验：owner 全链路（建空间 → 上传 → 轮询至 status=ready + ingestion=done + 列表/查询 → 重试 → URL 导入非法 URL 400）、
 空文件 400、绑定传播、跨租户 RLS 不可见、schema 无 workspace 入参。
 """
 

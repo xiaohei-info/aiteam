@@ -73,6 +73,7 @@ describe("OrgPage 组织架构", () => {
     loginStorage();
     fetchMock = mockFetch((url) => {
       if (url.includes("/api/agent/org/tree")) return envelope(tree);
+      if (url.includes("/api/agent/grants/sync")) return envelope({ ok: true, upserted: 2, revoked: 0 });
       if (url.includes("/api/agent/grants/experts")) return envelope([
         { employee_id: "e1", tenant_id: "t1", version: "1", handle: "luna", display_name: "Luna", avatar_url: "/avatars/luna.png", revoked: false },
         { employee_id: "e2", tenant_id: "t1", version: "1", handle: "rex", display_name: "Rex", avatar_url: null, revoked: false },
@@ -116,7 +117,10 @@ describe("OrgPage 组织架构", () => {
     expect(unassignedNode?.querySelector('[data-node-id="e2"]')).toBeInTheDocument();
     expect(document.querySelectorAll('[data-aiteam-avatar="true"]')).toHaveLength(2);
     expect(document.querySelector('[data-aiteam-avatar="true"] img')).toHaveAttribute("src", "/avatars/luna.png");
+    expect(document.querySelectorAll('[data-org-children="true"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-org-child="true"]')).toHaveLength(4);
     const urls = fetchMock.mock.calls.map((c) => (typeof c[0] === "string" ? c[0] : c[0]?.toString() ?? ""));
+    expect(urls.some((u) => u.includes("/api/agent/grants/sync"))).toBe(true);
     expect(urls.some((u) => u.includes("/api/agent/org/tree"))).toBe(true);
   });
 

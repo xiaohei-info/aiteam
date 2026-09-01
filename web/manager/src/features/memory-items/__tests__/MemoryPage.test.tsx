@@ -68,10 +68,12 @@ describe("MemoryPage 记忆管理", () => {
     vi.restoreAllMocks();
   });
 
-  it("渲染记忆条目列表", async () => {
+  it("点击当前专家后在弹窗中渲染记忆条目列表", async () => {
     mockApi();
     const { container } = renderPage();
-    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    expect(await screen.findByTestId("memory-item")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "记忆列表 · 专家B" })).toBeInTheDocument();
     expect(screen.getByText("用户偏好中文回答")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "记忆管理" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "打开 Hindsight 控制台" })).toHaveAttribute("href", "http://localhost:9999/dashboard");
@@ -97,22 +99,24 @@ describe("MemoryPage 记忆管理", () => {
     expect(await screen.findByText("记忆总数")).toBeInTheDocument();
     expect(screen.getByText("覆盖 1 位专家")).toBeInTheDocument();
     await waitFor(() => expect(api.getAnalytics).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "查看详情m1" }));
-    expect(await screen.findByRole("dialog", { name: "记忆详情 · m1" })).toBeInTheDocument();
-    expect(screen.getAllByText(/状态：valid/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "查看专家B记忆" }));
+    expect(await screen.findByRole("dialog", { name: "记忆列表 · 专家B" })).toBeInTheDocument();
+    expect(await screen.findByTestId("memory-item")).toBeInTheDocument();
+    expect(screen.getByText("用户偏好中文回答")).toBeInTheDocument();
   });
 
-  it("加载失败展示错误", async () => {
+  it("打开具体员工记忆时，加载失败展示错误", async () => {
     mockApi({ list: vi.fn().mockRejectedValue(new ApiError("记忆服务不可用", 503, "memory_unavailable")) });
     renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("记忆服务不可用"));
   });
 
   it("创建记忆后刷新列表", async () => {
     const api = mockApi();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("+ 新增记忆"));
     fireEvent.click(screen.getByRole("combobox", { name: /专家/ }));
@@ -128,7 +132,8 @@ describe("MemoryPage 记忆管理", () => {
   it("编辑记忆后刷新列表并带员工授权范围", async () => {
     const api = mockApi();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("编辑"));
     fireEvent.change(screen.getByLabelText("记忆内容"), { target: { value: "已更新记忆" } });
@@ -141,7 +146,8 @@ describe("MemoryPage 记忆管理", () => {
   it("删除记忆后刷新列表", async () => {
     const api = mockApi();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId("memory-item")).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("删除"));
     expect(screen.getByRole("button", { name: "确认删除" })).toBeInTheDocument();

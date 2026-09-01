@@ -123,7 +123,7 @@ function mockApis(
           status: "published",
           version: 1,
           capabilities: model.model === "minimax-m3"
-            ? { reasoning: true, thinking_levels: ["off", "high"] }
+            ? { reasoning: true, thinking_mode: "toggle", thinking_levels: ["off", "high"] }
             : model.model === "gpt-4o"
               ? { reasoning: true, thinking_level_map: { off: "none", minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: null } }
               : undefined,
@@ -268,7 +268,7 @@ describe("ExpertsPage", () => {
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
     const thinking = await screen.findByRole("combobox", { name: "思考深度" });
     fireEvent.click(thinking);
-    expect(screen.getByRole("option", { name: /high/, hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /开启思考/, hidden: true })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /basic|deep/, hidden: true })).not.toBeInTheDocument();
   });
 

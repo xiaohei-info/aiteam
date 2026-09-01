@@ -18,6 +18,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 
 import { useApp } from "../../lib/app-context";
+import { syncGrants } from "../sync/useSyncApi";
 import { getOrgTree } from "./useOrgApi";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 import type { OrgTreeNode } from "./types";
@@ -151,7 +152,12 @@ function OrgNode({ node, experts }: { node: OrgTreeNode; experts: Map<string, Lo
   const expert = !isDepartment ? experts.get(node.id) : undefined;
   const kids = node.children ?? [];
   return (
-    <VStack align="center" gap={2} data-testid="org-node" data-node-id={node.id} data-node-type={node.type}>
+    <div
+      data-testid="org-node"
+      data-node-id={node.id}
+      data-node-type={node.type}
+      data-org-branch="true"
+    >
       <Card padding={2} variant={isDepartment ? "yellow" : "muted"} minHeight={64} width={170}>
         <HStack gap={2} align="center">
           {!isDepartment ? <DigitalEmployeeAvatar name={expert?.display_name ?? node.name} seed={node.id} src={expert?.avatar_url ?? node.avatar_url} size={42} /> : null}
@@ -162,28 +168,39 @@ function OrgNode({ node, experts }: { node: OrgTreeNode; experts: Map<string, Lo
         </HStack>
       </Card>
       {kids.length > 0 && (
-        <HStack gap={4} align="start" wrap="wrap">
+        <div data-org-children="true">
           {kids.map((c) => (
-            <OrgNode key={c.id} node={c} experts={experts} />
+            <div key={c.id} data-org-child="true">
+              <OrgNode node={c} experts={experts} />
+            </div>
           ))}
-        </HStack>
+        </div>
       )}
-    </VStack>
+    </div>
   );
 }
 
 export function OrgPage() {
-  const { client, i18n } = useApp();
+  const { client, i18n, session } = useApp();
   const [tree, setTree] = useState<OrgTreeNode | null>(null);
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     try {
+      // Manager is the organization source of truth, while Agent filters the tree
+      // through its local authorized projection. Pull first so newly recruited
+      // employees are visible without requiring a manual visit to /sync.
+      if (session?.claims.tenant_id && session.claims.user_id) {
+        await syncGrants(client, session.claims.tenant_id, session.claims.user_id).catch(() => undefined);
+      }
       const [t, loaded] = await Promise.all([
         getOrgTree(client),
         listLoadedExperts(client).catch(() => []),
@@ -193,12 +210,15 @@ export function OrgPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : i18n.t("agent.org.load_error"));
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [client, i18n]);
+  }, [client, i18n, session]);
 
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => void load(), 15_000);
+    return () => window.clearInterval(timer);
   }, [load]);
 
   const expertById = useMemo(

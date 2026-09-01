@@ -29,9 +29,10 @@ describe("ConversationContextHud", () => {
     }) as typeof fetch;
     const client = new AgentApiClient({ baseUrl: "http://agent.test", fetch: globalThis.fetch });
     render(<ConversationContextHud client={client} conversationId="c1" />);
-    await screen.findByText(/上下文：/);
-    fireEvent.click(screen.getByRole("combobox", { name: "思考档位" }));
-    fireEvent.click(await screen.findByRole("option", { name: "最小" }));
+    await screen.findByTestId("conversation-context-hud");
+    fireEvent.click(screen.getByTestId("conversation-thinking-level"));
+    fireEvent.click(screen.getByTestId("conversation-thinking-level-menu"));
+    fireEvent.click(await screen.findByRole("button", { name: "最小" }));
     expect(await screen.findByText(/错误响应/)).toBeInTheDocument();
   });
 
@@ -44,11 +45,14 @@ describe("ConversationContextHud", () => {
 
     render(<ConversationContextHud client={client} conversationId="c1" />);
 
-    expect(await screen.findByTestId("conversation-context-hud")).toHaveTextContent("local/model");
-    expect(screen.getByTestId("conversation-context-hud")).toHaveTextContent("120");
-    const selector = screen.getByRole("combobox", { name: "思考档位" });
-    fireEvent.click(selector);
-    fireEvent.click(await screen.findByRole("option", { name: "高" }));
+    const hud = await screen.findByTestId("conversation-context-hud");
+    expect(hud).toHaveTextContent("Model");
+    expect(hud).toHaveTextContent("120");
+    expect(hud.querySelector('[data-context-ring="true"]')).toHaveAttribute("aria-label", "上下文使用率 12.0%");
+    expect(screen.getByTestId("conversation-context-hud").querySelector('[data-context-ring="true"]')).toHaveTextContent("12%");
+    fireEvent.click(screen.getByTestId("conversation-thinking-level"));
+    fireEvent.click(screen.getByTestId("conversation-thinking-level-menu"));
+    fireEvent.click(await screen.findByRole("button", { name: "高" }));
     await waitFor(() => expect(globalThis.fetch).toHaveBeenLastCalledWith("http://agent.test/api/agent/conversations/c1/context", expect.objectContaining({ method: "PATCH" })));
   });
 });

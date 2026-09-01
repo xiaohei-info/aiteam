@@ -40,7 +40,6 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { ConversationList } from "../chat/ConversationList";
 import { MessageComposer } from "../chat/MessageComposer";
 import { TimelineView } from "../chat/TimelineView";
-import { ConversationContextHud } from "../chat/ConversationContextHud";
 import { FilesPanel } from "../chat/FilesPanel";
 import type { Conversation } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
@@ -269,7 +268,7 @@ export function GroupPage() {
   const conversationTitle = selected?.title ?? "群聊";
 
   return (
-    <HStack gap={4} height="100%" minHeight={0} data-testid="group-chat-layout">
+    <HStack gap={4} height="100%" minHeight={0} width="100%" data-testid="group-chat-layout">
       <ConversationList
         client={client}
         selectedId={selected?.id ?? null}
@@ -281,7 +280,7 @@ export function GroupPage() {
         filter={isGroupConversation}
         onItemsLoaded={setConversations}
       />
-      <VStack gap={4} width="100%" minHeight={0}>
+      <VStack data-testid="group-chat-content" gap={4} width="100%" minHeight={0}>
         <Toolbar
           label="群聊协作操作"
           startContent={
@@ -306,8 +305,8 @@ export function GroupPage() {
         {freeCreateError && <Banner status="error" title={freeCreateError} />}
       <Card role="region" aria-label="群聊协作工作区" width="100%" padding={0}>
         {selected ? (
-          <VStack gap={2} padding={4}>
-            <ConversationContextHud client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} />
+          <HStack data-testid="group-conversation-workspace" gap={4} align="stretch" width="100%">
+          <VStack data-testid="group-conversation-main" gap={2} padding={4} width="100%">
             <HStack justify="between" align="center" wrap="wrap">
               <Heading level={2}>{conversationTitle}</Heading>
               <HStack gap={1} role="group" aria-label="群聊操作">
@@ -351,9 +350,12 @@ export function GroupPage() {
               isPrompting={prompting}
               onPromptingChange={setPrompting}
               onSent={handleDispatched}
+              refreshSignal={dispatchSignal}
               mentionRoster={participantExperts}
             />
           </VStack>
+          <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} />
+          </HStack>
         ) : (
           <EmptyState
             title="选择一个群聊会话"
@@ -363,7 +365,6 @@ export function GroupPage() {
         )}
       </Card>
       </VStack>
-      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} /> : null}
 
       <Dialog
         isOpen={showCreateModal}

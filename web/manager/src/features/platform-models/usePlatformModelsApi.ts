@@ -14,6 +14,7 @@ export interface PlatformRate {
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export interface PlatformModelCapabilities {
   reasoning?: boolean;
+  thinking_mode?: "toggle" | "effort" | "budget" | "none";
   thinking_levels?: ThinkingLevel[];
   thinking_level_map?: Partial<Record<ThinkingLevel, string | null>>;
 }

@@ -46,7 +46,11 @@ class PlatformProviderService:
     def _auto_prepare_models(self, provider: ProviderRow, models: list[PlatformModel]) -> None:
         """Fill missing catalog metadata/prices and publish every priced model."""
         metadata_updater = getattr(self._repo, "update_model_metadata", None)
-        if callable(metadata_updater) and any(not model.capabilities for model in models):
+        if callable(metadata_updater) and any(
+            not model.capabilities.get("thinking_levels")
+            or "thinking_mode" not in model.capabilities
+            for model in models
+        ):
             self._sync_model_capabilities(provider.provider_id, models, metadata_updater)
         needs_public_prices = any(
             (rate := self._repo.current_rate(provider.provider_id, model.model_id)) is None
@@ -196,6 +200,33 @@ class PlatformProviderService:
             if rate is None or rate.pricing_status != "known":
                 raise Conflict("published platform model has no known active price")
         return ref
+
+    def validate_model_thinking_level(
+        self,
+        ref: PlatformModelRef,
+        thinking_level: str,
+        *,
+        require_published: bool = False,
+    ) -> None:
+        """Reject a template default that the pinned model cannot execute."""
+        self.validate_model_ref(ref, require_published=require_published)
+        model = self._require_model(ref.provider_id, ref.model_id)
+        capabilities = model.capabilities or {}
+        levels = capabilities.get("thinking_levels")
+        if isinstance(levels, list) and levels:
+            supported = {level for level in levels if isinstance(level, str)}
+        else:
+            mapping = capabilities.get("thinking_level_map")
+            supported = {
+                level for level, value in mapping.items()
+                if isinstance(level, str) and value is not None
+            } if isinstance(mapping, dict) else set()
+        if supported and thinking_level not in supported:
+            raise Conflict(
+                f"thinking level {thinking_level!r} is not supported by platform model {ref.model_id!r}"
+            )
+        if capabilities.get("reasoning") is False and thinking_level != "off":
+            raise Conflict(f"platform model {ref.model_id!r} does not support thinking")
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         provider = self._require_provider(provider_id)

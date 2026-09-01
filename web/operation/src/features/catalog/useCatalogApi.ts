@@ -34,6 +34,7 @@ export type UpdateExpertTemplateChanges = {
   platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   platform_skill_refs?: { skill_id: string; version: string; content_hash: string }[];
   description?: string;
+  thinking_level?: string;
 };
 
 export type UpdateSolutionTemplateChanges = {

@@ -176,6 +176,31 @@ def test_update_expert_validates_and_persists_avatar(service):
     assert updated.avatar_url == avatar
 
 
+def test_register_expert_persists_default_thinking_for_manager_recruit(service):
+    entry = service.register_expert_template(_expert(thinking_level="high"))
+    stored = service._repo.get(CatalogType.EXPERT_TEMPLATE, entry.template_id)
+    assert entry.thinking_level == "high"
+    assert stored.payload["thinking_level"] == "high"
+    service._repo.update(stored, status=CatalogStatus.PUBLISHED)
+    detail = service.pull_expert_template_detail(template_id=entry.template_id)
+    assert detail.recommended_config["thinking_level"] == "high"
+
+
+def test_register_expert_validates_default_thinking_with_provider_capabilities(manager):
+    seen = []
+
+    class PlatformProviderStoreWithThinking(PlatformProviderStore):
+        def validate_model_thinking_level(self, ref, thinking_level, *, require_published=False):
+            seen.append((ref.model_id, thinking_level, require_published))
+
+    svc = CatalogService(
+        CatalogRepository(), manager,
+        platform_providers=PlatformProviderStoreWithThinking(),
+    )
+    svc.register_expert_template(_expert(thinking_level="high"))
+    assert seen == [("gpt-5", "high", True)]
+
+
 def test_register_expert_is_draft_and_silent(service, manager):
     entry = service.register_expert_template(_expert())
     assert entry.catalog_type == CatalogType.EXPERT_TEMPLATE

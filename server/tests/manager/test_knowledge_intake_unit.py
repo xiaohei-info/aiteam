@@ -358,6 +358,17 @@ class _ResolvingFakeIngestion(_FakeIngestion):
         return self.resolved_id
 
 
+class _MultiResolvingFakeIngestion(_FakeIngestion):
+    def __init__(self, *, resolved_ids=None, **kwargs):
+        super().__init__(**kwargs)
+        self.resolved_ids = list(resolved_ids or [])
+        self.resolve_calls = []
+
+    def resolve_document_ids(self, *, workspace, aliases):
+        self.resolve_calls.append((workspace, aliases))
+        return list(self.resolved_ids)
+
+
 class _FakeSpaceExists:
     def __init__(self, existing: set[str] | None = None):
         self._existing = existing or set()
@@ -634,6 +645,48 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
         svc.retry(ctx, knowledge_space_id="ks", document_id="d1")
 
 
+def test_resolver_handles_empty_and_legacy_alias_results(tmp_path: Path) -> None:
+    class EmptyMany(_FakeIngestion):
+        def resolve_document_ids(self, *, workspace, aliases):
+            return None
+
+    empty = _make_service(space_root=tmp_path / "empty", existing_spaces={"ks"}, ingestion=EmptyMany())
+    assert empty._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"]) == []
+
+    class InvalidMany(_FakeIngestion):
+        def resolve_document_ids(self, *, workspace, aliases):
+            return "invalid"
+
+    invalid = _make_service(space_root=tmp_path / "invalid", existing_spaces={"ks"}, ingestion=InvalidMany())
+    with pytest.raises(RagIngestionUnavailable):
+        invalid._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"])
+
+    legacy = _make_service(
+        space_root=tmp_path / "legacy", existing_spaces={"ks"},
+        ingestion=_ResolvingFakeIngestion(resolved_id=None),
+    )
+    assert legacy._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"]) == []
+
+
+def test_delete_resolves_multiple_duplicate_aliases_before_request(tmp_path: Path) -> None:
+    ingestion = _MultiResolvingFakeIngestion(
+        resolved_ids=["duplicate-marker", "original-doc"],
+        delete_result=RagDeletionResult(True, False),
+    )
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    doc, _ = svc.ingest_upload(
+        _owner_ctx(), knowledge_space_id="ks", display_name="duplicate", file_name="a.txt",
+        file_type="text/plain", content=b"text",
+    )
+
+    operation = svc.delete(
+        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="delete-multi",
+    )
+
+    assert operation.status == "pending"
+    assert ingestion.delete_calls[0][1] == ["duplicate-marker", "original-doc"]
+
+
 def test_delete_resolves_alias_before_request_and_keeps_document_deleting(tmp_path: Path) -> None:
     ingestion = _ResolvingFakeIngestion(
         resolved_id="doc-internal-1",
@@ -783,7 +836,7 @@ def test_reconcile_delete_records_sanitized_audit_lifecycle(tmp_path: Path) -> N
     assert all("audit me" not in str(record) for record in audit.records)
 
 
-def test_reconcile_delete_present_keeps_pending_and_source(tmp_path: Path) -> None:
+def test_reconcile_delete_present_retries_and_keeps_pending_and_source(tmp_path: Path) -> None:
     ingestion = _FakeIngestion(present={"doc-placeholder"})
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
     ctx = _owner_ctx()
@@ -800,8 +853,71 @@ def test_reconcile_delete_present_keeps_pending_and_source(tmp_path: Path) -> No
     )
     assert pending.status == "pending"
     assert pending.document_status == "deleting"
-    assert pending.upstream_status == "present"
+    assert pending.upstream_status == "deletion_started"
     assert source.exists()
+    assert len(ingestion.delete_calls) == 2
+
+
+def test_reconcile_delete_present_retries_busy_without_claiming_completion(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(
+        present={"doc-placeholder"}, delete_result=RagDeletionResult(False, True),
+    )
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="busy", file_name="a.txt",
+        file_type="text/plain", content=b"busy",
+    )
+    ingestion.present = {doc.id}
+    with pytest.raises(RagDeletionBusy):
+        svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-busy")
+
+    pending = svc.reconcile_delete(
+        ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-busy"
+    )
+    assert pending.status == "pending"
+    assert pending.document_status == "deleting"
+    assert pending.upstream_status == "busy"
+    assert len(ingestion.delete_calls) == 2
+
+
+def test_reconcile_delete_retry_rejects_ambiguous_upstream_response(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(present={"doc-placeholder"})
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="ambiguous", file_name="a.txt",
+        file_type="text/plain", content=b"ambiguous",
+    )
+    ingestion.present = {doc.id}
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-ambiguous")
+    ingestion.delete_result = RagDeletionResult(False, False)
+
+    with pytest.raises(RagIngestionUnavailable):
+        svc.reconcile_delete(
+            ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-ambiguous"
+        )
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
+
+
+def test_reconcile_delete_retry_failure_is_sanitized_and_retryable(tmp_path: Path) -> None:
+    ingestion = _FakeIngestion(present={"doc-placeholder"})
+    svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
+    ctx = _owner_ctx()
+    doc, _ = svc.ingest_upload(
+        ctx, knowledge_space_id="ks", display_name="retry failure", file_name="a.txt",
+        file_type="text/plain", content=b"retry failure",
+    )
+    ingestion.present = {doc.id}
+    svc.delete(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-retry-failure")
+    ingestion.delete_error = RuntimeError("upstream secret")
+
+    with pytest.raises(RagIngestionUnavailable) as exc:
+        svc.reconcile_delete(
+            ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="del-retry-failure"
+        )
+    assert "upstream secret" not in str(exc.value)
+    assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
 
 
 def test_reconcile_delete_probe_failure_is_retryable_without_claiming_deleted(tmp_path: Path) -> None:

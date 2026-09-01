@@ -9,6 +9,7 @@ from operation_service.newapi_client import NewApiAdminClient, NewApiError
 from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
 from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
 from shared.errors import Conflict
+from shared.contracts.platform_provider import PlatformModelRef
 from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError, _model_capabilities
 
 
@@ -42,6 +43,7 @@ def test_models_dev_client_selects_canonical_prices_and_skips_free_entries():
     assert prices["gpt-5.5"].input_usd_per_million == 5
     assert prices["minimax-m3"].output_usd_per_million == Decimal("1.2")
     assert prices["minimax-m3"].display_name == "MiniMax M3"
+    assert prices["minimax-m3"].capabilities["thinking_mode"] == "toggle"
     assert prices["minimax-m3"].capabilities["thinking_levels"] == ["off", "high"]
     assert prices["minimax-m3"].capabilities["thinking_level_map"]["minimal"] is None
     assert "free-model" not in prices
@@ -201,6 +203,51 @@ def test_internal_provider_bootstrap_enriches_model_capabilities():
         "display_name": "MiniMax M3",
         "capabilities": {"reasoning": True, "thinking_levels": ["off", "high"]},
     })]
+
+
+def test_platform_provider_rejects_unsupported_template_thinking_level():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    model = ModelRow(
+        "p1", "minimax-m3", "MiniMax M3",
+        {"reasoning": True, "thinking_levels": ["off", "high"]},
+        "published", "discovery", 1, now,
+    )
+    rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
+
+    class Repo:
+        def get_provider(self, _): return provider
+        def get_model(self, _provider_id, _model_id): return model
+        def current_rate(self, _provider_id, _model_id): return rate
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
+    ref = PlatformModelRef(provider_id="p1", provider_version=1, model_id="minimax-m3", model_version=1)
+    service.validate_model_thinking_level(ref, "high", require_published=True)
+    with pytest.raises(Conflict, match="not supported"):
+        service.validate_model_thinking_level(ref, "low", require_published=True)
+
+
+def test_platform_provider_thinking_validation_handles_map_and_non_reasoning_model():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    mapping_model = ModelRow(
+        "p1", "mapped", "Mapped", {"thinking_level_map": {"off": "none", "high": "high", "low": None}},
+        "published", "discovery", 1, now,
+    )
+    plain_model = ModelRow(
+        "p1", "plain", "Plain", {"reasoning": False}, "published", "discovery", 1, now,
+    )
+    rate = RateRow("r1", "p1", "mapped", 1, "known", "token", Decimal("1"), Decimal("2"), None, None, None, "USD", "manual", None, now, None, False)
+
+    class Repo:
+        def get_provider(self, _): return provider
+        def get_model(self, _provider_id, model_id): return mapping_model if model_id == "mapped" else plain_model
+        def current_rate(self, _provider_id, _model_id): return rate
+
+    service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
+    service.validate_model_thinking_level(PlatformModelRef(provider_id="p1", provider_version=1, model_id="mapped", model_version=1), "high", require_published=True)
+    with pytest.raises(Conflict, match="does not support thinking"):
+        service.validate_model_thinking_level(PlatformModelRef(provider_id="p1", provider_version=1, model_id="plain", model_version=1), "high", require_published=True)
 
 
 def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_models():

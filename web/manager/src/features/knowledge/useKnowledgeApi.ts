@@ -43,7 +43,8 @@ export function parseDeleteReconciliationOperation(value: unknown): KnowledgeDoc
   if (
     operation.operation !== "delete"
     || (operation.status === "pending"
-      && (operation.document_status !== "deleting" || operation.upstream_status !== "present"))
+      && (operation.document_status !== "deleting"
+        || !["present", "deletion_started", "busy"].includes(operation.upstream_status ?? "")))
     || (operation.status === "completed"
       && (operation.document_status !== "deleted" || operation.upstream_status !== "deleted"))
     || (operation.status !== "pending" && operation.status !== "completed")

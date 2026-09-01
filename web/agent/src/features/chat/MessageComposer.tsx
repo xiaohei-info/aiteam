@@ -41,6 +41,7 @@ import { ApiError } from "@aiteam/shared/api-client";
 import { AgentIcon, AttachmentIcon, ScreenshotIcon, SkillIcon } from "@aiteam/shared/theme";
 import { abortPrompt, attachmentMimeType, deleteAttachment, isSupportedAttachmentMime, makeIdempotencyKey, submitPrompt, uploadAttachment, type Conversation, type LocalFile } from "./useChatApi";
 import { ConversationPermissionControl } from "./ConversationPermissionControl";
+import { ConversationContextHud } from "./ConversationContextHud";
 import { parseMentions } from "../group/mention";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
@@ -78,6 +79,7 @@ export interface MessageComposerProps {
   isPrompting: boolean;
   onPromptingChange: (prompting: boolean) => void;
   onSent: () => void;
+  refreshSignal?: number;
   /** Group conversations pass their authorized solution roster; private chat keeps the local roster lookup. */
   mentionRoster?: LoadedExpertProjection[];
   /** The owning conversation enables the shared permission control beside Send. */
@@ -85,7 +87,7 @@ export interface MessageComposerProps {
   onConversationChanged?: (conversation: Conversation) => void;
 }
 
-export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, mentionRoster, conversation, onConversationChanged }: MessageComposerProps) {
+export function MessageComposer({ conversationId, isPrompting, onPromptingChange, onSent, refreshSignal = 0, mentionRoster, conversation, onConversationChanged }: MessageComposerProps) {
   const { client } = useApp();
   const toMessage = useApiError();
   const [content, setContent] = useState("");
@@ -443,6 +445,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
         isDisabled={false}
         placeholder="输入消息，@ 召唤智能体，/ 使用技能…"
         status={error ? { type: "error", message: error } : undefined}
+        headerContext={<ConversationContextHud client={client} conversationId={conversationId} refreshSignal={refreshSignal} isPrompting={isPrompting} />}
         drawer={
           attachments.length > 0 || mentioned.length > 0 ? (
             <VStack gap={1} padding={1}>

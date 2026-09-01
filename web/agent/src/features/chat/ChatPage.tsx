@@ -22,7 +22,6 @@ import { ScheduleControl } from "./ScheduleControl";
 import { ConversationList } from "./ConversationList";
 import { TimelineView } from "./TimelineView";
 import { MessageComposer } from "./MessageComposer";
-import { ConversationContextHud } from "./ConversationContextHud";
 import { FilesPanel } from "./FilesPanel";
 import { RosterPicker } from "./RosterPicker";
 import type { Conversation } from "./useChatApi";
@@ -145,9 +144,9 @@ export function ChatPage(): React.ReactNode {
       <StackItem size="fill" crossAlignSelf="stretch">
         <Card role="region" aria-label="会话工作区" width="100%">
           {selected ? (
-            <VStack gap={4} width="100%">
+            <HStack data-testid="chat-conversation-workspace" gap={4} align="stretch" width="100%">
+              <VStack data-testid="chat-conversation-main" gap={4} width="100%">
               <ConversationStateControl client={client} conversation={selected} onStateChanged={handleStateChanged} />
-              <ConversationContextHud client={client} conversationId={selected.id} refreshSignal={sentSignal} isPrompting={prompting} />
               <HStack justify="between" align="center">
                 <Heading level={2}>{employeeName}</Heading>
                 <HStack gap={1} role="group" aria-label="对话操作">
@@ -185,16 +184,17 @@ export function ChatPage(): React.ReactNode {
               {createError && !createOpen ? <Banner status="error" title={createError} /> : null}
               <ChatLayout
                 density="balanced"
-                composer={<MessageComposer conversationId={selected.id} conversation={selected} onConversationChanged={handleStateChanged} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} />}
+                composer={<MessageComposer conversationId={selected.id} conversation={selected} onConversationChanged={handleStateChanged} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} refreshSignal={sentSignal} />}
                 emptyState={<Text>选择一个会话开始对话</Text>}
               >
                 <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} sourceExperts={experts} />
               </ChatLayout>
-            </VStack>
+              </VStack>
+              <FilesPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} isPrompting={prompting} />
+            </HStack>
           ) : <EmptyState title="选择一个会话开始对话" actions={<Button label="新建对话" variant="primary" onClick={() => setCreateOpen(true)} />} />}
         </Card>
       </StackItem>
-      {selected ? <FilesPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} isPrompting={prompting} /> : null}
       {selected && historyOpen ? (
         <Dialog
           isOpen

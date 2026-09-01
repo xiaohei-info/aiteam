@@ -611,7 +611,12 @@ start_service_local() {
       echo "[ctl] Starting Node agent on port ${AGENT_PORT}..."
       local agent_env="${AITEAM_ENV:-dev}"
       local agent_dev_auth="${AITEAM_AGENT_DEV_AUTH:-true}"
-      local agent_fake="${AITEAM_PI_FAKE:-true}"
+      # Test and production must exercise the configured Manager model. Keep
+      # faux as the development-only default when the env file omits the flag.
+      local agent_fake="${AITEAM_PI_FAKE:-}"
+      if [[ -z "${agent_fake}" ]]; then
+        [[ "${agent_env}" == "dev" || "${agent_env}" == "development" ]] && agent_fake=true || agent_fake=false
+      fi
       local agent_manager_url="${AITEAM_MANAGER_URL:-${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}}"
       if [[ "${agent_env}" == "production" ]]; then
         [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
@@ -635,7 +640,7 @@ start_service_local() {
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
-        AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}/api/manager/rag/mcp}" \
+        AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-${agent_manager_url%/}/api/manager/rag/mcp}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEYS="${AITEAM_SKILL_SIGNING_PUBLIC_KEYS:-}" \
         AITEAM_SKILL_SIGNING_PUBLIC_KEY="${AITEAM_SKILL_SIGNING_PUBLIC_KEY:-}" \
         AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev-current}" \
