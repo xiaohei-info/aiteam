@@ -617,7 +617,7 @@ export class AgentHttpServer {
           description: "Pi SSE 事件流。每条事件使用 `event: pi`，并在 `data` 行携带一个 JSON 对象。",
           content: {
             "text/event-stream": {
-              schema: Type.String({ description: "SSE 事件流文本；每个 data 行的 JSON 结构见 PiSseEventData。" }),
+              schema: Type.String({ description: "SSE 事件流文本；每个 data 行的 JSON 结构见 <a href='#/components/schemas/PiSseEventData' target='_self'>PiSseEventData</a>。" }),
               examples: PI_EVENT_STREAM_EXAMPLES,
               "x-event-data-schema": { $ref: "#/components/schemas/PiSseEventData" },
             },

@@ -392,7 +392,7 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
     const eventStream = eventOperation.responses["200"].content["text/event-stream"];
     assert.equal(eventOperation.parameters.find((parameter: any) => parameter.name === "Last-Event-ID").in, "header");
     assert.equal(eventStream["x-event-data-schema"].$ref, "#/components/schemas/PiSseEventData");
-    assert(eventStream.schema.description.includes("PiSseEventData"));
+    assert(eventStream.schema.description.includes("<a href='#/components/schemas/PiSseEventData' target='_self'>PiSseEventData</a>"));
     assert(eventOperation.responses["200"].description.includes("data"));
     assert.deepEqual(Object.keys(eventStream.examples).sort(), ["lifecycle", "thinking", "todoUpdate", "toolCall", "toolExecution"]);
     assert(eventStream.examples.thinking.value.includes('"thinking"'));
