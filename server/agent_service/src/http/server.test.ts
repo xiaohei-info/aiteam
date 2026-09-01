@@ -433,6 +433,81 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
   }
 });
 
+test("Agent OpenAPI gives every frontend operation structured parameters, responses, and examples", async () => {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const document = await (await fetch(`http://127.0.0.1:${address.port}/openapi.json`)).json() as { paths: Record<string, any>; components: { schemas: Record<string, any>; responses: Record<string, any> } };
+    const frontendOperations: Array<{ path: string; method: string; operation: any }> = [];
+    for (const [path, pathItem] of Object.entries(document.paths)) {
+      if (!(path.startsWith("/api/agent/") || path.startsWith("/api/auth/"))) continue;
+      for (const [method, operation] of Object.entries(pathItem as Record<string, any>)) {
+        if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
+        frontendOperations.push({ path, method, operation });
+      }
+    }
+    assert.equal(frontendOperations.length, 45);
+    for (const { path, method, operation } of frontendOperations) {
+      const label = `${method.toUpperCase()} ${path}`;
+      assert(operation.summary, `${label} missing summary`);
+      assert(operation.description, `${label} missing description`);
+      assert(operation.operationId, `${label} missing operationId`);
+      for (const parameter of operation.parameters ?? []) {
+        assert(parameter.description, `${label} parameter ${parameter.name} missing description`);
+        if (parameter.in === "path") assert.equal(parameter.required, true, `${label} path parameter ${parameter.name} must be required`);
+        assert(parameter.schema && Object.keys(parameter.schema).length > 0, `${label} parameter ${parameter.name} missing schema`);
+        assert(parameter.example !== undefined, `${label} parameter ${parameter.name} missing example`);
+      }
+      for (const content of Object.values(operation.requestBody?.content ?? {}) as any[]) {
+        assert(content.schema && Object.keys(content.schema).length > 0, `${label} request missing schema`);
+        assert(content.examples && Object.keys(content.examples).length > 0, `${label} request missing example`);
+      }
+      assert(operation.responses["500"]?.$ref === "#/components/responses/InternalError", `${label} missing 500 response`);
+      for (const [status, response] of Object.entries(operation.responses)) {
+        if (Number(status) < 400) continue;
+        const reference = (response as any).$ref;
+        const errorResponse = reference ? document.components.responses[reference.split("/").at(-1)!] : response;
+        assert(errorResponse?.content?.["application/problem+json"]?.schema?.$ref === "#/components/schemas/Problem", `${label} ${status} must use problem+json`);
+      }
+      const successResponses = Object.entries(operation.responses).filter(([status]) => /^2/.test(status));
+      if (!path.includes("/knowledge-bases")) {
+        assert(successResponses.length > 0, `${label} missing success response`);
+        for (const [status, response] of successResponses) {
+          const content = (response as any).content ?? {};
+          assert(Object.keys(content).length > 0, `${label} ${status} missing response content`);
+          for (const [media, value] of Object.entries(content) as [string, any][]) {
+            assert(value.schema && Object.keys(value.schema).length > 0, `${label} ${status} ${media} missing response schema`);
+            assert(value.examples && Object.keys(value.examples).length > 0, `${label} ${status} ${media} missing response example`);
+          }
+          assert((response as any).headers?.["X-Request-ID"]?.$ref === "#/components/headers/RequestId", `${label} ${status} missing request ID header`);
+        }
+      }
+    }
+    const shortKnowledgeParams = document.paths["/api/agent/knowledge-bases/{knowledge_base_id}/{kind}"].get.parameters;
+    assert.deepEqual(shortKnowledgeParams.map((parameter: any) => parameter.name), ["knowledge_base_id", "kind"]);
+    assert.deepEqual(document.components.schemas.ConversationState.anyOf.map((branch: any) => branch.enum?.[0]), ["draft", "active", "paused", "muted", "archived"]);
+    assert.equal(document.components.schemas.ConversationScheduleInput.anyOf.length, 2);
+    assert.equal(document.components.schemas.LocalFileUpload.properties.data.maxLength, 6_990_508);
+    assert(document.components.schemas.LocalFileUpload.properties.mime_type.enum.includes("application/pdf"));
+    assert.deepEqual(document.components.schemas.ReadinessState.anyOf.map((branch: any) => branch.enum?.[0]), ["ready", "degraded", "blocked", "unknown"]);
+    assert.equal(document.components.schemas.ExpertReadiness.properties.skills.items.$ref, "#/components/schemas/SkillReadiness");
+    assert.equal(document.components.schemas.ExpertReadiness.properties.capabilities.items.$ref, "#/components/schemas/CapabilityReadiness");
+    for (const name of ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone"]) {
+      assert(document.components.responses[name]?.content?.["application/problem+json"]?.schema?.$ref === "#/components/schemas/Problem", `missing problem response ${name}`);
+      assert(document.components.responses[name]?.content?.["application/problem+json"]?.examples, `missing problem example ${name}`);
+    }
+    const sse = document.paths["/api/agent/conversations/{conversation_id}/events"].get.responses["200"];
+    assert.equal(sse.headers["Cache-Control"].schema.example, "no-cache, no-transform");
+    assert.equal(sse.headers["X-Accel-Buffering"].schema.example, "no");
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent OpenAPI exposes complete operation metadata", async () => {
   const fixture = await createFixture();
   const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
