@@ -35,15 +35,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: darwin-arm64
-            runner: macos-14
-          - target: darwin-x64
-            runner: macos-13
-          - target: win32-x64
-            runner: windows-2022
-    if: ${{ matrix.target != 'darwin-x64' || github.event_name != 'workflow_dispatch' || inputs.include_darwin_x64 == true }}
-    runs-on: ${{ matrix.runner }}
+        target: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.include_darwin_x64 && '["darwin-arm64","darwin-x64","win32-x64"]' || '["darwin-arm64","win32-x64"]') }}
+    runs-on: ${{ matrix.target == 'darwin-arm64' && 'macos-14' || matrix.target == 'darwin-x64' && 'macos-13' || 'windows-2022' }}
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
     steps:
