@@ -17,6 +17,11 @@ on:
         description: "Optional artifact version; defaults to server/agent_service/package.json"
         required: false
         type: string
+      include_darwin_x64:
+        description: "Also queue the Intel macOS runner (it may have long hosted-runner wait times)"
+        required: false
+        default: false
+        type: boolean
   push:
     tags: ["agent-v*"]
 
@@ -37,6 +42,7 @@ jobs:
             runner: macos-13
           - target: win32-x64
             runner: windows-2022
+    if: ${{ matrix.target != 'darwin-x64' || github.event_name != 'workflow_dispatch' || inputs.include_darwin_x64 == true }}
     runs-on: ${{ matrix.runner }}
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
