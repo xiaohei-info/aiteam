@@ -1,0 +1,94 @@
+name: agent-package
+
+# Build portable Agent sidecars on the OS/architecture that will run them.
+# The default package contains an editable config template; enterprise-specific
+# URLs/JWKS should be injected by the client release job or built locally with
+# --config, never committed to this repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_environment:
+        description: "GitHub Environment containing AITEAM_AGENT_PACKAGE_CONFIG (use agent-package for the template)"
+        required: false
+        default: agent-package
+        type: string
+      package_version:
+        description: "Optional artifact version; defaults to server/agent_service/package.json"
+        required: false
+        type: string
+  push:
+    tags: ["agent-v*"]
+
+concurrency:
+  group: agent-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-14
+          - target: darwin-x64
+            runner: macos-13
+          - target: win32-x64
+            runner: windows-2022
+    runs-on: ${{ matrix.runner }}
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: pnpm
+          cache-dependency-path: |
+            server/agent_service/pnpm-lock.yaml
+            web/pnpm-lock.yaml
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.4.0 --activate
+      - name: Prepare optional enterprise Agent config
+        shell: bash
+        env:
+          AITEAM_AGENT_PACKAGE_CONFIG: ${{ secrets.AITEAM_AGENT_PACKAGE_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${AITEAM_AGENT_PACKAGE_CONFIG:-}" ]]; then
+            umask 077
+            config_file="$RUNNER_TEMP/aiteam-agent.env"
+            printf '%s\n' "$AITEAM_AGENT_PACKAGE_CONFIG" > "$config_file"
+            echo "AITEAM_AGENT_CONFIG_FILE=$config_file" >> "$GITHUB_ENV"
+          else
+            echo "AITEAM_AGENT_CONFIG_FILE=" >> "$GITHUB_ENV"
+          fi
+      - name: Build Agent sidecar
+        shell: bash
+        env:
+          AGENT_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: |
+          set -euo pipefail
+          trap 'rm -f "${AITEAM_AGENT_CONFIG_FILE:-}"' EXIT
+          args=(scripts/build-agent-package.mjs --target "${{ matrix.target }}")
+          if [[ -n "${AGENT_PACKAGE_VERSION:-}" ]]; then args+=(--version "$AGENT_PACKAGE_VERSION"); fi
+          if [[ -n "${AITEAM_AGENT_CONFIG_FILE:-}" ]]; then
+            node "${args[@]}" --config "$AITEAM_AGENT_CONFIG_FILE"
+          else
+            node "${args[@]}"
+          fi
+          rm -f "${AITEAM_AGENT_CONFIG_FILE:-}"
+      - name: Upload Agent package
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiteam-agent-${{ matrix.target }}
+          path: |
+            dist/agent-packages/*.tar.gz
+            dist/agent-packages/*.zip
+          if-no-files-found: error
+          retention-days: 30

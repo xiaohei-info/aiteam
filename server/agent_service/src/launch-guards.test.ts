@@ -35,12 +35,18 @@ test("production rejects faux runtime, development auth, and malformed Manager U
   assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_PI_FAKE: "TRUE" }), /PI_FAKE=true/);
   assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_AGENT_DEV_AUTH: "true" }), /DEV_AUTH=true/);
   assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_MANAGER_URL: "manager.internal" }), /absolute http\(s\) URL/);
+  assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_MANAGER_URL: "https://user:password@manager.example.test" }), /embedded credentials/);
 });
 
 test("Agent rejects ambient Manager-only credentials instead of inheriting them", () => {
   for (const name of ["LIGHTRAG_API_KEY", "HINDSIGHT_SERVICE_TOKEN", "AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY"] as const) {
     assert.throws(() => assertAgentLaunchConfiguration({ ...production, [name]: "secret" }), new RegExp(`must not receive ${name}`));
   }
+});
+
+test("desktop local-only mode rejects a non-loopback bind address", () => {
+  assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_AGENT_LOCAL_ONLY: "true", HOST: "0.0.0.0" }), /loopback/);
+  assert.equal(assertAgentLaunchConfiguration({ ...production, AITEAM_AGENT_LOCAL_ONLY: "true", HOST: "127.0.0.1" }).environment, "production");
 });
 
 test("unsupported or unset environment does not silently become development", () => {

@@ -30,6 +30,7 @@ function requireAbsoluteHttpUrl(env: NodeJS.ProcessEnv, name: string): void {
     throw new Error(`${name} must be an absolute http(s) URL`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error(`${name} must be an absolute http(s) URL`);
+  if (parsed.username || parsed.password) throw new Error(`${name} must not contain embedded credentials`);
 }
 
 /** Validate settings that must be true before the Agent can bind a production port. */
@@ -50,6 +51,10 @@ export function assertAgentLaunchConfiguration(env: NodeJS.ProcessEnv = process.
   if (useFauxModel) throw new Error("AITEAM_PI_FAKE=true is forbidden in production");
   if (useDevAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in production");
   if (!isTrue(env.AITEAM_AGENT_SANDBOX_READY)) throw new Error("AITEAM_AGENT_SANDBOX_READY=true is required in production");
+  if (isTrue(env.AITEAM_AGENT_LOCAL_ONLY)) {
+    const host = (env.HOST ?? "127.0.0.1").trim().toLowerCase();
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(host)) throw new Error("AITEAM_AGENT_LOCAL_ONLY=true requires HOST to be a loopback address");
+  }
   requireAbsoluteHttpUrl(env, "AITEAM_MANAGER_URL");
   required(env, "AITEAM_AGENT_JWT_ISSUER");
   required(env, "AITEAM_AGENT_JWT_AUDIENCE");

@@ -83,6 +83,7 @@
 │   └── shared/                # 共享 API 基础设施、主题和页面壳
 ├── deploy/
 │   ├── docker/                # Dockerfile 与 Compose
+│   ├── agent/                 # macOS/Windows Agent sidecar 配置与说明
 │   └── ci/                    # self-hosted 自动部署脚本与 systemd unit
 ├── scripts/                   # OpenAPI、部署和本地检查脚本
 ├── docs/                      # v1 设计、产品、部署运维文档
@@ -230,6 +231,7 @@ GitHub Actions 在 `main`/`feature/**` 和相关 Pull Request 上运行：
 - `v1-server-ci`：契约边界、真实 PostgreSQL + RLS、Node Agent、OpenAPI 与覆盖率门禁
 - `v1-web-ci`：TypeScript、Vitest、构建、Playwright 三端真实装配
 - `deployment-ops-checks`：shell/Compose/凭据边界与部署 dry-run
+- `agent-package`：在 macOS/Windows 目标 runner 上构建并上传 Agent sidecar 压缩包
 
 ## 部署
 
@@ -248,6 +250,15 @@ GitHub Actions 在 `main`/`feature/**` 和相关 Pull Request 上运行：
 ### 交付边界
 
 Agent 交付物不包含 Operation/Manager 控制面代码。对应产物由 `deploy/docker/Dockerfile.agent`、`Dockerfile.manager` 和 `Dockerfile.operation` 分别构建，禁止运行时通过一个胖镜像切换端。
+
+桌面客户端集成使用可嵌入的本地 sidecar 包（固定 Node 22 + Agent runtime + Agent SPA + 当前平台 production 依赖），而不是 Electron/Tauri 或用户预装 Node：
+
+```bash
+node scripts/build-agent-package.mjs --target darwin-arm64 --config deploy/agent/config/acme.env
+# Windows 在 Windows 构建机执行：--target win32-x64
+```
+
+产物目录/压缩包、配置字段、port file、loopback/CORS 和客户端启动/停止流程见 [`deploy/agent/README.md`](deploy/agent/README.md)。企业只需替换对应 Manager 的 URL、issuer 和 public JWKS；Provider/Hindsight/LightRAG secret 不进入包。
 
 ## 文档
 

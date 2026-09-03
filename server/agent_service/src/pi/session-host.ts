@@ -1262,7 +1262,7 @@ export class SessionHost {
   private assertManagedPath(path: string, root: string): void {
     if (!isAbsolute(path) || !isAbsolute(root)) throw new Error("Managed paths must be absolute");
     const resolvedRoot = realpathSync(root);
-    const resolved = existsSync(path) ? realpathSync(path) : join(realpathSync(join(path, "..")), path.split("/").at(-1)!);
+    const resolved = existsSync(path) ? realpathSync(path) : join(realpathSync(join(path, "..")), basename(path));
     const rel = relative(resolvedRoot, resolved);
     if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path escapes Agent data root");
   }

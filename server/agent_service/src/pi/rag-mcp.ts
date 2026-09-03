@@ -64,7 +64,7 @@ export function ragMcpUrl(managerUrl = process.env.AITEAM_MANAGER_URL): string |
   try {
     const manager = new URL(managerUrl);
     const rag = new URL(configured);
-    if ((manager.protocol !== "http:" && manager.protocol !== "https:") || rag.origin !== manager.origin) return undefined;
+    if ((manager.protocol !== "http:" && manager.protocol !== "https:") || manager.username || manager.password || rag.username || rag.password || rag.origin !== manager.origin) return undefined;
     if (rag.pathname !== "/api/manager/rag/mcp" || rag.search || rag.hash) return undefined;
     return rag.toString();
   } catch {

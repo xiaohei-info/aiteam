@@ -718,6 +718,12 @@ function routeSchema(operationId: string, fields: Record<string, unknown> = {}):
   return { operationId, ...fields };
 }
 
+function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string> {
+  const values = new Set(origins.map((origin) => origin.trim()).filter(Boolean));
+  if (values.has("*")) throw new Error("AITEAM_AGENT_ALLOWED_ORIGINS does not support wildcard origins");
+  return values;
+}
+
 export interface AgentHttpServerOptions {
   host: SessionHost;
   store: AgentSqliteStore;
@@ -727,6 +733,8 @@ export interface AgentHttpServerOptions {
   managerClient?: ManagerClient;
   logger?: Pick<Console, "error">;
   spaRoot?: string;
+  /** Exact browser origins allowed to call this local sidecar. Empty means no CORS. */
+  allowedOrigins?: readonly string[];
   usageFlush?: UsageFlushService;
   skillCache?: SkillCache;
   /** Injected for deterministic upstream transcription tests. */
@@ -747,9 +755,11 @@ export class AgentHttpServer {
   private errors = 0;
   private readonly promptWorkers = new Set<Promise<void>>();
   private readonly fetchImpl: typeof fetch;
+  private readonly allowedOrigins: ReadonlySet<string>;
 
   constructor(private readonly options: AgentHttpServerOptions) {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins ?? []);
     this.app = Fastify({
       bodyLimit: MAX_UPLOAD_JSON_BYTES,
       requestIdHeader: "x-request-id",
@@ -775,6 +785,21 @@ export class AgentHttpServer {
     this.app.addHook("onRequest", async (request, reply) => {
       this.requests += 1;
       reply.raw.setHeader("X-Request-ID", request.id);
+      const origin = request.headers.origin;
+      if (origin && this.allowedOrigins.has(origin)) {
+        // Business handlers intentionally write through reply.raw/hijack; put
+        // CORS headers on the raw response so they survive that boundary.
+        reply.raw.setHeader("Access-Control-Allow-Origin", origin);
+        reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
+        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID");
+        reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+        reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID");
+        reply.raw.setHeader("Access-Control-Max-Age", "600");
+        reply.raw.setHeader("Vary", "Origin");
+        if (request.method === "OPTIONS") return reply.code(204).send();
+      } else if (request.method === "OPTIONS" && origin) {
+        return reply.code(403).send();
+      }
     });
     this.app.setErrorHandler((error, request, reply) => {
       this.errors += 1;

@@ -35,3 +35,4 @@ server/.coverage
 server/.coverage
 server/coverage.json
 server/coverage.xml
+/dist/

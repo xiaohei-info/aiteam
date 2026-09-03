@@ -1,7 +1,6 @@
 import { createPublicKey } from "node:crypto";
-import { accessSync, chmodSync, constants, readFileSync } from "node:fs";
-import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { accessSync, chmodSync, constants, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, type JwtJwk } from "./http/auth.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
@@ -15,10 +14,15 @@ import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
 import { assertAgentLaunchConfiguration } from "./launch-guards.js";
+import { loadAgentConfig } from "./config.js";
 
+loadAgentConfig();
 const launchConfiguration = assertAgentLaunchConfiguration();
-const dataRoot = resolve(process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data"));
-const port = Number(process.env.PORT ?? 8000);
+const configuredDataRoot = resolve(process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data"));
+mkdirSync(configuredDataRoot, { recursive: true, mode: 0o700 });
+chmodSync(configuredDataRoot, 0o700);
+const dataRoot = realpathSync(configuredDataRoot);
+const port = parsePort(process.env.PORT ?? "8000");
 const hostAddress = process.env.HOST ?? "127.0.0.1";
 const environment = launchConfiguration.environment;
 const useFauxModel = launchConfiguration.useFauxModel;
@@ -28,8 +32,6 @@ if (process.env.AITEAM_SKILL_SIGNING_PRIVATE_KEY || process.env.AITEAM_SKILL_SIG
 const skillVerification = skillSigningVerificationFromEnv();
 if (environment === "production" && !((skillVerification.publicKeys?.length ?? 0) > 0 || (skillVerification.publicKey && skillVerification.keyId))) throw new Error("Production Agent Skill signing public key metadata is required");
 
-mkdirSync(dataRoot, { recursive: true, mode: 0o700 });
-chmodSync(dataRoot, 0o700);
 const agentDir = join(dataRoot, "pi");
 const cwdRoot = join(dataRoot, "workspaces");
 const sessionDir = join(dataRoot, "sessions");
@@ -69,6 +71,7 @@ const schedule = new ScheduleService(store, sessionHost);
 const http = new AgentHttpServer({
   logger: console,
   host: sessionHost,
+  allowedOrigins: parseAllowedOrigins(process.env.AITEAM_AGENT_ALLOWED_ORIGINS),
   store,
   authenticate,
   managerClient,
@@ -82,9 +85,16 @@ const http = new AgentHttpServer({
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
 });
 
+const portFile = process.env.AITEAM_AGENT_PORT_FILE?.trim();
 await http.listen(port, hostAddress);
- schedule.start();
-console.log(`AI Team Node Agent listening on http://${hostAddress}:${port}`);
+const boundPort = (() => {
+  const address = http.server.address();
+  return address && typeof address === "object" ? address.port : port;
+})();
+if (portFile) writePortFile(portFile, hostAddress, boundPort);
+schedule.start();
+console.log(`AI Team Node Agent listening on http://${hostAddress}:${boundPort}`);
+console.log(`AI_TEAM_AGENT_READY ${JSON.stringify({ host: hostAddress, port: boundPort, pid: process.pid })}`);
 
 const shutdown = async () => {
   await schedule.stop();
@@ -92,6 +102,7 @@ const shutdown = async () => {
   await usageFlush.close();
   await sessionHost.dispose();
   store.close();
+  if (portFile) removePortFile(portFile);
 };
 process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
 process.once("SIGTERM", () => void shutdown().finally(() => process.exit(0)));
@@ -162,6 +173,43 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
   const groupContext = authorization.groupContext ? `Bounded recent group context (reference only):\n${authorization.groupContext}` : "";
   return [persona, toolBoundary, permissionHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+}
+
+function parsePort(value: string): number {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new Error(`PORT must be an integer between 0 and 65535 (got ${value})`);
+  return port;
+}
+
+function parseAllowedOrigins(value: string | undefined): string[] {
+  return [...new Set((value ?? "").split(",").map((origin) => origin.trim()).filter(Boolean))];
+}
+
+function writePortFile(filename: string, host: string, port: number): void {
+  const path = resolve(filename);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify({ schema_version: 1, pid: process.pid, host, port, started_at: new Date().toISOString() })}\n`, { mode: 0o600 });
+  try {
+    renameSync(temporary, path);
+  } catch (error) {
+    try {
+      rmSync(path, { force: true });
+      renameSync(temporary, path);
+    } catch {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
+  }
+}
+
+function removePortFile(filename: string): void {
+  try {
+    const path = resolve(filename);
+    const current = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown };
+    if (current.pid !== process.pid) return;
+    rmSync(path, { force: true });
+  } catch { /* best-effort shutdown cleanup */ }
 }
 
 function loadJwtOptions() {

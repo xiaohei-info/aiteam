@@ -39,6 +39,7 @@ test("RAG MCP rejects a mismatched origin, path, query, or fragment", () => {
     "https://manager.test:9443/api/manager/rag/other",
     "https://manager.test:9443/api/manager/rag/mcp?x=1",
     "https://manager.test:9443/api/manager/rag/mcp#fragment",
+    "https://user:password@manager.test:9443/api/manager/rag/mcp",
   ]) {
     process.env.AITEAM_RAG_MCP_URL = configured;
     assert.equal(ragMcpUrl(manager), undefined);
