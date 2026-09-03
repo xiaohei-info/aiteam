@@ -361,5 +361,10 @@ function createArchive(packageRoot, archivePath, archiveType) {
 
 function run(command, args, cwd) {
   const executable = process.platform === "win32" && command === "pnpm" ? "pnpm.cmd" : command;
-  execFileSync(executable, args, { cwd, stdio: "inherit", env: { ...process.env, CI: process.env.CI ?? "1" } });
+  execFileSync(executable, args, {
+    cwd,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    env: { ...process.env, CI: process.env.CI ?? "1" },
+  });
 }
