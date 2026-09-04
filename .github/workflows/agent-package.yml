@@ -87,7 +87,7 @@ jobs:
             dist/agent-packages/*.zip
           if-no-files-found: error
           retention-days: 30
-      - name: Show client integration instructions
+      - name: 输出客户端集成说明
         shell: bash
         env:
           AGENT_TARGET: ${{ matrix.target }}
@@ -103,18 +103,18 @@ jobs:
             archive_hint='aiteam-agent-*-darwin-*.tar.gz'
           fi
           cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
-          ## Agent sidecar · ${AGENT_TARGET}
+          ## Agent 本地 sidecar · ${AGENT_TARGET}
 
-          - Artifact: **aiteam-agent-${AGENT_TARGET}**
-          - Configuration source: GitHub Environment ${AGENT_ENVIRONMENT}
-          - Download run: ${RUN_URL}
-          - Inner package: ${archive_hint}
+          - 构建产物：**aiteam-agent-${AGENT_TARGET}**
+          - 配置来源：GitHub Environment ${AGENT_ENVIRONMENT}
+          - 下载入口：${RUN_URL}
+          - 包内文件：${archive_hint}
 
-          After extracting the Actions artifact, keep the package directory read-only and start the sidecar:
+          解压 Actions Artifact 后，请将 sidecar 目录作为安装资源保存，并启动本地 Agent：
 
               ${start_command}
 
-          Read agent-port.json from the data directory (or parse AI_TEAM_AGENT_READY) and set the client API base URL to http://127.0.0.1:<port>. Poll /healthz; use /readyz before enabling local execution. The page calls only /api/agent/* and /api/auth/*.
+          从数据目录读取 agent-port.json，或解析 stdout 中的 AI_TEAM_AGENT_READY，然后将客户端 API base URL 设置为 http://127.0.0.1:<port>。请轮询 /healthz；启用本地执行前确认 /readyz 返回 200。页面只调用 /api/agent/* 和 /api/auth/*。
 
-          Stop the child process on client exit; preserve the data directory during upgrades. See the packaged README.md for CORS, config, signing and platform notes.
+          客户端退出时终止 Agent 子进程；升级时保留数据目录。完整的配置、CORS、签名、启动和平台说明请查看包内 README.md。
           EOF
