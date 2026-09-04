@@ -131,6 +131,54 @@ Windows:
 
 ## 3. 准备 Agent 配置
 
+### 3.0 外部 agent.env 是什么
+
+`agent.env` 是 **Agent 进程的运行配置文件**，不是 Manager 的数据库配置，也不是客户端前端的 `.env`。它只告诉本地 Agent：
+
+```text
+当前企业的 Manager 在哪里
+Agent 如何验证 Manager token
+Agent 如何验证 Manager 下发的 Skill
+哪个 WebView origin 可以调用 localhost
+Agent 应该绑定哪个本地地址
+```
+
+“外部”指的是：文件由客户端自己保存，位于 Agent 安装资源目录之外。例如：
+
+```text
+macOS:
+~/Library/Application Support/<Vendor>/<Client>/agent.env
+
+Windows:
+%LOCALAPPDATA%\\<Vendor>\\<Client>\\agent.env
+```
+
+这样做是为了让 Agent 安装目录保持只读，客户端升级时不覆盖企业配置。它不是必须项：
+
+- **taiyi 测试包**：包内 `config/agent.env` 已经是可用的 taiyi 测试配置，直接传给 `--config` 即可；
+- **通用模板包**：包内 `config/agent.env.example` 只是模板，需要复制一份并填写后再使用；
+- **其他企业**：从 `agent.env.example` 复制，替换对应 Manager URL、issuer/audience、public JWKS、Skill public key 和 WebView origin。
+
+推荐客户端安装时执行一次：
+
+```text
+安装包内的 AGENT_DIR/config/agent.env
+    → 复制到客户端自己的 CONFIG_FILE
+    → 启动时传 --config CONFIG_FILE
+```
+
+`CONFIG_FILE` 与 `DATA_DIR` 可以是两个不同路径。`CONFIG_FILE` 保存部署配置；`DATA_DIR` 保存 SQLite、Session、workspace 和附件。每个用户应使用独立的 `DATA_DIR`，但同一个企业的 Manager 配置可以复用。
+
+以下字段由客户端启动参数提供，不要写死到可移植的外部配置中：
+
+```text
+AITEAM_AGENT_DATA_DIR
+AITEAM_AGENT_PORT_FILE
+AITEAM_AGENT_SPA_ROOT
+```
+
+它们分别由 `--data-dir`、默认 port file 位置和包内资源路径处理。客户端需要改端口、数据目录或 Manager URL 时，应优先使用启动参数或外部配置，不要修改 Agent 编译产物。
+
 ### 3.1 taiyi 测试包配置
 
 本次 CI 生成的是 taiyi 测试包，配置已经写入包内 `config/agent.env`：

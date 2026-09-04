@@ -122,7 +122,7 @@ jobs:
 
           1. 下载 Artifact。先解压 GitHub 外层 ZIP，再解压包内的 Agent 安装文件。
           2. 将 Agent 目录放入客户端只读资源目录；macOS 放入 App Resources，Windows 放入 Program Files 的 resources 目录。
-          3. 不要把 SQLite、Session、workspace、附件或配置写入安装目录；为每个用户准备独立的 agent-data 和 agent.env。
+          3. 不要把 SQLite、Session、workspace、附件或配置写入安装目录；为每个用户准备独立的 agent-data 和 agent.env。taiyi 测试包可直接复制包内 config/agent.env；通用包请从 config/agent.env.example 复制后填写。
           4. 客户端启动后端 Agent 子进程。正式客户端使用绝对路径和原生 spawn，不依赖用户 Node.js、shell 或当前工作目录：
 
                  ${native_command}
