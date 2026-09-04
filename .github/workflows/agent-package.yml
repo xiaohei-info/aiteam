@@ -81,6 +81,7 @@ jobs:
           fi
           rm -f "${AITEAM_AGENT_CONFIG_FILE:-}"
       - name: Upload Agent package
+        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: aiteam-agent-${{ matrix.target }}
@@ -95,39 +96,45 @@ jobs:
           AGENT_TARGET: ${{ matrix.target }}
           AGENT_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         run: |
           set -euo pipefail
           if [[ "${AGENT_TARGET}" == win32-* ]]; then
-            start_command='bin\start-agent.cmd --config config\agent.env --port 0 --data-dir "%LOCALAPPDATA%\AI Team\agent"'
+            native_command='AGENT_DIR\runtime\node.exe --import AGENT_DIR\node_modules\tsx\dist\esm\index.mjs AGENT_DIR\bin\start-agent.mjs --config CONFIG_FILE --port 0 --data-dir DATA_DIR'
             archive_hint='aiteam-agent-*-win32-*.zip'
           else
-            start_command='bin/start-agent.sh --config config/agent.env --port 0 --data-dir "$HOME/Library/Application Support/AI Team/agent"'
+            native_command='AGENT_DIR/runtime/node --import AGENT_DIR/node_modules/tsx/dist/esm/index.mjs AGENT_DIR/bin/start-agent.mjs --config CONFIG_FILE --port 0 --data-dir DATA_DIR'
             archive_hint='aiteam-agent-*-darwin-*.tar.gz'
           fi
+          archive_id_url="${RUN_URL}/artifacts/${ARTIFACT_ID}"
           cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
           ## Agent 客户端集成说明 · ${AGENT_TARGET}
 
           - 构建产物：aiteam-agent-${AGENT_TARGET}
           - 配置来源：GitHub Environment ${AGENT_ENVIRONMENT}
           - 配置是否已绑定企业：${AITEAM_AGENT_CONFIGURED:-false}
-          - 下载入口：${RUN_URL}
+          - 直接下载 Artifact：${archive_id_url}
           - 包内真正的安装文件：${archive_hint}
 
-          ### 客户端接入步骤
+          ### 客户端团队必须完成的接入步骤
 
-          1. 下载上面的 Actions Artifact。先解压 GitHub 外层 ZIP，再解压包内的 Agent 安装文件。
-          2. 将解压后的 Agent 目录放到客户端只读资源目录；不要放到用户可写目录。
-          3. 将企业 env 配置放到客户端数据目录之外，并通过 --config 传入；升级时保留 agent-data。
-          4. 客户端启动后端 Agent 子进程，不要要求用户安装 Node，也不要依赖当前工作目录：
+          1. 下载 Artifact。先解压 GitHub 外层 ZIP，再解压包内的 Agent 安装文件。
+          2. 将 Agent 目录放入客户端只读资源目录；macOS 放入 App Resources，Windows 放入 Program Files 的 resources 目录。
+          3. 不要把 SQLite、Session、workspace、附件或配置写入安装目录；为每个用户准备独立的 agent-data 和 agent.env。
+          4. 客户端启动后端 Agent 子进程。正式客户端使用绝对路径和原生 spawn，不依赖用户 Node.js、shell 或当前工作目录：
 
-                 ${start_command}
+                 ${native_command}
 
-          5. 等待数据目录出现 agent-port.json，校验 pid、host=127.0.0.1 和 1–65535 端口；也可以解析 AI_TEAM_AGENT_READY。
-          6. 使用 http://127.0.0.1:<port>/healthz 检查进程存活；需要本地执行时再确认 /readyz 返回 HTTP 200 和 data.ready=true。
-          7. 原生层把 http://127.0.0.1:<port> 传给 WebView/前端，前端 API base URL 不要写死 8180；页面只请求 /api/agent/* 和 /api/auth/*。
-          8. 如果页面是独立 origin，确保 AITEAM_AGENT_ALLOWED_ORIGINS 是精确白名单；不允许使用 *。
-          9. 前端连接检查顺序：resolve-tenant-by-account → login → whoami → grants/sync → grants/readiness，然后再开放聊天和 SSE。
-          10. 客户端退出时发送 SIGTERM/等效终止信号并等待子进程结束；升级/回滚只替换安装目录，不删除 agent-data。
+             其中 AGENT_DIR 是安装目录，CONFIG_FILE 是客户端配置文件绝对路径，DATA_DIR 是用户数据目录；手工调试时才使用包内 bin/start-agent.sh 或 bin/start-agent.cmd。
+          5. 传入 --config、--port 0、--data-dir；升级/回滚只替换安装目录，必须保留 agent-data。
+          6. 轮询 agent-data/agent-port.json，校验 JSON、pid 仍存活、host 为 127.0.0.1、port 为 1–65535；也可以解析 stdout 的 AI_TEAM_AGENT_READY。
+          7. 请求 http://127.0.0.1:PORT_VALUE/healthz。只有 HTTP 200 才把 Agent 标记为 alive；/readyz 返回 HTTP 200 且 data.ready=true 后才开放本地执行。
+          8. 原生层把 http://127.0.0.1:PORT_VALUE 通过 preload/IPC 传给 WebView，前端 API base URL 不要写死 8180。
+          9. 如果 WebView 不是 Agent 同源页面，把真实 origin 加入 AITEAM_AGENT_ALLOWED_ORIGINS；只允许精确 origin，禁止使用 *。
+          10. 页面连接检查顺序固定为：resolve-tenant-by-account → login → whoami → grants/sync → grants/readiness → 聊天/SSE。
+          11. 页面只调用 /api/agent/* 和 /api/auth/*，不得直接调用 Manager/Operator，不得读取 Agent SQLite/Session。
+          12. 客户端退出时发送 SIGTERM/等效终止信号并等待 Agent 子进程结束；崩溃重启时复用同一个 agent-data。
+          13. 生产发布前完成 macOS 嵌套 runtime 签名/notarize、Windows Authenticode、安装目录权限和目标平台 sandbox 验收。
 
-          完整的目录规划、配置优先级、启动参数、健康检查、断线恢复、日志隐私、CORS、签名和故障排查请阅读安装包内 README.md。当前 taiyi 包是测试配置，不得当作生产包。
+          包内 CLIENT-INTEGRATION.md 是完整实施手册，包含原生 spawn argv、目录示例、配置优先级、状态机、健康检查、登录请求、断线恢复、升级回滚、日志隐私和故障排查。当前 taiyi 包是测试配置，不得当作生产包。
           EOF

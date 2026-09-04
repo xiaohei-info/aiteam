@@ -68,6 +68,7 @@ async function main() {
   cpSync(join(AGENT_ROOT, "bin"), join(packageRoot, "bin"), { recursive: true });
   cpSync(join(WEB_ROOT, "agent", "dist"), join(packageRoot, "web", "agent", "dist"), { recursive: true });
   cpSync(join(ROOT, "deploy", "agent", "README.md"), join(packageRoot, "README.md"));
+  cpSync(join(ROOT, "deploy", "agent", "CLIENT-INTEGRATION.md"), join(packageRoot, "CLIENT-INTEGRATION.md"));
   if (process.platform !== "win32") execFileSync("chmod", ["755", join(packageRoot, "bin", "start-agent.sh")]);
   mkdirSync(join(packageRoot, "config"), { recursive: true });
 
@@ -77,7 +78,7 @@ async function main() {
   writeFileSync(join(packageRoot, "config", "agent.env"), config.text, { mode: 0o600 });
   cpSync(CONFIG_TEMPLATE, join(packageRoot, "config", "agent.env.example"));
 
-  const packaged = { ...sourcePackage, version, private: false, files: ["dist", "bin", "config", "web", "README.md"] };
+  const packaged = { ...sourcePackage, version, private: false, files: ["dist", "bin", "config", "web", "README.md", "CLIENT-INTEGRATION.md"] };
   writeFileSync(join(packageRoot, "package.json"), `${JSON.stringify(packaged, null, 2)}\n`);
   cpSync(join(AGENT_ROOT, "pnpm-lock.yaml"), join(packageRoot, "pnpm-lock.yaml"));
   cpSync(join(AGENT_ROOT, "pnpm-workspace.yaml"), join(packageRoot, "pnpm-workspace.yaml"));

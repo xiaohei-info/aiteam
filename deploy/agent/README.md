@@ -21,6 +21,8 @@
 
 不要把 `operation_service`、`manager_service`、`web/operation`、`web/manager` 或 `app/` 放进此产物。Agent 的 Pi 会话、SQLite、附件和 workspace 默认写到用户数据目录，不写安装目录。
 
+客户端团队的逐步实施手册见包内 `CLIENT-INTEGRATION.md`；本 README 解释打包、配置和平台边界。
+
 > **发布闸门**：macOS 可在完成目标系统 Seatbelt 矩阵后发布；Windows 当前只能先生成/联调 sidecar，现有 Windows ACL 后端尚未提供网络隔离和完整 piped-grandchild 输出能力，不能直接标记为 production-ready（详见文末平台前置条件）。
 
 ## 本机构建
