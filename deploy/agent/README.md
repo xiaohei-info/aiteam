@@ -131,6 +131,294 @@ sidecar 内含可执行的 Node runtime，不能只签外层客户端：
 - Windows：按客户端发布策略对 `runtime/node.exe`/安装包做 Authenticode 签名，避免 SmartScreen 将嵌套运行时视为未知程序。
 - 发布前校验 `manifest.json`，只从受信构建产物解压；不要运行用户可写数据目录中的可执行文件。
 
+## 客户端团队集成手册（逐步）
+
+本节是给桌面客户端团队的实施清单。客户端负责安装/签名/启动 sidecar 和把 Agent URL 注入页面；Agent 负责本地会话、Pi 执行和主动访问 Manager。客户端不需要启动 Python、PostgreSQL、Operator 或 Manager。
+
+### 1. 解压并规划目录
+
+GitHub Actions 下载的 Artifact 还有一层 GitHub ZIP 包装。先解压 Artifact，再解压其中的真正 Agent 包：
+
+- macOS：外层 ZIP → `aiteam-agent-*-darwin-*.tar.gz` → Agent 目录；
+- Windows：外层 ZIP → `aiteam-agent-*-win32-*.zip` → Agent 目录。
+
+建议安装目录不可写：
+
+```text
+macOS:  <Client>.app/Contents/Resources/agent/
+Windows: C:\\Program Files\\<Vendor>\\<Client>\\resources\\agent\\
+```
+
+不要把 SQLite、Session、workspace、附件或可变配置写入上述目录。建议使用独立用户数据目录：
+
+```text
+macOS:  ~/Library/Application Support/<Vendor>/<Client>/agent-data/
+Windows: %LOCALAPPDATA%\\<Vendor>\\<Client>\\agent-data\\
+```
+
+升级时替换安装目录，保留 `agent-data`；回滚时也只回滚安装目录，不删除数据目录。
+
+### 2. 准备企业配置
+
+客户端可以直接使用包内 `config/agent.env`，也可以把配置复制到用户数据目录之外，再通过 `--config` 指定。推荐使用外部配置，便于企业切换和客户端升级。
+
+最小生产配置：
+
+```dotenv
+AITEAM_ENV=production
+AITEAM_AGENT_LOCAL_ONLY=true
+AITEAM_AGENT_SANDBOX_READY=true
+HOST=127.0.0.1
+PORT=8180
+AITEAM_MANAGER_URL=https://manager.example.com
+AITEAM_AGENT_JWT_ISSUER=https://manager.example.com
+AITEAM_AGENT_JWT_AUDIENCE=aiteam-agent
+AITEAM_AGENT_JWKS_JSON='{"keys":[...]}'
+AITEAM_SKILL_SIGNING_PUBLIC_KEY=...
+AITEAM_SKILL_SIGNING_KEY_ID=skills-current
+AITEAM_AGENT_ALLOWED_ORIGINS=aiteam://desktop
+```
+
+字段说明：
+
+| 配置 | 客户端用途 |
+|---|---|
+| `AITEAM_MANAGER_URL` | 当前企业 Manager 实例；每企业可以不同，不能填 Docker 内部地址 |
+| `AITEAM_AGENT_JWT_ISSUER` / `AUDIENCE` | Agent 验证 Manager 签发 token |
+| `AITEAM_AGENT_JWKS_JSON` 或 `JWKS_PATH` | 只放 RSA public JWKS，不放私钥 |
+| `AITEAM_SKILL_SIGNING_PUBLIC_KEY` | 验证 Manager 下发的签名 Skill，只放公钥 |
+| `HOST` / `PORT` | 本地监听；桌面客户端必须保持 loopback |
+| `AITEAM_AGENT_ALLOWED_ORIGINS` | 独立 WebView origin 的精确白名单，不支持 `*` |
+
+配置优先级从高到低为：
+
+1. 启动参数，例如 `--port`、`--data-dir`、`--manager-url`；
+2. 客户端启动 Agent 时注入的进程环境变量；
+3. `--config` 指定的 env 文件；
+4. 启动器默认值。
+
+Provider key、账号密码、Hindsight/LightRAG token、service token、JWT 私钥和 Skill 私钥都不能进入这个文件。Provider 凭据由 Manager 按员工授权短期下发到 Agent 进程内存。
+
+### 3. 客户端启动 Agent
+
+客户端原生代码应直接启动子进程，不依赖用户安装 Node，也不要依赖当前工作目录。
+
+macOS 推荐 argv：
+
+```text
+<agent>/runtime/node
+--import <agent>/node_modules/tsx/dist/esm/index.mjs
+<agent>/bin/start-agent.mjs
+--config <client-data>/agent.env
+--port 0
+--data-dir <client-data>/agent-data
+```
+
+Windows 推荐 argv：
+
+```text
+<agent>\\runtime\\node.exe
+--import <agent>\\node_modules\\tsx\\dist\\esm\\index.mjs
+<agent>\\bin\\start-agent.mjs
+--config <client-data>\\agent.env
+--port 0
+--data-dir <client-data>\\agent-data
+```
+
+手工调试也可以使用：
+
+```bash
+# macOS
+./bin/start-agent.sh --config /path/to/agent.env --port 0 --data-dir "/path/to/agent-data"
+```
+
+```powershell
+# Windows
+.\\bin\\start-agent.cmd --config C:\\path\\to\\agent.env --port 0 --data-dir C:\\path\\to\\agent-data
+```
+
+客户端启动选项：
+
+- macOS 记录 stdout/stderr 到客户端私有日志，不要把会话正文上传到云端；
+- Windows 使用 `CREATE_NO_WINDOW` 或等效的无控制台子进程选项；
+- 只启动一个 Agent 实例，避免两个进程同时打开同一个 SQLite/Session 目录；
+- 设置启动超时，例如 30 秒；超时后读取 stderr 并终止子进程，不要无限等待；
+- 保存子进程 PID，但最终状态以 port file 和 HTTP 探针为准。
+
+### 4. 检查 Agent 是否启动成功
+
+Agent 启动后会在 `data-dir` 下生成：
+
+```text
+agent-port.json
+```
+
+内容类似：
+
+```json
+{
+  "schema_version": 1,
+  "pid": 12345,
+  "host": "127.0.0.1",
+  "port": 53124,
+  "started_at": "2026-09-03T08:00:00.000Z"
+}
+```
+
+客户端必须依次检查：
+
+1. 文件存在且 JSON 可解析；
+2. `host` 是 `127.0.0.1`、`localhost` 或 `::1`；
+3. `port` 在 1–65535；
+4. PID 仍然是 Agent 子进程；
+5. `GET http://127.0.0.1:<port>/healthz` 返回 HTTP 200；
+6. 页面需要本地执行时，再检查 `GET /readyz` 返回 HTTP 200 且 `data.ready=true`。
+
+`/healthz` 只表示进程存活；`/readyz` 会检查本地数据库、工作目录和 sandbox。不能只看到进程存在就把页面标记为 ready。
+
+客户端也可以监听 stdout 中的机器可读行：
+
+```text
+AI_TEAM_AGENT_READY {"host":"127.0.0.1","port":53124,"pid":12345}
+```
+
+port file 和 stdout 都没有出现时，视为启动失败。port file 可能是上一次崩溃留下的旧文件，必须重新检查 PID 和 `/healthz`，不能直接复用旧端口。
+
+### 5. 将 Agent URL 注入客户端页面
+
+浏览器/WebView 不能直接读取本地 `agent-port.json`。应由客户端原生层读取端口，再通过 preload、IPC 或页面初始化参数传给前端：
+
+```text
+agentBaseUrl = http://127.0.0.1:<port>
+```
+
+前端 API Client 应使用这个动态地址：
+
+```ts
+const client = new AgentApiClient({
+  baseUrl: agentBaseUrl,
+  getToken: () => localToken,
+});
+```
+
+禁止在前端写死 `8180`，因为生产客户端应使用 `--port 0`。
+
+如果客户端直接打开包内 Agent SPA：
+
+```text
+http://127.0.0.1:<port>/
+```
+
+页面和 Agent 同源，不需要 CORS。如果客户端页面来自自定义 scheme 或另一个 localhost 端口，则配置精确 origin：
+
+```dotenv
+AITEAM_AGENT_ALLOWED_ORIGINS=aiteam://desktop,http://127.0.0.1:5173
+```
+
+`file://` 页面通常发送 origin `null`，需要显式配置 `null`。CORS 配置修改后必须重启 Agent。
+
+### 6. 检查 Manager 连接和登录链路
+
+Agent 不直接连接 Operator。客户端页面只访问本地 Agent，由 Agent 主动访问配置的 Manager。
+
+推荐在页面启动后的连接检查中按以下顺序执行：
+
+1. 页面调用 `POST /api/auth/resolve-tenant-by-account`，根据账号解析企业；
+2. 页面调用 `POST /api/agent/login`，密码只通过 HTTPS/本地请求传输，不写日志；
+3. 保存返回的短期 token，使用安全的客户端会话存储；
+4. 调用 `GET /api/agent/whoami`，确认 `tenant_id`、`user_id` 和 `roles`；
+5. 调用 `POST /api/agent/grants/sync` 拉取当前成员授权投影；
+6. 调用 `GET /api/agent/grants/readiness`，确认授权员工和 runtime 状态；
+7. 最后再开放聊天、SSE 和本地执行按钮。
+
+常见状态：
+
+| 状态 | 含义 | 客户端处理 |
+|---|---|---|
+| `/healthz` 200 | Agent 进程存活 | 可以继续 readiness 检查 |
+| `/readyz` 503 | 本地 DB/workspace/sandbox 未就绪 | 展示“本地执行不可用”，可保留登录页 |
+| 登录 401/403 | 账号、token 或企业授权问题 | 清理本地 token，要求重新登录 |
+| 登录/同步 503 | Manager 不可达 | 展示离线/稍后重试，不要伪造成功 |
+| `/api/agent/grants/readiness` 中专家 blocked | 当前员工没有可用模型、Skill 或授权 | 禁用对应员工，不影响 Agent 进程存活 |
+
+密码、token、完整请求体和会话正文不能写入客户端日志、诊断报告或 crash dump。
+
+### 7. 客户端运行期间的请求约定
+
+页面只调用以下本地路径：
+
+```text
+/api/agent/*
+/api/auth/*
+/healthz
+/readyz
+```
+
+私聊/群聊事件使用 Agent SSE：
+
+```text
+GET /api/agent/conversations/{conversation_id}/events
+```
+
+页面不要：
+
+- 直接请求 Manager 或 Operator；
+- 读取 Agent SQLite 或 Session JSONL；
+- 读取 Node runtime、workspace 或 Skill cache；
+- 把 Manager/Hindsight/LightRAG 凭据注入浏览器；
+- 把会话正文上传到客户端自己的云端日志。
+
+### 8. 客户端退出、重启和升级
+
+正常退出：
+
+1. 禁止页面继续创建新 prompt；
+2. 等待当前 UI 状态稳定，必要时调用 abort；
+3. 向 Agent 子进程发送 SIGTERM/等效终止信号；
+4. 等待进程退出，确认 `agent-port.json` 被清理；
+5. 客户端退出。
+
+异常退出时，下一次启动必须重新验证 PID、端口和 `/healthz`，不能相信旧 port file。
+
+升级：
+
+1. 停止旧 Agent；
+2. 保留用户 `agent-data`；
+3. 替换只读安装目录中的 sidecar；
+4. 使用相同 `--config` 和 `--data-dir` 启动；
+5. 重新执行 health/readiness/Manager 连接检查；
+6. 失败时回滚安装目录，不能删除数据目录。
+
+### 9. 客户端发布前验收清单
+
+客户端团队至少应在每个目标 OS/架构执行：
+
+- 安装后首次启动；
+- 已安装客户端再次启动；
+- 固定端口和随机端口；
+- Agent 进程崩溃后的自动重启；
+- Manager 暂时不可达后的恢复；
+- 登录、whoami、授权同步、readiness；
+- 私聊、群聊、SSE 断线重连；
+- 客户端退出时 Agent 子进程确实退出；
+- 升级/回滚后 SQLite、Session 和附件仍可读取；
+- 自定义 WebView origin 的 CORS；
+- Windows/macOS 的 code-sign、权限和防火墙行为；
+- `manifest.json` 文件校验和安装目录不可写。
+
+### 10. taiyi 测试包说明
+
+本次 CI 的 `taiyi` 包是测试包：
+
+```text
+AITEAM_ENV=test
+AITEAM_AGENT_DEV_AUTH=true
+AITEAM_PI_FAKE=false
+AITEAM_MANAGER_URL=http://121.40.78.201:8782
+```
+
+它用于连接 taiyi 测试 Manager，不是生产配置。运行机器必须能访问该测试地址；测试包使用 HTTP 和开发认证，不能复制到正式用户环境。
+
 ## 当前平台前置条件
 
 - macOS 使用系统 Seatbelt (`sandbox-exec`)；须在目标 macOS 做 native readiness/deny 矩阵验证。

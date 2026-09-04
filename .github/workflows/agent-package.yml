@@ -60,8 +60,10 @@ jobs:
             config_file="$RUNNER_TEMP/aiteam-agent.env"
             printf '%s\n' "$AITEAM_AGENT_PACKAGE_CONFIG" > "$config_file"
             echo "AITEAM_AGENT_CONFIG_FILE=$config_file" >> "$GITHUB_ENV"
+            echo "AITEAM_AGENT_CONFIGURED=true" >> "$GITHUB_ENV"
           else
             echo "AITEAM_AGENT_CONFIG_FILE=" >> "$GITHUB_ENV"
+            echo "AITEAM_AGENT_CONFIGURED=false" >> "$GITHUB_ENV"
           fi
       - name: Build Agent sidecar
         shell: bash
@@ -96,25 +98,36 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${AGENT_TARGET}" == win32-* ]]; then
-            start_command='bin\\start-agent.cmd --config config\\agent.env --port 0 --data-dir "%LOCALAPPDATA%\\AI Team\\agent"'
+            start_command='bin\start-agent.cmd --config config\agent.env --port 0 --data-dir "%LOCALAPPDATA%\AI Team\agent"'
             archive_hint='aiteam-agent-*-win32-*.zip'
           else
             start_command='bin/start-agent.sh --config config/agent.env --port 0 --data-dir "$HOME/Library/Application Support/AI Team/agent"'
             archive_hint='aiteam-agent-*-darwin-*.tar.gz'
           fi
           cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
-          ## Agent 本地 sidecar · ${AGENT_TARGET}
+          ## Agent 客户端集成说明 · ${AGENT_TARGET}
 
-          - 构建产物：**aiteam-agent-${AGENT_TARGET}**
+          - 构建产物：aiteam-agent-${AGENT_TARGET}
           - 配置来源：GitHub Environment ${AGENT_ENVIRONMENT}
+          - 配置是否已绑定企业：${AITEAM_AGENT_CONFIGURED:-false}
           - 下载入口：${RUN_URL}
-          - 包内文件：${archive_hint}
+          - 包内真正的安装文件：${archive_hint}
 
-          解压 Actions Artifact 后，请将 sidecar 目录作为安装资源保存，并启动本地 Agent：
+          ### 客户端接入步骤
 
-              ${start_command}
+          1. 下载上面的 Actions Artifact。先解压 GitHub 外层 ZIP，再解压包内的 Agent 安装文件。
+          2. 将解压后的 Agent 目录放到客户端只读资源目录；不要放到用户可写目录。
+          3. 将企业 env 配置放到客户端数据目录之外，并通过 --config 传入；升级时保留 agent-data。
+          4. 客户端启动后端 Agent 子进程，不要要求用户安装 Node，也不要依赖当前工作目录：
 
-          从数据目录读取 agent-port.json，或解析 stdout 中的 AI_TEAM_AGENT_READY，然后将客户端 API base URL 设置为 http://127.0.0.1:<port>。请轮询 /healthz；启用本地执行前确认 /readyz 返回 200。页面只调用 /api/agent/* 和 /api/auth/*。
+                 ${start_command}
 
-          客户端退出时终止 Agent 子进程；升级时保留数据目录。完整的配置、CORS、签名、启动和平台说明请查看包内 README.md。
+          5. 等待数据目录出现 agent-port.json，校验 pid、host=127.0.0.1 和 1–65535 端口；也可以解析 AI_TEAM_AGENT_READY。
+          6. 使用 http://127.0.0.1:<port>/healthz 检查进程存活；需要本地执行时再确认 /readyz 返回 HTTP 200 和 data.ready=true。
+          7. 原生层把 http://127.0.0.1:<port> 传给 WebView/前端，前端 API base URL 不要写死 8180；页面只请求 /api/agent/* 和 /api/auth/*。
+          8. 如果页面是独立 origin，确保 AITEAM_AGENT_ALLOWED_ORIGINS 是精确白名单；不允许使用 *。
+          9. 前端连接检查顺序：resolve-tenant-by-account → login → whoami → grants/sync → grants/readiness，然后再开放聊天和 SSE。
+          10. 客户端退出时发送 SIGTERM/等效终止信号并等待子进程结束；升级/回滚只替换安装目录，不删除 agent-data。
+
+          完整的目录规划、配置优先级、启动参数、健康检查、断线恢复、日志隐私、CORS、签名和故障排查请阅读安装包内 README.md。当前 taiyi 包是测试配置，不得当作生产包。
           EOF
