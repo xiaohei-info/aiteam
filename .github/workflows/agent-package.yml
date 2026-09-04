@@ -109,34 +109,27 @@ jobs:
           archive_hint="$(basename "${archive_path}")"
           archive_id_url="${RUN_URL}/artifacts/${ARTIFACT_ID}"
           cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
-          ## Agent 客户端集成说明 · ${AGENT_TARGET}
+          ## Agent 客户端快速集成 · ${AGENT_TARGET}
 
-          - 构建产物：aiteam-agent-${AGENT_TARGET}
-          - 配置来源：GitHub Environment ${AGENT_ENVIRONMENT}
-          - 配置是否已绑定企业：${AITEAM_AGENT_CONFIGURED:-false}
-          - 直接下载 Artifact：${archive_id_url}
-          - 包内真正的安装文件：${archive_hint}
-          - 包内集成手册：CLIENT-INTEGRATION.md
+          - 下载：${archive_id_url}
+          - 内层包：${archive_hint}
+          - 企业配置：${AGENT_ENVIRONMENT}（已配置：${AITEAM_AGENT_CONFIGURED:-false}）
 
-          ### 客户端团队必须完成的接入步骤
-
-          1. 下载 Artifact。先解压 GitHub 外层 ZIP，再解压包内的 Agent 安装文件。
-          2. 将 Agent 目录放入客户端只读资源目录；macOS 放入 App Resources，Windows 放入 Program Files 的 resources 目录。
-          3. 不要把 SQLite、Session、workspace、附件或配置写入安装目录；为每个用户准备独立的 agent-data 和 agent.env。taiyi 测试包可直接复制包内 config/agent.env；通用包请从 config/agent.env.example 复制后填写。
-          4. 客户端启动后端 Agent 子进程。正式客户端使用绝对路径和原生 spawn，不依赖用户 Node.js、shell 或当前工作目录：
+          1. 解压 Artifact 外层 ZIP，再解压内层包；将整个 Agent 目录放入客户端资源目录，记为 AGENT_DIR。
+          2. 安装/升级时复制 AGENT_DIR/config/agent.env 到客户端配置目录，记为 CONFIG_FILE。
+          3. 创建并永久保留用户数据目录 DATA_DIR；升级时不得删除。
+          4. 客户端打开后用原生进程 API 启动：
 
                  ${native_command}
 
-             其中 AGENT_DIR 是安装目录，CONFIG_FILE 是客户端配置文件绝对路径，DATA_DIR 是用户数据目录；手工调试时才使用包内 bin/start-agent.sh 或 bin/start-agent.cmd。
-          5. 传入 --config、--port 0、--data-dir，三个路径都使用绝对路径；升级/回滚只替换安装目录，必须保留 agent-data。
-          6. 轮询 DATA_DIR/agent-port.json，校验 JSON、pid 仍存活、host 为 127.0.0.1、port 为 1–65535；也可以解析 stdout 的 AI_TEAM_AGENT_READY。
-          7. 请求 http://127.0.0.1:PORT_VALUE/healthz。只有 HTTP 200 才把 Agent 标记为 alive；/readyz 返回 HTTP 200 且 data.ready=true 后才开放本地执行。
-          8. 原生层把 http://127.0.0.1:PORT_VALUE 通过 preload/IPC 传给 WebView，前端 API base URL 不要写死 8180。
-          9. 如果 WebView 不是 Agent 同源页面，把真实 origin 加入 AITEAM_AGENT_ALLOWED_ORIGINS；只允许精确 origin，禁止使用 *。
-          10. 页面连接检查顺序固定为：resolve-tenant-by-account → login → whoami → grants/sync → grants/readiness → 聊天/SSE。
-          11. 页面只调用 /api/agent/* 和 /api/auth/*，不得直接调用 Manager/Operator，不得读取 Agent SQLite/Session。
-          12. 客户端退出时发送 SIGTERM/等效终止信号并等待 Agent 子进程结束；崩溃重启时复用同一个 agent-data。
-          13. 生产发布前完成 macOS 嵌套 runtime 签名/notarize、Windows Authenticode、安装目录权限和目标平台 sandbox 验收。
+          5. 轮询 DATA_DIR/agent-port.json，取出 pid 和 port；随后检查：
 
-          包内 CLIENT-INTEGRATION.md 是完整实施手册，包含原生 spawn argv、目录示例、配置优先级、状态机、健康检查、登录请求、断线恢复、升级回滚、日志隐私和故障排查。当前 taiyi 包是测试配置，不得当作生产包。
+                 GET http://127.0.0.1:PORT_VALUE/healthz  → HTTP 200
+                 GET http://127.0.0.1:PORT_VALUE/readyz   → HTTP 200 且 data.ready=true
+
+          6. 原生层将 http://127.0.0.1:PORT_VALUE 注入 WebView，作为 Agent API base URL；禁止写死端口。
+          7. 页面只调用 /api/agent/* 和 /api/auth/*；登录后执行 whoami → grants/sync → grants/readiness。
+          8. 客户端退出时终止 Agent 子进程；升级只替换 AGENT_DIR，保留 CONFIG_FILE 和 DATA_DIR。
+
+          完整参数和目录示例见包内 CLIENT-INTEGRATION.md。taiyi 包仅用于测试。
           EOF
