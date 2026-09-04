@@ -87,3 +87,34 @@ jobs:
             dist/agent-packages/*.zip
           if-no-files-found: error
           retention-days: 30
+      - name: Show client integration instructions
+        shell: bash
+        env:
+          AGENT_TARGET: ${{ matrix.target }}
+          AGENT_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${AGENT_TARGET}" == win32-* ]]; then
+            start_command='bin\\start-agent.cmd --config config\\agent.env --port 0 --data-dir "%LOCALAPPDATA%\\AI Team\\agent"'
+            archive_hint='aiteam-agent-*-win32-*.zip'
+          else
+            start_command='bin/start-agent.sh --config config/agent.env --port 0 --data-dir "$HOME/Library/Application Support/AI Team/agent"'
+            archive_hint='aiteam-agent-*-darwin-*.tar.gz'
+          fi
+          cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
+          ## Agent sidecar · ${AGENT_TARGET}
+
+          - Artifact: **aiteam-agent-${AGENT_TARGET}**
+          - Configuration source: GitHub Environment ${AGENT_ENVIRONMENT}
+          - Download run: ${RUN_URL}
+          - Inner package: ${archive_hint}
+
+          After extracting the Actions artifact, keep the package directory read-only and start the sidecar:
+
+              ${start_command}
+
+          Read agent-port.json from the data directory (or parse AI_TEAM_AGENT_READY) and set the client API base URL to http://127.0.0.1:<port>. Poll /healthz; use /readyz before enabling local execution. The page calls only /api/agent/* and /api/auth/*.
+
+          Stop the child process on client exit; preserve the data directory during upgrades. See the packaged README.md for CORS, config, signing and platform notes.
+          EOF
