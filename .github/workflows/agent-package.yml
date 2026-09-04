@@ -101,11 +101,12 @@ jobs:
           set -euo pipefail
           if [[ "${AGENT_TARGET}" == win32-* ]]; then
             native_command='AGENT_DIR\runtime\node.exe --import AGENT_DIR\node_modules\tsx\dist\esm\index.mjs AGENT_DIR\bin\start-agent.mjs --config CONFIG_FILE --port 0 --data-dir DATA_DIR'
-            archive_hint='aiteam-agent-*-win32-*.zip'
           else
             native_command='AGENT_DIR/runtime/node --import AGENT_DIR/node_modules/tsx/dist/esm/index.mjs AGENT_DIR/bin/start-agent.mjs --config CONFIG_FILE --port 0 --data-dir DATA_DIR'
-            archive_hint='aiteam-agent-*-darwin-*.tar.gz'
           fi
+          archive_path="$(find dist/agent-packages -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -print | sort | head -1)"
+          [[ -n "${archive_path}" ]] || { echo "未找到 Agent 压缩包" >&2; exit 1; }
+          archive_hint="$(basename "${archive_path}")"
           archive_id_url="${RUN_URL}/artifacts/${ARTIFACT_ID}"
           cat <<EOF | tee -a "$GITHUB_STEP_SUMMARY"
           ## Agent 客户端集成说明 · ${AGENT_TARGET}
@@ -115,6 +116,7 @@ jobs:
           - 配置是否已绑定企业：${AITEAM_AGENT_CONFIGURED:-false}
           - 直接下载 Artifact：${archive_id_url}
           - 包内真正的安装文件：${archive_hint}
+          - 包内集成手册：CLIENT-INTEGRATION.md
 
           ### 客户端团队必须完成的接入步骤
 
@@ -126,8 +128,8 @@ jobs:
                  ${native_command}
 
              其中 AGENT_DIR 是安装目录，CONFIG_FILE 是客户端配置文件绝对路径，DATA_DIR 是用户数据目录；手工调试时才使用包内 bin/start-agent.sh 或 bin/start-agent.cmd。
-          5. 传入 --config、--port 0、--data-dir；升级/回滚只替换安装目录，必须保留 agent-data。
-          6. 轮询 agent-data/agent-port.json，校验 JSON、pid 仍存活、host 为 127.0.0.1、port 为 1–65535；也可以解析 stdout 的 AI_TEAM_AGENT_READY。
+          5. 传入 --config、--port 0、--data-dir，三个路径都使用绝对路径；升级/回滚只替换安装目录，必须保留 agent-data。
+          6. 轮询 DATA_DIR/agent-port.json，校验 JSON、pid 仍存活、host 为 127.0.0.1、port 为 1–65535；也可以解析 stdout 的 AI_TEAM_AGENT_READY。
           7. 请求 http://127.0.0.1:PORT_VALUE/healthz。只有 HTTP 200 才把 Agent 标记为 alive；/readyz 返回 HTTP 200 且 data.ready=true 后才开放本地执行。
           8. 原生层把 http://127.0.0.1:PORT_VALUE 通过 preload/IPC 传给 WebView，前端 API base URL 不要写死 8180。
           9. 如果 WebView 不是 Agent 同源页面，把真实 origin 加入 AITEAM_AGENT_ALLOWED_ORIGINS；只允许精确 origin，禁止使用 *。
