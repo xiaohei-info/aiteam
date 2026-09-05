@@ -301,6 +301,23 @@ describe("TimelineView Pi cards", () => {
     expect(mergeTimeline([durable], [live])).toEqual([{ kind: "entry", entry: durable }]);
   });
 
+  it("keeps participant histories with duplicate raw IDs using entry_ref, including React refresh de-dup", async () => {
+    const coordinator = entry("same", "message", { entry_ref: "entry_v1_coord", participant_employee_id: "coord", source_employee_id: "coord", message: { role: "assistant", content: "协调答案" } });
+    const worker = entry("same", "message", { entry_ref: "entry_v1_worker", participant_employee_id: "worker", source_employee_id: "worker", message: { role: "assistant", content: "员工答案" } });
+    expect(mergeTimeline([coordinator, worker, coordinator], [event("worker:same", "message_end", { source_employee_id: "worker" })])).toEqual([{ kind: "entry", entry: coordinator }, { kind: "entry", entry: worker }]);
+    mockedGetEntries.mockResolvedValue([coordinator, worker, coordinator]);
+    render(<TimelineView client={client} conversationId="colliding" />);
+    expect(await screen.findByText("协调答案")).toBeInTheDocument();
+    expect(screen.getByText("员工答案")).toBeInTheDocument();
+    expect(screen.getAllByText("协调答案")).toHaveLength(1);
+  });
+
+  it("does not hide another participant's live answer just because its body or raw payload ID matches", () => {
+    const durable = entry("same", "message", { entry_ref: "entry_v1_coord", participant_employee_id: "coord", source_employee_id: "coord", message: { role: "assistant", id: "same", content: "shared answer" } });
+    const live = event("worker:same", "message_end", { source_employee_id: "worker", message: { role: "assistant", id: "same", content: "shared answer" } });
+    expect(mergeTimeline([durable], [live])).toHaveLength(2);
+  });
+
   it("keeps persisted order and removes duplicate SSE identities", () => {
     const merged = mergeTimeline(
       [entry("e1", "message"), entry("e2", "message")],

@@ -14,7 +14,14 @@ import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStor
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
-import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
+import { serializePiEvent } from "../pi/event-sse.js";
+import { InvalidReadCursorError } from "../storage/read-cursor.js";
+import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
+import { employeeDisplay } from "../services/employee-display.js";
+import { CONVERSATION_READ_DOCS, CONVERSATION_READ_SCHEMAS, EmployeeDisplayProperties, HistoryQuery, MessageSearchQuery } from "./conversation-read-schemas.js";
+import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQuery, UsageStatisticsQuery } from "./work-record-schemas.js";
+import { WorkRecordReadService } from "../services/work-records.js";
+import { UsageStatisticsService } from "../services/usage-statistics.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -54,7 +61,7 @@ const KnowledgeResourceParams = Type.Object({
 }, { additionalProperties: false });
 const ConversationQuery = Type.Object({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 50, description: "返回条数上限；缺省为 50，最大 100。" })),
-  cursor: Type.Optional(Type.String({ minLength: 1, description: "从指定会话之后继续读取；服务端按 updated_at 降序、id 降序排列。" })),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192, description: "原样使用 next_cursor；冻结 updated_at DESC/id DESC 边界并绑定 owner。兼容当前 owner 的旧裸会话 ID，不接受其它资源游标。" })),
 }, { additionalProperties: false, description: "本地会话列表查询；该接口不接受 after，事件流断点请使用 events 接口的 after。" });
 const PermissionMode = Type.Union([
   Type.Literal("read-only", { description: "只读，不允许本地写入。" }),
@@ -141,7 +148,9 @@ const ConversationMetadata = Type.Object({
   member_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "本地成员 ID。" })),
   schedule: Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "定时执行配置。" }),
   permission_mode: PermissionMode,
-  last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的条目 ID。" }),
+  last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的 entry_ref；旧存储可能是 raw Pi ID，歧义/失效时按未读处理。" }),
+  last_preview: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "最新可见 user/assistant 的脱敏短文本；排除 thinking/tool/internal，图片为占位符，无消息为 null。" }),
+  unread_count: Type.Integer({ minimum: 0, description: "已读位置之后的可见 assistant 消息数；输入和 transient delta 不计数。" }),
   created_at: Type.String({ format: "date-time", description: "创建时间。" }),
   updated_at: Type.String({ format: "date-time", description: "最后更新时间。" }),
 }, { $id: "ConversationMetadata", additionalProperties: false, description: "本地会话元数据。" });
@@ -162,7 +171,7 @@ const ConversationUpdateRequest = Type.Object({
   labels: Type.Optional(Type.Array(Type.String({ maxLength: 128, description: "会话标签。" }), { maxItems: 32, description: "会话标签列表。" })),
   permission_mode: Type.Optional(PermissionMode),
   schedule: Type.Optional(Type.Union([Type.Ref("ConversationScheduleInput"), Type.Null()], { description: "定时执行配置；null 表示移除调度。" })),
-  last_read_entry_id: Type.Optional(Type.Union([Type.String({ minLength: 1, description: "最后读取条目 ID。" }), Type.Null()])),
+  last_read_entry_id: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 256, description: "推荐传 entry_ref；兼容该会话内唯一 raw Pi ID。跨会话/歧义/非法引用 422，写入规范化 entry_ref；null 清空。" }), Type.Null()])),
 }, { $id: "ConversationUpdateRequest", additionalProperties: false, description: "更新本地会话请求；未提供字段保持不变。" });
 const ConversationStateUpdateRequest = Type.Object({ state: Type.Ref("ConversationState") }, { $id: "ConversationStateUpdateRequest", additionalProperties: false, description: "更新会话状态请求。" });
 const GrantSyncRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；必须与当前 access token 一致。" }), member_id: Type.String({ minLength: 1, maxLength: 200, description: "当前成员 ID；必须与当前 access token 一致。" }), known_versions: Type.Optional(Type.Record(Type.String({ minLength: 1, description: "投影键（通常为 employee/solution ID）。" }), Type.String({ minLength: 1, description: "本地已知版本。" }), { maxProperties: 256, description: "投影键到本地版本的映射；省略表示从头获取。" })) }, { $id: "GrantSyncRequest", additionalProperties: false, description: "授权配置增量同步请求；服务端只接受与当前身份匹配的 tenant_id/member_id。" });
@@ -229,7 +238,9 @@ const ConversationMessage = Type.Object({
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
 }, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
-  id: Type.String({ description: "条目 ID。" }),
+  id: Type.String({ description: "原 Pi 条目 ID；跨 participant 可能重复，保留用于旧客户端兼容。" }),
+  entry_ref: Type.Optional(Type.String({ description: "conversation/participant/Pi ID 的稳定唯一定位引用；客户端优先用于 key、去重、已读与搜索定位，不是 SSE 或分页 ID。" })),
+  participant_employee_id: Type.Optional(Type.String({ description: "条目所属 Session 员工，不等于发送者；旧无员工 Session 可缺省。" })),
   type: Type.String({ description: "条目类型。" }),
   parentId: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "父条目 ID。" })),
   timestamp: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Integer()], { description: "条目时间。" })),
@@ -242,7 +253,7 @@ const ConversationEntry = Type.Object({
   source_employee_display_name: Type.Optional(Type.String({ description: "产生该条目的员工展示名。" })),
   source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "消息来源角色。" })),
 }, { $id: "ConversationEntry", additionalProperties: true, description: "会话历史条目（仅返回脱敏后的持久化视图）。", "x-dynamic-json": true });
-const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "按时间和稳定条目 ID 排序的脱敏历史条目。" }) }, { additionalProperties: false }) }, { $id: "ConversationEntriesEnvelope", description: "会话历史响应；entries 是持久化事实源，不包含未脱敏 runtime 对象。" });
+const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "按 timestamp、conversation ID、participant ID、Session append ordinal、Pi entry ID 正序；同逻辑输入去重。" }) }, { additionalProperties: false }), page: Type.Optional(Type.Ref("Page")) }, { $id: "ConversationEntriesEnvelope", description: "无查询参数保持旧 data 形状且不返回 page；提供 limit/cursor/entry_ref 时分页。Pi JSONL 为正文事实源，只读不创建 Session。" });
 const PiSseToolCall = Type.Object({
   type: Type.Optional(Type.Union([
     Type.Literal("toolCall", { description: "Pi 工具调用片段。" }),
@@ -301,7 +312,7 @@ const PiSseEventData = Type.Object({
 const AbortEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), aborted: Type.Boolean({ description: "是否发现并终止活动执行；没有运行时为 false。" }) }, { additionalProperties: false }) }, { $id: "AbortEnvelope", description: "终止提示执行的结果。" });
 const AuthClaims = Type.Object({
   user_id: Type.String({ minLength: 1, description: "成员账号 ID。" }),
-  tenant_id: Type.Union([Type.String({ minLength: 1, description: "企业租户 ID。" }), Type.Null()], { description: "企业租户 ID；本地登录成功后通常为非空。" }),
+  tenant_id: Type.String({ minLength: 1, description: "Agent 成功身份必含非空企业 ID；不适用于 Operator 平台身份。", examples: ["tenant-1"] }),
   roles: Type.Array(Type.String({ minLength: 1, description: "角色名称。" }), { description: "账号角色列表。" }),
   iss: Type.Optional(Type.String({ description: "JWT issuer。" })),
   aud: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Array(Type.String({ minLength: 1 }))], { description: "JWT audience。" })),
@@ -333,6 +344,7 @@ const SkillSigningKeyMetadata = Type.Object({
   revoked_at: Type.Optional(Type.Union([Type.String({ format: "date-time", description: "密钥撤销时间。" }), Type.Null()])),
 }, { $id: "SkillSigningKeyMetadata", additionalProperties: false, description: "技能签名公钥元数据；不包含私钥。" });
 const ExpertProjection = Type.Object({
+  ...EmployeeDisplayProperties,
   employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
 }, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影；未知扩展字段由 Manager 配置透传，但不包含凭据。", "x-dynamic-json": true });
 const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
@@ -372,6 +384,7 @@ const ReadinessEnvelope = Type.Object({ data: Type.Object({ runtime: Type.Ref("R
 const GrantSyncEnvelope = Type.Object({ data: Type.Object({ ok: Type.Boolean({ const: true, description: "同步是否成功；成功响应固定为 true。" }), upserted: Type.Integer({ minimum: 0, description: "写入或更新的投影数量。" }), revoked: Type.Integer({ minimum: 0, description: "撤销并移除的投影数量。" }) }, { additionalProperties: false }) }, { $id: "GrantSyncEnvelope", description: "授权同步结果；投影正文通过后续本地 grants 接口读取。" });
 const UsageFlushEnvelope = Type.Object({ data: Type.Object({ sent: Type.Array(Type.String({ minLength: 1, description: "摘要 ID。" }), { description: "已成功上报的摘要 ID。" }), failed: Type.Array(Type.String({ minLength: 1, description: "摘要 ID。" }), { description: "本次上报失败、仍留在本地 outbox 的摘要 ID。" }) }, { additionalProperties: false }) }, { $id: "UsageFlushEnvelope", description: "用量 outbox 刷新结果；失败项不会被误标记为成功。" });
 const OrgTreeNode = Type.Object({
+  role_title: EmployeeDisplayProperties.role_title,
   id: Type.String({ minLength: 1, description: "组织节点 ID。" }),
   name: Type.String({ description: "组织节点名称。" }),
   type: Type.Union([
@@ -387,6 +400,7 @@ const OrgTreeEnvelope = Type.Object({ data: Type.Ref("OrgTreeNode") }, { $id: "O
 const OfficeSceneEnvelope = Type.Object({
   data: Type.Object({
     employees: Type.Array(Type.Object({
+      ...EmployeeDisplayProperties,
       employee_id: Type.String({ minLength: 1, description: "员工 ID。" }),
       display_name: Type.String({ description: "员工展示名称。" }),
       status: Type.Union([
@@ -457,7 +471,23 @@ const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, {
 const Page = Type.Object({ next_cursor: Type.Union([Type.String({ minLength: 1, description: "下一页游标。" }), Type.Null()], { description: "下一页游标；无下一页时为 null。" }), has_more: Type.Boolean({ description: "是否还有更多。" }) }, { $id: "Page", description: "分页信息；当前文件、授权和市场列表返回 null 游标表示一次性结果。" });
 const LocalFileListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalFileMetadata"), { description: "文件元数据列表。" }), page: Type.Ref("Page") }, { $id: "LocalFileListEnvelope", description: "本地文件列表响应。" });
 const LocalFileDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ const: true, description: "是否删除成功；成功响应固定为 true。" }), id: Type.String({ minLength: 1, description: "删除的文件 ID。" }) }, { additionalProperties: false }) }, { $id: "LocalFileDeleteEnvelope", description: "本地文件删除结果。" });
-const MarketplaceTemplate = Type.Object({ template_id: Type.String({ minLength: 1, description: "模板 ID。" }), display_name: Type.String({ description: "模板展示名称。" }), category: Type.String({ description: "模板分类。" }), model_name: Type.String({ description: "默认模型名称；可能为空字符串表示尚未配置。" }), skills_count: Type.Integer({ minimum: 0, description: "技能数量。" }), recruit_count: Type.Integer({ minimum: 0, description: "已招募次数。" }), is_recruited: Type.Boolean({ description: "当前成员是否已招募。" }), tags: Type.Array(Type.String({ description: "模板标签。" }), { description: "模板标签。" }), avatar_url: Type.Union([Type.String(), Type.Null()], { description: "头像 URL；未配置时为 null。" }) }, { $id: "MarketplaceTemplate", description: "可招募专家模板摘要；列表来源为 Manager 目录的本地受控投影。" });
+const MarketplaceTemplate = Type.Object({
+  template_id: Type.String({ minLength: 1, description: "模板 ID。" }),
+  display_name: Type.String({ description: "模板展示名称。" }),
+  description: Type.Union([Type.String(), Type.Null()], { description: "上游模板原有描述；未提供为 null。", examples: ["研究与报告整理", null] }),
+  platform_skill_refs: Type.Union([Type.Array(Type.Object({
+    skill_id: Type.String({ minLength: 1, description: "平台技能 ID。" }),
+    version: Type.String({ minLength: 1, description: "固定技能版本。" }),
+    content_hash: Type.String({ minLength: 1, description: "固定内容哈希。" }),
+  }, { additionalProperties: false }), { description: "上游合法固定引用；仅返回 ID/版本/哈希，不返回技能包正文或企业绑定。" }), Type.Null()], { description: "现代模板固定技能列表，[] 表示明确无技能；旧目录未提供时为 null，不从旧 skill_ids 猜版本。" }),
+  category: Type.String({ description: "模板分类。" }),
+  model_name: Type.String({ description: "默认模型名称；可能为空字符串表示尚未配置。" }),
+  skills_count: Type.Integer({ minimum: 0, description: "优先按合法 platform_skill_refs 计数（含明确空列表）；旧目录兼容已有计数/skill_ids。" }),
+  recruit_count: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], { description: "仅透出上游已记录的招募计数，未提供时为 null；不是本端计算的跨企业商业统计。" }),
+  is_recruited: Type.Boolean({ description: "当前企业是否已有该模板的有效招募实例。" }),
+  tags: Type.Array(Type.String({ description: "模板标签。" }), { description: "模板标签。" }),
+  avatar_url: Type.Union([Type.String(), Type.Null()], { description: "头像 URL；未配置时为 null。" }),
+}, { $id: "MarketplaceTemplate", additionalProperties: false, description: "Manager 目录受控摘要，无 usage_stats/price_tier 或招募前企业能力要求。名称/分类筛选由客户端完成，无服务端市场搜索或翻页。" });
 const MarketplaceTemplateEnvelope = Type.Object({ data: Type.Ref("MarketplaceTemplate") }, { $id: "MarketplaceTemplateEnvelope", description: "单个人才市场模板响应。" });
 const MarketplaceTemplateListEnvelope = Type.Object({ data: Type.Array(Type.Ref("MarketplaceTemplate"), { description: "可见模板列表。" }), page: Type.Ref("Page") }, { $id: "MarketplaceTemplateListEnvelope", description: "人才市场模板列表响应；当前 page 游标固定为空。" });
 const UsageSummary = Type.Object({ schema_version: Type.Literal("1", { description: "摘要 schema 版本。" }), summary_id: Type.String({ minLength: 1, description: "摘要幂等 ID。" }), tenant_id: Type.String({ minLength: 1, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, description: "成员 ID。" }), employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), window_start: Type.String({ format: "date-time", description: "统计窗口起点（ISO 8601 UTC）。" }), window_end: Type.String({ format: "date-time", description: "统计窗口终点（ISO 8601 UTC）。" }), prompt_count: Type.Integer({ minimum: 0, description: "提示次数。" }), settled_count: Type.Integer({ minimum: 0, description: "已结算次数。" }), error_count: Type.Integer({ minimum: 0, description: "错误次数。" }), input_tokens: Type.Integer({ minimum: 0, description: "输入 token 数。" }), output_tokens: Type.Integer({ minimum: 0, description: "输出 token 数。" }), cache_tokens: Type.Integer({ minimum: 0, description: "缓存 token 数。" }), cost_minor: Type.Integer({ minimum: 0, description: "最小货币单位成本（USD cents）。" }), currency: Type.Literal("USD", { description: "成本币种；固定为 USD。" }), duration_ms_total: Type.Integer({ minimum: 0, description: "总耗时（毫秒）。" }), pricing_version: Type.Union([Type.Integer({ minimum: 1, description: "计价版本。" }), Type.Null()], { description: "计价版本；未知价格时为 null。" }), pricing_status: Type.Union([Type.Literal("known", { description: "价格已知。" }), Type.Literal("unknown", { description: "价格未知。" })], { description: "价格是否可用。" }), run_count: Type.Integer({ minimum: 0, description: "兼容聚合字段：运行次数。" }), token_total: Type.Integer({ minimum: 0, description: "兼容聚合字段：总 token 数。" }), cost_total: Type.Number({ minimum: 0, description: "兼容聚合字段：总成本（USD）。" }), duration_seconds_total: Type.Integer({ minimum: 0, description: "兼容聚合字段：总耗时（秒）。" }) }, { $id: "UsageSummary", additionalProperties: false, description: "脱敏用量摘要；不包含会话正文、工具明细或原始事件。" });
@@ -465,7 +495,7 @@ const UsageOutboxItem = Type.Object({ summary_id: Type.String({ minLength: 1, de
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
 
@@ -530,7 +560,7 @@ const EXAMPLE_CONVERSATION = {
   id: "conversation-1", title: "今日工作摘要", kind: "private", labels: ["daily"], state: "active",
   entry_employee_id: "employee-1", coordinator_employee_id: null, solution_instance_id: null,
   tenant_id: "tenant-1", member_id: "member-1", schedule: null, permission_mode: "read-only",
-  last_read_entry_id: null, created_at: "2026-09-01T08:00:00.000Z", updated_at: "2026-09-01T08:01:00.000Z",
+  last_read_entry_id: null, last_preview: null, unread_count: 0, created_at: "2026-09-01T08:00:00.000Z", updated_at: "2026-09-01T08:01:00.000Z",
 };
 const EXAMPLE_FILE = {
   id: "file-1", conversation_id: "conversation-1", tenant_id: "tenant-1", member_id: "member-1",
@@ -543,6 +573,7 @@ const EXAMPLE_EXPERT = {
   handle: "researcher", display_name: "研究助手", revoked: false, synced_at: "2026-09-01T08:00:00.000Z",
   model_policy: { model: "model-1", provider_ref: "provider-1", thinking_level: "medium" },
   tools: ["todo_update"], skills: ["research"], status: "active", avatar_url: null,
+  role_title: "研究分析师", department_ids: ["department-research", "department-sales"],
 };
 const EXAMPLE_SOLUTION = {
   solution_instance_id: "solution-1", solution_id: "solution-template-1", display_name: "研究方案",
@@ -584,10 +615,12 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
-  after: "employee-1:assistant-1", cursor: "conversation-previous", limit: 50,
+  after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
   "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1",
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
+  ...CONVERSATION_READ_DOCS,
+  ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
   metrics: { responses: { "200": { description: "Prometheus 文本指标。", examples: { metrics: { summary: "指标文本", value: "# TYPE aiteam_agent_http_requests_total counter\\naiteam_agent_http_requests_total 12\\n" } } } } },
   readyz: { responses: {
@@ -606,7 +639,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   listConversations: { request: { limit: { summary: "返回条数", value: 50 }, cursor: { summary: "分页游标", value: "conversation-previous" } }, responses: { "200": { description: "本地会话列表和分页信息。", examples: { list: { summary: "会话列表", value: { data: [EXAMPLE_CONVERSATION], page: EXAMPLE_PAGE } } } } } },
   createConversation: { request: { private: { summary: "私聊会话", value: { title: "今日工作摘要", kind: "private", entry_employee_id: "employee-1", permission_mode: "read-only" } }, scheduled: { summary: "一次性调度会话", value: { title: "定时摘要", kind: "private", entry_employee_id: "employee-1", schedule: EXAMPLE_SCHEDULE } } }, responses: { "201": { description: "创建成功的本地会话元数据。", examples: { created: { summary: "创建成功", value: { data: EXAMPLE_CONVERSATION } } } } } },
   getConversation: { responses: { "200": { description: "本地会话元数据。", examples: { conversation: { summary: "会话详情", value: { data: EXAMPLE_CONVERSATION } } } } } },
-  updateConversation: { request: { patch: { summary: "部分更新", value: { title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } } }, responses: { "200": { description: "更新后的本地会话元数据。", examples: { updated: { summary: "更新成功", value: { data: { ...EXAMPLE_CONVERSATION, title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } } } } } } },
+  updateConversation: { request: { patch: { summary: "部分更新", value: { title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } }, markRead: { summary: "使用 entries/search 返回的 entry_ref 标记已读（引用仅为形状示例）", value: { last_read_entry_id: "entry_v1_opaque" } } }, responses: { "200": { description: "更新后的本地会话元数据。", examples: { updated: { summary: "更新成功", value: { data: { ...EXAMPLE_CONVERSATION, title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } } } } } } },
   replaceConversation: { description: "兼容 PUT 的部分更新；未提供字段保持不变。", request: { patch: { summary: "兼容 PUT 的部分更新", value: { title: "更新后的标题" } } }, responses: { "200": { description: "更新后的本地会话元数据；当前 PUT 仍按部分更新处理。", examples: { updated: { summary: "更新成功", value: { data: EXAMPLE_CONVERSATION } } } } } },
   deleteConversation: { responses: { "200": { description: "会话删除结果；关联的本地附件和产物也会被删除。", examples: { deleted: { summary: "删除成功", value: { data: { deleted: true } } } } } } },
   getConversationState: { responses: { "200": { description: "持久化 state 与瞬时 prompting 状态。", examples: { state: { summary: "运行状态", value: { data: { conversation_id: "conversation-1", state: "active", prompting: false } } } } } } },
@@ -615,7 +648,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   updateConversationContext: { request: { thinking: { summary: "思考档位", value: { thinking_level: "high" } } }, responses: { "200": { description: "更新后的上下文状态。", examples: { updated: { summary: "设置成功", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: null, used_tokens: null, context_window: 0, percentage: null, thinking_level: "high", available_thinking_levels: ["off", "low", "high"], prompting: false } } } } } } },
   setConversationThinkingLevel: { request: { thinking: { summary: "思考档位", value: { thinking_level: "low" } } }, responses: { "200": { description: "更新后的上下文状态；PUT 是 PATCH 的兼容别名。", examples: { updated: { summary: "设置成功", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: null, used_tokens: null, context_window: 0, percentage: null, thinking_level: "low", available_thinking_levels: ["off", "low"], prompting: false } } } } } } },
   promptConversation: { request: { textOnly: { summary: "文本提示", value: { text: "请总结今天的工作" } }, withImages: { summary: "提示、内联图片和附件", value: { text: "请分析附件", images: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }], attachment_ids: ["file-1"], mentions: ["researcher"] } } }, responses: { "202": { description: "提示已接受或幂等重放；后台执行通过 SSE/entries 获取。", examples: { accepted: { summary: "首次接受", value: { data: { conversation_id: "conversation-1", accepted: true, state: "accepted", idempotency_key: "prompt-1" } } }, completed: { summary: "幂等重放", value: { data: { conversation_id: "conversation-1", accepted: true, state: "completed", idempotency_key: "prompt-1" } } } } } } },
-  listConversationEntries: { responses: { "200": { description: "脱敏历史条目；用于刷新后恢复时间线。", examples: { entries: { summary: "消息、思考和工具条目", value: { data: { conversation_id: "conversation-1", entries: [{ id: "entry-1", type: "message", timestamp: "2026-09-01T08:02:00.000Z", message: { role: "user", content: "请总结今天的工作" } }, { id: "entry-2", type: "message", timestamp: "2026-09-01T08:02:01.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "整理信息" }, { type: "text", text: "这是摘要" }] } }, { id: "entry-3", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: false, content: "done" } }] } } } } } } },
+  listConversationEntries: { request: { limit: { summary: "条数", value: 50 }, cursor: { summary: "上一页 next_cursor", value: "page_v1.opaque" }, entry_ref: { summary: "搜索定位", value: "entry_v1_opaque" } }, responses: { "200": { description: "脱敏历史条目；无参数不返回 page，分页参数启用正序续读。", examples: { paged: { summary: "带 limit 的历史分页；引用仅为形状示例，实际值来自响应", value: { data: { conversation_id: "conversation-1", entries: [{ id: "pi-entry-1", entry_ref: "entry_v1_opaque", participant_employee_id: "employee-1", type: "message", parentId: null, timestamp: "2026-09-05T08:00:00.000Z", source_employee_id: "employee-1", source_role: "participant", message: { role: "assistant", content: "以下是今日总结。" } }] }, page: { next_cursor: "page_v1.opaque", has_more: true } } }, entries: { summary: "消息、思考和工具条目", value: { data: { conversation_id: "conversation-1", entries: [{ id: "entry-1", type: "message", timestamp: "2026-09-01T08:02:00.000Z", message: { role: "user", content: "请总结今天的工作" } }, { id: "entry-2", type: "message", timestamp: "2026-09-01T08:02:01.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "整理信息" }, { type: "text", text: "这是摘要" }] } }, { id: "entry-3", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: false, content: "done" } }] } } } } } } },
   abortConversation: { responses: { "200": { description: "终止结果；没有活动执行时 aborted 为 false。", examples: { aborted: { summary: "终止结果", value: { data: { conversation_id: "conversation-1", aborted: true } } } } } } },
   listAttachments: { responses: { "200": { description: "会话附件元数据列表；当前为一次性结果。", examples: { list: { summary: "附件列表", value: { data: [EXAMPLE_FILE], page: EXAMPLE_PAGE } } } } } },
   listArtifacts: { responses: { "200": { description: "会话产物元数据列表；当前为一次性结果。", examples: { list: { summary: "产物列表", value: { data: [{ ...EXAMPLE_FILE, id: "artifact-1", kind: "artifact", filename: "report.md" }], page: EXAMPLE_PAGE } } } } } },
@@ -633,8 +666,8 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   syncGrants: { request: { sync: { summary: "增量同步", value: { tenant_id: "tenant-1", member_id: "member-1", known_versions: { "employee-1": "v1", "solution-1": "v1" } } } }, responses: { "200": { description: "本地授权投影同步结果。", examples: { synced: { summary: "同步成功", value: { data: { ok: true, upserted: 2, revoked: 0 } } } } } } },
   listUsageOutbox: { responses: { "200": { description: "本地脱敏用量摘要上报队列。", examples: { list: { summary: "待上报摘要", value: { data: [{ summary_id: "summary-1", tenant_id: "tenant-1", member_id: "member-1", kind: "usage", status: "pending", attempts: 0, last_error: null, created_at: "2026-09-01T08:00:00.000Z", payload: EXAMPLE_USAGE_SUMMARY }], page: EXAMPLE_PAGE } } } } } },
   flushUsage: { request: { limit: { summary: "批量上限", value: { limit: 50 } } }, responses: { "200": { description: "用量摘要发送结果。", examples: { flushed: { summary: "刷新成功", value: { data: { sent: ["summary-1"], failed: [] } } } } } } },
-  listMarketplaceTemplates: { responses: { "200": { description: "当前成员可见的人才市场模板。", examples: { list: { summary: "模板列表", value: { data: [{ template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", skills_count: 2, recruit_count: 12, is_recruited: false, tags: ["research"], avatar_url: null }], page: EXAMPLE_PAGE } } } } } },
-  getMarketplaceTemplate: { responses: { "200": { description: "单个人才市场模板。", examples: { template: { summary: "模板详情", value: { data: { template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", skills_count: 2, recruit_count: 12, is_recruited: false, tags: ["research"], avatar_url: null } } } } } } },
+  listMarketplaceTemplates: { responses: { "200": { description: "当前成员可见的人才市场模板。", examples: { list: { summary: "模板列表", value: { data: [{ template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", description: "研究与报告整理", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:example" }], skills_count: 1, recruit_count: null, is_recruited: false, tags: ["research"], avatar_url: null }], page: EXAMPLE_PAGE } } } } } },
+  getMarketplaceTemplate: { responses: { "200": { description: "单个人才市场模板。", examples: { template: { summary: "模板详情", value: { data: { template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", description: "研究与报告整理", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:example" }], skills_count: 1, recruit_count: null, is_recruited: false, tags: ["research"], avatar_url: null } } } } } } },
   orgTree: {
     responses: {
       "200": {
@@ -642,7 +675,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
         examples: {
           tree: {
             summary: "组织树",
-            value: { data: { id: "root", name: "企业", type: "department", children: [{ id: "dept-1", name: "研究部", type: "department", parent_id: "root", children: [{ id: "employee-1", name: "研究助手", type: "employee", parent_id: "dept-1", status: "active", avatar_url: null, children: [] }] }] } },
+            value: { data: { id: "root", name: "企业", type: "department", role_title: null, children: [{ id: "dept-1", name: "研究部", type: "department", role_title: null, parent_id: "root", children: [{ id: "employee-1", name: "研究助手", type: "employee", parent_id: "dept-1", status: "active", role_title: "研究分析师", avatar_url: null, children: [] }] }] } },
           },
         },
       },
@@ -655,7 +688,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
         examples: {
           scene: {
             summary: "办公场景",
-            value: { data: { employees: [{ employee_id: "employee-1", display_name: "研究助手", status: "working", task: "整理摘要", avatar_url: null, last_activity_at: "2026-09-01T08:02:00.000Z", last_status: "working", last_task: "整理摘要" }], summary: { total: 1, working: 1, ready: 0, offline: 0 } } },
+            value: { data: { employees: [{ employee_id: "employee-1", display_name: "研究助手", role_title: "研究分析师", department_ids: ["department-research", "department-sales"], status: "working", task: "整理摘要", avatar_url: null, last_activity_at: "2026-09-01T08:02:00.000Z", last_status: "working", last_task: "整理摘要" }], summary: { total: 1, working: 1, ready: 0, offline: 0 } } },
           },
         },
       },
@@ -756,8 +789,14 @@ export class AgentHttpServer {
   private readonly promptWorkers = new Set<Promise<void>>();
   private readonly fetchImpl: typeof fetch;
   private readonly allowedOrigins: ReadonlySet<string>;
+  private readonly conversationReads: ConversationReadService;
+  private readonly workRecords: WorkRecordReadService;
+  private readonly usageStatistics: UsageStatisticsService;
 
   constructor(private readonly options: AgentHttpServerOptions) {
+    this.conversationReads = new ConversationReadService(options.store, options.host);
+    this.workRecords = new WorkRecordReadService(options.store, options.host);
+    this.usageStatistics = new UsageStatisticsService(options.store);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins ?? []);
     this.app = Fastify({
@@ -1001,7 +1040,7 @@ export class AgentHttpServer {
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
-    this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId ?? null, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { summary: "列出本地会话", description: "按当前成员列出本地会话，支持游标和条数限制。", querystring: ConversationQuery, response: { 200: jsonResponse(Type.Ref("ConversationListEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { summary: "创建本地会话", description: "创建私聊、群聊或任务会话；会话内容仅保存在本机。", body: Type.Ref("ConversationCreateRequest"), response: { 201: jsonResponse(Type.Ref("ConversationEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound") } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.getConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversation", { summary: "获取本地会话", description: "返回当前成员拥有的本地会话元数据。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } }));
@@ -1047,10 +1086,14 @@ export class AgentHttpServer {
     }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/entries", async (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
-      this.requireOwnedConversation(conversationId, caller!);
-      const entries = await this.options.host.entries(conversationId);
-      this.writeJson(response, 200, { data: { conversation_id: conversationId, entries: entries.map(serializePiEntry).filter((entry): entry is Record<string, unknown> => entry !== undefined) } });
-    }, routeSchema("listConversationEntries", { summary: "列出会话条目", description: "读取当前成员会话的脱敏历史条目。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEntriesEnvelope")), 404: problemResponse("NotFound") } }));
+      this.writeJson(response, 200, await this.conversationReads.entries(conversationId, caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
+    }, routeSchema("listConversationEntries", { summary: "列出会话条目", description: "只读 Pi 历史，按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 正序。无参数保持旧 data.entries 响应；limit/cursor/entry_ref 启用分页。entry_ref 唯一定位，raw id/parentId 不变；SSE ID 不是历史游标，transient delta 不持久回放。", params: ConversationParams, querystring: HistoryQuery, response: { 200: jsonResponse(Type.Ref("ConversationEntriesEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/participants", (_request, response, caller, fastifyRequest) => {
+      this.writeJson(response, 200, this.conversationReads.participants((fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!));
+    }, routeSchema("listConversationParticipants", { summary: "读取真实会话成员", description: "仅返回已存在的固定 participant Session 索引成员，不回退到授权全集；撤权成员仍可见但不可执行，不返回本机路径。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationParticipantsEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/messages/search", (request, response, caller) => {
+      this.writeJson(response, 200, this.conversationReads.search(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
+    }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 4,000 字/32 块展示截断影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
@@ -1080,6 +1123,15 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { summary: "检查授权执行就绪状态", description: "检查 Agent runtime 和当前授权专家是否可以执行。", response: { 200: jsonResponse(Type.Ref("ReadinessEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { summary: "检查专家就绪状态", description: "检查指定授权专家的本地执行条件。", params: ExpertParams, response: { 200: jsonResponse(Type.Ref("ExpertReadinessEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { summary: "同步授权配置", description: "主动从 Manager 拉取当前成员的增量授权配置并更新本地投影。", body: Type.Ref("GrantSyncRequest"), response: { 200: jsonResponse(Type.Ref("GrantSyncEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/work-records", (request, response, caller) => {
+      this.writeJson(response, 200, this.workRecords.history(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
+    }, routeSchema("listWorkRecords", { summary: "读取本机员工工作历史", description: "owner 隔离的实际 promptParticipant 观察及明确 provenance 的旧 Pi 历史，不是 Run/Task 执行状态机。按 occurred_at DESC/稳定创建序号 DESC，before 向更早翻页。精确 UTC [window_start,window_end)；未知旧时间为 null、不虚构开始/结束/用量。meta.after 保持第一页水位，随后轮询已看到记录的终态更新。正文摘要仅从 Pi 读取脱敏，不保存第二份正文，不上传。", querystring: WorkHistoryQuery, response: { 200: jsonResponse(Type.Ref("WorkHistoryEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/work-records/changes", (request, response, caller) => {
+      this.writeJson(response, 200, this.workRecords.changes(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
+    }, routeSchema("listWorkRecordChanges", { summary: "增量轮询工作记录更新与删除", description: "按单调变更序号正序返回最新 upsert/delete；同 ID 的 active→final 和同毫秒变化均可见，非逐事件回放。after 使用 history.meta.after 或上次 page.next_cursor；空页仍可续用。只允许 owner/employee 过滤，不接受时间/会话/结果过滤，删除仅留不可定位会话的 opaque ID tombstone。keyset 非内容快照，UI 按 ID upsert/remove；时间过滤历史的 UI 在相同 employee scope 变更上更新筛选。", querystring: WorkChangesQuery, response: { 200: jsonResponse(Type.Ref("WorkChangesEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/usage/statistics", (request, response, caller) => {
+      this.writeJson(response, 200, this.usageStatistics.statistics(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
+    }, routeSchema("getUsageStatistics", { summary: "读取当前成员本机小时用量统计", description: "直接相加全部 pending/sending/sent/failed 小时 outbox，无重复账本。按执行开始所在 UTC 小时归属，成对 [window_start,window_end) 必须 UTC 整点，不对齐返回 422，均省略为全部；不同于工作历史精确时间。费用 USD 十二位 decimal string，未知总价 null，另给已知小计，最终一次舍入 cents。删除/已上报不缩水，不重新计量旧历史，不补造旧缺失 counters/历史精度，崩溃未结算不猜计量。", querystring: UsageStatisticsQuery, response: { 200: jsonResponse(Type.Ref("UsageStatisticsEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/usage/outbox", (_request, response, caller) => this.listOutbox(response, caller!), routeSchema("listUsageOutbox", { summary: "列出用量上报队列", description: "查看本地待上报或失败的脱敏用量摘要。", response: { 200: jsonResponse(Type.Ref("UsageOutboxListEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/usage/flush", (request, response, caller) => this.flushUsage(request, response, caller!), routeSchema("flushUsage", { summary: "刷新用量上报", description: "将本地脱敏用量摘要尽力上报到 Manager。", body: Type.Ref("UsageFlushRequest"), response: { 200: jsonResponse(Type.Ref("UsageFlushEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/marketplace/templates", (_request, response, caller) => this.listMarketplaceTemplates(response, caller!), routeSchema("listMarketplaceTemplates", { summary: "列出专家市场模板", description: "从 Manager 拉取当前成员可见的专家模板。", response: { 200: jsonResponse(Type.Ref("MarketplaceTemplateListEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
@@ -1111,7 +1163,7 @@ export class AgentHttpServer {
           let caller: AuthenticatedCaller | undefined;
           if (authenticated) {
             try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
-            if (!caller.callerId || !caller.tenantId || !(caller.userId ?? caller.callerId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+            if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
           }
           await handler(raw, reply.raw, caller, request);
         } catch (error) {
@@ -1137,6 +1189,8 @@ export class AgentHttpServer {
     const account = this.stringField(body.account, "account", 256);
     try {
       const payload = await this.options.managerClient.resolveTenantByAccount(account);
+      const tenantId = payload && typeof payload === "object" ? (payload as { data?: { tenant_id?: unknown } }).data?.tenant_id : undefined;
+      if (typeof tenantId !== "string" || !tenantId.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) {
@@ -1148,6 +1202,11 @@ export class AgentHttpServer {
     }
   }
 
+  private validateAuthTenant(payload: unknown, expected: string): void {
+    const data = payload && typeof payload === "object" ? (payload as { data?: { claims?: { tenant_id?: unknown } } }).data : undefined;
+    if (!expected.trim() || data?.claims?.tenant_id !== expected) throw new ManagerUnavailableError("Manager returned an invalid Agent tenant identity");
+  }
+
   private async login(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (!this.options.managerClient?.login) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is not configured");
     const body = await this.readJson(request);
@@ -1156,6 +1215,7 @@ export class AgentHttpServer {
     const password = this.stringField(body.password, "password", 512);
     try {
       const payload = await this.options.managerClient.login({ tenant_id: tenantId, account, password });
+      this.validateAuthTenant(payload, tenantId);
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) {
@@ -1178,6 +1238,7 @@ export class AgentHttpServer {
     };
     try {
       const payload = await this.options.managerClient.ownerReset(input);
+      this.validateAuthTenant(payload, input.tenant_id);
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) {
@@ -1190,13 +1251,11 @@ export class AgentHttpServer {
   }
 
   private listConversations(response: ServerResponse, query: URLSearchParams, caller: AuthenticatedCaller): void {
-    const rawLimit = query.get("limit");
-    const limit = rawLimit === null ? 50 : Number(rawLimit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpProblem(422, "invalid_limit", "limit must be an integer between 1 and 100");
+    validateReadQuery(query, ["limit", "cursor"]);
+    const limit = readPageLimit(query);
     const cursor = query.get("cursor") ?? undefined;
-    if (cursor !== undefined && !this.options.store.getOwnedConversationMetadata(cursor, caller.tenantId!, caller.userId ?? caller.callerId)) throw new HttpProblem(422, "invalid_cursor", "cursor does not identify a conversation");
     const result = this.options.store.listConversations(limit, cursor, caller.tenantId, caller.userId ?? caller.callerId);
-    this.writeJson(response, 200, { data: result.items, page: { next_cursor: result.nextCursor, has_more: result.hasMore } });
+    this.writeJson(response, 200, { data: result.items.map((item) => this.conversationReads.metadata(item.id, caller)), page: { next_cursor: result.nextCursor, has_more: result.hasMore } });
   }
 
   private async createConversation(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -1234,7 +1293,7 @@ export class AgentHttpServer {
     }
     let schedule = null;
     if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
-    const metadata = this.options.store.createConversation({
+    this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
       entryEmployeeId, coordinatorEmployeeId, solutionRef, permissionMode,
       tenantId: caller.tenantId,
@@ -1246,7 +1305,7 @@ export class AgentHttpServer {
       await this.options.host.delete(id, caller.tenantId!, memberId).catch(() => undefined);
       throw error;
     }
-    this.writeJson(response, 201, { data: this.options.store.getOwnedConversationMetadata(id, caller.tenantId!, memberId) ?? metadata });
+    this.writeJson(response, 201, { data: this.conversationReads.metadata(id, caller) });
   }
 
   private resolvePromptTargets(conversation: ReturnType<AgentSqliteStore["getConversation"]>, caller: AuthenticatedCaller, mentions: string[]): string[] {
@@ -1291,9 +1350,7 @@ export class AgentHttpServer {
   }
 
   private getConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
-    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
-    if (!metadata) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    this.writeJson(response, 200, { data: metadata });
+    this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
   }
 
   private async updateConversation(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -1304,11 +1361,11 @@ export class AgentHttpServer {
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
     if (body.permission_mode !== undefined) patch.permissionMode = parsePermissionMode(body.permission_mode);
-    if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.optionalString(body.last_read_entry_id, "last_read_entry_id");
     this.requireOwnedConversation(conversationId, caller);
+    if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.conversationReads.readPointer(conversationId, caller, body.last_read_entry_id);
     const updated = this.options.store.updateConversation(conversationId, patch);
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    this.writeJson(response, 200, { data: updated });
+    this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
   }
 
   private getConversationState(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
@@ -1336,7 +1393,7 @@ export class AgentHttpServer {
     this.requireOwnedConversation(conversationId, caller);
     const updated = this.options.store.updateConversation(conversationId, { state });
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    this.writeJson(response, 200, { data: updated });
+    this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
   }
 
   private async deleteConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
@@ -1344,7 +1401,7 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ ...expert, ...employeeDisplay(expert) })), page: { next_cursor: null, has_more: false } }); }
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private async listMarketplaceTemplates(response: ServerResponse, caller: AuthenticatedCaller, templateId?: string): Promise<void> {
     if (!this.options.managerClient?.listMarketplaceTemplates) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");
@@ -1489,6 +1546,7 @@ export class AgentHttpServer {
       return {
         employee_id: expert.employee_id,
         display_name: expert.display_name,
+        ...employeeDisplay(expert),
         status,
         task: status === "working" ? activity?.last_task ?? null : null,
         avatar_url: typeof expert.avatar_url === "string" ? expert.avatar_url : null,
@@ -1859,7 +1917,8 @@ export class AgentHttpServer {
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
-    else if (error instanceof InvalidEventCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
+    else if (error instanceof InvalidEventCursorError || error instanceof InvalidReadCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
+    else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
@@ -1869,7 +1928,7 @@ export class AgentHttpServer {
 
 function projectOrgTree(value: unknown, visibleEmployees: ReadonlySet<string>): Record<string, unknown> {
   const root = projectOrgNode(value, visibleEmployees, true);
-  return root ?? { id: "root", name: "企业", type: "department", children: [] };
+  return root ?? { id: "root", name: "企业", type: "department", role_title: null, children: [] };
 }
 
 function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, root = false): Record<string, unknown> | undefined {
@@ -1886,6 +1945,7 @@ function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, r
     id: source.id,
     name: source.name,
     type: source.type,
+    role_title: source.type === "employee" ? employeeDisplay(source).role_title : null,
     ...(typeof source.parent_id === "string" || source.parent_id === null ? { parent_id: source.parent_id } : {}),
     ...(typeof source.status === "string" || source.status === null ? { status: source.status } : {}),
     ...(typeof source.avatar_url === "string" || source.avatar_url === null ? { avatar_url: source.avatar_url } : {}),

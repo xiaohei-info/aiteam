@@ -83,7 +83,7 @@ export function MarketplacePage() {
                 </HStack>
                 <Text type="supporting">{t.model_name} · {t.skills_count} Skills</Text>
                 {t.tags.length > 0 && <HStack gap={1} wrap="wrap">{t.tags.slice(0, 3).map((tag) => <Badge key={tag} label={tag} />)}</HStack>}
-                <Text type="supporting">已有 {t.recruit_count} 家企业招募</Text>
+                {t.recruit_count != null && <Text type="supporting">已记录 {t.recruit_count} 次招募</Text>}
                 {t.is_recruited ? <Badge variant="success" label="✓ 已招募" /> :
                   <Text type="supporting">请在 Manager 端配置</Text>}
               </VStack>

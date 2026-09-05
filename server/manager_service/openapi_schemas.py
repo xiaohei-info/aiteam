@@ -129,7 +129,7 @@ class MemoryResultOut(BaseModel):
 
 class OrgAssignmentOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    assignment_id: str = Field(description="员工/部门分配记录 ID。")
+    assignment_id: str = Field(description="被调整的 employee_id（即组织树 employee 节点 id），不是独立分配表的 ID。", examples=["employee-1"])
     department_id: str = Field(description="目标部门 ID。")
     updated: bool = Field(description="是否已更新。")
 

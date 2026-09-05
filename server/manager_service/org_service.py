@@ -29,7 +29,7 @@ class OrgService:
             ).fetchall()
             # 取所有员工（含 department_ids）
             emp_rows = s.execute(
-                "SELECT e.id, e.employee_slug, e.display_name, e.department_ids "
+                "SELECT e.id, e.employee_slug, e.display_name, e.department_ids, e.role_title "
                 "FROM employee e ORDER BY e.display_name",
             ).fetchall()
 
@@ -52,12 +52,12 @@ class OrgService:
                 for department_id in assigned_ids:
                     dept_nodes[department_id]["children"].append({
                         "id": emp_id, "type": "employee", "name": r[2] or r[1],
-                        "parent_id": department_id, "status": None, "children": [],
+                        "parent_id": department_id, "status": None, "role_title": r[4], "children": [],
                     })
             else:
                 unassigned_employees.append({
                     "id": emp_id, "type": "employee", "name": r[2] or r[1],
-                    "parent_id": UNASSIGNED_DEPARTMENT_ID, "status": None, "children": [],
+                    "parent_id": UNASSIGNED_DEPARTMENT_ID, "status": None, "role_title": r[4], "children": [],
                 })
 
         # 构建树：根节点 → 部门 → 员工；未设置也是一个合成部门节点。

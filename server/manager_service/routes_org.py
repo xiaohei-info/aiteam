@@ -37,7 +37,7 @@ def build_org_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/manager/org", tags=["manager", "org"])
     require = require_claims(verifier)
 
-    @router.get("/tree", summary="获取组织树", operation_id="manager_org_tree")
+    @router.get("/tree", summary="获取组织树", description="读取当前企业真实部门与员工岗位；多部门员工在各所属部门下出现，未设置岗位返回 null。", operation_id="manager_org_tree")
     async def get_org_tree(
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -47,7 +47,7 @@ def build_org_router(verifier) -> APIRouter:
         tree = svc.build_tree(ctx)
         return Envelope(data=OrgTreeNode(**tree))
 
-    @router.patch("/assignments/{employee_id}", summary="调整员工部门", operation_id="manager_org_assignment_patch")
+    @router.patch("/assignments/{employee_id}", summary="调整员工部门", description="owner/enterprise_admin 为员工追加一个真实部门（重复追加不改变配置版本）；employee_id 为组织树 employee 节点 id。需要替换或清空全部部门时使用员工配置 PUT department_ids。", operation_id="manager_org_assignment_patch")
     async def patch_assignment(
         employee_id: str,
         body: OrgAssignmentPatch,

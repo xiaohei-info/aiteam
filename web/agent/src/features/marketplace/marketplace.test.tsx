@@ -36,6 +36,14 @@ describe("MarketplacePage", () => {
     expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
   });
 
+  it("does not fabricate a commercial recruitment count when upstream has no data", async () => {
+    login();
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [{ ...template, recruit_count: null }] }), { status: 200 })) as typeof fetch;
+    renderPage();
+    await waitFor(() => expect(screen.getByText("营销专家A")).toBeInTheDocument());
+    expect(screen.queryByText(/次招募|家企业招募/)).toBeNull();
+  });
+
   it("projects an empty Agent catalog explicitly", async () => {
     login();
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { status: 200 })) as typeof fetch;

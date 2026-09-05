@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { UsageSummary } from "../usage.js";
+import { usdDecimal, usdUnits, type UsageSummary } from "../usage.js";
+import { WorkRecordRepository } from "./work-records.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
+import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 
@@ -102,6 +104,8 @@ export interface LoadedExpertProjection {
   display_name: string;
   revoked: boolean;
   synced_at: string;
+  role_title?: string | null;
+  department_ids?: string[];
   model_policy?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
@@ -239,6 +243,7 @@ const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 export class AgentSqliteStore {
   readonly db: DatabaseSync;
   readonly attachmentRoot: string;
+  readonly workRecords: WorkRecordRepository;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
@@ -247,6 +252,10 @@ export class AgentSqliteStore {
     mkdirSync(this.attachmentRoot, { recursive: true, mode: 0o700 });
     chmodSync(this.attachmentRoot, 0o700);
     this.db = new DatabaseSync(path);
+    this.db.function("add_usage_cost", (left, right) => {
+      const a = usdUnits(left), b = usdUnits(right);
+      return a === undefined || b === undefined ? null : usdDecimal(a + b);
+    });
     try { chmodSync(path, 0o600); } catch { /* database may be created by SQLite after open */ }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
@@ -395,12 +404,14 @@ export class AgentSqliteStore {
       "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
+      "ALTER TABLE usage_summary_outbox ADD COLUMN cost_total_decimal TEXT",
       "ALTER TABLE local_file ADD COLUMN referenced_at TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
     this.db.prepare("UPDATE usage_summary_outbox SET member_id = COALESCE(NULLIF(member_id, ''), json_extract(payload_json, '$.member_id'), '') WHERE member_id = ''").run();
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', last_error = COALESCE(last_error, 'Recovered unfinished usage upload'), claim_token = NULL, claimed_at = NULL WHERE status = 'sending'").run();
+    this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.cleanupAttachmentRoot();
   }
 
@@ -455,17 +466,30 @@ export class AgentSqliteStore {
 
   listConversations(limit = 50, cursor?: string, tenantId?: string, memberId?: string): { items: ConversationMetadata[]; nextCursor: string | null; hasMore: boolean } {
     const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const scope = readCursorScope("conversations:updated-desc", [tenantId ?? null, memberId ?? null]);
+    let boundary: [string, string] | undefined;
+    if (cursor !== undefined) {
+      if (cursor.startsWith("page_v1.")) boundary = decodeReadCursor(cursor, scope, ["string", "string"]) as [string, string];
+      else {
+        // Legacy bare IDs may only anchor a row in this query's owner scope.
+        const anchor = this.getConversation(cursor);
+        if (!anchor || (tenantId !== undefined && anchor.tenantId !== tenantId) || (memberId !== undefined && anchor.memberId !== memberId)) throw new InvalidReadCursorError();
+        boundary = [anchor.updatedAt!, anchor.id];
+      }
+      if (!Number.isFinite(Date.parse(boundary[0])) || !boundary[1]) throw new InvalidReadCursorError();
+    }
     const rows = this.db.prepare(`
       SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
              coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at
       FROM conversation
-      WHERE (? IS NULL OR updated_at < (SELECT updated_at FROM conversation WHERE id = ?))
+      WHERE (? IS NULL OR (updated_at, id) < (?, ?))
         AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)
       ORDER BY updated_at DESC, id DESC LIMIT ?
-    `).all(cursor ?? null, cursor ?? null, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null, safeLimit + 1) as unknown as ConversationRow[];
+    `).all(boundary?.[0] ?? null, boundary?.[0] ?? null, boundary?.[1] ?? null, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null, safeLimit + 1) as unknown as ConversationRow[];
     const hasMore = rows.length > safeLimit;
     const items = rows.slice(0, safeLimit).map((row) => this.toMetadata(row));
-    return { items, nextCursor: hasMore ? items.at(-1)?.id ?? null : null, hasMore };
+    const last = items.at(-1);
+    return { items, nextCursor: hasMore && last ? encodeReadCursor(scope, [last.updated_at, last.id]) : null, hasMore };
   }
 
   saveConversation(record: ConversationRecord): void {
@@ -523,14 +547,20 @@ export class AgentSqliteStore {
 
   deleteConversation(id: string, tenantId?: string, memberId?: string): boolean {
     const existing = this.getConversation(id);
-    const result = this.db.prepare("DELETE FROM conversation WHERE id = ? AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)").run(id, tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null);
-    const ownerTenant = existing?.tenantId ?? tenantId;
-    const ownerMember = existing?.memberId ?? memberId;
-    if (result.changes > 0 && ownerTenant && ownerMember) this.deleteConversationLocalFiles(id, ownerTenant, ownerMember);
-    this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
-    this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
-    this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
-    return result.changes > 0;
+    if (!existing || (tenantId !== undefined && existing.tenantId !== tenantId) || (memberId !== undefined && existing.memberId !== memberId)) return false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (existing.tenantId && existing.memberId) {
+        this.workRecords.deleteConversation(id, { tenantId: existing.tenantId, memberId: existing.memberId });
+        this.deleteConversationLocalFiles(id, existing.tenantId, existing.memberId);
+      }
+      this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
+      this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
+      this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
+      this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   listConversationParticipants(conversationId: string): ConversationParticipantSession[] {
@@ -829,11 +859,14 @@ export class AgentSqliteStore {
     });
   }
 
-  upsertUsageSummary(summary: UsageSummary): void {
+  upsertUsageSummary(summary: UsageSummary, preciseCost?: string): void {
     const now = new Date().toISOString();
+    // One hourly row/ledger. The numeric wire alias remains compatible; local accumulation is decimal.
+    const cost = usdUnits(preciseCost ?? summary.cost_total);
+    const cumulativeCost = "add_usage_cost(COALESCE(usage_summary_outbox.cost_total_decimal, json_extract(usage_summary_outbox.payload_json, '$.cost_total')), excluded.cost_total_decimal)";
     this.db.prepare(`
-      INSERT INTO usage_summary_outbox (summary_id, tenant_id, member_id, kind, status, attempts, last_error, payload_json, created_at)
-      VALUES (?, ?, ?, 'usage', 'pending', 0, NULL, ?, ?)
+      INSERT INTO usage_summary_outbox (summary_id, tenant_id, member_id, kind, status, attempts, last_error, payload_json, created_at, cost_total_decimal)
+      VALUES (?, ?, ?, 'usage', 'pending', 0, NULL, ?, ?, ?)
       ON CONFLICT(summary_id) DO UPDATE SET
         payload_json = json_object(
           'schema_version', '1', 'summary_id', excluded.summary_id,
@@ -847,17 +880,17 @@ export class AgentSqliteStore {
           'input_tokens', json_extract(usage_summary_outbox.payload_json, '$.input_tokens') + json_extract(excluded.payload_json, '$.input_tokens'),
           'output_tokens', json_extract(usage_summary_outbox.payload_json, '$.output_tokens') + json_extract(excluded.payload_json, '$.output_tokens'),
           'cache_tokens', json_extract(usage_summary_outbox.payload_json, '$.cache_tokens') + json_extract(excluded.payload_json, '$.cache_tokens'),
-          'cost_minor', json_extract(usage_summary_outbox.payload_json, '$.cost_minor') + json_extract(excluded.payload_json, '$.cost_minor'),
+          'cost_minor', CAST(ROUND(CAST(${cumulativeCost} AS REAL) * 100) AS INTEGER),
           'currency', json_extract(usage_summary_outbox.payload_json, '$.currency'),
           'duration_ms_total', json_extract(usage_summary_outbox.payload_json, '$.duration_ms_total') + json_extract(excluded.payload_json, '$.duration_ms_total'),
           'pricing_version', json_extract(usage_summary_outbox.payload_json, '$.pricing_version'),
           'pricing_status', json_extract(usage_summary_outbox.payload_json, '$.pricing_status'),
           'run_count', json_extract(usage_summary_outbox.payload_json, '$.run_count') + json_extract(excluded.payload_json, '$.run_count'),
           'token_total', json_extract(usage_summary_outbox.payload_json, '$.token_total') + json_extract(excluded.payload_json, '$.token_total'),
-          'cost_total', json_extract(usage_summary_outbox.payload_json, '$.cost_total') + json_extract(excluded.payload_json, '$.cost_total'),
+          'cost_total', CAST(${cumulativeCost} AS REAL),
           'duration_seconds_total', json_extract(usage_summary_outbox.payload_json, '$.duration_seconds_total') + json_extract(excluded.payload_json, '$.duration_seconds_total')
-        ), status = 'pending', last_error = NULL
-    `).run(summary.summary_id, summary.tenant_id, summary.member_id, JSON.stringify(summary), now);
+        ), cost_total_decimal = ${cumulativeCost}, status = 'pending', last_error = NULL
+    `).run(summary.summary_id, summary.tenant_id, summary.member_id, JSON.stringify(summary), now, cost === undefined ? null : usdDecimal(cost));
   }
 
   claimUsageOutbox(tenantId: string, memberIdOrLimit?: string | number, limit = 50): Array<{ summary_id: string; tenant_id: string; payload: UsageSummary; claim_token: string }> {

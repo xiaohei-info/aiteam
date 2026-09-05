@@ -6,6 +6,33 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { AgentSqliteStore } from "./sqlite.js";
 
+test("conversation cursors preserve timestamp ties, frozen anchors, legacy IDs and owner scope across restart", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-conversation-cursor-test-"));
+  const path = join(root, "agent.sqlite");
+  let store = new AgentSqliteStore(path);
+  try {
+    const time = "2026-09-05T08:00:00.000Z";
+    for (const id of ["a", "b", "c", "d"]) store.saveConversation({ id, tenantId: "t", memberId: "m", sessionFile: "", workspace: "", updatedAt: time });
+    store.saveConversation({ id: "foreign", tenantId: "t", memberId: "other", sessionFile: "", workspace: "", updatedAt: time });
+    const first = store.listConversations(2, undefined, "t", "m");
+    assert.deepEqual(first.items.map((item) => item.id), ["d", "c"]);
+    assert(first.nextCursor?.startsWith("page_v1."));
+    assert.deepEqual(store.listConversations(2, "c", "t", "m").items.map((item) => item.id), ["b", "a"]);
+    store.updateConversation("c", { title: "anchor moved" });
+    assert.deepEqual(store.listConversations(2, first.nextCursor!, "t", "m").items.map((item) => item.id), ["b", "a"]);
+    for (const cursor of ["foreign", "invalid", "page_v1.invalid"]) assert.throws(() => store.listConversations(2, cursor, "t", "m"), /Invalid cursor/);
+    assert.throws(() => store.listConversations(2, first.nextCursor!, "t", "other"), /Invalid cursor/);
+    assert.throws(() => store.listConversations(2, first.nextCursor!, "other", "m"), /Invalid cursor/);
+    store.deleteConversation("c", "t", "m");
+    store.close();
+    store = new AgentSqliteStore(path);
+    const next = store.listConversations(2, first.nextCursor!, "t", "m");
+    assert.deepEqual(next.items.map((item) => item.id), ["b", "a"]);
+    assert.equal(next.nextCursor, null);
+    assert.equal(next.hasMore, false);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("projection ownership schema migrates legacy local databases additively", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-schema-migration-test-"));
   const path = join(root, "agent.sqlite");

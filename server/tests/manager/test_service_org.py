@@ -21,9 +21,9 @@ def test_build_tree_assigns_employees_from_employee_department_ids():
         ),
         FakeCursor(
             fetchall=[
-                ("emp-1", "alice", "Alice", ["dept-a"]),
-                ("emp-2", "bob", "Bob", ["missing-dept"]),
-                ("emp-3", "cathy", "Cathy", None),
+                ("emp-1", "alice", "Alice", ["dept-a", "dept-b"], "研究分析师"),
+                ("emp-2", "bob", "Bob", ["missing-dept"], None),
+                ("emp-3", "cathy", "Cathy", None, None),
             ]
         ),
     )
@@ -33,11 +33,15 @@ def test_build_tree_assigns_employees_from_employee_department_ids():
     sales = next(child for child in tree["children"] if child["id"] == "dept-a")
     assert [child["id"] for child in sales["children"]] == ["emp-1"]
     assert sales["children"][0]["parent_id"] == "dept-a"
+    assert sales["children"][0]["role_title"] == "研究分析师"
+    engineering = next(child for child in tree["children"] if child["id"] == "dept-b")
+    assert engineering["children"][0]["role_title"] == "研究分析师"
     assert all(child["type"] == "department" for child in tree["children"])
     unassigned = next(child for child in tree["children"] if child["id"] == "unassigned")
     assert unassigned["name"] == "未设置"
     assert [child["id"] for child in unassigned["children"]] == ["emp-2", "emp-3"]
     assert all(child["parent_id"] == "unassigned" for child in unassigned["children"])
+    assert all(child["role_title"] is None for child in unassigned["children"])
     assert all("app_user" not in sql for sql, _ in router.executed)
 
 

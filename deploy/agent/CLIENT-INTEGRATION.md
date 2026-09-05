@@ -1,6 +1,6 @@
 # Agent 客户端快速集成
 
-客户端只负责四件事：**带上完整 Agent 目录、启动进程、把本地 URL 交给前端、退出时关闭进程**。
+本篇说明 Agent sidecar 宿主集成：**带上完整目录与公共配置、公钥，启动进程，把动态本地 URL 交给前端，退出时关闭进程**。macOS 三端复合客户端另外按模块直接访问 Operator/Manager，并使用对应端身份权限；不要求 Agent 通用代理控制面。20 项业务接入见仓库 `docs/客户端接入/2026-09-05-macOS三端接口接入说明.md`。
 
 ## 1. 解压并放入客户端安装包
 
@@ -25,10 +25,17 @@ Windows: <Client>\resources\agent\
 客户端安装或升级时复制：
 
 ```text
-AGENT_DIR/config/agent.env → CLIENT_DATA_ROOT/agent.env
+AGENT_DIR/config/agent.env         → CLIENT_DATA_ROOT/agent.env
+AGENT_DIR/config/manager-jwks.json → CLIENT_DATA_ROOT/manager-jwks.json（文件型 JWKS 包）
 ```
 
-下文称目标文件为 `CONFIG_FILE`。CI 使用企业 Environment 打包时，这个文件已经包含对应 Manager 配置；客户端团队不需要重新生成。taiyi 测试包可以直接使用现成配置。
+下文称目标配置文件为 `CONFIG_FILE`。有企业公共配置的包可使用随包配置；模板包不能直接登录。文件型 JWKS 打包后通常写为 `AITEAM_AGENT_JWKS_PATH=manager-jwks.json`，相对路径以 **CONFIG_FILE 所在目录**解析，不以 `cwd` 或可执行文件目录解析。因此不能只复制 env；自定义相对路径也必须保持对应目录结构，或由宿主设置可信公钥文件的绝对路径。内联 `AITEAM_AGENT_JWKS_JSON` 非空时优先于文件，两者不要保留相互矛盾的配置。
+
+正式交付需要企业确认 Manager HTTPS 正式地址、与 Manager `AITEAM_JWT_ISSUER` **逐字相同**的 `AITEAM_AGENT_JWT_ISSUER`、与 JWT aud 一致的 `AITEAM_AGENT_JWT_AUDIENCE`、可信 RSA RS256 公共 JWKS（kid/n/e）和技能验证公钥。Manager URL 不自动等于 issuer；不能改写 scheme/path/末尾斜杠来“修复”验签。现有严格打包器要求 URL 型 issuer，生产包要求 HTTPS；如 Manager 仍用开发默认 `aiteam-manager`，应由部署方正式配置一致的 issuer 后交付，不能客户端自行猜一个 URL。
+
+Agent 在启动时载入公钥，不会自动下载 JWKS、发现 issuer 或热加载文件。轮换时通过受控安装/配置通道先分发可信 current+next 公钥并重启 Agent，再由 Manager 切换签名；旧 token 有效期及重叠窗口结束后受控移除旧公钥并再次重启。未知 kid/issuer/audience 必须失败，不得自动信任。公钥不等于签名私钥；任何用户密码、service token、Provider/Hindsight/LightRAG secret 均不得入包。
+
+企业知识能力可在公共配置中设置 `AITEAM_RAG_MCP_URL=https://manager.example.com/api/manager/rag/mcp`（示例域名）。它必须与配置的 Manager 同 origin、固定此路径、无 query/hash/凭据；测试 Manager 可对应使用 `http://121.40.78.201:8782/api/manager/rag/mcp`。不配置时不装载该 MCP 工具，不把企业 LightRAG 内网地址交给客户端。运行时认证由 Agent 当前会话在内存中提供。
 
 另外创建持久化数据目录：
 
@@ -37,7 +44,7 @@ macOS:  ~/Library/Application Support/<Vendor>/<Client>/agent-data/
 Windows: %LOCALAPPDATA%\<Vendor>\<Client>\agent-data\
 ```
 
-下文称它为 `DATA_DIR`。升级时可以覆盖 `CONFIG_FILE`，但**不得删除或覆盖 `DATA_DIR`**。
+下文称它为 `DATA_DIR`。升级时可受控更新 `CONFIG_FILE` 及配套 JWKS（保留宿主定制 origin/目录等设置），但**不得删除或覆盖 `DATA_DIR`**。
 
 如果客户端 WebView 的 origin 不是配置中的 `aiteam://desktop`，只需修改 `CONFIG_FILE` 中这一项：
 
@@ -127,12 +134,12 @@ GET http://127.0.0.1:PORT_VALUE/readyz
 agentBaseUrl = http://127.0.0.1:PORT_VALUE
 ```
 
-前端创建 API Client 时传入该地址，禁止写死 `8180`：
+宿主可实现 `get_agent_base_url` IPC，返回经过上一节进程/健康校验的 URL；它是原生宿主接口，**不是 Agent 新增 HTTP 路由**。每次进程重启后重新发现，禁止缓存旧端口或在失败时回退到 taiyi 远程 Agent。前端创建 API Client 时传入该地址，禁止写死 `8180`：
 
 ```ts
 new AgentApiClient({
   baseUrl: agentBaseUrl,
-  getToken: () => token,
+  getToken() { return token; },
 });
 ```
 
@@ -144,7 +151,7 @@ http://127.0.0.1:PORT_VALUE/
 
 ## 6. 登录并确认 Manager 连接
 
-页面只请求本地 Agent，不直接请求 Manager 或 Operator。首次登录按以下顺序：
+Agent 自带页面/本地聊天模块使用下面的既有认证窄通道；它不是所有业务的通用代理。复合客户端企业招募、组织/知识管理、企业汇总直接访问 Manager 并使用该企业身份；平台运营模块直接访问 Operator 并使用平台身份，不能复用企业 token 冒充平台权限。首次本地登录按以下顺序：
 
 ```text
 POST /api/auth/resolve-tenant-by-account
@@ -167,7 +174,7 @@ GET  /api/agent/grants/readiness
 客户端升级时：
 
 ```text
-停止旧 Agent → 替换 AGENT_DIR → 更新 CONFIG_FILE → 保留 DATA_DIR → 重新启动并检查 healthz/readyz
+停止旧 Agent → 替换 AGENT_DIR → 更新 CONFIG_FILE 及配套公共 JWKS → 保留 DATA_DIR → 重新发现端口并检查 healthz/readyz
 ```
 
 ## 最小验收
@@ -180,4 +187,4 @@ GET  /api/agent/grants/readiness
 - [ ] 客户端退出后 Agent 进程同步退出；
 - [ ] 升级后原有会话和数据仍存在。
 
-> taiyi 包是测试包，连接 `http://121.40.78.201:8782`，不能作为生产包发布。Windows 包在生产发布前仍需完成原生 sandbox 验收。
+> taiyi 包是测试包，Manager 地址为 `http://121.40.78.201:8782`，不能作为生产包发布；本说明不表示本轮已部署或正式 JWKS 已交付。taiyi 云端服务升级不等于用户已安装的本机 sidecar 自动升级；本轮本地新增接口需要单独升级包含对应代码的 Agent 包，并验证本地 `/openapi.json`。Windows 包在生产发布前仍需完成原生 sandbox 验收。

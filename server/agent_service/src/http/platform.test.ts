@@ -131,7 +131,7 @@ test("Agent projections use real Manager catalog, schedules, and usage payloads"
   const remote: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
     getOrgTree: async () => ({}),
-    listMarketplaceTemplates: async () => [{ template_id: "template-1", display_name: "Researcher", category: "research", model_name: "model-1", skills_count: 2, recruit_count: 1, is_recruited: false, tags: ["analysis"], avatar_url: null }],
+    listMarketplaceTemplates: async () => [{ template_id: "template-1", display_name: "Researcher", category: "research", description: "真实市场描述", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:abc" }], model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null }],
   };
   const { fixture, http, base } = await start(remote);
   try {
@@ -146,6 +146,10 @@ test("Agent projections use real Manager catalog, schedules, and usage payloads"
     assert.equal((await catalog.json() as { data: Array<{ template_id: string }> }).data[0].template_id, "template-1");
     const detail = await fetch(`${base}/api/agent/marketplace/templates/template-1`, { headers: auth });
     assert.equal(detail.status, 200);
+    const template = (await detail.json() as { data: Record<string, unknown> }).data;
+    assert.equal(template.description, "真实市场描述");
+    assert.deepEqual(template.platform_skill_refs, [{ skill_id: "research", version: "1", content_hash: "sha256:abc" }]);
+    assert.equal(template.recruit_count, null);
     const feed = await fetch(`${base}/api/agent/office/feed`, { headers: auth });
     assert.equal((await feed.json() as { data: { events: unknown[] } }).data.events.length, 1);
     const outbox = await fetch(`${base}/api/agent/usage/outbox`, { headers: auth });

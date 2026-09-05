@@ -216,7 +216,7 @@ describe("ExpertsPage", () => {
   });
 
   it("编辑：点击编辑配置打开抽屉，修改模型后自动反推 provider 并保存", async () => {
-    const { api, updateEmployee } = mockApis([employeeConfigured]);
+    const { api, updateEmployee } = mockApis([{ ...employeeConfigured, role_title: "研究分析师", department_ids: ["d1", "d2"] }]);
     renderPage();
     await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
@@ -245,6 +245,8 @@ describe("ExpertsPage", () => {
     expect(calledCfg.skills).toEqual(["s1"]);
     expect(calledCfg.knowledge_refs).toEqual(["k1"]);
     expect(calledCfg.persona).toBe("技术架构专家");
+    expect(calledCfg.role_title).toBe("研究分析师");
+    expect(calledCfg.department_ids).toEqual(["d1", "d2"]);
   });
 
   it("选择模型后自动反推其 provider", async () => {

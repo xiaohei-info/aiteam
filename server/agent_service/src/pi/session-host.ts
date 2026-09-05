@@ -19,12 +19,14 @@ import {
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
-import type { AgentSqliteStore, ConversationPermissionMode, FrozenSnapshot } from "../storage/sqlite.js";
+import type { AgentSqliteStore, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { serializePiEntry, serializePiEvent } from "./event-sse.js";
-import type { UsageCapture } from "../usage.js";
+import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
+import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
+import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
@@ -111,6 +113,7 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
+  /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
   usageRecorder?: (capture: UsageCapture, caller: AuthenticatedCaller) => void | Promise<void>;
 }
 
@@ -277,13 +280,13 @@ export class SessionHost {
       const record = this.records.get(this.recordKey(conversationId, employeeId));
       const participant = participants.find((item) => item.employee_id === employeeId);
       const sessionFile = participant?.session_file || (employeeIds.length === 1 ? this.options.store.getConversation(conversationId)?.sessionFile : undefined);
-      const entries = record?.sessionManager.getEntries() ?? this.readPersistedOfficeEntries(sessionFile);
+      const entries = record?.sessionManager.getEntries() ?? this.readPersistedEntries(sessionFile, 256);
       const prompting = record?.prompting ?? false;
       let latest: SessionEntry | undefined;
       let latestTimestamp = -1;
       for (const entry of entries) {
         if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info") continue;
-        const timestamp = this.entryTimestamp(entry);
+        const timestamp = historyTimestamp(entry);
         if (timestamp >= latestTimestamp) {
           latestTimestamp = timestamp;
           latest = entry;
@@ -419,11 +422,9 @@ export class SessionHost {
     }));
   }
 
-  async entries(conversationId: string) {
-    const participantRows = this.options.store.listConversationParticipants(conversationId);
-    const records = participantRows.length > 0
-      ? participantRows.map((participant) => this.ensureRecord(conversationId, participant.employee_id))
-      : [this.ensureRecord(conversationId)];
+  async entries(conversationId: string, caller?: AuthenticatedCaller) {
+    if (caller) this.requireHistoryOwner(conversationId, caller);
+    const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
     await Promise.all(records.map(async (record) => {
       await record.sessionReady?.catch(() => undefined);
       if (record.prompting && !record.promptPromise) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -436,42 +437,69 @@ export class SessionHost {
         ]);
       }
     }));
-    const seenLogicalMessages = new Set<string>();
-    return records
-      .flatMap((record) => record.sessionManager.getEntries().map((entry) => this.decorateEntry(record, entry)))
-      .filter((entry) => {
-        const value = entry as unknown as Record<string, unknown>;
-        if (value.type !== "message" || (value as { message?: { role?: unknown } }).message?.role !== "user") return true;
-        const logicalMessageId = typeof value.logical_message_id === "string" ? value.logical_message_id : undefined;
-        if (!logicalMessageId || seenLogicalMessages.has(logicalMessageId)) return !logicalMessageId;
-        seenLogicalMessages.add(logicalMessageId);
-        return true;
-      })
-      // SessionManager timestamps are ISO strings. Stable sort preserves append order
-      // for entries written within the same millisecond.
-      .sort((left, right) => this.entryTimestamp(left) - this.entryTimestamp(right));
+    if (caller) this.requireHistoryOwner(conversationId, caller);
+    return this.readIndexedHistory(conversationId).map((item) => item.entry);
   }
 
-  private entryTimestamp(entry: SessionEntry): number {
-    const value = entry as unknown as { timestamp?: unknown };
-    if (typeof value.timestamp === "number" && Number.isFinite(value.timestamp)) return value.timestamp;
-    if (typeof value.timestamp === "string") {
-      const timestamp = Date.parse(value.timestamp);
-      if (Number.isFinite(timestamp)) return timestamp;
+  /** Observational owner-checked seam for preview, unread, history pages and search. */
+  readEntries(conversationId: string, caller: AuthenticatedCaller): IndexedHistoryEntry[] {
+    this.requireHistoryOwner(conversationId, caller);
+    return this.readIndexedHistory(conversationId);
+  }
+
+  private requireHistoryOwner(conversationId: string, caller: AuthenticatedCaller): void {
+    if (!caller.tenantId || !this.options.store.getOwnedConversation(conversationId, caller.tenantId, caller.userId ?? caller.callerId)) {
+      throw new SessionAuthorizationError("Conversation is not owned by the authenticated member");
     }
-    return 0;
   }
 
-  private readPersistedOfficeEntries(sessionFile?: string): SessionEntry[] {
+  private readIndexedHistory(conversationId: string): IndexedHistoryEntry[] {
+    return mergeHistorySources(this.options.store, conversationId, this.readExistingHistorySources(conversationId));
+  }
+
+  /** Owner-checked raw participant ranges for derived work reads, without logical fan-out merging. */
+  readHistorySources(conversationId: string, caller: AuthenticatedCaller): HistorySource[] {
+    this.requireHistoryOwner(conversationId, caller);
+    return this.readExistingHistorySources(conversationId);
+  }
+
+  private readExistingHistorySources(conversationId: string): HistorySource[] {
+    const indexed = this.options.store.getConversation(conversationId);
+    if (!indexed) return [];
+    const participants = this.options.store.listConversationParticipants(conversationId);
+    const sources: HistorySource[] = participants.map((participant) => ({
+      employeeId: participant.employee_id,
+      role: participant.role,
+      entries: this.records.get(this.recordKey(conversationId, participant.employee_id))?.sessionManager.getEntries()
+        ?? this.readPersistedEntries(participant.session_file || this.legacySessionFile(indexed, participant.employee_id)),
+    }));
+    const legacyEmployeeId = indexed.entryEmployeeId ?? indexed.coordinatorEmployeeId ?? undefined;
+    if (!participants.length || (indexed.sessionFile && !participants.some((participant) => participant.employee_id === legacyEmployeeId))) {
+      sources.push({
+        employeeId: legacyEmployeeId,
+        role: legacyEmployeeId && indexed.coordinatorEmployeeId === legacyEmployeeId ? "coordinator" : "member",
+        entries: this.records.get(this.recordKey(conversationId, legacyEmployeeId))?.sessionManager.getEntries()
+          ?? this.readPersistedEntries(this.legacySessionFile(indexed, legacyEmployeeId)),
+      });
+    }
+    return sources;
+  }
+
+  /** A pre-participant Session belongs only to its indexed employee, not every member of a group. */
+  private legacySessionFile(indexed: ConversationRecord, employeeId?: string): string | undefined {
+    return employeeId === (indexed.entryEmployeeId ?? indexed.coordinatorEmployeeId ?? undefined) ? indexed.sessionFile : undefined;
+  }
+
+  private readPersistedEntries(sessionFile?: string, tail?: number): SessionEntry[] {
     if (!sessionFile || !existsSync(sessionFile)) return [];
     try {
       this.assertManagedPathEither(sessionFile, this.options.sessionDir, this.options.cwdRoot);
-      // Keep office polling bounded; the latest entries are enough to derive a status.
-      return readFileSync(sessionFile, "utf8").split("\\n").slice(-256).flatMap((line) => {
+      const lines = readFileSync(sessionFile, "utf8").split("\n");
+      return (tail === undefined ? lines : lines.slice(-tail)).flatMap((line) => {
         if (!line.trim()) return [];
         try {
           const value = JSON.parse(line) as unknown;
-          return value && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string"
+          return value && typeof value === "object" && !Array.isArray(value) && typeof (value as { type?: unknown }).type === "string" && (value as { type: string }).type !== "session" && typeof (value as { id?: unknown }).id === "string"
             ? [value as SessionEntry]
             : [];
         } catch {
@@ -521,6 +549,7 @@ export class SessionHost {
 
   async dispose(): Promise<void> {
     for (const record of this.records.values()) {
+      record.aborting = true;
       const session = record.session ?? await record.sessionReady?.catch(() => undefined);
       await session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
@@ -528,27 +557,6 @@ export class SessionHost {
     }
     this.records.clear();
     this.listeners.clear();
-  }
-
-  private async recordUsage(record: SessionRecord, authorization: SessionAuthorization | undefined, startedAt: number, settled: boolean, entriesBefore: number): Promise<void> {
-    if (!this.options.usageRecorder || !authorization?.caller.tenantId || !authorization.caller.userId) return;
-    await this.recordUsageEntries(
-      authorization, startedAt, settled, record.sessionManager.getEntries().slice(entriesBefore),
-    );
-  }
-
-  private async recordUsageEntries(authorization: SessionAuthorization, startedAt: number, settled: boolean, entries: readonly SessionEntry[]): Promise<void> {
-    if (!this.options.usageRecorder || !authorization.caller.tenantId || !authorization.caller.userId) return;
-    await this.options.usageRecorder({
-      tenantId: authorization.caller.tenantId,
-      memberId: authorization.caller.userId,
-      employeeId: authorization.employeeId,
-      startedAt,
-      endedAt: Date.now(),
-      entries,
-      settled,
-      pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
-    }, authorization.caller);
   }
 
   private ensureRecord(conversationId: string, employeeId?: string): SessionRecord {
@@ -572,7 +580,7 @@ export class SessionHost {
     chmodSync(workspace, 0o700);
 
     let sessionManager: SessionManager;
-    const existingSessionFile = participant?.session_file || (!resolvedEmployeeId ? indexed.sessionFile : "");
+    const existingSessionFile = participant?.session_file || this.legacySessionFile(indexed, resolvedEmployeeId);
     if (existingSessionFile && existsSync(existingSessionFile)) {
       this.assertManagedPathEither(existingSessionFile, this.options.sessionDir, this.options.cwdRoot);
       sessionManager = SessionManager.open(existingSessionFile, this.options.sessionDir, workspace);
@@ -905,10 +913,13 @@ export class SessionHost {
 
   private async promptParticipant(record: SessionRecord, command: GroupMessageCommand, authorization?: SessionAuthorization): Promise<GroupMessageReply> {
     const employeeId = record.employeeId ?? "conversation";
-    const startedAt = Date.now();
-    const entriesBefore = record.sessionManager.getEntries().length;
     if (record.contextOperation) await record.contextOperation;
     if (record.prompting) throw new ConversationBusyError();
+    const startedAt = Date.now();
+    const entriesBefore = record.sessionManager.getEntries().length;
+    const owner = authorization?.caller.tenantId ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
+    const workId = owner && this.options.store.getOwnedConversation(record.conversationId, owner.tenantId, owner.memberId)
+      ? this.options.store.workRecords.start({ ...owner, employeeId, conversationId: record.conversationId, startedAt, startOrdinal: entriesBefore }) : undefined;
     record.prompting = true;
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;
@@ -916,34 +927,68 @@ export class SessionHost {
     record.activeSource = command.source;
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
     const workspaceBefore = this.workspaceSnapshot(record.workspace);
+    let unsubscribeSource: (() => void) | undefined;
+    let sourceCapture = Promise.resolve();
+    let settled = false;
+    let failed = true;
+    let stopReason: string | undefined;
     try {
       record.sessionReady = this.ensureSession(record, authorization);
       const session = await record.sessionReady;
+      if (record.aborting) throw new Error("Prompt aborted during initialization");
+      unsubscribeSource = session.subscribe((event) => {
+        if (event.type === "agent_settled") settled = true;
+        if (event.type === "message_end" && event.message.role === "assistant") stopReason = event.message.stopReason;
+        if (event.type !== "message_end" || event.message.role !== "user") return;
+        // Pi emits message_end immediately before appending the same message object.
+        // The microtask observes its stable entry ID; the closure is per participant delivery.
+        sourceCapture = sourceCapture.then(() => this.recordEntrySources(record, command, entriesBefore, event.message));
+        void sourceCapture.catch(() => undefined); // Awaited at settlement; avoid an unhandled rejection during streaming.
+      });
       const promptPromise = (async () => {
         await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        await sourceCapture;
         this.recordEntrySources(record, command, entriesBefore);
-        await this.recordUsage(record, authorization, startedAt, true, entriesBefore);
         return record.sessionManager.getLeafId() ?? undefined;
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
+      failed = false;
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       return { employeeId, entryId, text };
     } catch (error) {
       this.recordEntrySources(record, command, entriesBefore);
-      await this.recordUsage(record, authorization, startedAt, false, entriesBefore);
       throw error;
     } finally {
-      this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
-      record.promptPromise = undefined;
-      record.sessionReady = undefined;
-      record.prompting = false;
-      record.aborting = false;
-      record.activeToolCallId = undefined;
-      record.activeSourceRef = undefined;
-      record.activeSourceRole = undefined;
-      record.activeSource = undefined;
-      await this.disposeSession(record);
+      unsubscribeSource?.();
+      try {
+        if (workId && owner && authorization) {
+          const entries = record.sessionManager.getEntries().slice(entriesBefore);
+          const outcome = observedWorkOutcome(stopReason ?? lastAssistantStopReason(entries), settled, record.aborting, failed);
+          const capture: UsageCapture = {
+            ...owner, employeeId, startedAt, endedAt: Date.now(), entries, settled: outcome === "succeeded",
+            pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
+          };
+          const committed = this.options.store.workRecords.finish(workId, owner, {
+            outcome, endedAt: capture.endedAt, endOrdinal: entriesBefore + entries.length,
+            firstEntryId: entries[0]?.id ?? null, lastEntryId: entries.at(-1)?.id ?? null,
+            firstEntryAt: workEntryTime(entries[0]), lastEntryAt: workEntryTime(entries.at(-1)),
+            usage: this.options.useFauxModel ? null : measureWorkUsage(entries, capture.pricing),
+          }, this.options.useFauxModel ? undefined : aggregateUsage(capture));
+          if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
+        }
+      } finally {
+        this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
+        record.promptPromise = undefined;
+        record.sessionReady = undefined;
+        record.prompting = false;
+        record.aborting = false;
+        record.activeToolCallId = undefined;
+        record.activeSourceRef = undefined;
+        record.activeSourceRole = undefined;
+        record.activeSource = undefined;
+        await this.disposeSession(record);
+      }
     }
   }
 
@@ -1047,10 +1092,10 @@ export class SessionHost {
     return boundGroupContext(sections.join("\n\n"));
   }
 
-  private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number): void {
+  private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number, observedMessage?: unknown): void {
     if (!record.employeeId) return;
     for (const entry of record.sessionManager.getEntries().slice(entriesBefore)) {
-      if (entry.type !== "message" || entry.message.role !== "user" || typeof entry.id !== "string") continue;
+      if (entry.type !== "message" || entry.message.role !== "user" || typeof entry.id !== "string" || (observedMessage !== undefined && entry.message !== observedMessage)) continue;
       this.options.store.upsertConversationEntrySource({
         conversation_id: record.conversationId,
         employee_id: record.employeeId,
@@ -1070,34 +1115,6 @@ export class SessionHost {
       if (text) return text.slice(0, MAX_DELEGATE_RESULT_CHARS);
     }
     return "Employee completed without a textual result.";
-  }
-
-  private decorateEntry(record: SessionRecord, entry: SessionEntry): SessionEntry {
-    if (!record.employeeId || !record.role) return entry;
-    const indexed = this.options.store.getConversation(record.conversationId);
-    const expert = this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId);
-    const base = entry as unknown as Record<string, unknown>;
-    if (entry.type === "message" && entry.message.role === "user" && typeof entry.id === "string") {
-      const source = this.options.store.getConversationEntrySource(record.conversationId, record.employeeId, entry.id);
-      if (source) return {
-        ...base,
-        source_type: source.source_type,
-        source_id: source.source_id,
-        ...(source.source_display_name ? { source_display_name: source.source_display_name } : {}),
-        source_role: source.source_type === "employee" ? "participant" : "human",
-        logical_message_id: source.logical_message_id,
-      } as unknown as SessionEntry;
-      // A persisted user entry without a source index is a human message. Do
-      // not fall through to the participant fallback below, which would make
-      // the coordinator appear to have authored the user's prompt.
-      return { ...base, source_type: "human", source_role: "human" } as unknown as SessionEntry;
-    }
-    return {
-      ...base,
-      source_employee_id: record.employeeId,
-      source_employee_display_name: expert?.display_name ?? record.employeeId,
-      source_role: record.role,
-    } as unknown as SessionEntry;
   }
 
   private resolveEmployeeReference(record: SessionRecord, authorization: SessionAuthorization, reference: string): string {
@@ -1297,16 +1314,7 @@ function officeEntryStatus(entry: SessionEntry | undefined): OfficeEmployeeActiv
 function officeEntryTask(entries: readonly SessionEntry[]): string | null {
   for (const entry of [...entries].reverse()) {
     if (entry.type !== "message" || (entry.message.role !== "assistant" && entry.message.role !== "user")) continue;
-    const serialized = serializePiEntry(entry);
-    const message = serialized?.message;
-    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
-    const content = (message as Record<string, unknown>).content;
-    const text = typeof content === "string"
-      ? content
-      : Array.isArray(content)
-        ? content.flatMap((part) => part && typeof part === "object" && !Array.isArray(part) && typeof (part as Record<string, unknown>).text === "string" ? [(part as Record<string, unknown>).text as string] : []).join(" ")
-        : "";
-    const task = text.replace(/\\s+/gu, " ").trim();
+    const task = visibleHistoryText(entry);
     if (task) return task.slice(0, 240);
   }
   return null;

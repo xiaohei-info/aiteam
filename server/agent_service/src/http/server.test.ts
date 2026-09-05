@@ -449,7 +449,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 45);
+    assert.equal(frontendOperations.length, 50);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -486,6 +486,23 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         }
       }
     }
+    const orgSchema = document.components.schemas.OrgTreeNode;
+    const assertOrgNode = (node: Record<string, any>) => {
+      for (const field of orgSchema.required) assert(Object.hasOwn(node, field), `org example ${node.id} missing required ${field}`);
+      if (node.type === "department") assert.equal(node.role_title, null);
+      for (const child of node.children) assertOrgNode(child);
+    };
+    for (const example of Object.values(document.paths["/api/agent/org/tree"].get.responses["200"].content["application/json"].examples) as any[]) {
+      assertOrgNode(example.value.data);
+    }
+    const historyParameters = document.paths["/api/agent/conversations/{conversation_id}/entries"].get.parameters;
+    assert.deepEqual(historyParameters.map((parameter: any) => parameter.name).sort(), ["conversation_id", "cursor", "entry_ref", "limit"]);
+    assert.deepEqual(historyParameters.filter((parameter: any) => parameter.in === "query").map((parameter: any) => parameter.name).sort(), ["cursor", "entry_ref", "limit"]);
+    assert.equal(historyParameters.find((parameter: any) => parameter.name === "limit").schema.maximum, 100);
+    assert(document.components.schemas.ConversationEntriesEnvelope.properties.page);
+    assert(!document.components.schemas.ConversationEntriesEnvelope.required.includes("page"), "legacy entries response omits page");
+    for (const field of ["last_preview", "unread_count"]) assert(document.components.schemas.ConversationMetadata.properties[field]);
+    for (const path of ["/api/agent/messages/search", "/api/agent/conversations/{conversation_id}/participants"]) assert(document.paths[path].get.responses["404"]);
     const shortKnowledgeParams = document.paths["/api/agent/knowledge-bases/{knowledge_base_id}/{kind}"].get.parameters;
     assert.deepEqual(shortKnowledgeParams.map((parameter: any) => parameter.name), ["knowledge_base_id", "kind"]);
     assert.deepEqual(document.components.schemas.ConversationState.anyOf.map((branch: any) => branch.enum?.[0]), ["draft", "active", "paused", "muted", "archived"]);
