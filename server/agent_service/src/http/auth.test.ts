@@ -3,15 +3,22 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { test } from "node:test";
 import { createJwtAuthenticator } from "./auth.js";
 
-function token(exp = Math.floor(Date.now() / 1000) + 60): { token: string; jwks: { keys: [{ kty: "RSA"; n: string; e: string; kid: string; alg: "RS256" }] } } {
+function token(exp = Math.floor(Date.now() / 1000) + 60, tenantId: unknown = "tenant-a"): { token: string; jwks: { keys: [{ kty: "RSA"; n: string; e: string; kid: string; alg: "RS256" }] } } {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = publicKey.export({ format: "jwk" }) as { n: string; e: string };
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "tenant-a:1" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ iss: "manager", aud: "agent", enterprise_id: "enterprise-a", tenant_id: "tenant-a", user_id: "member-a", roles: ["member"], iat: Math.floor(Date.now() / 1000), exp })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ iss: "manager", aud: "agent", enterprise_id: "enterprise-a", tenant_id: tenantId, user_id: "member-a", roles: ["member"], iat: Math.floor(Date.now() / 1000), exp })).toString("base64url");
   const signed = `${header}.${payload}`;
   const signature = sign("RSA-SHA256", Buffer.from(signed), privateKey).toString("base64url");
   return { token: `${signed}.${signature}`, jwks: { keys: [{ kty: "RSA", n: jwk.n, e: jwk.e, kid: "tenant-a:1", alg: "RS256" }] } };
 }
+
+test("JWT Agent identity rejects null, non-string and empty tenant claims", async () => {
+  for (const tenantId of [null, "", " ", 123]) {
+    const signed = token(undefined, tenantId);
+    await assert.rejects(async () => createJwtAuthenticator({ jwks: signed.jwks, issuer: "manager", audience: "agent" })({ headers: { authorization: `Bearer ${signed.token}` } } as never), /identity claims/);
+  }
+});
 
 test("JWT authenticator verifies tenant identity and rejects expiry", async () => {
   const valid = token();

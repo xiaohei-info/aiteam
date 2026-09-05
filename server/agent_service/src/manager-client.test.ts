@@ -28,9 +28,36 @@ test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async
     return new Response(JSON.stringify({ data: [{ template_id: "tpl-1", display_name: "Researcher", category: "research", default_model: "model-1", skill_ids: ["skill-1"], tags: ["analysis"] }] }), { status: 200 });
   });
   const templates = await client.listMarketplaceTemplates(caller);
-  assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", model_name: "model-1", skills_count: 1, recruit_count: 0, is_recruited: false, tags: ["analysis"], avatar_url: null });
+  assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", description: null, platform_skill_refs: null, model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null });
   assert.equal(request?.url, "https://manager.test/api/manager/recruit/catalog/experts");
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+});
+
+test("marketplace skill counts prefer modern fixed platform refs, including authoritative empty lists", async () => {
+  const ref = { skill_id: "skill-1", version: "1", content_hash: "sha256:abc" };
+  const client = new HttpManagerClient("https://manager.test", async () => new Response(JSON.stringify({ data: [
+    { template_id: "modern", description: "真实描述", platform_skill_refs: [ref, { ...ref, skill_id: "skill-2", private_key: "not-public" }], skill_ids: ["old"], skills_count: 9 },
+    { template_id: "empty", platform_skill_refs: [], skill_ids: ["old"] },
+    { template_id: "invalid", platform_skill_refs: [null, "not-a-ref", {}, ref] },
+  ] }), { status: 200 }));
+  const templates = await client.listMarketplaceTemplates(caller);
+  assert.deepEqual(templates.map((template) => template.skills_count), [2, 0, 1]);
+  assert.equal(templates[0].description, "真实描述");
+  assert.deepEqual(templates[0].platform_skill_refs, [ref, { ...ref, skill_id: "skill-2" }]);
+  assert.deepEqual(templates[1].platform_skill_refs, []);
+  assert.deepEqual(templates[2].platform_skill_refs, [ref]);
+  assert.equal(templates[0].recruit_count, null);
+  assert.doesNotMatch(JSON.stringify(templates), /private_key|not-public|usage_stats|price_tier/);
+});
+
+test("authorized employee projection preserves real position and all departments without inference", () => {
+  const expert = { employee_id: "e1", version: 1, display_name: "研究员", role_title: "研究分析师", department_ids: ["d1", "d2"] };
+  const normalized = normalizeAuthorizedConfig({ experts: [expert] }, "tenant-1", "member-1").experts[0];
+  assert.equal(normalized.role_title, expert.role_title);
+  assert.deepEqual(normalized.department_ids, expert.department_ids);
+  const legacy = normalizeAuthorizedConfig({ experts: [{ employee_id: "e2", version: 1, role_name: "不得猜测", persona: "总监" }] }).experts[0];
+  assert.equal(legacy.role_title, null);
+  assert.deepEqual(legacy.department_ids, []);
 });
 
 test("HttpManagerClient pulls only the employee-scoped runtime provider config", async () => {

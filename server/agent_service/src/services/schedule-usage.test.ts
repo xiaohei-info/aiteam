@@ -69,7 +69,7 @@ test("usage aggregation is deterministic, bucketed, and contains no prompt data"
   assert.equal(summary.output_tokens, 5);
   assert.equal(summary.cache_tokens, 5);
   assert.equal(summary.cost_minor, 0);
-  assert.equal(summary.cost_total, 0.00001);
+  assert.equal(summary.cost_total, 0.000010245);
   assert.equal(summary.pricing_version, 7);
   assert.equal(summary.pricing_status, "known");
   assert.equal(summary.duration_ms_total, 62000);

@@ -81,7 +81,7 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
   if (typeof claims.enterprise_id !== "string" || !Array.isArray(claims.roles)) throw new Error("JWT required claims are missing");
   if (typeof claims.nbf === "number" && claims.nbf - skew > now) throw new Error("JWT is not active");
   const userId = typeof claims.user_id === "string" ? claims.user_id : typeof claims.sub === "string" ? claims.sub : "";
-  if (!userId || typeof claims.tenant_id !== "string") throw new Error("JWT identity claims are missing");
+  if (!userId || typeof claims.tenant_id !== "string" || !claims.tenant_id.trim()) throw new Error("JWT identity claims are missing");
   const caller: AuthenticatedCaller = {
     callerId: userId,
     userId,

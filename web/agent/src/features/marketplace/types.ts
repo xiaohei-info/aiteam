@@ -1,1 +1,1 @@
-export interface MarketTemplate { template_id: string; display_name: string; category: string; model_name: string; skills_count: number; recruit_count: number; is_recruited: boolean; tags: string[]; avatar_url: string | null; }
+export interface MarketTemplate { template_id: string; display_name: string; category: string; model_name: string; skills_count: number; recruit_count: number | null; is_recruited: boolean; tags: string[]; avatar_url: string | null; }

@@ -1,4 +1,5 @@
 import type { AuthenticatedCaller } from "./http/auth.js";
+import { employeeDisplay } from "./services/employee-display.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
 import type { UsageSummary } from "./usage.js";
 import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
@@ -29,11 +30,13 @@ export interface AuthorizedConfig {
 
 export interface MarketplaceTemplate {
   template_id: string;
+  description: string | null;
+  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string }> | null;
   display_name: string;
   category: string;
   model_name: string;
   skills_count: number;
-  recruit_count: number;
+  recruit_count: number | null;
   is_recruited: boolean;
   tags: string[];
   avatar_url: string | null;
@@ -292,6 +295,7 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
     revoked: raw.revoked === true,
     synced_at: typeof raw.synced_at === "string" ? raw.synced_at : new Date().toISOString(),
     model_policy: modelPolicy,
+    ...employeeDisplay(raw),
     tools: stringArray(raw.tools),
     skills: stringArray(raw.skills ?? raw.skill_refs),
   };
@@ -301,17 +305,22 @@ function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const raw = value as Record<string, unknown>;
   if (typeof raw.template_id !== "string" || raw.template_id.length === 0 || raw.template_id.length > 256) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
-  const skills = stringArray(raw.skill_ids);
+  const skills = Array.isArray(raw.platform_skill_refs)
+    ? raw.platform_skill_refs.filter((ref) => ref && typeof ref === "object" && !Array.isArray(ref) && ["skill_id", "version", "content_hash"].every((key) => typeof ref[key] === "string" && ref[key].length > 0))
+      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string }))
+    : stringArray(raw.skill_ids);
   const tags = stringArray(raw.tags);
   return {
     template_id: raw.template_id,
+    description: typeof raw.description === "string" ? raw.description : null,
+    platform_skill_refs: Array.isArray(raw.platform_skill_refs) ? skills as NonNullable<MarketplaceTemplate["platform_skill_refs"]> : null,
     display_name: typeof raw.display_name === "string" ? raw.display_name : raw.template_id,
     category: typeof raw.category === "string" ? raw.category : "",
     model_name: typeof raw.platform_model_ref === "object" && raw.platform_model_ref !== null && typeof (raw.platform_model_ref as Record<string, unknown>).model_id === "string"
       ? (raw.platform_model_ref as Record<string, unknown>).model_id as string
       : typeof raw.default_model === "string" ? raw.default_model : "",
-    skills_count: typeof raw.skills_count === "number" && Number.isInteger(raw.skills_count) && raw.skills_count >= 0 ? raw.skills_count : skills.length,
-    recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : 0,
+    skills_count: Array.isArray(raw.platform_skill_refs) ? skills.length : typeof raw.skills_count === "number" && Number.isInteger(raw.skills_count) && raw.skills_count >= 0 ? raw.skills_count : skills.length,
+    recruit_count: typeof raw.recruit_count === "number" && Number.isInteger(raw.recruit_count) && raw.recruit_count >= 0 ? raw.recruit_count : null,
     is_recruited: raw.is_recruited === true,
     tags,
     avatar_url: typeof raw.avatar_url === "string" && raw.avatar_url.length > 0 ? raw.avatar_url : null,

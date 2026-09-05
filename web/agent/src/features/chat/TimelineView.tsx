@@ -202,7 +202,7 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     if (NON_CONVERSATION_ENTRY_TYPES.has(normalizeType(record.type))) return [];
     const models = classifyPiRecords(record)
       .filter((model) => model.kind !== "streaming" && model.kind !== "settled");
-    const itemKey = item.kind === "entry" ? `entry-${item.entry.id}` : `event-${item.item.id || index}`;
+    const itemKey = item.kind === "entry" ? `entry-${historyEntryIdentity(item.entry)}` : `event-${item.item.id || index}`;
     return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
   }));
   const hasContent = visibleTimeline.length > 0;
@@ -539,10 +539,11 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
 
   for (const entry of entries) {
     const id = typeof entry?.id === "string" ? entry.id : "";
-    const fallbackId = id || `${entry?.type ?? "unknown"}:${result.length}`;
+    const fallbackId = historyEntryIdentity(entry) || `${entry?.type ?? "unknown"}:${result.length}`;
     if (seenEntryIds.has(fallbackId)) continue;
     seenEntryIds.add(fallbackId);
-    if (id) durableIds.add(id);
+    const participant = firstString(asRecord(entry), "participant_employee_id", "source_employee_id");
+    if (id) durableIds.add(participant ? `${participant}:${id}` : id);
     const payloadId = payloadIdentity(entry);
     if (payloadId) durableIds.add(payloadId);
     const signature = messageSignature(entry);
@@ -571,10 +572,17 @@ export function mergeTimeline(entries: PiEntry[], events: TimelineEventItem[]): 
   return result;
 }
 
+function historyEntryIdentity(entry: PiEntry): string {
+  const reference = firstString(asRecord(entry), "entry_ref");
+  if (reference) return reference;
+  const participant = firstString(asRecord(entry), "participant_employee_id", "source_employee_id");
+  return participant ? `${participant}:${entry.id}` : entry.id;
+}
+
 function uniqueEntries(entries: PiEntry[]): PiEntry[] {
   const seen = new Set<string>();
   return entries.filter((entry, index) => {
-    const id = typeof entry?.id === "string" ? entry.id : `${entry?.type ?? "unknown"}:${index}`;
+    const id = historyEntryIdentity(entry) || `${entry?.type ?? "unknown"}:${index}`;
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
@@ -1273,11 +1281,10 @@ function isEmployeeSourcedMessage(value: Record<string, unknown> | null): boolea
 function payloadIdentity(value: unknown): string | null {
   const record = asRecord(value);
   if (!record) return null;
-  if (typeof record.entry_id === "string" && record.entry_id) return record.entry_id;
-  if (typeof record.entryId === "string" && record.entryId) return record.entryId;
   const message = asRecord(record.message);
-  if (typeof message?.id === "string" && message.id) return message.id;
-  return null;
+  const id = firstString(record, "entry_id", "entryId") ?? firstString(message, "id");
+  const participant = firstString(record, "participant_employee_id", "source_employee_id");
+  return id ? participant ? `${participant}:${id}` : id : null;
 }
 
 function messageActivityIdentity(value: unknown): string | null {
@@ -1298,7 +1305,8 @@ function messageSignature(value: unknown): string | null {
     ? rawContent.filter((part) => normalizeType(firstString(asRecord(part), "type") ?? "") === "text")
     : rawContent;
   const content = textFrom(visibleContent);
-  return role && content ? `${role}:${content}` : null;
+  const source = firstString(asRecord(value), "source_employee_id", "sourceEmployeeId") ?? "";
+  return role && content ? `${role}:${source}:${content}` : null;
 }
 
 function normalizeType(type: string): string {

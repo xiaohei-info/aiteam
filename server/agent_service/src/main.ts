@@ -9,7 +9,6 @@ import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 import { HttpManagerClient } from "./manager-client.js";
-import { aggregateUsage } from "./usage.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
@@ -56,8 +55,7 @@ const sessionHost = new SessionHost({
   managerClient,
   sandbox,
   // Faux responses are test artifacts, never billable usage.
-  usageRecorder: useFauxModel ? undefined : (capture, caller) => {
-    store.upsertUsageSummary(aggregateUsage(capture));
+  usageRecorder: useFauxModel ? undefined : (_capture, caller) => {
     void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
   },
   resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl, hindsightRuntimeConfig),
