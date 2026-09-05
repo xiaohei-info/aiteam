@@ -58,6 +58,7 @@ class _FakeRepo:
             tools=kw["tools"], skills=kw["skills"], knowledge_refs=kw["knowledge_refs"],
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"], version=1,
             status="draft",
+            role_title=kw.get("role_title"),
             department_ids=list(kw.get("department_ids") or []),
         )
         self._bucket(ctx)[row.employee_id] = row
@@ -86,6 +87,7 @@ class _FakeRepo:
             connector_refs=kw["connector_refs"], memory_policy=kw["memory_policy"],
             version=old.version + 1, status=old.status,
             archive_reason=old.archive_reason, archived_at=old.archived_at,
+            role_title=kw.get("role_title"),
             department_ids=list(kw["department_ids"]) if kw.get("department_ids") is not None else old.department_ids,
         )
         b[employee_id] = row
@@ -136,6 +138,31 @@ def test_department_ids_roundtrip_and_update():
 
     updated = svc.update(ctx, _body(department_ids=["d-3"]), employee_id=created.employee_id)
     assert updated.department_ids == ["d-3"]
+
+
+def test_role_title_roundtrip_clear_and_no_permission_alias():
+    from pydantic import ValidationError
+
+    svc = EmployeeConfigService(_FakeRepo())
+    ctx = _ctx("t-a")
+    created = svc.create(ctx, _body(role_title="研究分析师"), employee_slug="researcher")
+    assert svc.get(ctx, employee_id=created.employee_id).role_title == "研究分析师"
+    assert svc.list_all(ctx)[0].role_title == "研究分析师"
+    for body in [_body(role_title=None), _body(role_title="新岗位"), _body()]:
+        updated = svc.update(ctx, body, employee_id=created.employee_id)
+        assert updated.role_title == body.role_title
+    assert EmployeeConfigIn(display_name="x", role_title="岗" * 100).role_title == "岗" * 100
+    for value in ["", "岗" * 101, 123]:
+        with pytest.raises(ValidationError):
+            _body(role_title=value)
+    for alias in ["role_name", "position_title"]:
+        with pytest.raises(ValidationError):
+            _body(**{alias: "不接受别名"})
+    for role in ["member", "finance_admin"]:
+        with pytest.raises(Forbidden):
+            svc.update(_ctx("t-a", [role]), _body(role_title="owner"), employee_id=created.employee_id)
+    with pytest.raises(NotFound):
+        svc.update(_ctx("t-b"), _body(role_title="其他企业"), employee_id=created.employee_id)
 
 
 def test_cross_tenant_isolation_not_visible():

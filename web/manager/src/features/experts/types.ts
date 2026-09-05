@@ -87,6 +87,8 @@ export interface EmployeeConfig {
   knowledge_refs: string[];
   connector_refs: string[];
   memory_policy: Record<string, unknown> | null;
+  /** Display position, not an account role; preserve it in full-replacement PUT. */
+  role_title?: string | null;
   /** Employee organizational departments; an empty list means 未设置. */
   department_ids?: string[];
   status: string;

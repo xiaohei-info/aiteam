@@ -103,6 +103,40 @@ def test_create_missing_slug_query_422():
     assert resp.status_code == 422
 
 
+def test_role_title_http_roundtrip_validation_and_runtime_openapi():
+    from manager_service.employee_config_service import EmployeeConfigService
+    from manager_service.routes_org import build_org_router
+    from shared.contracts.auth import TokenClaims
+    from .test_employee_config import _FakeRepo
+
+    client = _client("postgresql://fake/fake")
+    client.app.state._employee_config_service = EmployeeConfigService(_FakeRepo())
+    client.app.include_router(build_org_router(_VERIFIER))
+    created = client.post("/api/manager/employees?employee_slug=role-title", headers=_auth_header(), json={"display_name": "研究员", "role_title": "研究分析师"})
+    assert created.status_code == 201, created.text
+    eid = created.json()["data"]["employee_id"]
+    assert client.get(f"/api/manager/employees/{eid}", headers=_auth_header()).json()["data"]["role_title"] == "研究分析师"
+    assert client.get("/api/manager/employees", headers=_auth_header()).json()["data"][0]["role_title"] == "研究分析师"
+    for value in ["", "岗" * 101, 123]:
+        response = client.put(f"/api/manager/employees/{eid}", headers=_auth_header(), json={"display_name": "研究员", "role_title": value})
+        assert response.status_code == 422
+        assert response.headers["content-type"].startswith("application/problem+json")
+    for body in [{"display_name": "研究员", "role_title": None}, {"display_name": "研究员"}]:
+        assert client.put(f"/api/manager/employees/{eid}", headers=_auth_header(), json=body).json()["data"]["role_title"] is None
+    assert client.put(f"/api/manager/employees/{eid}", headers=_auth_header(roles=["member"]), json={"display_name": "x", "role_title": "owner"}).status_code == 403
+    assert client.get(f"/api/manager/employees/{eid}", headers=_auth_header(tenant_id="other")).status_code == 404
+    document = client.get("/openapi.json").json()
+    for schema_name in ["EmployeeConfigIn", "EmployeeConfigOut", "OrgTreeNode"]:
+        field = document["components"]["schemas"][schema_name]["properties"]["role_title"]
+        text = next(item for item in field["anyOf"] if item["type"] == "string")
+        assert (text["minLength"], text["maxLength"]) == (1, 100)
+        assert any(item["type"] == "null" for item in field["anyOf"])
+        assert field["description"] and field["examples"] == ["研究分析师", None]
+    assert "完整替换" in document["paths"]["/api/manager/employees/{employee_id}"]["put"]["description"]
+    # Operator uses the shared claims contract: do not tighten its nullable tenant.
+    assert any(item["type"] == "null" for item in TokenClaims.model_json_schema()["properties"]["tenant_id"]["anyOf"])
+
+
 def test_happy_path_multistep_covers_cache_hit():
     """同 client 多次请求：首次 cache-miss（build）→ 后续 cache-hit。"""
     fake = _fake_service()

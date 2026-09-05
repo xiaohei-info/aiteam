@@ -43,7 +43,12 @@ class EmployeeConfig(BaseModel):
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
     connector_refs: list[str] = Field(default_factory=list)
     memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。键值由记忆能力约定。")
-    department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表；空列表表示未设置。")
+    department_ids: list[str] = Field(default_factory=list, description="全部所属部门 id 列表；空列表表示未设置。PUT 完整替换，省略时清空。", examples=[["department-sales", "department-research"], []])
+    role_title: str | None = Field(
+        default=None, min_length=1, max_length=100,
+        description="员工岗位名称（非账号权限角色）；未设置为 null。POST/PUT 省略或传 null 均清空；PUT 为完整配置替换。",
+        examples=["研究分析师", None],
+    )
 
 
 class EmployeeConfigIn(EmployeeConfig):

@@ -39,6 +39,7 @@ class EmployeeConfigService:
             ctx,
             employee_slug=employee_slug,
             display_name=body.display_name,
+            role_title=body.role_title,
             persona=body.persona,
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
@@ -68,6 +69,7 @@ class EmployeeConfigService:
             ctx,
             employee_id=employee_id,
             display_name=body.display_name,
+            role_title=body.role_title,
             persona=body.persona,
             model=body.model_policy.model,
             provider_ref=body.model_policy.provider_ref,
@@ -213,6 +215,7 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         employee_id=row.employee_id,
         employee_slug=row.employee_slug,
         display_name=row.display_name,
+        role_title=row.role_title,
         persona=row.persona,
         model_policy=ModelPolicy(
             model=row.model, provider_ref=row.provider_ref,

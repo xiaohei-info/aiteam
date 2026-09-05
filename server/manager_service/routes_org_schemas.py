@@ -12,6 +12,7 @@ class OrgTreeNode(BaseModel):
     name: str
     parent_id: str | None = None
     status: str | None = None
+    role_title: str | None = Field(default=None, min_length=1, max_length=100, description="员工真实岗位（非账号权限角色）；部门节点或未设置时为 null。同一员工可在多个部门出现，以 employee 节点 id 调整归属。", examples=["研究分析师", None])
     children: list["OrgTreeNode"] = Field(default_factory=list)
 
 

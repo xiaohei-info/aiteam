@@ -115,7 +115,7 @@ def build_employee_router(verifier) -> APIRouter:
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
 
     @router.put(
-        "/{employee_id}", description="改写 employee 配置（version 自增）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",
+        "/{employee_id}", description="完整替换 employee 配置；role_title 省略或 null 清空岗位，department_ids 省略或 [] 清空全部部门。实际配置变化时 version 自增，授权增量 pull 可感知；需 owner/enterprise_admin。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",
         operation_id="manager_employee_config_update",
     )
     async def update_employee_config(

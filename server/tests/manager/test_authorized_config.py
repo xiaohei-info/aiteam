@@ -184,6 +184,26 @@ def test_stale_version_returns_delta():
     assert any(e["employee_id"] == created.employee_id for e in resp.experts)
 
 
+def test_role_title_change_reaches_only_authorized_member_delta():
+    config, grants, members, service = _services()
+    owner = _ctx("t-a", roles=["owner"])
+    created = config.create(owner, _body(), employee_slug="role-delta")
+    members.set_member("t-a", "m-1")
+    members.set_member("t-a", "m-2")
+    grants.set_grant("t-a", created.employee_id, member_ids=["m-1"])
+    known = {created.employee_id: str(created.version)}
+    updated = config.update(owner, _body().model_copy(update={"role_title": "研究分析师", "department_ids": ["d-a", "d-b"]}), employee_id=created.employee_id)
+    req = AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1", known_versions=known)
+    result = service.pull(_ctx("t-a", user_id="m-1"), req)
+    assert result.experts[0]["role_title"] == "研究分析师"
+    assert result.experts[0]["department_ids"] == ["d-a", "d-b"]
+    assert result.experts[0]["version"] == updated.version
+    req.known_versions = {created.employee_id: str(updated.version)}
+    assert service.pull(_ctx("t-a", user_id="m-1"), req).experts == []
+    for tenant, member in [("t-a", "m-2"), ("t-b", "m-1")]:
+        assert service.pull(_ctx(tenant, user_id=member), AuthorizedConfigPullRequest(tenant_id=tenant, member_id=member)).experts == []
+
+
 # ---- revoked_ids ----
 
 def test_non_business_exception_propagates():
