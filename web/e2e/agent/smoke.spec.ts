@@ -6,7 +6,7 @@ import { expectShellReady, collectBrowserErrors, expectLoginPageSmoke } from "..
 
 const TIER = "agent" as const;
 
-// These are the only conversation endpoints owned by the refactored Node Agent.
+// Pi execution stays prompt-based; local read views do not restore legacy write APIs.
 test.describe("agent auth", () => {
   test("登录页 shell 与表单可见", async ({ page }) => {
     const browserErrors = collectBrowserErrors(page);
@@ -28,8 +28,16 @@ test.describe("agent api-contract", () => {
   test("Node Agent publishes the Pi conversation contract", async ({ request }) => {
     const response = await request.get(`${TIER_API_ORIGIN.agent}/openapi.json`);
     expect(response.ok()).toBeTruthy();
-    const openapi = (await response.json()) as { paths: Record<string, unknown> };
-    expect(Object.keys(openapi.paths)).toEqual(expect.arrayContaining([
+    const openapi = (await response.json()) as { paths: Record<string, Record<string, unknown>> };
+    const localReadPaths = [
+      "/api/agent/conversations/{conversation_id}/participants",
+      "/api/agent/messages/search",
+      "/api/agent/work-records",
+      "/api/agent/work-records/changes",
+      "/api/agent/usage/statistics",
+    ];
+    const paths = Object.keys(openapi.paths);
+    expect(paths).toEqual(expect.arrayContaining([
       "/api/agent/conversations/{conversation_id}/prompt",
       "/api/agent/conversations/{conversation_id}/entries",
       "/api/agent/conversations/{conversation_id}/events",
@@ -37,8 +45,16 @@ test.describe("agent api-contract", () => {
       "/api/agent/conversations",
       "/api/agent/conversations/{conversation_id}",
       "/api/agent/conversations/{conversation_id}/state",
+      ...localReadPaths,
     ]));
-    expect(Object.keys(openapi.paths).some((path) => /messages|runs|tasks|loops|timeline|group-dispatch|terminal-execute/.test(path))).toBe(false);
+    for (const path of localReadPaths) {
+      const methods = Object.keys(openapi.paths[path]).filter((key) =>
+        ["get", "post", "put", "patch", "delete", "options", "head", "trace"].includes(key));
+      expect(methods).toEqual(["get"]);
+      expect(openapi.paths[path].get).toMatchObject({ security: [{ bearerAuth: [] }] });
+    }
+    expect(paths.filter((path) => path !== "/api/agent/messages/search")
+      .some((path) => /messages|runs|tasks|loops|timeline|group-dispatch|terminal-execute/.test(path))).toBe(false);
   });
 });
 

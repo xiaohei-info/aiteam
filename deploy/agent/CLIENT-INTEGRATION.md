@@ -139,7 +139,7 @@ agentBaseUrl = http://127.0.0.1:PORT_VALUE
 ```ts
 new AgentApiClient({
   baseUrl: agentBaseUrl,
-  getToken: () => token,
+  getToken() { return token; },
 });
 ```
 
