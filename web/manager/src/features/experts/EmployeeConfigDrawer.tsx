@@ -27,6 +27,8 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "./DepartmentSelector";
+import { KnowledgePolicyPanel } from "./KnowledgePolicyPanel";
+import { MemoryPolicyPanel } from "./MemoryPolicyPanel";
 import { useExpertsApi } from "./useExpertsApi";
 import { usePlatformModelsApi, type PlatformModelItem, type ThinkingLevel } from "../platform-models/usePlatformModelsApi";
 import { useCapabilityApi } from "../capability/useCapabilityApi";
@@ -104,6 +106,7 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     status,
     archive_reason,
     archived_at,
+    memory_policy,
     ...editable
   } = config;
   void employee_id;
@@ -112,6 +115,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   void status;
   void archive_reason;
   void archived_at;
+  // Memory is edited independently and immediately. Never echo a stale drawer snapshot.
+  void memory_policy;
   return editable;
 }
 
@@ -421,6 +426,9 @@ export function EmployeeConfigDrawer({
                         isDisabled={submitting || skills.length === 0}
                       />
                     </VStack>
+
+                    <KnowledgePolicyPanel key={employeeId} employeeId={employeeId} tools={employee?.tools ?? []} />
+                    <MemoryPolicyPanel key={`memory-${employeeId}`} employeeId={employeeId} />
 
                     <VStack gap={3}>
                       <Heading level={3}>{i18n.t("manager.experts.execution_policy")}</Heading>

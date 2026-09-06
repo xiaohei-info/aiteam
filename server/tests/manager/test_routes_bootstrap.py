@@ -15,6 +15,7 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
+_BOUND_TENANT = "11111111-1111-4111-8111-111111111111"
 
 
 def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder"):
@@ -24,7 +25,8 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, service_token=service_token),
+                              admin_db_url=admin_db_url, service_token=service_token,
+                              manager_tenant_id=_BOUND_TENANT),
                      manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
@@ -33,7 +35,7 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
 
 
 def _body():
-    return {"tenant_id": "t1", "owner_phone": "13800138000",
+    return {"tenant_id": _BOUND_TENANT, "owner_phone": "13800138000",
             "bootstrap_secret": "boot-Pw-1", "must_reset": True}
 
 

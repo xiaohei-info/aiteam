@@ -59,6 +59,9 @@ def _services():
     config_svc = EmployeeConfigService(_FakeRepo())
     grant_svc = _FakeGrantService()
     member_svc = _FakeMemberService()
+    for tenant in ("t-a", "t-b"):
+        for user in ("admin-1", "u-1", "m-1"):
+            member_svc.set_member(tenant, user)
     svc = AuthorizedConfigService(
         config_service=config_svc, grant_service=grant_svc, member_service=member_svc
     )
@@ -95,6 +98,7 @@ def test_authorized_config_publishes_only_public_skill_signing_key_metadata():
         config_service=EmployeeConfigService(_FakeRepo()), grant_service=_FakeGrantService(), member_service=_FakeMemberService(),
         capability_catalog=_Catalog(), skill_signer=signer,
     )
+    service._members.set_member("t-a", "m-1")
     response = service.pull(_ctx("t-a", user_id="m-1"), AuthorizedConfigPullRequest(tenant_id="t-a", member_id="m-1"))
     assert [item.key_id for item in response.skill_signing_keys] == ["current", "next"]
     assert all(item.public_key and item.algorithm == "Ed25519" for item in response.skill_signing_keys)
@@ -239,6 +243,7 @@ def test_bundle_citation_versions_are_not_projection_versions():
     config_svc, _gs, _member_svc, svc = _services()
     ctx = _ctx("t-a", roles=["owner"], user_id="owner-1")
     config_svc.create(ctx, _body(), employee_slug="exp-x")
+    _member_svc.set_member("t-a", "owner-1")
     citation_id = "citation-1"
 
     # Real AuthorizedConfigService treats unknown keys as revoked projection IDs.

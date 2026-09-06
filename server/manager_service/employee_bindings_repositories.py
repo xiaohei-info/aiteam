@@ -63,6 +63,12 @@ class KnowledgeBindingRow:
     created_at: datetime
     updated_at: datetime
 
+    policy_revision: int = 0
+    policy_source: str = "legacy_observed"
+    policy_actor: str | None = None
+    policy_updated_at: datetime | None = None
+    revoked_at: datetime | None = None
+
 
 @dataclass(frozen=True)
 class MemorySettingRow:
@@ -73,6 +79,11 @@ class MemorySettingRow:
     retention_days: int | None
     scope: str
     updated_at: datetime
+    revision: int = 0
+    source: str = "legacy_pending"
+    explicit_auto_retain: bool = False
+    provenance: dict | None = None
+    retention_guarded: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,13 +280,17 @@ class EmployeeSkillBindingRepository:
 
 # ============================= KnowledgeBinding =============================
 
-_KNOW_COLS = "id, employee_id, knowledge_space_id, enabled, config, created_at, updated_at"
+_KNOW_COLS = ("id, employee_id, knowledge_space_id, enabled, config, created_at, updated_at, "
+              "policy_revision, policy_source, policy_actor, policy_updated_at, revoked_at")
 
 
 def _row_to_know(row: Any) -> KnowledgeBindingRow:
     return KnowledgeBindingRow(
         binding_id=str(row[0]), employee_id=str(row[1]), knowledge_space_id=row[2],
         enabled=bool(row[3]), config=row[4] or {}, created_at=row[5], updated_at=row[6],
+        policy_revision=row[7], policy_source=row[8],
+        policy_actor=str(row[9]) if row[9] is not None else None,
+        policy_updated_at=row[10], revoked_at=row[11],
     )
 
 
@@ -285,16 +300,101 @@ class EmployeeKnowledgeBindingRepository:
     def __init__(self, router: PgTenantRouter):
         self._router = router
 
+    def employee_exists(self, ctx: TenantContext, *, employee_id: str) -> bool:
+        with self._router.session(ctx) as s:
+            return s.execute("SELECT 1 FROM employee WHERE id=%s", (employee_id,)).fetchone() is not None
+
+    def atomic_enable(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str,
+                      config: dict | None = None) -> tuple[KnowledgeBindingRow | None, bool]:
+        """Validate and enable a binding with a serialized tombstone transition.
+
+        The insert uses the tenant/employee/space unique key as the
+        concurrency boundary.  A concurrent disable/enable therefore waits for
+        the winner and then takes the same row lock; it cannot surface a raw
+        unique-violation or lose a policy revision.
+        """
+        with self._router.session(ctx) as s:
+            employee = s.execute(
+                "SELECT id FROM employee WHERE id=%s FOR KEY SHARE",
+                (employee_id,),
+            ).fetchone()
+            if employee is None:
+                return None, False
+            s.execute(
+                "INSERT INTO employee_knowledge_binding "
+                "(tenant_id, employee_id, knowledge_space_id, enabled, config, policy_revision, "
+                "policy_source, policy_actor, policy_updated_at, revoked_at) "
+                "VALUES (%s,%s,%s,true,%s,1,'admin',%s,now(),NULL) "
+                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO NOTHING",
+                (ctx.tenant_id, employee_id, knowledge_space_id, json.dumps(config or {}), ctx.user_id),
+            )
+            current = s.execute(
+                "SELECT " + _KNOW_COLS + " FROM employee_knowledge_binding "
+                "WHERE employee_id=%s AND knowledge_space_id=%s FOR UPDATE",
+                (employee_id, knowledge_space_id),
+            ).fetchone()
+            if current is None:
+                return None, False
+            previous = _row_to_know(current)
+            next_config = previous.config if config is None else config
+            if previous.enabled and previous.revoked_at is None and previous.config == next_config:
+                return previous, False
+            row = s.execute(
+                "UPDATE employee_knowledge_binding SET enabled=true, config=%s, revoked_at=NULL, "
+                "policy_revision=policy_revision+1, policy_source='admin', policy_actor=%s, "
+                "policy_updated_at=now(), updated_at=now() WHERE id=%s RETURNING " + _KNOW_COLS,
+                (json.dumps(next_config), ctx.user_id, previous.binding_id),
+            ).fetchone()
+            return _row_to_know(row), True
+
     def create(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str,
                enabled: bool, config: dict) -> KnowledgeBindingRow:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO employee_knowledge_binding "
-                "(tenant_id, employee_id, knowledge_space_id, enabled, config) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING " + _KNOW_COLS,
-                (ctx.tenant_id, employee_id, knowledge_space_id, enabled, json.dumps(config)),
+                "(tenant_id, employee_id, knowledge_space_id, enabled, config, "
+                "policy_revision, policy_source, policy_actor, policy_updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, 1, 'admin', %s, now()) RETURNING " + _KNOW_COLS,
+                (ctx.tenant_id, employee_id, knowledge_space_id, enabled, json.dumps(config), ctx.user_id),
             ).fetchone()
         return _row_to_know(row)
+
+    def atomic_disable(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str,
+                       config: dict | None = None) -> tuple[KnowledgeBindingRow | None, bool]:
+        """Create or update an explicit deny tombstone under the row lock."""
+        with self._router.session(ctx) as s:
+            employee = s.execute(
+                "SELECT id FROM employee WHERE id=%s FOR KEY SHARE",
+                (employee_id,),
+            ).fetchone()
+            if employee is None:
+                return None, False
+            s.execute(
+                "INSERT INTO employee_knowledge_binding "
+                "(tenant_id, employee_id, knowledge_space_id, enabled, config, policy_revision, "
+                "policy_source, policy_actor, policy_updated_at, revoked_at) "
+                "VALUES (%s,%s,%s,false,%s,1,'admin',%s,now(),now()) "
+                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO NOTHING",
+                (ctx.tenant_id, employee_id, knowledge_space_id, json.dumps(config or {}), ctx.user_id),
+            )
+            current = s.execute(
+                "SELECT " + _KNOW_COLS + " FROM employee_knowledge_binding "
+                "WHERE employee_id=%s AND knowledge_space_id=%s FOR UPDATE",
+                (employee_id, knowledge_space_id),
+            ).fetchone()
+            if current is None:
+                return None, False
+            previous = _row_to_know(current)
+            next_config = previous.config if config is None else config
+            if not previous.enabled and previous.revoked_at is not None and previous.config == next_config:
+                return previous, False
+            row = s.execute(
+                "UPDATE employee_knowledge_binding SET enabled=false, config=%s, revoked_at=COALESCE(revoked_at,now()), "
+                "policy_revision=policy_revision+1, policy_source='admin', policy_actor=%s, "
+                "policy_updated_at=now(), updated_at=now() WHERE id=%s RETURNING " + _KNOW_COLS,
+                (json.dumps(next_config), ctx.user_id, previous.binding_id),
+            ).fetchone()
+            return _row_to_know(row), True
 
     def get(self, ctx: TenantContext, *, binding_id: str) -> KnowledgeBindingRow | None:
         with self._router.session(ctx) as s:
@@ -323,36 +423,56 @@ class EmployeeKnowledgeBindingRepository:
             ).fetchall()
         return [_row_to_know(r) for r in rows]
 
-    def update(self, ctx: TenantContext, *, binding_id: str, enabled: bool,
-               config: dict) -> KnowledgeBindingRow | None:
+    def update(self, ctx: TenantContext, *, binding_id: str, enabled: bool | None,
+               config: dict | None) -> KnowledgeBindingRow | None:
         with self._router.session(ctx) as s:
+            current = s.execute("SELECT " + _KNOW_COLS + " FROM employee_knowledge_binding "
+                                "WHERE id = %s FOR UPDATE", (binding_id,)).fetchone()
+            if current is None:
+                return None
+            previous = _row_to_know(current)
+            next_enabled = previous.enabled if enabled is None else enabled
+            next_config = previous.config if config is None else config
+            if (next_enabled == previous.enabled and next_config == previous.config
+                    and not (enabled is True and previous.revoked_at is not None)):
+                return previous
             row = s.execute(
-                "UPDATE employee_knowledge_binding "
-                "SET enabled = %s, config = %s, updated_at = now() "
+                "UPDATE employee_knowledge_binding SET enabled = %s, config = %s, "
+                "revoked_at = CASE WHEN %s THEN NULL ELSE COALESCE(revoked_at, now()) END, "
+                "policy_revision = policy_revision + 1, policy_source = 'admin', "
+                "policy_actor = %s, policy_updated_at = now(), updated_at = now() "
                 "WHERE id = %s RETURNING " + _KNOW_COLS,
-                (enabled, json.dumps(config), binding_id),
+                (next_enabled, json.dumps(next_config), enabled is True, ctx.user_id, binding_id),
             ).fetchone()
-        return _row_to_know(row) if row is not None else None
+        return _row_to_know(row)
 
     def delete(self, ctx: TenantContext, *, binding_id: str) -> bool:
         with self._router.session(ctx) as s:
             row = s.execute(
-                "DELETE FROM employee_knowledge_binding WHERE id = %s RETURNING id",
-                (binding_id,),
+                "UPDATE employee_knowledge_binding SET enabled = false, revoked_at = now(), "
+                "policy_revision = policy_revision + 1, policy_source = 'admin', "
+                "policy_actor = %s, policy_updated_at = now(), updated_at = now() "
+                "WHERE id = %s AND revoked_at IS NULL RETURNING id",
+                (ctx.user_id, binding_id),
             ).fetchone()
+            if row is None:
+                row = s.execute("SELECT id FROM employee_knowledge_binding WHERE id = %s",
+                                (binding_id,)).fetchone()
         return row is not None
 
 
 # ============================= MemorySetting =============================
 
-_MEMORY_COLS = "id, employee_id, policy, seed_memories, retention_days, scope, updated_at"
+_MEMORY_COLS = ("id, employee_id, policy, seed_memories, retention_days, scope, updated_at, revision, source, explicit_auto_retain, provenance, "
+                "EXISTS(SELECT 1 FROM memory_bank_guard g WHERE g.tenant_id=employee_memory_setting.tenant_id AND g.employee_id=employee_memory_setting.employee_id)")
 
 
 def _row_to_memory(row: Any) -> MemorySettingRow:
     return MemorySettingRow(
         binding_id=str(row[0]), employee_id=str(row[1]), policy=row[2] or {},
         seed_memories=list(row[3] or []), retention_days=row[4], scope=row[5],
-        updated_at=row[6],
+        updated_at=row[6], revision=int(row[7]), source=row[8],
+        explicit_auto_retain=row[9], provenance=row[10], retention_guarded=bool(row[11]),
     )
 
 
@@ -371,46 +491,27 @@ class EmployeeMemorySettingRepository:
             ).fetchone()
         return _row_to_memory(row) if row is not None else None
 
-    def upsert(self, ctx: TenantContext, *, employee_id: str, policy: dict,
-               seed_memories: list[Any], retention_days: int | None,
-               scope: str) -> MemorySettingRow:
-        """1:1 单例；存在则更新，不存在则新增。tenant_id 来自 ctx（D22）。"""
+    def _write(self, ctx: TenantContext, *, employee_id: str, fields: dict,
+               source: str = "memory_setting", require_existing: bool = False) -> MemorySettingRow:
+        from .memory_policy_service import write_policy_in_session
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO employee_memory_setting "
-                "(tenant_id, employee_id, policy, seed_memories, retention_days, scope) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (tenant_id, employee_id) DO UPDATE SET "
-                "policy = EXCLUDED.policy, seed_memories = EXCLUDED.seed_memories, "
-                "retention_days = EXCLUDED.retention_days, scope = EXCLUDED.scope, "
-                "updated_at = now() "
-                "RETURNING " + _MEMORY_COLS,
-                (ctx.tenant_id, employee_id, json.dumps(policy), json.dumps(seed_memories),
-                 retention_days, scope),
-            ).fetchone()
+            write_policy_in_session(s, ctx, employee_id=employee_id, fields=fields,
+                                    source=source, require_existing=require_existing)
+            row = s.execute("SELECT " + _MEMORY_COLS + " FROM employee_memory_setting WHERE employee_id=%s",
+                            (employee_id,)).fetchone()
         return _row_to_memory(row)
 
-    def update(self, ctx: TenantContext, *, employee_id: str, policy: dict,
-               seed_memories: list[Any], retention_days: int | None,
-               scope: str) -> MemorySettingRow | None:
-        with self._router.session(ctx) as s:
-            row = s.execute(
-                "UPDATE employee_memory_setting "
-                "SET policy = %s, seed_memories = %s, retention_days = %s, scope = %s, "
-                "updated_at = now() "
-                "WHERE employee_id = %s RETURNING " + _MEMORY_COLS,
-                (json.dumps(policy), json.dumps(seed_memories), retention_days,
-                 scope, employee_id),
-            ).fetchone()
-        return _row_to_memory(row) if row is not None else None
+    def upsert(self, ctx: TenantContext, *, employee_id: str, **fields) -> MemorySettingRow:
+        return self._write(ctx, employee_id=employee_id, fields=fields)
+
+    def update(self, ctx: TenantContext, *, employee_id: str, **fields) -> MemorySettingRow:
+        return self._write(ctx, employee_id=employee_id, fields=fields, require_existing=True)
 
     def delete(self, ctx: TenantContext, *, employee_id: str) -> bool:
-        with self._router.session(ctx) as s:
-            row = s.execute(
-                "DELETE FROM employee_memory_setting WHERE employee_id = %s RETURNING id",
-                (employee_id,),
-            ).fetchone()
-        return row is not None
+        self._write(ctx, employee_id=employee_id,
+                    fields={"policy": {"enabled": False, "allowed_operations": [], "explicit_auto_retain": False}},
+                    source="deleted_deny")
+        return True
 
 
 # ============================= ConnectorBinding =============================

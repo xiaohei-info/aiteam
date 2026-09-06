@@ -77,10 +77,21 @@ class PasskeyStore:
             )
 
     def delete(self, ctx: TenantContext, *, credential_id) -> bool:
+        from shared.errors import Conflict
         with self._router.session(ctx) as s:
-            cur = s.execute(
-                "DELETE FROM passkey_credential WHERE credential_id = %s", (credential_id,)
-            )
+            s.execute("SELECT id FROM app_user WHERE id = %s FOR UPDATE", (ctx.user_id,))
+            own = s.execute("SELECT 1 FROM passkey_credential WHERE credential_id = %s AND user_id = %s", (credential_id, ctx.user_id)).fetchone()
+            if own is None:
+                return False
+            alternative = s.execute(
+                "SELECT 1 FROM auth_identity WHERE user_id = %s AND "
+                "((provider IN ('phone', 'password') AND secret IS NOT NULL) OR provider = 'oauth') "
+                "UNION ALL SELECT 1 FROM passkey_credential WHERE user_id = %s AND credential_id <> %s LIMIT 1",
+                (ctx.user_id, ctx.user_id, credential_id),
+            ).fetchone()
+            if alternative is None:
+                raise Conflict("add another login method before removing the last one")
+            cur = s.execute("DELETE FROM passkey_credential WHERE credential_id = %s AND user_id = %s", (credential_id, ctx.user_id))
             return cur.rowcount > 0
 
 

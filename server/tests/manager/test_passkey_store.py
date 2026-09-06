@@ -43,13 +43,13 @@ def test_insert_persists_and_returns_id():
 
 def test_update_usage_then_delete():
     router = FakeRouter()
-    router.queue_many(FakeCursor(rowcount=1), FakeCursor(rowcount=1))
+    router.queue_many(FakeCursor(rowcount=1), FakeCursor(), FakeCursor(fetchone=(1,)), FakeCursor(fetchone=(1,)), FakeCursor(rowcount=1))
     store = PasskeyStore(router)
     store.update_usage(ctx(), credential_id="cred-1", sign_count=7)
     assert "UPDATE passkey_credential" in router.executed[0][0]
     deleted = store.delete(ctx(), credential_id="cred-1")
     assert deleted is True
-    assert router.executed[1][0].startswith("DELETE")
+    assert router.executed[-1][0].startswith("DELETE")
 
 
 def test_find_by_credential_none_when_missing():

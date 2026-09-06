@@ -237,13 +237,19 @@ GitHub Actions 在 `main`/`feature/**` 和相关 Pull Request 上运行：
 
 ### 测试环境自动部署
 
-合并 Pull Request 到 `main` 后，`deploy-main.yml` 会在带 `taiyi` 标签的 self-hosted runner 上执行：
+合并 Pull Request 到 `main` 后，`deploy-main.yml` 会在带 `taiyi` 标签的 self-hosted runner 上执行。当前发布基线为 `5483218e`；本轮未提交工作树当前为 `e5a29890`，两者不可混写成“已部署版本”。
 
-1. 检查 `/root/app/aiteam` 持久化 Git 工作树、SSH origin、Node/pnpm、Python venv、Docker/Compose 和 systemd。
-2. 从 GitHub Secret `ENV_CONTENTS_TEST` 写入 `/root/app/aiteam/.env.test`（不提交、不打印）。
-3. 使用 SSH origin 拉取 `main`，重建三端前端产物。
-4. 安装/更新 `aiteam-v1.service`，重启服务。
-5. 检查三个 `/healthz`、内部 NewAPI 和三端 HTML 入口。
+### taiyi TEST 维护窗口（完整停机）
+
+TEST 采用明确的维护停机，不做零停机切换、旧新栈并行或 cgroup 保活。发布负责人必须按以下顺序执行：
+
+1. 暂停新的应用写入/知识导入，并停止旧 Manager、Operation、Agent 应用进程；确认所有 application writers 已退出且不再写库。
+2. 保留持久化数据卷；若 PostgreSQL 或 NewAPI 依赖曾被停止，**在备份和 DDL/迁移之前显式启动并确认可用**，同时保持 Manager、Operation、Agent 应用停止。
+3. 在应用仍停止、PostgreSQL/NewAPI 已就绪的窗口执行数据库备份。
+4. 切换到批准 checkout 并安装依赖/构建产物；保持应用停止，在已备份且依赖可用的窗口执行 DDL/已批准迁移（包括 0039）。迁移失败保持停机，按 backout 合同人工对账，不跳过 DDL。
+5. 迁移完成后启动新的三端应用栈，再检查三个 `/healthz`、Manager `/readyz`、内部 NewAPI 和三端 HTML 入口；对未完成任务按持久 fence/track/job 证据对账，未知提交不盲目重试或删除。
+
+上述是测试环境维护窗口流程，不是生产零停机方案；正式发布仍须由主控确认实际 checkout、卷/备份和依赖状态后执行。
 
 部署根首次初始化和故障排查见 [`deploy/ci/README.md`](deploy/ci/README.md)。该流程要求部署机已经 clone 仓库并把 `origin` 配为 GitHub SSH 地址；部署 workflow 不依赖 runner workspace 的额外 checkout。
 

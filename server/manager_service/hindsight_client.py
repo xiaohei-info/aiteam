@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from typing import Any
+from time import monotonic
 from urllib.parse import quote
 
 import httpx
@@ -111,9 +113,81 @@ def _derive_update_path(list_path: str | None, delete_path: str | None) -> str |
 class HindsightClient:
     """HTTP transport only; Hindsight owns memory semantics and persistence."""
 
-    def __init__(self, settings: HindsightSettings | None = None, *, client: httpx.Client | None = None):
+    def __init__(self, settings: HindsightSettings | None = None, *, client: httpx.Client | None = None, router=None):
         self._settings = settings or HindsightSettings.from_env()
         self._client = client
+        self._router = router
+
+    @contextmanager
+    def _bank_lock(self, ctx: TenantContext, employee_id: str):
+        if self._router is None:  # Isolated HTTP fixtures; production assembly always supplies PgTenantRouter.
+            yield
+            return
+        with self._router.session(ctx) as session:
+            session.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                            (f"hindsight-bank:{ctx.tenant_id}:{employee_id}",))
+            yield
+
+    def ensure_bank(self, ctx: TenantContext, *, employee_id: str) -> None:
+        from .hindsight_credentials import derive_hindsight_bank_id
+        settings = self._settings
+        if not settings.base_url or not settings.token:
+            raise HindsightUnavailable("Hindsight bank provisioning is not configured")
+        bank = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
+        client = self._client or httpx.Client(timeout=10.0, follow_redirects=False)
+        headers = {"Authorization": f"Bearer {settings.token}"}
+        target = f"{settings.base_url.rstrip('/')}/v1/default/banks/{quote(bank, safe='')}"
+        try:
+            with self._bank_lock(ctx, employee_id):
+                response = client.get(target + "/profile", headers=headers)
+                if response.status_code == 404:
+                    created = client.put(target, headers=headers,
+                                         json={"name": bank, "retain_extraction_mode": "verbatim"})
+                    if created.status_code not in (200, 201, 409):
+                        raise HindsightUnavailable("Hindsight bank provisioning failed")
+                    response = client.get(target + "/profile", headers=headers)
+                if response.status_code != 200 or len(response.content) > _MAX_RESPONSE_BYTES:
+                    raise HindsightUnavailable("Hindsight bank status is unavailable")
+                if response.json().get("bank_id") != bank:
+                    raise HindsightUnavailable("Hindsight bank profile scope is invalid")
+        except HindsightUnavailable:
+            raise
+        except (httpx.HTTPError, ValueError, AttributeError) as exc:
+            raise HindsightUnavailable("Hindsight bank provisioning is unavailable") from exc
+        finally:
+            if self._client is None:
+                client.close()
+
+    def retention_request(self, bank_id: str | None, suffix: str, *, method="GET", payload=None, params=None) -> dict:
+        """Trusted maintenance transport; suffixes are fixed by the retention service."""
+        settings = self._settings
+        if not settings.base_url or not settings.token:
+            raise HindsightUnavailable("Hindsight retention is not configured")
+        path = (f"/v1/default/banks/{quote(bank_id, safe='')}/{suffix}" if bank_id else "/openapi.json")
+        client = self._client or httpx.Client(timeout=10.0, follow_redirects=False)
+        until = monotonic() + 10
+        try:
+            with client.stream(method, settings.base_url.rstrip('/') + path,
+                               headers={"Authorization": f"Bearer {settings.token}"}, json=payload, params=params,
+                               follow_redirects=False, timeout=10.0) as response:
+                if response.status_code != 200:
+                    raise HindsightUnavailable("Hindsight retention request failed")
+                data = bytearray()
+                for chunk in response.iter_bytes():
+                    if monotonic() >= until:
+                        raise HindsightUnavailable("Hindsight retention response timed out")
+                    data.extend(chunk)
+                    if len(data) > _MAX_RESPONSE_BYTES:
+                        raise HindsightUnavailable("Hindsight retention response exceeds the limit")
+            value = json.loads(data)
+            if not isinstance(value, dict):
+                raise HindsightUnavailable("Invalid Hindsight retention response")
+            return value
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HindsightUnavailable("Hindsight retention is unavailable") from exc
+        finally:
+            if self._client is None:
+                client.close()
 
     def _request(
         self,
@@ -145,7 +219,7 @@ class HindsightClient:
         }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
-        if settings.bank_id_mode == "scoped":
+        if settings.bank_id_mode == "scoped" or "/v1/default/" in path:
             # Import lazily to keep the transport module usable by the lease
             # module without an import cycle during Manager startup.
             from .hindsight_credentials import derive_hindsight_bank_id
@@ -164,17 +238,7 @@ class HindsightClient:
                 memory_id=quote(memory_id or "", safe=""),
             )
             if native:
-                # Hindsight creates banks via PUT; making this idempotent call before
-                # each operation keeps first-use employees working after a fresh deploy.
-                bank_response = client.put(
-                    f"{self._settings.base_url.rstrip('/')}/v1/default/banks/{encoded_bank_id}",
-                    json={"name": bank_id, "retain_extraction_mode": "verbatim"},
-                    headers=headers,
-                )
-                if bank_response.status_code >= 400:
-                    raise HindsightUnavailable(
-                        f"Hindsight bank initialization returned HTTP {bank_response.status_code}"
-                    )
+                self.ensure_bank(ctx, employee_id=employee_id)
             if native and method == "DELETE":
                 # Hindsight exposes reversible invalidation (PATCH), not a per-memory
                 # DELETE endpoint.  Keep the Manager delete contract destructive to
@@ -188,7 +252,7 @@ class HindsightClient:
                 params=params,
                 headers=headers,
             )
-            if response.status_code >= 400:
+            if not 200 <= response.status_code < 300:
                 raise HindsightUnavailable(f"Hindsight returned HTTP {response.status_code}")
             if len(response.content) > _MAX_RESPONSE_BYTES:
                 raise HindsightUnavailable("Hindsight response is too large")
@@ -211,8 +275,9 @@ class HindsightClient:
         item = {"content": content}
         if context:
             item["context"] = context
-        if isinstance(metadata.get("document_id"), str):
-            item["document_id"] = metadata["document_id"]
+        # Governance retain is still append-only; document_id is never an
+        # authority to replace an existing native document.
+        item["metadata"] = metadata
         operation_id = hashlib.sha256(
             f"{ctx.tenant_id}:{ctx.user_id}:{employee_id}:"
             f"{content}:{json.dumps(metadata, sort_keys=True, default=str)}".encode()
@@ -221,9 +286,10 @@ class HindsightClient:
             f"{operation_id[:8]}-{operation_id[8:12]}-{operation_id[12:16]}-"
             f"{operation_id[16:20]}-{operation_id[20:32]}"
         )
-        return self._request(ctx, self._settings.retain_path, {
-            "items": [item], "async": True, "operation_id": operation_id,
-        }, employee_id=employee_id)
+        from .hindsight_operation_policy import scoped_retain_body
+        payload = scoped_retain_body({"items": [item], "async": True, "operation_id": operation_id},
+                                     tenant_id=ctx.tenant_id, member_id=ctx.user_id, employee_id=employee_id)
+        return self._request(ctx, self._settings.retain_path, payload, employee_id=employee_id)
 
     def stats(self, ctx: TenantContext, *, employee_id: str) -> dict:
         path = self._settings.stats_path or _derive_stats_path(self._settings.list_path)

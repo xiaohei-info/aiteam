@@ -29,8 +29,8 @@ from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
+from .active_principal import require_bound_tenant
 
-from .document_parser import UnsupportedFormatError, extract_text
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import (
     KnowledgeDocumentBindingRepository,
@@ -38,6 +38,7 @@ from .knowledge_intake_repository import (
     KnowledgeIngestionJobRepository,
     KnowledgeOperationRepository,
     KnowledgeOperationRow,
+    KnowledgeReconciliationRequired,
     build_knowledge_intake_repositories,
 )
 from .knowledge_space_repository import ExpertKnowledgeBinding
@@ -133,6 +134,9 @@ class _EmployeeKnowledgeBindingQuery:
         return [str(r[0]) for r in rows]
 
 
+_UNCONFIGURED = object()
+
+
 class KnowledgeIntakeService:
     """知识文档 intake 编排。tenant_id 全程经 TenantContext（D22）。"""
 
@@ -150,6 +154,7 @@ class KnowledgeIntakeService:
         ingestion_client: RagIngestionPort,
         operation_repo: KnowledgeOperationRepository | None = None,
         audit_recorder: _AuditPort | None = None,
+        bound_tenant_id: str | None | object = _UNCONFIGURED,
     ):
         self._doc_repo = doc_repo
         self._job_repo = job_repo
@@ -162,6 +167,11 @@ class KnowledgeIntakeService:
         self._ingestion_client = ingestion_client
         self._operation_repo = operation_repo
         self._audit = audit_recorder
+        # Production route/lifespan assembly supplies the one Manager tenant.
+        # Compatibility/unit fixtures may omit it, but no configured binding is
+        # ever inferred from a document/job row.
+        self._binding_configured = bound_tenant_id is not _UNCONFIGURED
+        self._bound_tenant_id = bound_tenant_id if self._binding_configured else None
         # Compatibility for unit/dev callers that predate the durable receipt
         # repository. Production always supplies KnowledgeOperationRepository.
         self._local_operations: dict[tuple[str, str], KnowledgeOperationRow] = {}
@@ -273,7 +283,7 @@ class KnowledgeIntakeService:
         document_items: list[KnowledgeDocumentAnalyticsOut] = []
         for document in documents:
             job = latest_jobs.get(document.id)
-            rag_document = upstream_by_source.get(document.id)
+            rag_document = upstream_by_source.get(getattr(job, "file_source", None) or document.id)
             chunk_count = _nonnegative_int(getattr(job, "chunk_count", None))
             if chunk_count is None:
                 chunk_count = _nonnegative_int(getattr(rag_document, "chunks_count", None))
@@ -429,8 +439,8 @@ class KnowledgeIntakeService:
         storage_key = _store_bytes(
             self._storage_root, knowledge_space_id, file_name, content, tenant_id=ctx.tenant_id,
         )
-        doc = self._doc_repo.create(
-            ctx,
+        doc, job = self._doc_repo.create(
+            ctx, create_job=True,
             knowledge_space_id=knowledge_space_id,
             display_name=display_name,
             source_type="file",
@@ -439,13 +449,6 @@ class KnowledgeIntakeService:
             file_size=len(content),
             storage_key=storage_key,
             status="uploaded",
-        )
-        job = self._job_repo.create(
-            ctx,
-            knowledge_space_id=knowledge_space_id,
-            document_id=doc.id,
-            status="parsing",
-            started_at=datetime.now(timezone.utc),
         )
         return _to_doc_out(doc), _to_ing_out(job)
 
@@ -457,33 +460,8 @@ class KnowledgeIntakeService:
         document_id: str,
         job_id: str,
     ) -> None:
-        """Run one persisted upload in a background worker and keep failures visible."""
-        if not self._transition_document(
-            ctx, document_id=document_id, expected=("uploaded",), status="parsing",
-            error_code=None, error_message=None,
-        ):
-            current = self._doc_repo.get(ctx, document_id=document_id)
-            if current is None or current.status in {"ready", "failed"}:
-                return
-        try:
-            self._advance(
-                ctx,
-                knowledge_space_id=knowledge_space_id,
-                document_id=document_id,
-                job_id=job_id,
-            )
-        except Exception:  # noqa: BLE001 - background failures must not disappear
-            logger.exception("[kb] background intake failed for %s", document_id)
-            try:
-                self._fail(
-                    ctx,
-                    document_id=document_id,
-                    job_id=job_id,
-                    error_code="PROCESSING_FAILED",
-                    message="knowledge processing failed",
-                )
-            except Exception:  # noqa: BLE001 - preserve the original background failure in logs
-                logger.exception("[kb] unable to persist background failure for %s", document_id)
+        """Best-effort delivery hint; durable recovery also claims this same job."""
+        self._advance(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id, job_id=job_id)
 
     def ingest_url(
         self,
@@ -525,6 +503,11 @@ class KnowledgeIntakeService:
         idempotency_key: str | None = None,
     ) -> tuple[KnowledgeDocumentOut, KnowledgeIngestionJobOut]:
         """兼容旧 retry 路径，复用 reindex 状态机与 durable receipt。"""
+        doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
+        if doc.error_code == "SUBMISSION_UNKNOWN":
+            raise KnowledgeReconciliationRequired(
+                "Submission outcome is unknown; automatic reconciliation continues. Retry/delete are protected."
+            )
         self.reindex(
             ctx,
             knowledge_space_id=knowledge_space_id,
@@ -565,6 +548,8 @@ class KnowledgeIntakeService:
         """请求 LightRAG 删除；started/busy 均不代表物理删除完成。"""
         _ensure_can_write(ctx)
         doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
+        if doc.error_code == "SUBMISSION_UNKNOWN":
+            raise KnowledgeReconciliationRequired("Submission outcome is unknown; automatic reconciliation continues. Retry/delete are protected.")
         key = _operation_key(idempotency_key)
         fingerprint = _fingerprint("delete", knowledge_space_id, document_id)
         existing = self._existing_operation(
@@ -902,102 +887,41 @@ class KnowledgeIntakeService:
         doc = self._require_doc(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id)
         key = _operation_key(idempotency_key)
         fingerprint = _fingerprint("reindex", knowledge_space_id, document_id)
-        existing = self._existing_operation(
-            ctx, operation="reindex", idempotency_key=key, request_fingerprint=fingerprint
+        prepared = self._job_repo.prepare_reindex(
+            ctx, document_id=document_id, knowledge_space_id=knowledge_space_id,
+            idempotency_key=key, request_fingerprint=fingerprint,
         )
-        if existing is not None:
-            return self._operation_out(ctx, existing)
-        if doc.status not in ("ready", "failed"):
-            raise Conflict(
-                f"cannot reindex document in state {doc.status!r} "
-                "(allowed: ready, failed)"
-            )
-        operation = self._create_operation(
-            ctx,
-            operation="reindex",
-            knowledge_space_id=knowledge_space_id,
-            document_id=document_id,
-            idempotency_key=key,
-            request_fingerprint=fingerprint,
-        )
-        if (
-            operation.request_fingerprint != fingerprint
-            or operation.document_id != document_id
-            or operation.knowledge_space_id != knowledge_space_id
-        ):
-            raise Conflict("idempotency key was already used for a different document operation")
-        if operation.status != "pending":
+        operation = self._remember_operation(prepared.operation)
+        if not prepared.newly_created:
+            if operation.status in {"pending", "accepted"} and prepared.job is None:
+                raise KnowledgeReconciliationRequired("Pending reindex has no proven job association; reconciliation is required")
+            if operation.status != "completed" and doc.error_code == "SUBMISSION_UNKNOWN":
+                raise KnowledgeReconciliationRequired("Submission outcome is unknown; automatic reconciliation continues. Retry/delete are protected.")
             return self._operation_out(ctx, operation)
-        if not self._transition_document(
-            ctx, document_id=document_id, expected=("ready", "failed"), status="reindex_requested",
-            error_code=None, error_message=None,
-        ):
-            self._update_operation(
-                ctx, operation_id=operation.id, status="failed",
-                error_code="STATE_CONFLICT", error_message="document changed while reindex was requested",
-            )
-            raise Conflict("document changed while reindex was being requested")
-        # Keep old citations unavailable while the new index is built.
-        self._binding_repo.mark_stale_by_document(ctx, document_id=document_id)
-        self._record_audit(
-            ctx, action="knowledge_document_reindex_requested", resource_id=document_id,
-            detail="document status set to reindex_requested; bindings stale",
-        )
-        job = self._job_repo.create(
-            ctx,
-            knowledge_space_id=knowledge_space_id,
-            document_id=document_id,
-            status="reindex_requested",
-            started_at=datetime.now(timezone.utc),
-        )
+        assert prepared.job is not None
+        self._record_audit(ctx, action="knowledge_document_reindex_requested", resource_id=document_id,
+                           detail="reindex receipt, document transition and job committed; bindings stale")
+        # Delivery is only a hint after commit. The same durable claim/fence is
+        # used by startup recovery; a replay never creates or delivers another job.
         try:
             self._advance(
-                ctx,
-                knowledge_space_id=knowledge_space_id,
-                document_id=document_id,
-                job_id=job.id,
-                propagate_unavailable=True,
+                ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                job_id=prepared.job.id, propagate_unavailable=True,
             )
         except RagIngestionUnavailable:
-            self._update_operation(
-                ctx, operation_id=operation.id, status="failed",
-                upstream_status="unavailable", error_code="LIGHTRAG_UNAVAILABLE",
-                error_message="knowledge indexing unavailable",
-            )
-            self._record_audit(
-                ctx, action="knowledge_document_reindex_failed", resource_id=document_id,
-                detail="LightRAG indexing unavailable; document remains failed",
-            )
+            self._record_audit(ctx, action="knowledge_document_reindex_failed", resource_id=document_id,
+                               detail="indexing unavailable; durable job retains its reconciliation state")
             raise
-        updated = self._doc_repo.get(ctx, document_id=document_id)
-        if updated is None:
-            self._update_operation(
-                ctx, operation_id=operation.id, status="failed",
-                error_code="DOCUMENT_UNAVAILABLE", error_message="knowledge document unavailable",
-            )
-            raise RagIngestionUnavailable("knowledge indexing unavailable")
-        if updated.status == "ready":
-            self._record_audit(
-                ctx, action="knowledge_document_reindex_completed", resource_id=document_id,
-                detail="document and current bindings published ready",
-            )
-            operation = self._update_operation(
-                ctx, operation_id=operation.id, status="completed",
-                upstream_status="processed", completed=True,
-            ) or replace(operation, status="completed", upstream_status="processed")
-        else:
-            self._record_audit(
-                ctx, action="knowledge_document_reindex_failed", resource_id=document_id,
-                detail="document intake failed; document remains retryable",
-            )
-            operation = self._update_operation(
-                ctx, operation_id=operation.id, status="failed",
-                upstream_status="failed", error_code=updated.error_code,
-                error_message=updated.error_message,
-            ) or replace(
-                operation, status="failed", upstream_status="failed",
-                error_code=updated.error_code, error_message=updated.error_message,
-            )
+        # Read this generation's receipt. The document may already have changed
+        # again; its current state cannot prove completion of a different job.
+        operation = self._existing_operation(
+            ctx, operation="reindex", idempotency_key=key, request_fingerprint=fingerprint,
+        )
+        if operation is None:
+            raise RagIngestionUnavailable("knowledge operation receipt unavailable")
+        if operation.status in {"completed", "failed"}:
+            self._record_audit(ctx, action=f"knowledge_document_reindex_{operation.status}",
+                               resource_id=document_id, detail="reindex receipt settled")
         return self._operation_out(ctx, operation)
 
     def _existing_operation(
@@ -1258,6 +1182,11 @@ class KnowledgeIntakeService:
         """Return binding ids plus the Manager id as resolver candidates."""
         rows = self._binding_repo.list_by_document(ctx, document_id=document_id)
         ids: set[str] = {document_id}
+        for job in self._job_repo.list_by_document(ctx, document_id=document_id):
+            if getattr(job, "file_source", None):
+                ids.add(job.file_source)
+            if getattr(job, "upstream_document_id", None):
+                ids.add(job.upstream_document_id)
         for row in rows:
             if (
                 row.tenant_id != ctx.tenant_id
@@ -1320,8 +1249,8 @@ class KnowledgeIntakeService:
         file_size: int,
         storage_key: str,
     ) -> tuple[KnowledgeDocumentOut, KnowledgeIngestionJobOut]:
-        doc = self._doc_repo.create(
-            ctx,
+        doc, job = self._doc_repo.create(
+            ctx, create_job=True,
             knowledge_space_id=knowledge_space_id,
             display_name=display_name,
             source_type=source_type,
@@ -1330,13 +1259,6 @@ class KnowledgeIntakeService:
             file_size=file_size,
             storage_key=storage_key,
             status="parsing",
-        )
-        job = self._job_repo.create(
-            ctx,
-            knowledge_space_id=knowledge_space_id,
-            document_id=doc.id,
-            status="parsing",
-            started_at=datetime.now(timezone.utc),
         )
         self._advance(ctx, knowledge_space_id=knowledge_space_id, document_id=doc.id, job_id=job.id)
         updated = self._doc_repo.get(ctx, document_id=doc.id)
@@ -1354,118 +1276,22 @@ class KnowledgeIntakeService:
         job_id: str,
         propagate_unavailable: bool = False,
     ) -> None:
-        """推进 parsing → indexing → ready | failed；重建可传播上游不可达。"""
-        doc = self._doc_repo.get(ctx, document_id=document_id)
-        if doc is None:
-            logger.warning("[kb]intake advance: document %s vanished", document_id)
-            return
-        path = _resolve_path(self._storage_root, doc.storage_key)
-        # parsing
-        try:
-            text = extract_text(path)
-        except UnsupportedFormatError as exc:
-            self._fail(ctx, document_id=document_id, job_id=job_id,
-                       error_code="UNSUPPORTED_FORMAT", message=str(exc))
-            return
-        except FileNotFoundError:
-            self._fail(ctx, document_id=document_id, job_id=job_id,
-                       error_code="FILE_NOT_FOUND", message=f"stored file missing: {doc.storage_key}")
-            return
-        except Exception as exc:
-            logger.exception("[kb] parse failed for %s", document_id)
-            self._fail(ctx, document_id=document_id, job_id=job_id,
-                       error_code="PARSE_FAILED", message=str(exc)[:500])
-            return
-        if not text.strip():
-            self._fail(
-                ctx,
-                document_id=document_id,
-                job_id=job_id,
-                error_code="EMPTY_TEXT",
-                message="未能从文档中提取可索引文本（可能是扫描图片 PDF）",
+        from .knowledge_intake_recovery import KnowledgeIntakeRecovery
+        if self._binding_configured:
+            require_bound_tenant(self._bound_tenant_id, ctx.tenant_id)
+        job = self._job_repo.get(ctx, ingestion_id=job_id)
+        if job is None or job.document_id != document_id or job.knowledge_space_id != knowledge_space_id:
+            raise NotFound("ingestion job not found in this knowledge space")
+        KnowledgeIntakeRecovery(self).process(ctx, job_id=job_id)
+        current = self._doc_repo.get(ctx, document_id=document_id)
+        if propagate_unavailable and current and current.error_code == "SUBMISSION_UNKNOWN":
+            # The upstream acceptance result is unknown; callers must not see a
+            # generic retryable 503 that could invite a duplicate POST.
+            raise KnowledgeReconciliationRequired(
+                "Submission outcome is unknown; automatic reconciliation continues. Retry/delete are protected."
             )
-            return
-        self._doc_repo.update_status(ctx, document_id, status="indexing", text_chars=len(text))
-        self._job_repo.update_status(ctx, job_id, status="indexing")
-        # Indexing is Manager-owned: derive the workspace from tenant context,
-        # then wait for LightRAG before publishing any ready state.
-        try:
-            handle = self._rag_service.get(ctx, knowledge_space_id)
-            if (
-                handle is None
-                or handle.tenant_id != ctx.tenant_id
-                or handle.knowledge_space_id != knowledge_space_id
-                or not isinstance(handle.workspace, str)
-                or not handle.workspace.strip()
-            ):
-                raise RagIngestionUnavailable("knowledge indexing unavailable")
-            registry = getattr(self._ingestion_client, "instance_registry", None)
-            if registry is not None:
-                instance = registry.resolve(handle.workspace)
-                if getattr(handle, "instance_id", "legacy") != instance.instance_id:
-                    raise RagIngestionUnavailable("knowledge indexing unavailable")
-            result = self._ingestion_client.ingest_text(
-                workspace=handle.workspace, file_source=document_id, text=text
-            )
-            if not result or getattr(result, "rag_document_id", None) != document_id:
-                raise RagIngestionUnavailable("knowledge indexing unavailable")
-            upstream_document_id = getattr(result, "upstream_document_id", None)
-            if upstream_document_id is not None and (
-                not isinstance(upstream_document_id, str)
-                or not upstream_document_id.strip()
-                or upstream_document_id != upstream_document_id.strip()
-                or len(upstream_document_id) > 1_024
-                or any(char in upstream_document_id for char in "\x00\r\n")
-            ):
-                raise RagIngestionUnavailable("knowledge indexing unavailable")
-            binding_rag_document_id = upstream_document_id or document_id
-        except Exception as exc:
-            if not isinstance(exc, RagIngestionUnavailable):
-                logger.warning("[kb] index failed for %s: %s", document_id, type(exc).__name__)
-            self._fail(
-                ctx, document_id=document_id, job_id=job_id,
-                error_code="INDEX_FAILED", message="knowledge indexing unavailable",
-            )
-            if propagate_unavailable:
-                raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
-            return
-        # Bindings, job completion, and Manager ready are one DB transaction.
-        try:
-            employee_ids = sorted(set(self._employee_index_port.list_employees_by_space(
-                ctx, knowledge_space_id=knowledge_space_id
-            )))
-            published_at = datetime.now(timezone.utc)
-            self._binding_repo.publish_ready(
-                ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
-                employee_ids=employee_ids, rag_document_id=binding_rag_document_id,
-                job_id=job_id, chunk_count=result.chunk_count, text_chars=len(text),
-                completed_at=published_at, synced_at=published_at,
-            )
-        except Exception as exc:
-            logger.warning("[kb] index publication failed for %s: %s", document_id, type(exc).__name__)
-            self._fail(
-                ctx, document_id=document_id, job_id=job_id,
-                error_code="BINDING_PROPAGATION_FAILED", message="knowledge binding propagation unavailable",
-            )
-            return
-
-    def _fail(
-        self,
-        ctx: TenantContext,
-        *,
-        document_id: str,
-        job_id: str,
-        error_code: str,
-        message: str,
-    ) -> None:
-        now = datetime.now(timezone.utc)
-        self._job_repo.mark_failed(
-            ctx, job_id, error_code=error_code, error_message=message, completed_at=now
-        )
-        self._doc_repo.update_status(
-            ctx, document_id, status="failed",
-            error_code=error_code, error_message=message[:2000],
-        )
+        if propagate_unavailable and current and current.error_code == "INDEX_UNCONFIGURED":
+            raise RagIngestionUnavailable("knowledge indexing unavailable")
 
     def _require_space(self, ctx: TenantContext, knowledge_space_id: str) -> None:
         """知识空间必须存在（跨 tenant 行 RLS 不可见 → NotFound）。"""
@@ -1520,6 +1346,9 @@ def _to_doc_out(row) -> KnowledgeDocumentOut:
         display_name=row.display_name, source_type=row.source_type, file_name=row.file_name,
         file_type=row.file_type, file_size=row.file_size, storage_key=row.storage_key,
         status=row.status, text_chars=row.text_chars, error_code=row.error_code,
+        can_retry=row.status in {"ready", "failed"} and row.error_code != "SUBMISSION_UNKNOWN",
+        can_delete=row.status in {"ready", "failed"} and row.error_code != "SUBMISSION_UNKNOWN",
+        recovery_required=row.error_code == "SUBMISSION_UNKNOWN",
         error_message=row.error_message, created_at=row.created_at, updated_at=row.updated_at,
     )
 
@@ -1530,6 +1359,9 @@ def _to_ing_out(row) -> KnowledgeIngestionJobOut:
         document_id=row.document_id, status=row.status, error_code=row.error_code,
         error_message=row.error_message, chunk_count=row.chunk_count,
         started_at=row.started_at, completed_at=row.completed_at, created_at=row.created_at,
+        attempts=row.attempts, next_attempt_at=row.next_attempt_at,
+        recovery_required=(row.error_code == "SUBMISSION_UNKNOWN"
+                           or (row.submission_state == "submitted" and row.status == "failed")),
     )
 
 
@@ -1761,6 +1593,7 @@ def build_knowledge_intake_service(
     router: PgTenantRouter, *, storage_root: Path,
     rag_service: ManagerRagService,
     ingestion_client: RagIngestionPort,
+    bound_tenant_id: str | None | object = _UNCONFIGURED,
 ) -> KnowledgeIntakeService:
     """组装 intake 服务；workspace 与 Manager ingestion client 显式注入。"""
     doc_repo, job_repo, binding_repo = build_knowledge_intake_repositories(router)
@@ -1776,6 +1609,7 @@ def build_knowledge_intake_service(
         ingestion_client=ingestion_client,
         operation_repo=KnowledgeOperationRepository(router),
         audit_recorder=build_enterprise_audit_repository(router),
+        bound_tenant_id=bound_tenant_id,
     )
 
 

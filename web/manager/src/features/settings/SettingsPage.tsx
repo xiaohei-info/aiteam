@@ -12,10 +12,18 @@ import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { AccountSecurityPanel } from "./AccountSecurityPanel";
+import { useSession } from "../../auth/session";
 import { useSettingsApi } from "./useSettingsApi";
 import type { EnterpriseSettings, AdminInvite } from "./types";
 
 export function SettingsPage(): ReactNode {
+  const { session } = useSession();
+  const canAdmin = session?.claims.roles.some((role) => ["owner", "enterprise_admin"].includes(role));
+  return <VStack gap={4}><AccountSecurityPanel />{canAdmin && <EnterpriseSettingsPanel />}</VStack>;
+}
+
+function EnterpriseSettingsPanel(): ReactNode {
   const api = useSettingsApi();
   const [settings, setSettings] = useState<EnterpriseSettings | null>(null);
   const [invites, setInvites] = useState<AdminInvite[]>([]);

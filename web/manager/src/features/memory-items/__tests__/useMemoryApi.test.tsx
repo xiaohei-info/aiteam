@@ -10,6 +10,7 @@ import * as clientMod from "../../../api/client";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { useMemoryApi } from "../useMemoryApi";
 import type { AuthSession } from "@aiteam/shared";
+import type { MemoryWriteAcknowledgement } from "../types";
 
 function makeSession(): SessionContextValue {
   return {
@@ -56,14 +57,7 @@ describe("useMemoryApi", () => {
     expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories/analytics");
   });
 
-  it("list 无参数时调用 listGet", async () => {
-    const { client, wrapper } = setup();
-    const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    await result.current.list();
-    expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories");
-  });
-
-  it("list 带 employee_id", async () => {
+  it("list requires employee_id and calls listGet", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useMemoryApi(), { wrapper });
     await result.current.list({ employee_id: "emp-1" });
@@ -73,8 +67,8 @@ describe("useMemoryApi", () => {
   it("list 带 keyword", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    await result.current.list({ keyword: "test" });
-    expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories?keyword=test");
+    await result.current.list({ employee_id: "emp-1", keyword: "test" });
+    expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories?employee_id=emp-1&keyword=test");
   });
 
   it("list 带 employee_id 和 keyword", async () => {
@@ -84,26 +78,28 @@ describe("useMemoryApi", () => {
     expect(client.listGet).toHaveBeenCalledWith("/api/manager/memories?employee_id=emp-1&keyword=hello");
   });
 
-  it("create 调用 client.post", async () => {
+  it("create 调用 client.post 并消费异步 acknowledgment", async () => {
     const { client, wrapper } = setup();
+    const acknowledgement: MemoryWriteAcknowledgement = { success: true, async: true, operation_id: "op-1" };
+    client.post!.mockResolvedValue(acknowledgement);
     const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    const body = { employee_id: "emp-1", content: "test", category: "note", importance: 5 };
-    await result.current.create(body);
+    const body = { employee_id: "emp-1", content: "test", metadata: { source: "fixture" } };
+    await expect(result.current.create(body)).resolves.toEqual(acknowledgement);
     expect(client.post).toHaveBeenCalledWith("/api/manager/memories", { body });
   });
 
   it("update 调用 client.patch", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    await result.current.update("mem-1", { content: "updated" });
-    expect(client.patch).toHaveBeenCalledWith("/api/manager/memories/mem-1", { body: { content: "updated" } });
+    await result.current.update("mem-1", { content: "updated" }, "emp-1");
+    expect(client.patch).toHaveBeenCalledWith("/api/manager/memories/mem-1?employee_id=emp-1", { body: { content: "updated" } });
   });
 
   it("delete 调用 client.del", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useMemoryApi(), { wrapper });
-    await result.current.delete("mem-1");
-    expect(client.del).toHaveBeenCalledWith("/api/manager/memories/mem-1");
+    await result.current.delete("mem-1", "emp-1");
+    expect(client.del).toHaveBeenCalledWith("/api/manager/memories/mem-1?employee_id=emp-1");
   });
 
 });

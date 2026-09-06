@@ -115,7 +115,20 @@ class RagDeletionResult:
     busy: bool
 
 
+@dataclass(frozen=True)
+class RagIngestionStatus:
+    state: str  # processed | pending | failed | unknown
+    upstream_document_id: str | None = None
+    chunk_count: int | None = None
+
+
 class RagIngestionPort(Protocol):
+    def validate_submission(self, *, workspace: str, file_source: str, text: str) -> None: ...
+
+    def submit_text(self, *, workspace: str, file_source: str, text: str) -> str: ...
+
+    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None) -> RagIngestionStatus: ...
+
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult: ...
 
     def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]: ...
@@ -272,6 +285,80 @@ class LightRagIngestionClient:
     def close(self) -> None:
         self._http.close()
 
+    def validate_submission(self, *, workspace: str, file_source: str, text: str) -> None:
+        if not self.settings or not _valid_document_alias(file_source) or not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
+            raise RagIngestionUnavailable("knowledge indexing unavailable")
+        self.instance_for_workspace(workspace)
+
+    def submit_text(self, *, workspace: str, file_source: str, text: str) -> str:
+        """One submission only. Callers persist a fence BEFORE entering this method."""
+        self.validate_submission(workspace=workspace, file_source=file_source, text=text)
+        instance = self.instance_for_workspace(workspace)
+        payload = self._recovery_request(instance, "/documents/text", method="POST", body={"text": text, "file_source": file_source})
+        track_id = payload.get("track_id")
+        if not _successful_response(payload) or not isinstance(track_id, str) or not track_id or not all(c.isalnum() or c in "_-" for c in track_id) or len(track_id) > 256:
+            raise RagIngestionUnavailable("knowledge submission outcome unknown")
+        return track_id
+
+    def _recovery_request(self, instance, path, *, method="GET", body=None, timeout=None):
+        timeout = timeout or self.settings.request_timeout_ms / 1000
+        deadline = self._clock() + timeout
+        try:
+            with self._http.stream(method, f"{instance.url}{path}",
+                                   headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                                   json=body, timeout=timeout) as response:
+                if response.status_code != 200:
+                    raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+                chunks = bytearray()
+                for chunk in response.iter_bytes():
+                    chunks.extend(chunk)
+                    if len(chunks) > _MAX_PROBE_RESPONSE_BYTES or self._clock() > deadline:
+                        raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+                value = json.loads(chunks)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid response")
+                return value
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise RagIngestionUnavailable("knowledge reconciliation unavailable") from exc
+
+    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None) -> RagIngestionStatus:
+        instance = self.instance_for_workspace(workspace)
+        if not _valid_document_alias(file_source):
+            raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+        if track_id:
+            if len(track_id) > 256 or not all(c.isalnum() or c in "_-" for c in track_id):
+                raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+            payload = self._recovery_request(instance, f"/documents/track_status/{track_id}")
+            docs = payload.get("documents")
+            count = payload.get("total_count")
+            if payload.get("track_id") != track_id or type(count) is not int or not isinstance(docs, list) or count != len(docs) or count not in (0, 1):
+                raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+            records = [_document_info(doc, workspace=workspace) for doc in docs]
+            if any(doc.file_path != file_source for doc in records):
+                raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+        else:
+            # Exhaust the bounded listing before accepting a match: a second
+            # matching source on a later page makes identity ambiguous.
+            records = [doc for doc in self._paginated_documents(
+                instance, headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                timeout=self.settings.request_timeout_ms / 1000, deadline=self._clock() + 30,
+            ) if doc.file_path == file_source]
+        if len(records) != 1:
+            return RagIngestionStatus("unknown")
+        record = records[0]
+        if record.is_duplicate:
+            # A duplicate marker alone is NOT completion proof. Resolve the
+            # original in this exact workspace and verify it is processed.
+            originals = [doc for doc in self._paginated_documents(
+                instance, headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                timeout=self.settings.request_timeout_ms / 1000, deadline=self._clock() + 30,
+            ) if doc.upstream_document_id == record.original_document_id]
+            if len(originals) != 1 or originals[0].status != "processed" or originals[0].is_duplicate:
+                return RagIngestionStatus("unknown")
+            record = originals[0]
+        state = "processed" if record.status == "processed" else "failed" if record.status == "failed" else "pending" if record.status in {"pending", "processing", "preprocessed"} else "unknown"
+        return RagIngestionStatus(state, record.upstream_document_id, record.chunks_count)
+
     def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult:
         settings = self.settings
         if settings is None or not workspace.strip() or not file_source.strip():
@@ -328,8 +415,8 @@ class LightRagIngestionClient:
             timeout = settings.request_timeout_ms / 1000
             headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
             return list(self._paginated_documents(instance, headers=headers, timeout=timeout))
-        except RagIngestionUnavailable:
-            raise
+        except RagIngestionUnavailable as exc:
+            raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
         except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
             logger.warning("LightRAG document analytics failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
@@ -478,29 +565,22 @@ class LightRagIngestionClient:
         *,
         headers: dict[str, str],
         timeout: float,
+        deadline: float | None = None,
     ):
         """Yield bounded LightRAG metadata after validating pagination and scope."""
         page = 1
         while True:
             if page > _MAX_PAGINATED_PAGES:
                 raise RagIngestionUnavailable("knowledge analytics unavailable")
-            response = self._http.post(
-                f"{instance.url}/documents/paginated",
-                headers=headers,
-                json={
-                    "page": page,
-                    "page_size": _MAX_PAGINATED_PAGE_SIZE,
-                    "sort_field": "created_at",
-                    "sort_direction": "desc",
-                },
-                timeout=timeout,
-            )
-            if response.status_code != 200:
-                raise RagIngestionUnavailable("knowledge analytics unavailable")
-            payload = _response_json(
-                response,
-                max_bytes=_MAX_PROBE_RESPONSE_BYTES,
-                unavailable_message="knowledge analytics unavailable",
+            if deadline is not None:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise RagIngestionUnavailable("knowledge reconciliation unavailable")
+                timeout = min(timeout, remaining)
+            payload = self._recovery_request(
+                instance, "/documents/paginated", method="POST", timeout=timeout,
+                body={"page": page, "page_size": _MAX_PAGINATED_PAGE_SIZE,
+                      "sort_field": "created_at", "sort_direction": "desc"},
             )
             documents = payload.get("documents")
             pagination = payload.get("pagination")

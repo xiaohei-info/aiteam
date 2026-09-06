@@ -15,8 +15,9 @@ from shared.db import PgTenantRouter
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .employee_lifecycle import can_write_config, is_provisionable, is_runnable, target_status
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
+from .memory_policy_service import MemoryPolicyService, normalize_policy
 
-# 配置写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
+# 配置写角色（03 §9.7）；公开完整配置读同样由routes限制，内部读由snapshot/pull授权。
 _CONFIG_WRITE_ROLES = [
     EnterpriseRole.OWNER.value,
     EnterpriseRole.ENTERPRISE_ADMIN.value,
@@ -26,9 +27,16 @@ _CONFIG_WRITE_ROLES = [
 class EmployeeConfigService:
     """employee 配置 CRUD 编排。tenant_id 全程经 TenantContext，不手写过滤（D22）。"""
 
-    def __init__(self, repo: EmployeeConfigRepository, operator=None):
+    def __init__(self, repo: EmployeeConfigRepository, operator=None, memory_policy=None):
         self._repo = repo
         self._operator = operator
+        self._memory_policy = memory_policy
+
+    def _out(self, ctx: TenantContext, row: EmployeeConfigRow) -> EmployeeConfigOut:
+        out = _to_out(row)
+        policy = (self._memory_policy.effective(ctx, employee_id=row.employee_id)
+                  if self._memory_policy is not None else normalize_policy(row.memory_policy))
+        return out.model_copy(update={"memory_policy": policy})
 
     def create(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_slug: str) -> EmployeeConfigOut:
         _ensure_can_write(ctx)
@@ -54,11 +62,11 @@ class EmployeeConfigService:
             platform_model_ref=_platform_model_ref(body.model_policy),
             department_ids=list(body.department_ids),
         )
-        return _to_out(row)
+        return self._out(ctx, row)
 
     def get(self, ctx: TenantContext, *, employee_id: str) -> EmployeeConfigOut:
         row = self._require(ctx, employee_id)
-        return _to_out(row)
+        return self._out(ctx, row)
 
     def update(self, ctx: TenantContext, body: EmployeeConfigIn, *, employee_id: str) -> EmployeeConfigOut:
         _ensure_can_write(ctx)
@@ -86,7 +94,7 @@ class EmployeeConfigService:
         )
         if row is None:  # 双保险：RLS 下跨 tenant 删除/不可见
             raise NotFound("employee not found in this tenant")
-        return _to_out(row)
+        return self._out(ctx, row)
 
     def _validate_platform_model(self, ctx: TenantContext, policy: ModelPolicy) -> None:
         if self._operator is None:  # isolated domain tests/read-only services; production write routes inject Operator client
@@ -162,10 +170,10 @@ class EmployeeConfigService:
         )
         if updated is None:
             raise NotFound("employee not found in this tenant")
-        return _to_out(updated)
+        return self._out(ctx, updated)
 
     def list_all(self, ctx: TenantContext) -> list[EmployeeConfigOut]:
-        return [_to_out(r) for r in self._repo.list_all(ctx)]
+        return [self._out(ctx, r) for r in self._repo.list_all(ctx)]
 
     def _require(self, ctx: TenantContext, employee_id: str) -> EmployeeConfigRow:
         row = self._repo.get(ctx, employee_id=employee_id)
@@ -237,7 +245,9 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
 
 
 def build_employee_config_service(router: PgTenantRouter, operator=None) -> EmployeeConfigService:
-    return EmployeeConfigService(EmployeeConfigRepository(router), operator)
+    from .employee_bindings_repositories import EmployeeMemorySettingRepository
+    return EmployeeConfigService(EmployeeConfigRepository(router), operator,
+                                 MemoryPolicyService(EmployeeMemorySettingRepository(router)))
 
 
 # ---- 生命周期便捷查询（供前端/Agent 运行前检查）----

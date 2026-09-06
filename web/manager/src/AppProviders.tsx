@@ -16,6 +16,8 @@ import { SessionContext, type SessionContextValue } from "./auth/session";
 import { I18nContext } from "./i18n/context";
 import { managerMessages } from "./i18n/messages";
 
+import { clearOAuthTransaction } from "./auth/factors";
+
 const TOKEN_STORAGE_KEY = "aiteam.manager.token";
 
 function readStoredToken(): string | null {
@@ -108,6 +110,8 @@ export function AppProviders({ children }: { children: ReactNode }): ReactNode {
         setToken(newToken);
       },
       signOut: () => {
+        clearOAuthTransaction();
+        setSession(null);
         writeStoredToken(null);
         setToken(null);
       },

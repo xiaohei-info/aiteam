@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from shared.contracts.enums import AuthProvider
 from shared.contracts.tenancy import TenantContext
@@ -20,7 +21,8 @@ class IdentityRow:
     secret: str | None
     must_reset: bool
     roles: list[str]
-    password_changed_at: float | None = None
+    password_changed_at: datetime | float | None = None
+    status: str = "active"
 
 
 class TenantAuthRepository:
@@ -48,8 +50,8 @@ class TenantAuthRepository:
             ).fetchone()[0]
             s.execute(
                 "INSERT INTO auth_identity "
-                "(tenant_id, user_id, provider, external_id, secret, must_reset) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
+                "(tenant_id, user_id, provider, external_id, secret, must_reset, password_changed_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now())",
                 (ctx.tenant_id, str(user_id), provider.value, external_id, secret, must_reset),
             )
             return str(user_id)
@@ -58,7 +60,7 @@ class TenantAuthRepository:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, "
-                "       ai.password_changed_at, u.roles "
+                "       ai.password_changed_at, u.roles, u.status "
                 "FROM auth_identity ai JOIN app_user u ON u.id = ai.user_id "
                 "WHERE ai.provider = %s AND ai.external_id = %s",
                 (provider.value, external_id),
@@ -71,7 +73,7 @@ class TenantAuthRepository:
             secret=row[2],
             must_reset=row[3],
             password_changed_at=row[4],
-            roles=list(row[5] or []),
+            roles=list(row[5] or []), status=row[6],
         )
 
 
@@ -79,9 +81,9 @@ class TenantAuthRepository:
         """按 user_id 取规范账号（含 roles）。tenant_id 发自 ctx。"""
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, u.roles "
+                "SELECT ai.id, ai.user_id, ai.secret, ai.must_reset, ai.password_changed_at, u.roles, u.status "
                 "FROM auth_identity ai JOIN app_user u ON u.id = ai.user_id "
-                "WHERE ai.user_id = %s LIMIT 1",
+                "WHERE ai.user_id = %s ORDER BY (ai.provider IN ('phone', 'password')) DESC, ai.id LIMIT 1",
                 (user_id,),
             ).fetchone()
         if row is None:
@@ -89,7 +91,7 @@ class TenantAuthRepository:
         return IdentityRow(
             identity_id=str(row[0]), user_id=str(row[1]),
             secret=row[2], must_reset=row[3], password_changed_at=row[4],
-            roles=list(row[5] or []),
+            roles=list(row[5] or []), status=row[6],
         )
 
     def find_or_create_passkey_identity(self, ctx: TenantContext, *, user_id: str) -> None:
@@ -137,7 +139,7 @@ class TenantAuthRepository:
     ) -> None:
         with self._router.session(ctx) as s:
             s.execute(
-                "UPDATE auth_identity SET secret = %s, must_reset = %s "
+                "UPDATE auth_identity SET secret = %s, must_reset = %s, password_changed_at = now() "
                 "WHERE provider = %s AND external_id = %s",
                 (secret, must_reset, provider.value, external_id),
             )

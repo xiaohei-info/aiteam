@@ -17,6 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import Response
 
+from .active_principal import require_admin
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
@@ -66,6 +67,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeePromptOut]:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         out = svc.create(ctx, body, employee_id=employee_id)
         return Envelope[EmployeePromptOut](data=out)
@@ -81,6 +83,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeePromptOut]:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         out = svc.get(ctx, employee_id=employee_id)
         return Envelope[EmployeePromptOut](data=out)
@@ -97,6 +100,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeePromptOut]:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         out = svc.update(ctx, body, employee_id=employee_id)
         return Envelope[EmployeePromptOut](data=out)
@@ -113,6 +117,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Response:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         svc.delete(ctx, employee_id=employee_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -128,6 +133,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[EmployeePromptHistoryOut]:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         items = svc.list_history(ctx, employee_id=employee_id)
         return ListEnvelope[EmployeePromptHistoryOut](data=items)
@@ -144,6 +150,7 @@ def build_employee_prompt_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeePromptOut]:
         ctx = tenant_context_from(claims)
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         out = svc.rollback(ctx, body, employee_id=employee_id)
         return Envelope[EmployeePromptOut](data=out)

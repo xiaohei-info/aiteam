@@ -82,7 +82,7 @@ def test_owner_first_login_with_bootstrap_returns_403_must_reset(
     ct = r.headers.get("content-type", "")
     assert ct.startswith("application/problem+json"), f"403 应为 problem+json: {ct}"
     body = r.json()
-    assert body["code"] == "forbidden"
+    assert body["code"] == "password_reset_required"
 
     # 清理
     import psycopg

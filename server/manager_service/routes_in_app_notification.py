@@ -26,6 +26,7 @@ from shared.service_token import verify_service_token
 from .in_app_notification_repository import InAppNotificationRepository
 from .in_app_notification_service import InAppNotificationService
 from .schemas import InAppNotificationOut
+from .active_principal import require_bound_tenant
 
 
 class _ManagerNotConfigured(AppError):
@@ -44,7 +45,11 @@ def _repo(request: Request) -> InAppNotificationRepository:
 
 
 def _service(request: Request) -> InAppNotificationService:
-    return InAppNotificationService(_repo(request))
+    settings = request.app.state.settings
+    return InAppNotificationService(
+        _repo(request),
+        bound_tenant_id=getattr(settings, "manager_tenant_id", None),
+    )
 
 
 def build_in_app_notification_router(verifier) -> APIRouter:
@@ -64,11 +69,17 @@ def build_in_app_notification_router(verifier) -> APIRouter:
         _svc_token=Depends(verify_service_token),  # 服务间认证守卫（平面③，03 §9.1）
     ) -> Envelope[InAppNotificationOut]:
         """同步路由（def）：psycopg 同步驱动，tenant 数据经 TenantContext（D22）。"""
+        # A service token authenticates the caller, but does not select the
+        # enterprise.  This Manager process has one deployment binding; reject
+        # a body tenant immediately after service authentication and before any
+        # tenant-scoped validation/context construction.
+        bound_tenant = require_bound_tenant(
+            getattr(request.app.state.settings, "manager_tenant_id", None), body.tenant_id,
+        )
         if not body.message:
             from shared.errors import ValidationProblem
             raise ValidationProblem("message is required")
-
-        ctx = TenantContext(tenant_id=body.tenant_id, user_id="operation-service", roles=["service"])
+        ctx = TenantContext(tenant_id=bound_tenant, user_id="operation-service", roles=["service"])
         row = _service(request).deliver_from_operation(
             ctx,
             org_id=body.org_id,
@@ -97,7 +108,10 @@ def build_in_app_notification_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
         limit: int | None = Query(default=None, ge=1, le=200, description="返回条数上限（可选）"),
     ) -> ListEnvelope[InAppNotificationOut]:
-        ctx = TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id, roles=claims.roles)
+        bound_tenant = require_bound_tenant(
+            getattr(request.app.state.settings, "manager_tenant_id", None), claims.tenant_id,
+        )
+        ctx = TenantContext(tenant_id=bound_tenant, user_id=claims.user_id, roles=claims.roles)
         items = _service(request).list_inbox(ctx, limit=limit)
         return ListEnvelope(data=[InAppNotificationOut(**r) for r in items])
 

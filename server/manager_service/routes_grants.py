@@ -16,16 +16,26 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError, Forbidden
+from shared.errors import AppError, Forbidden, ValidationProblem
 
 from .authorized_config_service import AuthorizedConfigService
+from .knowledge_access_policy import KnowledgeAccessPolicy
+from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .openapi_schemas import GrantRevocationOut
 from .capability_catalog_service import build_capability_catalog_service
 from .employee_config_service import build_employee_config_service
 from .routes_member import _services, _token_claims
-from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate
+from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate, validate_uuid_string_list
 
 router = APIRouter(prefix="/api/manager", tags=["grant"])
+
+
+def _validate_audience(body):
+    try:
+        validate_uuid_string_list(body.department_ids)
+        validate_uuid_string_list(body.member_ids)
+    except ValueError as exc:
+        raise ValidationProblem("department_ids and member_ids must contain non-empty UUIDs") from exc
 
 
 class _ManagerNotConfigured(AppError):
@@ -50,6 +60,7 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
             member_service=MemberDeptService(repo=MemberDeptRepository(router_pg)),
             recruit_repository=RecruitRepository(router_pg),
             capability_catalog=capability_catalog,
+            knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(router_pg)),
         )
         request.app.state._authorized_config_service = cache
     return cache
@@ -61,6 +72,7 @@ async def create_grant(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
 ) -> Envelope[MemberGrantOut]:
+    _validate_audience(body)
     ctx = tenant_context_from(claims)
     _, grant_svc = _services(request)
     return Envelope[MemberGrantOut](data=grant_svc.create_grant(ctx, body))
@@ -100,6 +112,7 @@ async def update_grant(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
 ) -> Envelope[MemberGrantOut]:
+    _validate_audience(body)
     ctx = tenant_context_from(claims)
     _, grant_svc = _services(request)
     return Envelope[MemberGrantOut](data=grant_svc.update_grant(ctx, grant_id, body))

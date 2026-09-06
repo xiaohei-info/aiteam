@@ -256,3 +256,46 @@ test("SQLite receipts never replay expired or unknown Pi prompts", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("authenticated scoped projection sync retires only matching legacy metadata and rolls back atomically", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-legacy-projection-test-"));
+  const store = new AgentSqliteStore(join(root, "agent.sqlite"));
+  const expert = (tenant: string, member?: string, id = "e1") => ({ employee_id: id, tenant_id: tenant, ...(member ? { member_id: member } : {}), version: "1", status: "active", handle: id, display_name: id, revoked: false, synced_at: "2026-09-06T00:00:00Z" });
+  const snapshot = (tenant: string, member?: string) => ({ employee_id: "e1", tenant_id: tenant, ...(member ? { member_id: member } : {}), version: "1", snapshot_version: "s1", display_name: "Employee" });
+  const owner = { tenantId: "t1", memberId: "m1" };
+  try {
+    store.replaceProjections([expert("t1"), expert("t1", "m2"), expert("t2"), expert("t1", undefined, "e2")], [], [snapshot("t1"), snapshot("t1", "m2"), snapshot("t2"), snapshot("")]);
+    const held = store.listSnapshots("t1", "m1").find((item) => item.tenant_id === "t1")!;
+    const heldBefore = structuredClone(held);
+    const paused = { ...expert("t1", "m1"), version: "2", status: "paused" };
+    // A compatibility write without authenticated owner must not perform cleanup.
+    store.replaceProjections([paused], [], []);
+    const legacyCount = () => (store.db.prepare("SELECT count(*) AS n FROM loaded_employee_projection WHERE tenant_id = 't1' AND employee_id = 'e1' AND member_id = ''").get() as { n: number }).n;
+    assert.equal(legacyCount(), 1);
+    store.replaceProjections([], [], [], [], owner);
+    assert.equal(legacyCount(), 1, "empty delta is not an implicit revocation");
+    const rowsBefore = store.listLoadedExperts(undefined, undefined, true);
+    const badSnapshot = { ...snapshot("t1", "m1"), toJSON() { throw new Error("injected projection serialization failure"); } };
+    assert.throws(() => store.replaceProjections([paused], [], [badSnapshot], [], owner), /injected/);
+    assert.equal(legacyCount(), 1);
+    assert.deepEqual(store.listLoadedExperts(undefined, undefined, true), rowsBefore);
+    store.replaceProjections([paused], [], [{ ...snapshot("t1", "m1"), version: "2", snapshot_version: "s2" }], [], owner);
+    assert.equal(legacyCount(), 0);
+    assert.equal(store.listLoadedExperts("t1", "m1").find((row) => row.employee_id === "e1")!.status, "paused");
+    assert.equal(store.listLoadedExperts("t1", "m2").find((row) => row.employee_id === "e1")!.status, "active");
+    assert.equal(store.listLoadedExperts("t2").length, 1);
+    assert.equal(store.listLoadedExperts("t1", "m1").some((row) => row.employee_id === "e2"), true);
+    const snapshots = store.listSnapshots();
+    assert.equal(snapshots.some((row) => row.tenant_id === "t1" && !row.member_id), false);
+    assert.equal(snapshots.some((row) => row.tenant_id === "t1" && row.member_id === "m2"), true);
+    assert.equal(snapshots.some((row) => !row.tenant_id), true, "unknown tenant is not guessed or deleted");
+    assert.deepEqual(held, heldBefore);
+    // Explicit revocation also retires a legacy-only cache, without touching another member.
+    store.replaceProjections([expert("t1")], [], [snapshot("t1")]);
+    store.replaceProjections([], [], [], ["e1"], owner);
+    assert.equal(legacyCount(), 0);
+    assert.equal(store.listLoadedExperts("t1", "m1").some((row) => row.employee_id === "e1"), false);
+    assert.equal(store.listLoadedExperts("t1", "m2").some((row) => row.employee_id === "e1"), true);
+    assert.deepEqual(held, heldBefore);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});

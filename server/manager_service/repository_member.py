@@ -213,6 +213,21 @@ class GrantRepository:
             ).fetchone()
         return GrantRow(_s(row[0]), row[1], _s(row[2]), _sa(row[3]), _sa(row[4]), row[5])
 
+    def extend(self, ctx: TenantContext, *, resource_type: str, resource_id: str,
+               department_ids: list[str], member_ids: list[str]) -> GrantRow:
+        """Implicit solution reuse only adds audience; explicit upsert still replaces it."""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO member_grant (tenant_id, resource_type, resource_id, department_ids, member_ids) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (tenant_id, resource_type, resource_id) DO UPDATE SET "
+                "department_ids = ARRAY(SELECT DISTINCT value FROM unnest(member_grant.department_ids || EXCLUDED.department_ids) AS value ORDER BY value), "
+                "member_ids = ARRAY(SELECT DISTINCT value FROM unnest(member_grant.member_ids || EXCLUDED.member_ids) AS value ORDER BY value), updated_at = now() "
+                "RETURNING id, resource_type, resource_id, department_ids, member_ids, updated_at",
+                (ctx.tenant_id, resource_type, resource_id, department_ids, member_ids),
+            ).fetchone()
+        return GrantRow(_s(row[0]), row[1], _s(row[2]), _sa(row[3]), _sa(row[4]), row[5])
+
     def list_all(self, ctx: TenantContext) -> list[GrantRow]:
         with self._router.session(ctx) as s:
             rows = s.execute(

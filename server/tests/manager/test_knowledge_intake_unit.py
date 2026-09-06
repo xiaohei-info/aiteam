@@ -12,8 +12,10 @@
 from __future__ import annotations
 
 import uuid
+import threading
+import copy
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dataclasses import replace as _dc_replace
 
@@ -32,6 +34,8 @@ from manager_service.knowledge_intake_repository import (
     KnowledgeDocumentRow,
     KnowledgeIngestionJobRow,
     KnowledgeOperationRow,
+    KnowledgeReindexPreparation,
+    KnowledgeReconciliationRequired,
 )
 from manager_service.knowledge_intake_service import KnowledgeIntakeService, RagDeletionBusy
 from manager_service.employee_bindings_services import EmployeeKnowledgeBindingService
@@ -125,13 +129,22 @@ class _FakeDocRepo:
         )
 
     def create(self, ctx, *, knowledge_space_id, display_name, source_type, file_name,
-               file_type, file_size, storage_key, status):
+               file_type, file_size, storage_key, status, create_job=False):
         rid = f"doc_{uuid.uuid4().hex[:8]}"
         row = self._row(rid, knowledge_space_id, status=status, display_name=display_name,
                         source_type=source_type, file_name=file_name, file_type=file_type,
                         file_size=file_size, storage_key=storage_key)
-        self._by_id[rid] = row
-        self._by_space.setdefault(knowledge_space_id, []).append(rid)
+        with self._job_repo.lock if create_job else threading.RLock():
+            before_id, before_space = copy.deepcopy((self._by_id, self._by_space))
+            self._by_id[rid] = row
+            self._by_space.setdefault(knowledge_space_id, []).append(rid)
+            try:
+                if create_job:
+                    job = self._job_repo.create(ctx, knowledge_space_id=knowledge_space_id, document_id=rid, status="parsing")
+                    return row, job
+            except BaseException:
+                self._by_id, self._by_space = before_id, before_space
+                raise
         return row
 
     def get(self, ctx, *, document_id):
@@ -161,6 +174,7 @@ class _FakeJobRepo:
         self._by_doc: dict[str, list[str]] = {}
         self._by_space: dict[str, list[str]] = {}
         self.done_count = 0
+        self.lock = threading.RLock()
 
     @classmethod
     def _row(cls, jid, ks, doc_id, status="parsing"):
@@ -170,9 +184,10 @@ class _FakeJobRepo:
             completed_at=None, created_at=None,
         )
 
-    def create(self, ctx, *, knowledge_space_id, document_id, status, started_at=None):
+    def create(self, ctx, *, knowledge_space_id, document_id, status, started_at=None, operation_id=None):
         jid = f"ing_{uuid.uuid4().hex[:8]}"
-        row = self._row(jid, knowledge_space_id, document_id, status=status)
+        row = _dc_replace(self._row(jid, knowledge_space_id, document_id, status=status),
+                          file_source=f"{document_id}/{jid}", operation_id=operation_id)
         self._by_id[jid] = row
         self._by_doc.setdefault(document_id, []).append(jid)
         self._by_space.setdefault(knowledge_space_id, []).append(jid)
@@ -191,10 +206,93 @@ class _FakeJobRepo:
     def list_by_space(self, ctx, *, knowledge_space_id):
         return [self._by_id[i] for i in self._by_space.get(knowledge_space_id, []) if i in self._by_id]
 
+    def _owned(self, job_id, owner):
+        job = self._by_id[job_id]
+        return job.claim_owner == owner and job.lease_until and job.lease_until > datetime.now(timezone.utc)
+
+    def claim(self, ctx, *, owner, job_id=None):
+        with self.lock:
+            now = datetime.now(timezone.utc)
+            for job in self._by_id.values():
+                doc = self._doc_repo.get(ctx, document_id=job.document_id)
+                if (job_id and job.id != job_id) or job.id != self._by_doc[job.document_id][-1] or doc.status not in {"uploaded", "parsing", "indexing", "reindex_requested", "failed"}:
+                    continue
+                if job.status in {"done", "failed"} and job.submission_state != "submitted":
+                    continue
+                if (job.lease_until and job.lease_until > now) or (job.next_attempt_at and job.next_attempt_at > now):
+                    continue
+                self._by_id[job.id] = _dc_replace(job, claim_owner=owner, lease_until=now+timedelta(seconds=90), heartbeat_at=now, attempts=job.attempts+1)
+                return self._by_id[job.id]
+        return None
+
+    def fence_submission(self, ctx, job, *, owner, text_chars):
+        with self.lock:
+            current = self._by_id[job.id]
+            if not self._owned(job.id, owner) or current.submission_state != "not_submitted":
+                return False
+            self._by_id[job.id] = _dc_replace(current, submission_state="submitted", status="indexing", text_chars=text_chars)
+            self._doc_repo.update_status(ctx, job.document_id, status="indexing", text_chars=text_chars)
+            return True
+
+    def record_track(self, ctx, job, *, owner, track_id):
+        with self.lock:
+            if not self._owned(job.id, owner):
+                return False
+            self._by_id[job.id] = _dc_replace(self._by_id[job.id], track_id=track_id)
+            return True
+
+    def settle(self, ctx, job, *, owner, state, error_code=None, upstream_document_id=None):
+        with self.lock:
+            if not self._owned(job.id, owner):
+                return False
+            current = self._by_id[job.id]
+            unknown = state == "unknown" and current.attempts >= 6
+            status = "failed" if state == "failed" or unknown else "indexing"
+            code = error_code or ("SUBMISSION_UNKNOWN" if unknown else None)
+            self._by_id[job.id] = _dc_replace(current, status=status, error_code=code,
+                submission_state="terminal" if state == "failed" else current.submission_state,
+                upstream_document_id=upstream_document_id or current.upstream_document_id,
+                next_attempt_at=datetime.now(timezone.utc)+timedelta(seconds=2), claim_owner=None, lease_until=None)
+            self._doc_repo.update_status(ctx, job.document_id, status=status, error_code=code)
+            if state == "failed" and current.operation_id:
+                self._operation_repo.update(ctx, operation_id=current.operation_id, status="failed", error_code=code, completed=True)
+            return True
+
+    def prepare_reindex(self, ctx, *, document_id, knowledge_space_id, idempotency_key, request_fingerprint):
+        with self.lock:
+            operations = self._operation_repo
+            existing = operations.get_by_key(ctx, operation="reindex", idempotency_key=idempotency_key)
+            if existing is not None:
+                if (existing.request_fingerprint != request_fingerprint or existing.document_id != document_id
+                        or existing.knowledge_space_id != knowledge_space_id):
+                    raise Conflict("idempotency key conflict")
+                jobs = [job for job in self._by_id.values() if job.operation_id == existing.id]
+                if len(jobs) > 1 or (jobs and (jobs[0].document_id != document_id or jobs[0].knowledge_space_id != knowledge_space_id)):
+                    raise KnowledgeReconciliationRequired("ambiguous job association")
+                return KnowledgeReindexPreparation(existing, jobs[0] if jobs else None, newly_created=False)
+            before = copy.deepcopy((self._doc_repo._by_id, self._by_id, self._by_doc, self._by_space, operations.rows, operations.calls))
+            try:
+                operation = operations.create(ctx, operation="reindex", knowledge_space_id=knowledge_space_id,
+                    document_id=document_id, idempotency_key=idempotency_key, request_fingerprint=request_fingerprint)
+                doc = self._doc_repo.get(ctx, document_id=document_id)
+                if doc.error_code == "SUBMISSION_UNKNOWN":
+                    raise KnowledgeReconciliationRequired("unknown submission")
+                if doc.status not in {"ready", "failed"}:
+                    raise Conflict("document is not ready/failed")
+                self._doc_repo.update_status(ctx, document_id, status="reindex_requested")
+                job = self.create(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                                  status="reindex_requested", operation_id=operation.id)
+                return KnowledgeReindexPreparation(operation, job, newly_created=True)
+            except BaseException:
+                self._doc_repo._by_id, self._by_id, self._by_doc, self._by_space, operations.rows, operations.calls = before
+                raise
+
     def mark_done(self, ctx, ingestion_id, *, chunk_count, completed_at):
         row = self._by_id.get(ingestion_id)
         if row and row.status != "done":
-            self._by_id[ingestion_id] = _dc_replace(row, status="done", chunk_count=chunk_count, completed_at=completed_at)
+            self._by_id[ingestion_id] = _dc_replace(row, status="done", chunk_count=chunk_count, completed_at=completed_at, submission_state="terminal", claim_owner=None, lease_until=None)
+            if row.operation_id:
+                self._operation_repo.update(ctx, operation_id=row.operation_id, status="completed", upstream_status="processed", completed=True)
             self.done_count += 1
             return True
         return False
@@ -267,14 +365,20 @@ class _FakeBindingRepo:
         return len(employee_ids)
 
     def publish_ready(self, ctx, *, knowledge_space_id, document_id, employee_ids,
-                      rag_document_id, job_id, chunk_count, text_chars, completed_at, synced_at):
-        self.upsert_ready_many(
-            ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
-            employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at,
-        )
-        self._job_repo.mark_done(ctx, job_id, chunk_count=chunk_count, completed_at=completed_at)
-        self._doc_repo.update_status(ctx, document_id, status="ready", text_chars=text_chars)
-        return len(employee_ids)
+                      rag_document_id, job_id, chunk_count, text_chars, completed_at, synced_at, claim_owner=None):
+        with self._job_repo.lock:
+            if claim_owner is not None and not self._job_repo._owned(job_id, claim_owner):
+                raise RuntimeError("ingestion claim expired")
+            before = copy.deepcopy((self.bindings, self._job_repo._by_id, self._doc_repo._by_id, self._job_repo._operation_repo.rows))
+            try:
+                self.upsert_ready_many(ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                    employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at)
+                self._job_repo.mark_done(ctx, job_id, chunk_count=chunk_count, completed_at=completed_at)
+                self._doc_repo.update_status(ctx, document_id, status="ready", text_chars=text_chars)
+                return len(employee_ids)
+            except BaseException:
+                self.bindings, self._job_repo._by_id, self._doc_repo._by_id, self._job_repo._operation_repo.rows = before
+                raise
 
     def mark_stale_by_document(self, ctx, *, document_id):
         return 0
@@ -334,6 +438,19 @@ class _FakeIngestion:
             file_source, self.result.chunk_count, self.result.upstream_document_id
         )
 
+    def validate_submission(self, *, workspace, file_source, text):
+        if not workspace or not file_source or not text or len(text.encode("utf-8")) > 4 * 1024 * 1024:
+            raise RagIngestionUnavailable("invalid fixture submission")
+
+    def submit_text(self, *, workspace, file_source, text):
+        self.validate_submission(workspace=workspace, file_source=file_source, text=text)
+        self.ingest_text(workspace=workspace, file_source=file_source, text=text)
+        return "fixture-track"
+
+    def reconcile_ingestion(self, *, workspace, file_source, track_id=None):
+        from manager_service.rag_ingestion import RagIngestionStatus
+        return RagIngestionStatus("processed", self.result.upstream_document_id or file_source.split("/")[0], self.result.chunk_count)
+
     def delete_document(self, *, workspace, doc_ids, delete_file, delete_llm_cache):
         self.delete_calls.append((workspace, doc_ids, delete_file, delete_llm_cache))
         if self.delete_error:
@@ -384,6 +501,10 @@ def _make_service(*, space_root: Path, experts=None, employees=None, existing_sp
                   ingestion=None, operation_repo=None):
     doc_repo = _FakeDocRepo()
     job_repo = _FakeJobRepo()
+    operation_repo = operation_repo or _FakeOperationRepo()
+    job_repo._operation_repo = operation_repo
+    doc_repo._job_repo = job_repo
+    job_repo._doc_repo = doc_repo
     return KnowledgeIntakeService(
         doc_repo=doc_repo,
         job_repo=job_repo,
@@ -436,28 +557,29 @@ def test_prepare_upload_returns_before_background_processing(tmp_path: Path) -> 
     assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "ready"
 
 
-def test_background_processing_persists_unexpected_failure(tmp_path: Path) -> None:
+def test_background_delivery_failure_leaves_durable_job_for_recovery(tmp_path: Path) -> None:
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"})
     doc, job = svc.prepare_upload(
         _owner_ctx(), knowledge_space_id="ks", display_name="报告", file_name="report.txt",
         file_type="text/plain", content=b"hello",
     )
 
-    def fail(**_kwargs):
+    def fail(*_args, **_kwargs):
         raise RuntimeError("worker failed")
 
-    svc._advance = fail  # type: ignore[method-assign]
-    svc.process_ingestion(
-        _owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id,
-    )
-    failed = svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id)
-    assert failed.status == "failed"
-    assert failed.error_code == "PROCESSING_FAILED"
+    advance = svc._advance
+    svc._advance = fail
+    with pytest.raises(RuntimeError, match="worker failed"):
+        svc.process_ingestion(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id)
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "uploaded"
+    svc._advance = advance
+    svc.process_ingestion(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id)
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "ready"
 
 
 def test_binding_propagation_failure_fails_closed_without_ready_state(tmp_path: Path) -> None:
     class FailingBindingRepo(_FakeBindingRepo):
-        def publish_ready(self, **kwargs):
+        def publish_ready(self, *args, **kwargs):
             raise RuntimeError("db unavailable")
 
     svc = _make_service(space_root=tmp_path / "store", employees=["emp-1"], existing_spaces={"ks"})
@@ -466,10 +588,18 @@ def test_binding_propagation_failure_fails_closed_without_ready_state(tmp_path: 
         _owner_ctx(), knowledge_space_id="ks", display_name="failed", file_name="a.txt",
         file_type="text/plain", content=b"text",
     )
-    assert doc.status == "failed"
-    assert job.status == "failed"
-    assert job.error_code == "BINDING_PROPAGATION_FAILED"
+    assert doc.status == "indexing"
+    assert job.status == "indexing"
+    assert not doc.can_retry and not doc.can_delete
+    current = svc._job_repo._by_id[job.id]
+    assert current.track_id == "fixture-track" and current.submission_state == "submitted"
+    svc._job_repo._by_id[job.id] = _dc_replace(current, next_attempt_at=None)
     assert svc.list_bindings(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id) == []
+    svc._binding_repo = _FakeBindingRepo(svc._doc_repo, svc._job_repo)
+    svc.process_ingestion(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, job_id=job.id)
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "ready"
+    assert len(svc._ingestion_client.calls) == 1
+    assert len(svc.list_bindings(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id)) == 1
 
 
 def test_ingest_upstream_failure_fails_closed_without_binding(tmp_path: Path) -> None:
@@ -479,10 +609,10 @@ def test_ingest_upstream_failure_fails_closed_without_binding(tmp_path: Path) ->
         _owner_ctx(), knowledge_space_id="ks", display_name="failed", file_name="a.txt",
         file_type="text/plain", content=b"text",
     )
-    assert doc.status == "failed"
-    assert job.status == "failed"
-    assert doc.error_code == "INDEX_FAILED"
-    assert doc.error_message == "knowledge indexing unavailable"
+    assert doc.status == "indexing"
+    assert job.status == "indexing"
+    assert not doc.can_retry and not doc.can_delete
+    assert "secret" not in (doc.error_message or "")
     assert svc.list_bindings(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id) == []
     assert svc._job_repo.done_count == 0
     assert all(status != "ready" for _, status in svc._doc_repo.status_updates)
@@ -708,7 +838,7 @@ def test_delete_resolves_alias_before_request_and_keeps_document_deleting(tmp_pa
     assert operation.document_status == "deleting"
     assert len(ingestion.resolve_calls) == 1
     assert ingestion.resolve_calls[0][0] == "tt__ks"
-    assert set(ingestion.resolve_calls[0][1]) == {doc.id, "doc-stored-1"}
+    assert set(ingestion.resolve_calls[0][1]) == {doc.id, "doc-stored-1", svc._job_repo.get_latest_by_document(ctx, document_id=doc.id).file_source}
     assert ingestion.delete_calls == [("tt__ks", ["doc-internal-1"], False, True)]
     assert svc.get_document(ctx, knowledge_space_id="ks", document_id=doc.id).status == "deleting"
 
@@ -783,7 +913,7 @@ def test_reconcile_delete_absent_completes_and_removes_source_idempotently(tmp_p
     )
     assert fresh_request_key.operation_id == completed.operation_id
     assert fresh_request_key.status == "completed"
-    assert ingestion.probe_calls == [("tt__ks", [doc.id])]
+    assert ingestion.probe_calls == [("tt__ks", sorted([doc.id, svc._job_repo.get_latest_by_document(ctx, document_id=doc.id).file_source]))]
 
 
 def test_reconcile_delete_resolves_internal_id_before_absence_probe(tmp_path: Path) -> None:
@@ -802,7 +932,7 @@ def test_reconcile_delete_resolves_internal_id_before_absence_probe(tmp_path: Pa
     assert completed.status == "completed"
     assert completed.document_status == "deleted"
     assert not source.exists()
-    assert ingestion.resolve_calls == [("tt__ks", [doc.id]), ("tt__ks", [doc.id])]
+    assert ingestion.resolve_calls == [("tt__ks", sorted([doc.id, svc._job_repo.get_latest_by_document(ctx, document_id=doc.id).file_source]))] * 2
     assert ingestion.probe_calls == [("tt__ks", ["doc-internal-1"])]
 
 
@@ -1010,17 +1140,14 @@ def test_reindex_cannot_restart_deleted_document(tmp_path: Path) -> None:
         svc.reindex(ctx, knowledge_space_id="ks", document_id=doc.id, idempotency_key="reindex-deleted")
 
 
-def test_reindex_upstream_failure_is_retryable_and_not_ready(tmp_path: Path) -> None:
+def test_reindex_after_unknown_upstream_failure_is_protected_not_reposted(tmp_path: Path) -> None:
     ingestion = _FakeIngestion(error=RagIngestionUnavailable("secret"))
     svc = _make_service(space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion)
-    doc, _ = svc.ingest_upload(
-        _owner_ctx(), knowledge_space_id="ks", display_name="reindex", file_name="a.txt",
-        file_type="text/plain", content=b"reindex",
-    )
-    # The initial upload failed, so a retry/reindex is a valid transition.
-    with pytest.raises(RagIngestionUnavailable):
+    doc, _ = svc.ingest_upload(_owner_ctx(), knowledge_space_id="ks", display_name="reindex", file_name="a.txt", file_type="text/plain", content=b"reindex")
+    with pytest.raises(Conflict):
         svc.reindex(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id, idempotency_key="re-1")
-    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "failed"
+    assert svc.get_document(_owner_ctx(), knowledge_space_id="ks", document_id=doc.id).status == "indexing"
+    assert len(ingestion.calls) == 1
 
 
 def test_reindex_state_conflict_and_idempotency_key_fingerprint(tmp_path: Path) -> None:

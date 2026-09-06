@@ -15,6 +15,8 @@ from shared.contracts.skill import SignedSkillPackage
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound
 
+from .active_principal import require_active
+from .knowledge_access_policy import KnowledgeAccessPolicy
 from .capability_catalog_service import CapabilityCatalogService
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
@@ -28,14 +30,18 @@ _GRANT_EXEMPT_ROLES = frozenset({
 
 
 def _catalog_row_to_out(row) -> SkillCatalogOut:
-    """把 capability_catalog_row 转成 SkillCatalogOut（含 files/content_hash）。"""
-    from .schemas import SkillCatalogOut, SkillFileIn
-    files_raw = row.files if hasattr(row, "files") else None
-    files_in = [
-        SkillFileIn(path=str(f.get("path", "")), content=str(f.get("content", "")))
-        if isinstance(f, dict) else f
-        for f in (files_raw or [])
-    ]
+    """把 capability_catalog_row 转成安全的 SkillCatalogOut 投影。
+
+    Legacy JSONB rows may contain an object/scalar in ``files``.  Keep those
+    rows inspectable through ``package_status=invalid`` without iterating their
+    value as if it were a list of executable files.
+    """
+    from .custom_skill_package import package_status
+    from .schemas import SkillCatalogOut
+    files_raw = getattr(row, "files", None)
+    # Keep the raw JSONB shape in the authorized projection.  A malformed
+    # scalar/object remains inspectable and invalid; it must not be iterated,
+    # string-coerced, or replaced with a fabricated empty package.
     return SkillCatalogOut(
         catalog_id=getattr(row, "catalog_id", "") or "",
         skill_id=row.skill_id, display_name=getattr(row, "display_name", ""),
@@ -44,8 +50,9 @@ def _catalog_row_to_out(row) -> SkillCatalogOut:
         binding_policy=getattr(row, "binding_policy", "opt_in"),
         visibility=getattr(row, "visibility", "private"),
         config=config if isinstance(config := getattr(row, "config", {}), dict) else {},
-        files=files_in, content_hash=getattr(row, "content_hash", "") or "",
+        files=files_raw, content_hash=getattr(row, "content_hash", "") or "",
         catalog_version=getattr(row, "catalog_version", 0) or 0,
+        package_status=package_status(row),
     )
 
 
@@ -61,8 +68,10 @@ class AuthorizedConfigService:
         recruit_repository: RecruitRepository | None = None,
         capability_catalog: CapabilityCatalogService | None = None,
         skill_signer: SkillPackageSigner | None = None,
+        knowledge_policy: KnowledgeAccessPolicy | None = None,
     ):
         self._config = config_service
+        self._knowledge_policy = knowledge_policy or KnowledgeAccessPolicy()
         self._grants = grant_service
         self._members = member_service
         self._recruit_repo = recruit_repository
@@ -81,6 +90,7 @@ class AuthorizedConfigService:
            Manager capability_catalog 有记录的 skill_id），技能真相供 Agent skill_cache
            按 version/hash 判定更新。capability_catalog 未提供 → skill_packages 置 []（D14）。
         """
+        require_active(self._members.get_member(ctx, req.member_id))
         all_configs = self._config.list_all(ctx)
         all_employee_ids = {c.employee_id for c in all_configs}
 
@@ -100,7 +110,12 @@ class AuthorizedConfigService:
         for cfg in authorized_configs:
             known_ver = req.known_versions.get(cfg.employee_id)
             if known_ver != str(cfg.version):
-                experts.append(cfg.model_dump(mode="json"))
+                policy = self._knowledge_policy.resolve(
+                    ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
+                )
+                experts.append({**cfg.model_dump(mode="json"), "tools": list(policy.tools),
+                                "knowledge_refs": list(policy.refs),
+                                "knowledge_policy": policy.projection.model_dump(mode="json")})
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:
@@ -154,7 +169,7 @@ class AuthorizedConfigService:
         skill_packages_authoritative=false 明确表示 Agent 保持既有缓存，不阻断 sync。
         仅 Manager 有记录的 skill_id 返回技能包——不泄漏未授权技能。
         """
-        from shared.contracts.skill import SkillFile, SkillPackage, derive_file_hash
+        from .custom_skill_package import catalog_package
 
         # Missing signing configuration is an intentional fail-closed downgrade:
         # never send a package that the Agent would have to treat as unsigned.
@@ -170,26 +185,35 @@ class AuthorizedConfigService:
         if not skill_ids:
             return []
         packages: list[SignedSkillPackage] = []
-        for sid in skill_ids:
+        resolved: set[tuple[str, str]] = set()
+        for ref in skill_ids:
+            sid, separator, requested_version = ref.partition("@")
             out = self._capability_get(ctx, skill_id=sid)
-            if out is None or out.skill_id != sid:
+            if out is None or out.skill_id != sid or (separator and out.version != requested_version):
+                continue
+            if (out.skill_id, out.version) in resolved:
                 continue
             try:
+                if out.binding_policy == "disabled" or getattr(out, "package_status", "invalid") != "ready":
+                    continue
+                raw_files = out.files
+                if not isinstance(raw_files, list):
+                    continue
                 files = [
-                    SkillFile(
-                        path=str(getf("path", "")),
-                        content=str(getf("content", "")),
-                        content_hash=derive_file_hash(str(getf("content", ""))),
-                    )
-                    for f in (out.files or [])
-                    for getf in [lambda k, d="": (f.get(k, d) if isinstance(f, dict) else getattr(f, k, d))]
+                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                    for item in raw_files
                 ]
-                pkg = SkillPackage(
-                    skill_id=out.skill_id, version=out.version, content_hash="",
-                    display_name=out.display_name, description=str(out.description) if hasattr(out, "description") else "",
+                if any(not isinstance(item, dict) for item in files):
+                    continue
+                pkg = catalog_package(
+                    skill_id=out.skill_id, version=out.version, content_hash=out.content_hash,
+                    display_name=out.display_name,
                     files=files,
-                ).with_computed_hash()
+                )
+                if not out.content_hash:
+                    continue
                 packages.append(self._skill_signer.sign(pkg, tenant_id=ctx.tenant_id, member_id=ctx.user_id))
+                resolved.add((out.skill_id, out.version))
             except (TypeError, ValueError):
                 # Legacy catalog rows without SKILL.md are not executable packages;
                 # skip them while preserving the rest of the authorized config.

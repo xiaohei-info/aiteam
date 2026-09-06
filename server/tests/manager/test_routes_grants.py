@@ -111,6 +111,17 @@ def test_create_invalid_resource_type_422():
     assert r.status_code == 422
 
 
+def test_grants_reject_malformed_audience_ids_before_service():
+    fakes = (MagicMock(), _fake_grant_svc())
+    with patch("manager_service.routes_member.build_member_dept_service", return_value=fakes), \
+         patch("manager_service.routes_member._auth_service", return_value=MagicMock()):
+        c = _client("postgresql://fake/fake")
+        response = c.patch("/api/manager/grants/g-1",
+                           json={"department_ids": [], "member_ids": ["not-a-uuid"]}, headers=_hdr())
+    assert response.status_code == 422
+    assert fakes[1].update_grant.call_count == 0
+
+
 def test_grants_crud_happy():
     fakes = (MagicMock(), _fake_grant_svc())
     with patch("manager_service.routes_member.build_member_dept_service", return_value=fakes), \
@@ -128,7 +139,7 @@ def test_grants_crud_happy():
         r = c.get("/api/manager/grants/g-1", headers=_hdr())
         assert r.status_code == 200
         r = c.patch("/api/manager/grants/g-1",
-                    json={"department_ids": [], "member_ids": ["u1"]}, headers=_hdr())
+                    json={"department_ids": [], "member_ids": ["11111111-1111-4111-8111-111111111111"]}, headers=_hdr())
         assert r.status_code == 200
         r = c.delete("/api/manager/grants/g-1", headers=_hdr())
         assert r.status_code == 200 and r.json()["data"]["revoked"] == "g-1"

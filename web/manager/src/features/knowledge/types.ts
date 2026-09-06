@@ -5,14 +5,18 @@ export interface KnowledgeSpace {
   created_at?: string | null;
 }
 // ---- 文档 intake（issue #416）----
+/** Unknown upstream acceptance is represented as failed + SUBMISSION_UNKNOWN/recovery_required; it remains claimable and is not retryable/deletable. */
 export interface KnowledgeDocument {
   id: string; tenant_id: string; knowledge_space_id: string;
   display_name: string; source_type: "file" | "url"; file_name: string; file_type: string;
   file_size: number; storage_key: string; status: KnowledgeDocumentStatus;
+  can_retry?: boolean; can_delete?: boolean; recovery_required?: boolean;
   text_chars?: number | null; error_code?: string | null; error_message?: string | null;
   created_at?: string | null; updated_at?: string | null;
 }
+/** A failed job can still be recoverable; only a confirmed terminal failure is retryable. */
 export interface KnowledgeIngestionJob {
+  attempts?: number; next_attempt_at?: string | null; recovery_required?: boolean;
   id: string; tenant_id: string; knowledge_space_id: string; document_id: string;
   status: "parsing" | "indexing" | "done" | "failed" | "reindex_requested";
   error_code?: string | null; error_message?: string | null;

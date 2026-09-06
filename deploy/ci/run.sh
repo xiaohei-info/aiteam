@@ -7,12 +7,15 @@
 # 与此前"条件性 build / fallback 到默认分支"的行为不同，本脚本
 # 严格要求调用方给出明确分支；分支为空即 fail。
 #
-# 流程（失败就报错，无 fallback）：
-#   1) git pull --ff-only <branch>
-#   2) 无条件 pnpm install && pnpm build（前端产物每次强制重建，
-#      避免前后端代码不一致）
-#   3) 装 systemd unit → daemon-reload → restart
-#   4) /healthz 冒烟 + GET / 必须是 HTML
+# TEST 简化维护窗口（失败就报错，无 fallback）：
+#   1) 先停止 systemd 管理的 Manager/Operation/Agent application writers
+#   2) 保持应用停止，拉取代码并构建前端
+#   3) 确认 PostgreSQL/NewAPI 依赖运行后备份并执行管理迁移/DDL
+#   4) 安装 systemd unit、启动新三端应用栈
+#   5) /healthz 冒烟 + GET / 必须是 HTML
+#
+# 本流程是完整停机，不是零停机/cgroup cutover；可选的 S05 systemd probe
+# 只在独立 hosted workflow 验证，不能由本脚本或 deploy-main 调用。
 
 set -euo pipefail
 
@@ -61,6 +64,16 @@ log()  { printf '[deploy-run][%s][%s] %s\n' "$ENV_TARGET" "$BRANCH" "$*"; }
 fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&2; exit 1; }
 
 cd "$DEPLOY_ROOT"
+
+# TEST 发布先停止应用 writers。systemd ExecStop 可能同时停止依赖；依赖会
+# 在代码同步/备份前由下方受控的 docker start 显式恢复。失败保持停机，避免
+# 在旧代码仍写库时 checkout 或备份。
+if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+  log "stopping application writers (unit=${UNIT_NAME}) before code sync"
+  systemctl stop "$UNIT_NAME" 2>&1 || fail "failed to stop application writers; release remains stopped"
+else
+  log "application writers already stopped (unit=${UNIT_NAME})"
+fi
 
 if [[ ! -d ".git" ]]; then
   fail "${DEPLOY_ROOT} is not a git repository — bootstrap it first (see deploy/ci/README.md)"
@@ -115,6 +128,25 @@ set -a
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 set +a
+
+if [[ -x "${DEPLOY_ROOT}/.venv/bin/python" ]]; then
+  VENV_PYTHON="${DEPLOY_ROOT}/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  VENV_PYTHON="$(command -v python3)"
+else
+  fail "Python interpreter is required for Manager/Operation migrations"
+fi
+
+# systemd's simple stop also stops the local dependency containers.  Bring the
+# migration/backup dependencies back while application writers remain stopped;
+# never run backup or DDL against a stopped/unknown database.
+log "starting PostgreSQL/NewAPI dependencies while applications remain stopped"
+if ! scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server postgres >/dev/null 2>&1; then
+  fail "PostgreSQL dependency is not available for backup/DDL"
+fi
+if ! scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server newapi >/dev/null 2>&1; then
+  fail "NewAPI dependency is not available for backup/DDL"
+fi
 
 persist_env_value() {
   local name="$1" value="$2"
@@ -171,7 +203,29 @@ else
   log "NewAPI database container not present yet; skipping pre-restart backup"
 fi
 
-# 4) 装 systemd unit（内容变了才 daemon-reload）
+# 4) 应用迁移/DDL。此时应用 writers 仍停止、PostgreSQL 已由上面显式启动；
+#    只用管理 DSN 执行 Manager/Operation migration，绝不让 app_rw 承担 DDL。
+DB_URL_FOR_MIGRATION="${DB_URL:-postgresql://${POSTGRES_USER:-app_rw}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-aiteam_v1}}"
+ADMIN_DB_URL_FOR_MIGRATION="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-app_rw}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-aiteam_v1}}"
+APP_RW_PASSWORD_FOR_MIGRATION="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+if ! DB_URL="${DB_URL_FOR_MIGRATION}" ADMIN_DB_URL="${ADMIN_DB_URL_FOR_MIGRATION}" APP_RW_PASSWORD="${APP_RW_PASSWORD_FOR_MIGRATION}" \
+  PYTHONPATH="${DEPLOY_ROOT}/server" "${VENV_PYTHON}" - <<'PY'
+import os
+
+from shared.db import apply_migrations as apply_manager_migrations
+from operation_service.repository import apply_migrations as apply_operation_migrations
+
+admin_url = os.environ["ADMIN_DB_URL"]
+password = os.environ.get("APP_RW_PASSWORD")
+apply_manager_migrations(admin_url, password)
+apply_operation_migrations(admin_url, password)
+PY
+then
+  fail "Manager/Operation DDL or migration failed; application writers remain stopped"
+fi
+log "Manager/Operation migrations complete while applications remain stopped"
+
+# 5) 装 systemd unit（内容变了才 daemon-reload）
 UNIT_SRC="${DEPLOY_ROOT}/deploy/ci/${UNIT_NAME}.service"
 UNIT_DST="/etc/systemd/system/${UNIT_NAME}.service"
 [[ -f "$UNIT_SRC" ]] || fail "unit file not found: ${UNIT_SRC}"
@@ -184,7 +238,7 @@ else
   log "${UNIT_DST} content unchanged"
 fi
 
-# 5) 启动 / 重启 daemon
+# 6) 启动 / 重启 daemon
 log "restarting ${UNIT_NAME}"
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || fail "systemctl enable ${UNIT_NAME} failed — deployment would not survive reboot"
 if ! systemctl restart "$UNIT_NAME" 2>&1; then
@@ -192,7 +246,7 @@ if ! systemctl restart "$UNIT_NAME" 2>&1; then
   fail "systemctl restart ${UNIT_NAME} failed — see status above"
 fi
 
-# 6) /healthz + internal NewAPI 冒烟；GET / 必须是 HTML
+# 7) /healthz + internal NewAPI 冒烟；GET / 必须是 HTML
 log "smoking /healthz"
 sleep 5
 for port in 8781 8782 8783; do

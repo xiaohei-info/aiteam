@@ -303,7 +303,7 @@ describe("ExpertsPage", () => {
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
     await screen.findByTestId("model-select");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("模型尚未关联平台服务");
+    expect((await screen.findByText("模型尚未关联平台服务，请刷新目录后重试")).closest("[role=alert]")).toBeInTheDocument();
   });
 
   it("模型归属服务缺少展示信息时仍按模型保存", async () => {
@@ -371,7 +371,7 @@ describe("ExpertsPage", () => {
     fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
     await screen.findByRole("dialog", { name: "专家实例详情" });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存失败"));
+    expect((await screen.findByText("保存失败")).closest("[role=alert]")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
   });
 

@@ -81,7 +81,7 @@ def test_login_accepts_valid_uuid_tenant_id():
 def test_sync_owner_bootstrap_replaces_existing_owner_credential():
     """Operator 重置 bootstrap 时必须覆盖已有 owner，而不能静默吞掉冲突。"""
     svc = _svc()
-    existing = MagicMock(user_id="owner-1")
+    existing = MagicMock(user_id="owner-1", status="active")
     svc._repo.find_identity.return_value = existing
 
     user_id = svc.sync_owner_bootstrap(

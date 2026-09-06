@@ -55,6 +55,10 @@ class ValidationProblem(AppError):
     status, code, title = 422, "validation_error", "Validation error"
 
 
+class RequestTooLarge(AppError):
+    status, code, title = 413, "request_too_large", "Request Too Large"
+
+
 class TooManyRequests(AppError):
     status, code, title = 429, "rate_limited", "Too Many Requests"
 

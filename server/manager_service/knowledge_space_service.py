@@ -201,9 +201,11 @@ class KnowledgeSpaceService:
     ) -> None:
         _ensure_can_write(ctx)
         if resource_type == "expert":
-            self._expert_binding.unbind(
+            removed = self._expert_binding.unbind(
                 ctx, employee_id=resource_id, knowledge_space_id=knowledge_space_id
             )
+            if removed is False:
+                raise NotFound("employee not found in this tenant")
             return
         self._binding_repo.delete_one(
             ctx,

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 
 # ---------------- Prompt Versions ----------------
@@ -71,20 +71,60 @@ class SkillBindingOut(BaseModel):
 # ---------------- Knowledge Bindings ----------------
 
 class KnowledgeBindingCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {
+            "knowledge_space_id": "enterprise_shared",
+            "enabled": True,
+            "config": {"source": "synthetic-fixture"},
+        }
+    ]})
     knowledge_space_id: str = Field(description="绑定的 knowledge_space id")
     enabled: bool = True
-    config: dict[str, Any] = Field(default_factory=dict, description="级联覆盖参数。")
+    config: dict[str, Any] = Field(
+        default_factory=dict,
+        description="级联覆盖参数；仅允许有界非敏感 JSON 配置。",
+    )
 
 
 class KnowledgeBindingPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"enabled": True, "config": {"source": "synthetic-fixture"}},
+        {"enabled": False, "config": {"source": "synthetic-fixture"}},
+    ]})
     enabled: bool | None = None
     config: dict[str, Any] | None = None
 
 
-class KnowledgeBindingOut(BaseModel):
+class KnowledgePolicyMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    policy_revision: int = 0
+    policy_source: str = "legacy_observed"
+    policy_actor: str | None = None
+    policy_updated_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class KnowledgeDocumentBindingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
+
+
+class KnowledgeDocumentBindingOut(KnowledgePolicyMetadata):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"employee_id": "00000000-0000-4000-8000-000000000001", "document_id": "00000000-0000-4000-8000-000000000002", "enabled": True, "status": "ready", "policy_revision": 2, "policy_source": "admin", "policy_actor": "00000000-0000-4000-8000-000000000003", "policy_updated_at": "2026-09-01T08:00:00Z", "revoked_at": None},
+        {"employee_id": "00000000-0000-4000-8000-000000000001", "document_id": "00000000-0000-4000-8000-000000000002", "enabled": False, "status": "ready", "policy_revision": 3, "policy_source": "admin", "policy_actor": "00000000-0000-4000-8000-000000000003", "policy_updated_at": "2026-09-01T09:00:00Z", "revoked_at": "2026-09-01T08:00:00Z"},
+    ]})
+    employee_id: str
+    document_id: str
+    enabled: bool | None = Field(default=None, description="NULL=inherit; false=explicit deny independent of index status.")
+    status: str = Field(description="Index state, not administrator permission.")
+
+
+class KnowledgeBindingOut(KnowledgePolicyMetadata):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [
+        {"binding_id": "00000000-0000-4000-8000-000000000004", "employee_id": "00000000-0000-4000-8000-000000000001", "knowledge_space_id": "enterprise_shared", "enabled": True, "config": {"source": "manager-fixture"}, "created_at": "2026-09-01T08:00:00Z", "updated_at": "2026-09-01T08:00:00Z", "policy_revision": 2, "policy_source": "admin", "policy_actor": "00000000-0000-4000-8000-000000000003", "policy_updated_at": "2026-09-01T08:00:00Z", "revoked_at": None},
+        {"binding_id": "00000000-0000-4000-8000-000000000004", "employee_id": "00000000-0000-4000-8000-000000000001", "knowledge_space_id": "enterprise_shared", "enabled": False, "config": {"source": "manager-fixture"}, "created_at": "2026-09-01T08:00:00Z", "updated_at": "2026-09-01T08:00:00Z", "policy_revision": 3, "policy_source": "admin", "policy_actor": "00000000-0000-4000-8000-000000000003", "policy_updated_at": "2026-09-01T09:00:00Z", "revoked_at": "2026-09-01T08:00:00Z"},
+    ]})
     binding_id: str
     employee_id: str
     knowledge_space_id: str
@@ -98,10 +138,10 @@ class KnowledgeBindingOut(BaseModel):
 
 class MemorySettingIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    policy: dict[str, Any] = Field(default_factory=dict, description="记忆策略（04 §6.6，mem0）。")
+    policy: dict[str, Any] = Field(default_factory=dict, description="有效Hindsight策略；显式[]拒绝全部操作，自动提炼须explicit_auto_retain=true。")
     seed_memories: list[dict[str, Any]] = Field(default_factory=list, description="种子记忆。")
-    retention_days: int | None = Field(default=None, description="保留天数")
-    scope: str = Field(default="employee", description="可见性作用域（employee 为默认个人级；兼容 tenant/department）")
+    retention_days: int | None = Field(default=None, ge=1, le=36500, description="有限保留期未通过原生验证时能力503；null为无期限。")
+    scope: str = Field(default="employee", pattern="^employee$", description="仅employee-private bank。")
 
 
 class MemorySettingOut(BaseModel):
@@ -113,6 +153,12 @@ class MemorySettingOut(BaseModel):
     retention_days: int | None = None
     scope: str = "employee"
     updated_at: datetime
+    revision: int = 0
+    source: str = "legacy_pending"
+    explicit_auto_retain: bool = False
+    retention_status: str = "unlimited"
+    retention_guarded: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------- Connector Bindings ----------------

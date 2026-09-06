@@ -17,13 +17,14 @@ def _svc(roles=None):
     roles = roles or ["member"]
     router = FakeRouter()
     auth_repo = MagicMock()
-    auth_repo.find_identity.return_value = MagicMock(user_id="u-1", roles=roles, secret="x", must_reset=False, password_changed_at=None)
-    auth_repo.find_user.return_value = MagicMock(user_id="u-1", roles=roles)
+    auth_repo.find_identity.return_value = MagicMock(user_id="u-1", roles=roles, status="active", secret="x", must_reset=False, password_changed_at=None)
+    auth_repo.find_user.return_value = MagicMock(user_id="u-1", roles=roles, status="active")
     issuer = MagicMock(return_value="ISSUED_TOKEN")
     from manager_service.passkey_store import PasskeyStore
     from manager_service.login_audit import LoginAuditRepository
     return PasskeyService(auth_repo=auth_repo, store=PasskeyStore(router),
-                          audit=LoginAuditRepository(router), issuer=issuer), auth_repo, router
+                          audit=LoginAuditRepository(router), issuer=issuer,
+                          origin=__import__("manager_service.auth_origin", fromlist=["AuthOrigin"]).AuthOrigin.parse("https://manager.example")), auth_repo, router
 
 
 def test_finish_login_unknown_credential_records_failure_and_raises(monkeypatch):

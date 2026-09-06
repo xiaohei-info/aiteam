@@ -16,6 +16,7 @@ from typing import Any
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict
+from .memory_policy_service import normalize_policy, policy_projection, write_policy_in_session
 
 
 @dataclass(frozen=True)
@@ -128,12 +129,14 @@ class EmployeeConfigRepository:
                         ctx.tenant_id, employee_slug, display_name, persona, model, provider_ref,
                         thinking_level, timeout_seconds,
                         json.dumps(tools), json.dumps(skills), json.dumps(knowledge_refs),
-                        json.dumps(connector_refs), json.dumps(memory_policy) if memory_policy else None,
+                        json.dumps(connector_refs), json.dumps(policy_projection(normalize_policy(memory_policy), revision=1, source="employee_config")),
                         source_template_id, source_template_version,
                         json.dumps(platform_model_ref) if platform_model_ref else None,
                         list(department_ids or []), role_title,
                     ),
                 ).fetchone()
+                write_policy_in_session(s, ctx, employee_id=str(row[0]),
+                                        fields={"policy": memory_policy or {}}, source="employee_config")
         except pg_errors.UniqueViolation as exc:
             if "uq_employee_live_direct_template" in str(exc):
                 raise Conflict("expert template already recruited in this tenant") from exc
@@ -198,6 +201,12 @@ class EmployeeConfigRepository:
     ) -> EmployeeConfigRow | None:
         """改写本 tenant 内 employee 的配置（version 由触发器自增）。跨 tenant 行 RLS 不可见。"""
         with self._router.session(ctx) as s:
+            if s.execute("SELECT id FROM employee WHERE id=%s FOR UPDATE", (employee_id,)).fetchone() is None:
+                return None
+            effective_memory = write_policy_in_session(
+                s, ctx, employee_id=employee_id, fields={"policy": memory_policy or {}},
+                source="employee_config", project_employee=False,
+            )
             row = s.execute(
                 """
                 UPDATE employee SET
@@ -211,7 +220,7 @@ class EmployeeConfigRepository:
                     display_name, persona, model, provider_ref, thinking_level,
                     timeout_seconds, json.dumps(tools), json.dumps(skills),
                     json.dumps(knowledge_refs), json.dumps(connector_refs),
-                    json.dumps(memory_policy) if memory_policy else None,
+                    json.dumps(effective_memory),
                     json.dumps(platform_model_ref) if platform_model_ref else None,
                     list(department_ids or []), role_title, employee_id,
                 ),

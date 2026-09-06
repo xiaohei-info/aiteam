@@ -1,4 +1,4 @@
-"""WebAuthn 注册/认证 ceremony（issue AITEAM-253，口径对齐旧 api/passkeys.py）。
+"""WebAuthn 注册/认证 ceremony（Manager可信origin及用户绑定）。
 
 把旧 WebUI 单租户的 CBOR/ES256 校验逻辑下沉为无框架 helper，依赖：
 - ``cryptography``（已列为 server 依赖）做公钥加载与签名校验。
@@ -52,11 +52,11 @@ def _cleanup_challenges(now: float) -> None:
         _challenges.pop(k, None)
 
 
-def _store_challenge(challenge: str, kind: str, rp_id: str, origin: str) -> None:
+def _store_challenge(challenge: str, kind: str, rp_id: str, origin: str, scope: str, credential_ids: list[str]) -> None:
     now = time.time()
     with _lock:
         _cleanup_challenges(now)
-        _challenges[challenge] = {"kind": kind, "rp_id": rp_id, "origin": origin, "ts": now}
+        _challenges[challenge] = {"kind": kind, "rp_id": rp_id, "origin": origin, "scope": scope, "credential_ids": list(credential_ids), "ts": now}
 
 
 def _consume_challenge(challenge: str, kind: str) -> dict[str, Any]:
@@ -136,6 +136,8 @@ def _parse_auth_data(auth_data: bytes, rp_id: str) -> dict[str, Any]:
     if not hmac.compare_digest(auth_data[:32], expected):
         raise CeremonyError("Passkey RP ID mismatch")
     flags = auth_data[32]
+    if flags & 0x05 != 0x05:
+        raise CeremonyError("Passkey user presence and verification required")
     sign_count = int.from_bytes(auth_data[33:37], "big")
     return {"flags": flags, "sign_count": sign_count, "rest": auth_data[37:]}
 
@@ -170,6 +172,8 @@ def _client_data(encoded: str, expected_type: str, challenge_kind: str) -> tuple
         data = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise CeremonyError("Malformed client data") from exc
+    if not isinstance(data, dict):
+        raise CeremonyError("Malformed client data")
     if data.get("type") != expected_type:
         raise CeremonyError("Unexpected passkey response type")
     challenge = data.get("challenge")
@@ -179,39 +183,47 @@ def _client_data(encoded: str, expected_type: str, challenge_kind: str) -> tuple
     return data, entry, raw
 
 
+def _validate_client(encoded: str, expected_type: str, kind: str, rp_id: str, origin: str, scope: str):
+    data, entry, _raw = _client_data(encoded, expected_type, kind)
+    if (entry["rp_id"] != rp_id or entry["origin"] != origin or entry["scope"] != scope
+            or data.get("origin") != origin or data.get("crossOrigin", False) is not False):
+        raise CeremonyError("Passkey origin or challenge scope mismatch")
+    return entry
+
+
 # ---- public ceremonies ----
-def registration_options(rp_id: str, existing_credential_ids: list[str]) -> dict[str, Any]:
+def registration_options(rp_id: str, existing_credential_ids: list[str], *, origin: str, scope: str, user_id: str) -> dict[str, Any]:
     challenge = _b64u(secrets.token_bytes(32))
-    _store_challenge(challenge, "register", rp_id, "")
+    _store_challenge(challenge, "register", rp_id, origin, scope, existing_credential_ids)
     return {
         "challenge": challenge,
         "rp": {"name": _RP_NAME, "id": rp_id},
-        "user": {"id": _b64u(secrets.token_bytes(16)), "name": "manager-user", "displayName": "manager-user"},
+        "user": {"id": _b64u(user_id.encode()), "name": "manager-user", "displayName": "manager-user"},
         "pubKeyCredParams": [{"type": "public-key", "alg": -7}],
-        "authenticatorSelection": {"residentKey": "preferred", "userVerification": "preferred"},
+        "authenticatorSelection": {"residentKey": "preferred", "userVerification": "required"},
         "timeout": 60000,
         "attestation": "none",
         "excludeCredentials": [{"type": "public-key", "id": cid} for cid in existing_credential_ids],
     }
 
 
-def authentication_options(rp_id: str, allow_credential_ids: list[str]) -> dict[str, Any]:
+def authentication_options(rp_id: str, allow_credential_ids: list[str], *, origin: str, scope: str) -> dict[str, Any]:
     challenge = _b64u(secrets.token_bytes(32))
-    _store_challenge(challenge, "login", rp_id, "")
+    _store_challenge(challenge, "login", rp_id, origin, scope, allow_credential_ids)
     return {
         "challenge": challenge,
         "rpId": rp_id,
         "allowCredentials": [{"type": "public-key", "id": cid} for cid in allow_credential_ids],
         "timeout": 60000,
-        "userVerification": "preferred",
+        "userVerification": "required",
     }
 
 
-def finish_registration(payload: dict, rp_id: str) -> dict[str, Any]:
+def finish_registration(payload: dict, rp_id: str, *, origin: str, scope: str) -> dict[str, Any]:
     """校验注册响应，返回 {credential_id, public_key_pem, sign_count, label}。抛出 CeremonyError。"""
     from cryptography.hazmat.primitives import hashes, serialization
     response = payload.get("response") or {}
-    _client_data(response.get("clientDataJSON", ""), "webauthn.create", "register")
+    _validate_client(response.get("clientDataJSON", ""), "webauthn.create", "register", rp_id, origin, scope)
     att_obj = _cbor_loads(_b64u_decode(response.get("attestationObject", "")))
     if not isinstance(att_obj, dict) or not isinstance(att_obj.get("authData"), bytes):
         raise CeremonyError("Malformed attestation object")
@@ -225,13 +237,15 @@ def finish_registration(payload: dict, rp_id: str) -> dict[str, Any]:
     return {"credential_id": cred_id, "public_key_pem": pem, "sign_count": parsed["sign_count"], "label": label}
 
 
-def finish_login(payload: dict, rp_id: str, *, stored_pem: str, old_sign_count: int) -> dict[str, Any]:
+def finish_login(payload: dict, rp_id: str, *, stored_pem: str, old_sign_count: int, origin: str, scope: str) -> dict[str, Any]:
     """校验登录断言，返回 {sign_count}。抛出 CeremonyError。"""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     response = payload.get("response") or {}
-    _client_data(response.get("clientDataJSON", ""), "webauthn.get", "login")
+    entry = _validate_client(response.get("clientDataJSON", ""), "webauthn.get", "login", rp_id, origin, scope)
+    if entry["credential_ids"] and payload.get("id") not in entry["credential_ids"]:
+        raise CeremonyError("Passkey credential does not match challenge")
     auth_data = _b64u_decode(response.get("authenticatorData", ""))
     parsed = _parse_auth_data(auth_data, rp_id)
     signature = _b64u_decode(response.get("signature", ""))

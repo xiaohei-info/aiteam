@@ -21,6 +21,16 @@ class InstalledPlatformSkill:
     installed: bool
 
 
+@dataclass(frozen=True)
+class PreparedPlatformSkill:
+    """Validated Operator bytes carried into a local publication transaction."""
+
+    ref: PlatformSkillRef
+    package: SkillPackage
+    owner: str
+    slug: str
+
+
 def _tenant_skill_id(ref: PlatformSkillRef) -> str:
     return f"platform-{ref.skill_id}-{ref.version}-{ref.content_hash[:16]}"
 
@@ -61,25 +71,44 @@ class PlatformSkillService:
             })
         return result
 
-    def install(self, ctx: TenantContext, ref: PlatformSkillRef) -> InstalledPlatformSkill:
+    def prepare(self, ctx: TenantContext, ref: PlatformSkillRef) -> PreparedPlatformSkill:
+        """Fetch and validate immutable Operator bytes before local writes begin."""
+        del ctx  # The remote package is selected only by its pinned public ref.
         remote = self._operator.pull_platform_skill(skill_id=ref.skill_id, version=ref.version)
         package = remote.package
-        tenant_skill_id = _tenant_skill_id(ref)
         if package.skill_id != ref.skill_id or package.version != ref.version or package.content_hash != ref.content_hash:
             raise Conflict("Operator platform skill package does not match the pinned reference")
         package.validate_package()
+        return PreparedPlatformSkill(ref=ref, package=package, owner=remote.owner, slug=remote.slug)
+
+    def prepare_all(self, ctx: TenantContext, refs: list[PlatformSkillRef | dict]) -> list[PreparedPlatformSkill]:
+        return [self.prepare(ctx, raw if isinstance(raw, PlatformSkillRef) else PlatformSkillRef.model_validate(raw)) for raw in refs]
+
+    def install(self, ctx: TenantContext, ref: PlatformSkillRef) -> InstalledPlatformSkill:
+        return self.install_prepared(ctx, self.prepare(ctx, ref))
+
+    def install_prepared(self, ctx: TenantContext, prepared: PreparedPlatformSkill) -> InstalledPlatformSkill:
+        """Install already-validated bytes; this method performs no remote IO."""
+        ref = prepared.ref
+        package = prepared.package
+        package.validate_package()
+        tenant_skill_id = _tenant_skill_id(ref)
         files = [{"path": file.path, "content": file.content} for file in package.files]
         existing = self._catalog.get_skill_by_id(ctx, skill_id=tenant_skill_id)
         if existing is not None:
-            existing_package = SkillPackage(
-                skill_id=ref.skill_id,
-                version=existing.version,
-                content_hash=existing.content_hash,
-                files=[
-                    SkillFile(path=str(item.get("path", "")), content=str(item.get("content", "")), content_hash=derive_file_hash(str(item.get("content", ""))))
-                    for item in existing.files if isinstance(item, dict)
-                ],
-            )
+            existing_files = existing.files if isinstance(existing.files, list) else []
+            try:
+                existing_package = SkillPackage(
+                    skill_id=ref.skill_id,
+                    version=existing.version,
+                    content_hash=existing.content_hash,
+                    files=[
+                        SkillFile(path=str(item.get("path", "")), content=str(item.get("content", "")), content_hash=derive_file_hash(str(item.get("content", ""))))
+                        for item in existing_files if isinstance(item, dict)
+                    ],
+                )
+            except (TypeError, ValueError):
+                raise Conflict("existing tenant skill does not match the immutable Operator package") from None
             identity_matches = (
                 existing.config.get("source") == "operator"
                 and existing.config.get("source_skill_id") == ref.skill_id
@@ -89,21 +118,6 @@ class PlatformSkillService:
             if identity_matches and existing.version == ref.version and existing.content_hash == ref.content_hash and existing_package.compute_content_hash() == ref.content_hash:
                 return InstalledPlatformSkill(tenant_skill_id, ref.version, ref.content_hash, False)
             raise Conflict("existing tenant skill does not match the immutable Operator package")
-            updated = self._catalog.update_skill(
-                ctx,
-                catalog_id=existing.catalog_id,
-                display_name=package.display_name,
-                version=package.version,
-                install_policy=existing.install_policy,
-                binding_policy=existing.binding_policy,
-                visibility=existing.visibility,
-                config={**existing.config, "source": "operator", "source_skill_id": ref.skill_id, "source_version": ref.version, "source_content_hash": ref.content_hash, "owner": remote.owner, "slug": remote.slug},
-                files=files,
-                content_hash=package.content_hash,
-            )
-            if updated is None:
-                raise Conflict("installed skill changed during update")
-            return InstalledPlatformSkill(tenant_skill_id, ref.version, ref.content_hash, True)
         self._catalog.create_skill(
             ctx,
             skill_id=tenant_skill_id,
@@ -112,11 +126,27 @@ class PlatformSkillService:
             install_policy="on_demand",
             binding_policy="opt_in",
             visibility="tenant",
-            config={"source": "operator", "source_skill_id": ref.skill_id, "source_version": ref.version, "source_content_hash": ref.content_hash, "owner": remote.owner, "slug": remote.slug},
+            config={"source": "operator", "source_skill_id": ref.skill_id, "source_version": ref.version, "source_content_hash": ref.content_hash, "owner": prepared.owner, "slug": prepared.slug},
             files=files,
             content_hash=package.content_hash,
         )
         return InstalledPlatformSkill(tenant_skill_id, ref.version, ref.content_hash, True)
+
+    def install_prepared_all(self, ctx: TenantContext, plans: list[PreparedPlatformSkill]) -> list[str]:
+        return [self.install_prepared(ctx, plan).skill_id for plan in plans]
+
+    def validate_all(self, ctx: TenantContext, refs: list[PlatformSkillRef | dict]) -> list[dict]:
+        """Validate pinned packages without writing the tenant catalog."""
+        normalized: list[dict] = []
+        for raw in refs:
+            ref = raw if isinstance(raw, PlatformSkillRef) else PlatformSkillRef.model_validate(raw)
+            remote = self._operator.pull_platform_skill(skill_id=ref.skill_id, version=ref.version)
+            package = remote.package
+            if package.skill_id != ref.skill_id or package.version != ref.version or package.content_hash != ref.content_hash:
+                raise Conflict("Operator platform skill package does not match the pinned reference")
+            package.validate_package()
+            normalized.append(ref.model_dump(mode="json"))
+        return normalized
 
     def install_all(self, ctx: TenantContext, refs: list[PlatformSkillRef | dict]) -> list[str]:
         ids: list[str] = []

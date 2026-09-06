@@ -19,7 +19,7 @@ from pydantic import Field
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
-from shared.errors import AppError
+from shared.errors import AppError, ValidationProblem
 
 from .operator_catalog import OperatorCatalogPort
 from .recruit_service import RecruitService, build_recruit_service
@@ -31,11 +31,20 @@ from .schemas import (
     RecruitmentOrderOut,
     SolutionApplyRecordOut,
     SolutionInstanceOut,
+    validate_uuid_string_list,
 )
 
 
 class RecruitableExpertOut(ExpertTemplateDetail):
     is_recruited: bool = Field(default=False)
+
+
+def _validate_audience(body):
+    try:
+        validate_uuid_string_list(body.department_ids)
+        validate_uuid_string_list(body.member_ids)
+    except ValueError as exc:
+        raise ValidationProblem("department_ids and member_ids must contain non-empty UUIDs") from exc
 
 
 class _ManagerNotConfigured(AppError):
@@ -175,6 +184,7 @@ def build_recruit_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[RecruitExpertResult]:
+        _validate_audience(body)
         svc = _service(request)
         return Envelope[RecruitExpertResult](
             data=svc.recruit_expert(tenant_context_from(claims), body)
@@ -189,6 +199,7 @@ def build_recruit_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ApplySolutionResult]:
+        _validate_audience(body)
         svc = _service(request)
         return Envelope[ApplySolutionResult](
             data=svc.apply_solution(tenant_context_from(claims), body)

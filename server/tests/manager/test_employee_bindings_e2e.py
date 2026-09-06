@@ -67,7 +67,7 @@ def _make_employee(client, token, *, slug):
 def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
-    tok_a = _token(tid_a, ["owner"], user_id="owner-a", admin_url=admin_url)
+    tok_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     eid_a = _make_employee(client, tok_a, slug=f"bind-a-{uuid.uuid4().hex[:6]}")
     auth_a = {"Authorization": f"Bearer {tok_a}"}
 
@@ -120,7 +120,7 @@ def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
 
     # ---- memory setting upsert + patch ----
     r = client.put(f"/api/manager/employees/{eid_a}/memory-setting",
-                   json={"retention_days": 30, "scope": "tenant"}, headers=auth_a)
+                   json={"retention_days": 30, "scope": "employee"}, headers=auth_a)
     assert r.status_code == 200, r.text
     r = client.patch(f"/api/manager/employees/{eid_a}/memory-setting",
                      json={"retention_days": 60}, headers=auth_a)
@@ -142,11 +142,11 @@ def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
     r = client.get(f"/api/manager/employees/{eid_a}/memory-setting", headers=auth_b)
     assert r.status_code == 404
 
-    # ---- member read ok / write 403 ----
+    # ---- member full configuration read/write 403 ----
     tok_m = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     auth_m = {"Authorization": f"Bearer {tok_m}"}
     r = client.get(f"/api/manager/employees/{eid_a}/skill-bindings", headers=auth_m)
-    assert r.status_code == 200
+    assert r.status_code == 403
     r = client.post(f"/api/manager/employees/{eid_a}/skill-bindings",
                     json={"skill_id": "reading"}, headers=auth_m)
     assert r.status_code == 403

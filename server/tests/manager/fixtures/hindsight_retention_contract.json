@@ -1,0 +1,1956 @@
+{
+  "version": "0.9.0",
+  "paths": {
+    "/v1/default/banks/{bank_id}/profile": {
+      "get": {
+        "tags": [
+          "Banks"
+        ],
+        "summary": "Get memory bank profile",
+        "description": "Get disposition traits and mission for a memory bank. Returns 404 if the bank does not exist.",
+        "operationId": "get_bank_profile",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Banks"
+        ],
+        "summary": "Update memory bank disposition",
+        "description": "Update bank's disposition traits (skepticism, literalism, empathy)",
+        "operationId": "update_bank_disposition",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDispositionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankProfileResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/memories": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Retain memories",
+        "description": "Retain memory items with automatic fact extraction.\n\nThis is the main endpoint for storing memories. It supports both synchronous and asynchronous processing via the `async` parameter.\n\n**Features:**\n- Efficient batch processing\n- Automatic fact extraction from natural language\n- Entity recognition and linking\n- Document tracking with automatic upsert (when document_id is provided)\n- Temporal and semantic linking\n- Optional asynchronous processing\n\n**The system automatically:**\n1. Extracts semantic facts from the content\n2. Generates embeddings\n3. Deduplicates similar facts\n4. Creates temporal, semantic, and entity links\n5. Tracks document metadata\n\n**When `async=true`:** Returns immediately after queuing. Use the operations endpoint to monitor progress.\n\n**When `async=false` (default):** Waits for processing to complete.\n\n**Note:** If a memory item has a `document_id` that already exists, the old document and its memory units will be deleted before creating new ones (upsert behavior).",
+        "operationId": "retain_memories",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetainResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Clear memory bank memories",
+        "description": "Delete memory units for a memory bank. Optionally filter by type (world, experience, observation) to delete only specific types. This is a destructive operation that cannot be undone. The bank profile (disposition and background) will be preserved.",
+        "operationId": "clear_bank_memories",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional fact type filter (world, experience, observation)",
+              "title": "Type"
+            },
+            "description": "Optional fact type filter (world, experience, observation)"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/memories/recall": {
+      "post": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Recall memory",
+        "description": "Recall memory using semantic similarity and spreading activation.\n\nThe type parameter is optional and must be one of:\n- `world`: General knowledge about people, places, events, and things that happen\n- `experience`: Memories about experience, conversations, actions taken, and tasks performed",
+        "operationId": "recall_memories",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/memories/list": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "List memory units",
+        "description": "List memory units with pagination and optional full-text search. Supports filtering by type, source document, and linked entity ID. Results are sorted by most recent first (mentioned_at DESC, then created_at DESC).",
+        "operationId": "list_memories",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "consolidation_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Consolidation State"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
+            }
+          },
+          {
+            "name": "entity_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tags"
+            }
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ],
+              "type": "string",
+              "default": "any",
+              "title": "Tags Match"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMemoryUnitsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/memories/{memory_id}": {
+      "get": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Get memory unit",
+        "description": "Get a single memory unit by ID with all its metadata including entities and tags. Note: the 'history' field is deprecated and always returns an empty list - use GET /memories/{memory_id}/history instead.",
+        "operationId": "get_memory",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Memory"
+        ],
+        "summary": "Curate memory unit",
+        "description": "Edit a memory's text and/or change its curation state (invalidate / revert). Invalidated memories are excluded from recall, consolidation, and graph maintenance but kept for audit (reversible). Only world/experience facts can be curated; observations are derived.",
+        "operationId": "update_memory",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{bank_id}/operations/{operation_id}": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get operation status",
+        "description": "Get the status of a specific async operation. Returns 'pending', 'processing', 'completed', 'failed', or 'cancelled'. Completed operations remain queryable with their payload for the configured retention window and are pruned afterward.",
+        "operationId": "get_operation_status",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Operation Id"
+            }
+          },
+          {
+            "name": "include_payload",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include the raw task payload (submission params) in the response. May be large.",
+              "default": false,
+              "title": "Include Payload"
+            },
+            "description": "Include the raw task payload (submission params) in the response. May be large."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Cancel a pending async operation",
+        "description": "Cancel a pending async operation by removing it from the queue",
+        "operationId": "cancel_operation",
+        "parameters": [
+          {
+            "name": "bank_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bank Id"
+            }
+          },
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Operation Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelOperationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "schemas": {
+    "RecallRequest": {
+      "properties": {
+        "query": {
+          "type": "string",
+          "title": "Query"
+        },
+        "types": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Types",
+          "description": "List of fact types to recall: 'world', 'experience', 'observation'. Defaults to world and experience if not specified."
+        },
+        "prefer_observations": {
+          "type": "boolean",
+          "title": "Prefer Observations",
+          "description": "When recalling raw facts ('world'/'experience') together with 'observation', drop any raw fact that an observation in the results was consolidated from, so the observation supersedes it and you don't get duplicate content. The freed slots are backfilled with the next results, keeping the result count at the requested budget. Disabled by default; set to true to enable. No effect unless 'observation' and at least one raw type are both requested.",
+          "default": false
+        },
+        "budget": {
+          "$ref": "#/components/schemas/Budget",
+          "default": "mid"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "title": "Max Tokens",
+          "default": 4096
+        },
+        "trace": {
+          "type": "boolean",
+          "title": "Trace",
+          "default": false
+        },
+        "query_timestamp": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Query Timestamp",
+          "description": "ISO format date string (e.g., '2023-05-30T23:40:00'). Used as the query-time anchor for relative temporal expressions and recency scoring."
+        },
+        "include": {
+          "$ref": "#/components/schemas/IncludeOptions",
+          "description": "Options for including additional data (entities are included by default)",
+          "default": {}
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tags",
+          "description": "Filter memories by tags. If not specified, all memories are returned. Omitting tags (or passing []) together with tags_match='exact' filters to untagged/global observations only (the scope written by observation_scopes='shared')."
+        },
+        "tags_match": {
+          "type": "string",
+          "enum": [
+            "any",
+            "all",
+            "any_strict",
+            "all_strict",
+            "exact"
+          ],
+          "title": "Tags Match",
+          "description": "How to match tags: 'any' (OR, includes untagged), 'all' (AND, includes untagged), 'any_strict' (OR, excludes untagged), 'all_strict' (AND, excludes untagged), 'exact' (set-equality on the full scope, excludes untagged). With 'exact' and no tags (or []), the empty global scope is selected and only untagged memories match.",
+          "default": "any"
+        },
+        "tag_groups": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TagGroupLeaf"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TagGroupAnd-Input"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TagGroupOr-Input"
+                  },
+                  {
+                    "$ref": "#/components/schemas/TagGroupNot-Input"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tag Groups",
+          "description": "Compound tag filter using boolean groups. Groups in the list are AND-ed. Each group is a leaf {tags, match} or compound {and: [...]}, {or: [...]}, {not: ...}."
+        },
+        "min_scores": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/MinScores"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional per-stage score floors (all inclusive, AND-ed). `semantic` and `keyword` are retrieval-level cutoffs pushed into the SQL arms (overriding the global similarity/BM25 minimums for this request); `reranker` and `final` are post-ranking filters on the scored results. Any field left unset imposes no floor; omitting `min_scores` entirely (the default) applies no score filtering. Use with care — the reranker's absolute scores are not calibrated across queries (a clearly-relevant match may score ~0.001 even though it is ranked first)."
+        }
+      },
+      "type": "object",
+      "required": [
+        "query"
+      ],
+      "title": "RecallRequest",
+      "description": "Request model for recall endpoint.",
+      "example": {
+        "budget": "mid",
+        "include": {
+          "entities": {
+            "max_tokens": 500
+          }
+        },
+        "max_tokens": 4096,
+        "query": "What did Alice say about machine learning?",
+        "query_timestamp": "2023-05-30T23:40:00",
+        "tags": [
+          "user_a"
+        ],
+        "tags_match": "any",
+        "trace": true,
+        "types": [
+          "world",
+          "experience"
+        ]
+      }
+    },
+    "RecallResponse": {
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/components/schemas/RecallResult"
+          },
+          "type": "array",
+          "title": "Results"
+        },
+        "trace": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace"
+        },
+        "entities": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/EntityStateResponse"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entities",
+          "description": "Entity states for entities mentioned in results"
+        },
+        "chunks": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/ChunkData"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Chunks",
+          "description": "Chunks for facts, keyed by chunk_id"
+        },
+        "source_facts": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/RecallResult"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Facts",
+          "description": "Source facts for observation-type results, keyed by fact ID"
+        }
+      },
+      "type": "object",
+      "required": [
+        "results"
+      ],
+      "title": "RecallResponse",
+      "description": "Response model for recall endpoints.",
+      "example": {
+        "chunks": {
+          "456e7890-e12b-34d5-a678-901234567890": {
+            "chunk_index": 0,
+            "id": "456e7890-e12b-34d5-a678-901234567890",
+            "text": "Alice works at Google on the AI team. She's been there for 3 years..."
+          }
+        },
+        "entities": {
+          "Alice": {
+            "canonical_name": "Alice",
+            "entity_id": "123e4567-e89b-12d3-a456-426614174001",
+            "observations": [
+              {
+                "mentioned_at": "2024-01-15T10:30:00Z",
+                "text": "Alice works at Google on the AI team"
+              }
+            ]
+          }
+        },
+        "results": [
+          {
+            "chunk_id": "456e7890-e12b-34d5-a678-901234567890",
+            "context": "work info",
+            "entities": [
+              "Alice",
+              "Google"
+            ],
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "occurred_end": "2024-01-15T10:30:00Z",
+            "occurred_start": "2024-01-15T10:30:00Z",
+            "text": "Alice works at Google on the AI team",
+            "type": "world"
+          }
+        ],
+        "trace": {
+          "num_results": 1,
+          "query": "What did Alice say about machine learning?",
+          "time_seconds": 0.123
+        }
+      }
+    },
+    "RecallResult": {
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "text": {
+          "type": "string",
+          "title": "Text"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Type"
+        },
+        "entities": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entities"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Context"
+        },
+        "occurred_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Occurred Start"
+        },
+        "occurred_end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Occurred End"
+        },
+        "mentioned_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Mentioned At"
+        },
+        "document_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Document Id"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metadata"
+        },
+        "chunk_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Chunk Id"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tags"
+        },
+        "source_fact_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Fact Ids"
+        },
+        "scores": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/RecallScores"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object",
+      "required": [
+        "id",
+        "text"
+      ],
+      "title": "RecallResult",
+      "description": "Single recall result item.",
+      "example": {
+        "chunk_id": "456e7890-e12b-34d5-a678-901234567890",
+        "context": "work info",
+        "document_id": "session_abc123",
+        "entities": [
+          "Alice",
+          "Google"
+        ],
+        "id": "123e4567-e89b-12d3-a456-426614174000",
+        "mentioned_at": "2024-01-15T10:30:00Z",
+        "metadata": {
+          "source": "slack"
+        },
+        "occurred_end": "2024-01-15T10:30:00Z",
+        "occurred_start": "2024-01-15T10:30:00Z",
+        "tags": [
+          "user_a",
+          "user_b"
+        ],
+        "text": "Alice works at Google on the AI team",
+        "type": "world"
+      }
+    },
+    "RetainRequest": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/components/schemas/MemoryItem"
+          },
+          "type": "array",
+          "title": "Items"
+        },
+        "async": {
+          "type": "boolean",
+          "title": "Async",
+          "description": "If true, process asynchronously in background. If false, wait for completion (default: false)",
+          "default": false
+        },
+        "document_tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Document Tags",
+          "description": "Deprecated. Use item-level tags instead.",
+          "deprecated": true
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Operation Id",
+          "description": "Optional client-supplied UUID used as the identity of an async retain operation. Re-submitting with the same operation_id returns the original operation and creates no new work, so retrying after a lost or timed-out acknowledgement will not enqueue a duplicate. Reusing an id that belongs to a different operation returns HTTP 409. Ignored for synchronous retain."
+        }
+      },
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "title": "RetainRequest",
+      "description": "Request model for retain endpoint.",
+      "example": {
+        "async": false,
+        "items": [
+          {
+            "content": "Alice works at Google",
+            "context": "work",
+            "document_id": "conversation_123"
+          },
+          {
+            "content": "Bob went hiking yesterday",
+            "document_id": "conversation_123",
+            "timestamp": "2024-01-15T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "RetainResponse": {
+      "properties": {
+        "success": {
+          "type": "boolean",
+          "title": "Success"
+        },
+        "bank_id": {
+          "type": "string",
+          "title": "Bank Id"
+        },
+        "items_count": {
+          "type": "integer",
+          "title": "Items Count"
+        },
+        "async": {
+          "type": "boolean",
+          "title": "Async",
+          "description": "Whether the operation was processed asynchronously"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Operation Id",
+          "description": "Operation ID for tracking async operations. Use GET /v1/default/banks/{bank_id}/operations to list operations. Only present when async=true. When items use different per-item strategies, use operation_ids instead."
+        },
+        "operation_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Operation Ids",
+          "description": "Operation IDs when items were submitted as multiple strategy groups (async=true with mixed per-item strategies). operation_id is set to the first entry for backward compatibility."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Token usage metrics for LLM calls during fact extraction (only present for synchronous operations)"
+        }
+      },
+      "type": "object",
+      "required": [
+        "success",
+        "bank_id",
+        "items_count",
+        "async"
+      ],
+      "title": "RetainResponse",
+      "description": "Response model for retain endpoint.",
+      "example": {
+        "async": false,
+        "bank_id": "user123",
+        "items_count": 2,
+        "success": true,
+        "usage": {
+          "input_tokens": 500,
+          "output_tokens": 100,
+          "total_tokens": 600
+        }
+      }
+    },
+    "MemoryItem": {
+      "properties": {
+        "content": {
+          "type": "string",
+          "title": "Content"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Timestamp",
+          "description": "When the content occurred. Accepts an ISO 8601 datetime string (e.g. '2024-01-15T10:30:00Z'), null/omitted (defaults to now), or the special string 'unset' to explicitly store without any timestamp (use this for timeless content such as fictional documents or static reference material)."
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Context"
+        },
+        "metadata": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Metadata"
+        },
+        "document_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Document Id",
+          "description": "Optional document ID for this memory item. Provide a distinct document_id per source document — items sharing a document_id are grouped into the same document. Auto-generated when omitted."
+        },
+        "entities": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/components/schemas/EntityInput"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entities",
+          "description": "Optional entities to combine with auto-extracted entities."
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Tags",
+          "description": "Optional tags for visibility scoping. Memories with tags can be filtered during recall."
+        },
+        "observation_scopes": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "per_tag",
+                "combined",
+                "all_combinations",
+                "shared"
+              ]
+            },
+            {
+              "items": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "ObservationScopes",
+          "description": "How to scope observations during consolidation. 'per_tag' runs one consolidation pass per individual tag, creating separate observations for each tag. 'combined' (default) runs a single pass with all tags together. 'shared' runs a single pass over one global, untagged scope, so memories consolidate together regardless of their tags — useful for deduplicating across volatile per-call provenance tags (e.g. per-session ids) while keeping those tags on the source facts. A list of tag lists runs one pass per inner list, giving full control over which combinations to use."
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Strategy",
+          "description": "Named retain strategy for this item. Overrides the bank's default strategy for this item only. Strategies are defined in the bank config under 'retain_strategies'."
+        },
+        "update_mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "replace",
+                "append"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Update Mode",
+          "description": "How to handle an existing document with the same document_id. 'replace' (default) deletes old data and reprocesses from scratch. 'append' concatenates new content to the existing document text and reprocesses."
+        }
+      },
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "title": "MemoryItem",
+      "description": "Single memory item for retain.",
+      "example": {
+        "content": "Alice mentioned she's working on a new ML model",
+        "context": "team meeting",
+        "document_id": "meeting_notes_2024_01_15",
+        "entities": [
+          {
+            "text": "Alice"
+          },
+          {
+            "text": "ML model",
+            "type": "CONCEPT"
+          }
+        ],
+        "metadata": {
+          "channel": "engineering",
+          "source": "slack"
+        },
+        "tags": [
+          "user_a",
+          "user_b"
+        ],
+        "timestamp": "2024-01-15T10:30:00Z"
+      }
+    },
+    "ListMemoryUnitsResponse": {
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array",
+          "title": "Items"
+        },
+        "total": {
+          "type": "integer",
+          "title": "Total"
+        },
+        "limit": {
+          "type": "integer",
+          "title": "Limit"
+        },
+        "offset": {
+          "type": "integer",
+          "title": "Offset"
+        }
+      },
+      "type": "object",
+      "required": [
+        "items",
+        "total",
+        "limit",
+        "offset"
+      ],
+      "title": "ListMemoryUnitsResponse",
+      "description": "Response model for list memory units endpoint.",
+      "example": {
+        "items": [
+          {
+            "context": "Work conversation",
+            "date": "2024-01-15T10:30:00Z",
+            "entities": "Alice (PERSON), Google (ORGANIZATION)",
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "metadata": {
+              "channel": "engineering",
+              "source": "slack"
+            },
+            "text": "Alice works at Google on the AI team",
+            "type": "world"
+          }
+        ],
+        "limit": 100,
+        "offset": 0,
+        "total": 150
+      }
+    },
+    "UpdateMemoryRequest": {
+      "properties": {
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Text",
+          "description": "New fact text. Re-embeds the memory, drops its derived observations and links, and triggers re-consolidation."
+        },
+        "context": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Context",
+          "description": "New context for the fact. '' clears it; omit to leave unchanged."
+        },
+        "occurred_start": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Occurred Start",
+          "description": "New occurred-range start (ISO 8601). '' clears it; omit to leave unchanged."
+        },
+        "occurred_end": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Occurred End",
+          "description": "New occurred-range end (ISO 8601). '' clears it; omit to leave unchanged."
+        },
+        "fact_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fact Type",
+          "description": "Reclassify the fact: 'world' or 'experience'. Omit to leave unchanged."
+        },
+        "entities": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entities",
+          "description": "Replace the fact's entities. Names are resolved/find-or-created the same way retain does; '[]' detaches all entities. Omit to leave unchanged."
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "State",
+          "description": "Curation state: 'invalidated' to soft-retire the memory (excluded from recall/consolidation, links and derived observations pruned, moved to the archive) or 'valid' to revert. Reversible."
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason",
+          "description": "Optional free-text reason recorded when invalidating."
+        }
+      },
+      "type": "object",
+      "title": "UpdateMemoryRequest",
+      "description": "Request model for curating a single memory unit (edit / invalidate / revert).\n\nProvide ``text`` to correct the fact, and/or ``state`` to invalidate\n('invalidated') or revert ('valid') it. ``reason`` is optional free text\nrecorded on the memory. At least one of ``text`` or ``state`` must be set.\nOnly world/experience facts can be curated; observations are derived.",
+      "example": {
+        "reason": "superseded: server decommissioned 2026-06-01",
+        "state": "invalidated"
+      }
+    },
+    "OperationResponse": {
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "Id"
+        },
+        "task_type": {
+          "type": "string",
+          "title": "Task Type"
+        },
+        "items_count": {
+          "type": "integer",
+          "title": "Items Count"
+        },
+        "document_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Document Id"
+        },
+        "filename": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Filename",
+          "description": "Original filename for file-conversion operations (file_convert_retain); null for other task types."
+        },
+        "created_at": {
+          "type": "string",
+          "title": "Created At"
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Updated At",
+          "description": "When this operation's row last changed (claim, progress heartbeat, or completion)."
+        },
+        "status": {
+          "type": "string",
+          "title": "Status"
+        },
+        "error_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error Message"
+        },
+        "retry_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retry Count",
+          "description": "Number of times this operation has been retried after failure."
+        },
+        "next_retry_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next Retry At",
+          "description": "When the worker will next attempt this operation. For a pending operation, a value in the future indicates the task is waiting rather than available for immediate pickup — for example, an extension may have raised DeferOperation to park the task until some backpressure window opens. Always null for completed tasks."
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "$ref": "#/components/schemas/OperationProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Last-known progress snapshot for a running operation; null if none was recorded."
+        }
+      },
+      "type": "object",
+      "required": [
+        "id",
+        "task_type",
+        "items_count",
+        "created_at",
+        "status",
+        "error_message"
+      ],
+      "title": "OperationResponse",
+      "description": "Response model for a single async operation.",
+      "example": {
+        "created_at": "2024-01-15T10:30:00Z",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "items_count": 5,
+        "retry_count": 0,
+        "status": "pending",
+        "task_type": "retain"
+      }
+    },
+    "BankProfileResponse": {
+      "properties": {
+        "bank_id": {
+          "type": "string",
+          "title": "Bank Id"
+        },
+        "name": {
+          "type": "string",
+          "title": "Name"
+        },
+        "disposition": {
+          "$ref": "#/components/schemas/DispositionTraits"
+        },
+        "mission": {
+          "type": "string",
+          "title": "Mission",
+          "description": "The agent's mission - who they are and what they're trying to accomplish"
+        },
+        "background": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Background",
+          "description": "Deprecated: use mission instead"
+        }
+      },
+      "type": "object",
+      "required": [
+        "bank_id",
+        "name",
+        "disposition",
+        "mission"
+      ],
+      "title": "BankProfileResponse",
+      "description": "Response model for bank profile.",
+      "example": {
+        "bank_id": "user123",
+        "disposition": {
+          "empathy": 3,
+          "literalism": 3,
+          "skepticism": 3
+        },
+        "mission": "I am a software engineer helping my team stay organized and ship quality code",
+        "name": "Alice"
+      }
+    }
+  }
+}

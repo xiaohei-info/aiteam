@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import time
 import uuid
+import httpx
 
 import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
-from manager_service.rag_ingestion import RagIngestionResult
+from manager_service.rag_ingestion import LightRagIngestionClient, LightRagIngestionSettings
 from tests.manager._auth_helper import (
     make_inmem_verifier_and_signer,
     make_verifier,
@@ -28,15 +29,12 @@ ENTERPRISE_SPACE_ID = "enterprise_shared"
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
-class _FakeIngestion:
-    def ingest_text(self, *, workspace, file_source, text):
-        return RagIngestionResult(rag_document_id=file_source, chunk_count=1)
-
-    def delete_document(self, *, workspace, doc_ids, delete_file=False, delete_llm_cache=True):
-        return type("Deletion", (), {"deletion_started": True, "busy": False})()
-
-    def document_ids_present(self, *, workspace, doc_ids):
-        return set()
+class _FakeIngestion(LightRagIngestionClient):
+    def __init__(self):
+        from tests.manager.test_knowledge_intake_recovery_pg import Upstream
+        self.upstream = Upstream()
+        super().__init__(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000,
+                         workspace=ENTERPRISE_SPACE_ID), transport=httpx.MockTransport(self.upstream))
 
 
 def _client(db_url, admin_url=None):
@@ -196,7 +194,7 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
 def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
     client = _client(migrated_db, admin_url=admin_url)
-    owner = _token(tid_a, ["owner"], user_id="owner-backfill", admin_url=admin_url)
+    owner = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
     _make_space(client, owner, name="Backfill")
     uploaded = client.post(

@@ -77,6 +77,7 @@ def _service(request: Request) -> KnowledgeIntakeService:
                 dsn, instance_registry=registry, enterprise_workspace=enterprise_workspace,
             ),
             ingestion_client=ingestion_client,
+            bound_tenant_id=getattr(request.app.state.settings, "manager_tenant_id", None),
         )
         request.app.state._knowledge_intake_service = cache
     return cache
@@ -136,7 +137,8 @@ def build_knowledge_intake_router(verifier) -> APIRouter:
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeDocumentOut]:
         svc = _service(request)
-        content = await file.read()
+        # Read only enough to enforce the existing 4 MiB intake limit.
+        content = await file.read(4 * 1024 * 1024 + 1)
         if not content:
             from shared.errors import ValidationProblem
             raise ValidationProblem(detail="empty file", errors=None)

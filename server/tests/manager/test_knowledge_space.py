@@ -343,6 +343,15 @@ def test_bind_expert_unknown_employee_not_found():
         ))
 
 
+def test_unbind_unknown_expert_is_not_silent():
+    expert = _FakeExpertBinding()
+    svc = _svc(expert=expert)
+    ctx = _ctx("t-a")
+    svc.create(ctx, KnowledgeSpaceCreate(knowledge_space_id="ks"))
+    with pytest.raises(NotFound):
+        svc.unbind(ctx, knowledge_space_id="ks", resource_type="expert", resource_id="missing")
+
+
 def test_unbind_expert_removes_from_knowledge_refs():
     expert = _FakeExpertBinding()
     svc = _svc(expert=expert)

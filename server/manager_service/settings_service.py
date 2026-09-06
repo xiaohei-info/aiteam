@@ -5,6 +5,7 @@ from __future__ import annotations
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound
 
+from .active_principal import require_admin
 from .settings_repository import SettingsRepository
 
 
@@ -13,6 +14,7 @@ class SettingsService:
         self._repo = repo
 
     def get_settings(self, ctx: TenantContext) -> dict:
+        require_admin(ctx)
         row = self._repo.get_settings(ctx)
         if row is None:
             row = self._repo.upsert_settings(ctx)
@@ -39,6 +41,7 @@ class SettingsService:
         max_employees: int | None = None,
         features: dict | None = None,
     ) -> dict:
+        require_admin(ctx)
         row = self._repo.upsert_settings(
             ctx,
             enterprise_name=enterprise_name,
@@ -63,6 +66,7 @@ class SettingsService:
         }
 
     def list_invites(self, ctx: TenantContext) -> list[dict]:
+        require_admin(ctx)
         rows = self._repo.list_invites(ctx)
         return [
             {
@@ -76,6 +80,7 @@ class SettingsService:
         ]
 
     def create_invite(self, ctx: TenantContext, *, phone: str, display_name: str) -> dict:
+        require_admin(ctx)
         row = self._repo.create_invite(ctx, phone=phone, display_name=display_name, created_by=ctx.user_id)
         return {
             "invite_id": row.invite_id,
@@ -86,5 +91,6 @@ class SettingsService:
         }
 
     def delete_invite(self, ctx: TenantContext, invite_id: str) -> None:
+        require_admin(ctx)
         if not self._repo.delete_invite(ctx, invite_id):
             raise NotFound("invite not found in this tenant")

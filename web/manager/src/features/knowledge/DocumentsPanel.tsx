@@ -75,7 +75,24 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function requiresReconciliation(error: unknown): boolean {
+  return error instanceof ApiError && error.problem?.code === "knowledge_reconciliation_required";
+}
+
+function documentRequiresReconciliation(document: KnowledgeDocument): boolean {
+  return document.recovery_required === true || document.error_code === "SUBMISSION_UNKNOWN";
+}
+
+function operationRequiresReconciliation(operation: { error_code?: string | null }): boolean {
+  return operation.error_code === "SUBMISSION_UNKNOWN";
+}
+
+function reconciliationNotice(): string {
+  return "需对账：提交结果未知，重试与删除保持保护；自动检查中。";
+}
+
 function retryableMessage(error: unknown, fallback: string): string {
+  if (requiresReconciliation(error)) return reconciliationNotice();
   const message = errorMessage(error, fallback);
   return error instanceof ApiError && (error.status === 409 || error.status === 503)
     ? `${message}；可重试`
@@ -87,6 +104,9 @@ function citationStatus(document: KnowledgeDocument): {
   description: string;
   variant: BadgeVariant;
 } {
+  if (documentRequiresReconciliation(document)) {
+    return { label: "引用不可用", description: "提交结果未知，需对账；当前不能重试或删除", variant: "warning" };
+  }
   if (document.status === "deleting") {
     return { label: "引用不可用", description: "文档删除处理中，当前不能获取引用", variant: "warning" };
   }
@@ -156,7 +176,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
   }, [reload]);
 
   useEffect(() => {
-    if (!docs.some((doc) => doc.status === "uploaded" || doc.status === "parsing" || doc.status === "indexing")) {
+    if (!docs.some((doc) => doc.status === "uploaded" || doc.status === "parsing" || doc.status === "indexing" || doc.status === "reindex_requested" || documentRequiresReconciliation(doc))) {
       return;
     }
     const timer = window.setInterval(() => { void reload({ silent: true }); }, 2_000);
@@ -237,6 +257,12 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
       if (currentSpaceId.current !== actionSpaceId) return;
       setPendingDelete(null);
       if (operation.status === "failed") {
+        if (operationRequiresReconciliation(operation)) {
+          setActionNoticeStatus("info");
+          setActionNotice(reconciliationNotice());
+          await reload({ silent: true });
+          return;
+        }
         setError(`${operation.error_message || "删除失败"}；可重试`);
         return;
       }
@@ -253,6 +279,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
           await reload({ silent: true });
         } else {
           setError(retryableMessage(err, "删除失败"));
+          if (requiresReconciliation(err)) await reload({ silent: true });
         }
       }
     } finally {
@@ -290,6 +317,12 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
       const operation = await api.reindexDocument(actionSpaceId, document.id);
       if (currentSpaceId.current !== actionSpaceId) return;
       if (operation.status === "failed") {
+        if (operationRequiresReconciliation(operation)) {
+          setActionNoticeStatus("info");
+          setActionNotice(reconciliationNotice());
+          await reload({ silent: true });
+          return;
+        }
         setError(`${operation.error_message || "重建索引失败"}；可重试`);
         return;
       }
@@ -298,7 +331,10 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
       await reload();
       onChanged?.();
     } catch (err) {
-      if (currentSpaceId.current === actionSpaceId) setError(retryableMessage(err, "重建索引失败"));
+      if (currentSpaceId.current === actionSpaceId) {
+        setError(retryableMessage(err, "重建索引失败"));
+        if (requiresReconciliation(err)) await reload({ silent: true });
+      }
     } finally {
       if (currentSpaceId.current === actionSpaceId) setBusy(false);
     }
@@ -326,7 +362,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
         renderCell: (doc) => (
           <VStack gap={1} aria-label={`文档状态：${STATUS_LABEL[doc.status]}`}>
             <Badge label={STATUS_LABEL[doc.status]} variant={STATUS_VARIANT[doc.status]} />
-            <Text type="supporting">{doc.status === "failed" ? (doc.error_message || doc.error_code || STATUS_DESCRIPTION[doc.status]) : STATUS_DESCRIPTION[doc.status]}</Text>
+            <Text type="supporting">{documentRequiresReconciliation(doc) ? "提交结果未知，需对账；重试与删除已保护" : doc.status === "failed" ? (doc.error_message || doc.error_code || STATUS_DESCRIPTION[doc.status]) : STATUS_DESCRIPTION[doc.status]}</Text>
           </VStack>
         ),
       },
@@ -369,7 +405,9 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
         resizable: false,
         renderCell: (doc) => (
           <HStack gap={2} justify="end">
-            {doc.status === "failed" || doc.status === "ready" ? (
+            {documentRequiresReconciliation(doc) ? (
+              <Text type="supporting">需对账：提交结果未知，自动检查中；重试与删除已保护。请提供文档/任务ID给运维核对。</Text>
+            ) : (doc.can_retry ?? (doc.status === "failed" || doc.status === "ready")) ? (
               <Button
                 label={doc.status === "failed" ? `重试${doc.display_name}` : `重建索引${doc.display_name}`}
                 variant="ghost"
@@ -391,7 +429,7 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
             ) : (
               <Text type="supporting">处理中</Text>
             )}
-            {(doc.status === "ready" || doc.status === "failed") && (
+            {!documentRequiresReconciliation(doc) && (doc.can_delete ?? (doc.status === "ready" || doc.status === "failed")) && (
               <Button label={`删除${doc.display_name}`} variant="destructive" size="sm" isDisabled={busy} onClick={() => setPendingDelete(doc)} />
             )}
           </HStack>

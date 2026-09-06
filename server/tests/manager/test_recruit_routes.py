@@ -59,6 +59,19 @@ def test_apply_solution_without_token_returns_401():
     assert resp.status_code == 401
 
 
+def test_recruit_and_apply_reject_malformed_audience_before_service_call():
+    service = MagicMock()
+    with patch("manager_service.routes_recruit._service", return_value=service):
+        client = _client("postgresql://fake/fake")
+        header = _auth_header()
+        recruit = client.post("/api/manager/recruit/experts", headers=header,
+                              json={"template_id": "tpl-1", "department_ids": ["not-a-uuid"]})
+        apply = client.post("/api/manager/recruit/solutions", headers=header,
+                            json={"solution_id": "sol-1", "member_ids": ["not-a-uuid"]})
+    assert recruit.status_code == 422 and apply.status_code == 422
+    assert service.mock_calls == []
+
+
 def test_recruit_expert_unconfigured_db_returns_503():
     """未配置业务 DB → 503 problem+json（不静默放行，与 employee/auth 路由一致）。"""
     import uuid

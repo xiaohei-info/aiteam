@@ -10,12 +10,28 @@ from __future__ import annotations
 
 from shared.contracts.tenancy import TenantContext
 
+from .active_principal import require_bound_tenant
 from .in_app_notification_repository import InAppNotificationRepository, InAppNotificationRow
 
 
+_UNCONFIGURED = object()
+
+
 class InAppNotificationService:
-    def __init__(self, repo: InAppNotificationRepository):
+    def __init__(self, repo: InAppNotificationRepository, *, bound_tenant_id: str | None | object = _UNCONFIGURED):
         self._repo = repo
+        self._binding_configured = bound_tenant_id is not _UNCONFIGURED
+        self._bound_tenant_id = bound_tenant_id if self._binding_configured else None
+
+    def _context(self, ctx: TenantContext) -> TenantContext:
+        # The repository is tenant-scoped, but a service instance can be reused
+        # by both the Operator ingress and the inbox route.  Bind that service
+        # instance as well so a caller cannot select a different tenant between
+        # route validation and the first SQL statement.
+        if not self._binding_configured:
+            return ctx
+        bound = require_bound_tenant(self._bound_tenant_id, ctx.tenant_id)
+        return ctx.model_copy(update={"tenant_id": bound})
 
     def deliver_from_operation(
         self,
@@ -28,7 +44,7 @@ class InAppNotificationService:
     ) -> InAppNotificationRow:
         """交付一条运营通知到本租户站内信收件箱。由 Operator 窄通道调用触发。"""
         return self._repo.add(
-            ctx,
+            self._context(ctx),
             org_id=org_id,
             message=message,
             notify_type=notify_type,
@@ -37,7 +53,7 @@ class InAppNotificationService:
 
     def list_inbox(self, ctx: TenantContext, *, limit: int | None = None) -> list[dict]:
         """列出本租户站内信（租户作用域，RLS 限定）。"""
-        rows = self._repo.list_all(ctx)
+        rows = self._repo.list_all(self._context(ctx))
         if limit is not None:
             rows = rows[:limit]
         return [
@@ -54,5 +70,5 @@ class InAppNotificationService:
         ]
 
 
-def build_in_app_notification_service(repo: InAppNotificationRepository) -> InAppNotificationService:
-    return InAppNotificationService(repo)
+def build_in_app_notification_service(repo: InAppNotificationRepository, *, bound_tenant_id: str | None | object = _UNCONFIGURED) -> InAppNotificationService:
+    return InAppNotificationService(repo, bound_tenant_id=bound_tenant_id)

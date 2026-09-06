@@ -562,3 +562,73 @@ describe("KnowledgePage Astryx contract", () => {
   });
 
 });
+
+describe("S05 persisted ingestion recovery consumer", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("unknown failed submissions stay polled with retry/delete protected, then recover to ready", async () => {
+    let unknown = true;
+    const timer = vi.spyOn(window, "setInterval");
+    const client = makeClient({ listGet: (url) => url.endsWith("/documents") ? { items: [{ ...DOCUMENTS[1],
+      status: unknown ? "failed" : "ready", error_code: unknown ? "SUBMISSION_UNKNOWN" : null,
+      can_retry: !unknown, can_delete: !unknown,
+    }], page: PAGE } : undefined });
+    render(<DocumentsPanel embedded canWrite spaceId="ks-sales" spaceName="Fixture" onClose={() => {}} />, { wrapper: Providers });
+    expect(await screen.findByText(/需对账：提交结果未知/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重试销售 FAQ/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /删除销售 FAQ/ })).not.toBeInTheDocument();
+    expect(client.post).not.toHaveBeenCalled();
+    expect(client.del).not.toHaveBeenCalled();
+    const polling = timer.mock.calls.find(([, milliseconds]) => milliseconds === 2000)?.[0];
+    expect(typeof polling).toBe("function");
+    unknown = false;
+    await act(async () => { if (typeof polling === "function") polling(); });
+    expect(await screen.findByRole("button", { name: "重建索引销售 FAQ.md" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除销售 FAQ.md" })).toBeInTheDocument();
+    expect(screen.queryByText(/需对账：提交结果未知/)).not.toBeInTheDocument();
+  });
+});
+
+describe("S05 unknown operation response", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps a failed SUBMISSION_UNKNOWN operation protected while ordinary failed documents remain retryable", async () => {
+    let unknown = false;
+    const client = makeClient({
+      listGet: (url) => url.endsWith("/documents") ? { items: [{ ...DOCUMENTS[1], status: unknown ? "failed" : "ready",
+        error_code: unknown ? "SUBMISSION_UNKNOWN" : null, can_retry: !unknown, can_delete: !unknown }], page: PAGE } : undefined,
+      post: () => {
+        unknown = true;
+        return { ...REINDEX_OPERATION, status: "failed", error_code: "SUBMISSION_UNKNOWN" };
+      },
+    });
+    render(<DocumentsPanel embedded canWrite spaceId="ks-sales" spaceName="Fixture" />, { wrapper: Providers });
+    fireEvent.click(await screen.findByRole("button", { name: "重建索引销售 FAQ.md" }));
+    expect(await screen.findByText("需对账：提交结果未知，重试与删除保持保护；自动检查中。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重建索引销售 FAQ.md" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除销售 FAQ.md" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/；可重试/)).not.toBeInTheDocument();
+    expect(client.post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("S05 stale document action", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("re-reads capabilities after a reconciliation-required conflict without advertising retry", async () => {
+    let unknown = false;
+    makeClient({
+      listGet: (url) => url.endsWith("/documents") ? { items: [{ ...DOCUMENTS[1], status: unknown ? "failed" : "ready",
+        error_code: unknown ? "SUBMISSION_UNKNOWN" : null, can_retry: !unknown, can_delete: !unknown }], page: PAGE } : undefined,
+      post: () => {
+        unknown = true;
+        throw new ApiError("Needs reconciliation", 409, "knowledge_reconciliation_required", {
+          type: "about:blank", title: "Needs reconciliation", status: 409, code: "knowledge_reconciliation_required", detail: "Outcome unknown",
+        });
+      },
+    });
+    render(<DocumentsPanel embedded canWrite spaceId="ks-sales" spaceName="Fixture" />, { wrapper: Providers });
+    fireEvent.click(await screen.findByRole("button", { name: "重建索引销售 FAQ.md" }));
+    expect(await screen.findByText("提交结果未知，需对账；当前不能重试或删除")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试销售 FAQ.md" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除销售 FAQ.md" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/；可重试/)).not.toBeInTheDocument();
+  });
+});

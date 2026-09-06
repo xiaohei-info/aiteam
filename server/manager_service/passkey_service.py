@@ -16,6 +16,8 @@ from shared.contracts.tenancy import TenantContext
 from shared.errors import Unauthorized, ValidationProblem
 
 from . import passkey_ceremony as ceremony
+from .active_principal import require_active
+from .auth_origin import AuthOrigin
 from .auth_service import AuthResult
 from .login_audit import LoginAuditRepository, record_login_attempt
 from .passkey_store import PasskeyStore
@@ -30,6 +32,7 @@ class PasskeyService:
         store: PasskeyStore,
         audit: LoginAuditRepository,
         issuer,
+        origin: AuthOrigin | None = None,
     ):
         """
         issuer: 签 token 的可调用对象，签 (tenant_id, user_id, roles) -> AuthResult
@@ -38,15 +41,30 @@ class PasskeyService:
         self._store = store
         self._audit = audit
         self._issuer = issuer
+        self._origin = origin
+
+    @property
+    def origin(self):
+        return (self._origin or AuthOrigin.from_env()).require_passkey_rp()
+
+    def _active_user(self, ctx, user_id):
+        return require_active(self._auth_repo.find_user(ctx, user_id=user_id))
 
     # ---- 注册（需已登录用户）----
     def registration_options(self, ctx: TenantContext, user_id: str) -> dict:
+        self._active_user(ctx, user_id)
         existing = self._store.list_for_user(ctx, user_id)
         ids = [c.credential_id for c in existing]
-        return ceremony.registration_options(ctx.tenant_id, existing_credential_ids=ids)
+        return ceremony.registration_options(self.origin.rp_id, existing_credential_ids=ids,
+                                             origin=self.origin.origin, scope=f"{ctx.tenant_id}:{user_id}", user_id=user_id)
 
     def finish_registration(self, ctx: TenantContext, user_id: str, payload: dict) -> dict:
-        result = ceremony.finish_registration(payload, rp_id=ctx.tenant_id)
+        self._active_user(ctx, user_id)
+        try:
+            result = ceremony.finish_registration(payload, rp_id=self.origin.rp_id,
+                                                  origin=self.origin.origin, scope=f"{ctx.tenant_id}:{user_id}")
+        except (ValueError, KeyError, TypeError) as exc:
+            raise ValidationProblem("passkey registration verification failed") from exc
         credential_id = result["credential_id"]
         if self._store.find_by_credential(ctx, credential_id):
             raise ValidationProblem("passkey already registered")
@@ -71,6 +89,7 @@ class PasskeyService:
             )
             if identity is None:
                 raise Unauthorized("account not found")
+            require_active(identity)
             user_id = identity.user_id
         else:
             user_id = None
@@ -78,8 +97,11 @@ class PasskeyService:
             creds = self._store.list_for_user(ctx, user_id)
         else:
             creds = []  # usernameless: 让客户端从 resident credential 自选
+        if user_id and not creds:
+            raise Unauthorized("no passkeys registered for this account")
         allow = [c.credential_id for c in creds]
-        return ceremony.authentication_options(tenant_id, allow_credential_ids=allow)
+        return ceremony.authentication_options(self.origin.rp_id, allow_credential_ids=allow,
+                                               origin=self.origin.origin, scope=tenant_id)
 
     def finish_login(self, tenant_id: str, payload: dict) -> AuthResult:
         ctx = TenantContext(tenant_id=tenant_id, user_id="anon", roles=[])
@@ -99,19 +121,20 @@ class PasskeyService:
                 detail="unknown credential",
             )
             raise Unauthorized("Unknown passkey")
+        identity = self._active_user(ctx, cred.user_id)
         try:
             res = ceremony.finish_login(
-                payload, rp_id=tenant_id,
+                payload, rp_id=self.origin.rp_id, origin=self.origin.origin, scope=tenant_id,
                 stored_pem=cred.public_key_pem, old_sign_count=cred.sign_count,
             )
             new_count = res["sign_count"]
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError) as exc:
             record_login_attempt(
                 self._audit, ctx, provider="passkey", external_id=cred_id,
                 actor=cred.user_id, ip=payload.get("ip"), success=False,
                 detail="verification failed",
             )
-            raise
+            raise ValidationProblem("passkey assertion verification failed") from exc
         self._store.update_usage(ctx, credential_id=cred_id, sign_count=new_count)
         identity = self._auth_repo.find_user(ctx, user_id=cred.user_id)
         if identity is None:
@@ -121,6 +144,7 @@ class PasskeyService:
                 detail="account missing",
             )
             raise Unauthorized("passkey credential has no matching account")
+        require_active(identity)
         record_login_attempt(
             self._audit, ctx, provider="passkey", external_id=cred_id,
             actor=cred.user_id, ip=payload.get("ip"), success=True,

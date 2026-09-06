@@ -15,11 +15,11 @@ from shared.auth import require_claims, tenant_context_from
 from shared.config import Settings
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.contracts.auth import TokenClaims
-from shared.errors import AppError
+from shared.errors import AppError, ValidationProblem
 
 from .member_service import build_member_dept_service, MemberDeptService
 from .openapi_schemas import DeletedResourceOut
-from .schemas import DepartmentCreate, DepartmentOut, DepartmentUpdate, MemberCreate, MemberOut, MemberUpdate
+from .schemas import DepartmentCreate, DepartmentOut, DepartmentUpdate, MemberCreate, MemberOut, MemberUpdate, validate_uuid_string_list
 from .routes_auth import _auth_service
 
 
@@ -30,6 +30,13 @@ class _ManagerNotConfigured(AppError):
 def _token_claims(request: Request) -> TokenClaims:
     """解出当前身份（03 §9.6）。验签器挂在 app.state（生产 tenant 公钥/JWKS，D23）。"""
     return require_claims(request.app.state._token_verifier)(request)
+
+
+def _validate_department_ids(value):
+    try:
+        return validate_uuid_string_list(value)
+    except ValueError as exc:
+        raise ValidationProblem("department_ids must contain non-empty UUIDs") from exc
 
 
 def _services(request: Request) -> tuple[MemberDeptService, "object"]:
@@ -113,6 +120,7 @@ async def create_member(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
 ) -> Envelope[MemberOut]:
+    _validate_department_ids(body.department_ids)
     ctx = tenant_context_from(claims)
     member_svc, _ = _services(request)
     return Envelope[MemberOut](data=member_svc.create_member(ctx, body))
@@ -146,6 +154,8 @@ async def update_member(
     request: Request,
     claims: TokenClaims = Depends(_token_claims),
 ) -> Envelope[MemberOut]:
+    if body.department_ids is not None:
+        _validate_department_ids(body.department_ids)
     ctx = tenant_context_from(claims)
     member_svc, _ = _services(request)
     return Envelope[MemberOut](data=member_svc.update_member(ctx, member_id, body))

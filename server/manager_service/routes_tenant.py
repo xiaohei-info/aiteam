@@ -12,6 +12,7 @@ from shared.contracts.crosstier import TenantProvisionRequest
 from shared.contracts.envelope import Envelope
 from shared.service_token import verify_service_token
 
+from .active_principal import require_bound_tenant
 from .exceptions import ManagerAdminDbNotConfigured
 from .openapi_schemas import TenantProvisionOut
 from .knowledge_space_service import ensure_enterprise_knowledge_space
@@ -45,6 +46,7 @@ def provision_tenant(
     dsn = settings.admin_db_url
     if not dsn:
         raise ManagerAdminDbNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
+    require_bound_tenant(settings.manager_tenant_id, body.tenant_id)
 
     slug = body.enterprise_code or body.enterprise_name
 
@@ -67,6 +69,11 @@ def provision_tenant(
         if "enterprise_code" in str(e):
             raise Conflict(f"企业代码 '{body.enterprise_code}' 已被占用，请更换")
         raise Conflict("企业信息重复，请检查企业名称和代码")
+
+    # First controlled F01 provisioning completes the configured binding.  No
+    # other registry row can flip readiness because the request was checked
+    # against MANAGER_TENANT_ID above.
+    request.app.state._manager_binding_ready = True
 
     # 2. Manager 开通即幂等初始化企业共享知识空间；文档索引仍由 Manager 后续 intake 负责。
     if business_dsn:

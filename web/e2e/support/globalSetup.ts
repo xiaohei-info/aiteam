@@ -192,6 +192,11 @@ export default async function globalSetup(): Promise<void> {
   // 1. seed E2E 租户（manager/agent 登录前置）。写文件作为 worker 可靠 handoff。
   const identity = runIdentity();
   const seed = seedE2eTenant(identity);
+  if (identity) {
+    process.env.E2E_FACTOR_ENTERPRISE = identity.slug;
+    process.env.E2E_FACTOR_ACCOUNT = identity.account;
+    process.env.E2E_FACTOR_PASSWORD = identity.password;
+  }
   if (seed?.tenant_id) {
     process.env.E2E_TENANT_ID = seed.tenant_id;
     writeFileSync(

@@ -24,7 +24,7 @@ const MANAGER_URL = process.env.MANAGER_URL ?? "http://127.0.0.1:8001";
 const OPERATOR_URL = process.env.OPERATOR_URL ?? "http://127.0.0.1:8000";
 const E2E_PYTHON = process.env.E2E_PYTHON ?? ".venv/bin/python";
 const OPERATION_UI_ORIGIN = process.env.E2E_OPERATION_UI_ORIGIN ?? "http://127.0.0.1:5173";
-const MANAGER_UI_ORIGIN = process.env.E2E_MANAGER_UI_ORIGIN ?? "http://127.0.0.1:5174";
+const MANAGER_UI_ORIGIN = process.env.E2E_MANAGER_UI_ORIGIN ?? "http://localhost:5174";
 const AGENT_UI_ORIGIN = process.env.E2E_AGENT_UI_ORIGIN ?? "http://127.0.0.1:5180";
 
 export default defineConfig({
@@ -91,7 +91,7 @@ export default defineConfig({
     },
     {
       command:
-        `cd .. && DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} OPERATOR_URL=${OPERATOR_URL} ${E2E_PYTHON} server/run.py --tier manager --host 127.0.0.1 --port 8001`,
+        `cd .. && AITEAM_ENV=test MANAGER_PUBLIC_ORIGIN=${MANAGER_UI_ORIGIN} DB_URL=${DB_URL} ADMIN_DB_URL=${ADMIN_DB_URL} SERVICE_TOKEN=${SERVICE_TOKEN} OPERATOR_URL=${OPERATOR_URL} ${E2E_PYTHON} server/run.py --tier manager --host 127.0.0.1 --port 8001`,
       url: "http://127.0.0.1:8001/healthz",
       reuseExistingServer: !isCI,
       timeout: 120_000,
@@ -111,7 +111,7 @@ export default defineConfig({
     },
     {
       command: `MANAGER_API_ORIGIN=http://127.0.0.1:8001 pnpm --dir manager dev --host 127.0.0.1`,
-      url: "http://127.0.0.1:5174/login",
+      url: `${MANAGER_UI_ORIGIN}/login`,
       reuseExistingServer: !isCI,
       timeout: 120_000,
     },

@@ -17,6 +17,8 @@ from shared.contracts.tenancy import TenantContext
 from shared.errors import Unauthorized, ValidationProblem
 
 from .auth_service import AuthResult
+from .auth_origin import AuthOrigin
+from .active_principal import require_active, require_bound_tenant
 from .login_audit import LoginAuditRepository
 from .oauth import (
     OAuthConnectionStore, OAuthError, OAuthProfile, OAuthProvider,
@@ -34,21 +36,45 @@ class OAuthService:
         auth_repo: TenantAuthRepository,
         audit: LoginAuditRepository,
         issuer,
+        origin: AuthOrigin | None = None,
+        deployment_tenant_id: str | None = None,
+        require_binding: bool = False,
     ):
         self._providers = providers
         self._connections = connections
         self._auth_repo = auth_repo
         self._audit = audit
         self._issuer = issuer
+        self._origin = origin
+        self._deployment_tenant_id = deployment_tenant_id
+        self._require_binding = require_binding
+
+    @property
+    def origin(self):
+        return self._origin or AuthOrigin.from_env()
+
+    def _active(self, ctx, user_id):
+        return require_active(self._auth_repo.find_user(ctx, user_id=user_id))
 
     def provider_names(self) -> list[str]:
         return sorted(self._providers.keys())
 
-    def authorize(self, *, provider: str, tenant_id: str, redirect_uri: str) -> dict:
+    def authorize(self, *, provider: str, tenant_id: str, redirect_uri: str, intent: str = "login", ctx: TenantContext | None = None) -> dict:
+        if self._require_binding:
+            require_bound_tenant(self._deployment_tenant_id, tenant_id)
         prov = self._providers.get(provider)
         if prov is None:
             raise ValidationProblem("unsupported oauth provider: %s" % provider)
-        state = _make_state(tenant_id, redirect_uri)
+        if redirect_uri != self.origin.oauth_redirect_uri:
+            raise ValidationProblem("untrusted oauth redirect_uri")
+        if intent not in {"login", "link"}:
+            raise ValidationProblem("invalid oauth intent")
+        user_id = None
+        if intent == "link":
+            if ctx is None or ctx.tenant_id != tenant_id:
+                raise Unauthorized("link requires the current account")
+            user_id = self._active(ctx, ctx.user_id).user_id
+        state = _make_state(tenant_id, redirect_uri, provider=provider, intent=intent, user_id=user_id)
         url = prov.authorization_url(state, redirect_uri, nonce=state)
         return {"provider": provider, "state": state, "authorization_url": url}
 
@@ -61,8 +87,11 @@ class OAuthService:
         except OAuthError as exc:
             raise ValidationProblem("invalid oauth state: %s" % exc) from exc
         tenant_id = payload.get("t")
+        if self._require_binding:
+            require_bound_tenant(self._deployment_tenant_id, tenant_id)
         redirect_uri = payload.get("r")
-        if not tenant_id or not redirect_uri:
+        if (not tenant_id or redirect_uri != self.origin.oauth_redirect_uri
+                or payload.get("provider") != provider or payload.get("intent") != "login"):
             raise ValidationProblem("invalid oauth state payload")
         try:
             token_resp = prov.exchange(code, redirect_uri)
@@ -81,10 +110,9 @@ class OAuthService:
         # 1) 先按连接表反查（已绑定用户）
         conn = self._connections.find(ctx, external_id=profile.external_id)
         if conn is not None:
-            self._connections.upsert(ctx, profile=profile, user_id=conn.user_id)
             identity = self._auth_repo.find_user(ctx, user_id=conn.user_id)
-            if identity is None:
-                raise Unauthorized("oauth bound account missing")
+            require_active(identity)
+            self._connections.upsert(ctx, profile=profile, user_id=conn.user_id)
             self._audit.record(
                 ctx, provider="oauth:" + profile.provider,
                 external_id=profile.external_id, actor=identity.user_id, ip=ip,
@@ -94,6 +122,7 @@ class OAuthService:
         # 2) 再按 auth_identity 反查（兼容直接建过映射的）
         identity = self._auth_repo.find_oauth_identity(ctx, external_id=profile.external_id)
         if identity is not None:
+            require_active(identity)
             self._connections.upsert(ctx, profile=profile, user_id=identity.user_id)
             self._audit.record(
                 ctx, provider="oauth:" + profile.provider,
@@ -108,8 +137,19 @@ class OAuthService:
         )
         raise Unauthorized("no manager account linked to this %s identity" % profile.provider)
 
-    def link(self, ctx: TenantContext, *, provider: str, code: str, redirect_uri: str, user_id: str) -> dict:
+    def link(self, ctx: TenantContext, *, provider: str, code: str, redirect_uri: str, user_id: str, state: str) -> dict:
         """已登录用户绑定第三方账号。"""
+        if ctx.user_id != user_id:
+            raise Unauthorized("link requires the current account")
+        self._active(ctx, user_id)
+        try:
+            payload = _consume_state(state)
+        except OAuthError as exc:
+            raise ValidationProblem("invalid oauth state") from exc
+        if (payload.get("provider") != provider or payload.get("intent") != "link"
+                or payload.get("t") != ctx.tenant_id or payload.get("user_id") != user_id
+                or payload.get("r") != redirect_uri or redirect_uri != self.origin.oauth_redirect_uri):
+            raise ValidationProblem("oauth state scope mismatch")
         prov = self._providers.get(provider)
         if prov is None:
             raise ValidationProblem("unsupported oauth provider: %s" % provider)
@@ -125,11 +165,12 @@ class OAuthService:
         identity = self._auth_repo.find_oauth_identity(ctx, external_id=profile.external_id)
         if identity is not None and identity.user_id != user_id:
             raise ValidationProblem("this %s account is already linked to another user" % provider)
-        self._connections.upsert(ctx, profile=profile, user_id=user_id)
-        self._auth_repo.upsert_oauth_identity(ctx, user_id=user_id, external_id=profile.external_id)
+        self._active(ctx, user_id)
+        self._connections.link(ctx, profile=profile, user_id=user_id)
         return {"provider": provider, "linked": True}
 
     def list_connections(self, ctx: TenantContext, user_id: str) -> list[dict]:
+        self._active(ctx, user_id)
         rows = self._connections.list_for_user(ctx, user_id)
         return [
             {
@@ -142,4 +183,5 @@ class OAuthService:
         ]
 
     def unlink(self, ctx: TenantContext, *, provider: str, user_id: str) -> bool:
+        self._active(ctx, user_id)
         return self._connections.delete(ctx, provider=provider, user_id=user_id)

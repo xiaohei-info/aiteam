@@ -12,8 +12,9 @@ from __future__ import annotations
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, Forbidden, NotFound
+from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
+from .custom_skill_package import package_status, validate_custom_package
 from .capability_catalog_repository import (
     CapabilityCatalogRepository,
     ConnectorCatalogRow,
@@ -51,11 +52,17 @@ class CapabilityCatalogService:
             raise Conflict("platform skill IDs are reserved for Operator-managed installs")
         if self._repo.get_skill_by_id(ctx, skill_id=body.skill_id) is not None:
             raise Conflict("skill_id already exists in this tenant")
+        files = [f.model_dump(mode="json") for f in body.files]
+        content_hash = ""
+        if files:
+            content_hash = validate_custom_package(skill_id=body.skill_id, version=body.version, files=files, content_hash=body.content_hash).content_hash
+        elif body.content_hash:
+            raise ValidationProblem(detail="A draft cannot have a content hash", errors=None)
         row = self._repo.create_skill(
             ctx, skill_id=body.skill_id, display_name=body.display_name, version=body.version,
             install_policy=body.install_policy, binding_policy=body.binding_policy,
             visibility=body.visibility, config=body.config,
-            files=[f.model_dump(mode="json") for f in body.files], content_hash=body.content_hash,
+            files=files, content_hash=content_hash,
         )
         return _skill_to_out(row)
 
@@ -67,13 +74,29 @@ class CapabilityCatalogService:
         current = self._require_skill(ctx, catalog_id)
         if current.config.get("source") == "operator":
             raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
-        # skill_id 不可变（unique 约束的稳定标识）；其余字段以 body 覆盖。
+        if body.skill_id != current.skill_id:
+            raise Conflict("skill_id is immutable")
+        supplied = body.model_fields_set
+        files = None
+        content_hash = None
+        if "files" in supplied:
+            files = [f.model_dump(mode="json") for f in body.files]
+            content_hash = validate_custom_package(
+                skill_id=current.skill_id, version=body.version if "version" in supplied else current.version,
+                files=files, content_hash=body.content_hash,
+            ).content_hash
+            if current.files and current.version == body.version and current.content_hash != content_hash:
+                raise Conflict("A published skill version cannot change content; choose a new version")
+        elif "content_hash" in supplied and body.content_hash != current.content_hash:
+            raise ValidationProblem(detail="content_hash requires an explicit package update", errors=None)
+        elif "version" in supplied and body.version != current.version and current.files:
+            validate_custom_package(skill_id=current.skill_id, version=body.version,
+                                    files=current.files, content_hash=current.content_hash)
         row = self._repo.update_skill(
-            ctx, catalog_id=catalog_id, display_name=body.display_name, version=body.version,
-            install_policy=body.install_policy, binding_policy=body.binding_policy,
-            visibility=body.visibility, config=body.config,
-            files=[f.model_dump(mode="json") for f in body.files],
-            content_hash=body.content_hash,
+            ctx, catalog_id=catalog_id,
+            **{name: getattr(body, name) if name in supplied else None for name in
+               ("display_name", "version", "install_policy", "binding_policy", "visibility", "config")},
+            files=files, content_hash=content_hash,
         )
         if row is None:  # 双保险：RLS 下跨 tenant 不可见
             raise NotFound("skill not found in this tenant")
@@ -190,12 +213,16 @@ def _ensure_can_write(ctx: TenantContext) -> None:
 
 
 def _skill_to_out(row: SkillCatalogRow) -> SkillCatalogOut:
-    files_in = [_to_skill_file_in(f, default_version=row.version) for f in (getattr(row, "files", None) or [])]
+    raw_files = getattr(row, "files", None)
+    # Preserve the repository JSONB value exactly.  Invalid legacy scalar/object
+    # shapes remain inspectable with package_status=invalid; only the package
+    # validator decides whether a list is executable.
     return SkillCatalogOut(
         catalog_id=row.catalog_id, skill_id=row.skill_id, display_name=row.display_name,
         version=row.version, install_policy=row.install_policy, binding_policy=row.binding_policy,
-        visibility=row.visibility, config=row.config, files=files_in,
+        visibility=row.visibility, config=row.config, files=raw_files,
         content_hash=getattr(row, "content_hash", "") or "", catalog_version=row.catalog_version,
+        package_status=package_status(row),
     )
 
 

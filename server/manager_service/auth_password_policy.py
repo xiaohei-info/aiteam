@@ -16,6 +16,14 @@ import time
 
 from shared.errors import Forbidden, ValidationProblem
 
+class PasswordResetRequired(Forbidden):
+    code = "password_reset_required"
+
+
+class PasswordExpired(Forbidden):
+    code = "password_expired"
+
+
 MIN_LENGTH_DEFAULT = 8
 MAX_AGE_DAYS_DEFAULT = 90
 
@@ -72,4 +80,4 @@ def password_expired(*, password_changed_at, now=None):
 def assert_password_not_expired(*, password_changed_at, now=None):
     """密码过期时抛 Forbidden(403 reset required)。"""
     if password_expired(password_changed_at=password_changed_at, now=now):
-        raise Forbidden("password expired (%dd); reset required" % max_age_days())
+        raise PasswordExpired("password expired (%dd); reset required" % max_age_days())

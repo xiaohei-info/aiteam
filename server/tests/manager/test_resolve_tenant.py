@@ -3,6 +3,9 @@
 import uuid
 
 import pytest
+from shared.db import PgTenantRouter
+
+pytestmark = pytest.mark.integration
 
 from shared.errors import NotFound
 
@@ -16,7 +19,7 @@ def svc(migrated_db: str, admin_url: str):
     from manager_service.repository import TenantAuthRepository
 
     keys = TenantKeyStore(admin_url)
-    repo = TenantAuthRepository()
+    repo = TenantAuthRepository(PgTenantRouter(migrated_db))
     return AuthService(dsn=migrated_db, repo=repo, keys=keys)
 
 
@@ -76,7 +79,7 @@ def test_resolve_prefers_code_over_slug(svc, admin_url: str):
         conn.execute(
             "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code) "
             "VALUES (%s, %s, %s), (%s, %s, NULL)",
-            (tid_code, "other", common, tid_slug, common),
+            (tid_code, "other-" + uuid.uuid4().hex, common, tid_slug, common),
         )
     # 'common' 是 tid_code 的 code 和 tid_slug 的 slug,应返回 tid_code
     resolved = svc.resolve_tenant(common)

@@ -14,6 +14,9 @@ import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { SettingsPage } from "../SettingsPage";
+// Account factors have independent route/ceremony tests; isolate enterprise settings here.
+vi.mock("../AccountSecurityPanel", () => ({ AccountSecurityPanel: () => null }));
+
 import * as apiModule from "../useSettingsApi";
 
 function makeI18n() {

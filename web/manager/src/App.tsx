@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./shell";
 import { RequireAuth } from "./auth/RequireAuth";
+import { OAuthCallbackPage } from "./pages/OAuthCallbackPage";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPlaceholder } from "./pages/DashboardPlaceholder";
 import { MembersPage } from "./features/members";
@@ -24,6 +25,7 @@ import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
 export function App(): React.ReactNode {
   return (
     <Routes>
+      <Route path="/auth/oauth/callback" element={<OAuthCallbackPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><AppShell /></RequireAuth>}>
         <Route path="/" element={<DashboardPlaceholder />} />

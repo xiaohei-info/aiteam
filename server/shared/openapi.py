@@ -51,9 +51,9 @@ _EXAMPLE_VALUES: dict[str, Any] = {
     "employee_id": "employee-1",
     "employee_slug": "research-assistant",
     "member_id": "member-1",
-    "member_ids": "member-1",
-    "department_id": "department-1",
-    "department_ids": "department-1",
+    "member_ids": "00000000-0000-4000-8000-000000000002",
+    "department_id": "00000000-0000-4000-8000-000000000001",
+    "department_ids": "00000000-0000-4000-8000-000000000001",
     "employee_ids": "employee-1",
     "skill_ids": "skill-1",
     "knowledge_refs": "knowledge-space-1",
@@ -96,6 +96,9 @@ _EXAMPLE_VALUES: dict[str, Any] = {
     "Idempotency-Key": "idem-example-1",
     "Mcp-Session-Id": "session-example-1",
     "X-AITeam-Employee-ID": "employee-1",
+    "client_protocol": "aiteam-memory-v1",
+    "allowed_operations": "recall",
+    "retention_mode": "unlimited",
     "period": "month",
     "metric": "token_total",
     "status": "active",
@@ -460,7 +463,9 @@ def _example_for_schema(
                 return result
         additional = resolved.get("additionalProperties")
         if isinstance(additional, dict) and depth < _EXAMPLE_MAX_DEPTH:
-            return {"key": _example_for_schema(additional, components, field_name="value", depth=depth + 1, seen_refs=seen_refs)}
+            return {"example_key": _example_for_schema(additional, components, field_name="value", depth=depth + 1, seen_refs=seen_refs)}
+        if additional is True:
+            return {"example_key": "synthetic-value"}
         return {}
     if schema_type == "array":
         if resolved.get("maxItems") == 0:
@@ -1066,6 +1071,18 @@ def _install_control_plane_schema_overrides(schemas: dict[str, Any]) -> None:
         if isinstance(properties.get("audits"), dict):
             properties["audits"]["items"] = {"$ref": "#/components/schemas/AuditSummaryEvent"}
 
+    for schema_name in ("MemberCreate", "MemberUpdate", "MemberGrantCreate", "MemberGrantUpdate", "RecruitExpertRequest", "ApplySolutionRequest"):
+        audience_schema = schemas.get(schema_name)
+        if not isinstance(audience_schema, dict):
+            continue
+        for field_name in ("department_ids", "member_ids"):
+            field = audience_schema.get("properties", {}).get(field_name)
+            if isinstance(field, dict):
+                items = field.setdefault("items", {})
+                if isinstance(items, dict):
+                    items.update({"type": "string", "format": "uuid", "minLength": 1})
+                    items.setdefault("description", "非空 UUID 列表；有效但不存在/跨租户主体返回 404。")
+
     authorized = schemas.get("AuthorizedConfigPullResponse")
     if isinstance(authorized, dict):
         properties = authorized.setdefault("properties", {})
@@ -1214,7 +1231,7 @@ _OPERATION_DESCRIPTION_OVERRIDES = {
     "manager_knowledge_intake_reindex": "请求异步重建知识文档索引；失败时可用同一幂等键重试。",
     "manager_provider_runtime_config": "按当前成员和 employee 快照返回最小 Provider 运行配置；响应含敏感 api_key，必须 no-store。",
     "manager_speech_runtime_config": "按当前成员的企业模型 allow-list 返回语音模型运行配置；响应必须 no-store。",
-    "manager_hindsight_runtime_config": "按当前 employee 快照签发短期 Hindsight facade lease；lease token 仅本次返回且必须 no-store。",
+    "manager_hindsight_runtime_config": "按当前 employee 快照签发短期 Hindsight facade lease；响应包含 client_protocol、recall/retain allowlist、policy_revision、explicit_auto_retain 与 retention_mode，lease token 仅本次返回且必须 no-store。缺失或未知协议只读 recall；retain-only 策略要求升级到 aiteam-memory-v1。",
     "manager_hindsight_lease_revoke": "撤销当前成员可见的 Hindsight lease；响应不返回原 lease token。",
     "manager_snapshot_generate": "生成供 Agent 拉取并本地冻结的 employee 执行快照；快照只含授权投影。",
     "manager_usage_upload": "接收 Agent 上报的脱敏 usage/audit 摘要并写入企业级聚合；不接收会话内容。",
@@ -1273,6 +1290,30 @@ def _apply_known_documentation_constraints(
     request_content = request_body.get("content")
     if not isinstance(request_content, dict):
         return
+    if operation_id in {"manager_memory_create", "manager_memory_retain", "manager_memory_update"}:
+        media = request_content.get("application/json")
+        if isinstance(media, dict):
+            body_schema = _resolve_schema(media.get("schema"), components)
+            if operation_id in {"manager_memory_create", "manager_memory_retain"}:
+                request_body["x-max-body-bytes"] = 256 * 1024
+                body_schema["x-max-body-bytes"] = 256 * 1024
+                metadata = body_schema.get("properties", {}).get("metadata")
+                if isinstance(metadata, dict):
+                    metadata["x-max-json-bytes"] = 64 * 1024
+                    metadata["description"] = "附加元数据；JSON UTF-8 序列化后最大 64 KiB。"
+                request_body["description"] = "写入 employee 作用域的 Hindsight 记忆；JSON 请求体最大 256 KiB，metadata 序列化后最大 64 KiB。"
+            else:
+                request_body["x-max-body-bytes"] = 256 * 1024
+                body_schema["minProperties"] = 1
+                body_schema["x-max-body-bytes"] = 256 * 1024
+                body_schema["description"] = "JSON 请求体最大 256 KiB；至少提供非空 text、content 或 valid/invalidated state 之一。"
+                for name in ("text", "content"):
+                    field = body_schema.get("properties", {}).get(name)
+                    if isinstance(field, dict):
+                        field["description"] = "非空记忆正文；最大 131072 字符。"
+                state = body_schema.get("properties", {}).get("state")
+                if isinstance(state, dict):
+                    state["description"] = "记忆状态，只能是 valid 或 invalidated。"
     if operation_id == "manager_knowledge_intake_upload":
         media = request_content.get("multipart/form-data")
         if isinstance(media, dict):
@@ -1298,6 +1339,22 @@ def _apply_known_documentation_constraints(
             url_schema.update({"maxLength": 2048, "format": "uri", "description": "HTTP(S) 文档 URL，最长 2048 字符。"})
 
 
+_MANAGER_AUTH_OPERATION_IDS = {
+    "manager_whoami",
+    "manager_passkey_authentication_options",
+    "manager_passkey_login",
+    "manager_passkeys_list",
+    "manager_passkey_registration_options",
+    "manager_passkey_register",
+    "manager_passkey_delete",
+    "manager_oauth_authorize",
+    "manager_oauth_callback",
+    "manager_oauth_connections",
+    "manager_oauth_link",
+    "manager_oauth_unlink",
+}
+
+
 def _apply_known_documentation_examples(operation_id: str, operation: dict[str, Any]) -> None:
     """Replace heuristic examples where a cross-field business invariant matters."""
     request_body = operation.get("requestBody")
@@ -1309,7 +1366,78 @@ def _apply_known_documentation_examples(operation_id: str, operation: dict[str, 
     media = content.get("application/json")
     if not isinstance(media, dict):
         return
-    if operation_id == "operation_register_solution_template":
+    if operation_id == "manager_hindsight_runtime_config":
+        request_body["description"] = (
+            "请求当前 employee 的短期 Hindsight facade lease；必须提交受支持的 "
+            "client_protocol=aiteam-memory-v1。缺失或未知协议只获得当前 recall 只读范围；"
+            "仅在 retain 策略、正 policy_revision 与受支持协议同时满足时授予 retain。"
+        )
+        media["examples"] = {
+            "currentAgent": {
+                "summary": "当前受支持 Agent 协议",
+                "value": {
+                    "employee_id": "00000000-0000-4000-8000-000000000001",
+                    "client_protocol": "aiteam-memory-v1",
+                    "rotate": False,
+                },
+            },
+        }
+    elif operation_id in {"manager_memory_create", "manager_memory_retain"}:
+        request_body["description"] = "写入 employee 作用域的 Hindsight 记忆；成功只确认异步 operation，不在响应中回显正文。请求 JSON（含 metadata）最大 256 KiB。"
+        media["examples"] = {
+            "retain": {
+                "summary": "employee 作用域异步记忆写入",
+                "value": {
+                    "employee_id": "00000000-0000-4000-8000-000000000001",
+                    "content": "示例文本内容",
+                    "metadata": {"source": "synthetic-fixture"},
+                },
+            }
+        }
+    elif operation_id == "manager_memory_update":
+        request_body["description"] = "更新 employee 作用域的 Hindsight 记忆；JSON 请求体最大 256 KiB，至少提供非空正文或 valid/invalidated 状态之一。"
+        media["examples"] = {
+            "updateText": {
+                "summary": "更新记忆正文",
+                "value": {"text": "更新后的示例文本"},
+            },
+            "invalidate": {
+                "summary": "使记忆失效",
+                "value": {"state": "invalidated"},
+            },
+        }
+    elif operation_id in {"manager_employee_knowledge_bind", "manager_employee_knowledge_bind_patch"}:
+        request_body["description"] = "配置 employee 的企业知识绑定；config 为有界的非敏感合成配置示例，不接受 workspace 或凭据。"
+        value = {"enabled": True, "config": {"source": "synthetic-fixture"}}
+        if operation_id == "manager_employee_knowledge_bind":
+            value["knowledge_space_id"] = "enterprise_shared"
+        media["examples"] = {
+            "binding": {
+                "summary": "企业知识绑定（合成配置）",
+                "value": value,
+            }
+        }
+    elif operation_id in {"manager_recruit_expert", "manager_apply_solution"}:
+        request_body["description"] = (
+            f"{operation.get('summary', '企业目录操作')}；department_ids/member_ids 如提供必须是当前企业的 UUID 主体。"
+        )
+        if operation_id == "manager_recruit_expert":
+            value = {
+                "template_id": "template-1",
+                "template_version": "1",
+                "employee_slug": "research-assistant",
+                "department_ids": ["00000000-0000-4000-8000-000000000001"],
+                "member_ids": ["00000000-0000-4000-8000-000000000002"],
+            }
+        else:
+            value = {
+                "solution_id": "solution-1",
+                "solution_version": "1",
+                "department_ids": ["00000000-0000-4000-8000-000000000001"],
+                "member_ids": ["00000000-0000-4000-8000-000000000002"],
+            }
+        media["examples"] = {"audience": {"summary": "当前企业 UUID audience", "value": value}}
+    elif operation_id == "operation_register_solution_template":
         request_body["description"] = "行业方案模板请求；至少一个启用专家，coordinator_template_id 必须属于启用专家。"
         media["examples"] = {
             "solution": {
@@ -1349,6 +1477,8 @@ def _apply_known_documentation_examples(operation_id: str, operation: dict[str, 
 def _apply_known_response_examples(operation_id: str, operation: dict[str, Any], components: dict[str, Any]) -> None:
     """Show both branches for responses whose wire shape depends on query inputs."""
     response = operation.get("responses", {}).get("200")
+    if response is None:
+        response = operation.get("responses", {}).get("201")
     media = response.get("content", {}).get("application/json") if isinstance(response, dict) else None
     if operation_id == "healthz_healthz_get" and isinstance(media, dict):
         media["examples"] = {"ok": {"summary": "服务存活", "value": {"status": "ok", "service": "aiteam-service"}}}
@@ -1379,6 +1509,81 @@ def _apply_known_response_examples(operation_id: str, operation: dict[str, Any],
             media = response.get("content", {}).get("application/json")
             if isinstance(media, dict):
                 media["examples"] = {"browse": {"summary": "外部技能分页结果（兼容结构）", "value": {"data": [{"owner": "example-owner", "slug": "research-skill", "display_name": "Research Skill", "summary": "示例技能", "version": "1.0.0", "latest_version": "1.0.0", "updated_at": 1790000000, "downloads": 12, "canonical_url": "https://skills.example.invalid/research-skill", "security_ok": True}], "next_cursor": "next-page-cursor"}}}
+    elif operation_id in {"manager_memory_create", "manager_memory_retain"}:
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {
+                    "accepted": {
+                        "summary": "异步记忆写入已接受",
+                        "value": {
+                            "data": {
+                                "success": True,
+                                "async": True,
+                                "operation_id": "00000000-0000-4000-8000-000000000004",
+                            }
+                        },
+                    }
+                }
+    elif operation_id == "manager_memory_recall":
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {
+                    "empty": {"summary": "无匹配记忆", "value": {"data": {"items": [], "total": 0}}}
+                }
+    elif operation_id == "manager_memory_update":
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {
+                    "invalidate": {"summary": "记忆已失效", "value": {"data": {"state": "invalidated"}}}
+                }
+    elif operation_id == "manager_hindsight_runtime_config":
+        response = operation.get("responses", {}).get("200")
+        if isinstance(response, dict):
+            media = response.get("content", {}).get("application/json")
+            if isinstance(media, dict):
+                media["examples"] = {
+                    "currentLease": {
+                        "summary": "当前协议 lease（可按策略包含 retain）",
+                        "value": {
+                            "data": {
+                                "base_url": "/api/manager/hindsight",
+                                "bank_id": "aiteam-00000000000000000000000000000001",
+                                "token": "opaque-lease-example-redacted",
+                                "lease_id": "lease-example-1",
+                                "version": 1,
+                                "issued_at": "2026-09-01T08:00:00Z",
+                                "expires_at": "2026-09-01T08:05:00Z",
+                                "allowed_operations": ["recall", "retain"],
+                                "policy_revision": 1,
+                                "client_protocol": "aiteam-memory-v1",
+                                "explicit_auto_retain": False,
+                                "retention_mode": "unlimited",
+                            }
+                        },
+                    },
+                    "legacyReadOnly": {
+                        "summary": "缺协议客户端的 recall 只读 lease",
+                        "value": {
+                            "data": {
+                                "base_url": "/api/manager/hindsight",
+                                "bank_id": "aiteam-00000000000000000000000000000001",
+                                "token": "opaque-lease-example-redacted",
+                                "lease_id": "lease-example-readonly",
+                                "version": 2,
+                                "issued_at": "2026-09-01T08:00:00Z",
+                                "expires_at": "2026-09-01T08:05:00Z",
+                                "allowed_operations": ["recall"],
+                                "policy_revision": 1,
+                                "client_protocol": None,
+                                "explicit_auto_retain": False,
+                                "retention_mode": "unlimited",
+                            }
+                        },
+                    },
+                }
     elif operation_id == "operation_admin_audit_events":
         response = operation.get("responses", {}).get("200")
         if isinstance(response, dict):
@@ -1394,6 +1599,12 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
     schemas.setdefault("Problem", _problem_schema())
     if tier in {"operation", "manager"}:
         _install_control_plane_schema_overrides(schemas)
+    for schema_name in ("MemoryItemOut", "MemoryResultOut"):
+        memory_schema = schemas.get(schema_name)
+        state_schema = memory_schema.get("properties", {}).get("state") if isinstance(memory_schema, dict) else None
+        if isinstance(state_schema, dict):
+            state_schema["enum"] = ["valid", "invalidated"]
+            state_schema["description"] = "Hindsight 记忆状态：valid 或 invalidated。"
     if tier == "manager":
         _install_manager_mcp_documentation(schema, components)
     components.setdefault("securitySchemes", {})
@@ -1433,14 +1644,39 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "Forbidden": _problem_response(
                 "鉴权失败；当前身份无权执行该操作。", status=403, code="forbidden", detail="The caller is not authorized."
             ),
+            "AuthForbidden": {
+                "description": "Manager 认证相关操作可能因账号停用或密码生命周期要求而返回 403；仅 password_reset_required/password_expired 可进入重置流程。",
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": {
+                            "passwordResetRequired": {"summary": "首次登录需要重置密码", "value": _problem_example(403, "password_reset_required", "Password reset is required before login.")},
+                            "passwordExpired": {"summary": "密码已过期", "value": _problem_example(403, "password_expired", "Password reset is required because the password expired.")},
+                            "principalInactive": {"summary": "账号已停用", "value": _problem_example(403, "principal_inactive", "The account is not active.")},
+                        },
+                    }
+                },
+                "headers": {
+                    "X-Request-ID": {"$ref": "#/components/headers/RequestId"},
+                    "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
+                },
+            },
             "NotFound": _problem_response(
                 "请求的资源不存在。", status=404, code="not_found", detail="The requested resource was not found."
             ),
             "Conflict": _problem_response(
                 "请求与当前资源状态冲突。", status=409, code="conflict", detail="The request conflicts with current state."
             ),
+            "HindsightClientUpgradeRequired": _problem_response(
+                "当前记忆策略要求升级受控 Agent 协议。", status=409,
+                code="hindsight_client_upgrade_required",
+                detail="The controlled Agent must negotiate aiteam-memory-v1 before retain is allowed.",
+            ),
             "ValidationError": _problem_response(
                 "请求参数校验失败。", status=422, code="validation_error", detail="Request validation failed."
+            ),
+            "TooLarge": _problem_response(
+                "请求体超过接口限制。", status=413, code="request_too_large", detail="The request body exceeds the permitted size."
             ),
             "TooManyRequests": _problem_response(
                 "请求过于频繁，请稍后重试。", status=429, code="rate_limited", detail="Too many requests."
@@ -1448,6 +1684,22 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "ServiceUnavailable": _problem_response(
                 "依赖服务暂时不可用。", status=503, code="service_unavailable", detail="A required service is unavailable."
             ),
+            "ReadinessUnavailable": {
+                "description": "服务尚未满足就绪条件；Manager 必须先绑定唯一部署企业。",
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": {
+                            "bindingRequired": {"summary": "缺少 Manager 部署绑定", "value": _problem_example(503, "http_error", "manager deployment tenant binding is required")},
+                            "bindingUnavailable": {"summary": "Manager 部署绑定不可用", "value": _problem_example(503, "http_error", "manager deployment tenant binding is unavailable")},
+                        },
+                    }
+                },
+                "headers": {
+                    "X-Request-ID": {"$ref": "#/components/headers/RequestId"},
+                    "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
+                },
+            },
             "InternalError": _problem_response(
                 "服务内部错误；详细信息只写入受控日志。", status=500, code="internal_error", detail="Unexpected server error."
             ),
@@ -1513,9 +1765,19 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             is_mcp = operation.get("x-protocol") == "mcp"
             operation["security"] = [] if kind is None else [{"serviceToken": []}] if kind == "service" else [{"bearerAuth": []}]
             responses = operation.setdefault("responses", {})
+            public_auth_forbidden = operation_id in {
+                "manager_login", "manager_owner_reset", "manager_passkey_authentication_options",
+                "manager_passkey_login", "manager_oauth_authorize", "manager_oauth_callback",
+            }
             if kind == "bearer":
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
-                responses.setdefault("403", {"$ref": "#/components/responses/Forbidden"})
+                responses["403"] = (
+                    {"$ref": "#/components/responses/AuthForbidden"}
+                    if tier == "manager" and operation_id in _MANAGER_AUTH_OPERATION_IDS
+                    else responses.get("403", {"$ref": "#/components/responses/Forbidden"})
+                )
+            elif public_auth_forbidden:
+                responses["403"] = {"$ref": "#/components/responses/AuthForbidden"}
             elif kind == "service":
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
                 responses.pop("403", None)
@@ -1531,12 +1793,22 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 responses.setdefault("404", {"$ref": "#/components/responses/NotFound"})
             if is_api and not is_mcp and method in {"post", "put", "patch", "delete"} and operation_id not in _NO_CONFLICT_OPERATION_IDS:
                 responses.setdefault("409", {"$ref": "#/components/responses/Conflict"})
+            if operation_id == "manager_hindsight_runtime_config":
+                responses["409"] = {"$ref": "#/components/responses/HindsightClientUpgradeRequired"}
             if operation_id in _OPERATION_429_OPERATION_IDS:
                 responses.setdefault("429", {"$ref": "#/components/responses/TooManyRequests"})
             if is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
                 responses.setdefault("503", {"$ref": "#/components/responses/ServiceUnavailable"})
-            if operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}:
+            if operation_id in {
+                "operation_system_login", "manager_login", "manager_owner_reset",
+                "manager_passkey_authentication_options", "manager_passkey_login",
+                "manager_oauth_authorize", "manager_oauth_callback",
+            }:
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
+            if path == "/readyz":
+                responses["503"] = {"$ref": "#/components/responses/ReadinessUnavailable"}
+            if operation_id in {"manager_memory_create", "manager_memory_retain", "manager_memory_update"}:
+                responses["413"] = {"$ref": "#/components/responses/TooLarge"}
             if is_api and not is_mcp:
                 responses.setdefault("500", {"$ref": "#/components/responses/InternalError"})
 

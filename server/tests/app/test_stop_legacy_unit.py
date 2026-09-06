@@ -204,6 +204,20 @@ def test_missing_approval_missing_upstream_and_wrong_unit_fail_closed(fixture):
     assert not host.calls
 
 
+def test_simple_test_release_stops_writers_before_dependencies_backup_and_migration():
+    runbook = (ROOT / 'deploy/ci/run.sh').read_text()
+    stop = runbook.index('stopping application writers')
+    fetch = runbook.index('git fetch --all --prune')
+    dependencies = runbook.index('starting PostgreSQL/NewAPI dependencies')
+    backup = runbook.index('backing up internal NewAPI')
+    migration = runbook.index('apply_manager_migrations')
+    restart = runbook.index('restarting ${UNIT_NAME}')
+    assert stop < fetch < dependencies < backup < migration < restart
+    docs = (ROOT / 'deploy/ci/README.md').read_text()
+    assert '完整应用停机' in docs and '应用保持停止' in docs
+    assert '0039' in docs and 's05_systemd_cutover_probe.py' in docs
+
+
 def test_native_probe_is_hosted_only_reuses_candidate_and_does_not_touch_taiyi():
     workflow = (ROOT / '.github/workflows/s05-cutover-probe.yml').read_text()
     probe = (ROOT / 'scripts/verification/s05_systemd_cutover_probe.py').read_text()

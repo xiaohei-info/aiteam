@@ -101,7 +101,7 @@ def _create_employee(client: TestClient, token: str, slug: str) -> dict:
         "skills": ["code-review"],
         "knowledge_refs": ["ks_default"],
         "connector_refs": ["slack"],
-        "memory_policy": {"seed": "记住用户偏好"},
+        "memory_policy": {"enabled": True, "allowed_operations": ["recall"]},
     }
     r = client.post(
         f"/api/manager/employees?employee_slug={slug}",
@@ -154,7 +154,9 @@ def test_snapshot_generate_e2e_grant_and_cross_tenant_rls(migrated_db, admin_url
     assert snap["display_name"] == "专家A"
     assert snap["model_policy"]["model"] == "claude-opus-4-8"
     assert snap["execution_policy"]["timeout_seconds"] == 120
-    assert snap["memory_policy"] == {"seed": "记住用户偏好"}
+    assert snap["memory_policy"] == {"enabled": True, "allowed_operations": ["recall"],
+                                     "explicit_auto_retain": False, "retention_days": None, "scope": "employee",
+                                     "revision": 1, "source": "employee_config", "retention_guarded": False}
     assert snap["snapshot_version"]
 
     # 幂等：再拉一次得同 snapshot_version

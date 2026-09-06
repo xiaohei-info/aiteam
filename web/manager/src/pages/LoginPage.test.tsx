@@ -143,7 +143,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("登录 403 触发 owner-reset 模式，重置成功后 signIn + 跳转", async () => {
+  it.each(["password_reset_required", "password_expired"])("登录 %s 触发 reset，重置成功后 signIn", async (code) => {
     const signIn = vi.fn();
     const resolveResp = () =>
       new Response(JSON.stringify({ data: { tenant_id: "t-uuid-1" } }), {
@@ -159,7 +159,7 @@ describe("LoginPage", () => {
             type: "about:blank",
             title: "Forbidden",
             status: 403,
-            code: "password_reset_required",
+            code,
             detail: "password reset required before login",
             instance: "/api/auth/login",
           }),
@@ -207,4 +207,46 @@ describe("LoginPage", () => {
       new_password: "NewPass!234",
     });
   });
+  it.each(["principal_inactive", "forbidden"])("403 %s 不进入密码重置", async (code) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { tenant_id: "t1" } }), { headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ type: "about:blank", title: "Denied", status: 403, code, detail: "not permitted" }), { status: 403, headers: { "Content-Type": "application/problem+json" } }));
+    renderLogin();
+    fireEvent.change(screen.getByLabelText("企业代码/名称"), { target: { value: "fixture" } });
+    fireEvent.change(screen.getByLabelText("成员账号"), { target: { value: "member" } });
+    fireEvent.change(screen.getByLabelText("登录密码"), { target: { value: "Fixture-Pass-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("not permitted"));
+    expect(screen.queryByTestId("owner-reset-form")).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("Passkey登录完成真实浏览器DTO转换及同端三段API调用", async () => {
+    const signIn = vi.fn();
+    const buf = new Uint8Array([1]).buffer;
+    vi.stubGlobal("navigator", { credentials: { get: vi.fn(async () => ({ id: "AQ", rawId: buf, type: "public-key", response: { clientDataJSON: buf, authenticatorData: buf, signature: buf, userHandle: null } })) } });
+    const response = (data: unknown) => new Response(JSON.stringify({ data }), { headers: { "Content-Type": "application/json" } });
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(response({ tenant_id: "t1" })).mockResolvedValueOnce(response({ challenge: "AQ", rpId: "localhost" })).mockResolvedValueOnce(response({ token: "issued" }));
+    try {
+      renderLogin({ signIn });
+      fireEvent.change(screen.getByLabelText("企业代码/名称"), { target: { value: "fixture" } });
+      fireEvent.change(screen.getByLabelText("成员账号"), { target: { value: "member" } });
+      fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+      await waitFor(() => expect(signIn).toHaveBeenCalledWith("issued"));
+      expect(String(fetch.mock.calls[1]?.[0])).toContain("account=member");
+      expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))).toMatchObject({ tenant_id: "t1", id: "AQ", response: { signature: "AQ" } });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("Passkey缺企业标识不发请求，OAuth仅列已配置提供方", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ data: ["github"] }), { headers: { "Content-Type": "application/json" } }));
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+    await screen.findByRole("alert");
+    expect(fetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "其他登录方式" }));
+    await screen.findByRole("button", { name: "使用 github 登录" });
+    expect(String(fetch.mock.calls[0]?.[0])).toContain("/api/auth/oauth/providers");
+  });
+
 });

@@ -11,10 +11,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import os
 import secrets
 import threading
 import time
@@ -192,60 +188,28 @@ _state_lock = threading.Lock()
 _STATE_TTL = 600
 
 
-def _make_state(tenant_id: str, redirect_uri: str) -> str:
-    nonce = secrets.token_urlsafe(24)
-    payload = {"t": tenant_id, "r": redirect_uri, "n": nonce, "ts": time.time()}
-    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
-    sig = hmac.new(_state_pepper(), raw, hashlib.sha256).hexdigest()[:24]
-    token = _b64u(raw) + "." + sig
+def _make_state(tenant_id: str, redirect_uri: str, *, provider: str, intent: str, user_id: str | None = None) -> str:
+    token = secrets.token_urlsafe(32)
     with _state_lock:
         _cleanup_state(time.time())
-        _state_store[token] = {**payload, "_sig": sig}
+        _state_store[token] = {"t": tenant_id, "r": redirect_uri, "provider": provider,
+                               "intent": intent, "user_id": user_id, "ts": time.time()}
     return token
 
 
 def _consume_state(state: str) -> dict[str, Any]:
-    try:
-        raw_b64, sig = state.split(".", 1)
-    except ValueError:
-        raise OAuthError("malformed state")
-    raw = _b64u_decode(raw_b64)
-    expected = hmac.new(_state_pepper(), raw, hashlib.sha256).hexdigest()[:24]
-    if not hmac.compare_digest(sig, expected):
-        raise OAuthError("state signature mismatch")
     with _state_lock:
-        entry = _state_store.pop(state, None)
         _cleanup_state(time.time())
+        entry = _state_store.pop(state, None)
     if entry is None:
         raise OAuthError("state expired or already used")
-    payload = json.loads(raw.decode("utf-8"))
-    if payload.get("t") != entry.get("t") or payload.get("r") != entry.get("r"):
-        raise OAuthError("state tampered")
-    return payload
+    return entry
 
 
 def _cleanup_state(now: float) -> None:
     expired = [k for k, v in _state_store.items() if now - v.get("ts", 0) > _STATE_TTL]
     for k in expired:
         _state_store.pop(k, None)
-
-
-def _state_pepper() -> bytes:
-    return os.getenv("OAUTH_STATE_PEPPER", "manager-oauth-state").encode("utf-8")
-
-
-def _b64u(data: bytes) -> str:
-    import base64
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _b64u_decode(value) -> bytes:
-    import base64
-    if isinstance(value, str):
-        value = value.encode("ascii")
-    value = bytes(value)
-    value += b"=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value)
 
 
 # ---- 连接持久化（oauth_connection 表）----
@@ -257,8 +221,8 @@ class OAuthConnectionStore:
         with self._router.session(ctx) as s:
             r = s.execute(
                 "SELECT id, tenant_id, user_id, provider, provider_user_id, profile_email, connected_at, last_login_at "
-                "FROM oauth_connection WHERE tenant_id = %s AND provider_user_id = %s LIMIT 1",
-                (ctx.tenant_id, _suffix(external_id)),
+                "FROM oauth_connection WHERE provider = %s AND provider_user_id = %s LIMIT 1",
+                (external_id.split(":", 1)[0], _suffix(external_id)),
             ).fetchone()
         if not r:
             return None
@@ -274,10 +238,14 @@ class OAuthConnectionStore:
                 "  (tenant_id, user_id, provider, provider_user_id, profile_email, last_login_at) "
                 "VALUES (%s, %s, %s, %s, %s, now()) "
                 "ON CONFLICT (tenant_id, provider, provider_user_id) DO UPDATE "
-                "  SET user_id = EXCLUDED.user_id, profile_email = EXCLUDED.profile_email, last_login_at = now() "
+                "  SET profile_email = EXCLUDED.profile_email, last_login_at = now() "
+                "WHERE oauth_connection.user_id = EXCLUDED.user_id "
                 "RETURNING id",
                 (ctx.tenant_id, user_id, profile.provider, profile.provider_user_id, profile.email),
             ).fetchone()
+        if r is None:
+            from shared.errors import Conflict
+            raise Conflict("oauth identity belongs to another account")
         return str(r[0])
 
     def list_for_user(self, ctx: TenantContext, user_id: str) -> list[OAuthConnectionRow]:
@@ -293,13 +261,54 @@ class OAuthConnectionStore:
                                 connected_at=r[6], last_login_at=r[7]) for r in rows
         ]
 
-    def delete(self, ctx: TenantContext, *, provider: str, user_id: str) -> bool:
+    def link(self, ctx: TenantContext, *, profile: OAuthProfile, user_id: str) -> None:
+        from shared.errors import Conflict
         with self._router.session(ctx) as s:
-            cur = s.execute(
-                "DELETE FROM oauth_connection WHERE provider = %s AND user_id = %s",
-                (provider, user_id),
-            )
-            return cur.rowcount > 0
+            s.execute("SELECT id FROM app_user WHERE id = %s FOR UPDATE", (user_id,))
+            row = s.execute(
+                "INSERT INTO auth_identity (tenant_id, user_id, provider, external_id, must_reset) "
+                "VALUES (%s, %s, 'oauth', %s, false) "
+                "ON CONFLICT (tenant_id, provider, external_id) DO UPDATE SET external_id = EXCLUDED.external_id "
+                "WHERE auth_identity.user_id = EXCLUDED.user_id RETURNING id",
+                (ctx.tenant_id, user_id, profile.external_id),
+            ).fetchone()
+            if row is None:
+                raise Conflict("oauth identity belongs to another account")
+            row = s.execute(
+                "INSERT INTO oauth_connection (tenant_id, user_id, provider, provider_user_id, profile_email) "
+                "VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (tenant_id, provider, provider_user_id) DO UPDATE SET profile_email = EXCLUDED.profile_email "
+                "WHERE oauth_connection.user_id = EXCLUDED.user_id RETURNING id",
+                (ctx.tenant_id, user_id, profile.provider, profile.provider_user_id, profile.email),
+            ).fetchone()
+            if row is None:
+                raise Conflict("oauth identity belongs to another account")
+
+    def delete(self, ctx: TenantContext, *, provider: str, user_id: str) -> bool:
+        from shared.errors import Conflict
+        with self._router.session(ctx) as s:
+            s.execute("SELECT id FROM app_user WHERE id = %s FOR UPDATE", (user_id,))
+            # Include legacy identity-only mappings; never delete another provider's identity.
+            identities = s.execute(
+                "SELECT id FROM auth_identity WHERE user_id = %s AND provider = 'oauth' "
+                "AND split_part(external_id, ':', 1) = %s", (user_id, provider),
+            ).fetchall()
+            exists = s.execute("SELECT 1 FROM oauth_connection WHERE user_id = %s AND provider = %s", (user_id, provider)).fetchone()
+            if not identities and not exists:
+                return False
+            alternative = s.execute(
+                "SELECT 1 FROM auth_identity WHERE user_id = %s AND "
+                "((provider IN ('phone', 'password') AND secret IS NOT NULL) OR "
+                "(provider = 'oauth' AND split_part(external_id, ':', 1) <> %s)) "
+                "UNION ALL SELECT 1 FROM passkey_credential WHERE user_id = %s LIMIT 1",
+                (user_id, provider, user_id),
+            ).fetchone()
+            if alternative is None:
+                raise Conflict("add another login method before removing the last one")
+            s.execute("DELETE FROM oauth_connection WHERE provider = %s AND user_id = %s", (provider, user_id))
+            s.execute("DELETE FROM auth_identity WHERE user_id = %s AND provider = 'oauth' "
+                      "AND split_part(external_id, ':', 1) = %s", (user_id, provider))
+            return True
 
 
 def _suffix(external_id: str) -> str:

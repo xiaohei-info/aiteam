@@ -10,9 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
+from shared.errors import NotFound, ValidationProblem
 
 # 绑定目标类型（本表承载的部门/成员；专家授权走 employee_knowledge_binding）。
 BINDING_RESOURCE_TYPES = ("department", "member")
@@ -232,27 +234,41 @@ class ExpertKnowledgeBinding:
 
     def __init__(self, router: PgTenantRouter):
         self._router = router
+        # Keep this compatibility port on the same policy-aware repository as
+        # the employee binding routes.  Indexing code must never write policy
+        # tombstone/revision columns itself.
+        from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
+        self._policy = EmployeeKnowledgeBindingRepository(router)
 
     def bind(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str) -> bool:
-        with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO employee_knowledge_binding "
-                "(tenant_id, employee_id, knowledge_space_id, enabled, config) "
-                "VALUES (%s, %s, %s, true, '{}'::jsonb) "
-                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO UPDATE "
-                "SET enabled = true, updated_at = now() RETURNING id",
-                (ctx.tenant_id, employee_id, knowledge_space_id),
-            ).fetchone()
-        return row is not None
+        try:
+            employee_id = str(UUID(str(employee_id)))
+        except (ValueError, TypeError) as exc:
+            raise ValidationProblem("employee_id must be a UUID") from exc
+        # The repository validates employee ownership, locks the existing row,
+        # and performs insert/re-enable atomically.  Concurrent binds therefore
+        # serialize instead of surfacing a unique-constraint 500.
+        row, _changed = self._policy.atomic_enable(
+            ctx, employee_id=employee_id, knowledge_space_id=knowledge_space_id, config=None,
+        )
+        if row is None:
+            raise NotFound("employee not found in this tenant")
+        return True
 
     def unbind(self, ctx: TenantContext, *, employee_id: str, knowledge_space_id: str) -> bool:
-        with self._router.session(ctx) as s:
-            cur = s.execute(
-                "UPDATE employee_knowledge_binding SET enabled = false, updated_at = now() "
-                "WHERE employee_id = %s AND knowledge_space_id = %s",
-                (employee_id, knowledge_space_id),
-            )
-        return cur.rowcount > 0
+        try:
+            employee_id = str(UUID(str(employee_id)))
+        except (ValueError, TypeError) as exc:
+            raise ValidationProblem("employee_id must be a UUID") from exc
+        if not self._policy.employee_exists(ctx, employee_id=employee_id):
+            raise NotFound("employee not found in this tenant")
+        existing = self._policy.get_by_ref(
+            ctx, employee_id=employee_id, knowledge_space_id=knowledge_space_id,
+        )
+        if existing is None:
+            return False
+        # DELETE is a policy deny tombstone, not a physical/indexing delete.
+        return self._policy.delete(ctx, binding_id=existing.binding_id)
 
     def list_experts_by_space(
         self, ctx: TenantContext, *, knowledge_space_id: str
@@ -260,7 +276,7 @@ class ExpertKnowledgeBinding:
         with self._router.session(ctx) as s:
             rows = s.execute(
                 "SELECT employee_id FROM employee_knowledge_binding "
-                "WHERE knowledge_space_id = %s AND enabled = true",
+                "WHERE knowledge_space_id = %s AND enabled = true AND revoked_at IS NULL",
                 (knowledge_space_id,),
             ).fetchall()
         return [_s(r[0]) for r in rows]
