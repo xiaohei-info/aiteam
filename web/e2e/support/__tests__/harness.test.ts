@@ -29,7 +29,13 @@ const TIERS: Tier[] = ["operation", "manager", "agent"];
 test.describe("AITEAM-224 harness: auth 常量与映射", () => {
   test("三端 tier 基址/origin/token-key 三处对齐", () => {
     for (const tier of TIERS) {
-      expect(TIER_BASE_URL[tier]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      if (tier === "manager") {
+        // Manager local E2E uses localhost so WebAuthn gets a DNS RP ID;
+        // its API remains a separate loopback service origin.
+        expect(TIER_BASE_URL[tier]).toMatch(/^http:\/\/localhost:\d+$/);
+      } else {
+        expect(TIER_BASE_URL[tier]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      }
       expect(TIER_API_ORIGIN[tier]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(TIER_BASE_URL[tier]).not.toBe(TIER_API_ORIGIN[tier]);
       expect(TOKEN_STORAGE_KEY[tier]).toMatch(new RegExp(`^aiteam\\.${tier}\\.(token|agent)`));

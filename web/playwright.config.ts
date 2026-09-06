@@ -24,7 +24,7 @@ const MANAGER_URL = process.env.MANAGER_URL ?? "http://127.0.0.1:8001";
 const OPERATOR_URL = process.env.OPERATOR_URL ?? "http://127.0.0.1:8000";
 const E2E_PYTHON = process.env.E2E_PYTHON ?? ".venv/bin/python";
 const OPERATION_UI_ORIGIN = process.env.E2E_OPERATION_UI_ORIGIN ?? "http://127.0.0.1:5173";
-const MANAGER_UI_ORIGIN = process.env.E2E_MANAGER_UI_ORIGIN ?? "http://127.0.0.1:5174";
+const MANAGER_UI_ORIGIN = process.env.E2E_MANAGER_UI_ORIGIN ?? "http://localhost:5174";
 const MANAGER_TENANT_ID = process.env.MANAGER_TENANT_ID ?? process.env.E2E_TENANT_ID ?? "00000000-0000-4000-8000-000000000001";
 const AGENT_UI_ORIGIN = process.env.E2E_AGENT_UI_ORIGIN ?? "http://127.0.0.1:5180";
 
