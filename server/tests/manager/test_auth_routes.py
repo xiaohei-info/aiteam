@@ -13,7 +13,12 @@ from fastapi.testclient import TestClient
 from shared.config import Settings
 
 
-def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
+def _client(
+    db_url: str | None,
+    admin_db_url: str | None = None,
+    *,
+    manager_tenant_id: str | None = None,
+) -> TestClient:
     # 用注入的 settings 重建 app，避免依赖进程环境变量。
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
@@ -22,6 +27,7 @@ def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
     settings = Settings(
         tier="manager", service_name="aiteam-manager-service",
         db_url=db_url, admin_db_url=admin_db_url,
+        manager_tenant_id=manager_tenant_id,
     )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
@@ -64,7 +70,7 @@ def test_owner_reset_login_jwks_over_http():
         tid, phone=phone, bootstrap_password="boot-Pass-1"
     )
 
-    client = _client(db_url, admin_db_url=admin_url)
+    client = _client(db_url, admin_db_url=admin_url, manager_tenant_id=tid)
 
     # 首登直接 login 应 403（需重置）
     r = client.post("/api/auth/login", json={"tenant_id": tid, "account": phone, "password": "boot-Pass-1"})

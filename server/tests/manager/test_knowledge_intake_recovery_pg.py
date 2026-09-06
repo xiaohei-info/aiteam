@@ -83,11 +83,25 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
     upstream = Upstream()
     client = LightRagIngestionClient(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000, workspace=SPACE), transport=httpx.MockTransport(upstream))
     def build():
-        return build_knowledge_intake_service(PgTenantRouter(migrated_db), storage_root=tmp_path,
-                    rag_service=PgManagerRagService(migrated_db, enterprise_workspace=SPACE), ingestion_client=client)
+        return build_knowledge_intake_service(
+            PgTenantRouter(migrated_db),
+            storage_root=tmp_path,
+            rag_service=PgManagerRagService(migrated_db, enterprise_workspace=SPACE),
+            ingestion_client=client,
+            bound_tenant_id=ctx.tenant_id,
+        )
     service = build()
     verifier, signer = make_inmem_verifier_and_signer()
-    app = create_app(Settings(tier="manager", service_name="s05-fixture", db_url=migrated_db, admin_db_url=admin_url), APIRouter())
+    app = create_app(
+        Settings(
+            tier="manager",
+            service_name="s05-fixture",
+            db_url=migrated_db,
+            admin_db_url=admin_url,
+            manager_tenant_id=ctx.tenant_id,
+        ),
+        APIRouter(),
+    )
     app.include_router(build_knowledge_intake_router(verifier))
     app.state._knowledge_intake_service = service
     token = sign_inmem_token(signer, ctx.tenant_id, ["owner"], user_id=ctx.user_id)
@@ -223,7 +237,7 @@ def test_legacy_duplicate_document_source_is_protected_before_post_even_not_subm
     recovery = KnowledgeIntakeRecovery(f.build())
     assert recovery.process(f.ctx, job_id=second.id)
     assert f.upstream.posts == 0
-    current = f.service._doc_repo.get(f.ctx, document_id=doc.id)
+    current = f.service.get_document(f.ctx, knowledge_space_id=SPACE, document_id=doc.id)
     assert current.error_code == "SUBMISSION_UNKNOWN"
     assert not current.can_retry and not current.can_delete
 

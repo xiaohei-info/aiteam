@@ -86,7 +86,16 @@ def policy_pg(migrated_db, admin_url, two_tenants, tmp_path):
                               document_repository=documents, storage_root=tmp_path, knowledge_policy=policy)
     signer = DevTokenService("fixture-only")
     verifier = ActivePrincipalVerifier(signer, TenantAuthRepository(router))
-    app = create_app(Settings(tier="manager", service_name="rag-fixture", db_url=migrated_db, admin_db_url=admin_url), APIRouter())
+    app = create_app(
+        Settings(
+            tier="manager",
+            service_name="rag-fixture",
+            db_url=migrated_db,
+            admin_db_url=admin_url,
+            manager_tenant_id=tenant,
+        ),
+        APIRouter(),
+    )
     app.state._token_verifier = verifier
     app.include_router(build_employee_bindings_router(verifier))
     app.include_router(build_snapshot_router(verifier))

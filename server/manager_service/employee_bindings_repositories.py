@@ -320,14 +320,17 @@ class EmployeeKnowledgeBindingRepository:
             ).fetchone()
             if employee is None:
                 return None, False
-            s.execute(
+            inserted = s.execute(
                 "INSERT INTO employee_knowledge_binding "
                 "(tenant_id, employee_id, knowledge_space_id, enabled, config, policy_revision, "
                 "policy_source, policy_actor, policy_updated_at, revoked_at) "
                 "VALUES (%s,%s,%s,true,%s,1,'admin',%s,now(),NULL) "
-                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO NOTHING",
+                "ON CONFLICT (tenant_id, employee_id, knowledge_space_id) DO NOTHING "
+                "RETURNING " + _KNOW_COLS,
                 (ctx.tenant_id, employee_id, knowledge_space_id, json.dumps(config or {}), ctx.user_id),
-            )
+            ).fetchone()
+            if inserted is not None:
+                return _row_to_know(inserted), True
             current = s.execute(
                 "SELECT " + _KNOW_COLS + " FROM employee_knowledge_binding "
                 "WHERE employee_id=%s AND knowledge_space_id=%s FOR UPDATE",

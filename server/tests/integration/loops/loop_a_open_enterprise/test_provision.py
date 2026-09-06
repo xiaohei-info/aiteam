@@ -30,7 +30,7 @@ def test_tenant_provision_creates_tenant_registry(
     """
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     enterprise_code = f"ent_{uuid.uuid4().hex[:8]}"
 
     client = TestClient(manager_app)
@@ -74,7 +74,7 @@ def test_tenant_provision_has_envelope_and_problem_json_headers(
     """F01 响应结构：envelope data + content-type 正确。"""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/tenants",
@@ -108,7 +108,7 @@ def test_tenant_provision_with_quota_policy(
     """F01: 带 initial_quota_policy 的开通——quota_policy 表落库。"""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/tenants",
@@ -163,7 +163,7 @@ def test_owner_bootstrap_creates_identity(
     """
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
 
     # F01
@@ -212,7 +212,7 @@ def test_owner_bootstrap_idempotent(
     """F02 可重复同步：重复 bootstrap 返回同一 user_id。"""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
 
     # F01
@@ -283,7 +283,7 @@ def test_full_provision_chain_owner_whoami_returns_correct_tenant(
     from manager_service.app import app as manager_app
     from manager_service.keys import TenantKeyStore
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
 
     # F01: 建 tenant

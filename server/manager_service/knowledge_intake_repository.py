@@ -636,7 +636,7 @@ class KnowledgeDocumentBindingRepository:
         with self._router.session(ctx) as s:
             # Use one INSERT ... ON CONFLICT statement so concurrent propagation cannot race.
             cur = s.execute(
-                "INSERT INTO knowledge_document_binding "
+                "INSERT INTO knowledge_document_binding AS b "
                 "(tenant_id, knowledge_space_id, document_id, employee_id, "
                 "rag_document_id, status, last_synced_at) "
                 "VALUES (%s, %s, %s, %s, %s, 'ready', %s) "

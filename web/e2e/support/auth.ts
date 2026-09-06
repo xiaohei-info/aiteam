@@ -22,7 +22,7 @@ const origin = (name: string, fallback: string): string => process.env[name]?.tr
 
 export const TIER_BASE_URL: Record<Tier, string> = {
   operation: origin("E2E_OPERATION_UI_ORIGIN", "http://127.0.0.1:5173"),
-  manager: origin("E2E_MANAGER_UI_ORIGIN", "http://localhost:5174"),
+  manager: origin("E2E_MANAGER_UI_ORIGIN", "http://127.0.0.1:5174"),
   agent: origin("E2E_AGENT_UI_ORIGIN", "http://127.0.0.1:5180"),
 };
 

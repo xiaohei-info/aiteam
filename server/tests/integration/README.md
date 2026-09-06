@@ -10,6 +10,7 @@
 | `fixtures/postgres.py` | P1-F1 | 真 PG + 迁移 + 隔离 tenant scope + RLS（`tenant_scope` / `tenant_scope_factory`） |
 | `fixtures/identities.py` | P1-F2 | operator/manager-owner/member/agent/service-token/cross-tenant 身份；service token 不 fail-open |
 | `fixtures/data_lifecycle.py` | P1-F3 | seed/cleanup（`seeded_enterprise`、`seed_full_enterprise`、`cleanup_test_scope`） |
+| `fixtures/manager_binding.py` | Wave1 | 将复用的模块级 Manager app 显式绑定到当前测试 tenant；不改变生产 fail-closed 语义 |
 | `fixtures/eventual.py` | P1-F4 | 统一等待窗口 30/60/120/300s（`wait_for_condition`） |
 | `fixtures/diagnostics.py` | P1-F7 | 失败诊断脱敏（无 secret/会话/文件/工具 I/O） |
 | `_foundation_consumers/` | — | sibling 可见性回归（证明 fixtures 在 `fixtures/` 之外可注入） |
@@ -49,6 +50,19 @@ URL 供你核对已真实展开。口令/连接对照（一次性本地测试值
 > 文档/日志里把 `<口令>` 显示成 `***` 属正常脱敏，**仅展示用**；真实值见上表第三列，或直接 source 脚本。
 
 迁移在首次连接由 `apply_migrations(ADMIN_DB_URL, app_rw_password=APP_RW_PASSWORD)` 自动应用，无需手动建表。
+
+### Manager deployment binding（Wave1）
+
+生产 Manager **必须**通过 `MANAGER_TENANT_ID` 绑定一个 UUID；未配置时不会从
+`tenant_registry` 猜租户，健康检查/受保护请求保持 fail-closed。集成测试中的
+`tenant_scope` 只是 RLS 数据夹具，不代表一个生产 Manager 服务多个企业；
+`fixtures/manager_binding.py` 在每个测试前把复用的模块级 app 绑定到该 scope。
+需要模拟两个 Manager deployment 的测试必须显式切换/创建绑定 app，不能打开未绑定回退。
+
+浏览器 E2E 使用固定、非生产的 UUID `00000000-0000-4000-8000-000000000001`：
+`web/e2e/support/seed-e2e-tenant.py` 按 `E2E_TENANT_ID` 创建该行，
+`web/playwright.config.ts` 将同一值传给 Manager 的 `MANAGER_TENANT_ID`。
+外部 E2E 必须自行提供已配置的 `E2E_TENANT_ID`，不得复用该 synthetic 值。
 **注意顺序**：`app_rw` 的 LOGIN 口令是迁移幂等下发的，所以 `DB_URL`（app_rw 身份）只有在
 **第 4 步任一 integration 测试跑过一次后**才能直接连——首次连接由 fixture `migrated_pg` 触发下发。
 
@@ -56,7 +70,7 @@ URL 供你核对已真实展开。口令/连接对照（一次性本地测试值
 
 ```bash
 cd server
-pip install -r requirements.txt pytest        # 含 psycopg/pytest-cov/diff-cover
+pip install -r requirements.txt pytest pytest-asyncio        # 含 psycopg/pytest-cov/diff-cover
 python -m pytest -q -m integration tests/integration/fixtures/test_postgres_fixture_contract.py
 python -m pytest -q -m integration tests/integration/fixtures/test_identity_fixture_contract.py
 python -m pytest -q -m integration tests/integration/fixtures/test_data_lifecycle_contract.py

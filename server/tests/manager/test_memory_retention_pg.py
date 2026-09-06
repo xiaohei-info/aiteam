@@ -254,7 +254,7 @@ def test_guarded_analytics_never_calls_rich_native_stats(retention_pg):
 def test_due_inventory_excludes_active_claims_and_uses_only_metadata(retention_pg):
     f = retention_pg
     f.accept()
-    inventory = MemoryRetentionRepository(f.router, f.admin_url)
+    inventory = MemoryRetentionRepository(f.router, f.admin_url, bound_tenant_id=f.ctx.tenant_id)
     with f.router.session(f.ctx) as s:
         s.execute("UPDATE memory_acceptance SET next_attempt=now()-interval '1000 years' WHERE bank_id=%s", (f.bank,))
     assert f.ctx.tenant_id in inventory.tenant_ids_due()

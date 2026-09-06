@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 from shared.config import Settings
 
 
-def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
+def _client(
+    db_url: str | None,
+    admin_db_url: str | None = None,
+    *,
+    manager_tenant_id: str | None = None,
+) -> TestClient:
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_tenant import router as tenant_router
@@ -24,6 +29,7 @@ def _client(db_url: str | None, admin_db_url: str | None = None) -> TestClient:
     settings = Settings(
         tier="manager", service_name="aiteam-manager-service",
         db_url=db_url, admin_db_url=admin_db_url,
+        manager_tenant_id=manager_tenant_id,
         # AITEAM-331 B2：未配置 SERVICE_TOKEN 不再 fail-open；显式 dev 占位值维持 dev profile。
         service_token="dev-service-token-placeholder",
     )
@@ -116,9 +122,9 @@ def test_provision_tenant_and_owner_bootstrap_e2e(migrated_db, admin_url):
     import psycopg
 
     db_url = migrated_db
-    client = _client(db_url, admin_db_url=admin_url)
-
     tenant_id = str(uuid.uuid4())
+    client = _client(db_url, admin_db_url=admin_url, manager_tenant_id=tenant_id)
+
     enterprise_id = str(uuid.uuid4())
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bootstrap_secret = "Bootstrap-plaintext-secret-123"  # 明文（TLS 服务间）；Manager 单次 scrypt

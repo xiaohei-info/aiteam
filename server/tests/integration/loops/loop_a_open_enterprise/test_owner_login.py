@@ -22,7 +22,9 @@ def _provision_owner_for_test(tenant_scope, service_token_headers):
 
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    # The shared integration app models one explicitly bound Manager deployment;
+    # use the fixture's bound tenant rather than inventing a second tenant.
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
 
     # F01

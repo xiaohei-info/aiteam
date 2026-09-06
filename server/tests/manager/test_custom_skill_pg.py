@@ -61,7 +61,7 @@ def test_concurrent_package_and_metadata_writes_never_restore_old_files(migrated
         for future in futures:
             future.result()
     final = service.get_skill(ctx, catalog_id=original.catalog_id)
-    assert final.display_name == "Renamed" and final.version == "2" and final.files[0].content == changed[0]["content"]
+    assert final.display_name == "Renamed" and final.version == "2" and final.files[0]["content"] == changed[0]["content"]
     apply_migrations(admin_url, app_rw_password="apprwpass")
     with pytest.raises(Conflict):
         service.update_skill(ctx, SkillCatalogIn(skill_id="concurrent", version="1", files=changed), catalog_id=original.catalog_id)
@@ -81,7 +81,7 @@ def test_fileless_draft_and_legacy_invalid_remain_nonexecutable(migrated_db, two
     with router.session(ctx) as s:
         s.execute("UPDATE skill_catalog SET files=%s::jsonb, content_hash='' WHERE id=%s", ('[{"path":"SKILL.md","content":"# legacy missing description"}]', draft.catalog_id))
     renamed = service.update_skill(ctx, SkillCatalogIn(skill_id="draft", display_name="Metadata only"), catalog_id=draft.catalog_id)
-    assert renamed.package_status == "invalid" and renamed.files[0].content == "# legacy missing description"
+    assert renamed.package_status == "invalid" and renamed.files[0]["content"] == "# legacy missing description"
 
 
 def test_migration0039_preserves_scalar_and_object_skill_files_as_invalid(migrated_db, admin_url, two_tenants):

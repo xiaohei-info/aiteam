@@ -38,9 +38,23 @@ def auth_app(migrated_db, admin_url, two_tenants, monkeypatch):
     oauth = OAuthService(providers={"fakeprov": FakeProvider()}, connections=OAuthConnectionStore(router),
                          auth_repo=auth._repo, audit=LoginAuditRepository(router), issuer=auth.issue,
                          origin=AuthOrigin.parse("https://manager.example"))
-    app = create_app(Settings(tier="manager", service_name="fixture", db_url=migrated_db, admin_db_url=admin_url), APIRouter())
+    app = create_app(
+        Settings(
+            tier="manager",
+            service_name="fixture",
+            db_url=migrated_db,
+            admin_db_url=admin_url,
+            manager_tenant_id=tenant,
+        ),
+        APIRouter(),
+    )
     app.state._auth_service, app.state._oauth_service = auth, oauth
-    app.state._token_verifier = ActivePrincipalVerifier(RS256TokenVerifier.from_jwks(auth.jwks(tenant)), auth._repo)
+    app.state._token_verifier = ActivePrincipalVerifier(
+        RS256TokenVerifier.from_jwks(auth.jwks(tenant)),
+        auth._repo,
+        deployment_tenant_id=tenant,
+        require_binding=True,
+    )
     for route in [auth_router, passkey_router, passkey_mgmt_router, oauth_router, oauth_mgmt_router]:
         app.include_router(route)
     return TestClient(app), ctx, account, {"Authorization": "Bearer " + result.token}, router, oauth
