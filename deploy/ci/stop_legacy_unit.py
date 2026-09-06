@@ -46,9 +46,12 @@ class LinuxHost:
         names = ('Id', 'LoadState', 'ActiveState', 'SubState', 'MainPID', 'ControlGroup',
                  'FragmentPath', 'DropInPaths', 'KillMode', 'Restart', 'NRestarts',
                  'ExecStop', 'ExecStopPost', 'ExecReload', 'KillSignal', 'SendSIGKILL', 'TimeoutStopUSec')
-        text = self.systemctl('show', unit, '--property=' + ','.join(names))
+        # systemctl suppresses empty properties by default, including the empty
+        # ExecStop/DropInPaths values which this candidate must verify explicitly.
+        text = self.systemctl('show', unit, '--all', '--property=' + ','.join(names))
         values = dict(line.split('=', 1) for line in text.splitlines() if '=' in line)
-        require(all(name in values for name in names), 'incomplete systemd unit identity')
+        missing = [name for name in names if name not in values]
+        require(not missing, 'incomplete systemd unit identity (missing: ' + ', '.join(missing) + ')')
         return values
 
     def process(self, pid: int) -> dict | None:

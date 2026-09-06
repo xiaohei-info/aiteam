@@ -215,6 +215,32 @@ def test_native_probe_is_hosted_only_reuses_candidate_and_does_not_touch_taiyi()
     assert 'stop_legacy_unit.py' not in (ROOT / '.github/workflows/deploy-main.yml').read_text()
 
 
+def test_systemctl_show_requests_empty_properties_instead_of_inventing_defaults(fixture, monkeypatch):
+    host, _ = fixture
+    reader = cutover.LinuxHost()
+    def show(*args):
+        assert args[:2] == ('show', 'aiteam-v1.service')
+        # Actual systemctl show suppresses empty properties without --all.
+        return '\n'.join(f'{key}={value}' for key, value in host.values.items()
+                         if value or '--all' in args)
+    monkeypatch.setattr(reader, 'systemctl', show)
+    values = reader.info('aiteam-v1.service')
+    assert values['DropInPaths'] == '' and values['ExecStopPost'] == ''
+
+
+def test_missing_show_properties_still_rejected_with_names_not_values(fixture, monkeypatch):
+    host, _ = fixture
+    reader = cutover.LinuxHost()
+    values = dict(host.values, ExecStop='synthetic-private-argv-must-not-log')
+    values.pop('DropInPaths')
+    values.pop('ExecReload')
+    monkeypatch.setattr(reader, 'systemctl', lambda *args: '\n'.join(f'{k}={v}' for k, v in values.items()))
+    with pytest.raises(cutover.CutoverError) as error:
+        reader.info('aiteam-v1.service')
+    assert str(error.value) == 'incomplete systemd unit identity (missing: DropInPaths, ExecReload)'
+    assert 'synthetic-private-argv' not in str(error.value)
+
+
 def test_proc_identity_parser_never_reads_environ(tmp_path):
     proc = tmp_path / 'proc'
     directory = proc / '17'
