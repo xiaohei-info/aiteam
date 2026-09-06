@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -29,6 +28,9 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
     from manager_service.app import app as manager_app
 
     fake_tenant_id = str(uuid.uuid4())
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tenant_scope.tenant_id, manager_app)
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/owner-bootstrap",
@@ -52,15 +54,18 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
 
 @pytest.mark.integration
 def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """有效 tenant A 存在时，向未开通 tenant B bootstrap 被拒，A 不被污染。"""
     import psycopg
     from manager_service.app import app as manager_app
 
-    client = TestClient(manager_app)
-    tenant_a = tenant_scope.tenant_id
+    tenant_a = fresh_tenant_cleanup(str(uuid.uuid4()))
     tenant_b = str(uuid.uuid4())
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tenant_a, manager_app)
+    client = TestClient(manager_app)
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
 
     r1 = client.post(
@@ -89,15 +94,12 @@ def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
     assert resp.headers.get("content-type", "").startswith("application/problem+json")
     assert resp.json()["code"] == "manager_binding_mismatch"
 
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND external_id = %s",
-                (tenant_b, phone),
-            ).fetchone()
-            assert row is None
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tenant_a,))
+    with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND external_id = %s",
+            (tenant_b, phone),
+        ).fetchone()
+        assert row is None
 
 
 # ── service token 负例（不 fail-open） ──
@@ -314,12 +316,12 @@ def test_problem_json_auth_401_no_credential_leak(tenant_scope):
 
 @pytest.mark.integration
 def test_cross_tenant_login_nonexistent_tenant(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """在 tenant_scope 的有效 tenant 下创建 owner，用另一 tenant_id 登录 → 401。"""
-    from manager_service.app import app as manager_app
-
-    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     other_tenant = str(uuid.uuid4())
     r = _client.post(
@@ -331,22 +333,16 @@ def test_cross_tenant_login_nonexistent_tenant(
     )
     assert r.json()["code"] == "manager_binding_mismatch"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 @pytest.mark.integration
 def test_owner_reset_wrong_tenant_id(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """用正确的 phone + 旧密码但错误的 tenant_id 重置 → 401。"""
-    from manager_service.app import app as manager_app
-
-    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     wrong_tenant = str(uuid.uuid4())
     r = _client.post(
@@ -363,22 +359,19 @@ def test_owner_reset_wrong_tenant_id(
     )
     assert r.json()["code"] == "manager_binding_mismatch"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 # ── 工具函数 ──
 
 
-def _provision_for_negative(tenant_scope, service_token_headers):
-    """同 _provision_owner_for_test，但调用方必须自行清理。"""
+def _provision_for_negative(tenant_scope, service_token_headers, register_tenant):
+    """Provision a fresh tenant and register it for fixture finalizer cleanup."""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = tenant_scope.tenant_id
+    new_tenant_id = register_tenant(str(uuid.uuid4()))
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(new_tenant_id, manager_app)
     client = TestClient(manager_app)
 
     r1 = client.post(
@@ -415,15 +408,29 @@ def _provision_for_negative(tenant_scope, service_token_headers):
 
 @pytest.mark.integration
 def test_agent_token_valid_after_new_login_by_another_owner_fails(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """A bound Manager keeps the existing tenant session usable and rejects another tenant."""
     from manager_service.app import app as manager_app
 
-    client = TestClient(manager_app)
-    tid_a = tenant_scope.tenant_id
+    tid_a = fresh_tenant_cleanup(str(uuid.uuid4()))
+    from tests.integration.fixtures.manager_binding import bind_manager_app
 
-    # The fixture row is the one deployment tenant; bootstrap and reset its owner.
+    bind_manager_app(tid_a, manager_app)
+    client = TestClient(manager_app)
+
+    # Provision the explicit deployment tenant, then bootstrap and reset its owner.
+    r_provision = client.post(
+        "/api/manager/tenants",
+        json={
+            "enterprise_id": str(uuid.uuid4()),
+            "tenant_id": tid_a,
+            "enterprise_name": "Company A",
+            "enterprise_code": f"a_{uuid.uuid4().hex[:6]}",
+        },
+        headers=service_token_headers,
+    )
+    assert r_provision.status_code == 201
     phone_a = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bpw_a = f"Boot!1-{uuid.uuid4().hex[:8]}"
     r_bootstrap = client.post(

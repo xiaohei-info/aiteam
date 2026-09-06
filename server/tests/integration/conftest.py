@@ -24,7 +24,10 @@ from tests.integration.fixtures.identities import (  # noqa: F401
     service_token,
     service_token_headers,
 )
-from tests.integration.fixtures.manager_binding import bind_manager_app  # noqa: F401
+from tests.integration.fixtures.manager_binding import (  # noqa: F401
+    bind_manager_app,
+    fresh_tenant_cleanup,
+)
 from tests.integration.fixtures.postgres import (  # noqa: F401
     migrated_pg,
     pg_admin_url,
@@ -52,15 +55,21 @@ def _bind_shared_manager_app(request):
     from manager_service import app as manager_module
 
     manager_app = manager_module.app
-    old_settings = manager_app.state.settings
-    old_ready = getattr(manager_app.state, "_manager_binding_ready", False)
+    state_mapping = getattr(manager_app.state, "_state", None)
+    if not isinstance(state_mapping, dict):
+        raise TypeError("Manager integration fixture requires Starlette State._state")
+    old_state = dict(state_mapping)
     verifier = getattr(manager_module, "_verifier", None)
     old_verifier_tenant = getattr(verifier, "_deployment_tenant_id", None)
     bind_manager_app(scope.tenant_id, manager_app)
     try:
         yield
     finally:
-        manager_app.state.settings = old_settings
-        manager_app.state._manager_binding_ready = old_ready
+        # Restore the entire Starlette state mapping, not only settings/readiness:
+        # route-created tenant services are cached in State._state and may capture
+        # the binding.  Also restore the mutable verifier field changed by the
+        # test-only helper before putting the original mapping back.
+        state_mapping.clear()
+        state_mapping.update(old_state)
         if verifier is not None and hasattr(verifier, "_deployment_tenant_id"):
             verifier._deployment_tenant_id = old_verifier_tenant

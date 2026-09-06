@@ -18,7 +18,7 @@ from shared.app_factory import create_app
 from shared.auth import RS256TokenVerifier, tenant_context_from
 from shared.config import Settings
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, Unauthorized
+from shared.errors import Conflict
 from .test_oauth_service import FakeProvider
 from .test_passkey_ceremony import registration_payload, login_payload
 
@@ -182,7 +182,6 @@ def test_factor_delete_ownership_and_last_method(auth_app, two_tenants):
 def test_existing_hindsight_lease_checks_active_member_in_real_route_assembly(auth_app, two_tenants, monkeypatch):
     import httpx
     from manager_service.hindsight_credentials import HindsightLeaseStore, derive_hindsight_bank_id
-    from manager_service.hindsight_client import HindsightSettings
     from manager_service.routes_hindsight import build_hindsight_router
     from manager_service.repository import TenantAuthRepository
     client, ctx, _, _, router, _ = auth_app
@@ -226,7 +225,9 @@ def test_existing_hindsight_lease_checks_active_member_in_real_route_assembly(au
     other = auth.create_member(ctx.tenant_id, phone="lease-other-"+uuid.uuid4().hex, initial_password="Fixture-Pass-1")
     authorize_member(other)
     assert call(issue(ctx.tenant_id, other)).status_code == 200
-    assert call(issue(two_tenants[1], other)).status_code == 401
+    # The lease token is valid, but its tenant scope is not authorized by this
+    # Manager deployment. This is forbidden (403), not unauthenticated (401).
+    assert call(issue(two_tenants[1], other)).status_code == 403
     with router.session(ctx) as s:
         s.execute("DELETE FROM app_user WHERE id = %s", (ctx.user_id,))
     assert call(lease).status_code == 401
