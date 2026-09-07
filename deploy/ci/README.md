@@ -81,7 +81,8 @@ cd /root/app/aiteam
 git remote set-url origin git@github.com:OWNER/REPO.git
 
 # 5. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）。
-#    之后每次 TEST 部署会按 server/requirements.txt 的内容 hash 再同步，不必手工重装。
+#    之后每次 TEST 部署会按 server/requirements.txt 的内容 hash 再同步，不必手工重装；
+#    首次更新也由 deploy-main.yml 先刷新 run.sh，避免继续执行旧编排脚本。
 python3 -m venv .venv
 .venv/bin/python -m pip install --requirement server/requirements.txt
 
