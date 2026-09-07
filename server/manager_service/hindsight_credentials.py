@@ -21,16 +21,17 @@ from urllib.parse import urlsplit
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from shared.errors import Forbidden, NotFound
+from shared.errors import Conflict, Forbidden, NotFound
 
-from .hindsight_client import HindsightSettings, HindsightUnavailable
+from .hindsight_client import HindsightClient, HindsightSettings, HindsightUnavailable
+from .memory_policy_service import normalize_policy, require_retention_ready, is_retention_guarded
 from .hindsight_lease_repository import (
     HindsightLeaseForbidden,
     HindsightLeaseUnauthorized,
     policy_fingerprint,
     token_sha256,
 )
-from .schemas_hindsight import HindsightLeaseRevocationOut, HindsightRuntimeConfigOut
+from .schemas_hindsight import HINDSIGHT_CLIENT_PROTOCOL, HindsightLeaseRevocationOut, HindsightRuntimeConfigOut
 
 
 _FACADE_PATH = "/api/manager/hindsight"
@@ -71,6 +72,9 @@ class HindsightLease:
     issued_at: datetime
     expires_at: datetime
     revoked_at: datetime | None = None
+    allowed_operations: tuple[str, ...] = ()
+    policy_revision: int = 0
+    client_protocol: str | None = None
     _now: Callable[[], datetime] = field(default=_utcnow, repr=False, compare=False)
 
     @property
@@ -93,6 +97,7 @@ class HindsightLeaseBackend(Protocol):
         policy: dict,
         bank_id: str,
         force_rotate: bool = False,
+        client_protocol: str | None = None,
     ) -> HindsightLease: ...
 
     def get(self, lease_id: str) -> HindsightLease | None: ...
@@ -146,6 +151,7 @@ class HindsightLeaseStore:
         policy: dict,
         bank_id: str,
         force_rotate: bool = False,
+        client_protocol: str | None = None,
     ) -> HindsightLease:
         with self._lock:
             scope = (tenant_id, member_id, employee_id)
@@ -157,6 +163,7 @@ class HindsightLeaseStore:
                 and not force_rotate
                 and current.policy_fingerprint == fingerprint
                 and current.bank_id == bank_id
+                and current.client_protocol == client_protocol
             ):
                 return current
 
@@ -173,6 +180,9 @@ class HindsightLeaseStore:
                 employee_id=employee_id,
                 snapshot_version=snapshot_version,
                 policy_fingerprint=fingerprint,
+                allowed_operations=tuple(normalize_policy(policy)["allowed_operations"]),
+                policy_revision=int(policy.get("revision", 0)),
+                client_protocol=client_protocol,
                 bank_id=bank_id,
                 version=version,
                 issued_at=issued_at,
@@ -238,6 +248,10 @@ class HindsightLeaseStore:
             return lease
 
 
+class HindsightClientUpgradeRequired(Conflict):
+    code, title = "hindsight_client_upgrade_required", "Memory client upgrade required"
+
+
 class HindsightRuntimeService:
     """Authorize a current snapshot, then issue or revoke a facade lease."""
 
@@ -248,9 +262,13 @@ class HindsightRuntimeService:
         settings: HindsightSettings | None = None,
         leases: HindsightLeaseBackend | None = None,
         facade_url: str | None = None,
+        bank_client: HindsightClient | None = None,
+        retention_service=None,
     ):
         self._snapshot = snapshot_service
         self._settings = settings or HindsightSettings.from_env()
+        self._banks = bank_client or HindsightClient(self._settings)
+        self._retention = retention_service
         self.leases = leases or HindsightLeaseStore(self._settings.lease_ttl_seconds)
         self._facade_url = facade_url or self._settings.facade_url or _FACADE_PATH
         _validate_facade_url(self._facade_url)
@@ -265,6 +283,7 @@ class HindsightRuntimeService:
         *,
         employee_id: str,
         rotate: bool = False,
+        client_protocol: str | None = None,
     ) -> HindsightRuntimeConfigOut:
         try:
             self._snapshot._ensure_runnable(ctx, employee_id=employee_id)
@@ -284,20 +303,43 @@ class HindsightRuntimeService:
         if not isinstance(policy, dict) or policy.get("enabled") is not True:
             self.leases.revoke_scope(ctx.tenant_id, ctx.user_id, employee_id)
             raise HindsightLeaseForbidden("memory policy does not authorize Hindsight")
+        if not normalize_policy(policy)["allowed_operations"]:
+            self.leases.revoke_scope(ctx.tenant_id, ctx.user_id, employee_id)
+            raise HindsightLeaseForbidden("memory policy has no permitted operations")
+        confirmed_protocol = client_protocol if client_protocol == HINDSIGHT_CLIENT_PROTOCOL else None
+        operations = normalize_policy(policy)["allowed_operations"]
+        if confirmed_protocol is None:
+            operations = [op for op in operations if op == "recall"]
+            if not operations:
+                self.leases.revoke_scope(ctx.tenant_id, ctx.user_id, employee_id)
+                raise HindsightClientUpgradeRequired("This memory policy requires an upgraded controlled Agent client")
+        auto_retain = confirmed_protocol is not None and "retain" in operations and normalize_policy(policy)["explicit_auto_retain"]
+        lease_policy = {**policy, "allowed_operations": operations, "explicit_auto_retain": auto_retain}
+        if "retain" in operations and (type(policy.get("revision")) is not int or policy["revision"] < 1):
+            raise HindsightLeaseForbidden("A versioned effective policy is required for a write lease")
+        (self._retention.require_ready(policy) if self._retention is not None else require_retention_ready(policy))
         self._require_upstream()
-        # This is the only bank-id derivation in the Manager lease path. The Agent
-        # receives the result as immutable session config and never selects a bank.
-        bank_id = derive_hindsight_bank_id(
-            ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
-        )
+        self._banks.ensure_bank(ctx, employee_id=employee_id)
+        # A bank lookup may wait on the upstream. Do not return stale consent if
+        # configuration/grants changed during that wait; retry config explicitly.
+        try:
+            self._snapshot._ensure_runnable(ctx, employee_id=employee_id)
+            current = self._snapshot.generate(ctx, member_id=ctx.user_id, employee_id=employee_id)
+            if current.memory_policy != policy or current.snapshot_version != snapshot.snapshot_version:
+                raise HindsightLeaseForbidden("Memory policy changed while preparing the lease")
+        except (Forbidden, NotFound):
+            self.leases.revoke_scope(ctx.tenant_id, ctx.user_id, employee_id)
+            raise
+        bank_id = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
         lease = self.leases.issue(
             tenant_id=ctx.tenant_id,
             member_id=ctx.user_id,
             employee_id=employee_id,
             snapshot_version=snapshot.snapshot_version,
-            policy=policy,
+            policy=lease_policy,
             bank_id=bank_id,
             force_rotate=rotate,
+            client_protocol=confirmed_protocol,
         )
         return HindsightRuntimeConfigOut(
             base_url=self._facade_url,
@@ -307,6 +349,11 @@ class HindsightRuntimeService:
             version=lease.version,
             issued_at=lease.issued_at,
             expires_at=lease.expires_at,
+            allowed_operations=list(lease.allowed_operations),
+            policy_revision=lease.policy_revision,
+            client_protocol=confirmed_protocol,
+            explicit_auto_retain=auto_retain,
+            retention_mode="fact_only" if is_retention_guarded(policy) else "unlimited",
         )
 
     def revoke(

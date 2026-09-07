@@ -75,6 +75,9 @@ def _services_with_solutions(recruit_repo=None):
     config_svc = EmployeeConfigService(_FakeRepo())
     grant_svc = _FakeGrantService()
     member_svc = _FakeMemberService()
+    for tenant in ("t-a", "t-b"):
+        for user in ("admin-1", "u-1", "m-1"):
+            member_svc.set_member(tenant, user)
     svc = AuthorizedConfigService(
         config_service=config_svc,
         grant_service=grant_svc,

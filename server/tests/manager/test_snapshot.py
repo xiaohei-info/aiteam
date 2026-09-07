@@ -109,6 +109,9 @@ def _services() -> tuple[EmployeeConfigService, _FakeGrantService, _FakeMemberSe
     config_svc = EmployeeConfigService(_FakeRepo())
     grant_svc = _FakeGrantService()
     member_svc = _FakeMemberService()
+    for tenant in ("t-a", "t-b"):
+        for user in ("admin-1", "u-1", "m-1"):
+            member_svc.set_member(tenant, user)
     snap_svc = SnapshotService(
         config_service=config_svc, grant_service=grant_svc, member_service=member_svc
     )
@@ -232,6 +235,7 @@ def test_admin_exempt_pull_records_no_audit():
         member_service=_FakeMemberService(), audit_recorder=audit,
     )
     created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")
+    snap_svc._members.set_member("t-a", "admin-1")
     snap_svc.generate(_ctx("t-a", roles=["owner"], user_id="admin-1"),
                       member_id="admin-1", employee_id=created.employee_id)
     assert audit.records == []
@@ -318,6 +322,7 @@ def test_generate_resolves_pricing_with_legacy_catalog_signature():
     )
     ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
 
+    snap_svc._members.set_member("t-a", "admin-1")
     snapshot = snap_svc.generate(ctx, member_id="admin-1", employee_id="e-priced")
 
     assert snapshot.model_policy.pricing == PricingSnapshot(
@@ -350,7 +355,7 @@ def test_generate_maps_all_fields():
     assert snap.skills == ["code-review"]
     assert snap.knowledge_refs == []  # relation binding is the sole snapshot source
     assert snap.connector_refs == ["slack"]
-    assert snap.memory_policy == {"seed": "记住用户偏好"}
+    assert snap.memory_policy == {"enabled": True, "scope": "employee", "allowed_operations": ["recall"], "explicit_auto_retain": False, "retention_days": None}
     assert snap.department_ids == ["d-eng"]
     assert snap.snapshot_version  # 非空
 
@@ -361,7 +366,7 @@ def test_generate_defaults_memory_policy_when_employee_has_no_override():
     created = config_svc.create(ctx, _full_body().model_copy(update={"memory_policy": None, "tools": []}), employee_slug="exp-a")
     snap = snap_svc.generate(ctx, member_id="admin-1", employee_id=created.employee_id)
     assert snap.tools == ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"]
-    assert snap.memory_policy == {"enabled": True, "scope": "employee", "allowed_operations": ["recall", "retain"]}
+    assert snap.memory_policy == {"enabled": True, "scope": "employee", "allowed_operations": ["recall"], "explicit_auto_retain": False, "retention_days": None}
 
 
 def test_generate_with_explicit_matching_version():
@@ -428,6 +433,8 @@ def test_cross_tenant_snapshot_isolated():
     ctx_b = _ctx("t-b", roles=["owner"], user_id="admin-b")
     created = config_svc.create(ctx_a, _full_body(), employee_slug="exp-a")
 
+    _member.set_member("t-a", "admin-a")
+    _member.set_member("t-b", "admin-b")
     # B 租户用 A 的 employee_id 生成快照 → 经 TenantContext 隔离，看不到 → 404
     with pytest.raises(NotFound):
         snap_svc.generate(ctx_b, member_id="admin-b", employee_id=created.employee_id)

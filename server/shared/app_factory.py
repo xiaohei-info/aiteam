@@ -13,17 +13,25 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
-from shared.errors import NotFound, install_exception_handlers
+from shared.errors import AppError, NotFound, install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
 from shared.openapi import install_openapi_enrichment
 
 logger = logging.getLogger(__name__)
+
+
+class _ManagerBindingRequired(AppError):
+    status, code, title = 503, "manager_binding_required", "Manager Binding Required"
+
+
+class _ManagerBindingUnavailable(AppError):
+    status, code, title = 503, "manager_binding_unavailable", "Manager Binding Unavailable"
 
 
 class HealthResponse(BaseModel):
@@ -56,13 +64,38 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
     install_openapi_enrichment(app, settings.tier)
 
     @app.get("/healthz", tags=["infra"], summary="liveness", description="检查服务进程是否存活。", response_model=HealthResponse)
-    async def healthz() -> HealthResponse:
-        return HealthResponse(status="ok", service=settings.service_name)
+    async def healthz(request: Request) -> HealthResponse:
+        runtime_settings = request.app.state.settings
+        return HealthResponse(status="ok", service=runtime_settings.service_name)
 
-    @app.get("/readyz", tags=["infra"], summary="readiness", description="检查本端数据库和本地依赖是否可用。", response_model=HealthResponse)
-    async def readyz() -> HealthResponse:
+    readyz_responses = (
+        {503: {"description": "Manager 尚未绑定唯一部署企业；返回 problem+json。"}}
+        if settings.tier == "manager" else {}
+    )
+
+    @app.get(
+        "/readyz",
+        tags=["infra"],
+        summary="readiness",
+        description="检查本端数据库和本地依赖是否可用。",
+        response_model=HealthResponse,
+        responses=readyz_responses,
+    )
+    async def readyz(request: Request) -> HealthResponse:
         # 只校验本端依赖；上端不可达按"可降级 pull"对待，不致本端 not-ready（CLAUDE/AGENTS §13）。
-        return HealthResponse(status="ready", service=settings.service_name)
+        # Read settings from app state at request time so dependency-injected test
+        # apps and any explicit runtime settings replacement are evaluated by the
+        # same source as the rest of the application.
+        runtime_settings = request.app.state.settings
+        # A Manager without an explicit deployment tenant is not ready: there
+        # is no safe tenant to bind, and readiness must not imply that a random
+        # tenant_registry row will be used.
+        if runtime_settings.tier == "manager":
+            if not getattr(runtime_settings, "manager_tenant_id", None):
+                raise _ManagerBindingRequired("Manager deployment tenant binding is required")
+            if getattr(request.app.state, "_manager_binding_ready", True) is False:
+                raise _ManagerBindingUnavailable("Manager deployment tenant binding is unavailable")
+        return HealthResponse(status="ready", service=runtime_settings.service_name)
 
     app.include_router(router)
 

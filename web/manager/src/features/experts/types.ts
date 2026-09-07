@@ -103,8 +103,8 @@ export interface EmployeeConfig {
  */
 export type EmployeeConfigIn = Omit<
   EmployeeConfig,
-  "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at"
->;
+  "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
+> & { memory_policy?: Record<string, unknown> | null };
 
 /** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */
 export interface LifecycleOptions {

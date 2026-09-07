@@ -12,6 +12,8 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
+import { authenticatePasskey, type PasskeyOptions } from "../auth/passkey";
+import { startOAuth } from "../auth/factors";
 import { createManagerApiClient } from "../api/client";
 
 interface LocationState {
@@ -42,6 +44,7 @@ export function LoginPage(): React.ReactNode {
   const [pendingReset, setPendingReset] = useState<OwnerIdentity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [providers, setProviders] = useState<string[] | null>(null);
 
   if (session) {
     const from = (location.state as LocationState | null)?.from ?? "/";
@@ -79,7 +82,7 @@ export function LoginPage(): React.ReactNode {
       const from = (location.state as LocationState | null)?.from ?? "/";
       navigate(from, { replace: true });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
+      if (err instanceof ApiError && err.status === 403 && ["password_reset_required", "password_expired"].includes(err.code ?? "")) {
         // 需先 resolve 再传给 reset 流程；403 时已经过 resolve（login 里解析了），
         // 但前端没留 tenantId，需重新 resolve 或在 catch 前存下来。
         // 简单起见：再 resolve 一次（冗余但逻辑清晰）。
@@ -106,6 +109,33 @@ export function LoginPage(): React.ReactNode {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function factorLogin(provider?: string): Promise<void> {
+    setError(null); setLoading(true);
+    try {
+      if (!enterprise.trim()) throw new Error("请填写企业代码/名称");
+      const client = createManagerApiClient({ getToken: () => null });
+      const resolved = await client.post<{ tenant_id: string }>("/api/auth/resolve-tenant", { body: { enterprise: enterprise.trim() } });
+      if (!resolved) throw new Error("企业未找到");
+      if (provider) { await startOAuth(client, resolved.tenant_id, provider, "login"); return; }
+      const params = new URLSearchParams({ tenant_id: resolved.tenant_id });
+      if (account.trim()) params.set("account", account.trim());
+      const options = await client.get<PasskeyOptions>(`/api/auth/passkey/authentication-options?${params}`);
+      if (!options) throw new Error("Passkey 未配置");
+      const assertion = await authenticatePasskey(options);
+      const result = await client.post<LoginResponse>("/api/auth/passkey/login", { body: { tenant_id: resolved.tenant_id, ...assertion } });
+      if (!result) throw new Error("Passkey 登录失败");
+      signIn(result.token); navigate("/", { replace: true });
+    } catch (err) { setError(err instanceof Error ? err.message : "登录失败"); }
+    finally { setLoading(false); }
+  }
+
+  async function showProviders(): Promise<void> {
+    try {
+      const client = createManagerApiClient({ getToken: () => null });
+      setProviders(await client.get<string[]>("/api/auth/oauth/providers") ?? []);
+    } catch (err) { setError(err instanceof Error ? err.message : "登录方式加载失败"); }
   }
 
   async function handleOwnerReset(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -253,6 +283,8 @@ export function LoginPage(): React.ReactNode {
               isDisabled={loading}
               isLoading={loading}
             />
+            <Button label="使用 Passkey 登录" isDisabled={loading} onClick={() => void factorLogin()} />
+            {providers === null ? <Button label="其他登录方式" onClick={() => void showProviders()} /> : providers.map((provider) => <Button key={provider} label={`使用 ${provider} 登录`} isDisabled={loading} onClick={() => void factorLogin(provider)} />)}
           </VStack>
         </form>
       </Card>

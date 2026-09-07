@@ -10,7 +10,7 @@ token 经 AuthService.issue 签发（与密码登录同一出口）。
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,6 +21,8 @@ from shared.contracts.envelope import Envelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError, NotFound
 
+from .active_principal import require_active, require_bound_tenant
+from .auth_origin import AuthOrigin
 from .auth_service import AuthResult, AuthService, build_auth_service
 from .login_audit import LoginAuditRepository
 from .openapi_schemas import (
@@ -46,7 +48,7 @@ class _ManagerNotConfigured(AppError):
 class PasskeyRegistrationFinishIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str | None = Field(default=None, description="用户为该 passkey 设置的标签。")
-    response: dict[str, Any] = Field(description="navigator.credentials.create 返回的 PublicKeyCredential。")
+    response: dict[str, Any] = Field(description="navigator.credentials.create返回的AuthenticatorAttestationResponse，clientDataJSON/attestationObject编码base64url。")
 
 
 class PasskeyLoginIn(BaseModel):
@@ -64,7 +66,8 @@ class OAuthAuthorizeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider: str = Field(description="OAuth 提供方。")
     tenant_id: str = Field(description="企业租户 ID。")
-    redirect_uri: str = Field(description="OAuth 回调地址。")
+    redirect_uri: str = Field(description="可信MANAGER_PUBLIC_ORIGIN的 /auth/oauth/callback。")
+    intent: Literal["login", "link"] = Field(default="login", description="login登录；link绑定当前active JWT用户。")
 
 
 class OAuthCallbackIn(BaseModel):
@@ -75,6 +78,7 @@ class OAuthCallbackIn(BaseModel):
 
 
 class OAuthLinkIn(BaseModel):
+    state: str = Field(description="authorize(intent=link)签发的当前用户一次性state；旧无state请求拒绝422。")
     model_config = ConfigDict(extra="forbid")
     provider: str = Field(description="OAuth 提供方。")
     code: str = Field(description="OAuth authorization code。")
@@ -88,7 +92,9 @@ def _require(request: Request):
     verifier = getattr(request.app.state, "_token_verifier", None)
     if verifier is None:
         verifier = RejectingTokenVerifier("manager signing key store unconfigured")
-    return require_claims(verifier)(request)
+    claims = require_claims(verifier)(request)
+    require_active(_auth_service(request)._repo.find_user(tenant_context_from(claims), user_id=claims.user_id))
+    return claims
 
 
 def _settings(request: Request):
@@ -105,7 +111,13 @@ def _auth_service(request: Request) -> AuthService:
         raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
     cache = getattr(request.app.state, "_auth_service", None)
     if cache is None:
-        cache = build_auth_service(dsn, admin_dsn=admin_dsn, audit_dsn=dsn)
+        cache = build_auth_service(
+            dsn,
+            admin_dsn=admin_dsn,
+            audit_dsn=dsn,
+            deployment_tenant_id=settings.manager_tenant_id,
+            require_binding=True,
+        )
         request.app.state._auth_service = cache
     return cache
 
@@ -137,6 +149,7 @@ def _passkey_service(request: Request, auth: AuthService) -> PasskeyService:
             store=PasskeyStore(r),
             audit=LoginAuditRepository(r),
             issuer=auth.issue,
+            origin=AuthOrigin.from_env(),
         )
         request.app.state._passkey_service = cache
     return cache
@@ -152,6 +165,8 @@ def _oauth_service(request: Request, auth: AuthService) -> OAuthService:
             auth_repo=auth._repo,
             audit=LoginAuditRepository(r),
             issuer=auth.issue,
+            deployment_tenant_id=_settings(request).manager_tenant_id,
+            require_binding=True,
         )
         request.app.state._oauth_service = cache
     return cache
@@ -168,7 +183,7 @@ passkey_router = APIRouter(prefix="/api/auth/passkey", tags=["mfa", "passkey"])
 @passkey_router.get(
     "/authentication-options",
     summary="生成 WebAuthn 登录选项（challenge）",
-    description="按 tenant_id 生成挑战；携 account 则限定为该账号已注册凭据，否则 usernameless（依赖 resident credential）。",
+    description="按可信MANAGER_PUBLIC_ORIGIN的DNS RP生成挑战并绑定tenant；account限定active账号凭据，否则resident credential。缺合法origin/RP配置503，仅此能力不可用。",
     operation_id="manager_passkey_authentication_options",
     response_model_exclude_none=True,
 )
@@ -178,6 +193,7 @@ async def passkey_authentication_options(
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
 ) -> Envelope[PasskeyOptionsOut]:
+    require_bound_tenant(_settings(request).manager_tenant_id, tenant_id)
     svc = _passkey_service(request, auth)
     return Envelope[PasskeyOptionsOut](data=PasskeyOptionsOut.model_validate(svc.authentication_options(tenant_id, account)))
 
@@ -193,6 +209,7 @@ async def passkey_login(
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
 ) -> Envelope[AuthResult]:
+    require_bound_tenant(_settings(request).manager_tenant_id, body.tenant_id)
     svc = _passkey_service(request, auth)
     payload = body.model_dump(exclude_none=True)
     return Envelope[AuthResult](data=svc.finish_login(tenant_id=body.tenant_id, payload=payload))
@@ -308,15 +325,17 @@ async def oauth_authorize(
     request: Request,
     auth: AuthService = Depends(_auth_service),
 ) -> Envelope[OAuthAuthorizeOut]:
+    require_bound_tenant(_settings(request).manager_tenant_id, body.tenant_id)
     svc = _oauth_service(request, auth)
     return Envelope[OAuthAuthorizeOut](data=OAuthAuthorizeOut(**svc.authorize(provider=body.provider, tenant_id=body.tenant_id,
-                                                                                redirect_uri=body.redirect_uri)))
+                                                                                redirect_uri=body.redirect_uri, intent=body.intent,
+                                                                                ctx=tenant_context_from(_require(request)) if body.intent == "link" else None)))
 
 
 @oauth_router.post(
     "/callback",
     summary="OAuth 回调登录（公开端点）",
-    description="校验 state 后换 token / 取 profile，反查 / 绑定 manager 账号后 issue JWT access token。",
+    description="仅消费一次有效login state（provider/tenant/可信redirect绑定），解析既有active Manager账号后签发JWT；不自动创建账号。浏览器须校验本地发起事务。",
     operation_id="manager_oauth_callback",
 )
 async def oauth_callback(
@@ -350,6 +369,7 @@ async def oauth_connections(
 @oauth_mgmt_router.post(
     "/link",
     summary="把第三方身份绑定到当前用户",
+    description="必须active JWT与authorize(intent=link)的同用户/provider/tenant/redirect一次性state；旧无state请求422。",
     operation_id="manager_oauth_link",
 )
 async def oauth_link(
@@ -361,7 +381,7 @@ async def oauth_link(
     ctx = tenant_context_from(claims)
     svc = _oauth_service(request, auth)
     return Envelope[OAuthLinkOut](data=OAuthLinkOut(**svc.link(ctx, provider=body.provider, code=body.code,
-                                                               redirect_uri=body.redirect_uri, user_id=claims.user_id)))
+                                                               redirect_uri=body.redirect_uri, user_id=claims.user_id, state=body.state)))
 
 
 @oauth_mgmt_router.delete(

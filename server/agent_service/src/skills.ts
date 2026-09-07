@@ -225,6 +225,25 @@ export function verifySignedSkillPackage(value: unknown, options: SkillVerificat
   return { package: p as unknown as SkillPackage, tenant_id: envelope.tenant_id, member_id: envelope.member_id, key_id: envelope.key_id, algorithm: "Ed25519", signature: envelope.signature };
 }
 
+/**
+ * Resolve the signing keys selected by one frozen snapshot.  A present snapshot
+ * key list (including an explicit empty list) is authoritative; only snapshots
+ * that omit the field use the process configuration.  This keeps readiness and
+ * resource loading on the same verification boundary.
+ */
+export function skillSigningVerificationForSnapshot(
+  snapshot: Record<string, unknown>,
+  fallback?: SkillVerificationOptions,
+): SkillVerificationOptions {
+  if (Object.prototype.hasOwnProperty.call(snapshot, "skill_signing_keys")) {
+    if (!Array.isArray(snapshot.skill_signing_keys)) {
+      throw new SkillVerificationError("invalid snapshot skill signing key metadata");
+    }
+    return { ...(fallback ?? {}), publicKeys: normalizeKeySet(snapshot.skill_signing_keys as SkillSigningKeyMetadata[]) };
+  }
+  return fallback ?? skillSigningVerificationFromEnv();
+}
+
 export class SkillCache {
   private readonly root: string;
   private readonly offlineTtlSeconds: number;
@@ -246,7 +265,11 @@ export class SkillCache {
     for (const ref of allowedRefs) {
       const parsed = parseRef(ref);
       if (parsed.version === undefined) unversioned.add(parsed.skillId);
-      else (requestedVersions.get(parsed.skillId) ?? new Set<string>()).add(parsed.version);
+      else {
+        const versions = requestedVersions.get(parsed.skillId) ?? new Set<string>();
+        versions.add(parsed.version);
+        requestedVersions.set(parsed.skillId, versions);
+      }
     }
     const allowed = new Set([...unversioned, ...requestedVersions.keys()]);
     const retained = new Map<string, Set<string>>();
@@ -320,6 +343,24 @@ export class SkillCache {
       if (this.validCacheRoot(path, scope, resolved, skillId, version)) paths.push(path);
     }
     return paths;
+  }
+
+  readinessFor(scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): Array<{ ref: string; status: "ready" | "blocked"; reason?: string; version?: string }> {
+    return [...new Set(refs)].map((ref) => {
+      try {
+        const { skillId, version } = parseRef(ref);
+        const paths = this.pathsFor(scope, [ref], verification);
+        if (!paths.length) {
+          const root = join(this.scopeRoot(scope), skillId, ...(version ? [version] : []));
+          return { ref, status: "blocked", reason: existsSync(root) ? "skill_invalid_or_expired" : "skill_missing" };
+        }
+        const loaded = loadSkillsFromDir({ dir: paths[0]!, source: "aiteam-manager" });
+        if (loaded.skills.length !== 1) return { ref, status: "blocked", reason: "skill_invalid" };
+        return { ref, status: "ready", version: version ?? this.readCurrent(scope, skillId, this.verificationFor(scope, verification, false)) };
+      } catch {
+        return { ref, status: "blocked", reason: "skill_invalid_or_expired" };
+      }
+    });
   }
 
   private materialize(scope: SkillScope, envelope: SignedSkillPackage, verification: SkillVerificationOptions): void {
@@ -410,7 +451,10 @@ export class SkillCache {
   }
 
   private verificationFor(scope: SkillScope, verification: SkillVerificationOptions, online: boolean): SkillVerificationOptions {
-    if (online && verification.publicKeys !== undefined) return { ...verification, publicKeys: normalizeKeySet(verification.publicKeys) };
+    // Explicit keys selected by the current Manager snapshot outrank a stale
+    // offline keyring in both readiness and resource loading.  The keyring is
+    // only an offline source when no snapshot key set was supplied.
+    if (verification.publicKeys !== undefined) return { ...verification, publicKeys: normalizeKeySet(verification.publicKeys) };
     const cached = this.readKeyring(scope);
     if (cached) {
       const now = verificationNow(verification);
@@ -485,16 +529,32 @@ export class SkillCache {
   }
 }
 
-export function skillRefsForSnapshot(snapshot: { skill_refs?: unknown; skills?: unknown }): string[] {
-  const refs = snapshot.skill_refs ?? snapshot.skills;
-  return Array.isArray(refs) ? refs.filter((ref): ref is string => typeof ref === "string" && ref.length > 0) : [];
+export function skillRefsForSnapshot(snapshot: Record<string, unknown>): string[] {
+  // `skills` is canonical. Presence is meaningful: a malformed current field
+  // fails closed instead of falling back to stale `skill_refs`; an explicit
+  // empty list therefore remains an explicit empty skill set.
+  const fieldName = Object.prototype.hasOwnProperty.call(snapshot, "skills") ? "skills" : "skill_refs";
+  if (!Object.prototype.hasOwnProperty.call(snapshot, fieldName)) return [];
+  const value = snapshot[fieldName];
+  if (!Array.isArray(value) || value.some((ref) => typeof ref !== "string" || ref.length === 0)) {
+    throw new SkillVerificationError(`invalid snapshot ${fieldName} field`);
+  }
+  return [...new Set(value)];
 }
 
 export function skillResourcePaths(cache: SkillCache, scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): { skills: Skill[]; diagnostics: ResourceDiagnostic[] } {
   const skills: Skill[] = []; const diagnostics: ResourceDiagnostic[] = [];
-  for (const path of cache.pathsFor(scope, refs, verification)) {
+  const loadedPaths = new Set<string>();
+  for (const ref of new Set(refs)) {
+    const paths = cache.pathsFor(scope, [ref], verification);
+    if (paths.length !== 1) throw new SkillVerificationError("Required signed skill is missing, invalid or expired; sync with Manager");
+    const path = paths[0]!;
     const result = loadSkillsFromDir({ dir: path, source: "aiteam-manager" });
-    skills.push(...result.skills); diagnostics.push(...result.diagnostics);
+    if (result.skills.length !== 1) throw new SkillVerificationError("Required signed skill cannot be loaded by Pi; sync with Manager");
+    if (!loadedPaths.has(path)) {
+      skills.push(...result.skills); diagnostics.push(...result.diagnostics);
+      loadedPaths.add(path);
+    }
   }
   return { skills, diagnostics };
 }

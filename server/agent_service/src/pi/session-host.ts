@@ -28,6 +28,7 @@ import { historyTimestamp, mergeHistorySources, visibleHistoryText, type History
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
+import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
@@ -1039,7 +1040,18 @@ export class SessionHost {
       const role = participant?.role === "coordinator" ? "协调专家" : "群成员";
       const intro = groupContextField(snapshot?.persona) ?? groupContextField(expert?.persona);
       const tools = snapshot ? [...this.allowedTools(snapshot)] : uniqueStrings(expert?.tools);
-      const skills = uniqueStrings(snapshot?.skill_refs, snapshot?.skills, expert?.skills);
+      let skills: string[] = [];
+      if (snapshot) {
+        try {
+          skills = skillRefsForSnapshot(snapshot as unknown as Record<string, unknown>);
+        } catch {
+          // Current malformed skills fail closed; do not union a stale legacy
+          // projection or the expert's pre-snapshot skills into group context.
+          skills = [];
+        }
+      } else {
+        skills = uniqueStrings(expert?.skills);
+      }
       const knowledge = uniqueStrings(snapshot?.knowledge_refs, expert?.knowledge_refs);
       const connectors = uniqueStrings(snapshot?.connector_refs, expert?.connector_refs);
       const lines = [`- ${displayName} (@${handle}) · ${role}`];

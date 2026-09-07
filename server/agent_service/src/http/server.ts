@@ -25,7 +25,7 @@ import { UsageStatisticsService } from "../services/usage-statistics.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { UsageFlushService } from "../usage-flush.js";
-import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
+import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
 import { ALLOWED_FILE_MIMES, AUDIO_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
@@ -348,7 +348,7 @@ const ExpertProjection = Type.Object({
   employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "头像 URL。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
 }, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影；未知扩展字段由 Manager 配置透传，但不包含凭据。", "x-dynamic-json": true });
 const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
-const SnapshotProjection = Type.Object({ employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), version: Type.String({ minLength: 1, description: "员工配置版本。" }), snapshot_version: Type.String({ minLength: 1, description: "执行快照版本。" }), display_name: Type.String({ minLength: 1, description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String({ description: "工具名称。" }), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "兼容技能引用字段。" })), skill_refs: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "快照技能引用。" })), knowledge_refs: Type.Optional(Type.Array(Type.String({ description: "知识引用。" }), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String({ description: "连接器引用。" }), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String({ description: "工具名称。" }), { description: "允许的工具名称。" }) }, { additionalProperties: false, description: "快照工具白名单。" })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照；用于离线执行和授权校验。", "x-dynamic-json": true });
+const SnapshotProjection = Type.Object({ employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), version: Type.String({ minLength: 1, description: "员工配置版本。" }), snapshot_version: Type.String({ minLength: 1, description: "执行快照版本。" }), display_name: Type.String({ minLength: 1, description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String({ description: "工具名称。" }), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "规范技能引用；该字段一旦出现（包括 []）即为权威，不读取 skill_refs。" })), skill_refs: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "旧本地投影兼容字段；仅当规范 skills 字段缺失时使用，不能覆盖显式 skills=[]。" })), knowledge_refs: Type.Optional(Type.Array(Type.String({ description: "知识引用。" }), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String({ description: "连接器引用。" }), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String({ description: "工具名称。" }), { description: "允许的工具名称。" }) }, { additionalProperties: false, description: "快照工具白名单。" })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照；skills 是 presence-aware 的规范技能字段（包括 []），skill_refs 仅在 skills 缺失时兼容旧投影；用于离线执行和授权校验。", "x-dynamic-json": true });
 const ExpertListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ExpertProjection")), page: Type.Ref("Page") }, { $id: "ExpertListEnvelope" });
 const SolutionListEnvelope = Type.Object({ data: Type.Array(Type.Ref("SolutionProjection")), page: Type.Ref("Page") }, { $id: "SolutionListEnvelope" });
 const SnapshotListEnvelope = Type.Object({ data: Type.Array(Type.Ref("SnapshotProjection")), page: Type.Ref("Page") }, { $id: "SnapshotListEnvelope" });
@@ -372,7 +372,7 @@ const ExpertReadiness = Type.Object({
   employee_id: Type.String({ minLength: 1, description: "员工 ID。" }),
   display_name: Type.String({ description: "员工展示名称。" }),
   handle: Type.String({ description: "员工句柄。" }),
-  available: Type.Boolean({ description: "综合 runtime、provider 和生命周期后是否可执行。" }),
+  available: Type.Boolean({ description: "综合 runtime、provider、生命周期及所有必需签名技能的实际缓存/加载状态后是否可执行。" }),
   runtime: Type.Ref("ReadinessState"),
   provider: Type.Ref("ReadinessState"),
   skills: Type.Array(Type.Ref("SkillReadiness"), { description: "已授权技能的就绪状态。" }),
@@ -585,7 +585,7 @@ const EXAMPLE_SOLUTION = {
 const EXAMPLE_SNAPSHOT = {
   employee_id: "employee-1", version: "v1", snapshot_version: "snapshot-1", display_name: "研究助手",
   tenant_id: "tenant-1", member_id: "member-1", persona: "负责研究和摘要", tools: ["todo_update"],
-  skills: ["research"], skill_refs: ["research@v1"], knowledge_refs: [], connector_refs: [],
+  skills: ["research@v1"], skill_refs: ["legacy-research@old"], knowledge_refs: [], connector_refs: [],
   tool_policy: { allowed_tools: ["todo_update"] },
 };
 const EXAMPLE_READINESS = {
@@ -1449,9 +1449,12 @@ export class AgentHttpServer {
       const skillPackagesAuthoritative = config.skill_packages !== undefined;
       const signedPackages = config.skill_packages ?? [];
       const envVerification = skillSigningVerificationFromEnv();
-      const verification = config.skill_signing_keys?.length
-        ? { ...envVerification, publicKeys: config.skill_signing_keys }
-        : envVerification;
+      // A present Manager key set is authoritative, including an explicit
+      // empty list.  Do not let the process env or an offline keyring revive
+      // packages after the snapshot/config revoked every signing key.
+      const verification = skillSigningVerificationForSnapshot(
+        config as unknown as Record<string, unknown>, envVerification,
+      );
       // Verify every envelope before changing projections or cache. Missing key means
       // package sync is disabled, not an invitation to accept unsigned content.
       if (signedPackages.length && !verification.publicKeys?.length && (!verification.publicKey || !verification.keyId)) throw new HttpProblem(503, "skill_signing_unconfigured", "Signed skill verification is not configured");
@@ -1466,7 +1469,8 @@ export class AgentHttpServer {
         }
       }
       const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
-      if ((skillPackagesAuthoritative || Boolean(config.skill_signing_keys?.length)) && this.options.skillCache && (signedPackages.length === 0 || verification.publicKeys?.length || (verification.publicKey && verification.keyId))) {
+      const hasNewSigningKeySet = Array.isArray(config.skill_signing_keys) && config.skill_signing_keys.length > 0;
+      if ((skillPackagesAuthoritative || hasNewSigningKeySet) && this.options.skillCache && (signedPackages.length === 0 || verification.publicKeys !== undefined || (verification.publicKey && verification.keyId))) {
         const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
         const currentEmployeeIds = new Set(experts.filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
         const refs = experts.filter((expert) => currentEmployeeIds.has(expert.employee_id)).flatMap((expert) => {
@@ -1487,7 +1491,7 @@ export class AgentHttpServer {
   private async readiness(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const runtime = (await this.options.runtimeReady?.()) ?? true;
     const state = runtime ? "ready" : "blocked";
-    const experts = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => this.expertReadinessValue(expert, runtime));
+    const experts = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => this.expertReadinessValue(expert, runtime, caller));
     this.writeJson(response, 200, { data: { runtime: state, runtime_reason: runtime ? undefined : "Pi runtime is not ready", experts } });
   }
 
@@ -1496,13 +1500,36 @@ export class AgentHttpServer {
     const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === id);
     if (!expert) return this.writeJson(response, 200, { data: { employee_id: id, display_name: id, handle: id, available: false, runtime: "unknown", provider: "unknown", skills: [], capabilities: [], reasons: ["Expert is not authorized locally"] } });
     const runtime = (await this.options.runtimeReady?.()) ?? true;
-    this.writeJson(response, 200, { data: this.expertReadinessValue(expert, runtime) });
+    this.writeJson(response, 200, { data: this.expertReadinessValue(expert, runtime, caller) });
   }
 
-  private expertReadinessValue(expert: LoadedExpertProjection, runtime: boolean) {
+  private expertReadinessValue(expert: LoadedExpertProjection, runtime: boolean, caller: AuthenticatedCaller) {
     const provider = expert.model_policy?.model && expert.model_policy.provider_ref ? "ready" : "blocked";
     const lifecycle = typeof expert.status === "string" && expert.status !== "active" ? "blocked" : "ready";
-    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready" && lifecycle === "ready", runtime: runtime ? "ready" : "blocked", provider, skills: [], capabilities: [], reasons: [ ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
+    const memberId = caller.userId ?? caller.callerId;
+    const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === expert.employee_id && item.version === expert.version);
+    let refs: string[] = [];
+    let malformedSnapshot = false;
+    try {
+      refs = snapshot ? skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown }) : skillRefsForSnapshot({ skills: expert.skills });
+    } catch {
+      // A present but malformed canonical field must not resurrect legacy refs;
+      // readiness reports the snapshot as blocked instead of executing fallback.
+      malformedSnapshot = Boolean(snapshot);
+    }
+    let skills: Array<{ ref: string; status: "ready" | "blocked"; reason?: string; version?: string }>;
+    try {
+      const verification = snapshot
+        ? skillSigningVerificationForSnapshot(snapshot as unknown as Record<string, unknown>)
+        : skillSigningVerificationFromEnv();
+      skills = malformedSnapshot
+        ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }]
+        : caller.tenantId && this.options.skillCache
+          ? this.options.skillCache.readinessFor({ tenantId: caller.tenantId, memberId }, refs, verification)
+          : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_missing" }));
+    } catch { skills = malformedSnapshot ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }] : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_invalid_or_expired" })); }
+    const missing = skills.filter((skill) => skill.status !== "ready");
+    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {

@@ -10,7 +10,7 @@ test("RAG MCP defaults to the enterprise tools while honoring an explicit allowl
     assert.equal(ragMcpUrl("http://manager.test/control"), "http://manager.test/api/manager/rag/mcp");
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }, "http://manager.test"), ["knowledge_search"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get"] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
-    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_get"] } }, "http://manager.test"), []);
+    assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_get"] } }, "http://manager.test"), ["knowledge_get"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: [] } }, "http://manager.test"), ["knowledge_search", "knowledge_get"]);
     assert.deepEqual(ragToolNames({ tool_policy: { allowed_tools: ["knowledge_search"] } }), []);
     assert.equal(createRagMcpFactory({ caller: { callerId: "member" }, employeeId: "employee", snapshot: {} } as never, "http://manager.test"), undefined);
@@ -45,4 +45,26 @@ test("RAG MCP rejects a mismatched origin, path, query, or fragment", () => {
     assert.equal(ragMcpUrl(manager), undefined);
   }
   delete process.env.AITEAM_RAG_MCP_URL;
+});
+
+
+test("effective knowledge deny or empty operations never restores defaults, and get-only registers independently", () => {
+  process.env.AITEAM_RAG_MCP_URL = "http://manager.test/api/manager/rag/mcp";
+  try {
+    for (const state of ["inherit", "allow", "deny"]) {
+      const snapshot = { tool_policy: { allowed_tools: [] }, knowledge_policy: { state, allowed_operations: [], revision: "2" } };
+      assert.deepEqual(ragToolNames(snapshot, "http://manager.test"), []);
+      assert.equal(createRagMcpFactory({ caller: { accessToken: "fixture" }, employeeId: "employee", snapshot } as never, "http://manager.test"), undefined);
+    }
+    const snapshot = { tool_policy: { allowed_tools: ["knowledge_get"] }, knowledge_policy: { state: "allow", allowed_operations: ["knowledge_get"], revision: "3" } };
+    const registered: string[] = [];
+    const factory = createRagMcpFactory({ caller: { accessToken: "fixture" }, employeeId: "employee", snapshot } as never, "http://manager.test");
+    assert(factory);
+    factory({ registerTool: (tool: { name: string }) => registered.push(tool.name), on: () => undefined } as never);
+    assert.deepEqual(registered, ["knowledge_get"]);
+    assert.deepEqual(ragToolNames({ ...snapshot, tool_policy: { allowed_tools: ["read"] } }, "http://manager.test"), []);
+    for (const invalid of [false, { state: "unknown", allowed_operations: ["knowledge_search"] }, { state: "allow" }]) {
+      assert.deepEqual(ragToolNames({ knowledge_policy: invalid }, "http://manager.test"), []);
+    }
+  } finally { delete process.env.AITEAM_RAG_MCP_URL; }
 });

@@ -11,7 +11,7 @@ import { AgentSqliteStore } from "./storage/sqlite.js";
 import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
-import { SkillCache, skillSigningVerificationFromEnv } from "./skills.js";
+import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } from "./skills.js";
 import { assertAgentLaunchConfiguration } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
 
@@ -141,7 +141,13 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   if (!authorization) return "You are an AI Team digital employee. Be concise.";
   const snapshot = authorization.snapshot;
   const persona = typeof snapshot.persona === "string" ? snapshot.persona : "You are an AI Team digital employee.";
-  const skills = Array.isArray(snapshot.skill_refs) ? snapshot.skill_refs.filter((value): value is string => typeof value === "string") : [];
+  let skills: string[] = [];
+  try {
+    skills = skillRefsForSnapshot(snapshot as unknown as Record<string, unknown>);
+  } catch {
+    // Do not advertise stale legacy skills when the canonical snapshot field is malformed.
+    skills = [];
+  }
   const policy = snapshot.tool_policy && typeof snapshot.tool_policy === "object" ? snapshot.tool_policy as Record<string, unknown> : undefined;
   const configuredTools = Array.isArray(policy?.allowed_tools)
     ? policy.allowed_tools.filter((value): value is string => typeof value === "string")

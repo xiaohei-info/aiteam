@@ -6,8 +6,10 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 
 - `aiteam-v1.service` — systemd unit（`Type=simple`）。由 `run.sh` 装到
   `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
-- `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；完成
-  git pull → 前端 build → 装 unit → systemctl restart → healthz + HTML smoke。
+- `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；TEST
+  维护窗口先停止应用 writers，再保持应用停止拉取/构建代码，显式启动并确认
+  PostgreSQL/NewAPI 依赖后备份、执行 DDL/迁移，最后启动新栈并做 healthz/readyz +
+  HTML smoke。失败时保持应用停机，不回退到旧 writer 并行运行。
 - `.github/workflows/deploy-main.yml` — GitHub Actions workflow。
   PR merge 到 `main` 或 `workflow_dispatch` 手动触发。
 
@@ -18,15 +20,35 @@ PR merge → GitHub Actions → self-hosted runner(taiyi)
   → 校验 DEPLOY_ROOT 上的持久化 git checkout（不依赖 runner workspace checkout）
   → 写 DEPLOY_ROOT/.env.<env>（从 GitHub Secret 注入）
   → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
-      → git pull --ff-only 同步部署根
+      → TEST 维护窗口：先停止应用 writers/Manager/Operation/Agent，确认已退出
+      → 保持应用停止，git pull --ff-only 同步部署根
       → pnpm install && pnpm build（每次部署重建，避免前后端产物不一致）
-      → 装 systemd unit（内容变了才 daemon-reload）
-      → systemctl restart aiteam-v1
-      → /healthz 三端冒烟 + GET / 必须是 text/html
+      → 启动并确认 PostgreSQL/NewAPI 依赖（应用仍停止）→ 备份 → DDL/迁移
+      → 安装/校验新 unit，启动新的三端应用栈
+      → /healthz、Manager /readyz、内部 NewAPI 与 HTML 冒烟
   → CI success
   → runner 退出
   → systemd (PID 1) 继续托管三端（runner 的 orphan clean-up 波及不到）
 ```
+
+### taiyi TEST 版本与维护窗口口径
+
+本轮允许的是**完整应用停机**，不是零停机、旧新栈并行或可选的复杂 systemd
+cgroup cutover。任务给定的已部署基线是 `5483218e`（PR56）；当前工作树为未提交的
+`e5a29890`，不能在发布记录中把两者写成同一个已部署版本。只有主控完成审查、CI 和
+TEST 维护窗口后，当前工作树才可成为新的 release checkout。
+
+TEST 顺序固定为：
+
+1. 暂停新的应用写入/知识导入，停止 Manager、Operation、Agent writers，并确认旧进程已退出；
+2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用；
+3. 依赖可用后执行数据库备份；
+4. 切换已批准 checkout、安装依赖并在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
+5. 迁移成功后启动新应用栈，再检查 healthz/readyz/OpenAPI 与 HTML 入口。
+
+任何备份/DDL/迁移失败都保持应用停止并按 backout 合同人工对账。`stop_legacy_unit.py`
+和 `s05_systemd_cutover_probe.py` 只是独立候选/hosted 实验，不属于上述 TEST 过程，
+也不接入 `deploy-main.yml`。
 
 ## 新服务器接入清单（一次性）
 

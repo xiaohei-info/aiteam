@@ -8,7 +8,7 @@ extensible.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,9 +122,18 @@ class MemoryResultOut(BaseModel):
     employee_id: str | None = Field(default=None, description="员工 ID。")
     content: str | None = Field(default=None, description="记忆文本（仅在授权管理响应中返回）。")
     operation_id: str | None = Field(default=None, description="异步 Hindsight 操作 ID。")
-    state: str | None = Field(default=None, description="记忆状态。")
+    state: Literal["valid", "invalidated"] | None = Field(default=None, description="记忆状态；只能是 valid 或 invalidated。")
     items: list[dict[str, Any]] | None = Field(default=None, description="Hindsight 返回的检索结果。")
     total: int | None = Field(default=None, description="检索结果总数。")
+
+
+class MemoryWriteAckOut(BaseModel):
+    """Actual Manager write response: native Hindsight accepted an async operation."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    success: Literal[True] = Field(description="固定为 true，表示已接受写入。")
+    async_: Literal[True] = Field(alias="async", description="固定为 true，表示后台异步处理。")
+    operation_id: str = Field(min_length=1, max_length=128, description="Hindsight 异步 operation ID；仅作状态关联，不代表已完成。")
 
 
 class OrgAssignmentOut(BaseModel):

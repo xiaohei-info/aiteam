@@ -12,6 +12,8 @@ import psycopg
 from manager_service.authorized_config_service import AuthorizedConfigService
 from manager_service.employee_config_repository import EmployeeConfigRepository
 from manager_service.employee_config_service import EmployeeConfigService
+from manager_service.member_service import MemberDeptService
+from manager_service.repository_member import MemberDeptRepository
 from manager_service.org_service import OrgService
 from shared.contracts.crosstier import AuthorizedConfigPullRequest
 from shared.contracts.tenancy import TenantContext
@@ -25,15 +27,18 @@ pytestmark = pytest.mark.integration
 
 def test_role_title_pg_versions_rls_org_and_authorized_delta(migrated_db, admin_url, two_tenants):
     tenant_a, tenant_b = two_tenants
+    router = PgTenantRouter(migrated_db)
+    with router.session(TenantContext(tenant_id=tenant_a, user_id="fixture", roles=["owner"])) as session:
+        owner_id = str(session.execute("INSERT INTO app_user (tenant_id, display_name, roles) VALUES (%s, 'Owner', ARRAY['owner']) RETURNING id", (tenant_a,)).fetchone()[0])
     client = _client(migrated_db, admin_url=admin_url)
-    owner = {"Authorization": f"Bearer {_token(tenant_a, ['owner'], user_id='owner-a', admin_url=admin_url)}"}
+    owner = {"Authorization": f"Bearer {_token(tenant_a, ['owner'], user_id=owner_id, admin_url=admin_url)}"}
     other = {"Authorization": f"Bearer {_token(tenant_b, ['owner'], user_id='owner-b', admin_url=admin_url)}"}
     router = PgTenantRouter(migrated_db)
-    ctx = TenantContext(tenant_id=tenant_a, user_id="owner-a", roles=["owner"])
+    ctx = TenantContext(tenant_id=tenant_a, user_id=owner_id, roles=["owner"])
     other_ctx = TenantContext(tenant_id=tenant_b, user_id="owner-b", roles=["owner"])
     repo = EmployeeConfigRepository(router)
     service = EmployeeConfigService(repo)
-    authorized = AuthorizedConfigService(config_service=service, grant_service=None, member_service=None)
+    authorized = AuthorizedConfigService(config_service=service, grant_service=None, member_service=MemberDeptService(repo=MemberDeptRepository(router)))
     body = {"display_name": "研究员"}
     created = client.post("/api/manager/employees?employee_slug=role-title", headers=owner, json=body)
     assert created.status_code == 201, created.text
@@ -55,7 +60,7 @@ def test_role_title_pg_versions_rls_org_and_authorized_delta(migrated_db, admin_
     body.update(role_title="多部门分析师", department_ids=depts)
     response = client.put(f"/api/manager/employees/{eid}", headers=owner, json=body)
     assert response.json()["data"]["version"] == 4
-    req = AuthorizedConfigPullRequest(tenant_id=tenant_a, member_id="owner-a", known_versions={eid: "3"})
+    req = AuthorizedConfigPullRequest(tenant_id=tenant_a, member_id=owner_id, known_versions={eid: "3"})
     projected = authorized.pull(ctx, req).experts[0]
     assert (projected["role_title"], projected["department_ids"], projected["version"]) == ("多部门分析师", depts, 4)
     req.known_versions = {eid: "4"}
@@ -83,14 +88,15 @@ def test_role_title_pg_versions_rls_org_and_authorized_delta(migrated_db, admin_
     response = client.put(f"/api/manager/employees/{eid}", headers=owner, json={"display_name": "研究员"})
     assert response.status_code == 200, response.text
     assert (response.json()["data"]["role_title"], response.json()["data"]["department_ids"], response.json()["data"]["version"]) == (None, [], 5)
-    # Lifecycle-only changes do not bump the config version.
+    # Lifecycle changes now bump the effective projection version (0035).
     with router.session(ctx) as session:
         session.execute("UPDATE employee SET status = 'provisioning' WHERE id = %s", (eid,))
-    assert service.get(ctx, employee_id=eid).version == 5
+    assert service.get(ctx, employee_id=eid).version == 6
     # apply_migrations replays SQL files rather than keeping a migration ledger.
     migration = Path(__file__).parents[2] / "manager_service/migrations/0034_employee_role_title.sql"
     with psycopg.connect(admin_url, autocommit=True) as conn:
-        conn.execute(migration.read_text())
-        conn.execute(migration.read_text())
-    assert service.get(ctx, employee_id=eid).version == 5
+        for _ in range(2):
+            conn.execute(migration.read_text())
+            conn.execute(migration.with_name("0035_identity_and_employee_revision.sql").read_text())
+    assert service.get(ctx, employee_id=eid).version == 6
     assert service.get(ctx, employee_id=eid).role_title is None

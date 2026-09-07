@@ -182,7 +182,7 @@ def test_skill_binding_create_conflict_409():
         assert r.status_code == 409, r.text
 
 
-def test_skill_binding_member_read_ok_write_403():
+def test_skill_binding_member_full_config_read_and_write_403():
     fake = MagicMock()
     fake.list_all.return_value = [SKILL_OUT]
     fake.create.side_effect = Forbidden("denied")
@@ -193,7 +193,7 @@ def test_skill_binding_member_read_ok_write_403():
         # member read OK
         r = client.get("/api/manager/employees/emp-1/skill-bindings",
                        headers=_auth_header(roles=["member"]))
-        assert r.status_code == 200
+        assert r.status_code == 403
         # member write 403
         r = client.post("/api/manager/employees/emp-1/skill-bindings",
                         json={"skill_id": "some"}, headers=_auth_header(roles=["member"]))

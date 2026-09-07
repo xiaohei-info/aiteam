@@ -9,11 +9,19 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _bound_manager_client(tenant_id: str) -> TestClient:
+    """Use a fresh deployment binding for F01/F02 provisioning tests."""
+    from manager_service.app import app as manager_app
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tenant_id, manager_app)
+    return TestClient(manager_app)
 
 
 # ── F01 tenant provision ──
@@ -22,18 +30,16 @@ from fastapi.testclient import TestClient
 @pytest.mark.integration
 @pytest.mark.pr_quick
 def test_tenant_provision_creates_tenant_registry(
-    tenant_scope, service_token_headers, migrated_pg,
+    tenant_scope, service_token_headers, migrated_pg, fresh_tenant_cleanup,
 ):
     """F01: POST /api/manager/tenants 创建 tenant 并落 tenant_registry + quota_policy。
 
     使用 tenant_scope fixture 提供的真实 PG 连接验证写入结果。
     """
-    from manager_service.app import app as manager_app
-
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
     enterprise_code = f"ent_{uuid.uuid4().hex[:8]}"
 
-    client = TestClient(manager_app)
+    client = _bound_manager_client(new_tenant_id)
     resp = client.post(
         "/api/manager/tenants",
         json={
@@ -51,7 +57,7 @@ def test_tenant_provision_creates_tenant_registry(
 
     # 验证 tenant_registry 已落库
     import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
+    admin_url = tenant_scope.admin_url
     if admin_url:
         with psycopg.connect(admin_url, autocommit=True) as conn:
             row = conn.execute(
@@ -61,21 +67,15 @@ def test_tenant_provision_creates_tenant_registry(
             assert row is not None, "tenant_registry 应存在"
             assert row[2] == enterprise_code
 
-    # 清理
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 @pytest.mark.integration
 def test_tenant_provision_has_envelope_and_problem_json_headers(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """F01 响应结构：envelope data + content-type 正确。"""
-    from manager_service.app import app as manager_app
-
-    new_tenant_id = str(uuid.uuid4())
-    client = TestClient(manager_app)
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
+    client = _bound_manager_client(new_tenant_id)
     resp = client.post(
         "/api/manager/tenants",
         json={
@@ -93,23 +93,15 @@ def test_tenant_provision_has_envelope_and_problem_json_headers(
     assert "data" in body
     assert body["data"]["tenant_id"] == new_tenant_id
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 @pytest.mark.integration
 def test_tenant_provision_with_quota_policy(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """F01: 带 initial_quota_policy 的开通——quota_policy 表落库。"""
-    from manager_service.app import app as manager_app
-
-    new_tenant_id = str(uuid.uuid4())
-    client = TestClient(manager_app)
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
+    client = _bound_manager_client(new_tenant_id)
     resp = client.post(
         "/api/manager/tenants",
         json={
@@ -132,7 +124,7 @@ def test_tenant_provision_with_quota_policy(
 
     # 验证 quota_policy 已落库
     import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
+    admin_url = tenant_scope.admin_url
     if admin_url:
         with psycopg.connect(admin_url, autocommit=True) as conn:
             conn.execute("SELECT set_config('app.tenant_id', %s, true)", (new_tenant_id,))
@@ -143,10 +135,6 @@ def test_tenant_provision_with_quota_policy(
             assert row is not None, "quota_policy 应存在"
             assert row[0] == "basic"
 
-    # 清理
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 # ── F02 owner bootstrap ──
@@ -155,16 +143,14 @@ def test_tenant_provision_with_quota_policy(
 @pytest.mark.integration
 @pytest.mark.pr_quick
 def test_owner_bootstrap_creates_identity(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """F02: POST /api/manager/owner-bootstrap 落 owner 凭据（must_reset=true）。
 
     先 F01 建 tenant，再 F02 bootstrap owner。
     """
-    from manager_service.app import app as manager_app
-
-    new_tenant_id = str(uuid.uuid4())
-    client = TestClient(manager_app)
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
+    client = _bound_manager_client(new_tenant_id)
 
     # F01
     r1 = client.post(
@@ -197,23 +183,15 @@ def test_owner_bootstrap_creates_identity(
     assert "data" in data
     assert data["data"]["tenant_id"] == new_tenant_id
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url and os.getenv("DB_URL"):
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 @pytest.mark.integration
 def test_owner_bootstrap_idempotent(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """F02 可重复同步：重复 bootstrap 返回同一 user_id。"""
-    from manager_service.app import app as manager_app
-
-    new_tenant_id = str(uuid.uuid4())
-    client = TestClient(manager_app)
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
+    client = _bound_manager_client(new_tenant_id)
 
     # F01
     r1 = client.post(
@@ -249,12 +227,6 @@ def test_owner_bootstrap_idempotent(
     assert r2b.status_code == 201
     assert r2b.json()["data"]["user_id"] == r2a.json()["data"]["user_id"]
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 # ── 全链：provision → owner whoami ──
@@ -262,7 +234,7 @@ def test_owner_bootstrap_idempotent(
 
 @pytest.mark.integration
 def test_full_provision_chain_owner_whoami_returns_correct_tenant(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """全链验收：F01+F02 后 owner 登录 → whoami tenant_id 等于开通目标 tenant。
 
@@ -274,17 +246,10 @@ def test_full_provision_chain_owner_whoami_returns_correct_tenant(
     if not admin_url or not db_url:
         pytest.skip("ADMIN_DB_URL 和 DB_URL 均需配置")
 
-    from manager_service.auth_service import (
-        AuthService,
-        LoginInput,
-        OwnerResetInput,
-        build_auth_service,
-    )
-    from manager_service.app import app as manager_app
-    from manager_service.keys import TenantKeyStore
+    from manager_service.auth_service import LoginInput, OwnerResetInput, build_auth_service
 
-    new_tenant_id = str(uuid.uuid4())
-    client = TestClient(manager_app)
+    new_tenant_id = fresh_tenant_cleanup(str(uuid.uuid4()))
+    client = _bound_manager_client(new_tenant_id)
 
     # F01: 建 tenant
     r1 = client.post(
@@ -338,10 +303,6 @@ def test_full_provision_chain_owner_whoami_returns_correct_tenant(
         f"whoami tenant_id={wdata['tenant_id']} 应等于开通目标 {new_tenant_id}"
     )
 
-    # 清理
-    import psycopg
-    with psycopg.connect(admin_url, autocommit=True) as conn:
-        conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (new_tenant_id,))
 
 
 # ── 422 / validation ──

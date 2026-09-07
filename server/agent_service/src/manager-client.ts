@@ -2,14 +2,26 @@ import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
 import type { UsageSummary } from "./usage.js";
-import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
+import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, skillRefsForSnapshot, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
+
+export const HINDSIGHT_CLIENT_PROTOCOL = "aiteam-memory-v1" as const;
 
 export interface HindsightRuntimeConfig {
   /** Manager facade URL; never a direct Hindsight service URL. */
   base_url: string;
   /** Bank selected by Manager; never supplied by a Pi model/tool call. */
   bank_id: string;
+  /** Current Manager responses always include this; optional only for legacy read-only responses. */
+  allowed_operations?: ("recall" | "retain")[];
+  /** Positive for a current write lease; legacy read-only responses may omit it. */
+  policy_revision?: number;
+  /** Current negotiated protocol; null/absent means read-only compatibility mode. */
+  client_protocol?: typeof HINDSIGHT_CLIENT_PROTOCOL | null;
+  /** Current Manager consent; absent/false never restores stale auto-retain permission. */
+  explicit_auto_retain?: boolean;
+  /** Fact-only finite/guarded mode versus unrestricted future policy. */
+  retention_mode?: "unlimited" | "fact_only";
   /** Opaque short-lived Manager facade lease token. Keep in process memory only. */
   token: string;
   lease_id: string;
@@ -132,7 +144,7 @@ export class HttpManagerClient implements ManagerClient {
     const response = await this.request(
       "/api/manager/hindsight/runtime-config",
       caller,
-      rotate ? { employee_id: employeeId, rotate: true } : { employee_id: employeeId },
+      { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL, ...(rotate ? { rotate: true } : {}) },
     );
     return normalizeHindsightRuntimeConfig(this.unwrap(response), this.baseUrl);
   }
@@ -284,6 +296,7 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
     ...(typeof raw.thinking_level === "string" ? { thinking_level: raw.thinking_level } : {}),
   };
   assertOwnership(raw, tenantId, memberId);
+  const skills = normalizeSnapshotSkillRefs(raw);
   return {
     ...raw,
     employee_id: employeeId,
@@ -297,7 +310,9 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
     model_policy: modelPolicy,
     ...employeeDisplay(raw),
     tools: stringArray(raw.tools),
-    skills: stringArray(raw.skills ?? raw.skill_refs),
+    skills,
+    skill_refs: skills,
+    knowledge_policy: normalizeKnowledgePolicy(raw.knowledge_policy),
   };
 }
 
@@ -341,7 +356,7 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
 export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: string): HindsightRuntimeConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid Hindsight runtime config");
   const raw = value as Record<string, unknown>;
-  const allowed = new Set(["base_url", "bank_id", "token", "lease_id", "version", "issued_at", "expires_at"]);
+  const allowed = new Set(["base_url", "bank_id", "token", "lease_id", "version", "issued_at", "expires_at", "allowed_operations", "policy_revision", "retention_mode", "client_protocol", "explicit_auto_retain"]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid Hindsight runtime config");
   const baseUrlValue = raw.base_url;
   const bankId = raw.bank_id;
@@ -368,7 +383,20 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   } catch {
     throw new ManagerUnavailableError("Manager returned an invalid Hindsight facade URL");
   }
-  return { base_url: baseUrl, bank_id: bankId as string, token: token as string, lease_id: leaseId as string, version: raw.version, issued_at: issuedAtValue as string, expires_at: expiresAtValue as string };
+  if (raw.client_protocol !== undefined && raw.client_protocol !== null && raw.client_protocol !== HINDSIGHT_CLIENT_PROTOCOL) throw new ManagerUnavailableError("Manager returned an unsupported memory client protocol");
+  if (raw.explicit_auto_retain !== undefined && typeof raw.explicit_auto_retain !== "boolean") throw new ManagerUnavailableError("Manager returned invalid automatic memory consent");
+  const confirmedProtocol = raw.client_protocol === HINDSIGHT_CLIENT_PROTOCOL;
+  if (confirmedProtocol && (!Array.isArray(raw.allowed_operations) || typeof raw.policy_revision !== "number" || !Number.isSafeInteger(raw.policy_revision) || raw.policy_revision < 1)) throw new ManagerUnavailableError("Manager returned an incomplete versioned memory lease");
+  if (raw.retention_mode !== undefined && raw.retention_mode !== "unlimited" && raw.retention_mode !== "fact_only") throw new ManagerUnavailableError("Manager returned invalid memory retention mode");
+  if (raw.allowed_operations !== undefined && (!Array.isArray(raw.allowed_operations) || raw.allowed_operations.some((op) => op !== "recall" && op !== "retain") || raw.allowed_operations.length > 2)) throw new ManagerUnavailableError("Manager returned invalid Hindsight operations");
+  if (raw.policy_revision !== undefined && (typeof raw.policy_revision !== "number" || !Number.isSafeInteger(raw.policy_revision) || raw.policy_revision < 0)) throw new ManagerUnavailableError("Manager returned invalid memory revision");
+  return { base_url: baseUrl, bank_id: bankId as string, token: token as string, lease_id: leaseId as string, version: raw.version, issued_at: issuedAtValue as string, expires_at: expiresAtValue as string,
+    explicit_auto_retain: confirmedProtocol && raw.explicit_auto_retain === true,
+    ...(raw.client_protocol !== undefined ? { client_protocol: raw.client_protocol as typeof HINDSIGHT_CLIENT_PROTOCOL | null } : {}),
+    ...(raw.allowed_operations !== undefined ? { allowed_operations: (raw.allowed_operations as ("recall" | "retain")[]).filter((op) => confirmedProtocol || op === "recall") } : {}),
+    ...(raw.policy_revision !== undefined ? { policy_revision: raw.policy_revision as number } : {}),
+    ...(raw.retention_mode !== undefined ? { retention_mode: raw.retention_mode as "unlimited" | "fact_only" } : {}),
+  };
 }
 
 function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing"] {
@@ -425,6 +453,27 @@ function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfi
   return output;
 }
 
+function normalizeKnowledgePolicy(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined;
+  const policy = objectValue(value);
+  if (!policy || !["inherit", "allow", "deny"].includes(String(policy.state))
+      || !Array.isArray(policy.allowed_operations) || policy.allowed_operations.length > 2
+      || policy.allowed_operations.some((name) => name !== "knowledge_search" && name !== "knowledge_get")
+      || new Set(policy.allowed_operations).size !== policy.allowed_operations.length
+      || (policy.state === "deny" && policy.allowed_operations.length !== 0)) {
+    throw new ManagerUnavailableError("Manager returned an invalid knowledge policy");
+  }
+  return { state: policy.state, allowed_operations: [...policy.allowed_operations], revision: stringValue(policy.revision, "knowledge policy revision") };
+}
+
+function normalizeSnapshotSkillRefs(raw: Record<string, unknown>): string[] {
+  try {
+    return skillRefsForSnapshot(raw);
+  } catch {
+    throw new ManagerUnavailableError("Manager returned invalid employee skills");
+  }
+}
+
 function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string): FrozenSnapshot {
   if (!value || typeof value !== "object") throw new ManagerUnavailableError("Manager returned an invalid employee snapshot");
   const raw = value as Record<string, unknown>;
@@ -433,8 +482,17 @@ function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string)
   const snapshotVersion = stringValue(raw.snapshot_version, "snapshot_version");
   if (!version) throw new ManagerUnavailableError("Manager snapshot is missing version");
   assertOwnership(raw, tenantId, memberId);
-  if (raw.skill_signing_keys !== undefined && !Array.isArray(raw.skill_signing_keys)) throw new ManagerUnavailableError("Manager returned invalid snapshot skill signing key metadata");
-  const skillSigningKeys = Array.isArray(raw.skill_signing_keys) ? raw.skill_signing_keys.map(normalizeSkillSigningKey) : [];
+  let skillSigningKeys: SkillSigningKeyMetadata[] | undefined;
+  if (Object.prototype.hasOwnProperty.call(raw, "skill_signing_keys")) {
+    if (!Array.isArray(raw.skill_signing_keys)) throw new ManagerUnavailableError("Manager returned invalid snapshot skill signing key metadata");
+    skillSigningKeys = raw.skill_signing_keys.map(normalizeSkillSigningKey);
+  }
+  let canonicalSkills: string[];
+  try {
+    canonicalSkills = skillRefsForSnapshot(raw);
+  } catch {
+    throw new ManagerUnavailableError("Manager returned invalid snapshot skills");
+  }
   return {
     ...raw,
     employee_id: employeeId,
@@ -443,9 +501,13 @@ function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string)
     display_name: typeof raw.display_name === "string" ? raw.display_name : employeeId,
     model_policy: objectValue(raw.model_policy) ?? {},
     tools: stringArray(raw.tools),
-    skill_refs: stringArray(raw.skill_refs ?? raw.skills),
-    skill_signing_keys: skillSigningKeys,
+    // Keep the canonical and compatibility fields equivalent in local
+    // projections so consumers cannot advertise stale legacy refs.
+    skills: canonicalSkills,
+    skill_refs: canonicalSkills,
+    ...(skillSigningKeys === undefined ? {} : { skill_signing_keys: skillSigningKeys }),
     tool_policy: objectValue(raw.tool_policy) ?? { allowed_tools: stringArray(raw.tools) },
+    knowledge_policy: normalizeKnowledgePolicy(raw.knowledge_policy),
     ...(tenantId ? { tenant_id: tenantId } : (typeof raw.tenant_id === "string" ? { tenant_id: raw.tenant_id } : {})),
     ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})),
   };

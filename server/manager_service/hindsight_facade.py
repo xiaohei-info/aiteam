@@ -1,161 +1,168 @@
-"""Bank-scoped Hindsight facade transport.
-
-The Agent talks to this route with an opaque lease token. The route validates
-that token and the URL bank segment, then substitutes Manager's private
-HINDSIGHT_SERVICE_TOKEN for the upstream request. Native Hindsight 0.12.0
-cannot enforce this scope itself, so direct Agent access to Hindsight is not a
-supported deployment shape.
-"""
-
+"""Operation-scoped Hindsight transport; bank administration stays in trusted Manager code."""
 from __future__ import annotations
 
 import json
 import re
-from typing import Any
-from urllib.parse import unquote
 
 import httpx
 from fastapi import Request
 from starlette.responses import Response
 
+from shared.contracts.tenancy import TenantContext
+from shared.errors import AppError
+from .active_principal import require_active, require_bound_tenant
 from .hindsight_client import HindsightSettings, HindsightUnavailable
-from .hindsight_credentials import (
-    HindsightLeaseBackend,
-    HindsightLeaseForbidden,
-    HindsightLeaseStore,
-    HindsightLeaseUnauthorized,
-    derive_hindsight_bank_id,
-)
+from .hindsight_credentials import HindsightLeaseBackend, HindsightLeaseStore, HindsightLeaseUnauthorized
+from .hindsight_lease_repository import HindsightLeaseForbidden
+from .hindsight_operation_policy import parse_operation_body, scoped_retain_body
+from .memory_policy_service import normalize_policy, require_retention_ready
+from .schemas_hindsight import HINDSIGHT_CLIENT_PROTOCOL
 
-
-_BANK_PATH = re.compile(r"^v1/default/banks/([^/]+)(?:/.*)?$")
-_PROXY_HEADERS = ("accept", "content-type", "idempotency-key", "user-agent")
-_MAX_BODY_BYTES = 8 * 1024 * 1024
-
-
-class HindsightFacade:
-    """Proxy only the bank path authorized by a Manager-issued lease."""
-
-    def __init__(
-        self,
-        *,
-        settings: HindsightSettings | None = None,
-        leases: HindsightLeaseBackend | None = None,
-        client: httpx.AsyncClient | None = None,
-    ):
-        self.settings = settings or HindsightSettings.from_env()
-        self.leases = leases or HindsightLeaseStore(self.settings.lease_ttl_seconds)
-        self._client = client
-
-    async def proxy(self, request: Request, path: str) -> Response:
-        decoded_path = unquote(path).lstrip("/")
-        match = _BANK_PATH.fullmatch(decoded_path)
-        if match is None or ".." in decoded_path.split("/") or any(char in decoded_path for char in "?#\\"):
-            raise HindsightLeaseScopeError("Hindsight path is outside the bank facade")
-        bank_id = match.group(1)
-        if "bank_id" in request.query_params or "bank" in request.query_params:
-            raise HindsightLeaseScopeError("bank scope is controlled by the lease")
-
-        authorization = request.headers.get("authorization", "")
-        if not authorization.startswith("Bearer ") or not authorization[7:].strip():
-            raise HindsightLeaseUnauthorized("Hindsight lease is required")
-        lease = self.leases.resolve(authorization[7:].strip(), bank_id=bank_id)
-        # The URL bank is untrusted input: use it only as a candidate and bind
-        # it to the lease's complete Manager-owned scope before proxying.
-        scope_values = (lease.tenant_id, lease.member_id, lease.employee_id)
-        derived_bank = (
-            derive_hindsight_bank_id(*scope_values)
-            if all(isinstance(value, str) and value.strip() for value in scope_values)
-            else None
-        )
-        if (
-            lease.bank_id != bank_id
-            or not all(isinstance(value, str) and value.strip() for value in scope_values)
-            or (lease.bank_id.startswith("aiteam-") and lease.bank_id != derived_bank)
-        ):
-            raise HindsightLeaseScopeError("Hindsight lease scope is not valid")
-        self._require_upstream()
-
-        body = await request.body()
-        if len(body) > _MAX_BODY_BYTES:
-            raise HindsightUnavailable(
-                "Hindsight request exceeds the facade body limit"
-            )
-        if _body_contains_bank_selector(request, body):
-            raise HindsightLeaseScopeError("bank scope is controlled by the lease")
-        upstream_headers = {
-            header: request.headers[header]
-            for header in _PROXY_HEADERS
-            if header in request.headers
-        }
-        upstream_headers.update(
-            {
-                "Authorization": f"Bearer {self.settings.token}",
-                "X-Tenant-ID": lease.tenant_id,
-                "X-Member-ID": lease.member_id,
-                "X-Employee-ID": lease.employee_id,
-            }
-        )
-        target = f"{self.settings.base_url.rstrip('/')}/{decoded_path}"
-        client = self._client or httpx.AsyncClient(timeout=60.0)
-        try:
-            upstream = await client.request(
-                request.method,
-                target,
-                content=body,
-                headers=upstream_headers,
-                params=list(request.query_params.multi_items()),
-            )
-            # Never mirror authentication or cookie headers from Hindsight to the Agent.
-            headers = (
-                {"content-type": upstream.headers["content-type"]}
-                if "content-type" in upstream.headers
-                else None
-            )
-            return Response(
-                content=upstream.content,
-                status_code=upstream.status_code,
-                headers=headers,
-            )
-        except HindsightUnavailable:
-            raise
-        except httpx.HTTPError as exc:
-            raise HindsightUnavailable("Hindsight facade request failed") from exc
-        finally:
-            if self._client is None:
-                await client.aclose()
-
-    def _require_upstream(self) -> None:
-        if not (
-            isinstance(self.settings.base_url, str)
-            and self.settings.base_url.strip()
-            and isinstance(self.settings.token, str)
-            and self.settings.token.strip()
-        ):
-            raise HindsightUnavailable(
-                "Hindsight facade requires HINDSIGHT_URL and HINDSIGHT_SERVICE_TOKEN"
-            )
-
-
+_BANK_PATH = re.compile(r"^v1/default/banks/([A-Za-z0-9_-]{1,128})/(profile|memories/recall|memories)$")
+_MAX_BODY_BYTES = 256 * 1024
+_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 HindsightLeaseScopeError = HindsightLeaseForbidden
 
 
-def _body_contains_bank_selector(request: Request, body: bytes) -> bool:
-    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type != "application/json" or not body:
-        return False
-    try:
-        value = json.loads(body)
-    except (TypeError, ValueError):
-        return False
-    return _contains_bank_selector(value)
+class HindsightFacade:
+    def __init__(self, *, settings: HindsightSettings | None = None,
+                 leases: HindsightLeaseBackend | None = None, client: httpx.AsyncClient | None = None,
+                 principal_repository=None, snapshot_service=None, retention_service=None,
+                 deployment_tenant_id: str | None = None):
+        self.settings = settings or HindsightSettings.from_env()
+        self.leases = leases or HindsightLeaseStore(self.settings.lease_ttl_seconds)
+        self._client = client
+        self._principals = principal_repository
+        self._snapshot = snapshot_service
+        self._retention = retention_service
+        self._deployment_tenant_id = deployment_tenant_id
 
+    def _authorize(self, lease, operation: str) -> dict:
+        bound_tenant = require_bound_tenant(self._deployment_tenant_id)
+        if lease.tenant_id != bound_tenant:
+            # Opaque leases survive process restarts, so a lease issued before
+            # a deployment rebind must never select the old enterprise bank.
+            raise HindsightLeaseForbidden("Hindsight lease is not bound to this Manager deployment")
+        if self._principals is None or self._snapshot is None:
+            raise HindsightUnavailable("online memory authorization is not configured")
+        ctx = TenantContext(tenant_id=lease.tenant_id, user_id=lease.member_id)
+        try:
+            principal = self._principals.find_user(ctx, user_id=lease.member_id)
+            require_active(principal)
+            ctx = ctx.model_copy(update={"roles": list(getattr(principal, "roles", []) or [])})
+            self._snapshot._ensure_runnable(ctx, employee_id=lease.employee_id)
+            snapshot = self._snapshot.generate(ctx, member_id=lease.member_id, employee_id=lease.employee_id)
+            if snapshot.employee_id != lease.employee_id:
+                raise HindsightLeaseForbidden("Employee scope is invalid")
+            policy = snapshot.memory_policy
+            if not isinstance(policy, dict):
+                raise HindsightLeaseForbidden("Memory policy is unavailable")
+            (self._retention.require_ready(policy) if self._retention is not None else require_retention_ready(policy))
+            current = normalize_policy(policy)
+            allowed = set(lease.allowed_operations) & set(current["allowed_operations"])
+            if not allowed or (operation != "profile" and operation not in allowed):
+                raise HindsightLeaseForbidden("Memory operation is not authorized")
+            if operation == "retain" and (
+                lease.client_protocol != HINDSIGHT_CLIENT_PROTOCOL
+                or type(policy.get("revision")) is not int or policy["revision"] < 1
+                or lease.policy_revision != policy["revision"]
+            ):
+                # Manual and automatic SDK retain use identical POSTs. Cancel all
+                # old write scopes on policy change, not a caller-declared intent.
+                raise HindsightLeaseForbidden("Memory write lease requires current policy and supported client protocol")
+            return policy
+        except AppError:
+            raise
+        except Exception as exc:
+            raise HindsightUnavailable("online memory authorization is unavailable") from exc
 
-def _contains_bank_selector(value: Any) -> bool:
-    if isinstance(value, dict):
-        if "bank_id" in value or "bank" in value:
-            return True
-        return any(_contains_bank_selector(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_bank_selector(item) for item in value)
-    return False
+    async def proxy(self, request: Request, path: str) -> Response:
+        # The facade has no user JWT dependency, so its deployment binding is
+        # the first authorization boundary.  An unbound Manager must fail before
+        # resolving an opaque lease (or touching the Hindsight upstream).
+        bound_tenant = require_bound_tenant(self._deployment_tenant_id)
+        # Starlette already decodes once. Reject any original percent encoding,
+        # including double encoding, rather than applying another URL decoder.
+        raw = request.scope.get("raw_path", b"")
+        match = _BANK_PATH.fullmatch(path)
+        if match is None or b"%" in raw or request.query_params:
+            raise HindsightLeaseForbidden("Hindsight path is outside the operation facade")
+        bank_id, suffix = match.groups()
+        operation = {"profile": "profile", "memories/recall": "recall", "memories": "retain"}[suffix]
+        if request.method != ("GET" if operation == "profile" else "POST"):
+            raise HindsightLeaseForbidden("Hindsight method is not authorized")
+        authorization = request.headers.get("authorization", "")
+        if not authorization.startswith("Bearer ") or not authorization[7:].strip():
+            raise HindsightLeaseUnauthorized("Hindsight lease is required")
+        token = authorization[7:].strip()
+        lease = self.leases.resolve(token, bank_id=bank_id)
+        if lease.tenant_id != bound_tenant:
+            raise HindsightLeaseForbidden("Hindsight lease is not bound to this Manager deployment")
+        # The persisted bank is Manager-derived at issuance, never caller input.
+        if not all(isinstance(v, str) and v.strip() for v in (lease.tenant_id, lease.member_id, lease.employee_id)):
+            raise HindsightLeaseForbidden("Hindsight lease scope is invalid")
+        self._authorize(lease, operation)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > _MAX_BODY_BYTES:
+                raise HindsightLeaseForbidden("Hindsight request exceeds the body limit")
+        if operation == "profile":
+            if body:
+                raise HindsightLeaseForbidden("Hindsight profile does not accept a body")
+            # The pinned extension only needs a successful profile to avoid PUT.
+            # No upstream mission/disposition/settings or memory data are exposed.
+            return Response(json.dumps({"bank_id": bank_id, "name": bank_id, "mission": "",
+                                        "disposition": {"skepticism": 3, "literalism": 3, "empathy": 3}}),
+                            media_type="application/json", headers={"Cache-Control": "no-store"})
+        if request.headers.get("content-type", "").split(";", 1)[0].strip() != "application/json":
+            raise HindsightLeaseForbidden("Hindsight requires a JSON operation body")
+        payload = parse_operation_body(operation, bytes(body))
+        if operation == "retain":
+            payload = scoped_retain_body(payload, tenant_id=lease.tenant_id,
+                                         member_id=lease.member_id, employee_id=lease.employee_id)
+        if not self.settings.base_url or not self.settings.token:
+            raise HindsightUnavailable("Hindsight upstream is not configured")
+        # Body streaming can span a revocation/expiry; recheck before side effects.
+        lease = self.leases.resolve(token, bank_id=bank_id)
+        policy = self._authorize(lease, operation)
+        ctx = TenantContext(tenant_id=lease.tenant_id, user_id=lease.member_id)
+        if self._retention is not None:
+            payload = (self._retention.prepare(ctx, employee_id=lease.employee_id, bank_id=bank_id, policy=policy, body=payload)
+                       if operation == "retain" else self._retention.recall_body(policy, payload))
+        # Write authorization linearizes at this final current-policy check.
+        # A later revocation cannot roll back a native operation already handed off.
+        self._authorize(self.leases.resolve(token, bank_id=bank_id), operation)
+        client = self._client or httpx.AsyncClient(timeout=60.0, follow_redirects=False)
+        try:
+            async with client.stream("POST", f"{self.settings.base_url.rstrip('/')}/{path}", json=payload,
+                                     headers={"Authorization": f"Bearer {self.settings.token}",
+                                              "X-Tenant-ID": lease.tenant_id, "X-Member-ID": lease.member_id,
+                                              "X-Employee-ID": lease.employee_id}) as upstream:
+                if not 200 <= upstream.status_code < 300:
+                    raise HindsightUnavailable("Hindsight operation failed")
+                data = bytearray()
+                async for chunk in upstream.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > _MAX_RESPONSE_BYTES:
+                        raise HindsightUnavailable("Hindsight response exceeds the limit")
+            policy = self._authorize(self.leases.resolve(token, bank_id=bank_id), operation)
+            # Errors/headers/cookies from the upstream are never relayed.
+            result = json.loads(data)
+            if self._retention is not None:
+                if operation == "retain":
+                    result = self._retention.validate_retain_response(payload, result, bank_id)
+                else:
+                    result = self._retention.filter_recall(ctx, employee_id=lease.employee_id, bank_id=bank_id, policy=policy, response=result)
+                    current = self._authorize(self.leases.resolve(token, bank_id=bank_id), operation)
+                    if current != policy:
+                        raise HindsightLeaseForbidden("Memory policy changed during recall")
+                    # Re-filter at the final current clock, not the request timestamp.
+                    result = self._retention.filter_recall(ctx, employee_id=lease.employee_id, bank_id=bank_id, policy=current, response=json.loads(data))
+            return Response(json.dumps(result), status_code=upstream.status_code, media_type="application/json",
+                            headers={"Cache-Control": "no-store"})
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HindsightUnavailable("Hindsight operation is unavailable") from exc
+        finally:
+            if self._client is None:
+                await client.aclose()

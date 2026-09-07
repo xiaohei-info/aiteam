@@ -29,6 +29,8 @@ from shared.contracts.envelope import Problem
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError, Forbidden, Unauthorized
 
+from .active_principal import require_active
+from .knowledge_access_policy import KnowledgeAccess, KnowledgeAccessPolicy
 from .document_parser import extract_text
 from .employee_config_service import employee_runnable
 from .knowledge_intake_repository import KnowledgeDocumentRepository
@@ -275,6 +277,7 @@ class AuthorizedRagRequest:
     handle: RagHandle
     bindings: tuple[Any, ...]
     handles: tuple[RagHandle, ...] = ()
+    policy: KnowledgeAccess | None = None
 
 
 class RagAccessService:
@@ -292,26 +295,26 @@ class RagAccessService:
         space_repository: SpacePort | None = None,
         document_repository: KnowledgeDocumentRepository | None = None,
         storage_root: os.PathLike[str] | str | None = None,
+        knowledge_policy: KnowledgeAccessPolicy | None = None,
     ):
         self._snapshots = snapshot_service
         self._members = member_repository
         self._employees = employee_config
         self._bindings = binding_repository
+        self._knowledge_policy = knowledge_policy or KnowledgeAccessPolicy(documents=binding_repository)
         self._rag = rag_service
         self._light_rag = light_rag
         self._spaces = space_repository
         self._documents = document_repository
         self._storage_root = Path(storage_root).resolve() if storage_root is not None else None
 
-    def authorize(self, claims: TokenClaims, employee_id: str) -> AuthorizedRagRequest:
+    def authorize(self, claims: TokenClaims, employee_id: str, operation: str | None = None) -> AuthorizedRagRequest:
         if not claims.tenant_id or not claims.user_id or not employee_id or len(employee_id) > 256:
             raise Unauthorized("invalid RAG identity")
         ctx = tenant_context_from(claims)
-        member = self._members.get_member(ctx, member_id=claims.user_id)
+        member = require_active(self._members.get_member(ctx, member_id=claims.user_id))
         if (
-            member is None
-            or getattr(member, "status", None) != "active"
-            or getattr(member, "tenant_id", ctx.tenant_id) != ctx.tenant_id
+            getattr(member, "tenant_id", ctx.tenant_id) != ctx.tenant_id
             or getattr(member, "id", claims.user_id) != claims.user_id
         ):
             raise Forbidden("member is not active")
@@ -328,6 +331,19 @@ class RagAccessService:
             or getattr(snapshot, "employee_id", None) != employee_id
         ):
             raise Forbidden("employee is not authorized")
+        policy = self._knowledge_policy.resolve(
+            ctx, employee_id=employee_id, tools=getattr(config, "tools", None),
+            version=str(getattr(config, "version", "0")),
+        )
+        policy.require(operation)
+        # SnapshotService uses the same resolver. Never treat its explicit deny
+        # as an absent legacy policy, even with an older/custom reader assembly.
+        projected = getattr(snapshot, "knowledge_policy", None)
+        if projected is not None:
+            if projected.state == "deny" or not projected.allowed_operations:
+                raise Forbidden("employee knowledge access denied")
+            if operation is not None and operation not in projected.allowed_operations:
+                raise Forbidden("employee knowledge operation denied")
         refs = list(dict.fromkeys(
             ref for ref in getattr(snapshot, "knowledge_refs", [])
             if isinstance(ref, str) and ref
@@ -373,7 +389,7 @@ class RagAccessService:
             handles.append(handle)
             valid_bindings.extend(space_bindings)
         return AuthorizedRagRequest(
-            claims, ctx, claims.user_id, employee_id, snapshot, handles[0], tuple(valid_bindings), tuple(handles)
+            claims, ctx, claims.user_id, employee_id, snapshot, handles[0], tuple(valid_bindings), tuple(handles), policy
         )
 
     async def search(self, auth: AuthorizedRagRequest, query: str, limit: int) -> dict[str, Any]:
@@ -383,21 +399,26 @@ class RagAccessService:
             limit = max(1, min(int(limit), _MAX_LIMIT))
         except (TypeError, ValueError):
             raise RagUnavailable("knowledge service unavailable")
+        auth = self.authorize(auth.claims, auth.employee_id, "knowledge_search")
         handles = auth.handles or (auth.handle,)
 
         async def query_space(handle: RagHandle):
             try:
                 payload = await self._light_rag.query(workspace=handle.workspace, query=query, limit=limit)
-                return handle, self._citations(auth, handle, payload), None
+                return handle, payload, None
             except Exception:  # noqa: BLE001 - never expose upstream details
                 return handle, [], RagUnavailable("knowledge service unavailable")
 
         results = await asyncio.gather(*(query_space(handle) for handle in handles))
+        current = self.authorize(auth.claims, auth.employee_id, "knowledge_search")
+        if auth.policy.fingerprint != current.policy.fingerprint or auth.handles != current.handles:
+            raise RagUnavailable("knowledge service unavailable")
         successful = [result for result in results if result[2] is None]
         if not successful:
             raise RagUnavailable("knowledge service unavailable")
         items = self._merge_citations(
-            citation for _, citations, _ in successful for citation in citations
+            citation for handle, payload, _ in successful
+            for citation in self._citations(current, handle, payload)
         )[:limit]
         result = {"query": query, "items": items}
         if len(successful) != len(results):
@@ -405,6 +426,14 @@ class RagAccessService:
         # Keep the MCP result bounded even if an upstream adds unexpectedly large metadata.
         while len(json.dumps(result, ensure_ascii=False).encode()) > _MAX_RESPONSE_BYTES and items:
             items.pop()
+        latest = self.authorize(auth.claims, auth.employee_id, "knowledge_search")
+        if latest.policy.fingerprint != current.policy.fingerprint:
+            raise RagUnavailable("knowledge service unavailable")
+        for item in items:
+            doc = self._documents.get(latest.ctx, document_id=item["document_id"])
+            if (doc is None or doc.status != "ready"
+                    or self._document_version(latest.ctx, item["knowledge_space_id"], doc) != item["citation_version"]):
+                raise RagUnavailable("knowledge service unavailable")
         return result
 
     def get(self, auth: AuthorizedRagRequest, citation_id: str) -> dict[str, Any]:
@@ -414,7 +443,9 @@ class RagAccessService:
         # A search authorization is a snapshot-time object. Rebuild it here so
         # revoked bindings, reindexing, and employee changes take effect before
         # every read.
-        current = self.authorize(auth.claims, auth.employee_id)
+        current = self.authorize(auth.claims, auth.employee_id, "knowledge_get")
+        if not current.policy.permits_document(parsed.document_id):
+            raise RagUnavailable("knowledge service unavailable")
         handle = next(
             (candidate for candidate in (current.handles or (current.handle,))
              if candidate.knowledge_space_id == parsed.knowledge_space_id),
@@ -482,6 +513,12 @@ class RagAccessService:
             result["text"] = chunks[parsed.chunk_index][:_MAX_CHUNK_CHARS]
             result["locator"] = f"i{parsed.chunk_index}"
             result["chunk_index"] = parsed.chunk_index
+        latest = self.authorize(auth.claims, auth.employee_id, "knowledge_get")
+        latest_document = self._documents.get(latest.ctx, document_id=parsed.document_id)
+        if (latest.policy.fingerprint != current.policy.fingerprint
+                or latest_document is None or latest_document.status != "ready"
+                or self._document_version(latest.ctx, parsed.knowledge_space_id, latest_document) != version):
+            raise RagUnavailable("knowledge service unavailable")
         return result
 
     def _document_path(self, ctx: TenantContext, space_id: str, document: Any) -> Path | None:
@@ -589,6 +626,7 @@ class RagAccessService:
         """Build a tenant/space-scoped alias map; collisions are unusable."""
         allowed: dict[str, tuple[str, Any]] = {}
         ambiguous: set[str] = set()
+        blocked_aliases: set[str] = set()
         if self._documents is None:
             return allowed, ambiguous
         enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id)
@@ -620,7 +658,6 @@ class RagAccessService:
                 or getattr(doc, "id", document_id) != document_id
                 or getattr(doc, "tenant_id", auth.ctx.tenant_id) != auth.ctx.tenant_id
                 or getattr(doc, "knowledge_space_id", None) != handle.knowledge_space_id
-                or getattr(doc, "status", None) != "ready"
             ):
                 continue
             aliases = {
@@ -629,6 +666,12 @@ class RagAccessService:
                 str(getattr(doc, "storage_key", "") or ""),
                 str(getattr(doc, "file_name", "") or ""),
             }
+            # A denied/deleted document still makes its shared filename
+            # ambiguous. Removing it before building aliases could relabel its
+            # upstream text as a permitted document with the same filename.
+            if getattr(doc, "status", None) != "ready" or not auth.policy.permits_document(document_id):
+                blocked_aliases.update(aliases - {""})
+                continue
             for alias in aliases - {""}:
                 if alias in ambiguous:
                     continue
@@ -638,7 +681,9 @@ class RagAccessService:
                     allowed.pop(alias, None)
                 else:
                     allowed[alias] = (document_id, doc)
-        return allowed, ambiguous
+        for alias in blocked_aliases:
+            allowed.pop(alias, None)
+        return allowed, ambiguous | blocked_aliases
 
     @staticmethod
     def _resolve_item(
@@ -647,6 +692,7 @@ class RagAccessService:
         ambiguous: set[str],
         reference_targets: dict[str, tuple[str, Any]],
         ambiguous_references: set[str],
+        *, resolve_reference: bool = True,
     ) -> tuple[str, Any] | None:
         matches: dict[str, tuple[str, Any]] = {}
         # These fields identify a Manager document. If one is present but is
@@ -669,13 +715,14 @@ class RagAccessService:
         reference_id = RagAccessService._upstream_value(item, "reference_id")
         if reference_id is _AMBIGUOUS_UPSTREAM_VALUE:
             return None
-        if reference_id is not None:
+        if reference_id is not None and resolve_reference:
             reference_key = str(reference_id)
-            if reference_key in ambiguous_references:
+            if reference_key in ambiguous_references or reference_key in ambiguous:
                 return None
             bound = allowed.get(reference_key) or reference_targets.get(reference_key)
-            if bound is not None:
-                matches[bound[0]] = bound
+            if bound is None:
+                return None
+            matches[bound[0]] = bound
         return next(iter(matches.values())) if len(matches) == 1 else None
 
     def _reference_targets(
@@ -699,7 +746,7 @@ class RagAccessService:
                 metadata.pop(key, None)
                 continue
             seen_ids.add(key)
-            bound = self._resolve_item(reference, allowed, ambiguous, {}, set())
+            bound = self._resolve_item(reference, allowed, ambiguous, {}, set(), resolve_reference=False)
             if bound is None:
                 continue
             if key not in ambiguous_ids:
@@ -905,16 +952,20 @@ class RagAccessService:
                     exact_output[citation["citation_id"]] = citation
                 continue
 
-            # Ambiguous or incomplete upstream provenance gets a versioned
-            # document citation. It is safe, bounded, and never pretends to be
-            # an exact chunk.
+            # Document identity does not authorize arbitrary graph/LLM text.
+            # Inexact locators can fall back only to a verified source span, or
+            # to a Manager-owned document preview when no content was supplied.
+            source_text = record["authoritative_text"]
+            content = record["content"]
+            if source_text is None or (content and content not in source_text):
+                continue
             token = _document_token(version)
             citation = {
                 "citation_id": f"citation:{handle.knowledge_space_id}:{document_id}:{token}",
                 "document_id": document_id,
                 "knowledge_space_id": handle.knowledge_space_id,
                 "title": str(getattr(document, "display_name", ""))[:512],
-                "text": record["content"][:_MAX_CHUNK_CHARS],
+                "text": (content or source_text)[:_MAX_CHUNK_CHARS],
                 "score": record["score"],
                 "citation_version": version,
                 "source": self._public_source(document),

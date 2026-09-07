@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import uuid
 from urllib.parse import urlparse
 
 
@@ -76,6 +77,12 @@ def main() -> int:
     endpoint, provider_secret, provider_ref, model, api_protocol = _provider_settings()
 
     slug = os.getenv("E2E_TENANT_SLUG", "e2e-smoke").strip()
+    configured_tenant_id = os.getenv("E2E_TENANT_ID", "").strip() or None
+    if configured_tenant_id:
+        try:
+            configured_tenant_id = str(uuid.UUID(configured_tenant_id))
+        except ValueError as exc:
+            raise RuntimeError("E2E_TENANT_ID must be a UUID") from exc
     phone = os.getenv("E2E_MEMBER_ACCOUNT", "13800000001").strip()
     password = os.getenv("E2E_MEMBER_PASSWORD", "E2e-Pass-2024")
     employee_slug = os.getenv("E2E_AGENT_EMPLOYEE_SLUG", "e2e-usage-employee").strip()
@@ -97,18 +104,39 @@ def main() -> int:
     apply_migrations(admin_url, os.getenv("APP_RW_PASSWORD"))
 
     with psycopg.connect(admin_url, autocommit=True) as conn:
-        row = conn.execute(
-            "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s", (slug,)
-        ).fetchone()
-        if row:
-            tenant_id = str(row[0])
-        else:
-            tenant_id = str(
-                conn.execute(
-                    "INSERT INTO tenant_registry (enterprise_slug) VALUES (%s) RETURNING tenant_id",
+        if configured_tenant_id:
+            row = conn.execute(
+                "SELECT tenant_id FROM tenant_registry WHERE tenant_id = %s::uuid",
+                (configured_tenant_id,),
+            ).fetchone()
+            if row:
+                tenant_id = str(row[0])
+            else:
+                slug_row = conn.execute(
+                    "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s",
                     (slug,),
-                ).fetchone()[0]
-            )
+                ).fetchone()
+                if slug_row and str(slug_row[0]) != configured_tenant_id:
+                    raise RuntimeError("E2E_TENANT_SLUG is already bound to a different tenant")
+                tenant_id = str(
+                    conn.execute(
+                        "INSERT INTO tenant_registry (tenant_id, enterprise_slug) VALUES (%s::uuid, %s) RETURNING tenant_id",
+                        (configured_tenant_id, slug),
+                    ).fetchone()[0]
+                )
+        else:
+            row = conn.execute(
+                "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s", (slug,)
+            ).fetchone()
+            if row:
+                tenant_id = str(row[0])
+            else:
+                tenant_id = str(
+                    conn.execute(
+                        "INSERT INTO tenant_registry (enterprise_slug) VALUES (%s) RETURNING tenant_id",
+                        (slug,),
+                    ).fetchone()[0]
+                )
 
     # 2. 落成员账号（must_reset=False，可直接登录）。
     from shared.contracts.enums import AuthProvider, EnterpriseRole

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { test } from "node:test";
 import { createMemoryLifecycle } from "@luxusai/pi-hindsight/extensions/lifecycle/memory-lifecycle.js";
 import { resolveConfig } from "@luxusai/pi-hindsight/extensions/config/config.js";
 import { createAgentControlledReloadConfig, createControlledResourceLoader, hindsightConfigPath, hindsightStateDir, isMemoryPolicyEnabled, memoryToolNames, removeHindsightState, withAgentHindsightEnvironment } from "./resources.js";
-import type { HindsightRuntimeConfig } from "../manager-client.js";
+import { HINDSIGHT_CLIENT_PROTOCOL, type HindsightRuntimeConfig } from "../manager-client.js";
 import type { SessionAuthorization } from "./session-host.js";
 
 function hindsightLease(bank = "a", token = "opaque-lease-secret"): HindsightRuntimeConfig {
@@ -16,6 +16,10 @@ function hindsightLease(bank = "a", token = "opaque-lease-secret"): HindsightRun
     token,
     lease_id: `lease-${bank}`,
     version: 1,
+    policy_revision: 1,
+    allowed_operations: ["recall", "retain"],
+    client_protocol: HINDSIGHT_CLIENT_PROTOCOL,
+    explicit_auto_retain: false,
     issued_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + 60_000).toISOString(),
   };
@@ -51,7 +55,7 @@ test("controlled loader uses only the Manager lease and loads approved Hindsight
   process.env.PI_HINDSIGHT_GLOBAL_BANK_ID = "ambient-global-bank";
   try {
     mkdirSync(join(workspace, ".pi", "extensions"), { recursive: true });
-    const auth = authorization("member-1", "employee-1", { enabled: true });
+    const auth = authorization("member-1", "employee-1", { enabled: true, allowed_operations: ["recall", "retain"] });
     const runtime = hindsightLease();
     const loader = createControlledResourceLoader("product prompt", undefined, auth, workspace, agentDir, undefined, runtime);
     await loader.reload();
@@ -71,10 +75,10 @@ test("controlled loader uses only the Manager lease and loads approved Hindsight
     const defaultPolicy = authorization("member-1", "employee-1");
     defaultPolicy.snapshot.tool_policy = { allowed_tools: [] };
     assert.equal(isMemoryPolicyEnabled(defaultPolicy.snapshot), true);
-    assert.deepEqual(memoryToolNames(defaultPolicy.snapshot, runtime), ["hindsight_recall", "hindsight_retain"]);
+    assert.deepEqual(memoryToolNames(defaultPolicy.snapshot, runtime), ["hindsight_recall"]);
 
-    const configPath = hindsightConfigPath(agentDir, workspace);
-    const configDir = join(hindsightStateDir(agentDir, workspace), "config");
+    const configPath = hindsightConfigPath(agentDir, workspace, runtime);
+    const configDir = dirname(dirname(configPath));
     assert.equal(configPath, join(configDir, ".pi", "hindsight.json"));
     assert.equal(configPath.startsWith(workspace), false);
     assert.equal(existsSync(join(workspace, ".pi", "hindsight.json")), false);
@@ -93,7 +97,9 @@ test("controlled loader uses only the Manager lease and loads approved Hindsight
     assert.equal(configText.includes("ambient-service-token"), false);
     assert.equal(process.env[config.hindsight.apiKeyRef.slice("env:".length)], undefined);
     assert.equal(isAbsolute(config.retain.queuePath), true);
-    assert.equal(config.retain.queuePath, join(hindsightStateDir(agentDir, workspace), "retain-queue.jsonl"));
+    assert.equal(dirname(config.retain.queuePath), hindsightStateDir(agentDir, workspace));
+    assert.match(config.retain.queuePath, /\/retain-queue-[a-f0-9]{32}\.jsonl$/);
+    assert.equal(existsSync(join(hindsightStateDir(agentDir, workspace), "retain-queue.jsonl")), false);
     writeFileSync(config.retain.queuePath, "retry\n");
 
     const resolved = withAgentHindsightEnvironment(() => resolveConfig(configDir, process.env));
@@ -129,7 +135,7 @@ test("controlled loader keeps Hindsight state outside the coding workspace", asy
   let loader: ReturnType<typeof createControlledResourceLoader> | undefined;
   try {
     loader = createControlledResourceLoader("product prompt", undefined, authorization("member-1", "employee-1", { enabled: true }), workspace, agentDir, undefined, hindsightLease());
-    const configPath = hindsightConfigPath(agentDir, workspace);
+    const configPath = hindsightConfigPath(agentDir, workspace, hindsightLease());
     assert.equal(configPath.startsWith(workspace), false);
     assert.equal(existsSync(configPath), true);
     const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, any>;
@@ -210,14 +216,14 @@ test("memory defaults on, supports explicit disable, and only Manager leases sel
     const secondLease = hindsightLease("b", "lease-two-secret");
     const firstLoader = createControlledResourceLoader("prompt", undefined, first, workspace, agentDir, undefined, firstLease);
     await firstLoader.reload();
-    const firstBank = JSON.parse(readFileSync(hindsightConfigPath(agentDir, workspace), "utf8")).banks.project.bankId;
+    const firstBank = JSON.parse(readFileSync(hindsightConfigPath(agentDir, workspace, firstLease), "utf8")).banks.project.bankId;
     const secondLoader = createControlledResourceLoader("prompt", undefined, second, workspace, agentDir, undefined, secondLease);
     await secondLoader.reload();
-    const secondBank = JSON.parse(readFileSync(hindsightConfigPath(agentDir, workspace), "utf8")).banks.project.bankId;
+    const secondBank = JSON.parse(readFileSync(hindsightConfigPath(agentDir, workspace, secondLease), "utf8")).banks.project.bankId;
     assert.equal(firstBank, firstLease.bank_id);
     assert.equal(secondBank, secondLease.bank_id);
     assert.notEqual(firstBank, secondBank);
-    assert.equal(readFileSync(hindsightConfigPath(agentDir, workspace), "utf8").includes(firstLease.token), false);
+    assert.equal(readFileSync(hindsightConfigPath(agentDir, workspace, secondLease), "utf8").includes(firstLease.token), false);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });

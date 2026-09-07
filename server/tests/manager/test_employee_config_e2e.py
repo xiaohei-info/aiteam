@@ -84,7 +84,7 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
         "skills": ["code-review"],
         "knowledge_refs": ["ks_default"],
         "connector_refs": ["slack"],
-        "memory_policy": {"seed": "记住用户偏好"},
+        "memory_policy": {"enabled": True, "allowed_operations": ["recall"]},
     }
 
     # create
@@ -97,7 +97,9 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert created["employee_slug"] == "exp-a"
     assert created["execution_policy"]["timeout_seconds"] == 120
     assert created["model_policy"]["model"] == "claude-opus-4-8"
-    assert created["memory_policy"] == {"seed": "记住用户偏好"}
+    assert created["memory_policy"] == {"enabled": True, "allowed_operations": ["recall"],
+                                        "explicit_auto_retain": False, "retention_days": None, "scope": "employee",
+                                        "revision": 1, "source": "employee_config", "retention_guarded": False}
     assert created["version"] == 1
     eid = created["employee_id"]
 
@@ -128,10 +130,10 @@ def test_employee_config_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert r.status_code == 200
     assert r.json()["data"] == []
 
-    # member 读可、写 403
+    # member 完整配置读写均403；授权snapshot另有独立回归
     member_a = _token(tid_a, ["member"], user_id="mem-a", admin_url=admin_url)
     r = client.get(f"/api/manager/employees/{eid}", headers={"Authorization": f"Bearer {member_a}"})
-    assert r.status_code == 200
+    assert r.status_code == 403
     r = client.put(
         f"/api/manager/employees/{eid}", json=config, headers={"Authorization": f"Bearer {member_a}"},
     )

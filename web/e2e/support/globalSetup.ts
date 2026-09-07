@@ -29,6 +29,9 @@ import {
 } from "./auth";
 
 const TIERS: Tier[] = ["operation", "manager", "agent"];
+// Local/CI web E2E uses one deterministic synthetic deployment tenant. External
+// profiles must provide their real pre-bound tenant explicitly.
+const DEFAULT_E2E_TENANT_ID = "00000000-0000-4000-8000-000000000001";
 
 /** 登录 API 路径（对齐前端 LoginPage 真实调用）。 */
 const LOGIN_PATH: Record<Tier, string> = {
@@ -84,6 +87,12 @@ function seedE2eTenant(identity?: SeedIdentity): SeedResult | null {
         E2E_MEMBER_ACCOUNT: identity.account,
         E2E_MEMBER_PASSWORD: identity.password,
       } : {}),
+      ...(process.env.E2E_EXTERNAL === "true"
+        ? {}
+        : {
+            E2E_TENANT_ID:
+              process.env.E2E_TENANT_ID ?? process.env.MANAGER_TENANT_ID ?? DEFAULT_E2E_TENANT_ID,
+          }),
       PYTHONPATH: join(process.cwd(), "..", "server"),
     },
     timeout: 30_000,
@@ -192,6 +201,11 @@ export default async function globalSetup(): Promise<void> {
   // 1. seed E2E 租户（manager/agent 登录前置）。写文件作为 worker 可靠 handoff。
   const identity = runIdentity();
   const seed = seedE2eTenant(identity);
+  if (identity) {
+    process.env.E2E_FACTOR_ENTERPRISE = identity.slug;
+    process.env.E2E_FACTOR_ACCOUNT = identity.account;
+    process.env.E2E_FACTOR_PASSWORD = identity.password;
+  }
   if (seed?.tenant_id) {
     process.env.E2E_TENANT_ID = seed.tenant_id;
     writeFileSync(

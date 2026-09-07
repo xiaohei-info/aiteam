@@ -18,14 +18,14 @@ from manager_service.auth_service import AuthResult
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url, admin_db_url=None):
+def _client(db_url, admin_db_url=None, manager_tenant_id=None):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url), manager_router)
+                              admin_db_url=admin_db_url, manager_tenant_id=manager_tenant_id), manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
     app.include_router(auth_router)
@@ -86,6 +86,32 @@ def test_auth_422(endpoint, body):
 
 
 # ---- happy path ----
+
+def test_unbound_manager_keeps_health_but_not_readiness():
+    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+    assert client.get("/healthz").status_code == 200
+    ready = client.get("/readyz")
+    assert ready.status_code == 503
+    assert ready.json()["code"] == "manager_binding_required"
+
+
+def test_unbound_public_resolve_tenant_fails_closed_without_registry_scan():
+    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+    response = client.post("/api/auth/resolve-tenant", json={"enterprise": "some-enterprise"})
+    assert response.status_code == 503
+    assert response.json()["code"] == "manager_binding_required"
+
+
+def test_unbound_public_login_fails_closed_without_body_tenant_fallback():
+    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+    response = client.post("/api/auth/login", json={
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "account": "13800138000",
+        "password": "Pw1!",
+    })
+    assert response.status_code == 503
+    assert response.json()["code"] == "manager_binding_required"
+
 
 def test_login_happy_cache_hit():
     """同 client 多次 login → 首次 build（mock）→ 后续 cache hit。"""

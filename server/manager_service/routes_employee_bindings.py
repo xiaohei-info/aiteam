@@ -7,12 +7,14 @@
     /api/manager/employees/{employee_id}/memory-setting
     /api/manager/employees/{employee_id}/connector-bindings
 
-受保护端点（require_claims）；写操作需 owner/enterprise_admin（service 层强制，03 §9.7）。
+公开完整配置读写均需 owner/enterprise_admin；内部授权snapshot/RAG直接使用repository读取。
 统一 envelope（02 §10.3.4）+ problem+json（02 §11.2）。tenant_id 经 TenantContext（D22），不手写过滤。
 verifier 注入：与 routes_employee 一致，由 app 持有并闭包注入各受保护端点，避免依赖 app.state 时序。
 """
 
 from __future__ import annotations
+
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Request, status
 from fastapi.responses import Response
@@ -23,9 +25,11 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError
 
+from .active_principal import require_admin
 from .employee_bindings_services import (
     build_connector_binding_service,
     build_knowledge_binding_service,
+    build_knowledge_document_binding_service,
     build_memory_setting_service,
     build_prompt_version_service,
     build_skill_binding_service,
@@ -42,6 +46,8 @@ from .schemas_employee_bindings import (
     KnowledgeBindingCreate,
     KnowledgeBindingOut,
     KnowledgeBindingPatch,
+    KnowledgeDocumentBindingIn,
+    KnowledgeDocumentBindingOut,
     MemorySettingIn,
     MemorySettingOut,
     PromptVersionCreate,
@@ -84,6 +90,7 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[PromptVersionOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.create(tenant_context_from(claims), employee_id=employee_id,
                        display_name=body.display_name, persona=body.persona,
@@ -99,6 +106,7 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[PromptVersionOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
         return ListEnvelope(data=[PromptVersionOut(**i) for i in items])
@@ -110,6 +118,7 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[PromptVersionOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         return Envelope(data=PromptVersionOut(
             **s.get_current(tenant_context_from(claims), employee_id=employee_id)))
@@ -122,7 +131,9 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[PromptVersionOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=PromptVersionOut(
             **s.get(tenant_context_from(claims), binding_id=binding_id)))
 
@@ -134,7 +145,9 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[PromptVersionOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=PromptVersionOut(
             **s.set_current(tenant_context_from(claims), binding_id=binding_id)))
 
@@ -147,7 +160,9 @@ def _build_prompt_versions_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         s.delete(tenant_context_from(claims), binding_id=binding_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -180,6 +195,7 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.create(tenant_context_from(claims), employee_id=employee_id,
                        skill_id=body.skill_id, enabled=body.enabled, config=body.config)
@@ -192,6 +208,7 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SkillBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
         return ListEnvelope(data=[SkillBindingOut(**i) for i in items])
@@ -204,7 +221,9 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=SkillBindingOut(
             **s.get(tenant_context_from(claims), binding_id=binding_id)))
 
@@ -217,7 +236,9 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[SkillBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=SkillBindingOut(
             **s.update(tenant_context_from(claims), binding_id=binding_id,
                       enabled=body.enabled, config=body.config)))
@@ -231,7 +252,9 @@ def _build_skill_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         s.delete(tenant_context_from(claims), binding_id=binding_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -264,6 +287,7 @@ def _build_knowledge_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.create(tenant_context_from(claims), employee_id=employee_id,
                        knowledge_space_id=body.knowledge_space_id, enabled=body.enabled,
@@ -277,6 +301,7 @@ def _build_knowledge_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[KnowledgeBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
         return ListEnvelope(data=[KnowledgeBindingOut(**i) for i in items])
@@ -289,7 +314,9 @@ def _build_knowledge_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=KnowledgeBindingOut(
             **s.get(tenant_context_from(claims), binding_id=binding_id)))
 
@@ -302,12 +329,14 @@ def _build_knowledge_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[KnowledgeBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=KnowledgeBindingOut(
             **s.update(tenant_context_from(claims), binding_id=binding_id,
                       enabled=body.enabled, config=body.config)))
 
-    @router.delete("/{binding_id}", summary="删 knowledge 绑定",
+    @router.delete("/{binding_id}", summary="撤销知识能力（保留deny tombstone）",
                    operation_id="manager_employee_knowledge_bind_delete",
                    status_code=status.HTTP_204_NO_CONTENT)
     async def delete_knowledge_binding(
@@ -316,8 +345,60 @@ def _build_knowledge_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         s.delete(tenant_context_from(claims), binding_id=binding_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    return router
+
+
+# ---------------- Employee document policy (not index lifecycle) ----------------
+
+def _build_knowledge_document_bindings_router(verifier) -> APIRouter:
+    require = require_claims(verifier)
+    router = APIRouter(prefix="/api/manager/employees/{employee_id}/knowledge-document-bindings",
+                       tags=["manager", "employee-bindings"])
+
+    def svc(request: Request):
+        dsn = request.app.state.settings.db_url
+        if not dsn:
+            raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+        cache = getattr(request.app.state, "_emp_bind_svc_doc", None)
+        if cache is None:
+            cache = build_knowledge_document_binding_service(PgTenantRouter(dsn))
+            request.app.state._emp_bind_svc_doc = cache
+        return cache
+
+    @router.get("", summary="列员工文档策略（索引状态不等于管理员授权）",
+                operation_id="manager_employee_knowledge_document_bind_list")
+    async def list_document_bindings(employee_id: UUID, request: Request,
+                                     claims: TokenClaims = Depends(require)) -> ListEnvelope[KnowledgeDocumentBindingOut]:
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        return ListEnvelope(data=svc(request).list_all(ctx, employee_id=str(employee_id)))
+
+    @router.put("/{document_id}", summary="显式允许或拒绝员工读取单份企业文档",
+                operation_id="manager_employee_knowledge_document_bind_set",
+                description="仅owner/enterprise_admin。enabled=true不覆盖whole/tool拒绝或文档生命周期；不接受workspace或审计字段。")
+    async def set_document_binding(employee_id: UUID, document_id: UUID, body: KnowledgeDocumentBindingIn,
+                                   request: Request, claims: TokenClaims = Depends(require)) -> Envelope[KnowledgeDocumentBindingOut]:
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        return Envelope(data=svc(request).set_policy(ctx, employee_id=str(employee_id),
+                                                      document_id=str(document_id), enabled=body.enabled))
+
+    @router.delete("/{document_id}", summary="撤销员工文档许可（保留deny tombstone）",
+                   operation_id="manager_employee_knowledge_document_bind_delete",
+                   description="幂等204；只撤销该员工许可，不删除企业文档或索引正文。",
+                   status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_document_binding(employee_id: UUID, document_id: UUID, request: Request,
+                                      claims: TokenClaims = Depends(require)) -> Response:
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        svc(request).set_policy(ctx, employee_id=str(employee_id), document_id=str(document_id),
+                                enabled=False, revoke=True)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router
@@ -348,11 +429,12 @@ def _build_memory_setting_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[MemorySettingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         return Envelope(data=MemorySettingOut(
             **s.get(tenant_context_from(claims), employee_id=employee_id)))
 
-    @router.put("/memory-setting", summary="新建或全量更新 employee 记忆策略单例",
+    @router.put("/memory-setting", summary="设置 employee 有效记忆策略（省略字段保持）",
                 operation_id="manager_employee_memory_setting_upsert")
     async def upsert_memory_setting(
         body: MemorySettingIn,
@@ -360,10 +442,10 @@ def _build_memory_setting_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[MemorySettingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.upsert(tenant_context_from(claims), employee_id=employee_id,
-                       policy=body.policy, seed_memories=body.seed_memories,
-                       retention_days=body.retention_days, scope=body.scope)
+                       **body.model_dump(exclude_unset=True))
         return Envelope(data=MemorySettingOut(**out))
 
     @router.patch("/memory-setting", summary="局部改 employee 记忆策略单例（不存在则 404）",
@@ -374,13 +456,13 @@ def _build_memory_setting_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[MemorySettingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.update(tenant_context_from(claims), employee_id=employee_id,
-                       policy=body.policy, seed_memories=body.seed_memories,
-                       retention_days=body.retention_days, scope=body.scope)
+                       **body.model_dump(exclude_unset=True))
         return Envelope(data=MemorySettingOut(**out))
 
-    @router.delete("/memory-setting", summary="删 employee 记忆策略单例",
+    @router.delete("/memory-setting", summary="撤销 employee 记忆策略（保留deny及来源）",
                    operation_id="manager_employee_memory_setting_delete",
                    status_code=status.HTTP_204_NO_CONTENT)
     async def delete_memory_setting(
@@ -388,6 +470,7 @@ def _build_memory_setting_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         s.delete(tenant_context_from(claims), employee_id=employee_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -421,6 +504,7 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         out = s.create(tenant_context_from(claims), employee_id=employee_id,
                        connector_id=body.connector_id, grant_ref=body.grant_ref,
@@ -434,6 +518,7 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[ConnectorBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
         items = s.list_all(tenant_context_from(claims), employee_id=employee_id)
         return ListEnvelope(data=[ConnectorBindingOut(**i) for i in items])
@@ -446,7 +531,9 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=ConnectorBindingOut(
             **s.get(tenant_context_from(claims), binding_id=binding_id)))
 
@@ -459,7 +546,9 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[ConnectorBindingOut]:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         return Envelope(data=ConnectorBindingOut(
             **s.update(tenant_context_from(claims), binding_id=binding_id,
                       grant_ref=body.grant_ref, enabled=body.enabled, config=body.config)))
@@ -473,7 +562,9 @@ def _build_connector_bindings_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         s = svc(request)
+        s.require_employee(tenant_context_from(claims), binding_id=binding_id, employee_id=employee_id)
         s.delete(tenant_context_from(claims), binding_id=binding_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -490,6 +581,7 @@ def build_employee_bindings_router(verifier) -> APIRouter:
     root.include_router(_build_prompt_versions_router(verifier))
     root.include_router(_build_skill_bindings_router(verifier))
     root.include_router(_build_knowledge_bindings_router(verifier))
+    root.include_router(_build_knowledge_document_bindings_router(verifier))
     root.include_router(_build_memory_setting_router(verifier))
     root.include_router(_build_connector_bindings_router(verifier))
     return root

@@ -148,3 +148,36 @@ describe("CapabilityPage", () => {
     await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-c1"));
   });
 });
+
+describe("S05 executable skill package contract", () => {
+  it("metadata-only edits omit files/hash and show a draft as non-executable", async () => {
+    const api = mockApi();
+    renderPage();
+    expect(await screen.findByText("草稿（不可执行）")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "Only metadata" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkill).toHaveBeenCalled());
+    const body = vi.mocked(api.updateSkill).mock.calls[0]![1];
+    expect(body).not.toHaveProperty("files");
+    expect(body).not.toHaveProperty("content_hash");
+    expect(body.version).toBe("1");
+  });
+
+  it("explicit complete package is sent, while malformed JSON is not silently converted to a draft", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, package_status: "ready" }]) });
+    renderPage();
+    expect(await screen.findByText("已验证包")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    const input = screen.getByLabelText("完整技能包（JSON 文件数组，可选）");
+    fireEvent.change(input, { target: { value: "[invalid" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(api.updateSkill).not.toHaveBeenCalled();
+    expect(screen.getByText(/技能包必须是包含 SKILL.md/)).toBeInTheDocument();
+    const files = [{ path: "SKILL.md", content: "---\ndescription: Test\n---\nSynthetic instructions" }];
+    fireEvent.change(input, { target: { value: JSON.stringify(files) } });
+    fireEvent.change(screen.getByLabelText("版本"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkill).toHaveBeenCalledWith("skill-c1", expect.objectContaining({ files, version: "2" })));
+  });
+});

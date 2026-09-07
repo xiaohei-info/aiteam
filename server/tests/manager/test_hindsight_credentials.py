@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from unittest.mock import Mock
 
 from manager_service.hindsight_client import HindsightSettings, HindsightUnavailable
 from manager_service.hindsight_credentials import (
@@ -13,6 +14,7 @@ from manager_service.hindsight_credentials import (
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
+from manager_service.schemas_hindsight import HINDSIGHT_CLIENT_PROTOCOL
 
 
 class _Snapshot:
@@ -57,11 +59,13 @@ def test_employee_bank_scope_ignores_member_but_separates_employees():
 
 
 def test_runtime_config_is_authorized_and_bank_scoped_without_snapshot_secret():
-    snapshot = _Snapshot({"enabled": True, "allowed_operations": ["recall", "retain"]})
-    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings())
+    snapshot = _Snapshot({"enabled": True, "allowed_operations": ["recall", "retain"], "revision": 1})
+    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings(), bank_client=Mock())
 
-    result = service.runtime_config(_ctx(), employee_id="employee-1")
+    result = service.runtime_config(_ctx(), employee_id="employee-1", client_protocol=HINDSIGHT_CLIENT_PROTOCOL)
 
+    assert result.allowed_operations == ["recall", "retain"]
+    assert result.explicit_auto_retain is False
     assert result.base_url == "/api/manager/hindsight"
     assert result.bank_id == derive_hindsight_bank_id(
         "tenant-1", "member-1", "employee-1"
@@ -75,7 +79,7 @@ def test_runtime_config_is_authorized_and_bank_scoped_without_snapshot_secret():
 
 def test_rotation_invalidates_old_lease_and_issues_new_version():
     snapshot = _Snapshot({"enabled": True})
-    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings())
+    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings(), bank_client=Mock())
     first = service.runtime_config(_ctx(), employee_id="employee-1")
     reused = service.runtime_config(_ctx(), employee_id="employee-1")
     rotated = service.runtime_config(_ctx(), employee_id="employee-1", rotate=True)
@@ -93,7 +97,7 @@ def test_rotation_invalidates_old_lease_and_issues_new_version():
 
 def test_revoke_is_member_scoped_and_does_not_return_token():
     snapshot = _Snapshot({"enabled": True})
-    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings())
+    service = HindsightRuntimeService(snapshot_service=snapshot, settings=_settings(), bank_client=Mock())
     config = service.runtime_config(_ctx(), employee_id="employee-1")
 
     with pytest.raises(NotFound):
@@ -109,7 +113,7 @@ def test_disabled_policy_and_missing_upstream_fail_closed():
     disabled_snapshot = _Snapshot({"enabled": True})
     disabled = HindsightRuntimeService(
         snapshot_service=disabled_snapshot,
-        settings=_settings(),
+        settings=_settings(), bank_client=Mock(),
     )
     old = disabled.runtime_config(_ctx(), employee_id="employee-1")
     disabled_snapshot.value.memory_policy = {"enabled": False}

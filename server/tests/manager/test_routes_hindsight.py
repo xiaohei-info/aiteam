@@ -1,4 +1,5 @@
 from __future__ import annotations
+from unittest.mock import Mock
 
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
@@ -36,7 +37,7 @@ def _client():
         APIRouter(),
     )
     service = HindsightRuntimeService(
-        snapshot_service=_Snapshot(),
+        snapshot_service=_Snapshot(), bank_client=Mock(),
         settings=HindsightSettings(
             "https://hindsight.internal", "manager-only", None, None, None
         ),

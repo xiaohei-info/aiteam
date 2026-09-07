@@ -44,11 +44,13 @@ class RagMcpClient {
 
   async search(query: string, limit: number): Promise<unknown> {
     const result = await this.client.callTool({ name: SEARCH_TOOL, arguments: { query, limit } });
+    if (result.isError) throw new Error("Knowledge access unavailable");
     return result;
   }
 
   async get(citation_id: string): Promise<unknown> {
     const result = await this.client.callTool({ name: GET_TOOL, arguments: { citation_id } });
+    if (result.isError) throw new Error("Knowledge access unavailable");
     return result;
   }
 
@@ -77,16 +79,25 @@ export function ragToolNames(snapshot: unknown, managerUrl?: string): string[] {
   const allowed: unknown[] = policy && typeof policy === "object" && Array.isArray((policy as Record<string, unknown>).allowed_tools)
     ? (policy as Record<string, unknown>).allowed_tools as unknown[] : [];
   if (!ragMcpUrl(managerUrl)) return [];
+  const knowledge = snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>).knowledge_policy : undefined;
+  if (knowledge !== undefined && knowledge !== null) {
+    if (typeof knowledge !== "object") return [];
+    const value = knowledge as Record<string, unknown>;
+    const operations = value.allowed_operations;
+    if (value.state === "deny" || !["inherit", "allow"].includes(String(value.state)) || !Array.isArray(operations)) return [];
+    return [SEARCH_TOOL, GET_TOOL].filter((name) => operations.includes(name) && (allowed.length === 0 || allowed.includes(name)));
+  }
+  // Old snapshots used an empty allowlist for platform defaults; a new
+  // knowledge_policy with [] must never take this compatibility fallback.
   if (allowed.length === 0) return [SEARCH_TOOL, GET_TOOL];
-  if (!allowed.includes(SEARCH_TOOL)) return [];
-  return allowed.includes(GET_TOOL) ? [SEARCH_TOOL, GET_TOOL] : [SEARCH_TOOL];
+  return [SEARCH_TOOL, GET_TOOL].filter((name) => allowed.includes(name));
 }
 
 /** Controlled extension: no .mcp.json, home-directory, or ambient server discovery. */
 export function createRagMcpFactory(authorization: SessionAuthorization, managerUrl?: string): ((pi: ExtensionAPI) => void) | undefined {
   const url = ragMcpUrl(managerUrl);
   const toolNames = ragToolNames(authorization.snapshot, managerUrl);
-  if (!url || !toolNames.includes(SEARCH_TOOL) || !authorization.caller.accessToken) return undefined;
+  if (!url || toolNames.length === 0 || !authorization.caller.accessToken) return undefined;
   let client: RagMcpClient | undefined;
   let connectPromise: Promise<RagMcpClient> | undefined;
   const getClient = async () => {
@@ -108,7 +119,7 @@ export function createRagMcpFactory(authorization: SessionAuthorization, manager
     await active?.close();
   };
   return (pi: ExtensionAPI) => {
-    pi.registerTool(defineTool({
+    if (toolNames.includes(SEARCH_TOOL)) pi.registerTool(defineTool({
       name: SEARCH_TOOL,
       label: "Search knowledge",
       description: "Search authorized enterprise knowledge and return explicit citations.",

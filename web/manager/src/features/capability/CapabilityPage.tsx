@@ -43,6 +43,7 @@ import {
 type Kind = "skill" | "connector" | "memory";
 
 interface SkillDraft {
+  files: string;
   kind: "skill";
   id: string;
   displayName: string;
@@ -117,7 +118,7 @@ function jsonText(value: Record<string, unknown>): string {
 
 function emptyDraft(kind: Kind): Draft {
   if (kind === "skill") {
-    return { kind, id: "", displayName: "", version: "1", install: "on_demand", binding: "opt_in", visibility: "private", config: "" };
+    return { kind, files: "", id: "", displayName: "", version: "1", install: "on_demand", binding: "opt_in", visibility: "private", config: "" };
   }
   if (kind === "connector") {
     return { kind, id: "", displayName: "", grant: "tenant_wide", visibility: "private", config: "" };
@@ -131,6 +132,7 @@ function draftFrom(kind: Kind, item: SkillCatalog | ConnectorCatalog | MemoryPol
     return {
       kind,
       id: skill.skill_id,
+      files: "",
       displayName: skill.display_name,
       version: skill.version,
       install: skill.install_policy as SkillInstallPolicy,
@@ -249,6 +251,16 @@ export function CapabilityPage(): ReactNode {
         visibility: draft.visibility,
         config: parseJson(draft.config),
       };
+      if (draft.files.trim()) {
+        try {
+          const files: unknown = JSON.parse(draft.files);
+          if (!Array.isArray(files) || files.length < 1 || files.length > 64 || files.some((file) => !file || typeof file.path !== "string" || typeof file.content !== "string")) throw new Error();
+          body.files = files;
+        } catch {
+          setActionError("技能包必须是包含 SKILL.md 的文件 JSON 数组；空白保留原包。");
+          return;
+        }
+      }
       operation = editingId
         ? () => api.updateSkill(editingId, body)
         : () => api.createSkill(body);
@@ -303,6 +315,7 @@ export function CapabilityPage(): ReactNode {
     const columns: TableColumn<SkillRow>[] = [
       { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
       { key: "version", header: i18n.t("manager.capability.version"), width: pixel(80) },
+      { key: "package_status", header: "执行包", width: pixel(130), renderCell: (row) => <Badge label={row.package_status === "ready" ? "已验证包" : row.package_status === "invalid" ? "无效包（不可执行）" : "草稿（不可执行）"} /> },
       { key: "install_policy", header: i18n.t("manager.capability.install_policy"), width: pixel(130), renderCell: (row) => <Badge label={row.install_policy} /> },
       { key: "binding_policy", header: i18n.t("manager.capability.binding_policy"), width: pixel(120), renderCell: (row) => <Badge label={row.binding_policy} /> },
       { key: "visibility", header: i18n.t("manager.capability.visibility"), width: pixel(100), renderCell: (row) => <Badge label={row.visibility} /> },
@@ -394,6 +407,8 @@ export function CapabilityPage(): ReactNode {
                       {editor.draft.kind === "skill" && (
                         <>
                           <TextInput label={i18n.t("manager.capability.version")} value={editor.draft.version} onChange={(value) => updateDraft("version", value)} isDisabled={working} />
+                          <Banner status="info" title="留空保留原包；新建无包为不可执行草稿。替换完整包必须包含 SKILL.md（非空 description），内容变化须使用未占用的新版本。最多64文件/1MiB，仅Markdown文本。" />
+                          <TextArea label="完整技能包（JSON 文件数组，可选）" value={editor.draft.files} onChange={(value) => updateDraft("files", value)} rows={6} isDisabled={working} />
                           <Selector label={i18n.t("manager.capability.install_policy")} options={SKILL_INSTALL_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.install.${value}`) }))} value={editor.draft.install} onChange={(value) => updateDraft("install", value)} isDisabled={working} />
                           <Selector label={i18n.t("manager.capability.binding_policy")} options={SKILL_BINDING_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.binding.${value}`) }))} value={editor.draft.binding} onChange={(value) => updateDraft("binding", value)} isDisabled={working} />
                         </>

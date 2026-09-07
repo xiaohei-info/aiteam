@@ -48,8 +48,20 @@ Manager 管理面 facade/client 使用。Agent 不设置 `AITEAM_HINDSIGHT_URL`�
 
 ## Wire contract
 
-`POST /api/manager/hindsight/runtime-config`（Manager JWT；body 只允许
-`employee_id` 与可选 `rotate=true`）返回 `Cache-Control: no-store`：
+`POST /api/manager/hindsight/runtime-config`（Manager JWT）接受：
+
+```json
+{
+  "employee_id": "<authorized-employee-id>",
+  "client_protocol": "aiteam-memory-v1",
+  "rotate": false
+}
+```
+
+`client_protocol` 是受控 Agent 的协商标识，不是用户认证、人工同意或权限提升凭据。
+缺失或未知协议只获得当前策略交集中的 `recall` 只读 lease；如果当前策略只有
+`retain`，Manager 返回 `409 hindsight_client_upgrade_required`，不会以旧请求重试写入。
+返回 `Cache-Control: no-store`，当前 wire shape 为：
 
 ```json
 {
@@ -60,16 +72,47 @@ Manager 管理面 facade/client 使用。Agent 不设置 `AITEAM_HINDSIGHT_URL`�
     "lease_id": "<non-secret-handle>",
     "version": 1,
     "issued_at": "2026-08-21T00:00:00Z",
-    "expires_at": "2026-08-21T00:05:00Z"
+    "expires_at": "2026-08-21T00:05:00Z",
+    "allowed_operations": ["recall", "retain"],
+    "policy_revision": 3,
+    "client_protocol": "aiteam-memory-v1",
+    "explicit_auto_retain": false,
+    "retention_mode": "unlimited"
   }
 }
 ```
+
+`allowed_operations` 是精确 allowlist，只能包含 `recall` 和 `retain`；空列表拒绝记忆
+操作。`policy_revision` 是当前 employee memory policy 的正向版本证据；retain lease
+必须携带正版本且与当前策略一致。`explicit_auto_retain` 只有当前策略、快照和受支持
+协议同时明确允许时才为 `true`。`retention_mode` 为 `unlimited` 或 `fact_only`；后者
+只返回有可信来源的 world/experience facts，不代表 Hindsight 物理硬擦除。
 
 `token` 只存在 Agent 进程内的 extension config 装配期间（配置文件仅保存一次性
 `apiKeyRef`，不保存 token）；不得进入 snapshot、SQLite、Pi Session JSONL、SSE、日志
 或 trace。`POST /api/manager/hindsight/leases/{lease_id}/revoke` 返回不含 secret 的
 `lease_id/bank_id/version/status/revoked_at`。
 
+### Facade operation allowlist
+
+Agent 只能使用 Manager facade 的以下三条 upstream-compatible 路径，且 bank ID 必须
+来自 Manager 返回的当前 lease：
+
+| Lease operation | Method + facade path | 说明 |
+|---|---|---|
+| profile | `GET /api/manager/hindsight/v1/default/banks/{bank_id}/profile` | 仅用于 pinned extension 的最小初始化响应；不授予 bank 管理权 |
+| recall | `POST /api/manager/hindsight/v1/default/banks/{bank_id}/memories/recall` | 读取当前允许的记忆；每次请求重新检查 member/employee/grant/policy |
+| retain | `POST /api/manager/hindsight/v1/default/banks/{bank_id}/memories` | 仅在协议、正 policy revision 和 retain allowlist 同时满足时写入 |
+
+PUT/PATCH/DELETE、bank/config/template/reflect/mental-model/list 管理路径、未知 query
+或 body 字段、编码路径和超限 body 一律拒绝。`profile` 的成功响应由 Manager facade
+生成，运行 lease 不需要 bank PUT。Manager 可信代码只在首次确认 profile 为 404 时
+初始化 bank；不会在每次 Agent 请求中覆盖已有 bank 配置。
+
+策略收紧或成员/员工撤权会立即使旧 lease 的对应操作失效；放宽必须重新协商 lease。
+已跨过 Manager 最后一次写授权围栏的 native 异步请求可能已经被 Hindsight 接受，后续
+403 不等于回滚，也不能用新 lease 盲目重放。Agent 对 401/403/升级错误不自动降级或
+重试旧无协议请求；同一有效 lease 的普通瞬时网络失败才保留 pinned SDK 原有重试。
 同一 snapshot/policy 的 active lease 可复用；`rotate=true`、snapshot/policy 变化或
 revoke 后会递增 `version`。旧 lease 在 revoke/expiry 后由 facade 拒绝，新 Session 每次
 从 Manager 拉取当前 lease。正常 shutdown/child disposal 仍先调用 Hindsight lifecycle

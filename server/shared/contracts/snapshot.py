@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +36,15 @@ class ExecutionPolicy(BaseModel):
     timeout_seconds: int | None = Field(default=None, description="单次 Pi 会话超时秒数（可选）")
 
 
+class KnowledgePolicySnapshot(BaseModel):
+    """Effective knowledge permission; empty operations explicitly deny both tools."""
+
+    model_config = ConfigDict(extra="forbid")
+    state: Literal["inherit", "allow", "deny"] = "inherit"
+    allowed_operations: list[Literal["knowledge_search", "knowledge_get"]] = Field(default_factory=list)
+    revision: str = "0"
+
+
 class EmployeeExecutionSnapshot(BaseModel):
     """创建 Pi 会话前固化的员工/专家配置快照（04 §6.3）。"""
 
@@ -49,12 +58,16 @@ class EmployeeExecutionSnapshot(BaseModel):
     model_policy: ModelPolicy = Field(default_factory=ModelPolicy)
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     tools: list[str] = Field(default_factory=list, description="工具列表")
-    skills: list[str] = Field(default_factory=list, description="技能引用列表")
+    skills: list[str] = Field(
+        default_factory=list,
+        description="规范技能引用列表；Agent 以 presence-aware 快照字段为准，显式 [] 不回退旧 skill_refs。",
+    )
     knowledge_refs: list[str] = Field(default_factory=list, description="已授权知识集引用")
+    knowledge_policy: KnowledgePolicySnapshot | None = Field(default=None, description="有效知识策略；空allowed_operations明确拒绝，不回退默认。")
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
     memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。")
     department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表；空列表表示未设置。")
     skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
         default_factory=list,
-        description="仅用于 Agent 离线验签的公开 key metadata；不含 private key/JWT/HMAC secret",
+        description="仅用于 Agent 离线验签的公开 key metadata；字段出现即优先于本地环境/缓存（包括显式空列表）；不含 private key/JWT/HMAC secret",
     )

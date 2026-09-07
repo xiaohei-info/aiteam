@@ -30,6 +30,9 @@ def _row(*, token: str = "lease-secret", revoked_at=None, expires_at=None):
         ISSUED,
         expires_at or ISSUED + timedelta(minutes=5),
         revoked_at,
+        ["recall"],
+        0,
+        None,  # legacy protocol evidence is intentionally absent
     )
 
 

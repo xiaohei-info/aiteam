@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.integration.fixtures.data_lifecycle import seeded_enterprise  # noqa: F401
 from tests.integration.fixtures.identities import (  # noqa: F401
     agent_user,
@@ -22,6 +24,10 @@ from tests.integration.fixtures.identities import (  # noqa: F401
     service_token,
     service_token_headers,
 )
+from tests.integration.fixtures.manager_binding import (  # noqa: F401
+    bind_manager_app,
+    fresh_tenant_cleanup,
+)
 from tests.integration.fixtures.postgres import (  # noqa: F401
     migrated_pg,
     pg_admin_url,
@@ -29,3 +35,41 @@ from tests.integration.fixtures.postgres import (  # noqa: F401
     tenant_scope,
     tenant_scope_factory,
 )
+
+
+@pytest.fixture(autouse=True)
+def _bind_shared_manager_app(request):
+    """Bind the legacy module app to the test's explicit tenant scope.
+
+    This is a test-harness adapter only. It lets older integration modules reuse
+    one imported FastAPI object without making production Manager discover or serve
+    multiple tenants. Tests that provision a different deployment tenant must call
+    ``bind_manager_app`` themselves before the request.
+    """
+    names = set(request.fixturenames)
+    if not {"tenant_scope", "seeded_enterprise"} & names:
+        yield
+        return
+
+    scope = request.getfixturevalue("tenant_scope")
+    from manager_service import app as manager_module
+
+    manager_app = manager_module.app
+    state_mapping = getattr(manager_app.state, "_state", None)
+    if not isinstance(state_mapping, dict):
+        raise TypeError("Manager integration fixture requires Starlette State._state")
+    old_state = dict(state_mapping)
+    verifier = getattr(manager_module, "_verifier", None)
+    old_verifier_tenant = getattr(verifier, "_deployment_tenant_id", None)
+    bind_manager_app(scope.tenant_id, manager_app)
+    try:
+        yield
+    finally:
+        # Restore the entire Starlette state mapping, not only settings/readiness:
+        # route-created tenant services are cached in State._state and may capture
+        # the binding.  Also restore the mutable verifier field changed by the
+        # test-only helper before putting the original mapping back.
+        state_mapping.clear()
+        state_mapping.update(old_state)
+        if verifier is not None and hasattr(verifier, "_deployment_tenant_id"):
+            verifier._deployment_tenant_id = old_verifier_tenant

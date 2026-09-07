@@ -22,7 +22,7 @@ const origin = (name: string, fallback: string): string => process.env[name]?.tr
 
 export const TIER_BASE_URL: Record<Tier, string> = {
   operation: origin("E2E_OPERATION_UI_ORIGIN", "http://127.0.0.1:5173"),
-  manager: origin("E2E_MANAGER_UI_ORIGIN", "http://127.0.0.1:5174"),
+  manager: origin("E2E_MANAGER_UI_ORIGIN", "http://localhost:5174"),
   agent: origin("E2E_AGENT_UI_ORIGIN", "http://127.0.0.1:5180"),
 };
 
@@ -94,6 +94,31 @@ export function seededEmployeeId(): string | undefined {
   if (typeof value === "string" && value.trim()) return value.trim();
   const external = process.env.E2E_AGENT_EMPLOYEE_ID?.trim();
   return external || undefined;
+}
+
+/** Non-production synthetic UUID used by local/CI Playwright Manager seed. */
+export const DEFAULT_E2E_TENANT_ID = "00000000-0000-4000-8000-000000000001";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The one Manager deployment tenant for local/CI E2E.
+ *
+ * Wave1 binds a single Manager process to this UUID. Positive F01/F02
+ * requests must target it; inventing a second tenant is a binding mismatch,
+ * not a provisioning success. Dynamic Operator→Manager routing is Wave2 S06.
+ */
+export function boundManagerTenantId(): string {
+  const raw = (
+    process.env.E2E_TENANT_ID?.trim() ||
+    process.env.MANAGER_TENANT_ID?.trim() ||
+    DEFAULT_E2E_TENANT_ID
+  );
+  if (!UUID_RE.test(raw)) {
+    throw new Error("E2E_TENANT_ID/MANAGER_TENANT_ID must be a UUID");
+  }
+  return raw.toLowerCase();
 }
 
 export function defaultCredentials(tier: Tier): TierCredentials {

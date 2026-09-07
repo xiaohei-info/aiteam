@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
@@ -29,6 +28,9 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
     from manager_service.app import app as manager_app
 
     fake_tenant_id = str(uuid.uuid4())
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tenant_scope.tenant_id, manager_app)
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/owner-bootstrap",
@@ -40,25 +42,30 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
         },
         headers=service_token_headers,
     )
-    assert resp.status_code == 404, (
-        f"不存在 tenant 的 bootstrap 应被拒绝，实际: {resp.status_code} body={resp.text}"
+    # Binding is checked before any registry lookup, so a different tenant is
+    # rejected as a deployment-scope mismatch without revealing registry state.
+    assert resp.status_code == 503, (
+        f"不同 Manager deployment tenant 应被拒绝，实际: {resp.status_code} body={resp.text}"
     )
     ct = resp.headers.get("content-type", "")
     assert ct.startswith("application/problem+json"), f"错误响应应为 problem+json: {ct}"
-    assert resp.json()["code"] == "not_found"
+    assert resp.json()["code"] == "manager_binding_mismatch"
 
 
 @pytest.mark.integration
 def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """有效 tenant A 存在时，向未开通 tenant B bootstrap 被拒，A 不被污染。"""
     import psycopg
     from manager_service.app import app as manager_app
 
-    client = TestClient(manager_app)
-    tenant_a = str(uuid.uuid4())
+    tenant_a = fresh_tenant_cleanup(str(uuid.uuid4()))
     tenant_b = str(uuid.uuid4())
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tenant_a, manager_app)
+    client = TestClient(manager_app)
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
 
     r1 = client.post(
@@ -83,18 +90,16 @@ def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
         },
         headers=service_token_headers,
     )
-    assert resp.status_code == 404
+    assert resp.status_code == 503
     assert resp.headers.get("content-type", "").startswith("application/problem+json")
+    assert resp.json()["code"] == "manager_binding_mismatch"
 
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            row = conn.execute(
-                "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND external_id = %s",
-                (tenant_b, phone),
-            ).fetchone()
-            assert row is None
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tenant_a,))
+    with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM auth_identity WHERE tenant_id = %s AND external_id = %s",
+            (tenant_b, phone),
+        ).fetchone()
+        assert row is None
 
 
 # ── service token 负例（不 fail-open） ──
@@ -107,7 +112,7 @@ def test_f01_missing_service_token_returns_401(
     """F01 POST /api/manager/tenants 无 service token → 401（不 fail-open）。"""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/tenants",
@@ -134,7 +139,7 @@ def test_f01_wrong_service_token_returns_401(
     """F01 错误 service token → 401。"""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = tenant_scope.tenant_id
     client = TestClient(manager_app)
     resp = client.post(
         "/api/manager/tenants",
@@ -311,38 +316,33 @@ def test_problem_json_auth_401_no_credential_leak(tenant_scope):
 
 @pytest.mark.integration
 def test_cross_tenant_login_nonexistent_tenant(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """在 tenant_scope 的有效 tenant 下创建 owner，用另一 tenant_id 登录 → 401。"""
-    from manager_service.app import app as manager_app
-
-    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     other_tenant = str(uuid.uuid4())
     r = _client.post(
         "/api/auth/login",
         json={"tenant_id": other_tenant, "account": phone, "password": bootstrap_pw},
     )
-    assert r.status_code == 401, (
-        f"跨租户登录应 401（tenant={other_tenant} 不是 {tid}），实际: {r.status_code}"
+    assert r.status_code == 503, (
+        f"跨 deployment tenant 登录应 503（tenant={other_tenant} 不是 {tid}），实际: {r.status_code}"
     )
+    assert r.json()["code"] == "manager_binding_mismatch"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 @pytest.mark.integration
 def test_owner_reset_wrong_tenant_id(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """用正确的 phone + 旧密码但错误的 tenant_id 重置 → 401。"""
-    from manager_service.app import app as manager_app
-
-    tid, phone, bootstrap_pw, _client = _provision_for_negative(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_for_negative(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     wrong_tenant = str(uuid.uuid4())
     r = _client.post(
@@ -354,26 +354,24 @@ def test_owner_reset_wrong_tenant_id(
             "new_password": "New-pw-123",
         },
     )
-    assert r.status_code == 401, (
-        f"错误 tenant_id 重置应 401，实际: {r.status_code}"
+    assert r.status_code == 503, (
+        f"错误 tenant_id 重置应 503，实际: {r.status_code}"
     )
+    assert r.json()["code"] == "manager_binding_mismatch"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 # ── 工具函数 ──
 
 
-def _provision_for_negative(tenant_scope, service_token_headers):
-    """同 _provision_owner_for_test，但调用方必须自行清理。"""
+def _provision_for_negative(tenant_scope, service_token_headers, register_tenant):
+    """Provision a fresh tenant and register it for fixture finalizer cleanup."""
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    new_tenant_id = register_tenant(str(uuid.uuid4()))
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(new_tenant_id, manager_app)
     client = TestClient(manager_app)
 
     r1 = client.post(
@@ -410,20 +408,19 @@ def _provision_for_negative(tenant_scope, service_token_headers):
 
 @pytest.mark.integration
 def test_agent_token_valid_after_new_login_by_another_owner_fails(
-    tenant_scope, service_token_headers, tenant_scope_factory,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
-    """验收："Manager 不可用时已登录 Agent 继续可用，仅新登录失败"。
-
-    创建两个独立 tenant：A 有 owner 已登录，B 的 bootstrap secret 错误。
-    A 的 token 仍然有效（whoami 200），B 的新登录失败（401）。
-    """
+    """A bound Manager keeps the existing tenant session usable and rejects another tenant."""
     from manager_service.app import app as manager_app
 
+    tid_a = fresh_tenant_cleanup(str(uuid.uuid4()))
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(tid_a, manager_app)
     client = TestClient(manager_app)
 
-    # Tenant A：开通 + bootstrap + 登录
-    tid_a = str(uuid.uuid4())
-    r1 = client.post(
+    # Provision the explicit deployment tenant, then bootstrap and reset its owner.
+    r_provision = client.post(
         "/api/manager/tenants",
         json={
             "enterprise_id": str(uuid.uuid4()),
@@ -433,15 +430,15 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
         },
         headers=service_token_headers,
     )
-    assert r1.status_code == 201
-
+    assert r_provision.status_code == 201
     phone_a = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bpw_a = f"Boot!1-{uuid.uuid4().hex[:8]}"
-    client.post(
+    r_bootstrap = client.post(
         "/api/manager/owner-bootstrap",
         json={"tenant_id": tid_a, "owner_phone": phone_a, "bootstrap_secret": bpw_a, "must_reset": True},
         headers=service_token_headers,
     )
+    assert r_bootstrap.status_code == 201
     new_pw_a = f"Np!1-{uuid.uuid4().hex[:8]}"
     r_reset = client.post(
         "/api/auth/owner-reset",
@@ -450,46 +447,18 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
     assert r_reset.status_code == 200
     token_a = r_reset.json()["data"]["token"]
 
-    # Tenant A whoami 仍可用
     r_wa = client.get("/api/manager/whoami", headers={"Authorization": f"Bearer {token_a}"})
     assert r_wa.status_code == 200, f"已登录 agent 的 whoami 不应失效: {r_wa.text}"
 
-    # Tenant B：尝试用错误凭据登录 → 401
+    # A second enterprise would require a separate Manager deployment; this app
+    # rejects it before credential lookup and does not create any registry row.
     tid_b = str(uuid.uuid4())
-    client.post(
-        "/api/manager/tenants",
-        json={
-            "enterprise_id": str(uuid.uuid4()),
-            "tenant_id": tid_b,
-            "enterprise_name": "Company B",
-            "enterprise_code": f"b_{uuid.uuid4().hex[:6]}",
-        },
-        headers=service_token_headers,
-    )
-    phone_b = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bpw_b = f"Boot!1-{uuid.uuid4().hex[:8]}"
-    client.post(
-        "/api/manager/owner-bootstrap",
-        json={"tenant_id": tid_b, "owner_phone": phone_b, "bootstrap_secret": bpw_b, "must_reset": True},
-        headers=service_token_headers,
-    )
-
     r_login_b = client.post(
         "/api/auth/login",
-        json={"tenant_id": tid_b, "account": phone_b, "password": "wrong-wrong"},
+        json={"tenant_id": tid_b, "account": phone_a, "password": "wrong-wrong"},
     )
-    assert r_login_b.status_code == 401, f"B 的新登录应失败: {r_login_b.text}"
+    assert r_login_b.status_code == 503, f"B 的新登录应被 deployment binding 拒绝: {r_login_b.text}"
+    assert r_login_b.json()["code"] == "manager_binding_mismatch"
 
-    # Tenant A whoami 仍然可用 !（旧 token 继续有效）
     r_wa2 = client.get("/api/manager/whoami", headers={"Authorization": f"Bearer {token_a}"})
-    assert r_wa2.status_code == 200, (
-        f"新登录失败不应影响已登录 agent: {r_wa2.text}"
-    )
-
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            for tid in (tid_a, tid_b):
-                conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
+    assert r_wa2.status_code == 200, f"新登录失败不应影响已登录 agent: {r_wa2.text}"

@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,20 @@ from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 
 # resource_type 取值（对齐 MemberGrant 契约）。
 RESOURCE_TYPES = ("expert", "solution")
+
+
+def validate_uuid_string_list(value: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("must be a list of UUIDs")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("IDs must be non-empty UUID strings")
+        try:
+            normalized.append(str(UUID(item)))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("IDs must be valid UUID strings") from exc
+    return normalized
 
 
 # ---- employee/expert 配置载体：复用 Pi 模型/执行策略，外加 persona 与能力引用 ----
@@ -122,6 +137,7 @@ class MemberUpdate(BaseModel):
     status: str | None = Field(default=None, description="active | disabled")
 
 
+
 class MemberOut(BaseModel):
     """成员（app_user principal，租户作用域）。不回显凭据/secret。"""
 
@@ -145,11 +161,13 @@ class MemberGrantCreate(BaseModel):
     member_ids: list[str] = Field(default_factory=list)
 
 
+
 class MemberGrantUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     department_ids: list[str] = Field(default_factory=list)
     member_ids: list[str] = Field(default_factory=list)
+
 
 
 class MemberGrantOut(BaseModel):
@@ -230,6 +248,9 @@ class KnowledgeSpaceBindingOut(BaseModel):
 # 索引绑定完成态走 knowledge_document_binding（employee ↔ document）。
 
 KnowledgeDocumentSource = Literal["file", "url"]
+# An upstream submission with unknown acceptance remains visible as failed +
+# SUBMISSION_UNKNOWN/recovery_required; it is intentionally not a new terminal
+# status because the durable job stays claimable for reconciliation.
 KnowledgeDocumentStatus = Literal[
     "uploaded", "parsing", "indexing", "ready", "failed",
     "reindex_requested", "deleting", "deleted",
@@ -263,9 +284,12 @@ class KnowledgeDocumentOut(BaseModel):
     file_type: str
     file_size: int
     storage_key: str
-    status: KnowledgeDocumentStatus
+    status: KnowledgeDocumentStatus = Field(description="文档状态；上游提交结果未知时仍为 failed，并由 error_code/recovery_required 标识需对账。")
+    can_retry: bool = Field(default=False, description="仅确认无在途工作且非 SUBMISSION_UNKNOWN 时可重试；未知提交仍需对账")
+    can_delete: bool = Field(default=False, description="当前允许请求删除；SUBMISSION_UNKNOWN 时为 false，且不代表物理删除证明")
+    recovery_required: bool = Field(default=False, description="提交结果未知；自动对账期间禁止重试或删除，文档仍可被恢复")
     text_chars: int | None = None
-    error_code: str | None = None
+    error_code: str | None = Field(default=None, description="安全错误码；SUBMISSION_UNKNOWN 表示上游接受结果未知")
     error_message: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -280,7 +304,10 @@ class KnowledgeIngestionJobOut(BaseModel):
     tenant_id: str
     knowledge_space_id: str
     document_id: str
-    status: IngestionJobStatus
+    status: IngestionJobStatus = Field(description="持久化任务状态；failed 不一定是终态，需结合 recovery_required 判断")
+    attempts: int = Field(default=0, ge=0, description="持久化 claim 次数")
+    next_attempt_at: datetime | None = Field(default=None, description="下一次有界对账时间")
+    recovery_required: bool = Field(default=False, description="提交结果未知，保持重试/删除保护；confirmed terminal failure 才可显式重试")
     error_code: str | None = None
     error_message: str | None = None
     chunk_count: int | None = None
@@ -369,7 +396,7 @@ class SkillCatalogIn(BaseModel):
     visibility: CatalogVisibility = Field(default="private")
     config: dict[str, Any] = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）。")
     # M2：技能真相（文件列表 + 包级内容哈希）；供 Agent 端 cache 按 version/hash 判定更新。
-    files: list[SkillFileIn] = Field(default_factory=list, description="技能文件列表（含 SKILL.md）")
+    files: list[SkillFileIn] = Field(default_factory=list, max_length=64, description="显式更新的完整文本包（含 SKILL.md）；PUT省略时保留，空列表仅创建草稿")
     content_hash: str = Field(default="", description="包级内容指纹（SkillPackage 同步 key）")
 
 
@@ -377,7 +404,12 @@ class SkillCatalogOut(SkillCatalogIn):
     """技能目录读取响应体（带 catalog 身份与版本）。"""
 
     catalog_id: str
+    # Reads must preserve legacy JSONB exactly.  In particular, a scalar/object
+    # in ``skill_catalog.files`` is invalid but still inspectable; never coerce
+    # it into an empty executable package or iterate it as a file list.
+    files: Any = Field(default_factory=list, description="已存文件原值；旧非法 scalar/object 保留供诊断，package_status=invalid")
     catalog_version: int = Field(description="目录条目版本；配置变更单调递增")
+    package_status: Literal["draft", "ready", "invalid"] = Field(default="draft", description="实际包状态；draft/invalid 不可分发执行")
 
 
 class ConnectorCatalogIn(BaseModel):
@@ -467,6 +499,7 @@ class RecruitExpertRequest(BaseModel):
     )
 
 
+
 class ApplySolutionRequest(BaseModel):
     """F07 应用方案请求：指定 Operator 侧方案标识 + 本 tenant 落地参数。"""
 
@@ -485,6 +518,7 @@ class ApplySolutionRequest(BaseModel):
     member_ids: list[str] = Field(
         default_factory=list, description="方案默认授权成员（D12，展开为各专家的 member_grant）"
     )
+
 
 
 class SolutionInstanceOut(BaseModel):

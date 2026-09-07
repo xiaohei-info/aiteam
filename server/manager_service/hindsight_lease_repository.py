@@ -24,7 +24,7 @@ from shared.errors import Forbidden, Unauthorized
 _LEASE_COLUMNS = (
     "lease_id, token_sha256, tenant_id, member_id, employee_id, "
     "snapshot_version, policy_fingerprint, bank_id, version, issued_at, "
-    "expires_at, revoked_at"
+    "expires_at, revoked_at, allowed_operations, policy_revision, client_protocol"
 )
 
 
@@ -107,10 +107,11 @@ class HindsightLeaseRepository:
         policy: dict,
         bank_id: str,
         force_rotate: bool = False,
+        client_protocol: str | None = None,
     ):
         """Reuse or atomically rotate the active scope lease."""
 
-        from .hindsight_credentials import HindsightLease
+        from .memory_policy_service import normalize_policy
 
         now = self._now()
         fingerprint = policy_fingerprint(snapshot_version, policy)
@@ -138,6 +139,7 @@ class HindsightLeaseRepository:
                     and not force_rotate
                     and existing.policy_fingerprint == fingerprint
                     and existing.bank_id == bank_id
+                    and existing.client_protocol == client_protocol
                     and existing.token
                 ):
                     return existing
@@ -158,8 +160,8 @@ class HindsightLeaseRepository:
             inserted = session.execute(
                 "INSERT INTO hindsight_lease "
                 "(lease_id, token_sha256, tenant_id, member_id, employee_id, "
-                " snapshot_version, policy_fingerprint, bank_id, version, issued_at, expires_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                " snapshot_version, policy_fingerprint, bank_id, version, issued_at, expires_at, allowed_operations, policy_revision, client_protocol) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "RETURNING " + _LEASE_COLUMNS,
                 (
                     lease_id,
@@ -173,6 +175,9 @@ class HindsightLeaseRepository:
                     version,
                     issued_at,
                     expires_at,
+                    json.dumps(normalize_policy(policy)["allowed_operations"]),
+                    int(policy.get("revision", 0)),
+                    client_protocol,
                 ),
             ).fetchone()
         assert inserted is not None
@@ -350,6 +355,9 @@ def _row_to_lease(row, *, token: str, now: Callable[[], datetime]):
         issued_at=_as_utc(row[9]),
         expires_at=_as_utc(row[10]),
         revoked_at=None if row[11] is None else _as_utc(row[11]),
+        allowed_operations=tuple(row[12] or ()),
+        policy_revision=int(row[13] or 0),
+        client_protocol=row[14],
         _now=now,
     )
 

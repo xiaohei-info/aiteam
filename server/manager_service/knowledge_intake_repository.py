@@ -12,12 +12,19 @@ RLS 强制跨租户隔离。
 
 from __future__ import annotations
 
+import uuid
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
+from shared.errors import Conflict
+
+
+class KnowledgeReconciliationRequired(Conflict):
+    status, code, title = 409, "knowledge_reconciliation_required", "Knowledge reconciliation required"
 
 _DOC_COLUMNS = (
     "id, tenant_id, knowledge_space_id, display_name, source_type, file_name, file_type, "
@@ -25,11 +32,13 @@ _DOC_COLUMNS = (
 )
 _INGEST_COLUMNS = (
     "id, tenant_id, knowledge_space_id, document_id, status, error_code, error_message, "
-    "chunk_count, started_at, completed_at, created_at"
+    "chunk_count, started_at, completed_at, created_at, claim_owner, lease_until, heartbeat_at, "
+    "attempts, next_attempt_at, submission_state, file_source, track_id, upstream_document_id, text_chars, operation_id"
 )
 _BIND_COLUMNS = (
     "id, tenant_id, knowledge_space_id, document_id, employee_id, rag_document_id, "
-    "status, last_synced_at, created_at"
+    "status, last_synced_at, created_at, enabled, policy_revision, policy_source, "
+    "policy_actor, policy_updated_at, revoked_at"
 )
 _OPERATION_COLUMNS = (
     "id, tenant_id, knowledge_space_id, document_id, operation, idempotency_key, "
@@ -91,7 +100,8 @@ class KnowledgeDocumentRepository:
         file_size: int,
         storage_key: str,
         status: str,
-    ) -> KnowledgeDocumentRow:
+        create_job: bool = False,
+    ) -> KnowledgeDocumentRow | tuple[KnowledgeDocumentRow, KnowledgeIngestionJobRow]:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO knowledge_document "
@@ -102,6 +112,9 @@ class KnowledgeDocumentRepository:
                 (ctx.tenant_id, knowledge_space_id, display_name, source_type, file_name,
                  file_type, file_size, storage_key, status),
             ).fetchone()
+            if create_job:
+                job = _insert_job(s, ctx, knowledge_space_id=knowledge_space_id, document_id=str(row[0]), status="parsing")
+                return _row_to_doc(row), job
         assert row is not None
         return _row_to_doc(row)
 
@@ -183,6 +196,17 @@ class KnowledgeIngestionJobRow:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None
+    claim_owner: str | None = None
+    lease_until: datetime | None = None
+    heartbeat_at: datetime | None = None
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+    submission_state: str = "not_submitted"
+    file_source: str = ""
+    track_id: str | None = None
+    upstream_document_id: str | None = None
+    text_chars: int | None = None
+    operation_id: str | None = None
 
 
 def _row_to_ing(row: Any) -> KnowledgeIngestionJobRow:
@@ -190,7 +214,20 @@ def _row_to_ing(row: Any) -> KnowledgeIngestionJobRow:
         id=_s(row[0]), tenant_id=_s(row[1]), knowledge_space_id=row[2], document_id=_s(row[3]),
         status=row[4], error_code=row[5], error_message=row[6], chunk_count=row[7],
         started_at=row[8], completed_at=row[9], created_at=row[10],
+        claim_owner=row[11], lease_until=row[12], heartbeat_at=row[13], attempts=row[14],
+        next_attempt_at=row[15], submission_state=row[16], file_source=row[17], track_id=row[18],
+        upstream_document_id=row[19], text_chars=row[20], operation_id=str(row[21]) if row[21] else None,
     )
+
+
+def _insert_job(s, ctx, *, knowledge_space_id, document_id, status, started_at=None, operation_id=None):
+    job_id = str(uuid.uuid4())
+    row = s.execute(
+        "INSERT INTO knowledge_ingestion_job (id, tenant_id, knowledge_space_id, document_id, status, started_at, file_source, operation_id) "
+        "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, now()), %s, %s) RETURNING " + _INGEST_COLUMNS,
+        (job_id, ctx.tenant_id, knowledge_space_id, document_id, status, started_at, f"{document_id}/{job_id}", operation_id),
+    ).fetchone()
+    return _row_to_ing(row)
 
 
 class KnowledgeIngestionJobRepository:
@@ -199,24 +236,11 @@ class KnowledgeIngestionJobRepository:
     def __init__(self, router: PgTenantRouter):
         self._router = router
 
-    def create(
-        self,
-        ctx: TenantContext,
-        *,
-        knowledge_space_id: str,
-        document_id: str,
-        status: str,
-        started_at: datetime | None = None,
-    ) -> KnowledgeIngestionJobRow:
+    def create(self, ctx: TenantContext, *, knowledge_space_id: str, document_id: str,
+               status: str, started_at: datetime | None = None, operation_id: str | None = None) -> KnowledgeIngestionJobRow:
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO knowledge_ingestion_job "
-                "(tenant_id, knowledge_space_id, document_id, status, started_at) "
-                "VALUES (%s, %s, %s, %s, %s) RETURNING " + _INGEST_COLUMNS,
-                (ctx.tenant_id, knowledge_space_id, document_id, status, started_at),
-            ).fetchone()
-        assert row is not None
-        return _row_to_ing(row)
+            return _insert_job(s, ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                               status=status, started_at=started_at, operation_id=operation_id)
 
     def get(self, ctx: TenantContext, *, ingestion_id: str) -> KnowledgeIngestionJobRow | None:
         with self._router.session(ctx) as s:
@@ -258,6 +282,137 @@ class KnowledgeIngestionJobRepository:
                 (knowledge_space_id,),
             ).fetchall()
         return [_row_to_ing(r) for r in rows]
+
+    def prepare_reindex(
+        self, ctx: TenantContext, *, document_id: str, knowledge_space_id: str,
+        idempotency_key: str, request_fingerprint: str,
+    ) -> KnowledgeReindexPreparation:
+        """Commit the receipt, document CAS and exact job association together.
+
+        The unique operation key serializes same-key requests. A document CAS
+        loser raises inside this transaction so it cannot leave an orphan receipt.
+        No parsing, delivery or external HTTP occurs while this transaction is open.
+        """
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO knowledge_document_operation "
+                "(tenant_id, knowledge_space_id, document_id, operation, idempotency_key, request_fingerprint, status) "
+                "VALUES (%s, %s, %s, 'reindex', %s, %s, 'pending') "
+                "ON CONFLICT (tenant_id, operation, idempotency_key) DO NOTHING RETURNING " + _OPERATION_COLUMNS,
+                (ctx.tenant_id, knowledge_space_id, document_id, idempotency_key, request_fingerprint),
+            ).fetchone()
+            newly_created = row is not None
+            if row is None:
+                row = s.execute(
+                    "SELECT " + _OPERATION_COLUMNS + " FROM knowledge_document_operation "
+                    "WHERE operation='reindex' AND idempotency_key=%s", (idempotency_key,),
+                ).fetchone()
+            if row is None:
+                raise RuntimeError("knowledge operation receipt unavailable")
+            operation = _row_to_operation(row)
+            if (operation.request_fingerprint != request_fingerprint or operation.document_id != document_id
+                    or operation.knowledge_space_id != knowledge_space_id):
+                raise Conflict("idempotency key was already used for a different document operation")
+            if not newly_created:
+                rows = s.execute(
+                    "SELECT " + _INGEST_COLUMNS + " FROM knowledge_ingestion_job WHERE operation_id=%s LIMIT 2",
+                    (operation.id,),
+                ).fetchall()
+                job = _row_to_ing(rows[0]) if len(rows) == 1 else None
+                if len(rows) > 1 or (job is not None and (
+                    job.document_id != operation.document_id or job.knowledge_space_id != operation.knowledge_space_id
+                )):
+                    raise KnowledgeReconciliationRequired("Reindex job association is ambiguous; reconciliation is required")
+                return KnowledgeReindexPreparation(operation, job, newly_created=False)
+            doc = s.execute(
+                "UPDATE knowledge_document SET status='reindex_requested', error_code=NULL, error_message=NULL, updated_at=now() "
+                "WHERE id=%s AND knowledge_space_id=%s AND status IN ('ready','failed') "
+                "AND error_code IS DISTINCT FROM 'SUBMISSION_UNKNOWN' RETURNING id",
+                (document_id, knowledge_space_id),
+            ).fetchone()
+            if doc is None:
+                current = s.execute("SELECT error_code FROM knowledge_document WHERE id=%s", (document_id,)).fetchone()
+                if current and current[0] == "SUBMISSION_UNKNOWN":
+                    raise KnowledgeReconciliationRequired("Submission outcome is unknown; automatic reconciliation continues. Retry/delete are protected.")
+                raise Conflict("document changed or is not ready/failed; reindex was not accepted")
+            s.execute("UPDATE knowledge_document_binding SET status='stale' WHERE document_id=%s AND status <> 'revoked'", (document_id,))
+            job = _insert_job(s, ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
+                              status="reindex_requested", operation_id=operation.id)
+            return KnowledgeReindexPreparation(operation, job, newly_created=True)
+
+    def claim(self, ctx, *, owner: str, job_id: str | None = None):
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT j.id FROM knowledge_ingestion_job j JOIN knowledge_document d ON d.id=j.document_id "
+                "WHERE (%s::uuid IS NULL OR j.id=%s) AND j.next_attempt_at <= now() "
+                "AND (j.lease_until IS NULL OR j.lease_until <= now()) "
+                "AND (j.status NOT IN ('done','failed') OR j.submission_state='submitted') "
+                "AND d.status IN ('uploaded','parsing','indexing','reindex_requested','failed') "
+                "AND j.id=(SELECT k.id FROM knowledge_ingestion_job k WHERE k.document_id=j.document_id ORDER BY k.created_at DESC, k.id DESC LIMIT 1) "
+                "ORDER BY j.next_attempt_at, j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1",
+                (job_id, job_id),
+            ).fetchone()
+            if row is None:
+                return None
+            result = s.execute(
+                "UPDATE knowledge_ingestion_job SET claim_owner=%s, lease_until=now()+interval '90 seconds', "
+                "heartbeat_at=now(), attempts=attempts+1 WHERE id=%s RETURNING " + _INGEST_COLUMNS,
+                (owner, row[0]),
+            ).fetchone()
+            return _row_to_ing(result)
+
+    @staticmethod
+    def _owned(s, job_id, owner):
+        return s.execute(
+            "SELECT id FROM knowledge_ingestion_job WHERE id=%s AND claim_owner=%s AND lease_until>now() FOR UPDATE",
+            (job_id, owner),
+        ).fetchone() is not None
+
+    def fence_submission(self, ctx, job, *, owner, text_chars):
+        with self._router.session(ctx) as s:
+            if not self._owned(s, job.id, owner):
+                return False
+            changed = s.execute(
+                "UPDATE knowledge_ingestion_job SET submission_state='submitted', status='indexing', text_chars=%s, "
+                "heartbeat_at=now(), lease_until=now()+interval '90 seconds' WHERE id=%s AND submission_state='not_submitted'",
+                (text_chars, job.id),
+            ).rowcount
+            if changed:
+                s.execute("UPDATE knowledge_document SET status='indexing', text_chars=%s, error_code=NULL, error_message=NULL, updated_at=now() WHERE id=%s", (text_chars, job.document_id))
+            return changed == 1
+
+    def record_track(self, ctx, job, *, owner, track_id):
+        with self._router.session(ctx) as s:
+            if not self._owned(s, job.id, owner):
+                return False
+            s.execute("UPDATE knowledge_ingestion_job SET track_id=%s, heartbeat_at=now(), lease_until=now()+interval '90 seconds' WHERE id=%s", (track_id, job.id))
+            return True
+
+    def settle(self, ctx, job, *, owner, state, error_code=None, upstream_document_id=None):
+        """CAS job + document + receipt. Unknown submissions stay claimable."""
+        terminal = state == "failed"
+        unknown_terminal = state == "unknown" and job.attempts >= 6
+        code = error_code or ("SUBMISSION_UNKNOWN" if unknown_terminal else None)
+        status = "failed" if terminal or unknown_terminal else "indexing"
+        # Unknown acceptance outcomes remain claimable for bounded automatic
+        # reconciliation even after the visible document status becomes failed.
+        submission_terminal = terminal and not unknown_terminal
+        with self._router.session(ctx) as s:
+            if not self._owned(s, job.id, owner):
+                return False
+            s.execute(
+                "UPDATE knowledge_ingestion_job SET status=%s, submission_state=CASE WHEN %s THEN 'terminal' ELSE submission_state END, "
+                "error_code=%s, error_message=%s, upstream_document_id=COALESCE(%s,upstream_document_id), "
+                "claim_owner=NULL, lease_until=NULL, next_attempt_at=now()+(%s * interval '1 second'), "
+                "completed_at=CASE WHEN %s THEN now() ELSE NULL END WHERE id=%s",
+                (status, submission_terminal, code, "Knowledge reconciliation required" if code else None, upstream_document_id,
+                 min(300, 2 ** min(job.attempts, 8)), terminal or unknown_terminal, job.id),
+            )
+            s.execute("UPDATE knowledge_document SET status=%s, error_code=%s, error_message=%s, updated_at=now() WHERE id=%s",
+                      (status, code, "Knowledge reconciliation required" if code else None, job.document_id))
+            if (terminal or unknown_terminal) and job.operation_id:
+                s.execute("UPDATE knowledge_document_operation SET status='failed', error_code=%s, error_message='Knowledge processing failed', updated_at=now(), completed_at=now() WHERE id=%s", (code, job.operation_id))
+            return True
 
     def mark_done(
         self,
@@ -318,12 +473,22 @@ class KnowledgeDocumentBindingRow:
     last_synced_at: datetime | None
     created_at: datetime | None
 
+    enabled: bool | None = None
+    policy_revision: int = 0
+    policy_source: str = "inherit"
+    policy_actor: str | None = None
+    policy_updated_at: datetime | None = None
+    revoked_at: datetime | None = None
+
 
 def _row_to_bind(row: Any) -> KnowledgeDocumentBindingRow:
     return KnowledgeDocumentBindingRow(
         id=_s(row[0]), tenant_id=_s(row[1]), knowledge_space_id=row[2], document_id=_s(row[3]),
         employee_id=_s(row[4]), rag_document_id=row[5], status=row[6],
-        last_synced_at=row[7], created_at=row[8],
+        last_synced_at=row[7], created_at=row[8], enabled=row[9],
+        policy_revision=row[10], policy_source=row[11],
+        policy_actor=str(row[12]) if row[12] is not None else None,
+        policy_updated_at=row[13], revoked_at=row[14],
     )
 
 
@@ -336,6 +501,33 @@ class KnowledgeDocumentBindingRepository:
 
     def __init__(self, router: PgTenantRouter):
         self._router = router
+
+    def set_policy(self, ctx: TenantContext, *, employee_id: str, document_id: str,
+                   enabled: bool, revoke: bool = False) -> KnowledgeDocumentBindingRow | None:
+        """Only the administrator service calls this; indexing never writes policy columns."""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO knowledge_document_binding AS b "
+                "(tenant_id, knowledge_space_id, document_id, employee_id, status, enabled, "
+                "policy_revision, policy_source, policy_actor, policy_updated_at, revoked_at) "
+                "SELECT %s, d.knowledge_space_id, d.id, e.id, "
+                "CASE WHEN d.status = 'ready' THEN 'ready' ELSE 'pending' END, %s, "
+                "1, 'admin', %s, now(), CASE WHEN %s THEN now() ELSE NULL END "
+                "FROM knowledge_document d CROSS JOIN employee e WHERE d.id = %s AND e.id = %s "
+                "ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE SET "
+                "enabled = EXCLUDED.enabled, policy_revision = b.policy_revision + 1, "
+                "policy_source = 'admin', policy_actor = EXCLUDED.policy_actor, policy_updated_at = now(), "
+                "status = CASE WHEN EXCLUDED.status = 'ready' THEN 'ready' ELSE b.status END, "
+                "revoked_at = CASE WHEN %s THEN COALESCE(b.revoked_at, now()) ELSE NULL END "
+                "WHERE b.enabled IS DISTINCT FROM EXCLUDED.enabled "
+                "OR (b.revoked_at IS NOT NULL) IS DISTINCT FROM %s "
+                "RETURNING " + _BIND_COLUMNS,
+                (ctx.tenant_id, enabled, ctx.user_id, revoke, document_id, employee_id, revoke, revoke),
+            ).fetchone()
+            if row is None:
+                row = s.execute("SELECT " + _BIND_COLUMNS + " FROM knowledge_document_binding "
+                                "WHERE document_id = %s AND employee_id = %s", (document_id, employee_id)).fetchone()
+        return _row_to_bind(row) if row is not None else None
 
     def _upsert_ready_many_in_session(
         self,
@@ -397,17 +589,24 @@ class KnowledgeDocumentBindingRepository:
         text_chars: int,
         completed_at: datetime,
         synced_at: datetime,
+        claim_owner: str | None = None,
     ) -> int:
         """Publish bindings, job completion, and document readiness atomically."""
         with self._router.session(ctx) as s:
+            if claim_owner is not None:
+                if not KnowledgeIngestionJobRepository._owned(s, job_id, claim_owner):
+                    raise RuntimeError("ingestion claim expired")
+                s.execute("UPDATE knowledge_ingestion_job SET status='indexing' WHERE id=%s", (job_id,))
+                s.execute("UPDATE knowledge_document SET status='indexing' WHERE id=%s AND status IN ('indexing','failed')", (document_id,))
             count = self._upsert_ready_many_in_session(
                 s, ctx, knowledge_space_id=knowledge_space_id, document_id=document_id,
                 employee_ids=employee_ids, rag_document_id=rag_document_id, synced_at=synced_at,
             )
             job = s.execute(
                 "UPDATE knowledge_ingestion_job SET status = 'done', chunk_count = %s, "
-                "completed_at = %s WHERE id = %s AND status = 'indexing'",
-                (chunk_count, completed_at, job_id),
+                "completed_at = %s, submission_state='terminal', claim_owner=NULL, lease_until=NULL, error_code=NULL, error_message=NULL, "
+                "upstream_document_id=%s WHERE id = %s AND status = 'indexing'",
+                (chunk_count, completed_at, rag_document_id, job_id),
             )
             if job.rowcount != 1:
                 raise RuntimeError("ingestion job publication failed")
@@ -419,6 +618,8 @@ class KnowledgeDocumentBindingRepository:
             )
             if document.rowcount != 1:
                 raise RuntimeError("knowledge document publication failed")
+            s.execute("UPDATE knowledge_document_operation SET status='completed', upstream_status='processed', updated_at=now(), completed_at=now() "
+                      "WHERE id=(SELECT operation_id FROM knowledge_ingestion_job WHERE id=%s)", (job_id,))
             return count
 
     def upsert_ready(
@@ -435,13 +636,14 @@ class KnowledgeDocumentBindingRepository:
         with self._router.session(ctx) as s:
             # Use one INSERT ... ON CONFLICT statement so concurrent propagation cannot race.
             cur = s.execute(
-                "INSERT INTO knowledge_document_binding "
+                "INSERT INTO knowledge_document_binding AS b "
                 "(tenant_id, knowledge_space_id, document_id, employee_id, "
                 "rag_document_id, status, last_synced_at) "
                 "VALUES (%s, %s, %s, %s, %s, 'ready', %s) "
                 "ON CONFLICT (tenant_id, document_id, employee_id) DO UPDATE SET "
                 "knowledge_space_id = EXCLUDED.knowledge_space_id, "
-                "rag_document_id = EXCLUDED.rag_document_id, status = 'ready', "
+                "rag_document_id = EXCLUDED.rag_document_id, status = CASE "
+                "WHEN EXCLUDED.status = 'ready' THEN 'ready' ELSE b.status END, "
                 "last_synced_at = EXCLUDED.last_synced_at "
                 "RETURNING " + _BIND_COLUMNS,
                 (ctx.tenant_id, knowledge_space_id, document_id, employee_id,
@@ -538,6 +740,13 @@ class KnowledgeOperationRow:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeReindexPreparation:
+    operation: KnowledgeOperationRow
+    job: KnowledgeIngestionJobRow | None
+    newly_created: bool
 
 
 def _row_to_operation(row: Any) -> KnowledgeOperationRow:

@@ -23,6 +23,8 @@ from .routes_employee_prompt import build_employee_prompt_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_knowledge_intake import build_knowledge_intake_router
+from .active_principal import ActivePrincipalVerifier
+from .repository import TenantAuthRepository
 from .routes_member import router as member_router
 from .routes_provider import build_provider_credential_router
 from .routes_platform_model import build_platform_model_router
@@ -52,6 +54,7 @@ from .employee_config_service import build_employee_config_service
 from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import build_knowledge_intake_repositories
+from .knowledge_access_policy import KnowledgeAccessPolicy
 from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .knowledge_space_repository import KnowledgeSpaceRepository
 from .knowledge_space_service import ensure_enterprise_knowledge_space
@@ -98,10 +101,15 @@ def _build_verifier():
     """
     settings = load_settings("manager")
     admin_dsn = settings.admin_db_url
-    if not admin_dsn:
+    if not admin_dsn or not settings.db_url:
         return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
     key_store = TenantKeyStore(admin_dsn)
-    return DynamicRS256TokenVerifier(key_store.public_pem_for_kid)
+    return ActivePrincipalVerifier(
+        DynamicRS256TokenVerifier(key_store.public_pem_for_kid),
+        TenantAuthRepository(PgTenantRouter(settings.db_url)),
+        deployment_tenant_id=settings.manager_tenant_id,
+        require_binding=True,
+    )
 
 
 _verifier = _build_verifier()
@@ -142,6 +150,22 @@ if settings.admin_db_url:
     from shared.db import apply_migrations as _apply_control_migrations
 
     _apply_control_migrations(settings.admin_db_url, settings.app_rw_password)
+
+# Keep readiness and all protected Manager routes bound to the explicitly
+# configured deployment tenant.  Do not discover a tenant from registry rows.
+app.state._manager_binding_ready = False
+if settings.manager_tenant_id and settings.admin_db_url:
+    import psycopg
+    with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
+        bound_row = conn.execute(
+            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
+            (settings.manager_tenant_id,),
+        ).fetchone()
+    # The Operator-controlled F01 provision route may create the bound row on
+    # first boot.  Keep readiness false until it exists, but do not enumerate or
+    # guess another registry row and do not prevent the controlled provision call.
+    app.state._manager_binding_ready = bound_row is not None
+
 # Hindsight lease metadata is durable whenever both Manager DB boundaries are
 # configured.  Cleanup is an admin read/write maintenance operation; issue,
 # rotate, and revoke continue to use the app_rw TenantContext path.
@@ -249,6 +273,7 @@ if settings.db_url:
         member_repository=_rag_member_repo,
         employee_config=_rag_config,
         binding_repository=_rag_doc_binding,
+        knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(_rag_router), _rag_doc_binding),
         rag_service=_rag_service,
         light_rag=_rag_light,
         space_repository=KnowledgeSpaceRepository(_rag_router),
@@ -261,18 +286,38 @@ if settings.db_url:
 
 
 def _initialize_enterprise_knowledge_spaces() -> None:
-    """Materialize the fixed enterprise space for already-provisioned tenants."""
+    """Materialize only the configured deployment tenant's fixed enterprise space.
+
+    A Manager deployment is not allowed to discover a tenant by scanning the
+    control registry.  Missing or stale binding is a startup configuration
+    failure, never a reason to guess the only/first row.
+    """
     if not settings.db_url or not settings.admin_db_url or _rag_settings is None or not _rag_settings.workspace:
         return
+    if not settings.manager_tenant_id:
+        raise RuntimeError("manager deployment tenant binding is required")
     import psycopg
     with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
-        tenant_ids = [str(row[0]) for row in conn.execute("SELECT tenant_id FROM tenant_registry").fetchall()]
-    for tenant_id in tenant_ids:
-        ensure_enterprise_knowledge_space(settings.db_url, tenant_id, _rag_settings.workspace)
-
+        row = conn.execute(
+            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
+            (settings.manager_tenant_id,),
+        ).fetchone()
+    if row is None:
+        # F01 may be the controlled first writer for this exact configured
+        # tenant.  Do not materialize any other registry row or guess a tenant;
+        # readiness remains false until F01 creates the binding row.
+        return
+    ensure_enterprise_knowledge_space(settings.db_url, settings.manager_tenant_id, _rag_settings.workspace)
 
 _initialize_enterprise_knowledge_spaces()
 
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257），
 # 否则 catch-all `GET /{full_path:path}` 会遮蔽后注册的 GET API 路由（如 jwks）→ 404。
 mount_frontend(app, settings.tier)
+
+# Compose with the RAG lifespan; metadata jobs survive restart, never replay memory bodies.
+if settings.db_url and settings.admin_db_url:
+    from .memory_retention_service import install_memory_retention_lifespan
+    install_memory_retention_lifespan(app)
+    from .knowledge_intake_recovery import install_knowledge_intake_lifespan
+    install_knowledge_intake_lifespan(app)

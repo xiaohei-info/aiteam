@@ -8,11 +8,14 @@ from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 from shared.errors import AppError
+from shared.db import PgTenantRouter
+from .repository import TenantAuthRepository
 
-from .hindsight_client import HindsightSettings
+from .hindsight_client import HindsightClient, HindsightSettings
 from .hindsight_credentials import HindsightRuntimeService
 from .hindsight_facade import HindsightFacade
 from .hindsight_lease_repository import HindsightLeaseRepository
+from .memory_retention_service import build_memory_retention_service
 from .schemas_hindsight import (
     HindsightLeaseRevocationOut,
     HindsightRuntimeConfigOut,
@@ -62,6 +65,8 @@ def _runtime_service(request: Request) -> HindsightRuntimeService:
             snapshot_service=_snapshot_service(request),
             settings=settings,
             leases=leases,
+            bank_client=HindsightClient(settings, router=PgTenantRouter(request.app.state.settings.db_url)),
+            retention_service=build_memory_retention_service(request),
         )
         request.app.state._hindsight_runtime_service = cache
     return cache
@@ -75,7 +80,14 @@ def _facade(request: Request) -> HindsightFacade:
             runtime.settings if runtime is not None else HindsightSettings.from_env()
         )
         leases = runtime.leases if runtime is not None else _lease_store(request, settings)
-        cache = HindsightFacade(settings=settings, leases=leases)
+        dsn = request.app.state.settings.db_url
+        if not dsn:
+            raise _ManagerNotConfigured("Manager business DB is not configured")
+        cache = HindsightFacade(settings=settings, leases=leases,
+                               principal_repository=TenantAuthRepository(PgTenantRouter(dsn)),
+                               snapshot_service=_snapshot_service(request),
+                               retention_service=build_memory_retention_service(request),
+                               deployment_tenant_id=request.app.state.settings.manager_tenant_id)
         request.app.state._hindsight_facade = cache
     return cache
 
@@ -100,6 +112,7 @@ def build_hindsight_router(verifier) -> APIRouter:
             tenant_context_from(claims),
             employee_id=body.employee_id,
             rotate=body.rotate,
+            client_protocol=body.client_protocol,
         )
         return Envelope[HindsightRuntimeConfigOut](data=data)
 

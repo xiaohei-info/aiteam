@@ -196,3 +196,43 @@ test("Grant sync maps a Manager transport outage to the formal 503 problem contr
     await fixture.close();
   }
 });
+
+test("Lifecycle known_versions deltas update readiness without mutating an already loaded snapshot", async () => {
+  let status = "draft";
+  let version = 1;
+  let snapshotRequests = 0;
+  const remote = new HttpManagerClient("https://manager.test", async (input, init) => {
+    const body = JSON.parse(String(init?.body)) as { known_versions?: Record<string, string>; employee_version?: string };
+    if (String(input).endsWith("/grants/authorized-config")) {
+      const experts = body.known_versions?.e1 === String(version) ? [] : [{
+        employee_id: "e1", employee_slug: "helper", display_name: "Helper", version, status,
+        model_policy: { model: "test", provider_ref: "test" },
+      }];
+      return new Response(JSON.stringify({ data: { experts, solutions: [], revoked_ids: [] } }));
+    }
+    assert.equal(body.employee_version, String(version));
+    snapshotRequests++;
+    return new Response(JSON.stringify({ data: { snapshot: { employee_id: "e1", version: String(version), snapshot_version: `s${version}`, display_name: "Helper" } } }));
+  });
+  const { fixture, http, base } = await start(remote);
+  const frozen = fixture.store.listSnapshots()[0]!;
+  const before = structuredClone(frozen);
+  try {
+    let known: Record<string, string> = {};
+    for (const next of ["draft", "active", "paused", "active", "archived"]) {
+      status = next;
+      const sync = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1", known_versions: known }) });
+      assert.equal(sync.status, 200, await sync.text());
+      assert.equal(fixture.store.listLoadedExperts("t1", "m1")[0]!.status, status);
+      const readiness = await (await fetch(`${base}/api/agent/grants/readiness`, { headers: auth })).json() as { data: { experts: Array<{ available: boolean }> } };
+      assert.equal(readiness.data.experts[0]!.available, status === "active");
+      known = { e1: String(version) };
+      const requests = snapshotRequests;
+      const unchanged = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1", known_versions: known }) });
+      assert.equal(unchanged.status, 200);
+      assert.equal(snapshotRequests, requests);
+      assert.deepEqual(frozen, before);
+      version++;
+    }
+  } finally { await http.close(); await fixture.close(); }
+});

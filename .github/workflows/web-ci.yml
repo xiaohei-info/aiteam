@@ -104,6 +104,9 @@ jobs:
       DB_URL: postgresql://app_rw:apprwpass@127.0.0.1:5433/manager_control_db
       APP_RW_PASSWORD: apprwpass
       OPERATOR_URL: http://127.0.0.1:8000
+      # Synthetic, per-job deployment binding; never use this value outside CI.
+      E2E_TENANT_ID: 00000000-0000-4000-8000-000000000001
+      MANAGER_TENANT_ID: 00000000-0000-4000-8000-000000000001
       # Playwright globalSetup seeds a runnable employee. The local Agent runs
       # with AITEAM_PI_FAKE=true, so these are non-production seed-only values;
       # the endpoint is never contacted by the CI provider.

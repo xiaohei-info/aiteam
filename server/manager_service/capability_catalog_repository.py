@@ -15,11 +15,14 @@ ctx 读取，SQL 不接受调用方手写 tenant 过滤字符串（D22）。RLS 
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
+from shared.errors import Conflict
+from psycopg.errors import CheckViolation
 
 ResourceKind = Literal["skill", "connector", "memory_policy"]
 
@@ -43,7 +46,7 @@ class SkillCatalogRow:
     binding_policy: str
     visibility: str
     config: dict
-    files: list
+    files: Any
     content_hash: str
     catalog_version: int
 
@@ -89,7 +92,9 @@ def _row_to_skill(row: Any) -> SkillCatalogRow:
     return SkillCatalogRow(
         catalog_id=str(row[0]), skill_id=row[1], display_name=row[2], version=row[3],
         install_policy=row[4], binding_policy=row[5], visibility=row[6], config=row[7] or {},
-        files=list(row[8] or []), content_hash=row[9] or "",
+        # Preserve the JSONB value exactly for status inspection.  Do not turn
+        # an object/string/scalar (or NULL) into fabricated file entries.
+        files=row[8], content_hash=row[9] or "",
         catalog_version=row[10],
     )
 
@@ -117,6 +122,17 @@ def _row_to_memory(row: Any) -> MemoryPolicyCatalogRow:
     )
 
 
+@contextmanager
+def _skill_write(router, ctx):
+    try:
+        with router.session(ctx) as session:
+            yield session
+    except CheckViolation as exc:
+        if exc.diag.constraint_name == "skill_package_version_immutable":
+            raise Conflict("A known skill version cannot change content; choose a new version") from exc
+        raise
+
+
 class CapabilityCatalogRepository:
     """能力目录的租户内读写（skill/connector/memory_policy 三表）。
 
@@ -131,7 +147,7 @@ class CapabilityCatalogRepository:
     def create_skill(self, ctx: TenantContext, *, skill_id: str, display_name: str, version: str,
                      install_policy: str, binding_policy: str, visibility: str, config: dict,
                      files: list | None = None, content_hash: str = "") -> SkillCatalogRow:
-        with self._router.session(ctx) as s:
+        with _skill_write(self._router, ctx) as s:
             row = s.execute(
                 "INSERT INTO skill_catalog "
                 "(tenant_id, skill_id, display_name, version, install_policy, binding_policy, visibility, config, files, content_hash) "
@@ -141,16 +157,19 @@ class CapabilityCatalogRepository:
             ).fetchone()
         return _row_to_skill(row)
 
-    def update_skill(self, ctx: TenantContext, *, catalog_id: str, display_name: str, version: str,
-                     install_policy: str, binding_policy: str, visibility: str, config: dict,
-                     files: list | None = None, content_hash: str = "") -> SkillCatalogRow | None:
-        with self._router.session(ctx) as s:
+    def update_skill(self, ctx: TenantContext, *, catalog_id: str, display_name: str | None, version: str | None,
+                     install_policy: str | None, binding_policy: str | None, visibility: str | None, config: dict | None,
+                     files: list | None = None, content_hash: str | None = None) -> SkillCatalogRow | None:
+        with _skill_write(self._router, ctx) as s:
             row = s.execute(
-                "UPDATE skill_catalog SET display_name = %s, version = %s, install_policy = %s, "
-                "binding_policy = %s, visibility = %s, config = %s, files = %s, content_hash = %s "
-                "WHERE id = %s RETURNING " + _SKILL_COLS,
-                (display_name, version, install_policy, binding_policy, visibility, json.dumps(config),
-                 json.dumps(files or []), content_hash, catalog_id),
+                "UPDATE skill_catalog SET display_name = COALESCE(%s, display_name), version = COALESCE(%s, version), "
+                "install_policy = COALESCE(%s, install_policy), binding_policy = COALESCE(%s, binding_policy), "
+                "visibility = COALESCE(%s, visibility), config = COALESCE(%s::jsonb, config), "
+                "files = COALESCE(%s::jsonb, files), content_hash = COALESCE(%s, content_hash) "
+                "WHERE id = %s AND config->>'source' IS DISTINCT FROM 'operator' RETURNING " + _SKILL_COLS,
+                (display_name, version, install_policy, binding_policy, visibility,
+                 json.dumps(config) if config is not None else None,
+                 json.dumps(files) if files is not None else None, content_hash, catalog_id),
             ).fetchone()
         return _row_to_skill(row) if row is not None else None
 

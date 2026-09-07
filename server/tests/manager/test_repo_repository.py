@@ -9,7 +9,7 @@ from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
 def _identity_row(iid="i-1", uid="m-1", secret="secret", must_reset=False, roles=None):
-    return (iid, uid, secret, must_reset, 1700000000.0, roles or ["member"])
+    return (iid, uid, secret, must_reset, 1700000000.0, roles or ["member"], "active")
 
 
 class TestCreateUserWithIdentity:
@@ -46,7 +46,7 @@ class TestFindIdentity:
 
     def test_found_with_null_roles(self):
         router = FakeRouter()
-        router.queue(FakeCursor(fetchone=("i-1", "m-1", "secret", False, None, None)))
+        router.queue(FakeCursor(fetchone=("i-1", "m-1", "secret", False, None, None, "active")))
         row = TenantAuthRepository(router).find_identity(ctx(), provider=AuthProvider.PASSWORD, external_id="a")
         assert row.roles == []
 

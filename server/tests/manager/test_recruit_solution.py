@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,6 +132,12 @@ class _FakeGrantRepo:
         self._bucket(ctx)[key] = row
         return row
 
+    def extend(self, ctx, *, resource_type, resource_id, department_ids, member_ids):
+        old = self._bucket(ctx).get((resource_type, resource_id))
+        return self.upsert(ctx, resource_type=resource_type, resource_id=resource_id,
+                           department_ids=sorted(set(department_ids) | set(old.department_ids if old else [])),
+                           member_ids=sorted(set(member_ids) | set(old.member_ids if old else [])))
+
     def list_by_resource(self, ctx, *, resource_type, resource_id):
         row = self._bucket(ctx).get((resource_type, resource_id))
         return [row] if row else []
@@ -142,6 +149,14 @@ class _FakeGrantRepo:
                 del bucket[key]
                 return True
         return False
+
+
+class _FakeMemberRepo:
+    def get_department(self, ctx, *, department_id):
+        return SimpleNamespace(id=department_id)
+
+    def get_member(self, ctx, *, member_id):
+        return SimpleNamespace(id=member_id, status="active")
 
 
 class _FakeProviderRepo:
@@ -334,6 +349,24 @@ class _FakeOrderRepo(RecruitOrderRepository):
         return order
 
 
+def _fake_transaction(service):
+    from contextlib import contextmanager
+    from copy import deepcopy
+    from manager_service.recruit_transaction import RecruitWriteRepositories
+    repos = RecruitWriteRepositories(service._employees, service._grants, service._recruit, service._orders)
+    @contextmanager
+    def transaction(ctx):
+        states = [(repo, deepcopy(vars(repo))) for repo in vars(repos).values()]
+        try:
+            yield repos
+        except Exception:
+            for repo, state in states:
+                vars(repo).clear()
+                vars(repo).update(state)
+            raise
+    return transaction
+
+
 def _build_service(catalog: OperatorCatalogPort):
     emp = _FakeEmployeeRepo()
     grant = _FakeGrantRepo()
@@ -345,8 +378,15 @@ def _build_service(catalog: OperatorCatalogPort):
     providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = RecruitService(
         catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, providers=providers,
+        members=_FakeMemberRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     return svc, emp, grant, recruit, orders
+
+
+AUDIENCE_DEPARTMENT = "00000000-0000-4000-8000-000000000001"
+AUDIENCE_MEMBER = "00000000-0000-4000-8000-000000000002"
+MISSING_AUDIENCE_DEPARTMENT = "00000000-0000-4000-8000-000000000099"
 
 
 def _ctx(tid: str, roles=None) -> TenantContext:
@@ -373,10 +413,17 @@ def test_recruit_expert_auto_installs_pinned_platform_skills():
     catalog = FakeOperatorCatalogClient()
     ref = PlatformSkillRef(skill_id="platform-skill", version="1.0.0", content_hash="abc123")
     catalog.seed_expert(_expert_template().model_copy(update={"platform_skill_refs": [ref]}))
-    installer = type("Installer", (), {"install_all": lambda self, ctx, refs: ["platform-skill--v1"]})()
+    from manager_service.platform_skill_service import PreparedPlatformSkill
+    class Installer:
+        def prepare_all(self, ctx, refs):
+            return [PreparedPlatformSkill(ref=refs[0], package=object(), owner="fixture", slug="fixture")]
+        def install_prepared_all(self, ctx, plans):
+            return ["platform-skill--v1"]
+    installer = Installer()
     emp, grant, recruit, orders, providers = _FakeEmployeeRepo(), _FakeGrantRepo(), _FakeRecruitRepo(), _FakeOrderRepo(), _FakeProviderRepo()
     providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, providers=providers, platform_skills=installer)
+    svc._transaction = _fake_transaction(svc)
 
     result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1"))
 
@@ -425,17 +472,17 @@ def test_recruit_expert_binds_grants_when_subjects_provided():
         _ctx("t-a"),
         RecruitExpertRequest(
             template_id="tpl-1", employee_slug="exp-a",
-            department_ids=["dept-1"], member_ids=["mem-1"],
+            department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER],
         ),
     )
 
     assert result.grants_applied is True
-    assert emp.get(_ctx("t-a"), employee_id=result.employee_id).department_ids == ["dept-1"]
+    assert emp.get(_ctx("t-a"), employee_id=result.employee_id).department_ids == [AUDIENCE_DEPARTMENT]
     grants = grant._bucket(_ctx("t-a"))
     assert ("expert", result.employee_id) in grants
     row = grants[("expert", result.employee_id)]
-    assert row.department_ids == ["dept-1"]
-    assert row.member_ids == ["mem-1"]
+    assert row.department_ids == [AUDIENCE_DEPARTMENT]
+    assert row.member_ids == [AUDIENCE_MEMBER]
 
 
 def test_recruit_expert_overrides_take_precedence():
@@ -515,6 +562,28 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
             ),
         ],
     )
+
+
+def test_apply_solution_validates_grant_subjects_before_publication():
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_solution(_solution_package())
+    svc, emp, grant, recruit, _ = _build_service(catalog)
+
+    class MissingSubjects:
+        def get_department(self, ctx, *, department_id):
+            return None
+
+        def get_member(self, ctx, *, member_id):
+            return None
+
+    svc._members = MissingSubjects()
+    with pytest.raises(NotFound, match="department not found"):
+        svc.apply_solution(
+            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[MISSING_AUDIENCE_DEPARTMENT]),
+        )
+    assert emp._bucket(_ctx("t-a")) == {}
+    assert grant._bucket(_ctx("t-a")) == {}
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 
 def test_apply_solution_expands_experts_and_instance():
@@ -599,6 +668,7 @@ def test_apply_solution_rolls_back_when_order_tracking_fails():
         recruit=_FakeRecruitRepo(),
         orders=FailingOrderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="order tracking failure"):
         svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
 
@@ -614,11 +684,12 @@ def test_apply_solution_rolls_back_when_expert_grant_fails():
     emp, recruit, orders = _FakeEmployeeRepo(), _FakeRecruitRepo(), _FakeOrderRepo()
     svc = RecruitService(
         catalog=catalog, employees=emp, grants=FailingGrantRepo(),
-        recruit=recruit, orders=orders,
+        recruit=recruit, orders=orders, members=_FakeMemberRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="expert grant failure"):
         svc.apply_solution(
-            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"]),
+            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
         )
     assert emp._bucket(_ctx("t-a")) == {}
 
@@ -636,6 +707,7 @@ def test_apply_solution_rolls_back_when_instance_creation_fails():
         catalog=catalog, employees=emp, grants=_FakeGrantRepo(),
         recruit=recruit, orders=orders,
     )
+    svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="instance creation failure"):
         svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
     assert emp._bucket(_ctx("t-a")) == {}
@@ -653,10 +725,11 @@ def test_apply_solution_rolls_back_when_solution_grant_fails():
             return super().upsert(ctx, **kwargs)
 
     emp, grant, recruit, orders = _FakeEmployeeRepo(), FailingSolutionGrantRepo(), _FakeRecruitRepo(), _FakeOrderRepo()
-    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, members=_FakeMemberRepo())
+    svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="solution grant failure"):
         svc.apply_solution(
-            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"]),
+            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
         )
     assert emp._bucket(_ctx("t-a")) == {}
     assert grant._bucket(_ctx("t-a")) == {}
@@ -676,6 +749,7 @@ def test_apply_solution_rolls_back_when_apply_record_fails():
         catalog=catalog, employees=_FakeEmployeeRepo(), grants=_FakeGrantRepo(),
         recruit=recruit, orders=_FakeOrderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="apply record failure"):
         svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
     assert recruit.list_solution_instances(_ctx("t-a")) == []
@@ -697,12 +771,13 @@ def test_apply_solution_rolls_back_partial_employee_creation():
     grant = _FakeGrantRepo()
     recruit = _FakeRecruitRepo()
     orders = _FakeOrderRepo()
-    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders)
+    svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, members=_FakeMemberRepo())
+    svc._transaction = _fake_transaction(svc)
 
     with pytest.raises(RuntimeError, match="simulated employee write failure"):
         svc.apply_solution(
             _ctx("t-a"),
-            ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-1"], member_ids=["member-1"]),
+            ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
         )
 
     assert emp._bucket(_ctx("t-a")) == {}
@@ -730,17 +805,17 @@ def test_apply_solution_request_grants_override_package_defaults():
 
     result = svc.apply_solution(
         _ctx("t-a"),
-        ApplySolutionRequest(solution_id="sol-1", department_ids=["dept-req"], member_ids=["mem-req"]),
+        ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
     )
     assert result.grants_applied is True
     grants = grant._bucket(_ctx("t-a"))
     for eid in result.solution_instance.expert_employee_ids:
-        assert emp.get(_ctx("t-a"), employee_id=eid).department_ids == ["dept-req"]
-        assert grants[("expert", eid)].department_ids == ["dept-req"]
-        assert grants[("expert", eid)].member_ids == ["mem-req"]
+        assert emp.get(_ctx("t-a"), employee_id=eid).department_ids == [AUDIENCE_DEPARTMENT]
+        assert grants[("expert", eid)].department_ids == [AUDIENCE_DEPARTMENT]
+        assert grants[("expert", eid)].member_ids == [AUDIENCE_MEMBER]
     solution_grant = grants[("solution", result.solution_instance.id)]
-    assert solution_grant.department_ids == ["dept-req"]
-    assert solution_grant.member_ids == ["mem-req"]
+    assert solution_grant.department_ids == [AUDIENCE_DEPARTMENT]
+    assert solution_grant.member_ids == [AUDIENCE_MEMBER]
 
 
 def test_apply_solution_rejects_coordinator_outside_roster():
@@ -1057,6 +1132,7 @@ def test_recruit_expert_generates_slug_when_missing():
         orders=_FakeOrderRepo(),
         providers=_FakeProviderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-a", enterprise_id="ent-a", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
     assert result.employee_slug, "应自动生成 slug"
@@ -1079,6 +1155,7 @@ def test_recruit_expert_same_template_conflicts():
         orders=_FakeOrderRepo(),
         providers=_FakeProviderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
     svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
     with pytest.raises(Conflict, match="already recruited"):
@@ -1101,6 +1178,7 @@ def test_recruit_expert_explicit_slug_still_works():
         orders=_FakeOrderRepo(),
         providers=_FakeProviderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-exp", enterprise_id="ent-exp", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto", employee_slug="my-custom-slug"))
     assert result.employee_slug == "my-custom-slug"
@@ -1123,6 +1201,7 @@ def test_recruit_expert_generated_slug_allowed_chars():
         orders=_FakeOrderRepo(),
         providers=_FakeProviderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-chars", enterprise_id="ent-chars", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
     slug = result.employee_slug
@@ -1148,6 +1227,7 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
         orders=_FakeOrderRepo(),
         providers=_FakeProviderRepo(),
     )
+    svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
     result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
     assert result.employee_slug == "enterprise_sales_pro_v2"
@@ -1169,6 +1249,7 @@ def _service_with_providers(
         orders=_FakeOrderRepo(),
         providers=providers,
     )
+    svc._transaction = _fake_transaction(svc)
     return svc
 
 

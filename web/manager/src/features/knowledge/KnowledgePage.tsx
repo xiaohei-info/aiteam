@@ -58,6 +58,7 @@ export function KnowledgePage(): ReactNode {
         <VStack gap={1}>
           <Heading level={1}>企业知识库</Heading>
           <Text type="supporting">此页面管理企业文档及 LightRAG 索引状态；引用正文请由用户端 Agent Pi 通过 knowledge_get 获取。</Text>
+          <Text type="supporting">删除文档影响整个企业；仅限制某位专家请在专家配置的知识访问策略中禁用或撤销。重建索引不会恢复管理员已拒绝的权限。</Text>
         </VStack>
         {canWrite && (
           <VStack gap={0} align="end">

@@ -13,6 +13,7 @@ import time
 
 from shared.contracts.tenancy import TenantContext
 
+from .active_principal import require_admin
 from .connector_ops_repository import ConnectorOpsRepository
 from .connector_probe import validate_connector
 
@@ -22,6 +23,7 @@ class ConnectorOpsService:
         self._repo = repo
 
     def get_status(self, ctx: TenantContext, connector_id: str) -> dict:
+        require_admin(ctx)
         row = self._repo.get_status(ctx, connector_id)
         if row is None:
             return {"connector_id": connector_id, "status": "disconnected",
@@ -41,6 +43,7 @@ class ConnectorOpsService:
     ) -> dict:
         # Real local validation: connector_id + auth_scheme + config_schema_json.
         # D18: no outbound connector-API calls here; only admin-face validation.
+        require_admin(ctx)
         t0 = time.time()
         probe = validate_connector(connector_id, auth_scheme=auth_scheme,
                                    config_schema_json=config_schema_json)
@@ -67,12 +70,14 @@ class ConnectorOpsService:
         }
 
     def get_grants(self, ctx: TenantContext, connector_id: str) -> dict:
+        require_admin(ctx)
         row = self._repo.get_grants(ctx, connector_id)
         if row is None:
             return {"connector_id": connector_id, "employee_ids": []}
         return {"connector_id": row.connector_id, "employee_ids": row.employee_ids}
 
     def set_grants(self, ctx: TenantContext, connector_id: str, employee_ids: list[str], action: str) -> dict:
+        require_admin(ctx)
         current = self._repo.get_grants(ctx, connector_id)
         if action == "revoke":
             if current:

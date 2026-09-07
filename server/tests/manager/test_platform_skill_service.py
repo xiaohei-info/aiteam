@@ -68,6 +68,26 @@ def test_install_pinned_operator_skill_into_tenant_catalog():
     assert catalog.rows[tenant_skill_id].files == [{"path": "SKILL.md", "content": "# Skill"}]
 
 
+def test_prepared_install_never_fetches_remote_package_inside_write_step():
+    operator = FakeOperatorCatalogClient()
+    remote = _package()
+    operator.seed_platform_skill(remote)
+    calls = []
+    original = operator.pull_platform_skill
+    def pull_platform_skill(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+    operator.pull_platform_skill = pull_platform_skill
+    catalog = FakeCatalog()
+    service = PlatformSkillService(operator=operator, catalog=catalog)
+    ref = PlatformSkillRef(skill_id=remote.package.skill_id, version=remote.package.version, content_hash=remote.package.content_hash)
+
+    prepared = service.prepare(_ctx(), ref)
+    assert len(calls) == 1
+    assert service.install_prepared(_ctx(), prepared).installed is True
+    assert len(calls) == 1
+
+
 def test_two_versions_keep_distinct_tenant_skill_ids():
     operator = FakeOperatorCatalogClient()
     first = _package(version="1.0.0", content="# V1")

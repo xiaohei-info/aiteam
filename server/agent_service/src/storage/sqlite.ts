@@ -819,6 +819,20 @@ export class AgentSqliteStore {
   }
 
   private replaceProjectionRows(experts: LoadedExpertProjection[], solutions: LoadedSolutionProjection[], snapshots: FrozenSnapshot[], revokedIds: string[], owner: { tenantId: string; memberId: string } | undefined, now: string): { upserted: number; revoked: number } {
+    // Authenticated scoped sync supersedes only the same enterprise employee's
+    // legacy member-less cache. Never let that old active row shadow a paused/revoked delta.
+    const removeLegacyExpert = this.db.prepare("DELETE FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ''");
+    const removeLegacySnapshot = this.db.prepare("DELETE FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ''");
+    if (owner) {
+      const superseded = new Set([
+        ...experts.filter((expert) => expert.tenant_id === owner.tenantId && expert.member_id === owner.memberId).map((expert) => expert.employee_id),
+        ...revokedIds,
+      ]);
+      for (const employeeId of superseded) {
+        removeLegacyExpert.run(employeeId, owner.tenantId);
+        removeLegacySnapshot.run(employeeId, owner.tenantId);
+      }
+    }
     const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, member_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
     for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.member_id ?? "", expert.version, JSON.stringify({ ...expert, tenant_id: expert.tenant_id, ...(expert.member_id ? { member_id: expert.member_id } : {}), synced_at: expert.synced_at ?? now, revoked: false }), now);
     const revoke = owner

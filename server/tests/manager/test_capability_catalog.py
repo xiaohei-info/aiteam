@@ -101,12 +101,8 @@ class _FakeRepo:
         if catalog_id not in b:
             return None
         old = b[catalog_id]
-        row = SkillCatalogRow(
-            catalog_id=old.catalog_id, skill_id=old.skill_id, display_name=kw["display_name"],
-            version=kw["version"], install_policy=kw["install_policy"], binding_policy=kw["binding_policy"],
-            visibility=kw["visibility"], config=kw["config"], files=old.files, content_hash=old.content_hash,
-            catalog_version=old.catalog_version + 1,
-        )
+        from dataclasses import replace
+        row = replace(old, **{name: value for name, value in kw.items() if value is not None}, catalog_version=old.catalog_version + 1)
         b[catalog_id] = row
         return row
 

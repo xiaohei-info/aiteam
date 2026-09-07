@@ -23,19 +23,16 @@ from typing import Protocol
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.platform_provider import PricingSnapshot
 from shared.contracts.snapshot import EmployeeExecutionSnapshot, ExecutionPolicy
+from .knowledge_access_policy import KnowledgeAccess, KnowledgeAccessPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, NotFound
 
+from .active_principal import require_active
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_AGENT_TOOLS = [
-    "bash", "read", "write", "edit", "todo_update",
-    "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain",
-]
 
 # 越权拦截审计动作名（05 F16）。
 _SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
@@ -92,12 +89,7 @@ class SnapshotService:
         self._platform_catalog = platform_catalog
 
     def _ensure_runnable(self, ctx: TenantContext, *, employee_id: str) -> None:
-        """Reject non-active employees for execution-only callers.
-
-        Snapshot generation intentionally remains a read-only projection and may be
-        used by draft-focused configuration tests; runtime pulls must opt into this
-        lifecycle gate explicitly.
-        """
+        """Reject non-active employees before an execution backend is contacted."""
         config = self._config.get(ctx, employee_id=employee_id)
         if config.status != "active":
             raise NotFound("employee is not runnable")
@@ -128,15 +120,11 @@ class SnapshotService:
                 f"(current version is {current_version})"
             )
 
-        knowledge_refs = []
-        if self._knowledge_binding is not None:
-            knowledge_refs = [
-                row.knowledge_space_id
-                for row in self._knowledge_binding.list_all(ctx, employee_id=employee_id)
-                if row.enabled
-            ]
+        policy = KnowledgeAccessPolicy(self._knowledge_binding).resolve(
+            ctx, employee_id=employee_id, tools=config.tools, version=current_version,
+        )
         return _to_snapshot(
-            config, version=current_version, knowledge_refs=knowledge_refs,
+            config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
         )
 
@@ -173,6 +161,7 @@ class SnapshotService:
         （直接 member_ids 命中，或其部门 ∈ grant.department_ids）。无授权 → 403，并记 enterprise_audit。
         审计写在抛 403 之前、读取专家配置之前——结构上不含任何执行配置内容（05 F16，D13）。
         """
+        require_active(self._members.get_member(ctx, member_id))
         if set(ctx.roles) & _GRANT_EXEMPT_ROLES:
             return
         if not self._member_has_expert_grant(ctx, member_id=member_id, employee_id=employee_id):
@@ -221,14 +210,16 @@ class SnapshotService:
 
 
 def _to_snapshot(
-    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str], pricing: PricingSnapshot | None = None
+    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str], knowledge_policy: KnowledgeAccess,
+    pricing: PricingSnapshot | None = None
 ) -> EmployeeExecutionSnapshot:
     """EmployeeConfigOut（中立配置真相）→ EmployeeExecutionSnapshot（只读执行投影）。
 
     snapshot_version 为内容确定性派生：同 (employee_id, version, 配置内容) → 同值，
     保证幂等与对账（05 §5.1 只读可幂等重试）。
     """
-    snapshot_version = _derive_snapshot_version(config, version=version, knowledge_refs=knowledge_refs)
+    snapshot_version = _derive_snapshot_version(config, version=version, knowledge_refs=knowledge_refs,
+                                                knowledge_policy=knowledge_policy)
     return EmployeeExecutionSnapshot(
         employee_id=config.employee_id,
         version=version,
@@ -237,21 +228,21 @@ def _to_snapshot(
         persona=config.persona,
         model_policy=config.model_policy.model_copy(update={"pricing": pricing}),
         execution_policy=ExecutionPolicy(timeout_seconds=config.execution_policy.timeout_seconds),
-        tools=list(config.tools) if config.tools else list(_DEFAULT_AGENT_TOOLS),
+        tools=list(knowledge_policy.tools),
+        knowledge_policy=knowledge_policy.projection,
         skills=list(config.skills),
         knowledge_refs=knowledge_refs,
         connector_refs=list(config.connector_refs),
         memory_policy=config.memory_policy if config.memory_policy is not None else {
-            "enabled": True,
-            "scope": "employee",
-            "allowed_operations": ["recall", "retain"],
+            "enabled": True, "scope": "employee", "allowed_operations": ["recall"],
+            "explicit_auto_retain": False, "retention_days": None,
         },
         department_ids=list(config.department_ids),
     )
 
 
 def _derive_snapshot_version(
-    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str]
+    config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str], knowledge_policy: KnowledgeAccess
 ) -> str:
     """确定性派生 snapshot_version：sha256(employee_id|version|规范化配置内容) 前 16 hex。
 
@@ -263,6 +254,7 @@ def _derive_snapshot_version(
         exclude={"employee_id", "employee_slug", "version", "knowledge_refs"},
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)
+    payload["knowledge_policy"] = knowledge_policy.projection.model_dump(mode="json")
     canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     digest = hashlib.sha256(f"{config.employee_id}|{version}|{canonical}".encode()).hexdigest()
     return f"snap_{version}_{digest[:16]}"

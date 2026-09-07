@@ -9,8 +9,6 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
@@ -21,6 +19,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.errors import AppError
 from shared.db import PgTenantRouter
 
+from .active_principal import require_admin
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 
@@ -86,24 +85,26 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         out = svc.create(tenant_context_from(claims), body, employee_slug=employee_slug)
         return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
-        "", description="列本租户全部 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户全部 employee 配置",
+        "", description="仅owner/enterprise_admin列本租户全部 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户全部 employee 配置",
         operation_id="manager_employee_config_list",
     )
     async def list_employee_config(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[EmployeeConfigOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         items = svc.list_all(tenant_context_from(claims))
         return ListEnvelope[EmployeeConfigOut](data=items)
 
     @router.get(
-        "/{employee_id}", description="取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",
+        "/{employee_id}", description="仅owner/enterprise_admin取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",
         operation_id="manager_employee_config_get",
     )
     async def get_employee_config(
@@ -111,6 +112,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
 
@@ -124,6 +126,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         return Envelope[EmployeeConfigOut](
             data=svc.update(tenant_context_from(claims), body, employee_id=employee_id)
@@ -139,6 +142,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         svc.delete(tenant_context_from(claims), employee_id=employee_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -154,6 +158,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Response:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         items = svc.list_all(tenant_context_from(claims))
         import csv
@@ -186,6 +191,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request = None,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeConfigOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         reason = body.reason if body is not None else None
         if transition == "archive" and not reason:
@@ -209,6 +215,7 @@ def build_employee_router(verifier) -> APIRouter:
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[EmployeeLifecycleOptionsOut]:
+        require_admin(tenant_context_from(claims))
         svc = _service(request)
         row = svc.get(tenant_context_from(claims), employee_id=employee_id)
         from shared.contracts.enums import EmployeeStatus

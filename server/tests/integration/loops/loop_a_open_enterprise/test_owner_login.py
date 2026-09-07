@@ -10,19 +10,24 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
 
-def _provision_owner_for_test(tenant_scope, service_token_headers):
+def _provision_owner_for_test(tenant_scope, service_token_headers, register_tenant):
     """工具：F01+F02 开通企业并 bootstrap owner，返回 (tenant_id, phone, bootstrap_pw, manager_client)。"""
 
     from manager_service.app import app as manager_app
 
-    new_tenant_id = str(uuid.uuid4())
+    # F01 must exercise creation of a fresh registry row. Bind the shared test
+    # app explicitly to this deployment target instead of reusing tenant_scope's
+    # already-created RLS fixture row.
+    new_tenant_id = register_tenant(str(uuid.uuid4()))
+    from tests.integration.fixtures.manager_binding import bind_manager_app
+
+    bind_manager_app(new_tenant_id, manager_app)
     client = TestClient(manager_app)
 
     # F01
@@ -61,15 +66,15 @@ def _provision_owner_for_test(tenant_scope, service_token_headers):
 
 @pytest.mark.integration
 def test_owner_first_login_with_bootstrap_returns_403_must_reset(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """Owner 用 bootstrap 密码首次登录 → 403 (Forbidden: must_reset)。
 
     03 §9.4A：must_reset=true 时拒绝直接签发 token。
     """
-    from manager_service.app import app as manager_app
-
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     # 尝试用 bootstrap 直接登录
     r = _client.post(
@@ -82,19 +87,13 @@ def test_owner_first_login_with_bootstrap_returns_403_must_reset(
     ct = r.headers.get("content-type", "")
     assert ct.startswith("application/problem+json"), f"403 应为 problem+json: {ct}"
     body = r.json()
-    assert body["code"] == "forbidden"
+    assert body["code"] == "password_reset_required"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 @pytest.mark.integration
 def test_owner_reset_then_login_success(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """Owner 重置密码后登录成功。
 
@@ -102,7 +101,9 @@ def test_owner_reset_then_login_success(
     2. 用新密码调用 /api/auth/login 获得 token
     3. 验证 token 结构正确
     """
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     r = _client.post(
@@ -126,12 +127,6 @@ def test_owner_reset_then_login_success(
     assert claims["tenant_id"] == tid
     assert "owner" in claims["roles"]
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 # ── 凭据失效 ──
@@ -139,13 +134,15 @@ def test_owner_reset_then_login_success(
 
 @pytest.mark.integration
 def test_old_bootstrap_invalid_after_reset(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """重置后旧 bootstrap 密码失效。
 
     03 §9.4A 验收："重置后旧凭据失效、新凭据可登录"。
     """
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     # 重置
@@ -169,20 +166,16 @@ def test_old_bootstrap_invalid_after_reset(
     )
     assert r3.status_code == 200
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 @pytest.mark.integration
 def test_repeated_reset_login_cycle(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """重复重置周期：重置多次，每次旧凭据失效、新凭据可登录。"""
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     current_pw = bootstrap_pw
     for i in range(2):
@@ -209,12 +202,6 @@ def test_repeated_reset_login_cycle(
 
         current_pw = new_pw
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 # ── Manager whoami ──
@@ -223,13 +210,15 @@ def test_repeated_reset_login_cycle(
 @pytest.mark.integration
 @pytest.mark.pr_quick
 def test_owner_whoami_after_login(
-    tenant_scope, service_token_headers,
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
 ):
     """Owner 登录后 /api/manager/whoami 返回正确身份。
 
     验收："Manager whoami tenant 等于开通目标 tenant"。
     """
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     new_pw = f"Np!1-{uuid.uuid4().hex[:8]}"
     # 重置
@@ -248,12 +237,6 @@ def test_owner_whoami_after_login(
         f"whoami tenant_id={wdata['tenant_id']} 应等于开通目标 {tid}"
     )
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
 
 
 @pytest.mark.integration
@@ -299,9 +282,13 @@ def test_owner_reset_missing_fields_422(tenant_scope):
 
 
 @pytest.mark.integration
-def test_login_wrong_credentials_returns_401(tenant_scope, service_token_headers):
+def test_login_wrong_credentials_returns_401(
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
+):
     """错误凭据登录 → 401。"""
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     r = _client.post(
         "/api/auth/login",
@@ -310,18 +297,15 @@ def test_login_wrong_credentials_returns_401(tenant_scope, service_token_headers
     assert r.status_code == 401
     assert r.json()["code"] == "unauthorized"
 
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))
-
 
 @pytest.mark.integration
-def test_owner_reset_wrong_old_password_returns_401(tenant_scope, service_token_headers):
+def test_owner_reset_wrong_old_password_returns_401(
+    tenant_scope, service_token_headers, fresh_tenant_cleanup,
+):
     """重置时旧密码错误 → 401。"""
-    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(tenant_scope, service_token_headers)
+    tid, phone, bootstrap_pw, _client = _provision_owner_for_test(
+        tenant_scope, service_token_headers, fresh_tenant_cleanup
+    )
 
     r = _client.post(
         "/api/auth/owner-reset",
@@ -334,10 +318,3 @@ def test_owner_reset_wrong_old_password_returns_401(tenant_scope, service_token_
     )
     assert r.status_code == 401
     assert r.json()["code"] == "unauthorized"
-
-    # 清理
-    import psycopg
-    admin_url = os.getenv("ADMIN_DB_URL")
-    if admin_url:
-        with psycopg.connect(admin_url, autocommit=True) as conn:
-            conn.execute("DELETE FROM tenant_registry WHERE tenant_id = %s", (tid,))

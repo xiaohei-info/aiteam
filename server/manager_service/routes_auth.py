@@ -62,7 +62,12 @@ def _auth_service(request: Request) -> AuthService:
         raise _ManagerNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
     cache = getattr(request.app.state, "_auth_service", None)
     if cache is None:
-        cache = build_auth_service(dsn, admin_dsn=admin_dsn)
+        cache = build_auth_service(
+            dsn,
+            admin_dsn=admin_dsn,
+            deployment_tenant_id=settings.manager_tenant_id,
+            require_binding=True,
+        )
         request.app.state._auth_service = cache
     return cache
 
@@ -73,8 +78,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post(
     "/resolve-tenant-by-account",
-    description="员工账号 → tenant_id 解析（登录前调用，隐藏 UUID 细节；去掉前端手工填企业/租户ID，#382）。"
-              "按 auth_identity.external_id 跨全部租户扫描；未命中 → 404；命中多个 → 409（需明确企业）。",
+    description="员工账号 → 当前 Manager 绑定 tenant_id 解析（登录前调用，隐藏 UUID 细节；#382）。"
+              "仅在已配置部署绑定的企业内查找；未绑定或未命中均 fail-closed。",
     summary="解析员工账号到 tenant_id（公开端点，#382）",
     operation_id="manager_resolve_tenant_by_account",
 )
@@ -90,7 +95,7 @@ async def login(body: LoginInput, svc: AuthService = Depends(_auth_service)) -> 
     return Envelope[AuthResult](data=svc.login(body))
 
 
-@router.post("/owner-reset", description="负责人首登时强制重置密码。首次登录后必须调用此端点设置新密码。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
+@router.post("/owner-reset", description="active账号以旧密码重置。password_reset_required/password_expired提示重置；principal_inactive拒绝重置和签发。已签发离线JWT的expiry不变。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
 async def owner_reset(body: OwnerResetInput, svc: AuthService = Depends(_auth_service)) -> Envelope[AuthResult]:
     return Envelope[AuthResult](data=svc.owner_reset(body))
 
@@ -101,7 +106,7 @@ async def jwks(tenant_id: str, svc: AuthService = Depends(_auth_service)) -> Jwk
     return JwksOut.model_validate(svc.jwks(tenant_id))
 
 
-@router.post("/resolve-tenant", description="企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。按 enterprise_code 或 enterprise_slug 匹配，404 未找到。", summary="解析企业标识到 tenant_id（公开端点）", operation_id="manager_resolve_tenant")
+@router.post("/resolve-tenant", description="企业代码/名称 → 当前 Manager 绑定 tenant_id 解析（登录前调用，隐藏 UUID 细节）。未配置部署绑定时返回 manager_binding_required。", summary="解析企业标识到当前部署 tenant（公开端点）", operation_id="manager_resolve_tenant")
 async def resolve_tenant(
     body: ResolveTenantInput, svc: AuthService = Depends(_auth_service)
 ) -> Envelope[ResolveTenantOutput]:

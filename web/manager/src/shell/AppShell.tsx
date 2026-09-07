@@ -4,6 +4,7 @@
  * 渲染由 buildShellViewModel 产出的可见导航树；未登录只渲染登录入口（requiresLogin）。
  * 不做跨端聚合（08 §12.3 无中心 BFF）——导航全部指向本端路由。
  */
+import { Button } from "@astryxdesign/core/Button";
 import { Outlet, useLocation } from "react-router-dom";
 import { AppShell as AstryxAppShell } from "@astryxdesign/core/AppShell";
 import {
@@ -18,7 +19,7 @@ import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
 
 export function AppShell(): React.ReactNode {
-  const { session } = useSession();
+  const { session, signOut } = useSession();
   const i18n = useI18n();
   const { pathname } = useLocation();
   const vm = buildShellViewModel(managerShellConfig, session, pathname);
@@ -53,6 +54,7 @@ export function AppShell(): React.ReactNode {
       sideNav={sideNav}
       mobileNav={{ breakpoint: "md" }}
     >
+      <Button label="退出登录" variant="ghost" onClick={signOut} />
       <Outlet />
     </AstryxAppShell>
   );

@@ -143,6 +143,20 @@ class EnterpriseDocs(FakeDocs):
         return self._document if document_id == self._document.id else None
 
 
+def stored_documents(root, content_by_id):
+    documents = {}
+    for document_id, (space, text) in content_by_id.items():
+        key = f"knowledge/tenant-a/{space}/{document_id}.txt"
+        path = root / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        documents[document_id] = Document(document_id, space, document_id, storage_key=key, file_name=f"{document_id}.txt")
+    class StoredDocuments:
+        def get(self, ctx, *, document_id):
+            return documents.get(document_id)
+    return StoredDocuments()
+
+
 def test_lightrag_client_uses_manager_headers_and_bounded_query():
     seen = {}
     request_body = {}
@@ -245,17 +259,17 @@ def test_enterprise_scope_allows_ready_documents_without_employee_bindings(tmp_p
     assert result["items"][0]["document_id"] == "doc-1"
 
 
-def test_access_derives_workspace_and_filters_unowned_citations():
+def test_access_derives_workspace_and_filters_unowned_citations(tmp_path):
     async def handler(request: httpx.Request):
         return httpx.Response(200, json={"status": "success", "data": {"references": [
-            {"reference_id": 1, "file_path": "docs/policy.pdf", "content": "allowed", "score": 0.8},
+            {"reference_id": 1, "file_path": "doc-1", "content": "allowed", "score": 0.8},
             {"reference_id": "rag-2", "content": ["unknown"], "score": 0.9},
         ]}})
 
     light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
     access = RagAccessService(
         snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(), binding_repository=FakeBindings(), rag_service=FakeRag(),
-        light_rag=light, space_repository=FakeSpaces(), document_repository=FakeDocs(),
+        light_rag=light, space_repository=FakeSpaces(), document_repository=stored_documents(tmp_path, {"doc-1": ("space-a", "allowed")}), storage_root=tmp_path,
     )
     claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
     async def run():
@@ -306,7 +320,7 @@ def test_access_does_not_use_duplicate_filename_as_citation_alias():
     assert asyncio.run(run())["items"] == []
 
 
-def test_access_joins_reference_metadata_with_chunk_content():
+def test_access_joins_reference_metadata_with_chunk_content(tmp_path):
     async def handler(request: httpx.Request):
         return httpx.Response(200, json={"status": "success", "data": {
             "references": [{"reference_id": "ref-1", "file_path": "doc-1", "file_name": "Policy", "score": 0.7}],
@@ -316,7 +330,7 @@ def test_access_joins_reference_metadata_with_chunk_content():
     light = LightRagClient(LightRagSettings("http://rag", "secret"), transport=httpx.MockTransport(handler))
     access = RagAccessService(
         snapshot_service=FakeSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(), binding_repository=FakeBindings(), rag_service=FakeRag(),
-        light_rag=light, space_repository=FakeSpaces(), document_repository=FakeDocs(),
+        light_rag=light, space_repository=FakeSpaces(), document_repository=stored_documents(tmp_path, {"doc-1": ("space-a", "joined chunk text")}), storage_root=tmp_path,
     )
     async def run():
         try:
@@ -358,7 +372,8 @@ def test_access_drops_wrong_binding_and_document_tenant_or_status():
             return await access.search(access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a"), "policy", 10)
         finally:
             await light.aclose()
-    assert asyncio.run(run())["items"] == []
+    with pytest.raises(Forbidden):
+        asyncio.run(run())
 
 
 def test_access_fails_closed_when_snapshot_and_binding_disagree():
@@ -396,7 +411,7 @@ def test_access_rejects_cross_tenant_or_stale_space_binding(binding_attrs):
         access.authorize(TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000), "employee-a")
 
 
-def test_access_fans_out_spaces_merges_deterministically_and_honors_limit():
+def test_access_fans_out_spaces_merges_deterministically_and_honors_limit(tmp_path):
     class MultiSnapshots(FakeSnapshots):
         def generate(self, ctx, *, member_id, employee_id, employee_version=None):
             return Snapshot(employee_id, ["space-a", "space-b"])
@@ -425,7 +440,7 @@ def test_access_fans_out_spaces_merges_deterministically_and_honors_limit():
     access = RagAccessService(
         snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
         binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=light,
-        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+        space_repository=FakeSpaces(), document_repository=stored_documents(tmp_path, {"doc-a": ("space-a", "rag-a"), "doc-b": ("space-b", "rag-b")}), storage_root=tmp_path,
     )
 
     async def run():
@@ -444,7 +459,7 @@ def test_access_fans_out_spaces_merges_deterministically_and_honors_limit():
     assert "degraded" not in result
 
 
-def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable():
+def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable(tmp_path):
     class MultiSnapshots(FakeSnapshots):
         def generate(self, ctx, *, member_id, employee_id, employee_version=None):
             return Snapshot(employee_id, ["space-a", "space-b"])
@@ -469,7 +484,7 @@ def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable
     access = RagAccessService(
         snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
         binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=light,
-        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+        space_repository=FakeSpaces(), document_repository=stored_documents(tmp_path, {"doc-a": ("space-a", "available"), "doc-b": ("space-b", "rag-b")}), storage_root=tmp_path,
     )
     claims = TokenClaims(tenant_id="tenant-a", user_id="member-a", exp=2_000_000_000)
 
@@ -492,7 +507,7 @@ def test_access_partial_space_failure_is_degraded_and_all_failure_is_unavailable
     failed_access = RagAccessService(
         snapshot_service=MultiSnapshots(), member_repository=FakeMembers(), employee_config=FakeEmployees(),
         binding_repository=MultiBindings(), rag_service=FakeRag(), light_rag=failed_light,
-        space_repository=FakeSpaces(), document_repository=MultiDocs(),
+        space_repository=FakeSpaces(), document_repository=stored_documents(tmp_path, {"doc-a": ("space-a", "available"), "doc-b": ("space-b", "rag-b")}), storage_root=tmp_path,
     )
 
     async def run_all_failed():

@@ -13,6 +13,7 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
+_BOUND_TENANT = "11111111-1111-4111-8111-111111111111"
 
 
 def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder"):
@@ -22,7 +23,8 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, service_token=service_token),
+                              admin_db_url=admin_db_url, service_token=service_token,
+                              manager_tenant_id=_BOUND_TENANT),
                      manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
@@ -31,7 +33,7 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
 
 
 def _body(**kw):
-    base = dict(enterprise_id="ent-1", tenant_id="t1", enterprise_name="Acme")
+    base = dict(enterprise_id="ent-1", tenant_id=_BOUND_TENANT, enterprise_name="Acme")
     base.update(kw)
     return base
 
@@ -100,7 +102,7 @@ def test_provision_no_policies_happy():
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/tenants", json=_body())
         assert r.status_code == 201
-        assert r.json()["data"]["tenant_id"] == "t1"
+        assert r.json()["data"]["tenant_id"] == _BOUND_TENANT
         assert mc.called  # psycopg.connect 被调用一次
 
 
@@ -202,7 +204,7 @@ def test_provision_enterprise_code_slug():
         # 用 code 做为 slug
         # 检查 slug 取值（验证 _service 路径行为）
         first_call_args = mc.return_value.execute.call_args_list[0]
-        assert first_call_args.args[1] == ("t1", "ent-1", "acme-corp", "acme-corp")
+        assert first_call_args.args[1] == (_BOUND_TENANT, "ent-1", "acme-corp", "acme-corp")
 
 
 def test_provision_idempotent_no_policies():

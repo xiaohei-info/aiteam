@@ -30,7 +30,9 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, Unauthorized, ValidationProblem
 
+from .active_principal import require_active, require_bound_tenant
 from .auth_password_policy import (
+    PasswordResetRequired,
     assert_password_not_expired,
     validate_password_complexity,
 )
@@ -69,14 +71,33 @@ class AuthResult(BaseModel):
 class AuthService:
     """编排凭据校验 + token 签发。tenant_id 全程经 TenantContext / 显式入参，不手写过滤。"""
 
-    def __init__(self, *, dsn, repo, keys, audit=None, admin_dsn=None):
+    def __init__(
+        self,
+        *,
+        dsn,
+        repo,
+        keys,
+        audit=None,
+        admin_dsn=None,
+        deployment_tenant_id: str | None = None,
+        require_binding: bool = False,
+    ):
         # dsn：业务连接串（app_rw 身份，跑租户 RLS SQL）。管理连接（签名私钥读写）在 keys 内。
         self.dsn = dsn
         self._repo = repo
         self._keys = keys
         self._audit = audit
+        self._deployment_tenant_id = deployment_tenant_id
+        self._require_binding = require_binding
         # admin_dsn：管理连接串（超管/BYPASSRLS）——仅在跨租户账号解析时需要；未给定时回落 dsn。
         self._admin_dsn = admin_dsn or dsn
+
+    def _bound_tenant(self, requested_tenant_id: str | None = None) -> str | None:
+        if self._require_binding:
+            return require_bound_tenant(self._deployment_tenant_id, requested_tenant_id)
+        if self._deployment_tenant_id is not None and requested_tenant_id is not None:
+            require_bound_tenant(self._deployment_tenant_id, requested_tenant_id)
+        return self._deployment_tenant_id
 
     # ---- 账号开通（控制面/负责人侧调用）----
     def provision_owner(self, tenant_id, *, phone, bootstrap_password):
@@ -104,6 +125,7 @@ class AuthService:
         existing = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
         if existing is None:
             return self.provision_owner(tenant_id, phone=phone, bootstrap_password=bootstrap_password), False
+        require_active(existing)
         self._repo.update_secret(
             ctx,
             provider=AuthProvider.PHONE,
@@ -123,6 +145,7 @@ class AuthService:
         )
 
     def _create(self, tenant_id, *, phone, password, roles, display_name, must_reset):
+        self._bound_tenant(tenant_id)
         validate_password_complexity(password)
         ctx = TenantContext(tenant_id=tenant_id, user_id="system", roles=roles)
         existing = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
@@ -146,16 +169,18 @@ class AuthService:
 
     def login(self, req):
         self._validate_tenant_id(req.tenant_id)
+        self._bound_tenant(req.tenant_id)
         ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
         if identity is None or not identity.secret or not verify_password(req.password, identity.secret):
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                            actor="anon", success=False, detail="invalid credentials")
             raise Unauthorized("invalid credentials")
+        require_active(identity)
         if identity.must_reset:
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                            actor=identity.user_id, success=False, detail="reset required")
-            raise Forbidden("password reset required before login")
+            raise PasswordResetRequired("password reset required before login")
         assert_password_not_expired(password_changed_at=identity.password_changed_at)
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail=None)
@@ -163,6 +188,7 @@ class AuthService:
 
     def owner_reset(self, req):
         self._validate_tenant_id(req.tenant_id)
+        self._bound_tenant(req.tenant_id)
         validate_password_complexity(req.new_password)
         ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
@@ -170,6 +196,7 @@ class AuthService:
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                            actor="anon", success=False, detail="invalid credentials")
             raise Unauthorized("invalid credentials")
+        require_active(identity)
         self._repo.update_secret(
             ctx, provider=AuthProvider.PHONE, external_id=req.account,
             secret=hash_password(req.new_password), must_reset=False,
@@ -180,6 +207,10 @@ class AuthService:
 
     # ---- token 单一出口（9.3/9.5）----
     def _issue(self, tenant_id, user_id, roles):
+        self._bound_tenant(tenant_id)
+        ctx = TenantContext(tenant_id=tenant_id, user_id=user_id, roles=[])
+        principal = require_active(self._repo.find_user(ctx, user_id=user_id))
+        roles = list(principal.roles)
         now = int(time.time())
         claims = TokenClaims(
             tenant_id=tenant_id,
@@ -201,6 +232,7 @@ class AuthService:
     def jwks(self, tenant_id):
         """下发用户端的验签材料（公钥/JWKS，9.5）。"""
         self._validate_tenant_id(tenant_id)
+        self._bound_tenant(tenant_id)
         return self._keys.jwks(tenant_id)
 
     def resolve_tenant(self, enterprise: str) -> str:
@@ -211,12 +243,20 @@ class AuthService:
         """
         import psycopg
 
+        bound_tenant_id = self._bound_tenant()
         with psycopg.connect(self.dsn, autocommit=True) as conn:
-            row = conn.execute(
-                "SELECT tenant_id FROM tenant_registry "
-                "WHERE enterprise_code = %s OR enterprise_slug = %s LIMIT 1",
-                (enterprise, enterprise),
-            ).fetchone()
+            if bound_tenant_id is None:
+                row = conn.execute(
+                    "SELECT tenant_id FROM tenant_registry "
+                    "WHERE enterprise_code = %s OR enterprise_slug = %s LIMIT 1",
+                    (enterprise, enterprise),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT tenant_id FROM tenant_registry "
+                    "WHERE tenant_id = %s AND (enterprise_code = %s OR enterprise_slug = %s)",
+                    (bound_tenant_id, enterprise, enterprise),
+                ).fetchone()
             if not row:
                 raise NotFound(f"enterprise not found: {enterprise}")
             return str(row[0])  # psycopg 返回 UUID 对象,转 str
@@ -229,13 +269,22 @@ class AuthService:
         """
         import psycopg
 
+        bound_tenant_id = self._bound_tenant()
         with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
-            rows = conn.execute(
-                "SELECT tenant_id FROM auth_identity "
-                "WHERE provider IN ('phone', 'password') AND external_id = %s "
-                "ORDER BY provider = 'phone' DESC, created_at DESC",
-                (account,),
-            ).fetchall()
+            if bound_tenant_id is None:
+                rows = conn.execute(
+                    "SELECT tenant_id FROM auth_identity "
+                    "WHERE provider IN ('phone', 'password') AND external_id = %s "
+                    "ORDER BY provider = 'phone' DESC, created_at DESC",
+                    (account,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT tenant_id FROM auth_identity "
+                    "WHERE tenant_id = %s AND provider IN ('phone', 'password') AND external_id = %s "
+                    "ORDER BY provider = 'phone' DESC, created_at DESC",
+                    (bound_tenant_id, account),
+                ).fetchall()
         if not rows:
             raise NotFound(f"account not bound to any tenant: {account}")
         tenant_ids = list({str(r[0]) for r in rows})
@@ -260,7 +309,14 @@ def record_attempt(audit, ctx, *, provider, external_id, actor, success, detail)
         return
 
 
-def build_auth_service(dsn, admin_dsn=None, *, audit_dsn=None):
+def build_auth_service(
+    dsn,
+    admin_dsn=None,
+    *,
+    audit_dsn=None,
+    deployment_tenant_id: str | None = None,
+    require_binding: bool = False,
+):
     """组装 AuthService（60：业务连接与管理连接分离）。
 
     - `dsn`：业务连接串（app_rw 身份）。租户 RLS 数据访问（auth_identity/app_user）走它。
@@ -271,5 +327,12 @@ def build_auth_service(dsn, admin_dsn=None, *, audit_dsn=None):
     router = PgTenantRouter(dsn)
     keys = TenantKeyStore(admin_dsn or dsn)
     audit = LoginAuditRepository(PgTenantRouter(audit_dsn or dsn)) if (audit_dsn or dsn) else None
-    return AuthService(dsn=dsn, repo=TenantAuthRepository(router), keys=keys, audit=audit,
-                       admin_dsn=admin_dsn or dsn)
+    return AuthService(
+        dsn=dsn,
+        repo=TenantAuthRepository(router),
+        keys=keys,
+        audit=audit,
+        admin_dsn=admin_dsn or dsn,
+        deployment_tenant_id=deployment_tenant_id,
+        require_binding=require_binding,
+    )

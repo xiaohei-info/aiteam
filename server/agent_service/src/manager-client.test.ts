@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { HttpManagerClient, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
+import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -109,7 +109,8 @@ test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank
   assert.equal(lease.base_url, "https://manager.test/api/manager/hindsight");
   assert.equal(lease.bank_id, "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   assert.equal(request?.url, "https://manager.test/api/manager/hindsight/runtime-config");
-  assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
+  assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1", client_protocol: HINDSIGHT_CLIENT_PROTOCOL }));
+  assert.equal(lease.explicit_auto_retain, false); // old response is not permission to auto-upload
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
   assert.doesNotMatch(String(request?.init.body), /opaque-lease-secret|bank_id/);
 });
@@ -190,4 +191,55 @@ test("empty skill package responses remain authoritative unless explicitly downg
 test("Manager projection normalization rejects a tenant or member mismatch", () => {
   assert.throws(() => normalizeAuthorizedConfig({ experts: [{ employee_id: "employee-1", tenant_id: "other-tenant", member_id: "member-1", version: "1" }] }, "tenant-1", "member-1"), /different tenant/);
   assert.throws(() => normalizeAuthorizedConfig({ experts: [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-2", version: "1" }] }, "tenant-1", "member-1"), /different member/);
+});
+
+
+test("Manager effective knowledge policy survives snapshot/projection normalization and malformed deny fails closed", () => {
+  const knowledge_policy = { state: "deny", allowed_operations: [], revision: "9" };
+  const expert = { employee_id: "employee", version: "9", knowledge_policy };
+  const snapshot = { ...expert, snapshot_version: "snap9", tools: [] };
+  const result = normalizeAuthorizedConfig({ experts: [expert], snapshots: [snapshot] }, "tenant", "member");
+  assert.deepEqual(result.experts[0].knowledge_policy, knowledge_policy);
+  assert.deepEqual(result.snapshots?.[0].knowledge_policy, knowledge_policy);
+  for (const invalid of [false, { state: "deny", allowed_operations: ["knowledge_get"], revision: "9" },
+    { state: "allow", allowed_operations: ["unknown"], revision: "9" }, { state: "inherit", allowed_operations: [] },
+    { state: "allow", allowed_operations: ["knowledge_get", "knowledge_get"], revision: "9" }]) {
+    assert.throws(() => normalizeAuthorizedConfig({ snapshots: [{ ...snapshot, knowledge_policy: invalid }] }), /knowledge policy/);
+  }
+});
+
+test("Hindsight current protocol validates scope/revision and never infers automatic consent", () => {
+  const base = { base_url: "/api/manager/hindsight", bank_id: `aiteam-${"a".repeat(32)}`, token: "fixture", lease_id: "lease", version: 1,
+    issued_at: new Date().toISOString(), expires_at: new Date(Date.now()+60_000).toISOString(),
+    allowed_operations: ["recall", "retain"], policy_revision: 2 };
+  const old = normalizeHindsightRuntimeConfig({ ...base, explicit_auto_retain: true }, "https://manager.test");
+  assert.deepEqual(old.allowed_operations, ["recall"]);
+  assert.equal(old.explicit_auto_retain, false);
+  const current = { ...base, client_protocol: HINDSIGHT_CLIENT_PROTOCOL, retention_mode: "fact_only" };
+  const normalized = normalizeHindsightRuntimeConfig(current, "https://manager.test");
+  assert.equal(normalized.explicit_auto_retain, false);
+  assert.equal(normalized.retention_mode, "fact_only");
+  assert.deepEqual(normalized.allowed_operations, ["recall", "retain"]);
+  assert.equal(normalized.policy_revision, 2);
+  assert.equal(normalizeHindsightRuntimeConfig({ ...current, explicit_auto_retain: true }, "https://manager.test").explicit_auto_retain, true);
+  for (const explicit_auto_retain of ["true", 1, null]) {
+    assert.throws(() => normalizeHindsightRuntimeConfig({ ...current, explicit_auto_retain }, "https://manager.test"), /consent/);
+  }
+  for (const policy_revision of [undefined, 0, -1, 2.5]) {
+    assert.throws(() => normalizeHindsightRuntimeConfig({ ...current, policy_revision }, "https://manager.test"), /versioned memory lease/);
+  }
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...current, allowed_operations: undefined }, "https://manager.test"), /versioned memory lease/);
+  assert.throws(() => normalizeHindsightRuntimeConfig({ ...current, client_protocol: "unrecognized" }, "https://manager.test"), /protocol/);
+});
+
+test("Hindsight negotiation is constant on rotation and is never retried as an old unscoped request", async () => {
+  for (const status of [401, 403, 409, 422]) {
+    const sent: unknown[] = [];
+    const client = new HttpManagerClient("https://manager.test", async (_url, init) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return Response.json({ code: "fixture-denial" }, { status });
+    });
+    await assert.rejects(() => client.pullHindsightRuntimeConfig(caller, "employee-1", true));
+    assert.deepEqual(sent, [{ employee_id: "employee-1", client_protocol: HINDSIGHT_CLIENT_PROTOCOL, rotate: true }]);
+  }
 });
