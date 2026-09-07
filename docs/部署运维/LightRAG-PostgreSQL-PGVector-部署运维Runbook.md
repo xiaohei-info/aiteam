@@ -58,7 +58,7 @@ legacy 配置下 URL 或 API key 任一缺失时 Manager 应保持 fail-closed�
 
 Manager 控制库的 `rag_workspace.workspace` 与 `instance_id` 是当前 tenant 映射的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy URL/key）registry；数据库不保存凭据，客户端也不能传入 `workspace`/`instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
 
-首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行可以先保持 NULL 并由可信 registry bootstrap；已写入的 instance、tenant 或 derived workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作路由或凭据来源。
+首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行只有在 registry 仅含一个 endpoint 时才可 bootstrap NULL；多 endpoint 且无历史 `instance_id` 必须先由运营核对并回填，Manager 不猜测。已写入的 instance、tenant 或 workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作凭据来源。
 
 ## 2. 初始化独立数据库、role、pgvector
 
@@ -123,7 +123,7 @@ bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   restore --input /var/backups/aiteam/lightrag/known-good.dump --yes
 ```
 
-恢复前须确认 dump 来自同一 storage adapter、embedding dimension 和兼容 LightRAG 版本；恢复会 `pg_restore --clean --if-exists` 覆盖目标 LightRAG 数据，不能在线对同一 workspace 运行旧 writer。
+恢复前须确认 dump 来自同一 storage adapter、embedding dimension 和兼容 LightRAG 版本；恢复会 `pg_restore --clean --if-exists` 覆盖目标 LightRAG 数据，不能在线对同一 tenant workspace 运行旧 writer。
 
 ## 5. 升级与 rollback
 
@@ -143,7 +143,7 @@ bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   rollback --image ghcr.io/hkuds/lightrag:1.5.6 --yes
 ```
 
-升级顺序是备份 → 拉取固定镜像 → 重启 LightRAG writer → health/query smoke。不要让旧版本与新版本同时写同一 workspace；schema/向量 dimension 变化必须走新的隔离数据库和重建索引，而不是直接回滚容器标签。
+升级顺序是备份 → 拉取固定镜像 → 重启 LightRAG writer → health/query smoke。不要让旧版本与新版本同时写同一 tenant workspace；schema/向量 dimension 变化必须走新的隔离数据库和重建索引，而不是直接回滚容器标签。
 
 ## 6. 验收与故障边界
 

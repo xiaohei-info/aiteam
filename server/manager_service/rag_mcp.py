@@ -348,7 +348,12 @@ class RagAccessService:
         # A Manager deployment owns one enterprise-shared knowledge base.  The
         # legacy snapshot binding list remains accepted for old projections, but
         # a new snapshot need not carry a per-space grant just to query it.
-        default_space_id = getattr(self._rag, "default_space_id", None)
+        default_space_resolver = getattr(self._rag, "default_space_id_for", None)
+        default_space_id = (
+            default_space_resolver(ctx)
+            if callable(default_space_resolver)
+            else getattr(self._rag, "default_space_id", None)
+        )
         if not refs and isinstance(default_space_id, str) and default_space_id:
             refs = [default_space_id]
         if not refs:
@@ -357,7 +362,7 @@ class RagAccessService:
         handles: list[RagHandle] = []
         valid_bindings: list[Any] = []
         for space_id in refs:
-            enterprise_scope = self._is_enterprise_scope(space_id)
+            enterprise_scope = self._is_enterprise_scope(space_id, ctx)
             space_bindings = tuple(
                 row for row in all_bindings
                 if self._valid_binding(row, ctx=ctx, employee_id=employee_id, space_id=space_id)
@@ -459,7 +464,7 @@ class RagAccessService:
              )),
             None,
         )
-        if binding is None and not self._is_enterprise_scope(parsed.knowledge_space_id):
+        if binding is None and not self._is_enterprise_scope(parsed.knowledge_space_id, current.ctx):
             raise RagUnavailable("knowledge service unavailable")
         document = self._documents.get(current.ctx, document_id=parsed.document_id)
         if (
@@ -566,9 +571,12 @@ class RagAccessService:
             "display_name": display_name,
         }
 
-    def _is_enterprise_scope(self, space_id: str) -> bool:
-        # The canonical key is enterprise-scoped for every tenant; the actual
-        # LightRAG workspace is still tenant-specific and comes from the handle.
+    def _is_enterprise_scope(self, space_id: str, ctx: TenantContext | None = None) -> bool:
+        # The canonical/legacy enterprise key is resolved per tenant; its
+        # LightRAG workspace remains tenant-specific and comes from the handle.
+        checker = getattr(self._rag, "is_enterprise_space", None)
+        if callable(checker) and ctx is not None:
+            return bool(checker(ctx, space_id))
         return space_id == getattr(self._rag, "default_space_id", None)
 
     @staticmethod
@@ -625,7 +633,7 @@ class RagAccessService:
         blocked_aliases: set[str] = set()
         if self._documents is None:
             return allowed, ambiguous
-        enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id)
+        enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id, auth.ctx)
         rows: list[Any] = list(auth.bindings)
         if enterprise_scope:
             # Enterprise documents are shared once; legacy employee binding rows

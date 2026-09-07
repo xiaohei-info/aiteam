@@ -20,16 +20,21 @@ DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID = "enterprise_shared"
 _SAFE_SPACE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
+def legacy_knowledge_space_id(workspace: str | None) -> str | None:
+    """Extract an old workspace-suffix key without consulting process config."""
+    if not isinstance(workspace, str) or "__" not in workspace:
+        return None
+    suffix = workspace.rsplit("__", 1)[1].strip()
+    return suffix if _SAFE_SPACE_ID.fullmatch(suffix) else None
+
+
 def enterprise_knowledge_space_id(workspace: str | None = None) -> str:
-    """Return the deployment-local internal key for the single enterprise KB."""
+    """Return the configured/default internal key for the enterprise KB."""
     configured = os.getenv("AITEAM_ENTERPRISE_KNOWLEDGE_SPACE_ID", "").strip()
     if configured and _SAFE_SPACE_ID.fullmatch(configured):
         return configured
-    if isinstance(workspace, str) and "__" in workspace:
-        suffix = workspace.rsplit("__", 1)[1].strip()
-        if _SAFE_SPACE_ID.fullmatch(suffix):
-            return suffix
-    return DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
+    legacy = legacy_knowledge_space_id(workspace)
+    return legacy or DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,33 @@ class PgManagerRagService(ManagerRagService):
 
     @property
     def default_space_id(self) -> str:
-        return DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
+        return enterprise_knowledge_space_id()
+
+    def default_space_id_for(self, ctx: TenantContext) -> str:
+        """Resolve the tenant's canonical or legacy enterprise key."""
+        configured = enterprise_knowledge_space_id()
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                "SELECT knowledge_space_id, workspace FROM rag_workspace ORDER BY created_at"
+            ).fetchall()
+        for row in rows:
+            if row[0] == configured:
+                return configured
+        for row in rows:
+            legacy = legacy_knowledge_space_id(row[1] if len(row) > 1 else None)
+            if legacy == row[0]:
+                return row[0]
+        return configured
+
+    def is_enterprise_space(self, ctx: TenantContext, space_id: str) -> bool:
+        if space_id == enterprise_knowledge_space_id():
+            return True
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT workspace FROM rag_workspace WHERE knowledge_space_id = %s",
+                (space_id,),
+            ).fetchone()
+        return bool(row and legacy_knowledge_space_id(row[0]) == space_id)
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
         if not isinstance(knowledge_space_id, str) or not knowledge_space_id.strip():
@@ -83,12 +114,22 @@ class PgManagerRagService(ManagerRagService):
             workspace = existing[0]
             stored_instance_id = existing[1] if len(existing) > 1 else None
 
-        instance = self._resolve_instance(workspace)
+        instances = getattr(self, "_instances", None)
+        if instances is not None and stored_instance_id:
+            # A persisted instance_id is historical routing evidence. Reuse it
+            # directly rather than re-hashing the workspace after a pool/order
+            # change; an unknown id fails closed instead of silently rerouting.
+            instance = self._resolve_instance(workspace, instance_id=str(stored_instance_id))
+        elif instances is not None and existing is not None and len(instances.instances) > 1:
+            # A legacy NULL mapping has no endpoint provenance. Hash routing is
+            # safe for a new mapping, but guessing an old multi-entry binding is
+            # not; require explicit operator reconciliation.
+            raise ValueError("knowledge service unavailable")
+        else:
+            instance = self._resolve_instance(workspace)
         if instance is None:
             instance_id = str(stored_instance_id or "legacy")
         else:
-            if stored_instance_id and str(stored_instance_id) != instance.instance_id:
-                raise ValueError("knowledge service unavailable")
             instance_id = instance.instance_id
 
         with self._router.session(ctx) as s:
@@ -117,12 +158,12 @@ class PgManagerRagService(ManagerRagService):
             instance_id=instance_id,
         )
 
-    def _resolve_instance(self, workspace: str) -> RagInstance | None:
+    def _resolve_instance(self, workspace: str, *, instance_id: str | None = None) -> RagInstance | None:
         instances = getattr(self, "_instances", None)
         if instances is None:
             return None
         try:
-            return instances.resolve(workspace)
+            return instances.by_id(instance_id) if instance_id else instances.resolve(workspace)
         except RagInstanceConfigurationError as exc:
             raise ValueError("knowledge service unavailable") from exc
 

@@ -16,6 +16,8 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import NotFound, ValidationProblem
 
+from .rag import enterprise_knowledge_space_id, legacy_knowledge_space_id
+
 # 绑定目标类型（本表承载的部门/成员；专家授权走 employee_knowledge_binding）。
 BINDING_RESOURCE_TYPES = ("department", "member")
 
@@ -96,7 +98,19 @@ class KnowledgeSpaceRepository:
     def ensure(
         self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str,
     ) -> KnowledgeSpaceRow:
-        """Idempotently materialize a tenant-owned workspace mapping."""
+        """Idempotently materialize a tenant-owned workspace mapping.
+
+        If a legacy deployment already persisted its enterprise key under a
+        workspace suffix, return that row instead of creating an empty
+        canonical alias and hiding the existing documents.
+        """
+        existing = self.get(ctx, knowledge_space_id=knowledge_space_id)
+        if existing is not None:
+            return existing
+        if knowledge_space_id == enterprise_knowledge_space_id():
+            for legacy in self.list_all(ctx):
+                if legacy_knowledge_space_id(legacy.workspace) == legacy.knowledge_space_id:
+                    return legacy
         workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
         with self._router.session(ctx) as s:
             row = s.execute(
@@ -109,6 +123,12 @@ class KnowledgeSpaceRepository:
             ).fetchone()
         assert row is not None
         return _row_to_space(row)
+
+    def is_enterprise_space(self, ctx: TenantContext, *, knowledge_space_id: str) -> bool:
+        if knowledge_space_id == enterprise_knowledge_space_id():
+            return True
+        row = self.get(ctx, knowledge_space_id=knowledge_space_id)
+        return row is not None and legacy_knowledge_space_id(row.workspace) == knowledge_space_id
 
     def get(self, ctx: TenantContext, *, knowledge_space_id: str) -> KnowledgeSpaceRow | None:
         with self._router.session(ctx) as s:

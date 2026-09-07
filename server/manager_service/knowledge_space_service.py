@@ -19,7 +19,7 @@ from .knowledge_space_repository import (
     KnowledgeSpaceRepository,
     KnowledgeSpaceRow,
 )
-from .rag import DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
+from .rag import enterprise_knowledge_space_id
 from .schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceBindingOut,
@@ -56,7 +56,13 @@ class KnowledgeSpaceService:
         _ensure_can_write(ctx)
         if self._repo.get(ctx, knowledge_space_id=body.knowledge_space_id) is not None:
             raise Conflict("knowledge space already exists in this tenant")
-        if self._enterprise_only and body.knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
+        enterprise_checker = getattr(self._repo, "is_enterprise_space", None)
+        if self._enterprise_only and callable(enterprise_checker) and any(
+            enterprise_checker(ctx, knowledge_space_id=row.knowledge_space_id)
+            for row in self._repo.list_all(ctx)
+        ):
+            raise Conflict("knowledge space already exists in this tenant")
+        if self._enterprise_only and body.knowledge_space_id != enterprise_knowledge_space_id():
             raise Conflict("Manager exposes one enterprise knowledge base")
         row = self._repo.create(
             ctx,
@@ -72,7 +78,7 @@ class KnowledgeSpaceService:
     def list_all(self, ctx: TenantContext) -> list[KnowledgeSpaceOut]:
         if self._enterprise_only:
             ensured = self._repo.ensure(
-                ctx, knowledge_space_id=DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID, display_name="企业知识库",
+                ctx, knowledge_space_id=enterprise_knowledge_space_id(), display_name="企业知识库",
             )
             return [_to_space_out(ensured)]
         return [_to_space_out(r) for r in self._repo.list_all(ctx)]
@@ -81,7 +87,7 @@ class KnowledgeSpaceService:
         self, ctx: TenantContext, knowledge_space_id: str, body: KnowledgeSpaceUpdate
     ) -> KnowledgeSpaceOut:
         _ensure_can_write(ctx)
-        if self._enterprise_only and knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
+        if self._enterprise_only and not self._is_enterprise_key(ctx, knowledge_space_id):
             raise Conflict("Manager exposes one enterprise knowledge base")
         if self._require(ctx, knowledge_space_id) is None:
             raise NotFound("knowledge space not found in this tenant")
@@ -111,6 +117,10 @@ class KnowledgeSpaceService:
         ):
             self._expert_binding.unbind(ctx, employee_id=emp_id, knowledge_space_id=knowledge_space_id)
 
+    def _is_enterprise_key(self, ctx: TenantContext, knowledge_space_id: str) -> bool:
+        checker = getattr(self._repo, "is_enterprise_space", None)
+        return bool(checker and checker(ctx, knowledge_space_id=knowledge_space_id))
+
     def _require(self, ctx: TenantContext, knowledge_space_id: str):
         row = self._repo.get(ctx, knowledge_space_id=knowledge_space_id)
         if row is None:
@@ -120,7 +130,7 @@ class KnowledgeSpaceService:
     # ---- 绑定 ----
     def bind(self, ctx: TenantContext, body: KnowledgeSpaceBindingCreate) -> KnowledgeSpaceBindingOut:
         _ensure_can_write(ctx)
-        if self._enterprise_only and body.knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
+        if self._enterprise_only and not self._is_enterprise_key(ctx, body.knowledge_space_id):
             raise Conflict("Manager exposes one enterprise knowledge base")
         # 目标知识空间必须存在（跨 tenant 行 RLS 不可见 → NotFound）。
         if self._repo.get(ctx, knowledge_space_id=body.knowledge_space_id) is None:
@@ -192,7 +202,7 @@ class KnowledgeSpaceService:
         resource_id: str,
     ) -> None:
         _ensure_can_write(ctx)
-        if self._enterprise_only and knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
+        if self._enterprise_only and not self._is_enterprise_key(ctx, knowledge_space_id):
             raise Conflict("Manager exposes one enterprise knowledge base")
         if resource_type == "expert":
             removed = self._expert_binding.unbind(
@@ -221,7 +231,7 @@ def ensure_enterprise_knowledge_space(dsn: str, tenant_id: str) -> KnowledgeSpac
     ctx = TenantContext(tenant_id=tenant_id, user_id="manager-system", roles=["service"])
     return repo.ensure(
         ctx,
-        knowledge_space_id=DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID,
+        knowledge_space_id=enterprise_knowledge_space_id(),
         display_name="企业知识库",
     )
 
