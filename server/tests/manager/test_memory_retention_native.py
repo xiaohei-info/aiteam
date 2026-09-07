@@ -61,7 +61,7 @@ def test_manager_routes_pg_ledger_and_approved_native_http_end_to_end(memory_pg)
         repo = MemoryRetentionRepository(f.router, f.admin_url)
         repo.tenant_ids_due = lambda _tenant=None: [f.ctx.tenant_id]
         clock = [datetime.now(timezone.utc)]
-        retention = MemoryRetentionService(repo, backend, now=lambda: clock[0], bound_tenant_id=f.ctx.tenant_id)
+        retention = MemoryRetentionService(repo, backend, now=lambda: clock[0])
         runtime_service = f.app.state._hindsight_runtime_service
         runtime_service._retention, runtime_service._banks = retention, backend
         facade = f.app.state._hindsight_facade

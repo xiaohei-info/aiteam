@@ -10,17 +10,19 @@ Agent offline JWT verification is unchanged: already-issued tokens remain valid
 until expiry when checked locally. Browser **退出登录** clears only that browser's
 session; it is not remote revocation of every issued JWT.
 
-## One-enterprise deployment binding
+## Session-scoped enterprise, no process tenant pin
 
-Every real Manager deployment must set `MANAGER_TENANT_ID` to the explicitly
-provisioned tenant UUID. The service never infers a tenant from the first or only
-`tenant_registry` row. Public enterprise/account resolution, password login,
-owner reset, JWKS, Operator tenant/bootstrap ingress, protected JWT verification,
-and startup enterprise-space initialization all fail closed when this binding is
-missing or does not exist in the registry. `healthz` remains a process liveness
-check; `readyz` is 503 until the binding is present and validated. Dev/test fixtures
-may inject a synthetic UUID explicitly. A body `tenant_id` never selects a second
-enterprise on a bound deployment.
+Manager no longer requires `MANAGER_TENANT_ID`. A leftover environment value is
+logged and ignored. Each browser session / JWT / request belongs to exactly one
+enterprise selected at login by enterprise code or name plus account and password.
+The service never infers a tenant from Host, `X-Forwarded-Host`, or the first/only
+`tenant_registry` row. `healthz` remains process liveness; `readyz` does not fail
+merely because the process tenant env is absent.
+
+Stage A keeps Operator F01/F02/F17 HTTP writes fail-closed with 503
+`multitenancy_phase_pending` until RAG workspace isolation, enterprise login UI,
+and background job isolation (Stages B/C/E) land. That code is a phase gate, not
+a tenant binding. Already-provisioned tenant login continues to work.
 
 ## Password and factor journeys
 
@@ -67,6 +69,10 @@ RP; enroll a new credential from a working password/other account session.
 Configured Google/GitHub adapters remain optional; no new SSO or refresh service
 is introduced. Register the exact provider callback
 `<MANAGER_PUBLIC_ORIGIN>/auth/oauth/callback`.
+
+Public Passkey and OAuth still accept an internal `tenant_id` UUID handshake.
+That is Stage C compatibility, not the user-facing enterprise login protocol and
+not a process tenant pin. Password login already uses enterprise code/name.
 
 1. `POST /api/auth/oauth/authorize` accepts `provider`, `tenant_id`,
    `redirect_uri`, and additive `intent=login|link` (default login). `link` requires

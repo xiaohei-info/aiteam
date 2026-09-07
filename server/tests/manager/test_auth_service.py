@@ -6,12 +6,18 @@
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from shared.errors import Unauthorized, ValidationProblem
-from manager_service.auth_service import AuthService, LoginInput, OwnerResetInput
+from shared.errors import NotFound, Unauthorized, ValidationProblem
+from manager_service.auth_service import (
+    AuthService,
+    EnterpriseAmbiguous,
+    LoginInput,
+    OwnerResetInput,
+    TenantSelectionRequired,
+)
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 
 
@@ -97,3 +103,86 @@ def test_sync_owner_bootstrap_replaces_existing_owner_credential():
     assert kwargs["external_id"] == "13800138000"
     assert kwargs["must_reset"] is True
     assert args[0].roles == [EnterpriseRole.OWNER.value]
+
+
+def test_login_requires_enterprise_or_tenant_id():
+    svc = _svc()
+    with pytest.raises(ValidationProblem, match="enterprise or tenant_id is required"):
+        svc.login(LoginInput(account="13800138000", password="Pw1!"))
+    svc._repo.find_identity.assert_not_called()
+
+
+def test_login_resolves_enterprise_without_tenant_uuid():
+    svc = _svc()
+    tenant_id = "550e8400-e29b-41d4-a716-446655440000"
+    svc.resolve_tenant = MagicMock(return_value=tenant_id)
+    svc._repo.find_identity.return_value = None
+    with pytest.raises(Unauthorized):
+        svc.login(LoginInput(enterprise="acme", account="13800138000", password="Pw1!"))
+    svc.resolve_tenant.assert_called_once_with("acme")
+    ctx = svc._repo.find_identity.call_args[0][0]
+    assert ctx.tenant_id == tenant_id
+
+
+def test_owner_reset_resolves_enterprise_without_tenant_uuid():
+    svc = _svc()
+    tenant_id = "550e8400-e29b-41d4-a716-446655440000"
+    svc.resolve_tenant = MagicMock(return_value=tenant_id)
+    svc._repo.find_identity.return_value = None
+    with pytest.raises(Unauthorized):
+        svc.owner_reset(
+            OwnerResetInput(
+                enterprise="acme",
+                account="13800138000",
+                old_password="Pw1!",
+                new_password="Fresh-Pass-2",
+            )
+        )
+    svc.resolve_tenant.assert_called_once_with("acme")
+    svc._repo.update_secret.assert_not_called()
+    ctx = svc._repo.find_identity.call_args[0][0]
+    assert ctx.tenant_id == tenant_id
+
+
+def test_login_rejects_enterprise_tenant_mismatch():
+    svc = _svc()
+    svc.resolve_tenant = MagicMock(return_value="550e8400-e29b-41d4-a716-446655440000")
+    with pytest.raises(ValidationProblem, match="enterprise does not match tenant_id"):
+        svc.login(LoginInput(
+            enterprise="acme",
+            tenant_id="11111111-1111-4111-8111-111111111111",
+            account="13800138000",
+            password="Pw1!",
+        ))
+    svc._repo.find_identity.assert_not_called()
+
+
+@patch("psycopg.connect")
+def test_resolve_tenant_slug_collision_is_enterprise_ambiguous(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.side_effect = [[], [("t-1",), ("t-2",)]]
+    mock_connect.return_value.__enter__.return_value = conn
+    with pytest.raises(EnterpriseAmbiguous) as exc:
+        _svc().resolve_tenant("dup-slug")
+    assert exc.value.status == 409
+    assert exc.value.code == "enterprise_ambiguous"
+
+
+@patch("psycopg.connect")
+def test_resolve_tenant_unknown_enterprise_is_not_found(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = []
+    mock_connect.return_value.__enter__.return_value = conn
+    with pytest.raises(NotFound):
+        _svc().resolve_tenant("missing-co")
+
+
+@patch("psycopg.connect")
+def test_resolve_tenant_by_account_duplicate_is_tenant_selection_required(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [("t-1",), ("t-2",)]
+    mock_connect.return_value.__enter__.return_value = conn
+    with pytest.raises(TenantSelectionRequired) as exc:
+        _svc().resolve_tenant_by_account("13800000000")
+    assert exc.value.status == 409
+    assert exc.value.code == "tenant_selection_required"

@@ -45,11 +45,11 @@ def test_bootstrap_to_nonexistent_tenant_rejected(
     # Binding is checked before any registry lookup, so a different tenant is
     # rejected as a deployment-scope mismatch without revealing registry state.
     assert resp.status_code == 503, (
-        f"不同 Manager deployment tenant 应被拒绝，实际: {resp.status_code} body={resp.text}"
+        f"Stage A F02 应相位闸关闭，实际: {resp.status_code} body={resp.text}"
     )
     ct = resp.headers.get("content-type", "")
     assert ct.startswith("application/problem+json"), f"错误响应应为 problem+json: {ct}"
-    assert resp.json()["code"] == "manager_binding_mismatch"
+    assert resp.json()["code"] == "multitenancy_phase_pending"
 
 
 @pytest.mark.integration
@@ -78,7 +78,8 @@ def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
         },
         headers=service_token_headers,
     )
-    assert r1.status_code == 201
+    assert r1.status_code == 503
+    assert r1.json()["code"] == "multitenancy_phase_pending"
 
     resp = client.post(
         "/api/manager/owner-bootstrap",
@@ -92,7 +93,7 @@ def test_bootstrap_wrong_tenant_does_not_create_owner_identity(
     )
     assert resp.status_code == 503
     assert resp.headers.get("content-type", "").startswith("application/problem+json")
-    assert resp.json()["code"] == "manager_binding_mismatch"
+    assert resp.json()["code"] == "multitenancy_phase_pending"
 
     with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
         row = conn.execute(
@@ -328,10 +329,10 @@ def test_cross_tenant_login_nonexistent_tenant(
         "/api/auth/login",
         json={"tenant_id": other_tenant, "account": phone, "password": bootstrap_pw},
     )
-    assert r.status_code == 503, (
-        f"跨 deployment tenant 登录应 503（tenant={other_tenant} 不是 {tid}），实际: {r.status_code}"
+    assert r.status_code == 401, (
+        f"跨 tenant 登录应 401（tenant={other_tenant} 不是 {tid}），实际: {r.status_code}"
     )
-    assert r.json()["code"] == "manager_binding_mismatch"
+    assert r.json()["code"] == "unauthorized"
 
 
 
@@ -354,10 +355,10 @@ def test_owner_reset_wrong_tenant_id(
             "new_password": "New-pw-123",
         },
     )
-    assert r.status_code == 503, (
-        f"错误 tenant_id 重置应 503，实际: {r.status_code}"
+    assert r.status_code == 401, (
+        f"错误 tenant_id 重置应 401，实际: {r.status_code}"
     )
-    assert r.json()["code"] == "manager_binding_mismatch"
+    assert r.json()["code"] == "unauthorized"
 
 
 
@@ -365,41 +366,26 @@ def test_owner_reset_wrong_tenant_id(
 
 
 def _provision_for_negative(tenant_scope, service_token_headers, register_tenant):
-    """Provision a fresh tenant and register it for fixture finalizer cleanup."""
+    """Create an already-provisioned tenant via AuthService (Stage A F01/F02 HTTP is gated)."""
+    import psycopg
     from manager_service.app import app as manager_app
-
-    new_tenant_id = register_tenant(str(uuid.uuid4()))
+    from manager_service.auth_service import build_auth_service
     from tests.integration.fixtures.manager_binding import bind_manager_app
 
+    new_tenant_id = register_tenant(str(uuid.uuid4()))
     bind_manager_app(new_tenant_id, manager_app)
     client = TestClient(manager_app)
-
-    r1 = client.post(
-        "/api/manager/tenants",
-        json={
-            "enterprise_id": str(uuid.uuid4()),
-            "tenant_id": new_tenant_id,
-            "enterprise_name": "NegTest Corp",
-            "enterprise_code": f"ng_{uuid.uuid4().hex[:6]}",
-        },
-        headers=service_token_headers,
-    )
-    assert r1.status_code == 201
-
+    slug = f"ng_{uuid.uuid4().hex[:6]}"
+    with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code) VALUES (%s, %s, %s)",
+            (new_tenant_id, slug, slug),
+        )
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bootstrap_pw = f"Boot!1-{uuid.uuid4().hex[:8]}"
-    r2 = client.post(
-        "/api/manager/owner-bootstrap",
-        json={
-            "tenant_id": new_tenant_id,
-            "owner_phone": phone,
-            "bootstrap_secret": bootstrap_pw,
-            "must_reset": True,
-        },
-        headers=service_token_headers,
+    build_auth_service(tenant_scope.business_url, admin_dsn=tenant_scope.admin_url).provision_owner(
+        new_tenant_id, phone=phone, bootstrap_password=bootstrap_pw,
     )
-    assert r2.status_code == 201
-
     return new_tenant_id, phone, bootstrap_pw, client
 
 
@@ -419,26 +405,20 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
     bind_manager_app(tid_a, manager_app)
     client = TestClient(manager_app)
 
-    # Provision the explicit deployment tenant, then bootstrap and reset its owner.
-    r_provision = client.post(
-        "/api/manager/tenants",
-        json={
-            "enterprise_id": str(uuid.uuid4()),
-            "tenant_id": tid_a,
-            "enterprise_name": "Company A",
-            "enterprise_code": f"a_{uuid.uuid4().hex[:6]}",
-        },
-        headers=service_token_headers,
-    )
-    assert r_provision.status_code == 201
+    import psycopg
+    from manager_service.auth_service import build_auth_service
+
+    slug_a = f"a_{uuid.uuid4().hex[:6]}"
+    with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code) VALUES (%s, %s, %s)",
+            (tid_a, slug_a, slug_a),
+        )
     phone_a = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bpw_a = f"Boot!1-{uuid.uuid4().hex[:8]}"
-    r_bootstrap = client.post(
-        "/api/manager/owner-bootstrap",
-        json={"tenant_id": tid_a, "owner_phone": phone_a, "bootstrap_secret": bpw_a, "must_reset": True},
-        headers=service_token_headers,
+    build_auth_service(tenant_scope.business_url, admin_dsn=tenant_scope.admin_url).provision_owner(
+        tid_a, phone=phone_a, bootstrap_password=bpw_a,
     )
-    assert r_bootstrap.status_code == 201
     new_pw_a = f"Np!1-{uuid.uuid4().hex[:8]}"
     r_reset = client.post(
         "/api/auth/owner-reset",
@@ -457,8 +437,8 @@ def test_agent_token_valid_after_new_login_by_another_owner_fails(
         "/api/auth/login",
         json={"tenant_id": tid_b, "account": phone_a, "password": "wrong-wrong"},
     )
-    assert r_login_b.status_code == 503, f"B 的新登录应被 deployment binding 拒绝: {r_login_b.text}"
-    assert r_login_b.json()["code"] == "manager_binding_mismatch"
+    assert r_login_b.status_code == 401, f"B 的新登录应 401: {r_login_b.text}"
+    assert r_login_b.json()["code"] == "unauthorized"
 
     r_wa2 = client.get("/api/manager/whoami", headers={"Authorization": f"Bearer {token_a}"})
     assert r_wa2.status_code == 200, f"新登录失败不应影响已登录 agent: {r_wa2.text}"

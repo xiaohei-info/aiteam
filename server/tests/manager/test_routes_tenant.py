@@ -23,8 +23,7 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, service_token=service_token,
-                              manager_tenant_id=_BOUND_TENANT),
+                              admin_db_url=admin_db_url, service_token=service_token),
                      manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
@@ -95,19 +94,18 @@ def test_provision_extra_field_422():
 
 # ---- happy + 条件分支 ----
 
-def test_provision_no_policies_happy():
-    """无 initial_quota_policy 且无 visible_catalog_policy → 只 INSERT tenant_registry。"""
+def test_provision_stage_a_phase_gate():
+    """Stage A: F01 stays fail-closed with an explicit non-tenant phase gate."""
     mc = _mock_psycopg()
     with patch("psycopg.connect", mc):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/tenants", json=_body())
-        assert r.status_code == 201
-        assert r.json()["data"]["tenant_id"] == _BOUND_TENANT
-        assert mc.called  # psycopg.connect 被调用一次
+    assert r.status_code == 503
+    assert r.json()["code"] == "multitenancy_phase_pending"
+    assert not mc.called
 
 
-def test_provision_with_quota_policy_only():
-    """带 initial_quota_policy（visible_catalog_policy=None）→ 调用 _provision_quota_policy。"""
+def test_provision_with_quota_policy_only_is_phase_gated():
     mc = _mock_psycopg()
     quota_policy = {"policy_slug": "default", "display_name": "Default",
                     "scope": "tenant", "window_days": 30,
@@ -115,9 +113,9 @@ def test_provision_with_quota_policy_only():
     with patch("psycopg.connect", mc):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/tenants", json=_body(initial_quota_policy=quota_policy))
-        assert r.status_code == 201
-        # psycopg.connect 被调两次（插入 tenant_registry + quota_policy）
-        assert mc.call_count == 2
+    assert r.status_code == 503
+    assert r.json()["code"] == "multitenancy_phase_pending"
+    assert not mc.called
 
 
 def test_quota_policy_window_uses_parameterized_interval():
@@ -166,52 +164,18 @@ def test_quota_policy_window_uses_parameterized_interval():
     assert insert_params[4] == 30
 
 
-def test_provision_with_visible_catalog_policy_only():
-    """带 visible_catalog_policy → _provision_visible_catalog_policy 走 pass 分支。"""
-    mc = _mock_psycopg()
-    visible_policy = {"visible_skills": ["s1"], "visible_connectors": ["c1"],
-                      "default_visibility": "private"}
-    with patch("psycopg.connect", mc):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/manager/tenants",
-                   json=_body(visible_catalog_policy=visible_policy))
-        assert r.status_code == 201
-        # _provision_visible_catalog_policy 只 pass（不连库），故 psycopg 调用仍 1
-        assert mc.call_count == 1
-
-
-def test_provision_with_both_policies():
+def test_provision_policy_bodies_remain_phase_gated():
     mc = _mock_psycopg()
     with patch("psycopg.connect", mc):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/manager/tenants", json=_body(
+        visible = c.post("/api/manager/tenants", json=_body(visible_catalog_policy={"visible_skills": ["s1"]}))
+        both = c.post("/api/manager/tenants", json=_body(
             initial_quota_policy={"policy_slug": "d"},
             visible_catalog_policy={"visible_skills": ["s1"]},
         ))
-        assert r.status_code == 201
-        # quota_policy 连一次 + visible_catalog 不连库 → total 2
-        assert mc.call_count == 2
-
-
-def test_provision_enterprise_code_slug():
-    """enterprise_code 非 None → slug = enterprise_code（else 分支覆盖）。"""
-    mc = _mock_psycopg()
-    with patch("psycopg.connect", mc):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/manager/tenants", json=_body(enterprise_code="acme-corp"))
-        assert r.status_code == 201
-        # execute 第一个参数是 SQL，第二个是 (tenant_id, slug, enterprise_code)
-        # 用 code 做为 slug
-        # 检查 slug 取值（验证 _service 路径行为）
-        first_call_args = mc.return_value.execute.call_args_list[0]
-        assert first_call_args.args[1] == (_BOUND_TENANT, "ent-1", "acme-corp", "acme-corp")
-
-
-def test_provision_idempotent_no_policies():
-    """同一 body 多次调（无策略）→ 201 且行为稳定（幂等 ON CONFLICT）。"""
-    mc = _mock_psycopg()
-    with patch("psycopg.connect", mc):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r1 = c.post("/api/manager/tenants", json=_body())
-        r2 = c.post("/api/manager/tenants", json=_body())
-        assert r1.status_code == 201 and r2.status_code == 201
+        coded = c.post("/api/manager/tenants", json=_body(enterprise_code="acme-corp"))
+        again = c.post("/api/manager/tenants", json=_body())
+    for response in (visible, both, coded, again):
+        assert response.status_code == 503
+        assert response.json()["code"] == "multitenancy_phase_pending"
+    assert not mc.called

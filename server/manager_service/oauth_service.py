@@ -3,6 +3,9 @@
 把 OAuthProvider（上游协议） + OAuthConnectionStore（绑定持久化） + TenantAuthRepository（auth_identity 映射）
 拼成端到端 OAuth 登录/绑定流程。tenant_id 只经 TenantContext 出入（D22）。
 
+公开 authorize 的 tenant_id 是 Stage C 之前的内部兼容 handshake（不是进程 pin，也不是用户可见企业选择）。
+受保护 link 必须与当前 JWT TenantContext 一致。
+
 流程：
 - authorize：生成 state（含 tenant_id + redirect_uri + nonce），返回 provider 授权跳转 URL。
 - callback：校验 state，provider 换 token + 取 profile，反查/建 auth_identity(provider=oauth, external_id=provider:sub)，
@@ -12,13 +15,12 @@
 
 from __future__ import annotations
 
-from shared.contracts.enums import AuthProvider
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Unauthorized, ValidationProblem
 
 from .auth_service import AuthResult
 from .auth_origin import AuthOrigin
-from .active_principal import require_active, require_bound_tenant
+from .active_principal import require_active
 from .login_audit import LoginAuditRepository
 from .oauth import (
     OAuthConnectionStore, OAuthError, OAuthProfile, OAuthProvider,
@@ -37,8 +39,6 @@ class OAuthService:
         audit: LoginAuditRepository,
         issuer,
         origin: AuthOrigin | None = None,
-        deployment_tenant_id: str | None = None,
-        require_binding: bool = False,
     ):
         self._providers = providers
         self._connections = connections
@@ -46,8 +46,6 @@ class OAuthService:
         self._audit = audit
         self._issuer = issuer
         self._origin = origin
-        self._deployment_tenant_id = deployment_tenant_id
-        self._require_binding = require_binding
 
     @property
     def origin(self):
@@ -60,8 +58,6 @@ class OAuthService:
         return sorted(self._providers.keys())
 
     def authorize(self, *, provider: str, tenant_id: str, redirect_uri: str, intent: str = "login", ctx: TenantContext | None = None) -> dict:
-        if self._require_binding:
-            require_bound_tenant(self._deployment_tenant_id, tenant_id)
         prov = self._providers.get(provider)
         if prov is None:
             raise ValidationProblem("unsupported oauth provider: %s" % provider)
@@ -87,8 +83,6 @@ class OAuthService:
         except OAuthError as exc:
             raise ValidationProblem("invalid oauth state: %s" % exc) from exc
         tenant_id = payload.get("t")
-        if self._require_binding:
-            require_bound_tenant(self._deployment_tenant_id, tenant_id)
         redirect_uri = payload.get("r")
         if (not tenant_id or redirect_uri != self.origin.oauth_redirect_uri
                 or payload.get("provider") != provider or payload.get("intent") != "login"):

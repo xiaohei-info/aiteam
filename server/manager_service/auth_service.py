@@ -28,9 +28,9 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, Forbidden, NotFound, Unauthorized, ValidationProblem
+from shared.errors import Conflict, NotFound, Unauthorized, ValidationProblem
 
-from .active_principal import require_active, require_bound_tenant
+from .active_principal import require_active
 from .auth_password_policy import (
     PasswordResetRequired,
     assert_password_not_expired,
@@ -44,21 +44,35 @@ from .security import hash_password, verify_password
 _ACCESS_TTL_SECONDS = 3600  # 短期 access token；过期需重新联网登录（9.5）。
 
 
+class TenantSelectionRequired(Conflict):
+    code, title = "tenant_selection_required", "Tenant Selection Required"
+
+
+class EnterpriseAmbiguous(Conflict):
+    code, title = "enterprise_ambiguous", "Enterprise Ambiguous"
+
+
 class LoginInput(BaseModel):
+    """企业成员/负责人登录。用户填写企业标识与账号密码；tenant_id 仅为内部解析结果。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    tenant_id: str = Field(description="租户 id（由企业定位解析得到，RLS 主键来源）")
+    enterprise: str | None = Field(default=None, description="企业代码或名称")
     account: str = Field(description="手机号/用户名（external_id）")
-    password: str
+    password: str = Field(description="登录密码；仅用于本次请求，不会回显。")
+    tenant_id: str | None = Field(default=None, description="内部 tenant UUID（解析结果，非用户必填）")
 
 
 class OwnerResetInput(BaseModel):
+    """负责人重置密码。用户填写企业标识与账号密码；tenant_id 仅为内部解析结果。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    tenant_id: str
-    account: str
+    enterprise: str | None = Field(default=None, description="企业代码或名称")
+    account: str = Field(description="手机号/用户名（external_id）")
     old_password: str = Field(description="bootstrap/旧密码")
-    new_password: str
+    new_password: str = Field(description="要设置的新密码")
+    tenant_id: str | None = Field(default=None, description="内部 tenant UUID（解析结果，非用户必填）")
 
 
 class AuthResult(BaseModel):
@@ -79,25 +93,14 @@ class AuthService:
         keys,
         audit=None,
         admin_dsn=None,
-        deployment_tenant_id: str | None = None,
-        require_binding: bool = False,
     ):
         # dsn：业务连接串（app_rw 身份，跑租户 RLS SQL）。管理连接（签名私钥读写）在 keys 内。
         self.dsn = dsn
         self._repo = repo
         self._keys = keys
         self._audit = audit
-        self._deployment_tenant_id = deployment_tenant_id
-        self._require_binding = require_binding
         # admin_dsn：管理连接串（超管/BYPASSRLS）——仅在跨租户账号解析时需要；未给定时回落 dsn。
         self._admin_dsn = admin_dsn or dsn
-
-    def _bound_tenant(self, requested_tenant_id: str | None = None) -> str | None:
-        if self._require_binding:
-            return require_bound_tenant(self._deployment_tenant_id, requested_tenant_id)
-        if self._deployment_tenant_id is not None and requested_tenant_id is not None:
-            require_bound_tenant(self._deployment_tenant_id, requested_tenant_id)
-        return self._deployment_tenant_id
 
     # ---- 账号开通（控制面/负责人侧调用）----
     def provision_owner(self, tenant_id, *, phone, bootstrap_password):
@@ -145,7 +148,6 @@ class AuthService:
         )
 
     def _create(self, tenant_id, *, phone, password, roles, display_name, must_reset):
-        self._bound_tenant(tenant_id)
         validate_password_complexity(password)
         ctx = TenantContext(tenant_id=tenant_id, user_id="system", roles=roles)
         existing = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
@@ -167,10 +169,22 @@ class AuthService:
         except (ValueError, TypeError):
             raise ValidationProblem("invalid tenant_id format")
 
+    def _session_tenant_id(self, *, tenant_id: str | None, enterprise: str | None) -> str:
+        resolved = None
+        if enterprise and enterprise.strip():
+            resolved = self.resolve_tenant(enterprise.strip())
+        if tenant_id is not None:
+            self._validate_tenant_id(tenant_id)
+            if resolved is not None and tenant_id != resolved:
+                raise ValidationProblem("enterprise does not match tenant_id")
+            return tenant_id
+        if resolved is None:
+            raise ValidationProblem("enterprise or tenant_id is required")
+        return resolved
+
     def login(self, req):
-        self._validate_tenant_id(req.tenant_id)
-        self._bound_tenant(req.tenant_id)
-        ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
+        tenant_id = self._session_tenant_id(tenant_id=req.tenant_id, enterprise=req.enterprise)
+        ctx = TenantContext(tenant_id=tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
         if identity is None or not identity.secret or not verify_password(req.password, identity.secret):
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
@@ -184,13 +198,12 @@ class AuthService:
         assert_password_not_expired(password_changed_at=identity.password_changed_at)
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail=None)
-        return self._issue(req.tenant_id, identity.user_id, identity.roles)
+        return self._issue(tenant_id, identity.user_id, identity.roles)
 
     def owner_reset(self, req):
-        self._validate_tenant_id(req.tenant_id)
-        self._bound_tenant(req.tenant_id)
+        tenant_id = self._session_tenant_id(tenant_id=req.tenant_id, enterprise=req.enterprise)
         validate_password_complexity(req.new_password)
-        ctx = TenantContext(tenant_id=req.tenant_id, user_id="anon", roles=[])
+        ctx = TenantContext(tenant_id=tenant_id, user_id="anon", roles=[])
         identity = self._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=req.account)
         if identity is None or not identity.secret or not verify_password(req.old_password, identity.secret):
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
@@ -203,11 +216,10 @@ class AuthService:
         )
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail="owner reset")
-        return self._issue(req.tenant_id, identity.user_id, identity.roles)
+        return self._issue(tenant_id, identity.user_id, identity.roles)
 
     # ---- token 单一出口（9.3/9.5）----
     def _issue(self, tenant_id, user_id, roles):
-        self._bound_tenant(tenant_id)
         ctx = TenantContext(tenant_id=tenant_id, user_id=user_id, roles=[])
         principal = require_active(self._repo.find_user(ctx, user_id=user_id))
         roles = list(principal.roles)
@@ -232,46 +244,45 @@ class AuthService:
     def jwks(self, tenant_id):
         """下发用户端的验签材料（公钥/JWKS，9.5）。"""
         self._validate_tenant_id(tenant_id)
-        self._bound_tenant(tenant_id)
         return self._keys.jwks(tenant_id)
 
     def resolve_tenant(self, enterprise: str) -> str:
-        """企业代码/名称 → tenant_id 解析（登录前调用，隐藏 UUID 细节）。
-
-        按 tenant_registry.enterprise_code 或 enterprise_slug 匹配（优先 code，再 slug），
-        404 未找到。返回 tenant_id UUID 字符串供 login/owner-reset 使用。
-        """
+        """企业代码/名称 → tenant_id。代码精确匹配优先；slug 收集全部匹配，歧义 409。"""
         import psycopg
 
-        bound_tenant_id = self._bound_tenant()
-        with psycopg.connect(self.dsn, autocommit=True) as conn:
-            if bound_tenant_id is None:
-                row = conn.execute(
-                    "SELECT tenant_id FROM tenant_registry "
-                    "WHERE enterprise_code = %s OR enterprise_slug = %s LIMIT 1",
-                    (enterprise, enterprise),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT tenant_id FROM tenant_registry "
-                    "WHERE tenant_id = %s AND (enterprise_code = %s OR enterprise_slug = %s)",
-                    (bound_tenant_id, enterprise, enterprise),
-                ).fetchone()
-            if not row:
-                raise NotFound(f"enterprise not found: {enterprise}")
-            return str(row[0])  # psycopg 返回 UUID 对象,转 str
-
-    def resolve_tenant_by_account(self, account: str) -> str:
-        """Resolve an account inside this Manager's bound enterprise.
-
-        The admin lookup remains for compatibility with the existing schema, but
-        a bound deployment never returns an account from another enterprise.
-        """
-        import psycopg
-
-        bound_tenant_id = self._bound_tenant()
+        value = (enterprise or "").strip()
+        if not value:
+            raise ValidationProblem("enterprise is required")
         with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
-            if bound_tenant_id is None:
+            code_rows = conn.execute(
+                "SELECT tenant_id FROM tenant_registry WHERE enterprise_code = %s",
+                (value,),
+            ).fetchall()
+            code_ids = list({str(row[0]) for row in code_rows})
+            if len(code_ids) == 1:
+                return code_ids[0]
+            if len(code_ids) > 1:
+                raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
+            slug_rows = conn.execute(
+                "SELECT tenant_id FROM tenant_registry WHERE enterprise_slug = %s",
+                (value,),
+            ).fetchall()
+            slug_ids = list({str(row[0]) for row in slug_rows})
+            if len(slug_ids) == 1:
+                return slug_ids[0]
+            if len(slug_ids) > 1:
+                raise EnterpriseAmbiguous(f"enterprise identifier is ambiguous: {value}")
+        raise NotFound(f"enterprise not found: {value}")
+
+    def resolve_tenant_by_account(self, account: str, enterprise: str | None = None) -> str:
+        """Resolve an account to one tenant; optional enterprise disambiguates duplicates."""
+        import psycopg
+
+        scoped = None
+        if enterprise and enterprise.strip():
+            scoped = self.resolve_tenant(enterprise.strip())
+        with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
+            if scoped is None:
                 rows = conn.execute(
                     "SELECT tenant_id FROM auth_identity "
                     "WHERE provider IN ('phone', 'password') AND external_id = %s "
@@ -283,13 +294,13 @@ class AuthService:
                     "SELECT tenant_id FROM auth_identity "
                     "WHERE tenant_id = %s AND provider IN ('phone', 'password') AND external_id = %s "
                     "ORDER BY provider = 'phone' DESC, created_at DESC",
-                    (bound_tenant_id, account),
+                    (scoped, account),
                 ).fetchall()
         if not rows:
             raise NotFound(f"account not bound to any tenant: {account}")
         tenant_ids = list({str(r[0]) for r in rows})
         if len(tenant_ids) > 1:
-            raise Conflict(
+            raise TenantSelectionRequired(
                 f"account belongs to multiple tenants, enterprise must be specified: {account}"
             )
         return tenant_ids[0]
@@ -314,8 +325,6 @@ def build_auth_service(
     admin_dsn=None,
     *,
     audit_dsn=None,
-    deployment_tenant_id: str | None = None,
-    require_binding: bool = False,
 ):
     """组装 AuthService（60：业务连接与管理连接分离）。
 
@@ -333,6 +342,4 @@ def build_auth_service(
         keys=keys,
         audit=audit,
         admin_dsn=admin_dsn or dsn,
-        deployment_tenant_id=deployment_tenant_id,
-        require_binding=require_binding,
     )

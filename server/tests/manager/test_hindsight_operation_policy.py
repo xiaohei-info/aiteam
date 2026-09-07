@@ -32,8 +32,7 @@ def scope():
         seen.append(request)
         return httpx.Response(200, json={"results": [{"text": "fixture"}]})
     facade = HindsightFacade(settings=_settings(), leases=leases, snapshot_service=snapshot,
-                             principal_repository=principals, client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
-                             deployment_tenant_id="tenant-1")
+                             principal_repository=principals, client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
     return NS(client=TestClient(_app(facade)), headers={"Authorization": "Bearer " + lease.token}, lease=lease,
               policy=policy, snapshot=snapshot, principal=principal, principals=principals, seen=seen,
               now=now, leases=leases, facade=facade, base="/api/manager/hindsight/v1/default/banks/bank-a")

@@ -271,7 +271,37 @@ def test_control_plane_openapi_documents_known_bounds(tier: str) -> None:
                 assert {"success", "async", "operation_id"} <= set(ack_schema["required"])
                 ack_example = next(iter(response["content"]["application/json"]["examples"].values()))["value"]["data"]
                 assert ack_example == {"success": True, "async": True, "operation_id": "00000000-0000-4000-8000-000000000004"}
-        assert spec["paths"]["/readyz"]["get"]["responses"]["503"]["$ref"] == "#/components/responses/ReadinessUnavailable"
+        readyz = spec["paths"]["/readyz"]["get"]
+        assert readyz["responses"]["200"]
+        assert "503" not in readyz["responses"]
+        dumped = json.dumps(spec)
+        assert "manager deployment tenant binding" not in dumped
+        assert "manager_binding_required" not in dumped
+        assert "必须先绑定唯一部署企业" not in dumped
+        assert "ReadinessUnavailable" not in dumped
+        login = spec["paths"]["/api/auth/login"]["post"]
+        reset = spec["paths"]["/api/auth/owner-reset"]["post"]
+        resolve = spec["paths"]["/api/auth/resolve-tenant"]["post"]
+        resolve_account = spec["paths"]["/api/auth/resolve-tenant-by-account"]["post"]
+        for operation in (login, reset, resolve, resolve_account):
+            assert operation["responses"]["409"]["$ref"] == "#/components/responses/AuthConflict"
+        auth_conflict = spec["components"]["responses"]["AuthConflict"]
+        conflict_codes = {
+            example["value"]["code"]
+            for example in auth_conflict["content"]["application/problem+json"]["examples"].values()
+        }
+        assert conflict_codes == {"enterprise_ambiguous", "tenant_selection_required"}
+        login_example = next(iter(login["requestBody"]["content"]["application/json"]["examples"].values()))["value"]
+        assert list(login_example)[:3] == ["enterprise", "account", "password"]
+        assert "tenant_id" not in login_example
+        reset_example = next(iter(reset["requestBody"]["content"]["application/json"]["examples"].values()))["value"]
+        assert reset_example["enterprise"] and reset_example["account"]
+        assert "tenant_id" not in reset_example
+        login_schema = schemas["LoginInput"]
+        assert set(login_schema["required"]) == {"account", "password"}
+        assert "enterprise" in login_schema["properties"]
+        assert "tenant_id" in login_schema["properties"]
+        assert login["description"].find("企业") >= 0
         hindsight = schemas["HindsightRuntimeConfigOut"]
         assert {
             "allowed_operations", "policy_revision", "client_protocol",

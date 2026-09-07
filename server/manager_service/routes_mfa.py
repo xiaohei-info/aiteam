@@ -5,6 +5,8 @@
 
 统一经 shared/auth require_claims 解出身份；PasskeyService/OAuthService 以 tenant_id 经 TenantContext 隔离；
 token 经 AuthService.issue 签发（与密码登录同一出口）。
+公开 Passkey/OAuth 请求里的 tenant_id 是 Stage C 之前的内部兼容 handshake，不是用户可见企业选择字段，
+也不是进程级 MANAGER_TENANT_ID。密码登录已使用企业标识；公开因子的企业标识语义留到 Stage C。
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from shared.contracts.envelope import Envelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError, NotFound
 
-from .active_principal import require_active, require_bound_tenant
+from .active_principal import require_active
 from .auth_origin import AuthOrigin
 from .auth_service import AuthResult, AuthService, build_auth_service
 from .login_audit import LoginAuditRepository
@@ -55,7 +57,7 @@ class PasskeyLoginIn(BaseModel):
     """WebAuthn 登录断言。"""
 
     model_config = ConfigDict(extra="allow", json_schema_extra={"x-dynamic-json": True})
-    tenant_id: str = Field(description="企业租户 ID。")
+    tenant_id: str = Field(description="内部 tenant UUID handshake（Stage C 再改为企业标识；非用户可见企业选择）。")
     id: str | None = Field(default=None, description="credential ID。")
     rawId: str | None = Field(default=None, description="base64url credential ID。")
     type: str | None = Field(default=None, description="WebAuthn credential 类型。")
@@ -65,7 +67,7 @@ class PasskeyLoginIn(BaseModel):
 class OAuthAuthorizeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider: str = Field(description="OAuth 提供方。")
-    tenant_id: str = Field(description="企业租户 ID。")
+    tenant_id: str = Field(description="内部 tenant UUID handshake（Stage C 再改为企业标识；非用户可见企业选择）。")
     redirect_uri: str = Field(description="可信MANAGER_PUBLIC_ORIGIN的 /auth/oauth/callback。")
     intent: Literal["login", "link"] = Field(default="login", description="login登录；link绑定当前active JWT用户。")
 
@@ -115,8 +117,6 @@ def _auth_service(request: Request) -> AuthService:
             dsn,
             admin_dsn=admin_dsn,
             audit_dsn=dsn,
-            deployment_tenant_id=settings.manager_tenant_id,
-            require_binding=True,
         )
         request.app.state._auth_service = cache
     return cache
@@ -165,8 +165,6 @@ def _oauth_service(request: Request, auth: AuthService) -> OAuthService:
             auth_repo=auth._repo,
             audit=LoginAuditRepository(r),
             issuer=auth.issue,
-            deployment_tenant_id=_settings(request).manager_tenant_id,
-            require_binding=True,
         )
         request.app.state._oauth_service = cache
     return cache
@@ -193,7 +191,6 @@ async def passkey_authentication_options(
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
 ) -> Envelope[PasskeyOptionsOut]:
-    require_bound_tenant(_settings(request).manager_tenant_id, tenant_id)
     svc = _passkey_service(request, auth)
     return Envelope[PasskeyOptionsOut](data=PasskeyOptionsOut.model_validate(svc.authentication_options(tenant_id, account)))
 
@@ -209,7 +206,6 @@ async def passkey_login(
     auth: AuthService = Depends(_auth_service),
     request: Request = None,
 ) -> Envelope[AuthResult]:
-    require_bound_tenant(_settings(request).manager_tenant_id, body.tenant_id)
     svc = _passkey_service(request, auth)
     payload = body.model_dump(exclude_none=True)
     return Envelope[AuthResult](data=svc.finish_login(tenant_id=body.tenant_id, payload=payload))
@@ -325,7 +321,6 @@ async def oauth_authorize(
     request: Request,
     auth: AuthService = Depends(_auth_service),
 ) -> Envelope[OAuthAuthorizeOut]:
-    require_bound_tenant(_settings(request).manager_tenant_id, body.tenant_id)
     svc = _oauth_service(request, auth)
     return Envelope[OAuthAuthorizeOut](data=OAuthAuthorizeOut(**svc.authorize(provider=body.provider, tenant_id=body.tenant_id,
                                                                                 redirect_uri=body.redirect_uri, intent=body.intent,

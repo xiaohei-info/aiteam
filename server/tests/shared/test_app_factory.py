@@ -49,36 +49,23 @@ def test_healthz_and_readyz():
 def test_healthz_and_readyz_follow_current_app_state_settings():
     """Rebinding the injected app state updates health/readiness decisions."""
     configured = _settings(tier="manager").model_copy(
-        update={"service_name": "configured-manager", "manager_tenant_id": None}
+        update={"service_name": "configured-manager"}
     )
     app = create_app(configured, _empty_router(prefix="/api/manager"))
     original_state = dict(app.state._state)
-    app.state.settings = configured.model_copy(
-        update={
-            "service_name": "rebound-manager",
-            "manager_tenant_id": "00000000-0000-4000-8000-000000000001",
-        }
-    )
-    app.state._manager_binding_ready = True
+    app.state.settings = configured.model_copy(update={"service_name": "rebound-manager"})
     client = TestClient(app)
 
     assert client.get("/healthz").json()["service"] == "rebound-manager"
     assert client.get("/readyz").status_code == 200
     assert client.get("/readyz").json()["service"] == "rebound-manager"
 
-    app.state.settings = configured.model_copy(update={"manager_tenant_id": None})
-    unavailable = client.get("/readyz")
-    assert unavailable.status_code == 503
-    assert unavailable.json()["code"] == "manager_binding_required"
-
-    # A test harness can restore the original State mapping without leaving the
-    # rebound settings/readiness flag visible to the next test.
     app.state._state.clear()
     app.state._state.update(original_state)
     assert client.get("/healthz").json()["service"] == "configured-manager"
     restored = client.get("/readyz")
-    assert restored.status_code == 503
-    assert restored.json()["code"] == "manager_binding_required"
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "ready"
 
 
 def test_docs_enabled():

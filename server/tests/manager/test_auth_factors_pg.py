@@ -44,7 +44,6 @@ def auth_app(migrated_db, admin_url, two_tenants, monkeypatch):
             service_name="fixture",
             db_url=migrated_db,
             admin_db_url=admin_url,
-            manager_tenant_id=tenant,
         ),
         APIRouter(),
     )
@@ -52,8 +51,6 @@ def auth_app(migrated_db, admin_url, two_tenants, monkeypatch):
     app.state._token_verifier = ActivePrincipalVerifier(
         RS256TokenVerifier.from_jwks(auth.jwks(tenant)),
         auth._repo,
-        deployment_tenant_id=tenant,
-        require_binding=True,
     )
     for route in [auth_router, passkey_router, passkey_mgmt_router, oauth_router, oauth_mgmt_router]:
         app.include_router(route)

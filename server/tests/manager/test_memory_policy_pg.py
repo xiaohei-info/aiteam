@@ -57,7 +57,7 @@ def memory_pg(migrated_db, admin_url, two_tenants):
     snapshot = SnapshotService(config_service=config, grant_service=grants, member_service=MemberDeptService(repo=members))
     signer = DevTokenService("fixture-only")
     verifier = ActivePrincipalVerifier(signer, TenantAuthRepository(router))
-    app = create_app(Settings(tier="manager", service_name="memory-fixture", db_url=migrated_db, admin_db_url=admin_url, manager_tenant_id=tenant), APIRouter())
+    app = create_app(Settings(tier="manager", service_name="memory-fixture", db_url=migrated_db, admin_db_url=admin_url), APIRouter())
     app.state._token_verifier = verifier
     app.state._operator_catalog = None
     app.include_router(build_employee_bindings_router(verifier))
@@ -70,8 +70,7 @@ def memory_pg(migrated_db, admin_url, two_tenants):
         seen.append(request)
         return httpx.Response(200, json={"results": []})
     app.state._hindsight_facade = HindsightFacade(settings=_settings(), leases=leases, snapshot_service=snapshot,
-        principal_repository=TenantAuthRepository(router), client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
-        deployment_tenant_id=tenant)
+        principal_repository=TenantAuthRepository(router), client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
     def headers(user=owner, roles=None):
         claims = TokenClaims(tenant_id=tenant, user_id=user, roles=roles or ["owner"], exp=2_000_000_000)
         return {"Authorization": "Bearer " + signer.sign(claims)}
@@ -204,7 +203,7 @@ def test_guarded_bank_real_routes_ttl_retry_future_time_and_restart_cleanup(memo
     repo=MemoryRetentionRepository(f.router,f.admin_url)
     repo.tenant_ids_due=lambda _tenant=None:[f.ctx.tenant_id]
     clock=[datetime.now(timezone.utc)]
-    retention=MemoryRetentionService(repo,backend,now=lambda:clock[0], bound_tenant_id=f.ctx.tenant_id)
+    retention=MemoryRetentionService(repo,backend,now=lambda:clock[0])
     f.app.state._hindsight_runtime_service._retention=retention
     facade=f.app.state._hindsight_facade
     facade._retention=retention
@@ -258,7 +257,7 @@ def test_guarded_bank_real_routes_ttl_retry_future_time_and_restart_cleanup(memo
     del operations[op]
     restarted_repo=MemoryRetentionRepository(PgTenantRouter(f.dsn),f.admin_url)
     restarted_repo.tenant_ids_due=lambda _tenant=None:[f.ctx.tenant_id]
-    restarted=MemoryRetentionService(restarted_repo,backend,now=lambda:clock[0], bound_tenant_id=f.ctx.tenant_id)
+    restarted=MemoryRetentionService(restarted_repo,backend,now=lambda:clock[0])
     for _ in range(2):
         with f.router.session(f.ctx) as s:
             s.execute("UPDATE memory_acceptance SET next_attempt=now()-interval '1 second' WHERE operation_id=%s",(op,))

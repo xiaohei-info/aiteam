@@ -32,7 +32,7 @@ def consent():
         return httpx.Response(200, json={"results": [], "success": True})
     facade = HindsightFacade(settings=_settings(), leases=runtime.leases, snapshot_service=snapshot,
         principal_repository=Mock(find_user=Mock(return_value=NS(status="active", roles=["member"]))),
-        client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)), deployment_tenant_id="tenant-1")
+        client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)))
     app.state._hindsight_facade = facade
     app.include_router(build_hindsight_router(verifier))
     auth = {"Authorization": "Bearer " + sign_inmem_token(signer, "tenant-1", ["member"], user_id="member-1")}

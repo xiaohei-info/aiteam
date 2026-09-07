@@ -138,7 +138,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `NEWAPI_DB_PASSWORD` / `NEWAPI_REDIS_PASSWORD` | NewAPI 专属 DB/Redis 密码 | `***` |
 | `NEWAPI_SESSION_SECRET` / `NEWAPI_CRYPTO_SECRET` | NewAPI 会话/数据库敏感字段加密材料 | `***` |
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
-| `MANAGER_TENANT_ID` | Manager 当前部署绑定的唯一企业 tenant UUID；缺失时 Manager 不 ready、不扫描租户 | `<deployment tenant UUID>` |
+| `MANAGER_TENANT_ID` | 遗留进程 pin，Stage A 起忽略；不作为 ready/登录条件。F01/F02/F17 另有 503 `multitenancy_phase_pending` 相位闸 | 可空 |
 | `MANAGER_DATA_VOLUME` | Compose Manager 数据卷名（挂载到 `/app/data`） | `managerdata_dev` |
 | `HINDSIGHT_URL` | Manager-only Hindsight API URL（未配置时 Agent lease fail-closed） | `http://hindsight:9290` |
 | `HINDSIGHT_SERVICE_TOKEN` | Manager-only upstream service token；绝不注入 Agent | `***` |

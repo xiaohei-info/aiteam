@@ -88,7 +88,6 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
             storage_root=tmp_path,
             rag_service=PgManagerRagService(migrated_db, enterprise_workspace=SPACE),
             ingestion_client=client,
-            bound_tenant_id=ctx.tenant_id,
         )
     service = build()
     verifier, signer = make_inmem_verifier_and_signer()
@@ -98,7 +97,6 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
             service_name="s05-fixture",
             db_url=migrated_db,
             admin_db_url=admin_url,
-            manager_tenant_id=ctx.tenant_id,
         ),
         APIRouter(),
     )

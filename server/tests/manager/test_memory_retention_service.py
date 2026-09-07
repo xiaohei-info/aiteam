@@ -41,7 +41,7 @@ def service():
     repo.accept.return_value = accepted
     backend = Mock(retention_request=Mock(return_value=deployed_schema()))
     clock = [NOW]
-    svc = MemoryRetentionService(repo, backend, now=lambda: clock[0], bound_tenant_id="tenant-a")
+    svc = MemoryRetentionService(repo, backend, now=lambda: clock[0])
     return NS(svc=svc,repo=repo,backend=backend,row=accepted,clock=clock,policy={"retention_days":1,"revision":3})
 
 
@@ -170,17 +170,17 @@ def test_confirmation_returns_only_safe_ack_fields(service):
 def test_due_inventory_requires_and_filters_bound_tenant():
     from manager_service.memory_retention_repository import MemoryRetentionRepository
     router = Mock()
-    repo = MemoryRetentionRepository(router, "postgresql://admin", bound_tenant_id="tenant-a")
+    repo = MemoryRetentionRepository(router, "postgresql://admin")
     connection = MagicMock()
     connection.__enter__.return_value = connection
     connection.__exit__.return_value = None
     connection.execute.return_value.fetchall.return_value = [("tenant-a",)]
     with patch("psycopg.connect", return_value=connection):
-        assert repo.tenant_ids_due() == ["tenant-a"]
+        assert repo.tenant_ids_due() == []
         assert repo.tenant_ids_due("tenant-a") == ["tenant-a"]
-        assert repo.tenant_ids_due("tenant-b") == []
+        assert repo.tenant_ids_due("tenant-b") == ["tenant-a"]
     calls = connection.execute.call_args_list
-    assert all(call.args[1] == ("tenant-a",) for call in calls[:2])
+    assert [call.args[1] for call in calls] == [("tenant-a",), ("tenant-b",)]
 
 
 def test_maintenance_total_claim_budget_is_bounded_across_tenants(service):
@@ -201,7 +201,7 @@ def test_production_builder_is_singleton_and_fails_without_metadata_db(monkeypat
     request = NS(app=NS(state=NS(settings=NS(db_url=None, admin_db_url=None))))
     with pytest.raises(MemoryRetentionUnverified): build_memory_retention_service(request)
     monkeypatch.setattr(HindsightClient, "__init__", lambda self, **kwargs: None)
-    request.app.state.settings = NS(db_url="postgresql://fixture", admin_db_url="postgresql://fixture-admin", manager_tenant_id="tenant-a")
+    request.app.state.settings = NS(db_url="postgresql://fixture", admin_db_url="postgresql://fixture-admin")
     built = build_memory_retention_service(request)
     assert build_memory_retention_service(request) is built
 
@@ -212,10 +212,10 @@ async def test_lifespan_runs_threaded_maintenance_and_stops_without_dropping_cla
     from fastapi import FastAPI
     from manager_service.memory_retention_service import install_memory_retention_lifespan
     app = FastAPI()
-    app.state.settings = NS(manager_tenant_id="tenant-a")
+    app.state.settings = NS()
     called = asyncio.Event()
     loop = asyncio.get_running_loop()
-    app.state._memory_retention_service = NS(maintain_once=lambda _tenant: loop.call_soon_threadsafe(called.set))
+    app.state._memory_retention_service = NS(maintain_once=lambda *args: loop.call_soon_threadsafe(called.set))
     install_memory_retention_lifespan(app)
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(called.wait(), timeout=2)

@@ -24,7 +24,7 @@ pytestmark = pytest.mark.integration
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
-def _app_with_bindings(db_url, admin_url=None, *, manager_tenant_id=None):
+def _app_with_bindings(db_url, admin_url=None):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_employee import build_employee_router
@@ -37,7 +37,6 @@ def _app_with_bindings(db_url, admin_url=None, *, manager_tenant_id=None):
         tier="manager",
         service_name="aiteam-manager-service",
         db_url=db_url,
-        manager_tenant_id=manager_tenant_id,
     )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
@@ -47,8 +46,8 @@ def _app_with_bindings(db_url, admin_url=None, *, manager_tenant_id=None):
     return app
 
 
-def _client(db_url, admin_url=None, *, manager_tenant_id=None):
-    return TestClient(_app_with_bindings(db_url, admin_url, manager_tenant_id=manager_tenant_id))
+def _client(db_url, admin_url=None):
+    return TestClient(_app_with_bindings(db_url, admin_url))
 
 
 def _token(tenant_id, roles, user_id=None, *, admin_url=None):
@@ -71,7 +70,7 @@ def _make_employee(client, token, *, slug):
 
 def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     tok_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     eid_a = _make_employee(client, tok_a, slug=f"bind-a-{uuid.uuid4().hex[:6]}")
     auth_a = {"Authorization": f"Bearer {tok_a}"}
@@ -166,7 +165,7 @@ def test_bindings_crud_and_cross_tenant(migrated_db, admin_url, two_tenants):
 def test_existing_employee_config_still_works(migrated_db, admin_url, two_tenants):
     """回归：新增绑定实体不破坏现有 EmployeeConfigService 快照配置路径。"""
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     tok_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth_a = {"Authorization": f"Bearer {tok_a}"}
     r = client.get("/api/manager/employees", headers=auth_a)

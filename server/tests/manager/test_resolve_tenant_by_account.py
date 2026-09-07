@@ -1,14 +1,15 @@
 """员工账号 → tenant_id 解析测试（#382：去掉 Agent 端手工填 enterprise/tenant ID，自动关联企业）。"""
 
 import uuid
+from unittest.mock import MagicMock, patch
 
 import pytest
 from shared.db import PgTenantRouter
 
 
-from shared.errors import Conflict, NotFound
+from shared.errors import NotFound
 
-from manager_service.auth_service import AuthService
+from manager_service.auth_service import AuthService, TenantSelectionRequired
 from manager_service.keys import TenantKeyStore
 from manager_service.repository import TenantAuthRepository
 
@@ -73,8 +74,10 @@ def test_resolve_multiple_tenants_409(auth_svc, admin_url):
         auth_svc.provision_owner(tid, phone=phone, bootstrap_password="Boot-Pass-2")
         tids.append(tid)
 
-    with pytest.raises(Conflict, match="account belongs to multiple tenants"):
+    with pytest.raises(TenantSelectionRequired, match="account belongs to multiple tenants") as exc:
         auth_svc.resolve_tenant_by_account(phone)
+    assert exc.value.status == 409
+    assert exc.value.code == "tenant_selection_required"
 
 
 @pytest.mark.integration
@@ -99,7 +102,6 @@ def test_resolve_prefers_phone_over_password(auth_svc, admin_url):
     # 同一 tenant 再加一条同名 external_id 的 password provider 身份
     from shared.contracts.tenancy import TenantContext
     ctx = TenantContext(tenant_id=tid, user_id="system", roles=["owner"])
-    from manager_service.security import hash_password
     user_row = auth_svc._repo.find_identity(ctx, provider=AuthProvider.PHONE, external_id=phone)
     with psycopg.connect(admin_url, autocommit=True) as conn:
         conn.execute(
@@ -114,18 +116,15 @@ def test_resolve_prefers_phone_over_password(auth_svc, admin_url):
 # ---------------------------------------------------------------------------
 # Fast unit tests (no PG required): mock psycopg2 to exercise the scan/query path
 # ---------------------------------------------------------------------------
-from unittest.mock import MagicMock, patch
 
 
-def _svc(*, bound=None, require_binding=False):
+def _svc():
     """In-process AuthService with fakes — admin URL not used when psycopg is mocked."""
     return AuthService(
         dsn="postgresql://f/f",
         repo=MagicMock(),
         keys=MagicMock(),
         admin_dsn="postgresql://admin/a",
-        deployment_tenant_id=bound,
-        require_binding=require_binding,
     )
 
 
@@ -133,22 +132,15 @@ def _row(tid):
     return (MagicMock(__str__=lambda self: tid),)
 
 
-def test_unit_resolve_requires_explicit_deployment_binding():
-    with pytest.raises(Exception) as exc_info:
-        _svc(require_binding=True).resolve_tenant_by_account("13800000000")
-    assert exc_info.value.status == 503
-    assert exc_info.value.code == "manager_binding_required"
-
-
 @patch("psycopg.connect")
-def test_unit_bound_resolve_never_scans_other_tenants(mock_connect):
+def test_unit_enterprise_scopes_account_lookup(mock_connect):
     conn = MagicMock()
-    conn.execute.return_value.fetchall.return_value = [("bound-tenant",)]
+    conn.execute.return_value.fetchall.side_effect = [
+        [("scoped-tenant",)],
+        [("scoped-tenant",)],
+    ]
     mock_connect.return_value.__enter__.return_value = conn
-    assert _svc(bound="bound-tenant", require_binding=True).resolve_tenant_by_account("13800000000") == "bound-tenant"
-    query, params = conn.execute.call_args.args
-    assert "tenant_id = %s" in query
-    assert params == ("bound-tenant", "13800000000")
+    assert _svc().resolve_tenant_by_account("13800000000", enterprise="acme") == "scoped-tenant"
 
 
 @patch("psycopg.connect")
@@ -194,3 +186,4 @@ def test_unit_resolve_multi_tenant_raises_conflict(mock_connect):
     with pytest.raises(Exception) as exc_info:
         _svc().resolve_tenant_by_account("13800000000")
     assert exc_info.value.status == 409
+    assert exc_info.value.code == "tenant_selection_required"

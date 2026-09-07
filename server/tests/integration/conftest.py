@@ -39,19 +39,15 @@ from tests.integration.fixtures.postgres import (  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def _bind_shared_manager_app(request):
-    """Bind the legacy module app to the test's explicit tenant scope.
+    """Clear reused Manager app caches around tests that use a tenant scope.
 
-    This is a test-harness adapter only. It lets older integration modules reuse
-    one imported FastAPI object without making production Manager discover or serve
-    multiple tenants. Tests that provision a different deployment tenant must call
-    ``bind_manager_app`` themselves before the request.
+    This is a test-harness adapter only. It is not a production tenant pin.
     """
     names = set(request.fixturenames)
     if not {"tenant_scope", "seeded_enterprise"} & names:
         yield
         return
 
-    scope = request.getfixturevalue("tenant_scope")
     from manager_service import app as manager_module
 
     manager_app = manager_module.app
@@ -59,17 +55,9 @@ def _bind_shared_manager_app(request):
     if not isinstance(state_mapping, dict):
         raise TypeError("Manager integration fixture requires Starlette State._state")
     old_state = dict(state_mapping)
-    verifier = getattr(manager_module, "_verifier", None)
-    old_verifier_tenant = getattr(verifier, "_deployment_tenant_id", None)
-    bind_manager_app(scope.tenant_id, manager_app)
+    bind_manager_app(request.getfixturevalue("tenant_scope").tenant_id, manager_app)
     try:
         yield
     finally:
-        # Restore the entire Starlette state mapping, not only settings/readiness:
-        # route-created tenant services are cached in State._state and may capture
-        # the binding.  Also restore the mutable verifier field changed by the
-        # test-only helper before putting the original mapping back.
         state_mapping.clear()
         state_mapping.update(old_state)
-        if verifier is not None and hasattr(verifier, "_deployment_tenant_id"):
-            verifier._deployment_tenant_id = old_verifier_tenant

@@ -25,10 +25,6 @@ def test_healthz(client):
 
 def test_readyz(client, tier):
     r = client.get("/readyz")
-    if tier == "manager" and r.status_code == 503:
-        assert r.headers["content-type"].startswith("application/problem+json")
-        assert r.json()["code"] == "manager_binding_required"
-        return
     assert r.status_code == 200
     assert r.json()["status"] == "ready"
 

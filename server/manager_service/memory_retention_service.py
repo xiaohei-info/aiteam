@@ -62,19 +62,10 @@ def proves_fact(row, fact, *, employee_id, bank_id):
 
 
 class MemoryRetentionService:
-    def __init__(self, repository, backend: HindsightClient, *, now=utcnow, bound_tenant_id: str | None = None):
+    def __init__(self, repository, backend: HindsightClient, *, now=utcnow):
         self.repository = repository
         self.backend = backend
         self._now = now
-        # The deployment binding is explicit; a repository's bound value is
-        # accepted only as the already-configured production source.  Neither
-        # maintenance caller arguments nor a DB inventory may establish it.
-        repository_bound = getattr(repository, "_bound_tenant_id", None)
-        repository_bound = repository_bound if isinstance(repository_bound, str) and repository_bound else None
-        if bound_tenant_id and repository_bound and bound_tenant_id != repository_bound:
-            self._bound_tenant_id = None
-        else:
-            self._bound_tenant_id = bound_tenant_id or repository_bound
         self._verified_until = 0.0
 
     def require_ready(self, policy):
@@ -162,20 +153,15 @@ class MemoryRetentionService:
                 or (deadline(row, policy) is not None and self._now() >= deadline(row, policy)):
             raise Forbidden("Cannot edit or reactivate an expired or unproven memory")
 
-    def maintain_once(self, bound_tenant_id: str | None = None):
-        """Run bounded cleanup for this deployment's tenant only.
-
-        A missing binding is a deliberate no-op rather than permission to scan
-        the admin database and construct contexts for arbitrary tenants.
-        """
-        configured = self._bound_tenant_id
-        if not configured or (bound_tenant_id is not None and bound_tenant_id != configured):
+    def maintain_once(self, tenant_id: str | None = None):
+        """Run bounded cleanup for one explicit tenant. Stage A lifespan passes none."""
+        if not tenant_id:
             return
         owner = uuid.uuid4().hex
         budget = 16
         until = time.monotonic() + 20
-        for tenant in self.repository.tenant_ids_due(configured):
-            if tenant != configured:
+        for tenant in self.repository.tenant_ids_due(tenant_id):
+            if tenant != tenant_id:
                 continue
             ctx = TenantContext(tenant_id=tenant, user_id="memory-retention")
             while budget and time.monotonic() < until:
@@ -256,8 +242,8 @@ def build_memory_retention_service(request):
             raise MemoryRetentionUnverified("Manager memory metadata database is unavailable")
         router = PgTenantRouter(settings.db_url)
         service = MemoryRetentionService(
-            MemoryRetentionRepository(router, settings.admin_db_url, bound_tenant_id=settings.manager_tenant_id),
-            HindsightClient(router=router), bound_tenant_id=settings.manager_tenant_id,
+            MemoryRetentionRepository(router, settings.admin_db_url),
+            HindsightClient(router=router),
         )
         request.app.state._memory_retention_service = service
     return service
@@ -274,7 +260,7 @@ def install_memory_retention_lifespan(app):
                     try:
                         from types import SimpleNamespace
                         service = build_memory_retention_service(SimpleNamespace(app=instance))
-                        await asyncio.to_thread(service.maintain_once, instance.state.settings.manager_tenant_id)
+                        await asyncio.to_thread(service.maintain_once)
                     except Exception:
                         log.warning("memory retention maintenance unavailable")
                     try:

@@ -57,7 +57,7 @@ def test_facade_substitutes_manager_token_and_rejects_wrong_bank():
         return httpx.Response(200, json={"ok": True})
 
     external = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
-    app = _app(HindsightFacade(settings=settings, leases=leases, client=external, principal_repository=Mock(find_user=Mock(return_value=SimpleNamespace(status="active", roles=["member"]))), snapshot_service=_Snapshot({"enabled": True}), deployment_tenant_id="tenant-1"))
+    app = _app(HindsightFacade(settings=settings, leases=leases, client=external, principal_repository=Mock(find_user=Mock(return_value=SimpleNamespace(status="active", roles=["member"]))), snapshot_service=_Snapshot({"enabled": True})))
     client = TestClient(app)
     response = client.post(
         "/api/manager/hindsight/v1/default/banks/bank-a/memories/recall",
@@ -96,7 +96,7 @@ def test_facade_fails_closed_after_revoke_and_does_not_accept_bank_query_or_body
             lambda request: httpx.Response(200, json={"ok": True})
         )
     )
-    app = _app(HindsightFacade(settings=settings, leases=leases, client=external, principal_repository=Mock(find_user=Mock(return_value=SimpleNamespace(status="active", roles=["member"]))), snapshot_service=_Snapshot({"enabled": True}), deployment_tenant_id="tenant-1"))
+    app = _app(HindsightFacade(settings=settings, leases=leases, client=external, principal_repository=Mock(find_user=Mock(return_value=SimpleNamespace(status="active", roles=["member"]))), snapshot_service=_Snapshot({"enabled": True})))
     client = TestClient(app)
     leases.revoke(lease.lease_id)
 
@@ -130,35 +130,36 @@ def test_facade_fails_closed_after_revoke_and_does_not_accept_bank_query_or_body
     assert body_bank.status_code == 403
 
 
-def test_unbound_facade_rejects_before_lease_resolution_or_upstream():
+def test_facade_missing_lease_does_not_touch_upstream():
     leases = Mock()
+    from manager_service.hindsight_lease_repository import HindsightLeaseUnauthorized
+    leases.resolve.side_effect = HindsightLeaseUnauthorized("Hindsight lease is required")
     external = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
-    client = TestClient(_app(HindsightFacade(settings=_settings(), leases=leases, client=external,
-                                              deployment_tenant_id=None)))
+    client = TestClient(_app(HindsightFacade(settings=_settings(), leases=leases, client=external)))
     response = client.post("/api/manager/hindsight/v1/default/banks/bank-a/memories/recall",
                            headers={"Authorization": "Bearer opaque"}, json={"query": "fixture"})
-    assert response.status_code == 503
-    assert response.json()["code"] == "manager_binding_required"
-    leases.resolve.assert_not_called()
+    assert response.status_code == 401
+    leases.resolve.assert_called_once()
 
 
-def test_facade_rejects_active_lease_after_manager_rebind_before_principal_or_upstream():
-    leases = HindsightLeaseStore(token_factory=lambda: "opaque-rebound-lease")
+def test_facade_authorizes_using_lease_tenant_not_process_pin():
+    leases = HindsightLeaseStore(token_factory=lambda: "opaque-lease")
     lease = leases.issue(tenant_id="tenant-a", member_id="member-a", employee_id="employee-a",
-                         snapshot_version="snap-a", policy={"enabled": True}, bank_id="bank-a")
+                         snapshot_version="snap-a", policy={"enabled": True, "allowed_operations": ["recall"]},
+                         bank_id="bank-a")
     calls = []
-    external = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(200)))
+    external = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(200, json={"results": []})))
     principals = Mock(find_user=Mock(return_value=SimpleNamespace(status="active", roles=["member"])))
     client = TestClient(_app(HindsightFacade(
         settings=_settings(), leases=leases, client=external,
-        principal_repository=principals, snapshot_service=_Snapshot({"enabled": True}),
-        deployment_tenant_id="tenant-b",
+        principal_repository=principals, snapshot_service=_Snapshot({"enabled": True, "allowed_operations": ["recall"]}),
     )))
     response = client.post("/api/manager/hindsight/v1/default/banks/bank-a/memories/recall",
                            headers={"Authorization": f"Bearer {lease.token}"}, json={"query": "fixture"})
-    assert response.status_code == 403
-    assert principals.find_user.call_count == 0
-    assert calls == []
+    assert response.status_code != 503
+    assert principals.find_user.called
+    ctx = principals.find_user.call_args.args[0]
+    assert ctx.tenant_id == "tenant-a"
 
 
 def test_facade_without_principal_dependency_or_with_failed_db_never_forwards():
@@ -167,7 +168,7 @@ def test_facade_without_principal_dependency_or_with_failed_db_never_forwards():
     calls = []
     external = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: calls.append(request) or httpx.Response(200)))
     for principals in (None, Mock(find_user=Mock(side_effect=RuntimeError("private DB details")))):
-        client = TestClient(_app(HindsightFacade(settings=_settings(), leases=leases, client=external, principal_repository=principals, deployment_tenant_id="tenant-1")))
+        client = TestClient(_app(HindsightFacade(settings=_settings(), leases=leases, client=external, principal_repository=principals)))
         response = client.post("/api/manager/hindsight/v1/default/banks/bank-a/memories/recall", headers={"Authorization": "Bearer " + lease.token}, json={"query": "fixture"})
         assert response.status_code == 503
         assert "private DB details" not in response.text

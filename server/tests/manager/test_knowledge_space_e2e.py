@@ -30,7 +30,7 @@ ENTERPRISE_SPACE_ID = "enterprise_shared"
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url: str, admin_url: str | None = None, *, manager_tenant_id: str | None = None) -> TestClient:
+def _client(db_url: str, admin_url: str | None = None) -> TestClient:
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
@@ -43,7 +43,6 @@ def _client(db_url: str, admin_url: str | None = None, *, manager_tenant_id: str
         tier="manager",
         service_name="aiteam-manager-service",
         db_url=db_url,
-        manager_tenant_id=manager_tenant_id,
     )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
@@ -67,7 +66,7 @@ def _token(
 
 def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     owner_b = _token(tid_b, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
 
@@ -144,7 +143,7 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
 
 def test_knowledge_space_conflict_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
     body = {"knowledge_space_id": ENTERPRISE_SPACE_ID}
     r = client.post("/api/manager/knowledge-spaces", json=body, headers={"Authorization": f"Bearer {owner_a}"})
@@ -156,7 +155,7 @@ def test_knowledge_space_conflict_e2e(migrated_db, admin_url, two_tenants):
 
 def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
 
     # 建知识空间
@@ -237,7 +236,7 @@ def test_binding_department_member_and_expert_e2e(migrated_db, admin_url, two_te
 
 def test_enterprise_knowledge_space_cannot_be_deleted_e2e(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], admin_url=admin_url)
 
     client.post(

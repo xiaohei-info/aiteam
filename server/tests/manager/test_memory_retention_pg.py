@@ -28,7 +28,7 @@ def retention_pg(memory_pg):
     backend = Mock()
     backend.retention_request.side_effect = lambda bank, suffix, **kw: deployed_schema() if bank is None else {}
     f.repo, f.backend = repo, backend
-    f.retention = MemoryRetentionService(repo, backend, bound_tenant_id=f.ctx.tenant_id)
+    f.retention = MemoryRetentionService(repo, backend)
     f.policy = f.config.get(f.ctx, employee_id=f.eid).memory_policy
     f.bank = MemoryService._bank(f.ctx, f.eid)
     def accept(doc="generation", days=None):
@@ -254,10 +254,10 @@ def test_guarded_analytics_never_calls_rich_native_stats(retention_pg):
 def test_due_inventory_excludes_active_claims_and_uses_only_metadata(retention_pg):
     f = retention_pg
     f.accept()
-    inventory = MemoryRetentionRepository(f.router, f.admin_url, bound_tenant_id=f.ctx.tenant_id)
+    inventory = MemoryRetentionRepository(f.router, f.admin_url)
     with f.router.session(f.ctx) as s:
         s.execute("UPDATE memory_acceptance SET next_attempt=now()-interval '1000 years' WHERE bank_id=%s", (f.bank,))
-    assert f.ctx.tenant_id in inventory.tenant_ids_due()
+    assert f.ctx.tenant_id in inventory.tenant_ids_due(f.ctx.tenant_id)
     assert inventory.claim(f.ctx, owner="inventory-worker") is not None
-    assert f.ctx.tenant_id not in inventory.tenant_ids_due()
+    assert f.ctx.tenant_id not in inventory.tenant_ids_due(f.ctx.tenant_id)
     assert MemoryRetentionRepository(f.router).tenant_ids_due() == []
