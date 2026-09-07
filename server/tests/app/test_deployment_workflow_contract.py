@@ -63,3 +63,25 @@ def test_deploy_script_syncs_checked_out_requirements_into_persistent_venv():
     assert ".aiteam-requirements.sha256" in script
     assert "application writers remain stopped" in script
     assert 'never source TEST secrets into pip' in script
+
+
+def test_deploy_script_exposes_dependency_start_failure_before_restart():
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    helper = script.split("# --- dependency start diagnostics ---\n", 1)[1].split(
+        "# --- end dependency start diagnostics ---\n", 1
+    )[0]
+    sync = script.index('sync_persistent_venv_requirements "${VENV_PYTHON}"')
+    source_env = script.index('source "${ENV_FILE}"')
+    deps_log = script.index("starting PostgreSQL/NewAPI dependencies while applications remain stopped")
+    postgres = script.index("start_release_dependency postgres PostgreSQL")
+    newapi = script.index("start_release_dependency newapi NewAPI")
+    migrations = script.index("apply_manager_migrations")
+    restart = script.index('systemctl restart "$UNIT_NAME"')
+    assert sync < source_env < deps_log < postgres < newapi < migrations < restart
+    assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server postgres >/dev/null 2>&1' not in script
+    assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server newapi >/dev/null 2>&1' not in script
+    assert 'start --env "${ENV_TARGET}" --deploy docker --server "${server}"' in helper
+    assert "docker compose --profile newapi ps --all" in helper
+    assert "docker compose config" not in helper
+    assert "for attempt" not in helper
+    assert "up -d" not in helper
