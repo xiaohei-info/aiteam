@@ -19,10 +19,12 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 PR merge → GitHub Actions → self-hosted runner(taiyi)
   → 校验 DEPLOY_ROOT 上的持久化 git checkout（不依赖 runner workspace checkout）
   → 写 DEPLOY_ROOT/.env.<env>（从 GitHub Secret 注入）
+  → 从 origin/<branch> 只刷新 deploy/ci/run.sh（避免首次部署仍执行旧编排脚本）
   → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
       → TEST 维护窗口：先停止应用 writers/Manager/Operation/Agent，确认已退出
       → 保持应用停止，git pull --ff-only 同步部署根
       → pnpm install && pnpm build（每次部署重建，避免前后端产物不一致）
+      → 按 checked-out `server/requirements.txt` hash 同步持久化 `.venv`（无 marker、或 hash 与 checked-out 文件不一致时才 pip install；hash 相同则跳过）
       → 启动并确认 PostgreSQL/NewAPI 依赖（应用仍停止）→ 备份 → DDL/迁移
       → 安装/校验新 unit，启动新的三端应用栈
       → /healthz、Manager /readyz、内部 NewAPI 与 HTML 冒烟
@@ -43,7 +45,7 @@ TEST 顺序固定为：
 1. 暂停新的应用写入/知识导入，停止 Manager、Operation、Agent writers，并确认旧进程已退出；
 2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用；
 3. 依赖可用后执行数据库备份；
-4. 切换已批准 checkout、安装依赖并在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
+4. 切换已批准 checkout；`run.sh` 按 `server/requirements.txt` 内容 hash 同步持久化 `.venv`（失败保持停机），再在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
 5. 迁移成功后启动新应用栈，再检查 healthz/readyz/OpenAPI 与 HTML 入口。
 
 任何备份/DDL/迁移失败都保持应用停止并按 backout 合同人工对账。`stop_legacy_unit.py`
@@ -78,9 +80,10 @@ git clone git@github.com:OWNER/REPO.git /root/app/aiteam
 cd /root/app/aiteam
 git remote set-url origin git@github.com:OWNER/REPO.git
 
-# 5. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）
+# 5. venv bootstrap（首跑一次，与 .gitignore 里的 .venv 路径一致）。
+#    之后每次 TEST 部署会按 server/requirements.txt 的内容 hash 再同步，不必手工重装。
 python3 -m venv .venv
-.venv/bin/pip install -r server/requirements.txt
+.venv/bin/python -m pip install --requirement server/requirements.txt
 
 # 6. 首跑前端 build（或触发一次 CI，CI 会在部署时重建）
 cd web && pnpm install --frozen-lockfile && pnpm build
@@ -148,6 +151,9 @@ cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh --branch main
 
 - **CI 报 `pnpm not found` / `Node版本不兼容`**
   部署根机器没装 node ≥22 或 pnpm ≥11。按清单步骤 1–2 装好。
+
+- **Manager 启动报 `ModuleNotFoundError`（例如 `yaml`）**
+  持久化 `.venv` 落后于当前 `server/requirements.txt`。新的 `run.sh` 会在 checkout 后、迁移/启动前按 hash 自动 `pip install --requirement`；pip 失败则保持应用停机。也可按清单步骤 5 手工重建 venv。
 
 - **`systemctl status` 显示 `activating (auto-restart) (exit-code 209/STDOUT)`**
   旧 unit 里 `StandardOutput=append:/.../logs/stdout.log` 指向不存在的文件。

@@ -63,6 +63,44 @@ fi
 log()  { printf '[deploy-run][%s][%s] %s\n' "$ENV_TARGET" "$BRANCH" "$*"; }
 fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&2; exit 1; }
 
+# --- persistent venv requirements sync ---
+sync_persistent_venv_requirements() {
+  local venv_python="${1:-}"
+  local req_file="${DEPLOY_ROOT}/server/requirements.txt"
+  local venv_dir="${DEPLOY_ROOT}/.venv"
+  local marker="${venv_dir}/.aiteam-requirements.sha256"
+  local marker_tmp req_hash current
+
+  [[ -n "${venv_python}" && -x "${venv_python}" ]] || fail "persistent .venv Python is required to synchronize server/requirements.txt"
+  [[ -d "${venv_dir}" ]] || fail "persistent .venv is required; bootstrap it per deploy/ci/README.md"
+  [[ -f "${req_file}" ]] || fail "server/requirements.txt missing after checkout"
+  [[ "${venv_python}" == "${venv_dir}/bin/"* && "${venv_python}" != *..* ]] \
+    || fail "refusing to install server/requirements.txt outside persistent .venv"
+
+  req_hash="$(AITEAM_REQUIREMENTS_FILE="${req_file}" "${venv_python}" -c "import hashlib, os, pathlib; print(hashlib.sha256(pathlib.Path(os.environ['AITEAM_REQUIREMENTS_FILE']).read_bytes()).hexdigest())")" \
+    || fail "cannot hash checked-out server/requirements.txt"
+  [[ "${req_hash}" =~ ^[a-f0-9]{64}$ ]] || fail "invalid hash for server/requirements.txt"
+
+  current=""
+  if [[ -f "${marker}" ]]; then
+    current="$(tr -d '[:space:]' < "${marker}")"
+  fi
+  if [[ "${current}" == "${req_hash}" ]]; then
+    log "persistent venv requirements already match ${req_hash:0:12}"
+    return 0
+  fi
+
+  log "synchronizing persistent venv from server/requirements.txt"
+  "${venv_python}" -m pip install --requirement "${req_file}" \
+    || fail "pip install --requirement server/requirements.txt failed; application writers remain stopped"
+
+  marker_tmp="${marker}.tmp.$$"
+  printf '%s\n' "${req_hash}" > "${marker_tmp}" || fail "cannot write requirements marker"
+  mv -f "${marker_tmp}" "${marker}" || fail "cannot commit requirements marker"
+  log "persistent venv requirements marker updated ${req_hash:0:12}"
+}
+# --- end persistent venv requirements sync ---
+
 cd "$DEPLOY_ROOT"
 
 # TEST 发布先停止应用 writers。systemd ExecStop 可能同时停止依赖；依赖会
@@ -120,6 +158,14 @@ hash -r 2>/dev/null || true
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
 rm -rf "${PNPM_SHIM_DIR}"
 
+# Hash-gated install of the checked-out pin file. Never use system Python, and
+# never source TEST secrets into pip / install hooks.
+if [[ ! -x "${DEPLOY_ROOT}/.venv/bin/python" ]]; then
+  fail "persistent .venv/bin/python is required; bootstrap it per deploy/ci/README.md"
+fi
+VENV_PYTHON="${DEPLOY_ROOT}/.venv/bin/python"
+sync_persistent_venv_requirements "${VENV_PYTHON}"
+
 # 3) NewAPI 数据在服务重启/升级前先做可恢复备份（首次部署无容器时跳过）。
 ENV_FILE="${DEPLOY_ROOT}/.env.${ENV_TARGET}"
 [[ -f "${ENV_FILE}" ]] || fail "environment file missing: ${ENV_FILE}"
@@ -128,14 +174,6 @@ set -a
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 set +a
-
-if [[ -x "${DEPLOY_ROOT}/.venv/bin/python" ]]; then
-  VENV_PYTHON="${DEPLOY_ROOT}/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-  VENV_PYTHON="$(command -v python3)"
-else
-  fail "Python interpreter is required for Manager/Operation migrations"
-fi
 
 # systemd's simple stop also stops the local dependency containers.  Bring the
 # migration/backup dependencies back while application writers remain stopped;
