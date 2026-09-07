@@ -237,7 +237,8 @@ def test_guarded_bank_real_routes_ttl_retry_future_time_and_restart_cleanup(memo
     assert accepted["accepted_at"].year != 2099
     assert f.client.post(path,headers=write_headers,json=body).status_code==200
     assert repo.get(f.ctx,bank_id=runtime["bank_id"],document_id=retained["document_id"])["accepted_at"]==accepted["accepted_at"]
-    retention.maintain_once()
+    # Explicit tenant request-path maintenance, not the paused Stage A lifespan.
+    retention.maintain_once(f.ctx.tenant_id)
     assert f.client.post(path+"/recall",headers=headers,json={"query":"fixture"}).json()["results"][0]["text"]=="EXPIRED_MARKER"
     old_expiry=accepted["expires_at"]
     for days in (30,None):
@@ -250,7 +251,7 @@ def test_guarded_bank_real_routes_ttl_retry_future_time_and_restart_cleanup(memo
     assert f.client.post(path,headers=write_headers,json=body).status_code==403  # fresh lease cannot renew expiry
     fresh=f.client.post(path,headers=write_headers,json={"items":[{"content":"FRESH_MARKER","document_id":"shared-victim"}]})
     assert fresh.status_code==200,fresh.text
-    retention.maintain_once()
+    retention.maintain_once(f.ctx.tenant_id)
     response=f.client.post(path+"/recall",headers=headers,json={"query":"fixture"})
     assert response.status_code==200 and "EXPIRED_MARKER" not in response.text and "FRESH_MARKER" in response.text
     # A new process retains terminal evidence; native operation records may already be gone.
@@ -261,7 +262,7 @@ def test_guarded_bank_real_routes_ttl_retry_future_time_and_restart_cleanup(memo
     for _ in range(2):
         with f.router.session(f.ctx) as s:
             s.execute("UPDATE memory_acceptance SET next_attempt=now()-interval '1 second' WHERE operation_id=%s",(op,))
-        restarted.maintain_once()
+        restarted.maintain_once(f.ctx.tenant_id)
     after=repo.get(f.ctx,bank_id=runtime["bank_id"],document_id=retained["document_id"])
     assert after["cleanup_state"]=="cleaned" and mutations==[retained["id"]]
     assert any(v["text"]=="FRESH_MARKER" and v["state"]=="valid" for v in native_facts.values())
