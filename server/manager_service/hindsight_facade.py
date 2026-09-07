@@ -10,7 +10,7 @@ from starlette.responses import Response
 
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError
-from .active_principal import require_active, require_bound_tenant
+from .active_principal import require_active
 from .hindsight_client import HindsightSettings, HindsightUnavailable
 from .hindsight_credentials import HindsightLeaseBackend, HindsightLeaseStore, HindsightLeaseUnauthorized
 from .hindsight_lease_repository import HindsightLeaseForbidden
@@ -27,22 +27,15 @@ HindsightLeaseScopeError = HindsightLeaseForbidden
 class HindsightFacade:
     def __init__(self, *, settings: HindsightSettings | None = None,
                  leases: HindsightLeaseBackend | None = None, client: httpx.AsyncClient | None = None,
-                 principal_repository=None, snapshot_service=None, retention_service=None,
-                 deployment_tenant_id: str | None = None):
+                 principal_repository=None, snapshot_service=None, retention_service=None):
         self.settings = settings or HindsightSettings.from_env()
         self.leases = leases or HindsightLeaseStore(self.settings.lease_ttl_seconds)
         self._client = client
         self._principals = principal_repository
         self._snapshot = snapshot_service
         self._retention = retention_service
-        self._deployment_tenant_id = deployment_tenant_id
 
     def _authorize(self, lease, operation: str) -> dict:
-        bound_tenant = require_bound_tenant(self._deployment_tenant_id)
-        if lease.tenant_id != bound_tenant:
-            # Opaque leases survive process restarts, so a lease issued before
-            # a deployment rebind must never select the old enterprise bank.
-            raise HindsightLeaseForbidden("Hindsight lease is not bound to this Manager deployment")
         if self._principals is None or self._snapshot is None:
             raise HindsightUnavailable("online memory authorization is not configured")
         ctx = TenantContext(tenant_id=lease.tenant_id, user_id=lease.member_id)
@@ -77,10 +70,7 @@ class HindsightFacade:
             raise HindsightUnavailable("online memory authorization is unavailable") from exc
 
     async def proxy(self, request: Request, path: str) -> Response:
-        # The facade has no user JWT dependency, so its deployment binding is
-        # the first authorization boundary.  An unbound Manager must fail before
-        # resolving an opaque lease (or touching the Hindsight upstream).
-        bound_tenant = require_bound_tenant(self._deployment_tenant_id)
+        # Lease tenant + current principal/policy authorize the operation.
         # Starlette already decodes once. Reject any original percent encoding,
         # including double encoding, rather than applying another URL decoder.
         raw = request.scope.get("raw_path", b"")
@@ -96,8 +86,6 @@ class HindsightFacade:
             raise HindsightLeaseUnauthorized("Hindsight lease is required")
         token = authorization[7:].strip()
         lease = self.leases.resolve(token, bank_id=bank_id)
-        if lease.tenant_id != bound_tenant:
-            raise HindsightLeaseForbidden("Hindsight lease is not bound to this Manager deployment")
         # The persisted bank is Manager-derived at issuance, never caller input.
         if not all(isinstance(v, str) and v.strip() for v in (lease.tenant_id, lease.member_id, lease.employee_id)):
             raise HindsightLeaseForbidden("Hindsight lease scope is invalid")

@@ -86,8 +86,7 @@ def _facade(request: Request) -> HindsightFacade:
         cache = HindsightFacade(settings=settings, leases=leases,
                                principal_repository=TenantAuthRepository(PgTenantRouter(dsn)),
                                snapshot_service=_snapshot_service(request),
-                               retention_service=build_memory_retention_service(request),
-                               deployment_tenant_id=request.app.state.settings.manager_tenant_id)
+                               retention_service=build_memory_retention_service(request))
         request.app.state._hindsight_facade = cache
     return cache
 

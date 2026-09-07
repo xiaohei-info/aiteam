@@ -44,7 +44,6 @@ def auth_app(migrated_db, admin_url, two_tenants, monkeypatch):
             service_name="fixture",
             db_url=migrated_db,
             admin_db_url=admin_url,
-            manager_tenant_id=tenant,
         ),
         APIRouter(),
     )
@@ -52,8 +51,6 @@ def auth_app(migrated_db, admin_url, two_tenants, monkeypatch):
     app.state._token_verifier = ActivePrincipalVerifier(
         RS256TokenVerifier.from_jwks(auth.jwks(tenant)),
         auth._repo,
-        deployment_tenant_id=tenant,
-        require_binding=True,
     )
     for route in [auth_router, passkey_router, passkey_mgmt_router, oauth_router, oauth_mgmt_router]:
         app.include_router(route)
@@ -225,9 +222,10 @@ def test_existing_hindsight_lease_checks_active_member_in_real_route_assembly(au
     other = auth.create_member(ctx.tenant_id, phone="lease-other-"+uuid.uuid4().hex, initial_password="Fixture-Pass-1")
     authorize_member(other)
     assert call(issue(ctx.tenant_id, other)).status_code == 200
-    # The lease token is valid, but its tenant scope is not authorized by this
-    # Manager deployment. This is forbidden (403), not unauthenticated (401).
-    assert call(issue(two_tenants[1], other)).status_code == 403
+    # Lease material is still valid, but member `other` exists only in tenant A.
+    # Tenant B therefore has no active principal: missing/inactive lookup is 401,
+    # not a 403 scope denial of an existing B account. Do not invent a B member.
+    assert call(issue(two_tenants[1], other)).status_code == 401
     with router.session(ctx) as s:
         s.execute("DELETE FROM app_user WHERE id = %s", (ctx.user_id,))
     assert call(lease).status_code == 401

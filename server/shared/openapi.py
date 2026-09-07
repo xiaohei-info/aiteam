@@ -45,6 +45,7 @@ _EXAMPLE_VALUES: dict[str, Any] = {
     "display_name": "示例资源",
     "enterprise_name": "示例企业",
     "enterprise_code": "example-co",
+    "enterprise": "example-co",
     "enterprise_id": "enterprise-1",
     "tenant_id": "tenant-1",
     "org_id": "enterprise-1",
@@ -240,6 +241,7 @@ _FIELD_DESCRIPTIONS = {
     "code": "机器可读业务码。",
     "request_id": "请求关联 ID。",
     "tenant_id": "企业租户 ID。",
+    "enterprise": "企业代码或名称；用于登录前定位 tenant，不是 Host 或进程绑定。",
     "member_ids": "被授权的成员 ID 列表。",
     "department_ids": "被授权的部门 ID 列表。",
     "employee_ids": "员工 ID 列表。",
@@ -1093,6 +1095,8 @@ def _install_control_plane_schema_overrides(schemas: dict[str, Any]) -> None:
 
 
 _BODY_NOT_FOUND_OPERATION_IDS = frozenset({
+    "manager_login",
+    "manager_owner_reset",
     "manager_owner_bootstrap",
     "manager_employee_config_create",
     "manager_recruit_expert",
@@ -1119,6 +1123,13 @@ _NO_NOT_FOUND_OPERATION_IDS = frozenset({
 })
 
 
+_PHASE_GATED_OPERATION_IDS = frozenset({
+    "manager_provision_tenant",
+    "manager_owner_bootstrap",
+    "manager_inbox_deliver_from_operation",
+})
+
+
 _NO_CONFLICT_OPERATION_IDS = frozenset({
     "operation_system_login",
     "operation_reset_owner_bootstrap",
@@ -1126,9 +1137,6 @@ _NO_CONFLICT_OPERATION_IDS = frozenset({
     "operation_skill_market_settings_update",
     "operation_admin_enterprise_model_access_update",
     "operation_admin_quota_change",
-    "manager_login",
-    "manager_owner_reset",
-    "manager_resolve_tenant",
     "manager_owner_bootstrap",
     "manager_catalog_notify",
     "manager_inbox_deliver_from_operation",
@@ -1216,11 +1224,11 @@ _OPERATION_DESCRIPTION_OVERRIDES = {
     "operation_admin_finance_reports": "读取财务充值、消耗和利润明细报表。",
     "operation_admin_audit_events": "分页查询平台运营审计事件，可按企业、严重级别和动作筛选；响应为 data 内含 total/items/next_cursor 的兼容结构。",
     "operation_admin_health": "读取 Operator 依赖服务健康状态。",
-    "manager_resolve_tenant_by_account": "根据成员账号解析所属 tenant；登录前使用，不返回密码或 token。",
-    "manager_login": "成员或负责人使用 tenant、账号和密码登录，返回短期 RS256 access token。",
-    "manager_owner_reset": "负责人首次登录时重置 bootstrap 密码并获取新的短期 access token。",
+    "manager_resolve_tenant_by_account": "根据成员账号解析所属 tenant；账号跨企业返回 tenant_selection_required 409，带 enterprise 后继续。不返回密码或 token。",
+    "manager_login": "成员或负责人使用企业代码/名称、账号和密码登录，返回短期 RS256 access token。tenant_id 仅为内部解析结果，非用户必填。企业标识歧义返回 enterprise_ambiguous 409。",
+    "manager_owner_reset": "负责人首次登录时使用企业代码/名称或已解析 tenant 重置 bootstrap 密码并获取新的短期 access token。企业标识歧义返回 enterprise_ambiguous 409。",
     "manager_jwks": "返回指定 tenant 当前有效的公开 JWKS；不包含私钥或对称签名密钥。",
-    "manager_resolve_tenant": "根据企业代码或名称解析 tenant_id；登录前使用。",
+    "manager_resolve_tenant": "根据企业代码或名称解析 tenant_id；代码精确匹配优先，slug 歧义返回 enterprise_ambiguous 409。不使用 Host 或第一行 registry。",
     "manager_employee_config_create": "创建 runtime 中立的 employee 配置；不会写入任何 runtime 原生文件。",
     "manager_employee_lifecycle_transition": "执行 employee 生命周期状态转换；archive 转换必须提供 reason，其余转换按状态机约束执行。",
     "manager_grants_authorized_config_pull": "按当前成员权限与 known_versions 生成增量授权投影；员工配置含真实可空 role_title 与全部 department_ids，实际修改推进 version，无需猜测岗位或主部门。只返回授权的专家、方案和能力引用。",
@@ -1437,6 +1445,59 @@ def _apply_known_documentation_examples(operation_id: str, operation: dict[str, 
                 "member_ids": ["00000000-0000-4000-8000-000000000002"],
             }
         media["examples"] = {"audience": {"summary": "当前企业 UUID audience", "value": value}}
+    elif operation_id == "manager_login":
+        request_body["description"] = (
+            "企业成员或负责人登录；用户填写企业代码/名称、账号和密码。"
+            "tenant_id 仅为内部解析结果，不必由浏览器提交。"
+        )
+        media["examples"] = {
+            "enterpriseLogin": {
+                "summary": "企业代码 + 账号 + 密码",
+                "value": {
+                    "enterprise": "example-co",
+                    "account": "13800000000",
+                    "password": "••••••••",
+                },
+            }
+        }
+    elif operation_id == "manager_owner_reset":
+        request_body["description"] = (
+            "负责人使用企业代码/名称或已解析 tenant 重置密码。"
+            "请求示例以企业标识为主，不要求用户填写 tenant UUID。"
+        )
+        media["examples"] = {
+            "enterpriseReset": {
+                "summary": "企业代码 + 账号 + 新旧密码",
+                "value": {
+                    "enterprise": "example-co",
+                    "account": "13800000000",
+                    "old_password": "••••••••",
+                    "new_password": "••••••••",
+                },
+            }
+        }
+    elif operation_id == "manager_resolve_tenant":
+        request_body["description"] = "用企业代码或名称解析 tenant_id；歧义返回 enterprise_ambiguous 409。"
+        media["examples"] = {
+            "enterprise": {
+                "summary": "按企业代码解析",
+                "value": {"enterprise": "example-co"},
+            }
+        }
+    elif operation_id == "manager_resolve_tenant_by_account":
+        request_body["description"] = (
+            "用成员账号解析 tenant_id；跨企业时返回 tenant_selection_required 409，需同时提供 enterprise。"
+        )
+        media["examples"] = {
+            "uniqueAccount": {
+                "summary": "账号仅属于一个企业",
+                "value": {"account": "13800000000"},
+            },
+            "disambiguated": {
+                "summary": "跨企业账号需带企业标识",
+                "value": {"account": "13800000000", "enterprise": "example-co"},
+            },
+        }
     elif operation_id == "operation_register_solution_template":
         request_body["description"] = "行业方案模板请求；至少一个启用专家，coordinator_template_id 必须属于启用专家。"
         media["examples"] = {
@@ -1667,6 +1728,36 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "Conflict": _problem_response(
                 "请求与当前资源状态冲突。", status=409, code="conflict", detail="The request conflicts with current state."
             ),
+            "AuthConflict": {
+                "description": "Manager 登录前企业解析冲突：企业标识歧义或账号跨企业需要选择。错误体不含密码、token 或会话内容。",
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": {
+                            "enterpriseAmbiguous": {
+                                "summary": "企业代码或名称匹配多个 tenant",
+                                "value": _problem_example(
+                                    409,
+                                    "enterprise_ambiguous",
+                                    "The enterprise identifier matches more than one tenant.",
+                                ),
+                            },
+                            "tenantSelectionRequired": {
+                                "summary": "账号属于多个企业，需要提供 enterprise",
+                                "value": _problem_example(
+                                    409,
+                                    "tenant_selection_required",
+                                    "The account belongs to multiple enterprises; specify enterprise.",
+                                ),
+                            },
+                        },
+                    }
+                },
+                "headers": {
+                    "X-Request-ID": {"$ref": "#/components/headers/RequestId"},
+                    "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
+                },
+            },
             "HindsightClientUpgradeRequired": _problem_response(
                 "当前记忆策略要求升级受控 Agent 协议。", status=409,
                 code="hindsight_client_upgrade_required",
@@ -1684,14 +1775,28 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "ServiceUnavailable": _problem_response(
                 "依赖服务暂时不可用。", status=503, code="service_unavailable", detail="A required service is unavailable."
             ),
-            "ReadinessUnavailable": {
-                "description": "服务尚未满足就绪条件；Manager 必须先绑定唯一部署企业。",
+            "MultitenancyPhasePending": {
+                "description": "Manager 多租户控制面写入仍处于相位闸。",
                 "content": {
                     "application/problem+json": {
                         "schema": {"$ref": "#/components/schemas/Problem"},
                         "examples": {
-                            "bindingRequired": {"summary": "缺少 Manager 部署绑定", "value": _problem_example(503, "http_error", "manager deployment tenant binding is required")},
-                            "bindingUnavailable": {"summary": "Manager 部署绑定不可用", "value": _problem_example(503, "http_error", "manager deployment tenant binding is unavailable")},
+                            "phasePending": {
+                                "summary": "多租户阶段尚未开放控制面写入",
+                                "value": _problem_example(
+                                    503,
+                                    "multitenancy_phase_pending",
+                                    "Control-plane tenant writes are unavailable until the Manager multi-tenancy stages complete.",
+                                ),
+                            },
+                            "databaseUnconfigured": {
+                                "summary": "Manager 本端数据库尚未配置",
+                                "value": _problem_example(
+                                    503,
+                                    "manager_admin_db_unconfigured",
+                                    "Manager database is not configured.",
+                                ),
+                            },
                         },
                     }
                 },
@@ -1793,11 +1898,22 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 responses.setdefault("404", {"$ref": "#/components/responses/NotFound"})
             if is_api and not is_mcp and method in {"post", "put", "patch", "delete"} and operation_id not in _NO_CONFLICT_OPERATION_IDS:
                 responses.setdefault("409", {"$ref": "#/components/responses/Conflict"})
+            if operation_id in {
+                "manager_login",
+                "manager_owner_reset",
+                "manager_resolve_tenant",
+                "manager_resolve_tenant_by_account",
+            }:
+                responses["409"] = {"$ref": "#/components/responses/AuthConflict"}
             if operation_id == "manager_hindsight_runtime_config":
                 responses["409"] = {"$ref": "#/components/responses/HindsightClientUpgradeRequired"}
             if operation_id in _OPERATION_429_OPERATION_IDS:
                 responses.setdefault("429", {"$ref": "#/components/responses/TooManyRequests"})
-            if is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
+            if operation_id == "readyz_readyz_get":
+                responses["503"] = {"$ref": "#/components/responses/ServiceUnavailable"}
+            elif operation_id in _PHASE_GATED_OPERATION_IDS:
+                responses["503"] = {"$ref": "#/components/responses/MultitenancyPhasePending"}
+            elif is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
                 responses.setdefault("503", {"$ref": "#/components/responses/ServiceUnavailable"})
             if operation_id in {
                 "operation_system_login", "manager_login", "manager_owner_reset",
@@ -1805,8 +1921,6 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 "manager_oauth_authorize", "manager_oauth_callback",
             }:
                 responses.setdefault("401", {"$ref": "#/components/responses/Unauthorized"})
-            if path == "/readyz":
-                responses["503"] = {"$ref": "#/components/responses/ReadinessUnavailable"}
             if operation_id in {"manager_memory_create", "manager_memory_retain", "manager_memory_update"}:
                 responses["413"] = {"$ref": "#/components/responses/TooLarge"}
             if is_api and not is_mcp:

@@ -16,8 +16,6 @@ from shared.config import Settings
 def _client(
     db_url: str | None,
     admin_db_url: str | None = None,
-    *,
-    manager_tenant_id: str | None = None,
 ) -> TestClient:
     # 用注入的 settings 重建 app，避免依赖进程环境变量。
     from shared.app_factory import create_app
@@ -27,7 +25,6 @@ def _client(
     settings = Settings(
         tier="manager", service_name="aiteam-manager-service",
         db_url=db_url, admin_db_url=admin_db_url,
-        manager_tenant_id=manager_tenant_id,
     )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
@@ -70,7 +67,7 @@ def test_owner_reset_login_jwks_over_http():
         tid, phone=phone, bootstrap_password="boot-Pass-1"
     )
 
-    client = _client(db_url, admin_db_url=admin_url, manager_tenant_id=tid)
+    client = _client(db_url, admin_db_url=admin_url)
 
     # 首登直接 login 应 403（需重置）
     r = client.post("/api/auth/login", json={"tenant_id": tid, "account": phone, "password": "boot-Pass-1"})
@@ -96,3 +93,61 @@ def test_owner_reset_login_jwks_over_http():
     # 错误密码 401
     r = client.post("/api/auth/login", json={"tenant_id": tid, "account": phone, "password": "nope"})
     assert r.status_code == 401
+
+    # 企业标识登录；Host 不得选择租户。
+    r = client.post(
+        "/api/auth/login",
+        json={"enterprise": slug, "account": phone, "password": "fresh-Pass-2"},
+        headers={"Host": "other.example.com", "X-Forwarded-Host": "evil.example.com"},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["claims"]["tenant_id"] == tid
+
+
+@pytest.mark.integration
+def test_same_enterprise_second_account_and_another_enterprise_relogin():
+    db_url = os.getenv("DB_URL")
+    admin_url = os.getenv("ADMIN_DB_URL")
+    app_rw_password = os.getenv("APP_RW_PASSWORD")
+    if not db_url or not admin_url:
+        pytest.skip("DB_URL/ADMIN_DB_URL 未设置")
+    from shared.db import apply_migrations
+    import psycopg
+    from manager_service.auth_service import build_auth_service
+
+    apply_migrations(admin_url, app_rw_password=app_rw_password)
+    service = build_auth_service(db_url, admin_dsn=admin_url)
+    client = _client(db_url, admin_db_url=admin_url)
+
+    def _tenant(prefix):
+        slug = f"{prefix}_{uuid.uuid4().hex[:8]}"
+        with psycopg.connect(admin_url, autocommit=True) as conn:
+            tid = str(conn.execute(
+                "INSERT INTO tenant_registry (enterprise_slug, enterprise_code) VALUES (%s, %s) RETURNING tenant_id",
+                (slug, slug),
+            ).fetchone()[0])
+        return tid, slug
+
+    tid_a, slug_a = _tenant("ent_a")
+    tid_b, slug_b = _tenant("ent_b")
+    phone_a1 = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    phone_a2 = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    phone_b = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
+    service.create_member(tid_a, phone=phone_a1, initial_password="Member-Pass-1", must_reset=False)
+    service.create_member(tid_a, phone=phone_a2, initial_password="Member-Pass-2", must_reset=False)
+    service.create_member(tid_b, phone=phone_b, initial_password="Member-Pass-3", must_reset=False)
+
+    first = client.post("/api/auth/login", json={"enterprise": slug_a, "account": phone_a1, "password": "Member-Pass-1"})
+    assert first.status_code == 200
+    token_a1 = first.json()["data"]["token"]
+    second = client.post("/api/auth/login", json={"enterprise": slug_a, "account": phone_a2, "password": "Member-Pass-2"})
+    assert second.status_code == 200
+    assert second.json()["data"]["claims"]["tenant_id"] == tid_a
+    other = client.post("/api/auth/login", json={"enterprise": slug_b, "account": phone_b, "password": "Member-Pass-3"})
+    assert other.status_code == 200
+    assert other.json()["data"]["claims"]["tenant_id"] == tid_b
+    from shared.auth import RS256TokenVerifier
+    jwks_a = client.get(f"/api/auth/{tid_a}/jwks.json").json()
+    assert RS256TokenVerifier.from_jwks(jwks_a).verify(token_a1).tenant_id == tid_a
+    mismatch = client.post("/api/auth/login", json={"enterprise": slug_b, "account": phone_a1, "password": "Member-Pass-1"})
+    assert mismatch.status_code == 401

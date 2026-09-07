@@ -18,8 +18,6 @@ from shared.config import Settings
 def _client(
     db_url: str | None,
     admin_db_url: str | None = None,
-    *,
-    manager_tenant_id: str | None = None,
 ) -> TestClient:
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
@@ -29,7 +27,6 @@ def _client(
     settings = Settings(
         tier="manager", service_name="aiteam-manager-service",
         db_url=db_url, admin_db_url=admin_db_url,
-        manager_tenant_id=manager_tenant_id,
         # AITEAM-331 B2：未配置 SERVICE_TOKEN 不再 fail-open；显式 dev 占位值维持 dev profile。
         service_token="dev-service-token-placeholder",
     )
@@ -117,76 +114,49 @@ def test_hash_single_source_of_truth_no_double_hash():
 
 @pytest.mark.integration
 def test_provision_tenant_and_owner_bootstrap_e2e(migrated_db, admin_url):
-    # 复用 conftest 夹具（migrated_db 已 apply_migrations 并返回业务 DSN；admin_url 为管理 DSN）。
-    # 统一经夹具读 DB_URL/ADMIN_DB_URL（#103），不再自取旧名 env——杜绝变量名漂移导致 CI 静默 skip。
+    # Stage A keeps F01/F02 HTTP fail-closed. Existing-tenant owner provision
+    # still uses AuthService (single scrypt) so login can recover without the gate.
+    import hashlib
     import psycopg
+    from manager_service.auth_service import build_auth_service
+    from manager_service.security import verify_password
 
     db_url = migrated_db
     tenant_id = str(uuid.uuid4())
-    client = _client(db_url, admin_db_url=admin_url, manager_tenant_id=tenant_id)
-
-    enterprise_id = str(uuid.uuid4())
+    client = _client(db_url, admin_db_url=admin_url)
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
-    bootstrap_secret = "Bootstrap-plaintext-secret-123"  # 明文（TLS 服务间）；Manager 单次 scrypt
+    bootstrap_secret = "Bootstrap-plaintext-secret-123"
+    slug = f"tc_{uuid.uuid4().hex[:6]}"
 
-    # F01：建 tenant
     r = client.post("/api/manager/tenants", json={
-        "enterprise_id": enterprise_id,
+        "enterprise_id": str(uuid.uuid4()),
         "tenant_id": tenant_id,
         "enterprise_name": "TestCo",
-        "enterprise_code": f"tc_{uuid.uuid4().hex[:6]}",
+        "enterprise_code": slug,
     })
-    assert r.status_code == 201
-    assert r.json()["data"]["tenant_id"] == tenant_id
-
-    # 验 tenant_registry 行已落控制面库
-    with psycopg.connect(admin_url) as conn:
-        row = conn.execute(
-            "SELECT tenant_id FROM tenant_registry WHERE tenant_id = %s::uuid",
-            (tenant_id,),
-        ).fetchone()
-    assert row is not None
-
-    # F01 幂等：重放同 tenant_id 不报错
-    r2 = client.post("/api/manager/tenants", json={
-        "enterprise_id": enterprise_id,
-        "tenant_id": tenant_id,
-        "enterprise_name": "TestCo",
-    })
-    assert r2.status_code == 201
-
-    # F02：落 owner 凭据（传明文，Manager 单次 scrypt）
-    r = client.post("/api/manager/owner-bootstrap", json={
+    assert r.status_code == 503
+    assert r.json()["code"] == "multitenancy_phase_pending"
+    r2 = client.post("/api/manager/owner-bootstrap", json={
         "tenant_id": tenant_id,
         "owner_phone": phone,
         "bootstrap_secret": bootstrap_secret,
     })
-    assert r.status_code == 201
-    body = r.json()["data"]
-    assert body["tenant_id"] == tenant_id
-    assert "user_id" in body
-    # 响应体不含明文凭据
-    assert bootstrap_secret not in r.text
+    assert r2.status_code == 503
+    assert r2.json()["code"] == "multitenancy_phase_pending"
+    assert bootstrap_secret not in r2.text
 
-    # F02 重放：Operator 同步是可重复的 replace 操作，仍返回同一个 user_id。
-    r3 = client.post("/api/manager/owner-bootstrap", json={
-        "tenant_id": tenant_id,
-        "owner_phone": phone,
-        "bootstrap_secret": bootstrap_secret,
-    })
-    assert r3.status_code == 201
-    assert r3.json()["data"]["user_id"] == body["user_id"]
-
-    # ── CRITICAL 回归：双重 hash 断链已修复 ──────────────────────────────────────
-    # 直接直读 auth_identity 拿落库 scrypt hash，用明文 secret 验证 verify_password 通过。
-    from manager_service.security import verify_password
-
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code) VALUES (%s, %s, %s)",
+            (tenant_id, slug, slug),
+        )
+    build_auth_service(db_url, admin_dsn=admin_url).provision_owner(
+        tenant_id, phone=phone, bootstrap_password=bootstrap_secret,
+    )
     with psycopg.connect(admin_url, autocommit=True) as conn:
         stored = conn.execute(
             "SELECT secret FROM auth_identity WHERE external_id = %s", (phone,)
         ).fetchone()[0]
-    assert stored.startswith("scrypt$")  # 确认是 Manager 单次 scrypt，非双重 hash
-    assert verify_password(bootstrap_secret, stored) is True  # 明文 secret 能验过
-    # 双重 hash 断链红线：sha256(secret) 必然验不过
-    import hashlib
+    assert stored.startswith("scrypt$")
+    assert verify_password(bootstrap_secret, stored) is True
     assert verify_password(hashlib.sha256(bootstrap_secret.encode()).hexdigest(), stored) is False

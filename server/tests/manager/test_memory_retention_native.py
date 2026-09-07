@@ -61,7 +61,7 @@ def test_manager_routes_pg_ledger_and_approved_native_http_end_to_end(memory_pg)
         repo = MemoryRetentionRepository(f.router, f.admin_url)
         repo.tenant_ids_due = lambda _tenant=None: [f.ctx.tenant_id]
         clock = [datetime.now(timezone.utc)]
-        retention = MemoryRetentionService(repo, backend, now=lambda: clock[0], bound_tenant_id=f.ctx.tenant_id)
+        retention = MemoryRetentionService(repo, backend, now=lambda: clock[0])
         runtime_service = f.app.state._hindsight_runtime_service
         runtime_service._retention, runtime_service._banks = retention, backend
         facade = f.app.state._hindsight_facade
@@ -90,7 +90,7 @@ def test_manager_routes_pg_ledger_and_approved_native_http_end_to_end(memory_pg)
             for _ in range(60):
                 with f.router.session(f.ctx) as s:
                     s.execute("UPDATE memory_acceptance SET next_attempt=now() WHERE operation_id=%s", (operation,))
-                retention.maintain_once()
+                retention.maintain_once(f.ctx.tenant_id)
                 with f.router.session(f.ctx) as s:
                     state = s.execute("SELECT operation_state FROM memory_acceptance WHERE operation_id=%s", (operation,)).fetchone()[0]
                 if state == "completed": return
@@ -125,7 +125,7 @@ def test_manager_routes_pg_ledger_and_approved_native_http_end_to_end(memory_pg)
         for _ in range(3):
             with f.router.session(f.ctx) as s:
                 s.execute("UPDATE memory_acceptance SET next_attempt=now() WHERE operation_id=%s", (op,))
-            retention.maintain_once()
+            retention.maintain_once(f.ctx.tenant_id)
         assert repo.get(f.ctx, bank_id=bank, document_id=document)["cleanup_state"] == "cleaned"
         invalidated = backend.retention_request(bank, f"memories/{mid}")
         assert invalidated["state"] == "invalidated"

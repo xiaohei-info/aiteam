@@ -1,9 +1,8 @@
-"""Explicit binding helpers for Manager integration fixtures.
+"""Test-only Manager app cache helpers.
 
-Production Manager binding is never inferred.  These helpers only reconfigure the
-module-level FastAPI app used by the legacy shared integration harness so each test
-models one explicitly bound deployment.  Tests that need two deployments must call
-``bind_manager_app`` before each client operation instead of using one unbound app.
+Production Manager has no process tenant pin. These helpers only clear
+request-scoped service caches on the reused module-level FastAPI app so
+tests do not leak tenant-scoped objects. They are not production semantics.
 """
 
 from __future__ import annotations
@@ -13,9 +12,9 @@ from typing import Any
 import pytest
 
 
-# Every Manager route cache below captures either the deployment tenant, a tenant
-# router, or a tenant-scoped service.  Keep this explicit so a new test binding
-# cannot accidentally reuse a service created for the previous test tenant.
+# Every Manager route cache below captures a tenant router or tenant-scoped
+# service. Keep this explicit so a new test cannot accidentally reuse a
+# service created for the previous test tenant.
 _BINDING_CACHE_NAMES: tuple[str, ...] = (
     "_auth_service",
     "_oauth_service",
@@ -65,35 +64,18 @@ def _state_mapping(app: Any) -> dict[str, Any]:
 
 
 def clear_binding_caches(app: Any) -> None:
-    """Drop all known tenant-bound caches from a shared test Manager app."""
+    """Drop all known tenant-scoped caches from a shared test Manager app."""
     mapping = _state_mapping(app)
     for name in _BINDING_CACHE_NAMES:
         mapping.pop(name, None)
 
 
 def bind_manager_app(tenant_id: str, app: Any | None = None):
-    """Bind a test Manager app and its captured verifier to ``tenant_id``.
-
-    The production app is assembled once at module import, while integration tests
-    reuse that app object for speed.  Pydantic settings are frozen, so the harness
-    copies settings and clears request-scoped caches rather than mutating production
-    code or enabling an unbound fallback.
-    """
+    """Clear reused test-app caches. tenant_id is ignored; not a production pin."""
     import manager_service.app as manager_module
 
     manager_app = app or manager_module.app
     clear_binding_caches(manager_app)
-    settings = manager_app.state.settings
-    manager_app.state.settings = settings.model_copy(update={"manager_tenant_id": str(tenant_id)})
-    manager_app.state._manager_binding_ready = True
-
-    # ``manager_router``'s whoami dependency captures the module verifier at route
-    # construction time; update that test-only verifier object as well.  Custom
-    # routers should inject their own verifier and do not rely on this path.
-    verifier = getattr(manager_module, "_verifier", None)
-    if verifier is not None and hasattr(verifier, "_deployment_tenant_id"):
-        verifier._deployment_tenant_id = str(tenant_id)
-        manager_app.state._token_verifier = verifier
     return manager_app
 
 

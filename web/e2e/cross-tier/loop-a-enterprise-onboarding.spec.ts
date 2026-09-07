@@ -1,11 +1,11 @@
 /**
- * Wave1 单部署 Manager 开通交接（F01/F02 → owner reset → whoami）。
+ * Wave1 单部署 Manager 相位闸与既有租户登录（F01/F02 gate → whoami）。
  *
  * 验证命令：npx playwright test e2e/cross-tier/loop-a-enterprise-onboarding.spec.ts --project=cross-tier
  *
  * Wave1 验收：
  * - 本地/CI 只有一个 Manager 进程，绑定 E2E_TENANT_ID/MANAGER_TENANT_ID。
- * - 正向路径走 Manager POST /api/manager/tenants + /owner-bootstrap，再 owner-reset/whoami。
+ * - Stage A 明确阻断 F01/F02 写入，再走已 seed 租户的登录/whoami。
  * - 失败时产出 Playwright report/trace/screenshot/video；成功必须靠断言不是截图。
  *
  * 非目标：不声称 Operator POST /api/operation/enterprises 能为该 Manager 动态开通第二个企业。
@@ -41,21 +41,14 @@ function uniqueEnterpriseCode(): string {
   return `be2e-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 }
 
-function uniquePhone(): string {
-  return `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
-}
-
-// ── Wave1 单部署 Manager F01/F02 交接：开通绑定租户 → 负责人 whoami ──
+// ── Wave1 单部署 Manager F01/F02 交接：相位闸 → 已存在租户登录 ──
 
 test.describe("Loop-A enterprise onboarding（跨端）", () => {
-  test("bound Manager F01/F02 → owner reset → whoami matches the deployment tenant", async ({
+  test("Stage A F01/F02 phase gate → seeded tenant login → whoami", async ({
     request,
   }) => {
     const tenantId = boundManagerTenantId();
     const enterpriseCode = uniqueEnterpriseCode();
-    const ownerPhone = uniquePhone();
-    const bootstrapSecret = `Boot!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-    const newPassword = `New!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const mgrApi = TIER_API_ORIGIN.manager;
 
     const provisionResp = await request.post(`${mgrApi}/api/manager/tenants`, {
@@ -68,53 +61,31 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
       headers: svcHeaders(),
       failOnStatusCode: false,
     });
-    expect(
-      provisionResp.status(),
-      `bound Manager F01 应 201: ${provisionResp.status()} body=${await provisionResp.text()}`,
-    ).toBe(201);
-    expect(provisionResp.headers()["content-type"] ?? "").toContain("application/json");
-    const provisionBody = (await provisionResp.json()) as { data?: { tenant_id?: string } };
-    expect(provisionBody.data?.tenant_id, "F01 envelope 须返回绑定 tenant").toBe(tenantId);
+    const provisionText = await provisionResp.text();
+    expect(provisionResp.status(), `Stage A F01 应保持相位闸: ${provisionText}`).toBe(503);
+    expect(provisionResp.headers()["content-type"] ?? "").toContain("application/problem+json");
+    expect((JSON.parse(provisionText) as { code?: string }).code).toBe("multitenancy_phase_pending");
 
     const bootstrapResp = await request.post(`${mgrApi}/api/manager/owner-bootstrap`, {
       data: {
         tenant_id: tenantId,
-        owner_phone: ownerPhone,
-        bootstrap_secret: bootstrapSecret,
+        owner_phone: `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`,
+        bootstrap_secret: `Boot!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`,
         must_reset: true,
       },
       headers: svcHeaders(),
       failOnStatusCode: false,
     });
-    expect(
-      [200, 201],
-      `bound Manager F02 应 200/201: ${bootstrapResp.status()} body=${await bootstrapResp.text()}`,
-    ).toContain(bootstrapResp.status());
+    const bootstrapText = await bootstrapResp.text();
+    expect(bootstrapResp.status(), `Stage A F02 应保持相位闸: ${bootstrapText}`).toBe(503);
+    expect(bootstrapResp.headers()["content-type"] ?? "").toContain("application/problem+json");
+    expect((JSON.parse(bootstrapText) as { code?: string }).code).toBe("multitenancy_phase_pending");
 
-    const firstLoginResp = await request.post(`${mgrApi}/api/auth/login`, {
-      data: { tenant_id: tenantId, account: ownerPhone, password: bootstrapSecret },
-      failOnStatusCode: false,
-    });
-    expect(firstLoginResp.status()).toBe(403);
-    expect(firstLoginResp.headers()["content-type"] ?? "").toContain("application/problem+json");
-
-    const resetResp = await request.post(`${mgrApi}/api/auth/owner-reset`, {
-      data: {
-        tenant_id: tenantId,
-        account: ownerPhone,
-        old_password: bootstrapSecret,
-        new_password: newPassword,
-      },
-      failOnStatusCode: false,
-    });
-    expect(resetResp.ok(), `owner-reset 应成功: ${resetResp.status()} body=${await resetResp.text()}`).toBeTruthy();
-    const resetBody = (await resetResp.json()) as { data?: { token: string; claims?: Record<string, unknown> } };
-    expect(resetBody.data?.token, "owner-reset 应返回 token").toBeTruthy();
-    const managerToken = resetBody.data.token;
-
-    await expectAuthenticatedEnvelope(request, "manager", managerToken);
+    // globalSetup 直接准备已存在租户和成员；Stage A 的认证链不依赖 F01/F02 HTTP 写入。
+    const managerLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
+    await expectAuthenticatedEnvelope(request, "manager", managerLogin.token);
     const whoamiResp = await request.get(`${mgrApi}/api/manager/whoami`, {
-      headers: { Authorization: `Bearer ${managerToken}` },
+      headers: { Authorization: `Bearer ${managerLogin.token}` },
     });
     expect(whoamiResp.ok(), `whoami 应成功: ${whoamiResp.status()}`).toBeTruthy();
     const whoamiData = ((await whoamiResp.json()) as { data: { tenant_id: string } }).data;
@@ -193,44 +164,34 @@ test.describe("Loop-A enterprise onboarding（跨端）", () => {
     expect(ct).not.toContain("text/html");
   });
 
-  test("Manager tenant provision 幂等：重复调用不报错", async ({ request }) => {
+  test("Stage A Manager tenant provision 重复请求均命中 phase gate", async ({ request }) => {
     const tenantId = boundManagerTenantId();
     const enterpriseId = randomUUID();
     const code = uniqueEnterpriseCode();
+    const body = {
+      enterprise_id: enterpriseId,
+      tenant_id: tenantId,
+      enterprise_name: "Stage A Pending Corp",
+      enterprise_code: code,
+    };
 
-    // 第一次
-    const r1 = await request.post(
-      `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
-      {
-        data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
-          enterprise_name: "Idempotent Corp",
-          enterprise_code: code,
-        },
-        headers: svcHeaders(),
-        failOnStatusCode: false,
-      },
-    );
+    const r1 = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/tenants`, {
+      data: body,
+      headers: svcHeaders(),
+      failOnStatusCode: false,
+    });
+    const r2 = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/tenants`, {
+      data: body,
+      headers: svcHeaders(),
+      failOnStatusCode: false,
+    });
 
-    // dev 模式 fail-open 会通过（返回 200/201）；无 PG 会 500。
-    // 幂等验证：如果第一次返回非错误，第二次也至少不应报新错。
-    const r2 = await request.post(
-      `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
-      {
-        data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
-          enterprise_name: "Idempotent Corp",
-          enterprise_code: code,
-        },
-        headers: svcHeaders(),
-        failOnStatusCode: false,
-      },
-    );
-
-    // 两次调用结果一致（同为成功或同为失败），验证幂等处理存在（不是裸 panic）
-    expect(r1.status() === r2.status() || r1.ok() === r2.ok()).toBeTruthy();
+    for (const response of [r1, r2]) {
+      const text = await response.text();
+      expect(response.status()).toBe(503);
+      expect(response.headers()["content-type"] ?? "").toContain("application/problem+json");
+      expect((JSON.parse(text) as { code?: string }).code).toBe("multitenancy_phase_pending");
+    }
   });
 });
 

@@ -19,19 +19,66 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
-from shared.errors import AppError, NotFound, install_exception_handlers
+from shared.errors import NotFound, ServiceUnavailable, install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
 from shared.openapi import install_openapi_enrichment
 
 logger = logging.getLogger(__name__)
 
+_READINESS_RELATIONS = {
+    "operation": "enterprise_account",
+    "manager": "tenant_registry",
+}
+_READINESS_CONNECT_TIMEOUT_SECONDS = 5
 
-class _ManagerBindingRequired(AppError):
-    status, code, title = 503, "manager_binding_required", "Manager Binding Required"
+
+def _readiness_target(settings: Settings) -> tuple[str, str]:
+    """Return the local DSN and required schema relation for one control plane."""
+    if settings.tier == "manager":
+        # Manager needs both connection boundaries: app_rw serves tenant SQL and
+        # the admin DSN provisions/reads control-plane schema and signing keys.
+        if not settings.db_url or not settings.admin_db_url:
+            raise ServiceUnavailable("本端数据库连接未完整配置")
+        return settings.db_url, _READINESS_RELATIONS[settings.tier]
+    dsn = settings.admin_db_url or settings.db_url
+    if not dsn:
+        raise ServiceUnavailable("本端数据库连接未配置")
+    return dsn, _READINESS_RELATIONS[settings.tier]
 
 
-class _ManagerBindingUnavailable(AppError):
-    status, code, title = 503, "manager_binding_unavailable", "Manager Binding Unavailable"
+def _check_local_readiness(settings: Settings) -> None:
+    """Check only this service's database connection and required schema.
+
+    This deliberately does not inspect MANAGER_TENANT_ID or any upstream service:
+    tenant selection is request/JWT scoped, and upstream outages are a degraded
+    dependency rather than a reason for the local control plane to claim it is
+    not ready.
+    """
+    try:
+        dsn, relation = _readiness_target(settings)
+    except ServiceUnavailable:
+        logger.warning("local database readiness check failed: service=%s reason=unconfigured", settings.service_name)
+        raise
+
+    try:
+        import psycopg
+
+        with psycopg.connect(
+            dsn,
+            autocommit=True,
+            connect_timeout=_READINESS_CONNECT_TIMEOUT_SECONDS,
+        ) as conn:
+            row = conn.execute(
+                "SELECT to_regclass(%s)",
+                (f"public.{relation}",),
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 - readiness must fail closed without exposing DSN details
+        logger.warning("local database readiness check failed: service=%s reason=unreachable", settings.service_name)
+        raise ServiceUnavailable("本端数据库不可用") from exc
+
+    if not row or row[0] is None:
+        logger.warning("local database readiness check failed: service=%s reason=schema_missing", settings.service_name)
+        raise ServiceUnavailable("本端数据库 schema 尚未就绪")
 
 
 class HealthResponse(BaseModel):
@@ -68,33 +115,22 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
         runtime_settings = request.app.state.settings
         return HealthResponse(status="ok", service=runtime_settings.service_name)
 
-    readyz_responses = (
-        {503: {"description": "Manager 尚未绑定唯一部署企业；返回 problem+json。"}}
-        if settings.tier == "manager" else {}
-    )
-
     @app.get(
         "/readyz",
         tags=["infra"],
         summary="readiness",
-        description="检查本端数据库和本地依赖是否可用。",
+        description="检查本端数据库和本地依赖是否可用。Manager 不要求 MANAGER_TENANT_ID。",
         response_model=HealthResponse,
-        responses=readyz_responses,
     )
     async def readyz(request: Request) -> HealthResponse:
         # 只校验本端依赖；上端不可达按"可降级 pull"对待，不致本端 not-ready（CLAUDE/AGENTS §13）。
         # Read settings from app state at request time so dependency-injected test
         # apps and any explicit runtime settings replacement are evaluated by the
         # same source as the rest of the application.
+        # Manager tenants are session-scoped; leftover MANAGER_TENANT_ID is not a
+        # readiness pin and registry first-row inference is forbidden.
         runtime_settings = request.app.state.settings
-        # A Manager without an explicit deployment tenant is not ready: there
-        # is no safe tenant to bind, and readiness must not imply that a random
-        # tenant_registry row will be used.
-        if runtime_settings.tier == "manager":
-            if not getattr(runtime_settings, "manager_tenant_id", None):
-                raise _ManagerBindingRequired("Manager deployment tenant binding is required")
-            if getattr(request.app.state, "_manager_binding_ready", True) is False:
-                raise _ManagerBindingUnavailable("Manager deployment tenant binding is unavailable")
+        _check_local_readiness(runtime_settings)
         return HealthResponse(status="ready", service=runtime_settings.service_name)
 
     app.include_router(router)

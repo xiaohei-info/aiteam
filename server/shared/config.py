@@ -6,14 +6,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
-from uuid import UUID
-
-from pydantic import field_validator
 
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 Tier = Literal["operation", "manager"]
 _VALID_TIERS = ("operation", "manager")
@@ -41,19 +41,6 @@ class Settings(BaseModel):
     )
     # Manager durable knowledge source. Compose mounts the named managerdata volume here.
     manager_data_root: Path = Field(default_factory=lambda: Path.cwd() / ".data" / "manager")
-    # One Manager process serves exactly this deployment tenant.  The value is
-    # supplied by the deployment owner; never infer it by scanning tenant rows.
-    manager_tenant_id: str | None = Field(default=None, description="Bound enterprise tenant UUID for this Manager deployment")
-
-    @field_validator("manager_tenant_id")
-    @classmethod
-    def _validate_manager_tenant_id(cls, value: str | None) -> str | None:
-        if value is None or not str(value).strip():
-            return None
-        try:
-            return str(UUID(str(value).strip()))
-        except (ValueError, TypeError) as exc:
-            raise ValueError("MANAGER_TENANT_ID must be a UUID") from exc
     # 跨端地址（窄通信面，05 §5.5）：Agent 需 manager_url；Manager 需 operator_url。
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
@@ -84,6 +71,11 @@ def load_settings(tier: Tier | None = None) -> Settings:
     resolved = tier or os.getenv("APP_TIER")
     if resolved not in _VALID_TIERS:
         raise ValueError(f"无效 tier={resolved!r}，应为 {_VALID_TIERS} 之一（见 09 §14.2）")
+    legacy_tenant = os.getenv("MANAGER_TENANT_ID")
+    if legacy_tenant and str(legacy_tenant).strip():
+        logger.warning(
+            "MANAGER_TENANT_ID is ignored; Manager tenants are selected per session, not process binding"
+        )
     return Settings(
         tier=resolved,  # type: ignore[arg-type]
         service_name=f"aiteam-{resolved}-service",
@@ -92,7 +84,6 @@ def load_settings(tier: Tier | None = None) -> Settings:
         admin_db_url=os.getenv("ADMIN_DB_URL"),
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_data_root=Path(os.getenv("AITEAM_MANAGER_DATA_ROOT") or (Path.cwd() / ".data" / "manager")),
-        manager_tenant_id=os.getenv("MANAGER_TENANT_ID"),
         manager_url=os.getenv("MANAGER_URL"),
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),

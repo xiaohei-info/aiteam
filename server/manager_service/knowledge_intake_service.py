@@ -29,8 +29,6 @@ from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
-from .active_principal import require_bound_tenant
-
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import (
     KnowledgeDocumentBindingRepository,
@@ -134,9 +132,6 @@ class _EmployeeKnowledgeBindingQuery:
         return [str(r[0]) for r in rows]
 
 
-_UNCONFIGURED = object()
-
-
 class KnowledgeIntakeService:
     """知识文档 intake 编排。tenant_id 全程经 TenantContext（D22）。"""
 
@@ -154,7 +149,6 @@ class KnowledgeIntakeService:
         ingestion_client: RagIngestionPort,
         operation_repo: KnowledgeOperationRepository | None = None,
         audit_recorder: _AuditPort | None = None,
-        bound_tenant_id: str | None | object = _UNCONFIGURED,
     ):
         self._doc_repo = doc_repo
         self._job_repo = job_repo
@@ -167,11 +161,6 @@ class KnowledgeIntakeService:
         self._ingestion_client = ingestion_client
         self._operation_repo = operation_repo
         self._audit = audit_recorder
-        # Production route/lifespan assembly supplies the one Manager tenant.
-        # Compatibility/unit fixtures may omit it, but no configured binding is
-        # ever inferred from a document/job row.
-        self._binding_configured = bound_tenant_id is not _UNCONFIGURED
-        self._bound_tenant_id = bound_tenant_id if self._binding_configured else None
         # Compatibility for unit/dev callers that predate the durable receipt
         # repository. Production always supplies KnowledgeOperationRepository.
         self._local_operations: dict[tuple[str, str], KnowledgeOperationRow] = {}
@@ -1277,8 +1266,6 @@ class KnowledgeIntakeService:
         propagate_unavailable: bool = False,
     ) -> None:
         from .knowledge_intake_recovery import KnowledgeIntakeRecovery
-        if self._binding_configured:
-            require_bound_tenant(self._bound_tenant_id, ctx.tenant_id)
         job = self._job_repo.get(ctx, ingestion_id=job_id)
         if job is None or job.document_id != document_id or job.knowledge_space_id != knowledge_space_id:
             raise NotFound("ingestion job not found in this knowledge space")
@@ -1593,7 +1580,6 @@ def build_knowledge_intake_service(
     router: PgTenantRouter, *, storage_root: Path,
     rag_service: ManagerRagService,
     ingestion_client: RagIngestionPort,
-    bound_tenant_id: str | None | object = _UNCONFIGURED,
 ) -> KnowledgeIntakeService:
     """组装 intake 服务；workspace 与 Manager ingestion client 显式注入。"""
     doc_repo, job_repo, binding_repo = build_knowledge_intake_repositories(router)
@@ -1609,7 +1595,6 @@ def build_knowledge_intake_service(
         ingestion_client=ingestion_client,
         operation_repo=KnowledgeOperationRepository(router),
         audit_recorder=build_enterprise_audit_repository(router),
-        bound_tenant_id=bound_tenant_id,
     )
 
 

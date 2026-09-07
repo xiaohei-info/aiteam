@@ -69,7 +69,7 @@ def test_resolve_not_found(svc):
 
 
 def test_resolve_prefers_code_over_slug(svc, admin_url: str):
-    """同时匹配 code 和 slug 时,优先返回 code 匹配者（SQL WHERE code= OR slug=, LIMIT 1）。"""
+    """同时匹配 code 和 slug 时,优先返回 code 匹配者，不使用 LIMIT 1 猜测。"""
     import psycopg
 
     tid_code = str(uuid.uuid4())

@@ -1,5 +1,7 @@
 """部署环境标记的配置层校验。"""
 
+import logging
+
 from shared.config import Settings, load_settings
 
 
@@ -29,3 +31,21 @@ def test_load_settings_reads_aiteam_env(monkeypatch):
     s = load_settings()
     assert s.aiteam_env == "production"
     assert s.is_production is True
+
+
+def test_load_settings_warns_and_ignores_legacy_manager_tenant_id(monkeypatch, caplog):
+    monkeypatch.setenv("APP_TIER", "manager")
+    monkeypatch.setenv("MANAGER_TENANT_ID", "00000000-0000-4000-8000-000000000001")
+    caplog.set_level(logging.WARNING)
+    s = load_settings()
+    assert not hasattr(s, "manager_tenant_id")
+    assert "MANAGER_TENANT_ID is ignored" in caplog.text
+
+
+def test_load_settings_ignores_whitespace_manager_tenant_id_without_warning(monkeypatch, caplog):
+    monkeypatch.setenv("APP_TIER", "manager")
+    monkeypatch.setenv("MANAGER_TENANT_ID", "   ")
+    caplog.set_level(logging.WARNING)
+    s = load_settings()
+    assert not hasattr(s, "manager_tenant_id")
+    assert "MANAGER_TENANT_ID is ignored" not in caplog.text

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from unittest.mock import patch, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
@@ -25,8 +24,7 @@ def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-pla
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, service_token=service_token,
-                              manager_tenant_id=_BOUND_TENANT),
+                              admin_db_url=admin_db_url, service_token=service_token),
                      manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
@@ -99,13 +97,13 @@ def test_bootstrap_extra_field_422():
 
 # ---- tenant guard / happy / idempotent ----
 
-def test_bootstrap_unknown_tenant_404():
+def test_bootstrap_stage_a_phase_gate():
     client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
     with patch("manager_service.routes_bootstrap._tenant_exists", return_value=False):
         r = client.post("/api/manager/owner-bootstrap", json=_body())
-    assert r.status_code == 404
+    assert r.status_code == 503
     assert r.headers["content-type"].startswith("application/problem+json")
-    assert r.json()["code"] == "not_found"
+    assert r.json()["code"] == "multitenancy_phase_pending"
 
 
 def _fake_auth_svc(provision_uid="user-1"):
@@ -114,39 +112,26 @@ def _fake_auth_svc(provision_uid="user-1"):
     return svc
 
 
-def test_bootstrap_happy():
-    """正常 bootstrap → 201 + user_id + cache hit（第二次请求）。"""
+def test_bootstrap_writes_are_phase_gated():
     fake = _fake_auth_svc()
     with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
             patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
         r = c.post("/api/manager/owner-bootstrap", json=_body())
-        assert r.status_code == 201
-        assert r.json()["data"]["user_id"] == "user-1"
-        # 第二次：cache hit → 同步入口仍调用一次
         r2 = c.post("/api/manager/owner-bootstrap", json=_body())
-        assert r2.status_code == 201
+    assert r.status_code == 503 and r2.status_code == 503
+    assert r.json()["code"] == "multitenancy_phase_pending"
+    fake.sync_owner_bootstrap.assert_not_called()
 
 
-def test_bootstrap_existing_owner_uses_replaceable_sync():
-    """已有负责人时仍调用可覆盖同步入口，供 Operator 重置新凭据。"""
+def test_bootstrap_cache_miss_builds_auth_service_when_phase_opens():
     fake = _fake_auth_svc()
-    with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
-            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
+    with patch("manager_service.routes_bootstrap.require_control_plane_writes_ready"), \
+            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True), \
+            patch("manager_service.auth_service.build_auth_service", return_value=fake) as build:
         c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        r = c.post("/api/manager/owner-bootstrap", json=_body())
-        assert r.status_code == 201
-        assert r.json()["data"]["user_id"] == "user-1"
-        fake.sync_owner_bootstrap.assert_called_once()
+        response = c.post("/api/manager/owner-bootstrap", json=_body())
 
-
-def test_bootstrap_sync_cache_hit():
-    """第二次同步复用缓存，仍进入可覆盖同步入口。"""
-    fake = _fake_auth_svc()
-    with patch("manager_service.auth_service.build_auth_service", return_value=fake), \
-            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True):
-        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-        c.post("/api/manager/owner-bootstrap", json=_body())
-        r2 = c.post("/api/manager/owner-bootstrap", json=_body())
-        assert r2.status_code == 201
-        assert fake.sync_owner_bootstrap.call_count == 2
+    assert response.status_code == 201
+    assert response.json()["data"]["user_id"] == "user-1"
+    build.assert_called_once_with("postgresql://fake/fake", admin_dsn="postgresql://admin/admin")

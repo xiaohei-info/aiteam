@@ -88,7 +88,6 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
             storage_root=tmp_path,
             rag_service=PgManagerRagService(migrated_db, enterprise_workspace=SPACE),
             ingestion_client=client,
-            bound_tenant_id=ctx.tenant_id,
         )
     service = build()
     verifier, signer = make_inmem_verifier_and_signer()
@@ -98,7 +97,6 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
             service_name="s05-fixture",
             db_url=migrated_db,
             admin_db_url=admin_url,
-            manager_tenant_id=ctx.tenant_id,
         ),
         APIRouter(),
     )
@@ -126,7 +124,10 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
             s.execute("DELETE FROM knowledge_document")
 
 
-def test_upload_without_background_delivery_recovers_on_real_lifespan(recovery_pg, monkeypatch):
+def test_upload_without_background_delivery_stays_uploaded_on_stage_a_lifespan(recovery_pg, monkeypatch):
+    # Stage A lifespan must not enumerate tenants or recover unbound jobs.
+    # Request-created uploaded rows stay durable; explicit TenantContext
+    # maintain_once remains the only recovery path until Stage E workers.
     f = recovery_pg
     tasks = []
     monkeypatch.setattr(BackgroundTasks, "add_task", lambda _self, *args, **kwargs: tasks.append((args, kwargs)))
@@ -145,12 +146,18 @@ def test_upload_without_background_delivery_recovers_on_real_lifespan(recovery_p
     monkeypatch.setattr(f.app.state._knowledge_intake_service._binding_repo, "publish_ready", publish)
     install_knowledge_intake_lifespan(f.app)
     with TestClient(f.app):
-        assert completed.wait(5)
-    assert f.upstream.posts == 1
+        assert not completed.wait(1)
+        assert f.upstream.posts == 0
+        persisted = f.service._doc_repo.get(f.ctx, document_id=doc["id"])
+        assert persisted is not None and persisted.status == "uploaded"
+    assert not completed.is_set() and f.upstream.posts == 0
+    assert f.service._doc_repo.get(f.ctx, document_id=doc["id"]).status == "uploaded"
+    assert f.service._job_repo.get(f.other, ingestion_id=job.id) is None
+    assert KnowledgeIntakeRecovery(f.app.state._knowledge_intake_service).maintain_once(f.ctx) == 1
+    assert completed.is_set() and f.upstream.posts == 1
     result = f.client.get(f"{f.path}/{doc['id']}/ingestion", headers=f.headers)
     assert result.status_code == 200 and result.json()["data"]["status"] == "done"
     assert result.json()["data"]["attempts"] == 1
-    assert f.service._job_repo.get(f.other, ingestion_id=job.id) is None
 
 
 @pytest.mark.parametrize("crash_at", ["before_fence", "after_fence", "post_before_receipt", "after_track"])

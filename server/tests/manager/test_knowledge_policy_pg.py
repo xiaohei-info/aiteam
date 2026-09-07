@@ -92,7 +92,6 @@ def policy_pg(migrated_db, admin_url, two_tenants, tmp_path):
             service_name="rag-fixture",
             db_url=migrated_db,
             admin_db_url=admin_url,
-            manager_tenant_id=tenant,
         ),
         APIRouter(),
     )

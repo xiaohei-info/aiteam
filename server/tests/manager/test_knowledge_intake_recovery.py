@@ -8,7 +8,6 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from manager_service.active_principal import ManagerBindingMismatch, ManagerBindingRequired
 from manager_service.knowledge_intake_recovery import KnowledgeIntakeRecovery
 from manager_service.rag_ingestion import LightRagIngestionClient, LightRagIngestionSettings, RagIngestionUnavailable
 from shared.contracts.tenancy import TenantContext
@@ -23,17 +22,14 @@ def document(source="source/job", *, status="processed", id="native-1", **extra)
     return {"id": id, "file_path": source, "status": status, "chunks_count": 2, **extra}
 
 
-def test_recovery_rejects_unbound_or_mismatched_service_context_before_claim():
+def test_recovery_claims_under_request_tenant_context():
     repo = Mock()
-    intake = SimpleNamespace(_job_repo=repo, _binding_configured=True, _bound_tenant_id=None)
+    repo.claim.return_value = None
+    intake = SimpleNamespace(_job_repo=repo)
     recovery = KnowledgeIntakeRecovery(intake)
-    with pytest.raises(ManagerBindingRequired):
-        recovery.process(TenantContext(tenant_id="tenant-a", user_id="recovery", roles=[]))
-    intake._bound_tenant_id = "tenant-a"
-    recovery = KnowledgeIntakeRecovery(intake)
-    with pytest.raises(ManagerBindingMismatch):
-        recovery.process(TenantContext(tenant_id="tenant-b", user_id="recovery", roles=[]))
-    assert repo.mock_calls == []
+    ctx = TenantContext(tenant_id="tenant-a", user_id="recovery", roles=[])
+    assert recovery.process(ctx) is False
+    repo.claim.assert_called_once()
 
 
 def test_submission_uses_only_supported_pinned_text_fields_and_persists_track_shape():

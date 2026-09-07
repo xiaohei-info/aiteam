@@ -63,6 +63,10 @@ class TooManyRequests(AppError):
     status, code, title = 429, "rate_limited", "Too Many Requests"
 
 
+class ServiceUnavailable(AppError):
+    status, code, title = 503, "service_unavailable", "Service Unavailable"
+
+
 def _to_problem(*, status: int, code: str, title: str, detail: str | None,
                 instance: str | None, request_id: str | None,
                 errors: list[ProblemFieldError] | None) -> Problem:

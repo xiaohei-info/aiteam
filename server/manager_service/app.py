@@ -57,7 +57,6 @@ from .knowledge_intake_repository import build_knowledge_intake_repositories
 from .knowledge_access_policy import KnowledgeAccessPolicy
 from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 from .knowledge_space_repository import KnowledgeSpaceRepository
-from .knowledge_space_service import ensure_enterprise_knowledge_space
 from .member_service import GrantService, MemberDeptService
 from .rag import PgManagerRagService
 from .rag_ingestion import LightRagIngestionClient
@@ -107,8 +106,6 @@ def _build_verifier():
     return ActivePrincipalVerifier(
         DynamicRS256TokenVerifier(key_store.public_pem_for_kid),
         TenantAuthRepository(PgTenantRouter(settings.db_url)),
-        deployment_tenant_id=settings.manager_tenant_id,
-        require_binding=True,
     )
 
 
@@ -150,21 +147,6 @@ if settings.admin_db_url:
     from shared.db import apply_migrations as _apply_control_migrations
 
     _apply_control_migrations(settings.admin_db_url, settings.app_rw_password)
-
-# Keep readiness and all protected Manager routes bound to the explicitly
-# configured deployment tenant.  Do not discover a tenant from registry rows.
-app.state._manager_binding_ready = False
-if settings.manager_tenant_id and settings.admin_db_url:
-    import psycopg
-    with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
-        bound_row = conn.execute(
-            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
-            (settings.manager_tenant_id,),
-        ).fetchone()
-    # The Operator-controlled F01 provision route may create the bound row on
-    # first boot.  Keep readiness false until it exists, but do not enumerate or
-    # guess another registry row and do not prevent the controlled provision call.
-    app.state._manager_binding_ready = bound_row is not None
 
 # Hindsight lease metadata is durable whenever both Manager DB boundaries are
 # configured.  Cleanup is an admin read/write maintenance operation; issue,
@@ -286,28 +268,12 @@ if settings.db_url:
 
 
 def _initialize_enterprise_knowledge_spaces() -> None:
-    """Materialize only the configured deployment tenant's fixed enterprise space.
+    """Stage A does not pin or scan tenants at startup.
 
-    A Manager deployment is not allowed to discover a tenant by scanning the
-    control registry.  Missing or stale binding is a startup configuration
-    failure, never a reason to guess the only/first row.
+    Existing workspaces stay with their owning enterprise. Stage B materializes
+    a space on an explicit tenant request; do not guess registry first-row.
     """
-    if not settings.db_url or not settings.admin_db_url or _rag_settings is None or not _rag_settings.workspace:
-        return
-    if not settings.manager_tenant_id:
-        raise RuntimeError("manager deployment tenant binding is required")
-    import psycopg
-    with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
-            (settings.manager_tenant_id,),
-        ).fetchone()
-    if row is None:
-        # F01 may be the controlled first writer for this exact configured
-        # tenant.  Do not materialize any other registry row or guess a tenant;
-        # readiness remains false until F01 creates the binding row.
-        return
-    ensure_enterprise_knowledge_space(settings.db_url, settings.manager_tenant_id, _rag_settings.workspace)
+    return
 
 _initialize_enterprise_knowledge_spaces()
 

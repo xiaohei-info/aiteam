@@ -12,20 +12,20 @@ from fastapi.testclient import TestClient
 from shared.config import Settings
 from shared.contracts.auth import TokenClaims
 from tests.manager._auth_helper import make_inmem_verifier_and_signer
-from manager_service.auth_service import AuthResult
+from manager_service.auth_service import AuthResult, EnterpriseAmbiguous, TenantSelectionRequired
 
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
 
 
-def _client(db_url, admin_db_url=None, manager_tenant_id=None):
+def _client(db_url, admin_db_url=None):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
     app = create_app(Settings(tier="manager", service_name="m", db_url=db_url,
-                              admin_db_url=admin_db_url, manager_tenant_id=manager_tenant_id), manager_router)
+                              admin_db_url=admin_db_url), manager_router)
     app.state._token_verifier = _VERIFIER
     app.state._operator_catalog = FakeOperatorCatalogClient()
     app.include_router(auth_router)
@@ -87,30 +87,126 @@ def test_auth_422(endpoint, body):
 
 # ---- happy path ----
 
-def test_unbound_manager_keeps_health_but_not_readiness():
-    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-    assert client.get("/healthz").status_code == 200
-    ready = client.get("/readyz")
-    assert ready.status_code == 503
-    assert ready.json()["code"] == "manager_binding_required"
+def test_unbound_manager_is_ready_without_process_tenant():
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("tenant_registry",)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        assert client.get("/healthz").status_code == 200
+        ready = client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    connect.assert_called_once_with(
+        "postgresql://fake/fake", autocommit=True, connect_timeout=5,
+    )
 
 
-def test_unbound_public_resolve_tenant_fails_closed_without_registry_scan():
-    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-    response = client.post("/api/auth/resolve-tenant", json={"enterprise": "some-enterprise"})
-    assert response.status_code == 503
-    assert response.json()["code"] == "manager_binding_required"
+def test_resolve_tenant_ignores_host_headers():
+    fake = _fake_auth_svc()
+    fake.resolve_tenant.return_value = "t-resolved"
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post(
+            "/api/auth/resolve-tenant",
+            json={"enterprise": "acme"},
+            headers={"Host": "other.example.com", "X-Forwarded-Host": "evil.example.com"},
+        )
+    assert r.status_code == 200
+    assert r.json()["data"]["tenant_id"] == "t-resolved"
+    fake.resolve_tenant.assert_called_once_with("acme")
 
 
-def test_unbound_public_login_fails_closed_without_body_tenant_fallback():
-    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-    response = client.post("/api/auth/login", json={
-        "tenant_id": "11111111-1111-4111-8111-111111111111",
-        "account": "13800138000",
-        "password": "Pw1!",
-    })
-    assert response.status_code == 503
-    assert response.json()["code"] == "manager_binding_required"
+def test_login_accepts_enterprise_without_tenant_id():
+    fake = _fake_auth_svc()
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/login", json={
+            "enterprise": "acme", "account": "13800138000", "password": "Pw1!",
+        })
+    assert r.status_code == 200
+    body = fake.login.call_args[0][0]
+    assert body.enterprise == "acme"
+    assert body.tenant_id is None
+    assert "Pw1!" not in str(r.json())
+
+
+def test_owner_reset_accepts_enterprise_without_tenant_id():
+    fake = _fake_auth_svc()
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/owner-reset", json={
+            "enterprise": "acme", "account": "13800138000",
+            "old_password": "Pw1!", "new_password": "NewPw2!",
+        })
+    assert r.status_code == 200
+    body = fake.owner_reset.call_args[0][0]
+    assert body.enterprise == "acme"
+    assert body.tenant_id is None
+
+
+def test_login_enterprise_ambiguous_409():
+    fake = _fake_auth_svc()
+    fake.login.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/login", json={
+            "enterprise": "acme", "account": "13800138000", "password": "Pw1!",
+        })
+    assert r.status_code == 409
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "enterprise_ambiguous"
+    assert "Pw1!" not in str(r.json())
+
+
+def test_resolve_tenant_enterprise_ambiguous_409():
+    fake = _fake_auth_svc()
+    fake.resolve_tenant.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant", json={"enterprise": "acme"})
+    assert r.status_code == 409
+    assert r.json()["code"] == "enterprise_ambiguous"
+
+
+def test_resolve_tenant_by_account_selection_required_409():
+    fake = _fake_auth_svc()
+    fake.resolve_tenant_by_account.side_effect = TenantSelectionRequired(
+        "account belongs to multiple tenants, enterprise must be specified: 13800138000"
+    )
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
+    assert r.status_code == 409
+    assert r.json()["code"] == "tenant_selection_required"
+
+
+def test_owner_reset_enterprise_ambiguous_409():
+    fake = _fake_auth_svc()
+    fake.owner_reset.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/owner-reset", json={
+            "enterprise": "acme", "account": "13800138000",
+            "old_password": "Pw1!", "new_password": "NewPw2!",
+        })
+    assert r.status_code == 409
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "enterprise_ambiguous"
+    assert "Pw1!" not in str(r.json()) and "NewPw2!" not in str(r.json())
+
+
+def test_resolve_tenant_by_account_passes_enterprise_for_disambiguation():
+    fake = _fake_auth_svc()
+    fake.resolve_tenant_by_account.return_value = "t-resolved"
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant-by-account", json={
+            "account": "13800138000", "enterprise": "acme",
+        })
+    assert r.status_code == 200
+    assert r.json()["data"]["tenant_id"] == "t-resolved"
+    fake.resolve_tenant_by_account.assert_called_once_with("13800138000", "acme")
 
 
 def test_login_happy_cache_hit():
@@ -159,7 +255,7 @@ def test_resolve_tenant_by_account_happy():
         r = c.post("/api/auth/resolve-tenant-by-account", json={"account": "13800138000"})
         assert r.status_code == 200
         assert r.json()["data"]["tenant_id"] == "t-resolved"
-        fake.resolve_tenant_by_account.assert_called_once_with("13800138000")
+        fake.resolve_tenant_by_account.assert_called_once_with("13800138000", None)
 
 
 def test_resolve_tenant_by_account_no_db_503():

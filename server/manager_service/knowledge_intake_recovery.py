@@ -6,39 +6,19 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from shared.contracts.tenancy import TenantContext
 
-from .active_principal import ManagerBindingMismatch, require_bound_tenant
 from .document_parser import UnsupportedFormatError, extract_text
 
 log = logging.getLogger(__name__)
-_UNCONFIGURED = object()
 
 
 class KnowledgeIntakeRecovery:
-    def __init__(self, intake, *, bound_tenant_id: str | None | object = _UNCONFIGURED):
+    def __init__(self, intake):
         self.intake = intake
-        intake_configured = bool(getattr(intake, "_binding_configured", False))
-        intake_bound = getattr(intake, "_bound_tenant_id", None)
-        if bound_tenant_id is _UNCONFIGURED:
-            self._binding_configured = intake_configured
-            self._bound_tenant_id = intake_bound
-            self._binding_mismatch = False
-        else:
-            self._binding_configured = True
-            self._bound_tenant_id = bound_tenant_id
-            self._binding_mismatch = intake_configured and intake_bound != bound_tenant_id
-
-    def _require_context(self, ctx: TenantContext) -> None:
-        if self._binding_mismatch:
-            raise ManagerBindingMismatch("Knowledge recovery binding does not match the Manager service binding")
-        if self._binding_configured:
-            require_bound_tenant(self._bound_tenant_id, ctx.tenant_id)
 
     def process(self, ctx: TenantContext, *, job_id: str | None = None) -> bool:
-        self._require_context(ctx)
         service = self.intake
         repo = service._job_repo
         owner = uuid.uuid4().hex
@@ -115,7 +95,6 @@ class KnowledgeIntakeRecovery:
         return True
 
     def maintain_once(self, ctx: TenantContext, *, limit: int = 8) -> int:
-        self._require_context(ctx)
         count = 0
         for _ in range(min(8, max(0, limit))):
             if not self.process(ctx):
@@ -133,32 +112,10 @@ def install_knowledge_intake_lifespan(app):
             stop = asyncio.Event()
 
             def sweep():
-                import psycopg
-                from .routes_knowledge_intake import _service
-                settings = instance.state.settings
-                # A Manager maintenance worker is bound to exactly one tenant.
-                # Missing binding is fail-closed: it must not enumerate a shared
-                # database and submit another enterprise's document text.
-                bound_tenant = settings.manager_tenant_id
-                if not bound_tenant:
-                    return
-                # Infrastructure enumeration is still performed through the
-                # admin connection, but is filtered by the deployment binding;
-                # all claims/writes below use app_rw + TenantContext and FORCE RLS.
-                with psycopg.connect(settings.admin_db_url, autocommit=True) as conn:
-                    due = conn.execute(
-                        "SELECT 1 FROM knowledge_ingestion_job WHERE tenant_id=%s "
-                        "AND next_attempt_at<=now() "
-                        "AND (status NOT IN ('done','failed') OR submission_state='submitted') LIMIT 1",
-                        (bound_tenant,),
-                    ).fetchone()
-                if due is None:
-                    return
-                service = _service(SimpleNamespace(app=instance))
-                recovery = KnowledgeIntakeRecovery(service, bound_tenant_id=bound_tenant)
-                recovery.maintain_once(
-                    TenantContext(tenant_id=str(bound_tenant), user_id="knowledge-recovery", roles=[]), limit=8,
-                )
+                # Stage A: do not enumerate tenants or guess registry first-row.
+                # Stage E claims due jobs per tenant_id. Request-path recovery
+                # still runs under the caller's TenantContext.
+                return
 
             async def poll():
                 while not stop.is_set():

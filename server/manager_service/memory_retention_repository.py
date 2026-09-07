@@ -21,10 +21,9 @@ def _row(row):
 
 
 class MemoryRetentionRepository:
-    def __init__(self, router: PgTenantRouter, admin_dsn: str | None = None, *, bound_tenant_id: str | None = None):
+    def __init__(self, router: PgTenantRouter, admin_dsn: str | None = None):
         self._router = router
         self._admin_dsn = admin_dsn
-        self._bound_tenant_id = bound_tenant_id
 
     def accept(self, ctx, *, employee_id, bank_id, document_id, operation_id, policy):
         with self._router.session(ctx) as s:
@@ -53,27 +52,17 @@ class MemoryRetentionRepository:
                                   (bank_id, document_id)).fetchone())
 
     def tenant_ids_due(self, tenant_id: str | None = None):
-        """Return only the configured deployment tenant, never a DB-wide inventory."""
-        # A maintenance caller-provided tenant is not a binding.  Production
-        # repositories are constructed with the one explicit Manager tenant;
-        # an unbound repository must never turn a non-empty argument into a
-        # database-wide/other-enterprise maintenance capability.
-        if not self._bound_tenant_id:
-            return []
-        if tenant_id is not None and tenant_id != self._bound_tenant_id:
-            return []
-        bound_tenant = self._bound_tenant_id
-        if self._admin_dsn is None:
+        """Return due tenants for an explicit tenant_id. Stage A does not inventory all tenants."""
+        if not tenant_id or self._admin_dsn is None:
             return []
         import psycopg
-        # Infrastructure-only enumeration is filtered before any app_rw claim.
         with psycopg.connect(self._admin_dsn) as c:
             rows = c.execute(
                 "SELECT tenant_id FROM memory_acceptance WHERE tenant_id=%s "
                 "AND next_attempt<=now() AND cleanup_state<>'cleaned' "
                 "AND (claim_until IS NULL OR claim_until<=now()) "
                 "GROUP BY tenant_id ORDER BY MIN(next_attempt) LIMIT 1",
-                (bound_tenant,),
+                (tenant_id,),
             ).fetchall()
         return [str(row[0]) for row in rows]
 

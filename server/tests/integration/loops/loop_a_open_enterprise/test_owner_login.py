@@ -17,47 +17,27 @@ from fastapi.testclient import TestClient
 
 
 def _provision_owner_for_test(tenant_scope, service_token_headers, register_tenant):
-    """工具：F01+F02 开通企业并 bootstrap owner，返回 (tenant_id, phone, bootstrap_pw, manager_client)。"""
-
+    """Create an already-provisioned tenant via AuthService (Stage A F01/F02 HTTP is gated)."""
+    import psycopg
     from manager_service.app import app as manager_app
-
-    # F01 must exercise creation of a fresh registry row. Bind the shared test
-    # app explicitly to this deployment target instead of reusing tenant_scope's
-    # already-created RLS fixture row.
-    new_tenant_id = register_tenant(str(uuid.uuid4()))
+    from manager_service.auth_service import build_auth_service
     from tests.integration.fixtures.manager_binding import bind_manager_app
 
+    new_tenant_id = register_tenant(str(uuid.uuid4()))
     bind_manager_app(new_tenant_id, manager_app)
     client = TestClient(manager_app)
-
-    # F01
-    r1 = client.post(
-        "/api/manager/tenants",
-        json={
-            "enterprise_id": str(uuid.uuid4()),
-            "tenant_id": new_tenant_id,
-            "enterprise_name": "LoginTest Corp",
-            "enterprise_code": f"lt_{uuid.uuid4().hex[:6]}",
-        },
-        headers=service_token_headers,
-    )
-    assert r1.status_code == 201, f"F01 failed: {r1.text}"
-
-    # F02
+    slug = f"lt_{uuid.uuid4().hex[:6]}"
+    with psycopg.connect(tenant_scope.admin_url, autocommit=True) as conn:
+        conn.execute(
+            "INSERT INTO tenant_registry (tenant_id, enterprise_slug, enterprise_code) VALUES (%s, %s, %s)",
+            (new_tenant_id, slug, slug),
+        )
     phone = f"1{uuid.uuid4().int % 10_000_000_000:010d}"
     bootstrap_pw = f"Boot!1-{uuid.uuid4().hex[:8]}"
-    r2 = client.post(
-        "/api/manager/owner-bootstrap",
-        json={
-            "tenant_id": new_tenant_id,
-            "owner_phone": phone,
-            "bootstrap_secret": bootstrap_pw,
-            "must_reset": True,
-        },
-        headers=service_token_headers,
+    db_url = tenant_scope.business_url
+    build_auth_service(db_url, admin_dsn=tenant_scope.admin_url).provision_owner(
+        new_tenant_id, phone=phone, bootstrap_password=bootstrap_pw,
     )
-    assert r2.status_code == 201, f"F02 failed: {r2.text}"
-
     return new_tenant_id, phone, bootstrap_pw, client
 
 

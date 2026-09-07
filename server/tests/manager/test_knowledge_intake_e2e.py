@@ -37,7 +37,7 @@ class _FakeIngestion(LightRagIngestionClient):
                          workspace=ENTERPRISE_SPACE_ID), transport=httpx.MockTransport(self.upstream))
 
 
-def _client(db_url, admin_url=None, *, manager_tenant_id=None):
+def _client(db_url, admin_url=None):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
@@ -51,7 +51,6 @@ def _client(db_url, admin_url=None, *, manager_tenant_id=None):
         tier="manager",
         service_name="aiteam-manager-service",
         db_url=db_url,
-        manager_tenant_id=manager_tenant_id,
     )
     app = create_app(settings, manager_router)
     app.include_router(auth_router)
@@ -94,7 +93,7 @@ def _wait_ready(client, token, document_id: str) -> dict:
 
 def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     owner_b = _token(tid_b, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
@@ -152,7 +151,7 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     migrated_db, admin_url, two_tenants
 ):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     member = _token(tid_a, ["member"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
@@ -199,7 +198,7 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
 
 def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
     _make_space(client, owner, name="Backfill")
@@ -232,7 +231,7 @@ def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, 
 
 def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
@@ -246,7 +245,7 @@ def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
 
 def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
@@ -259,7 +258,7 @@ def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):
 
 def test_intake_missing_space_returns_404(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     r = client.post(
         "/api/manager/knowledge-spaces/no-such-space/documents",
@@ -271,7 +270,7 @@ def test_intake_missing_space_returns_404(migrated_db, admin_url, two_tenants):
 
 def test_intake_member_forbidden(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url, manager_tenant_id=tid_a)
+    client = _client(migrated_db, admin_url=admin_url)
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     member_a = _token(tid_a, ["member"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
