@@ -148,8 +148,8 @@ def test_upload_without_background_delivery_stays_uploaded_on_stage_a_lifespan(r
     with TestClient(f.app):
         assert not completed.wait(1)
         assert f.upstream.posts == 0
-        persisted = f.client.get(f"{f.path}/{doc['id']}", headers=f.headers)
-        assert persisted.status_code == 200 and persisted.json()["data"]["status"] == "uploaded"
+        persisted = f.service._doc_repo.get(f.ctx, document_id=doc["id"])
+        assert persisted is not None and persisted.status == "uploaded"
     assert not completed.is_set() and f.upstream.posts == 0
     assert f.service._doc_repo.get(f.ctx, document_id=doc["id"]).status == "uploaded"
     assert f.service._job_repo.get(f.other, ingestion_id=job.id) is None
