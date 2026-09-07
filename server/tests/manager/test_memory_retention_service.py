@@ -183,6 +183,23 @@ def test_due_inventory_requires_and_filters_bound_tenant():
     assert [call.args[1] for call in calls] == [("tenant-a",), ("tenant-b",)]
 
 
+def test_due_inventory_without_admin_dsn_never_enumerates():
+    from manager_service.memory_retention_repository import MemoryRetentionRepository
+    repo = MemoryRetentionRepository(Mock(), None)
+    with patch("psycopg.connect") as connect:
+        assert repo.tenant_ids_due("tenant-a") == []
+    connect.assert_not_called()
+
+
+def test_maintenance_without_explicit_tenant_is_noop(service):
+    f = service
+    f.svc.maintain_once()
+    f.svc.maintain_once("")
+    f.svc.maintain_once(None)
+    f.repo.tenant_ids_due.assert_not_called()
+    f.repo.claim.assert_not_called()
+
+
 def test_maintenance_total_claim_budget_is_bounded_across_tenants(service):
     f = service
     f.repo.tenant_ids_due.return_value = ["tenant-a", "tenant-b"]

@@ -174,6 +174,34 @@ def test_resolve_tenant_by_account_selection_required_409():
     assert r.json()["code"] == "tenant_selection_required"
 
 
+def test_owner_reset_enterprise_ambiguous_409():
+    fake = _fake_auth_svc()
+    fake.owner_reset.side_effect = EnterpriseAmbiguous("enterprise identifier is ambiguous: acme")
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/owner-reset", json={
+            "enterprise": "acme", "account": "13800138000",
+            "old_password": "Pw1!", "new_password": "NewPw2!",
+        })
+    assert r.status_code == 409
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "enterprise_ambiguous"
+    assert "Pw1!" not in str(r.json()) and "NewPw2!" not in str(r.json())
+
+
+def test_resolve_tenant_by_account_passes_enterprise_for_disambiguation():
+    fake = _fake_auth_svc()
+    fake.resolve_tenant_by_account.return_value = "t-resolved"
+    with patch("manager_service.routes_auth.build_auth_service", return_value=fake):
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        r = c.post("/api/auth/resolve-tenant-by-account", json={
+            "account": "13800138000", "enterprise": "acme",
+        })
+    assert r.status_code == 200
+    assert r.json()["data"]["tenant_id"] == "t-resolved"
+    fake.resolve_tenant_by_account.assert_called_once_with("13800138000", "acme")
+
+
 def test_login_happy_cache_hit():
     """同 client 多次 login → 首次 build（mock）→ 后续 cache hit。"""
     fake = _fake_auth_svc()

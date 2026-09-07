@@ -5,20 +5,20 @@
  * 验证命令：npx playwright test e2e/cross-tier/service-token-contract.spec.ts --project=cross-tier
  *
  * 验收锚点（DAG contract）：
- * - ServiceToken 覆盖合法、缺失、过期、越权、跨租户、禁止访问 /api/auth。
+ * - ServiceToken 覆盖相位闸前的合法守卫、缺失、过期、越权、跨租户、禁止访问 /api/auth。
  * - 失败时产出 Playwright report/trace/screenshot/video；成功必须靠断言不是截图。
  *
  * 设计：
  * - service token 是 Operator↔Manager 云侧服务间调用的共享密钥（03 §9.1）。
  * - Manager 敏感收端（POST /api/manager/tenants、POST /api/manager/owner-bootstrap）挂
- *   Depends(verify_service_token)，缺失/错误 → 401 problem+json。
+ *   Depends(verify_service_token)，缺失/错误 → 401；Stage A 合法请求随后命中 503 相位闸。
  * - service token **不能**访问 /api/auth/*（用户认证端点为用户凭据设计，03 §9.6）。
  * - 本 spec 测真实后端（不用 mock），依赖三端栈全量启动。
  *
  * 非目标（DAG contract）：不测 usage 数值精度、不覆盖多浏览器 nightly 矩阵、不用 mock 后端。
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIResponse } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { boundManagerTenantId, TIER_API_ORIGIN } from "../support/auth";
 
@@ -50,95 +50,52 @@ async function assertProblemJson(text: string, ct: string, status: number): Prom
   expect(body, "problem+json has status").toHaveProperty("status");
 }
 
+async function assertPhasePending(response: APIResponse, label: string): Promise<void> {
+  const text = await response.text();
+  expect(response.status(), `${label} 应返回 Stage A 相位闸: ${text}`).toBe(503);
+  const contentType = response.headers()["content-type"] ?? "";
+  expect(contentType).toContain("application/problem+json");
+  expect(contentType).not.toContain("text/html");
+  expect(text.toLowerCase()).not.toContain("<!doctype html");
+  expect((JSON.parse(text) as { code?: string }).code).toBe("multitenancy_phase_pending");
+}
+
 // ── ServiceToken 合法访问 ──
 
 test.describe("ServiceToken 合法访问", () => {
-  test("Manager /api/manager/tenants 带正确 service token → 201 + envelope data.tenant_id（token 守卫通过 + 租户成功落库）", async ({
+  test("Manager /api/manager/tenants 带正确 service token → Stage A 503 phase gate", async ({
     request,
   }) => {
-    // 正确 service token 必须通过守卫并成功 provision the bound Manager tenant。
-    // 5xx（无 PG）→ 测试失败（非误报），因为这代表 service token 守卫之后的业务链路断裂。
     const tenantId = boundManagerTenantId();
-    const enterpriseId = randomUUID();
-    const code = `svctok-${randomUUID().replace(/-/g, "").slice(0, 6)}`;
-
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
       {
         data: {
-          enterprise_id: enterpriseId,
+          enterprise_id: randomUUID(),
           tenant_id: tenantId,
           enterprise_name: "E2E ServiceToken Corp",
-          enterprise_code: code,
+          enterprise_code: `svctok-${randomUUID().replace(/-/g, "").slice(0, 6)}`,
         },
         headers: svcHeaders(),
         failOnStatusCode: false,
       },
     );
 
-    const status = resp.status();
-    const ct = resp.headers()["content-type"] ?? "";
-
-    // 510（Manager 管理 DB 未配置）是 infra 前置缺失，skip 而非 fail。
-    // 完整三端栈要求 PG 就绪；DB 未配置时无法验证 token → provision 全链。
-    if (status === 503) {
-      const text = await resp.text();
-      if (text.includes("manager_db") || text.includes("unconfigured") || text.includes("ADMIN_DB_URL")) {
-        test.skip(true, "Manager PG 未配置——完整三端栈需 ADMIN_DB_URL/DB_URL");
-        return;
-      }
-    }
-
-    // 严格断言：service token 合法 → 201 + JSON envelope + data.tenant_id。
-    // 不接受 5xx/4xx 伪装成通过。
-    expect(status, `正确 service token → tenant provision 应 201，实际 ${status}`).toBe(201);
-    expect(ct, `content-type 应为 application/json: "${ct}"`).toContain("application/json");
-    expect(ct).not.toContain("text/html");
-
-    const body = (await resp.json()) as { data?: { tenant_id: string } };
-    expect(body, "envelope 含 data").toHaveProperty("data");
-    expect(body.data?.tenant_id, "envelope.data.tenant_id 与请求一致").toBe(tenantId);
+    // Stage A 暂不开放 F01；正确 service token 必须先通过 service-token 守卫，
+    // 再命中明确的相位闸，而不是被错误地当成用户认证或被静默放行。
+    await assertPhasePending(resp, "正确 service token → tenant provision");
   });
 
-  test("Manager /api/manager/owner-bootstrap 带正确 service token → 201（或幂等 200）envelope", async ({
+  test("Manager /api/manager/owner-bootstrap 带正确 service token → Stage A 503 phase gate", async ({
     request,
   }) => {
-    // 先 provision the bound tenant（同一条测试内建前置，确保 deployment tenant 存在）。
     const tenantId = boundManagerTenantId();
-    const enterpriseId = randomUUID();
-    const code = `svctok-bs-${randomUUID().replace(/-/g, "").slice(0, 6)}`;
-
-    const provResp = await request.post(
-      `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
-      {
-        data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
-          enterprise_name: "E2E Bootstrap Corp",
-          enterprise_code: code,
-        },
-        headers: svcHeaders(),
-        failOnStatusCode: false,
-      },
-    );
-
-    if (!provResp.ok()) {
-      const text = await provResp.text();
-      if (provResp.status() === 503 && (text.includes("unconfigured") || text.includes("ADMIN_DB_URL"))) {
-        test.skip(true, "Manager PG 未配置——完整三端栈需 ADMIN_DB_URL/DB_URL");
-        return;
-      }
-      throw new Error(`tenant provision 前置失败: ${provResp.status()} body=${text.slice(0, 300)}`);
-    }
-
-    // 对已绑定 tenant 做 owner-bootstrap。账号必须唯一，不能依赖新建 tenant 行。
-    const ownerPhone = `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/owner-bootstrap`,
       {
         data: {
           tenant_id: tenantId,
-          owner_phone: ownerPhone,
+          owner_phone: `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`,
           bootstrap_secret: "Test-bootstrap-secret1",
           must_reset: true,
         },
@@ -147,20 +104,7 @@ test.describe("ServiceToken 合法访问", () => {
       },
     );
 
-    const status = resp.status();
-    const ct = resp.headers()["content-type"] ?? "";
-
-    // 合法 service token → 201（首次）或 200（幂等重试）。
-    expect(
-      [200, 201],
-      `正确 service token → owner-bootstrap 应 200/201，实际 ${status}`,
-    ).toContain(status);
-    expect(ct, `content-type 应为 application/json: "${ct}"`).toContain("application/json");
-    expect(ct).not.toContain("text/html");
-
-    const body = (await resp.json()) as { data?: { tenant_id: string } };
-    expect(body, "envelope 含 data").toHaveProperty("data");
-    expect(body.data?.tenant_id, "envelope.data.tenant_id 与请求一致").toBe(tenantId);
+    await assertPhasePending(resp, "正确 service token → owner-bootstrap");
   });
 });
 
@@ -328,25 +272,18 @@ test.describe("ServiceToken 错误/过期/越权", () => {
     }
   });
 
-  test("Bearer 格式传 service token（Authorization: Bearer <token>）→ 201 + envelope data.tenant_id（守卫接受 Bearer + 租户成功落库）", async ({
+  test("Bearer 格式传 service token → Stage A 503 phase gate", async ({
     request,
   }) => {
-    // 与 X-Service-Token 合法用例同一验收口径：Bearer 格式 token 也必须穿透守卫并成功
-    // provision tenant。固定 enterprise_code 会在重复运行时撞 tenant_registry_enterprise_slug_key
-    // 唯一约束导致 500，故使用随机 code；断言收紧为 201 + JSON envelope + data.tenant_id，
-    // 不再把 4xx/5xx 当作通过。
     const token = serviceToken();
-    const tenantId = boundManagerTenantId();
-    const enterpriseId = randomUUID();
-    const code = `bear-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/tenants`,
       {
         data: {
-          enterprise_id: enterpriseId,
-          tenant_id: tenantId,
+          enterprise_id: randomUUID(),
+          tenant_id: boundManagerTenantId(),
           enterprise_name: "BearerToken Corp",
-          enterprise_code: code,
+          enterprise_code: `bear-${randomUUID().replace(/-/g, "").slice(0, 8)}`,
         },
         headers: {
           "Authorization": `Bearer ${token}`,
@@ -355,26 +292,8 @@ test.describe("ServiceToken 错误/过期/越权", () => {
         failOnStatusCode: false,
       },
     );
-    // Authorization: Bearer 格式 token 也应被 service token 守卫接受。
-    const status = resp.status();
-    const ct = resp.headers()["content-type"] ?? "";
-    const text = await resp.text();
 
-    // 503（Manager 管理 DB 未配置）是 infra 前置缺失，skip 而非 fail。
-    if (status === 503 && (text.includes("manager_db") || text.includes("unconfigured") || text.includes("ADMIN_DB_URL"))) {
-      test.skip(true, "Manager PG 未配置——完整三端栈需 ADMIN_DB_URL/DB_URL");
-      return;
-    }
-
-    // 严格断言：Bearer 格式合法 service token → 201 + JSON envelope + data.tenant_id。
-    // 不接受 5xx/4xx 伪装成通过（500 UniqueViolation 等业务失败必须暴露）。
-    expect(status, `Bearer 格式合法 token → tenant provision 应 201，实际 ${status}: ${text.slice(0, 200)}`).toBe(201);
-    expect(ct, `content-type 应为 application/json: "${ct}"`).toContain("application/json");
-    expect(ct).not.toContain("text/html");
-
-    const body = JSON.parse(text) as { data?: { tenant_id: string } };
-    expect(body, "envelope 含 data").toHaveProperty("data");
-    expect(body.data?.tenant_id, "envelope.data.tenant_id 与请求一致").toBe(tenantId);
+    await assertPhasePending(resp, "Bearer service token → tenant provision");
   });
 });
 

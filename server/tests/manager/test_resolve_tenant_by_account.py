@@ -144,6 +144,20 @@ def test_unit_enterprise_scopes_account_lookup(mock_connect):
 
 
 @patch("psycopg.connect")
+def test_unit_whitespace_enterprise_does_not_scope_account_lookup(mock_connect):
+    conn = MagicMock()
+    conn.execute.return_value.fetchall.return_value = [("t-1",)]
+    mock_connect.return_value.__enter__.return_value = conn
+    svc = _svc()
+    svc.resolve_tenant = MagicMock()
+    assert svc.resolve_tenant_by_account("13800000000", enterprise="  ") == "t-1"
+    svc.resolve_tenant.assert_not_called()
+    sql, params = conn.execute.call_args[0]
+    assert params == ("13800000000",)
+    assert "WHERE tenant_id = %s" not in sql
+
+
+@patch("psycopg.connect")
 def test_unit_resolve_single_hit(mock_connect):
     """provider IN (...) 命中唯一 tenant → 返回 tenant_id。"""
     conn = MagicMock()

@@ -40,3 +40,12 @@ def test_load_settings_warns_and_ignores_legacy_manager_tenant_id(monkeypatch, c
     s = load_settings()
     assert not hasattr(s, "manager_tenant_id")
     assert "MANAGER_TENANT_ID is ignored" in caplog.text
+
+
+def test_load_settings_ignores_whitespace_manager_tenant_id_without_warning(monkeypatch, caplog):
+    monkeypatch.setenv("APP_TIER", "manager")
+    monkeypatch.setenv("MANAGER_TENANT_ID", "   ")
+    caplog.set_level(logging.WARNING)
+    s = load_settings()
+    assert not hasattr(s, "manager_tenant_id")
+    assert "MANAGER_TENANT_ID is ignored" not in caplog.text

@@ -20,66 +20,9 @@ import {
   TIER_API_ORIGIN,
 } from "../support/auth";
 
-function serviceToken(): string {
-  return process.env.SERVICE_TOKEN ?? "test-service-token";
-}
-
-function svcHeaders(): Record<string, string> {
-  return { "X-Service-Token": serviceToken(), "Content-Type": "application/json" };
-}
-
-function uniquePhone(): string {
-  return `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
-}
-
-async function createOwnerToken(request: APIRequestContext): Promise<string> {
-  const tenantId = boundManagerTenantId();
-  const enterpriseId = randomUUID();
-  const enterpriseCode = `gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const ownerPhone = uniquePhone();
-  const bootstrapSecret = `Boot!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const newPassword = `New!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-
-  const tenantResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/tenants`, {
-    data: {
-      enterprise_id: enterpriseId,
-      tenant_id: tenantId,
-      enterprise_name: "E2E Governance Corp",
-      enterprise_code: enterpriseCode,
-    },
-    headers: svcHeaders(),
-    failOnStatusCode: false,
-  });
-  expect(tenantResp.status(), `governance tenant provision 应成功: ${tenantResp.status()} body=${await tenantResp.text()}`).toBe(201);
-
-  const bootstrapResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/owner-bootstrap`, {
-    data: {
-      tenant_id: tenantId,
-      owner_phone: ownerPhone,
-      bootstrap_secret: bootstrapSecret,
-      must_reset: true,
-    },
-    headers: svcHeaders(),
-    failOnStatusCode: false,
-  });
-  expect(
-    [200, 201],
-    `governance owner-bootstrap 应成功: ${bootstrapResp.status()} body=${await bootstrapResp.text()}`,
-  ).toContain(bootstrapResp.status());
-
-  const resetResp = await request.post(`${TIER_API_ORIGIN.manager}/api/auth/owner-reset`, {
-    data: {
-      tenant_id: tenantId,
-      account: ownerPhone,
-      old_password: bootstrapSecret,
-      new_password: newPassword,
-    },
-    failOnStatusCode: false,
-  });
-  expect(resetResp.ok(), `governance owner-reset 应成功: ${resetResp.status()} body=${await resetResp.text()}`).toBe(true);
-  const resetBody = (await resetResp.json()) as { data?: { token?: string } };
-  expect(resetBody.data?.token, "owner-reset 应返回 owner token").toBeTruthy();
-  return resetBody.data.token;
+async function createManagerToken(request: APIRequestContext): Promise<string> {
+  const login = await apiLogin(request, "manager", defaultCredentials("manager"));
+  return login.token;
 }
 
 test.describe("Loop-C governance（跨端）", () => {
@@ -151,7 +94,7 @@ test.describe("Loop-C governance（跨端）", () => {
   test("Manager quota-policies 创建 + 列表可达（契约形状验证）", async ({
     request,
   }) => {
-    const token = await createOwnerToken(request);
+    const token = await createManagerToken(request);
     const origin = TIER_API_ORIGIN.manager;
     const policySlug = `be2e-gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
