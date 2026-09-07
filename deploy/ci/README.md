@@ -43,7 +43,7 @@ TEST 维护窗口后，当前工作树才可成为新的 release checkout。
 TEST 顺序固定为：
 
 1. 暂停新的应用写入/知识导入，停止 Manager、Operation、Agent writers，并确认旧进程已退出；
-2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用；
+2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用。若 `ctl` 因固定名 `aiteam-pg` 已存在而无法 `compose up`，只在镜像、非秘密 `POSTGRES_USER`/`POSTGRES_DB` 与数据卷都与当前 TEST 期望一致时 `docker start` 复用该容器，不删除容器或卷；
 3. 依赖可用后执行数据库备份；
 4. 切换已批准 checkout；`run.sh` 按 `server/requirements.txt` 内容 hash 同步持久化 `.venv`（失败保持停机），再在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
 5. 迁移成功后启动新应用栈，再检查 healthz/readyz/OpenAPI 与 HTML 入口。
@@ -155,6 +155,9 @@ cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh --branch main
 
 - **Manager 启动报 `ModuleNotFoundError`（例如 `yaml`）**
   持久化 `.venv` 落后于当前 `server/requirements.txt`。新的 `run.sh` 会在 checkout 后、迁移/启动前按 hash 自动 `pip install --requirement`；pip 失败则保持应用停机。也可按清单步骤 5 手工重建 venv。
+
+- **CI 报 PostgreSQL `container name "/aiteam-pg" is already in use`**
+  现有同名容器不是自动删除对象。`run.sh` 会检查该容器的镜像、`POSTGRES_USER=aiteam`、`POSTGRES_DB=aiteam_v1` 以及 `/var/lib/postgresql/data` 是否挂在 `POSTGRES_VOLUME` 或 `aiteam_pg_data_<env>` 上；匹配则复用（已运行则接受，已停止则 `docker start`）。不匹配或非同名冲突仍 fail-closed。不要手工 `docker rm` / `volume rm`。
 
 - **`systemctl status` 显示 `activating (auto-restart) (exit-code 209/STDOUT)`**
   旧 unit 里 `StandardOutput=append:/.../logs/stdout.log` 指向不存在的文件。
