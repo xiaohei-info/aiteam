@@ -122,3 +122,16 @@ def test_bootstrap_writes_are_phase_gated():
     assert r.status_code == 503 and r2.status_code == 503
     assert r.json()["code"] == "multitenancy_phase_pending"
     fake.sync_owner_bootstrap.assert_not_called()
+
+
+def test_bootstrap_cache_miss_builds_auth_service_when_phase_opens():
+    fake = _fake_auth_svc()
+    with patch("manager_service.routes_bootstrap.require_control_plane_writes_ready"), \
+            patch("manager_service.routes_bootstrap._tenant_exists", return_value=True), \
+            patch("manager_service.auth_service.build_auth_service", return_value=fake) as build:
+        c = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        response = c.post("/api/manager/owner-bootstrap", json=_body())
+
+    assert response.status_code == 201
+    assert response.json()["data"]["user_id"] == "user-1"
+    build.assert_called_once_with("postgresql://fake/fake", admin_dsn="postgresql://admin/admin")
