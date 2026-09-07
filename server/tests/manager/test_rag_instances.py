@@ -70,6 +70,15 @@ def test_registry_discards_legacy_workspace_configuration(monkeypatch):
     assert registry.resolve("tenant-b__enterprise_shared").instance_id == "rag-a"
 
 
+def test_empty_instance_pool_env_uses_legacy_endpoint(monkeypatch):
+    monkeypatch.setenv("LIGHTRAG_INSTANCES", "")
+    monkeypatch.setenv("LIGHTRAG_URL", "http://rag")
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    registry = RagInstanceRegistry.from_env()
+    assert registry is not None
+    assert registry.instances[0].instance_id == "legacy"
+
+
 def test_legacy_env_workspace_is_ignored(monkeypatch):
     monkeypatch.delenv("LIGHTRAG_INSTANCES", raising=False)
     monkeypatch.setenv("LIGHTRAG_URL", "http://rag")
@@ -128,6 +137,53 @@ def test_query_and_ingestion_select_the_same_instance_for_requested_workspace():
         (f"{selected.url}/documents/text", selected.api_key, "space-b"),
         (f"{selected.url}/documents/track_status/track-b", selected.api_key, "space-b"),
     ]
+
+
+def test_clients_honor_persisted_instance_id_after_registry_reorder():
+    registry = _registry(
+        {"instance_id": "rag-a", "url": "http://rag-a", "api_key": "secret-a"},
+        {"instance_id": "rag-b", "url": "http://rag-b", "api_key": "secret-b"},
+    )
+    query_seen: list[tuple[str, str]] = []
+
+    async def query_handler(request: httpx.Request):
+        query_seen.append((str(request.url), request.headers["x-api-key"]))
+        return httpx.Response(200, json={"status": "success", "data": {"references": []}})
+
+    query = LightRagClient(
+        LightRagSettings("unused", "unused", instance_registry=registry),
+        transport=httpx.MockTransport(query_handler),
+    )
+    import asyncio
+    try:
+        asyncio.run(query.query(
+            workspace="space-b", query="hello", limit=5, instance_id="rag-b"
+        ))
+    finally:
+        asyncio.run(query.aclose())
+    assert query_seen == [("http://rag-b/query/data", "secret-b")]
+
+    ingestion_seen: list[tuple[str, str]] = []
+
+    def ingestion_handler(request: httpx.Request):
+        ingestion_seen.append((str(request.url), request.headers["x-api-key"]))
+        return httpx.Response(200, json={
+            "documents": [],
+            "pagination": {"page": 1, "page_size": 100, "total_pages": 0, "total_count": 0, "has_next": False},
+        })
+
+    ingestion = LightRagIngestionClient(
+        LightRagIngestionSettings("unused", "unused", 100, 1000, 1, instance_registry=registry),
+        transport=httpx.MockTransport(ingestion_handler),
+    )
+    try:
+        assert ingestion.list_documents(workspace="space-b", instance_id="rag-b") == []
+    finally:
+        ingestion.close()
+    assert ingestion_seen == [("http://rag-b/documents/paginated", "secret-b")]
+    with pytest.raises(RagInstanceConfigurationError):
+        # Preferred endpoint selection must not bypass workspace validation.
+        registry.validate_workspace("bad\nworkspace")
 
 
 def test_client_routes_workspace_without_static_allowlist():

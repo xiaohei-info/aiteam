@@ -45,7 +45,10 @@ def _service(request: Request) -> KnowledgeSpaceService:
         raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
     cache = getattr(request.app.state, "_knowledge_space_service", None)
     if cache is None:
-        cache = build_knowledge_space_service(PgTenantRouter(dsn))
+        cache = build_knowledge_space_service(
+            PgTenantRouter(dsn),
+            instance_registry=getattr(request.app.state, "_rag_instance_registry", None),
+        )
         request.app.state._knowledge_space_service = cache
     return cache
 

@@ -41,6 +41,11 @@ class KnowledgeIntakeRecovery:
                         error_code="SUBMISSION_UNKNOWN",
                     )
                     return True
+            # Resolve the persisted workspace/endpoint mapping once per job and
+            # carry its instance_id through every downstream call. Re-hashing
+            # the workspace after a registry reorder could send a valid job to
+            # another endpoint.
+            handle = service._rag_handle(ctx, job.knowledge_space_id)
             if job.submission_state == "not_submitted":
                 from .knowledge_intake_service import _resolve_path
                 try:
@@ -56,20 +61,24 @@ class KnowledgeIntakeRecovery:
                     repo.settle(ctx, job, owner=owner, state="failed", error_code="PARSE_FAILED")
                     return True
                 # Resolve all local routing/configuration failures before the fence.
-                handle = service._rag_handle(ctx, job.knowledge_space_id)
                 client = service._ingestion_client
-                client.validate_submission(workspace=handle.workspace, file_source=job.file_source, text=text)
+                client.validate_submission(
+                    workspace=handle.workspace, file_source=job.file_source, text=text,
+                    instance_id=getattr(handle, "instance_id", "legacy"),
+                )
                 if not repo.fence_submission(ctx, job, owner=owner, text_chars=len(text)):
                     return True
                 # From this commit onward absence is NOT evidence of rejection.
-                track_id = client.submit_text(workspace=handle.workspace, file_source=job.file_source, text=text)
+                track_id = client.submit_text(
+                    workspace=handle.workspace, file_source=job.file_source, text=text,
+                    instance_id=getattr(handle, "instance_id", "legacy"),
+                )
                 if not repo.record_track(ctx, job, owner=owner, track_id=track_id):
                     return True
                 job = repo.get(ctx, ingestion_id=job.id)
-            else:
-                handle = service._rag_handle(ctx, job.knowledge_space_id)
             result = service._ingestion_client.reconcile_ingestion(
                 workspace=handle.workspace, file_source=job.file_source, track_id=job.track_id,
+                instance_id=getattr(handle, "instance_id", "legacy"),
             )
             if result.state == "processed" and result.upstream_document_id:
                 now = datetime.now(timezone.utc)

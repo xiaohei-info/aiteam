@@ -225,6 +225,11 @@ app.include_router(oauth_mgmt_router)
 # Manager-owned read-only RAG MCP facade. It is unavailable (rather than
 # bypassed) when the Manager business database is not configured.
 _rag_settings = LightRagSettings.from_env() if settings.db_url else None
+# Knowledge-space creation/ensure must stamp the startup-selected endpoint id;
+# the registry itself contains only endpoint credentials and never workspace data.
+app.state._rag_instance_registry = (
+    _rag_settings.instance_registry if _rag_settings is not None else None
+)
 if settings.db_url:
     _rag_router = PgTenantRouter(settings.db_url)
     _rag_member_repo = MemberDeptRepository(_rag_router)
@@ -257,7 +262,10 @@ if settings.db_url:
         knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(_rag_router), _rag_doc_binding),
         rag_service=_rag_service,
         light_rag=_rag_light,
-        space_repository=KnowledgeSpaceRepository(_rag_router),
+        space_repository=KnowledgeSpaceRepository(
+            _rag_router,
+            instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+        ),
         document_repository=_rag_doc_repo,
         storage_root=ensure_storage_root(manager_storage_root(settings)),
     )

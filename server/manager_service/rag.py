@@ -65,8 +65,8 @@ class PgManagerRagService(ManagerRagService):
     def default_space_id(self) -> str:
         return enterprise_knowledge_space_id()
 
-    def default_space_id_for(self, ctx: TenantContext) -> str:
-        """Resolve the tenant's canonical or legacy enterprise key."""
+    def default_space_id_for(self, ctx: TenantContext) -> str | None:
+        """Resolve the canonical or one unambiguous legacy enterprise key."""
         configured = enterprise_knowledge_space_id()
         with self._router.session(ctx) as s:
             rows = s.execute(
@@ -75,11 +75,19 @@ class PgManagerRagService(ManagerRagService):
         for row in rows:
             if row[0] == configured:
                 return configured
-        for row in rows:
-            legacy = legacy_knowledge_space_id(row[1] if len(row) > 1 else None)
-            if legacy == row[0]:
-                return row[0]
-        return configured
+        candidates = {
+            row[0]
+            for row in rows
+            if len(row) > 1
+            and isinstance(row[0], str)
+            and legacy_knowledge_space_id(row[1]) == row[0]
+        }
+        if len(candidates) == 1:
+            return next(iter(candidates))
+        # Multiple legacy suffixes cannot identify the enterprise KB. Returning
+        # None makes the caller deny access instead of creating/using a guessed
+        # canonical alias and hiding another retained knowledge base.
+        return configured if not candidates else None
 
     def is_enterprise_space(self, ctx: TenantContext, space_id: str) -> bool:
         if space_id == enterprise_knowledge_space_id():
@@ -121,9 +129,9 @@ class PgManagerRagService(ManagerRagService):
             # change; an unknown id fails closed instead of silently rerouting.
             instance = self._resolve_instance(workspace, instance_id=str(stored_instance_id))
         elif instances is not None and existing is not None and len(instances.instances) > 1:
-            # A legacy NULL mapping has no endpoint provenance. Hash routing is
-            # safe for a new mapping, but guessing an old multi-entry binding is
-            # not; require explicit operator reconciliation.
+            # NULL has no endpoint provenance. Only rows created through the
+            # registry-aware repository receive an instance_id; every existing
+            # NULL row is legacy and must be reconciled instead of guessed.
             raise ValueError("knowledge service unavailable")
         else:
             instance = self._resolve_instance(workspace)
@@ -163,7 +171,10 @@ class PgManagerRagService(ManagerRagService):
         if instances is None:
             return None
         try:
-            return instances.by_id(instance_id) if instance_id else instances.resolve(workspace)
+            if instance_id:
+                instances.validate_workspace(workspace)
+                return instances.by_id(instance_id)
+            return instances.resolve(workspace)
         except RagInstanceConfigurationError as exc:
             raise ValueError("knowledge service unavailable") from exc
 

@@ -179,12 +179,23 @@ validate_agent_production_env() {
 validate_lightrag_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|manager)$ ]] || return 0
   # LightRAG may be disabled for deployments that do not install the optional
-  # component; when configured, its native UI must not run in guest mode.
-  [[ -n "${LIGHTRAG_URL:-}" ]] || return 0
-  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET; do    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
+  # component. In pool mode Manager has no single LIGHTRAG_URL; each endpoint
+  # is described by LIGHTRAG_INSTANCES and validated before process startup.
+  local pool="${LIGHTRAG_INSTANCES:-}"
+  [[ -n "${LIGHTRAG_URL:-}" || -n "${pool}" ]] || return 0
+  # Pool entries carry their own endpoint credentials. The legacy top-level
+  # API key/auth settings are only required when a single local LightRAG URL is
+  # configured; do not reject a valid pool-only Manager configuration.
+  if [[ -n "${pool}" && -z "${LIGHTRAG_URL:-}" ]]; then
+    return 0
+  fi
+  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET; do
+    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
   done
   [[ ${#LIGHTRAG_TOKEN_SECRET} -ge 32 ]] || { echo "[ctl] ERROR: LIGHTRAG_TOKEN_SECRET must be at least 32 characters" >&2; exit 1; }
-  [[ "${LIGHTRAG_URL}" =~ ^https://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: production LIGHTRAG_URL must use HTTPS" >&2; exit 1; }
+  if [[ -n "${LIGHTRAG_URL:-}" ]]; then
+    [[ "${LIGHTRAG_URL}" =~ ^https://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: production LIGHTRAG_URL must use HTTPS" >&2; exit 1; }
+  fi
 }
 
 validate_newapi_production_env() {
@@ -627,7 +638,7 @@ start_service_local() {
         -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
         -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
-        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
+        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_INSTANCES -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
         -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE \
         -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_URL -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_UPDATE_PATH -u HINDSIGHT_LIST_PATH -u HINDSIGHT_STATS_PATH -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
         -u AITEAM_SKILL_SIGNING_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY \

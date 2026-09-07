@@ -1,23 +1,23 @@
 ---
 created: 2026-08-20
-status: implemented-minimal-static-slice
+status: superseded-by-stage-b
 scope: manager-rag-instance-pool
 ---
 
 # Manager RAG 安全多 workspace 实例池（P0.2 最小切片）
 
-> **2026-08-26 架构修订**：本计划的多企业/多 workspace 产品语义已被 `docs/superpowers/plans/2026-08-26-manager-one-enterprise-scope.md` 覆盖。Manager 当前目标是一企业一部署、一个企业共享 workspace；本文件仅保留为同一企业未来高可用/分片的技术参考，不得据此向普通管理员暴露多知识空间。
+> **已被 Stage B（2026-09-07）取代**：本文件只保留历史背景；当前唯一裁决是 `docs/v1正式版本/技术设计/概要设计/04-数据架构与多租户隔离.md`。Manager 进程按 TenantContext 承载多企业会话，每个企业保留一个逻辑共享 workspace；endpoint pool 只承载 URL/凭据，workspace 与已验证 `instance_id` 由 Manager 持久化映射决定。
 
 Manager 在启动时从 `LIGHTRAG_INSTANCES` 读取一个受边界限制的 JSON 数组。每项固定为：
 
 ```json
-{"instance_id":"rag-a","url":"http://lightrag-a:9621","api_key":"...","workspace":"tenant-space-a"}
+{"instance_id":"rag-a","url":"http://lightrag-a:9621","api_key":"..."}
 ```
 
-数组大小、instance ID、URL、凭据、workspace 均有上限；URL 只允许 `http`/`https`，禁止 URL 凭据、query 和 fragment；workspace 与 instance ID 必须唯一。解析失败、重复映射和未知 workspace 都 fail-closed。API key 只存在 Manager 进程内存，`repr`、snapshot、SQLite、日志和 SSE 不包含它。
+数组大小、instance ID、URL、凭据均有上限；URL 只允许 `http`/`https`，禁止 URL 凭据、query 和 fragment。解析失败、重复映射和未知 workspace 都 fail-closed。API key 只存在 Manager 进程内存，`repr`、snapshot、SQLite、日志和 SSE 不包含它。
 
-`PgManagerRagService` 派生 workspace 后解析唯一实例，并把 `instance_id` 放入 Manager 内部 `RagHandle`。query 与 ingestion 客户端均按同一静态 registry 解析 workspace，向 LightRAG 发送该实例固定 workspace；不存在动态热加载或 Agent/frontend endpoint、key、workspace 覆盖入口。query 保留多空间并行 fan-out、partial degraded 与 all-failed unavailable。
+`PgManagerRagService` 派生或读取 tenant workspace 后解析并持久化已验证的 `instance_id`。query 与 ingestion 客户端必须携带该 ID，向对应 endpoint 发送请求级 `LIGHTRAG-WORKSPACE` header；registry 顺序变化不得重路由已有 mapping，未知 instance 或多 endpoint 下无 provenance 的旧 NULL mapping 必须 fail-closed。不存在 Agent/frontend endpoint、key、workspace 覆盖入口。query 保留多空间并行 fan-out、partial degraded 与 all-failed unavailable。
 
-现有单实例配置继续可用：`LIGHTRAG_URL`、`LIGHTRAG_API_KEY`、`LIGHTRAG_WORKSPACE`（三者必须同时配置），通用超时配置不变。`LIGHTRAG_INSTANCES` 未配置时使用该 legacy 单实例映射。
+现有单实例配置继续可用：`LIGHTRAG_URL` 与 `LIGHTRAG_API_KEY`；`LIGHTRAG_WORKSPACE` 仅作为被忽略的 legacy hint，不参与路由。`LIGHTRAG_INSTANCES` 未配置时使用该 legacy 单实例 endpoint。
 
-本切片刻意不伪造数据库 mapping。未来若需要租户/知识空间到实例的动态业务映射，应增加 Manager-owned migration、受 TenantContext/RLS 保护的映射表和发布/回滚机制；当前仍由静态 workspace-to-instance 配置承担路由。
+Stage B 已增加 Manager-owned `rag_workspace.instance_id` 审计映射、registry-aware 新空间写入与按租户/RLS 访问；Compose 不设置全局 `POSTGRES_WORKSPACE`，LightRAG workspace 只由 Manager 请求 header 选择。历史 NULL 映射不能在多 endpoint pool 中猜测，需显式运维 reconciliation。

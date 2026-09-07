@@ -17,6 +17,7 @@ from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import NotFound, ValidationProblem
 
 from .rag import enterprise_knowledge_space_id, legacy_knowledge_space_id
+from .rag_instances import RagInstanceConfigurationError, RagInstanceRegistry
 
 # 绑定目标类型（本表承载的部门/成员；专家授权走 employee_knowledge_binding）。
 BINDING_RESOURCE_TYPES = ("department", "member")
@@ -73,8 +74,20 @@ def _row_to_binding(row: Any) -> KnowledgeSpaceBindingRow:
 class KnowledgeSpaceRepository:
     """知识空间管理面 CRUD（复用 rag_workspace 表）。tenant_id 取自 ctx（D22）。"""
 
-    def __init__(self, router: PgTenantRouter):
+    def __init__(self, router: PgTenantRouter, *, instance_registry: RagInstanceRegistry | None = None):
         self._router = router
+        self._instance_registry = instance_registry
+
+    def _instance_id_for(self, workspace: str) -> str | None:
+        if self._instance_registry is None:
+            return None
+        try:
+            return self._instance_registry.resolve(workspace).instance_id
+        except RagInstanceConfigurationError as exc:
+            raise ValidationProblem(
+                detail="LightRAG workspace routing is unavailable",
+                errors=None,
+            ) from exc
 
     def create(
         self,
@@ -85,13 +98,22 @@ class KnowledgeSpaceRepository:
     ) -> KnowledgeSpaceRow:
         """建知识空间：workspace 由 ManagerRagService 派生（D21，禁止外部直传）。"""
         workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        instance_id = self._instance_id_for(workspace)
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
-                "VALUES (%s, %s, %s, %s) "
-                "RETURNING " + _SPACE_COLUMNS,
-                (ctx.tenant_id, knowledge_space_id, workspace, display_name),
-            ).fetchone()
+            if instance_id is None:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name),
+                ).fetchone()
+            else:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name, instance_id) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name, instance_id),
+                ).fetchone()
         assert row is not None  # INSERT RETURNING 必有行
         return _row_to_space(row)
 
@@ -108,19 +130,40 @@ class KnowledgeSpaceRepository:
         if existing is not None:
             return existing
         if knowledge_space_id == enterprise_knowledge_space_id():
-            for legacy in self.list_all(ctx):
-                if legacy_knowledge_space_id(legacy.workspace) == legacy.knowledge_space_id:
-                    return legacy
+            legacy_rows = [
+                legacy for legacy in self.list_all(ctx)
+                if legacy_knowledge_space_id(legacy.workspace) == legacy.knowledge_space_id
+            ]
+            candidates = {legacy.knowledge_space_id for legacy in legacy_rows}
+            if len(candidates) == 1:
+                return legacy_rows[0]
+            if len(candidates) > 1:
+                raise ValidationProblem(
+                    detail="legacy enterprise knowledge-space mapping is ambiguous",
+                    errors=None,
+                )
         workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        instance_id = self._instance_id_for(workspace)
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
-                "VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
-                "workspace = rag_workspace.workspace, display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
-                "RETURNING " + _SPACE_COLUMNS,
-                (ctx.tenant_id, knowledge_space_id, workspace, display_name),
-            ).fetchone()
+            if instance_id is None:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                    "workspace = rag_workspace.workspace, display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name),
+                ).fetchone()
+            else:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name, instance_id) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                    "workspace = rag_workspace.workspace, instance_id = COALESCE(rag_workspace.instance_id, EXCLUDED.instance_id), "
+                    "display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name, instance_id),
+                ).fetchone()
         assert row is not None
         return _row_to_space(row)
 

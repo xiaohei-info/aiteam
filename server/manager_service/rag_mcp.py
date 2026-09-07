@@ -178,12 +178,15 @@ class LightRagClient:
     def instance_registry(self) -> RagInstanceRegistry | None:
         return self.settings.instance_registry if self.settings is not None else None
 
-    def instance_for_workspace(self, workspace: str) -> RagInstance:
+    def instance_for_workspace(self, workspace: str, *, instance_id: str | None = None) -> RagInstance:
         settings = self.settings
         if settings is None:
             raise RagUnavailable("knowledge service unavailable")
         try:
             if settings.instance_registry is not None:
+                if instance_id:
+                    settings.instance_registry.validate_workspace(workspace)
+                    return settings.instance_registry.by_id(instance_id)
                 return settings.instance_registry.resolve(workspace)
             # Explicit constructor settings remain useful to tests and local
             # callers; the workspace is always the caller-supplied tenant route.
@@ -194,12 +197,12 @@ class LightRagClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def query(self, *, workspace: str, query: str, limit: int) -> dict[str, Any]:
+    async def query(self, *, workspace: str, query: str, limit: int, instance_id: str | None = None) -> dict[str, Any]:
         settings = self.settings
         if settings is None:
             raise RagUnavailable("knowledge service unavailable")
         try:
-            instance = self.instance_for_workspace(workspace)
+            instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         except RagUnavailable:
             raise
         if len(query) > _MAX_QUERY_CHARS:
@@ -381,11 +384,13 @@ class RagAccessService:
             if not handle or handle.tenant_id != ctx.tenant_id or handle.knowledge_space_id != space_id:
                 raise Forbidden("employee knowledge binding is unavailable")
             if self._light_rag.settings is not None:
+                handle_instance_id = getattr(handle, "instance_id", "legacy")
                 try:
-                    instance = self._light_rag.instance_for_workspace(handle.workspace)
+                    instance = self._light_rag.instance_for_workspace(
+                        handle.workspace, instance_id=handle_instance_id,
+                    )
                 except RagUnavailable:
                     raise Forbidden("employee knowledge binding is unavailable")
-                handle_instance_id = getattr(handle, "instance_id", "legacy")
                 if self._light_rag.instance_registry is not None and handle_instance_id != instance.instance_id:
                     raise Forbidden("employee knowledge binding is unavailable")
             handles.append(handle)
@@ -406,7 +411,10 @@ class RagAccessService:
 
         async def query_space(handle: RagHandle):
             try:
-                payload = await self._light_rag.query(workspace=handle.workspace, query=query, limit=limit)
+                payload = await self._light_rag.query(
+                    workspace=handle.workspace, query=query, limit=limit,
+                    instance_id=getattr(handle, "instance_id", "legacy"),
+                )
                 return handle, payload, None
             except Exception:  # noqa: BLE001 - never expose upstream details
                 return handle, [], RagUnavailable("knowledge service unavailable")

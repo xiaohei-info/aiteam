@@ -1,6 +1,6 @@
 ---
 created: 2026-08-19
-status: design-supplement
+status: historical-supplement-superseded-by-stage-b
 implementation: first-read-and-ingestion-slices-live
 scope: aiteam-rag
 ---
@@ -9,7 +9,7 @@ scope: aiteam-rag
 
 > 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片，以及 taiyi/目标部署统一的 PostgreSQL + pgvector 存储切换。
 >
-> **架构形态修订（2026-08-26）**：一个 Manager 部署只服务一个企业。RAG 产品面只有一个企业共享知识库；`knowledge_space`/workspace 仅作为现有文档、citation、binding 的内部兼容键。员工个人级先由 Hindsight employee-private memory 承担，不在本篇的企业共享 LightRAG 中复制个人文档。下文旧的多企业、多 workspace fan-out 方案均降为未来同一企业的高可用/分片扩展，不是跨企业隔离模型。
+> **Stage B 覆盖说明（2026-09-07）**：当前 Manager 进程可承载多个企业会话，但每个企业只有一个逻辑共享知识库；`knowledge_space`/workspace 仍是现有文档、citation、binding 的内部兼容键。workspace 由 TenantContext 派生/持久化，endpoint pool 只保存 URL/凭据并通过持久化 `instance_id` 选路。本文早期关于固定 `POSTGRES_WORKSPACE`、单企业进程或请求级 workspace 不可用的段落均为历史背景，以 v1 概要设计 04 和 Stage B 实现为准。员工个人级先由 Hindsight employee-private memory 承担，不在企业共享 LightRAG 中复制个人文档。
 >
 > 本文不修改冻结的 `app/`、`./.hermes/hermes-agent/`，也不迁移旧库/旧知识数据。
 
@@ -122,14 +122,14 @@ LIGHTRAG_KV_STORAGE=PGKVStorage
 LIGHTRAG_DOC_STATUS_STORAGE=PGDocStatusStorage
 LIGHTRAG_GRAPH_STORAGE=PGTableGraphStorage
 LIGHTRAG_VECTOR_STORAGE=PGVectorStorage
-POSTGRES_WORKSPACE=<derived workspace for the LightRAG instance>
+# POSTGRES_WORKSPACE is intentionally unset; Manager sends LIGHTRAG-WORKSPACE per request.
 LOG_LEVEL=INFO
 WHITELIST_PATHS=/health
 ```
 
 当前 taiyi 已使用带 `pgvector` 扩展的 PostgreSQL 数据库，LightRAG 四类存储均落 PG；旧 Qwen/JSON 索引只作为备份保留，不参与查询。
 
-`PGTableGraphStorage` 不需要 Apache AGE；`PGVectorStorage` 使用 `vector(1024)` 和 HNSW 索引。每个 LightRAG 实例固定一个 `POSTGRES_WORKSPACE`，多 workspace 通过 Manager-owned fan-out 和实例编排扩展，不能依赖单实例请求头动态切换固定 PG workspace。
+`PGTableGraphStorage` 不需要 Apache AGE；`PGVectorStorage` 使用 `vector(1024)` 和 HNSW 索引。endpoint 实例不再配置进程级 workspace；Manager 通过请求级 `LIGHTRAG-WORKSPACE` header 选择持久化的 tenant workspace，并通过持久化 `instance_id` 选择正确 endpoint。Compose 不设置 `POSTGRES_WORKSPACE`。
 
 ---
 
@@ -510,20 +510,20 @@ query(q)
 测试也使用与生产相同的 PG-backed LightRAG 组件拓扑：
 
 ```text
-一个 LightRAG instance
-一个固定 POSTGRES_WORKSPACE
+一个 LightRAG endpoint
+Manager 按 tenant 派生/持久化 workspace 与 instance_id
 PostgreSQL + pgvector
 ```
 
-当前 LightRAG 1.5.6 Server 的 query/document 路由固定绑定进程启动时的 RAG 实例；`LIGHTRAG-WORKSPACE` header 不能把同一个固定 PG 实例动态切换到另一个 workspace。因此测试环境不伪造“一个实例多 workspace”，跨 workspace 测试必须通过实例池或独立实例完成。
+当前 Manager 的 query/document 路由不依赖进程级 workspace；每次请求都带 Manager 选定的 `LIGHTRAG-WORKSPACE` header，并按持久化 `instance_id` 选择 endpoint。测试必须覆盖 tenant workspace header、registry 顺序变化和无 provenance legacy NULL mapping 的 fail-closed 行为。
 
 #### 小规模生产
 
 推荐：
 
 ```text
-一个 tenant/knowledge-space 一个 LightRAG instance
-每个 instance 一个固定 POSTGRES_WORKSPACE
+一个 tenant/knowledge-space 一个 Manager workspace mapping
+endpoint pool 仅保存 URL/凭据，mapping 持久化 instance_id
 共享 PostgreSQL/pgvector 集群
 ```
 

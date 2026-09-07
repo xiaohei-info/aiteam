@@ -8,6 +8,7 @@ from manager_service.knowledge_space_repository import KnowledgeSpaceRepository
 from manager_service.rag import PgManagerRagService, RagHandle
 from manager_service.rag_instances import RagInstance, RagInstanceRegistry
 from shared.db import ManagerRagService
+from shared.errors import ValidationProblem
 
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
@@ -45,6 +46,37 @@ def test_knowledge_space_ensure_preserves_legacy_enterprise_key():
     assert len(router.executed) == 2
 
 
+def test_space_repository_stamps_instance_id_for_new_multi_pool_mapping():
+    registry = RagInstanceRegistry((
+        RagInstance("rag-a", "http://rag-a", "secret-a"),
+        RagInstance("rag-b", "http://rag-b", "secret-b"),
+    ))
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    router = FakeRouter().queue(
+        FakeCursor(fetchone=(_SPACE, workspace, "Enterprise", None))
+    )
+    row = KnowledgeSpaceRepository(router, instance_registry=registry).create(
+        ctx(tid=_TID), knowledge_space_id=_SPACE, display_name="Enterprise"
+    )
+    assert row.workspace == workspace
+    assert router.executed[0][1][-1] == registry.resolve(workspace).instance_id
+    assert "instance_id" in router.executed[0][0]
+
+
+def test_space_repository_rejects_ambiguous_legacy_enterprise_keys():
+    router = FakeRouter().queue_many(
+        FakeCursor(fetchone=None),
+        FakeCursor(fetchall=[
+            (_SPACE, "t123__enterprise_shared", "Current", None),
+            ("ks_default", "t123__ks_default", "Legacy", None),
+        ]),
+    )
+    with pytest.raises(ValidationProblem, match="legacy enterprise knowledge-space mapping is ambiguous"):
+        KnowledgeSpaceRepository(router).ensure(
+            ctx(tid=_TID), knowledge_space_id=_SPACE, display_name="Enterprise",
+        )
+
+
 def test_get_returns_existing_tenant_mapping():
     workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
     router = FakeRouter().queue_many(
@@ -64,6 +96,14 @@ def test_get_returns_existing_tenant_mapping():
 def test_default_space_id_for_preserves_legacy_key():
     router = FakeRouter().queue(FakeCursor(fetchall=[("ks_default", "t123__ks_default")]))
     assert _make_svc(router).default_space_id_for(ctx(tid=_TID)) == "ks_default"
+
+
+def test_default_space_id_for_rejects_ambiguous_legacy_keys():
+    router = FakeRouter().queue(FakeCursor(fetchall=[
+        ("ks_default", "t123__ks_default"),
+        ("smoke_space", "t123__smoke_space"),
+    ]))
+    assert _make_svc(router).default_space_id_for(ctx(tid=_TID)) is None
 
 
 def test_get_derives_workspace_and_assigns_registry_instance():
@@ -99,7 +139,9 @@ def test_get_reuses_persisted_instance_id_after_pool_order_changes():
 
 
 def test_get_rejects_null_legacy_mapping_with_multi_instance_pool():
-    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    # A fixed/suffixed workspace predates tenant-derived routing and carries no
+    # endpoint provenance, so a multi-entry pool must not guess its destination.
+    workspace = "old-fixed-workspace"
     registry = RagInstanceRegistry((
         RagInstance("rag-a", "http://rag-a", "secret-a"),
         RagInstance("rag-b", "http://rag-b", "secret-b"),
@@ -108,6 +150,17 @@ def test_get_rejects_null_legacy_mapping_with_multi_instance_pool():
     with pytest.raises(ValueError, match="knowledge service unavailable"):
         _make_svc(router, instance_registry=registry).get(ctx(tid=_TID), _SPACE)
     assert len(router.executed) == 1
+
+
+def test_get_rejects_derived_null_mapping_with_multi_instance_pool():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    registry = RagInstanceRegistry((
+        RagInstance("rag-a", "http://rag-a", "secret-a"),
+        RagInstance("rag-b", "http://rag-b", "secret-b"),
+    ))
+    router = FakeRouter().queue(FakeCursor(fetchone=(workspace, None)))
+    with pytest.raises(ValueError, match="knowledge service unavailable"):
+        _make_svc(router, instance_registry=registry).get(ctx(tid=_TID), _SPACE)
 
 
 def test_get_bootstraps_null_legacy_mapping_with_single_instance_pool():

@@ -64,8 +64,8 @@ class RagInstanceRegistry:
             by_id[instance.instance_id] = instance
         object.__setattr__(self, "_by_id", MappingProxyType(by_id))
 
-    def resolve(self, workspace: str) -> RagInstance:
-        """Resolve a workspace to one deterministic endpoint in the static pool."""
+    def validate_workspace(self, workspace: str) -> None:
+        """Validate a Manager-derived workspace before any endpoint selection."""
         if (
             not isinstance(workspace, str)
             or not workspace
@@ -74,6 +74,10 @@ class RagInstanceRegistry:
             or any(char in workspace for char in "\r\n")
         ):
             raise RagInstanceConfigurationError("invalid LightRAG workspace")
+
+    def resolve(self, workspace: str) -> RagInstance:
+        """Resolve a workspace to one deterministic endpoint in the static pool."""
+        self.validate_workspace(workspace)
         digest = hashlib.sha256(workspace.encode("utf-8")).digest()
         index = int.from_bytes(digest[:8], "big") % len(self.instances)
         return self.instances[index]
@@ -87,7 +91,7 @@ class RagInstanceRegistry:
     @classmethod
     def from_env(cls) -> "RagInstanceRegistry | None":
         raw = os.getenv("LIGHTRAG_INSTANCES")
-        if raw is not None:
+        if raw is not None and raw.strip():
             if len(raw.encode("utf-8")) > _MAX_CONFIG_BYTES:
                 raise RagInstanceConfigurationError("LightRAG instance configuration is too large")
             try:

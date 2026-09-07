@@ -1,10 +1,12 @@
 ---
 created: 2026-08-26
-status: approved-by-current-request
+status: superseded-by-2026-09-07-session-scoped-multitenancy
 scope: manager-one-enterprise
 ---
 
-# Manager 单企业部署与双层知识隔离调整计划
+# Manager 单企业部署与双层知识隔离调整计划（历史计划）
+
+> 本计划已被 `docs/superpowers/plans/2026-09-07-manager-session-scoped-multitenancy.md` 及其 Stage B 实现取代。以下单企业进程/固定 workspace 文字仅保留决策历史，不是当前实现契约；当前以 v1 概要设计 04 与代码为准。
 
 ## 已确认架构
 

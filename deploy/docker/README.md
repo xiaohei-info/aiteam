@@ -150,10 +150,11 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `HINDSIGHT_STATS_PATH` | Manager-side Hindsight bank stats path（可选，按原生 list path 推导） | `/v1/default/banks/{bank_id}/stats` |
 | `HINDSIGHT_LEASE_TTL_SECONDS` | Manager opaque bank lease TTL（30–3600 秒） | `300` |
 | `LIGHTRAG_URL` | Manager-only LightRAG API/UI URL（未配置时 Agent lease fail-closed） | `http://lightrag:9621` |
-| `LIGHTRAG_API_KEY` | Manager-only LightRAG API key | `***` |
+| `LIGHTRAG_API_KEY` | Manager-only LightRAG API key（legacy 单 endpoint 模式） | `***` |
+| `LIGHTRAG_INSTANCES` | 可选 JSON endpoint/credential pool（`instance_id`、`url`、`api_key`）；不包含 workspace | `[]` |
 | `LIGHTRAG_AUTH_ACCOUNTS` | LightRAG 原生 UI/API 登录账号（映射为组件 `AUTH_ACCOUNTS`） | `***` |
 | `LIGHTRAG_TOKEN_SECRET` | LightRAG JWT 签名密钥（映射为组件 `TOKEN_SECRET`） | `***` |
-| `LIGHTRAG_WORKSPACE` | 兼容旧配置的 workspace hint；Manager 忽略并按 tenant 派生 | （忽略） |
+| `LIGHTRAG_WORKSPACE` | 兼容旧配置的 workspace hint；Manager 忽略并按 tenant 派生/持久化。Compose 不将其映射为 `POSTGRES_WORKSPACE` | （忽略） |
 | `NEWAPI_BIND_HOST` | NewAPI 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
 | `LIGHTRAG_BIND_HOST` | LightRAG 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
 
@@ -161,7 +162,7 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 >
 > NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布公网。`NEWAPI_URL`/`NEWAPI_ADMIN_BASE_URL` 只给 Operator 管理面使用；`NEWAPI_PUBLIC_BASE_URL` 是 Manager、Agent 和自定义客户端访问推理的唯一地址，不能填 `http://newapi:3000` 等 Docker 内部地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
 >
-> LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role，Manager 按 tenant 选择并持久化 workspace；Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
+> LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role，Manager 按 tenant 选择并持久化 workspace 与 endpoint `instance_id`；请求通过 `LIGHTRAG-WORKSPACE` header 选择 workspace，Compose 不设置全局 `POSTGRES_WORKSPACE`。Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
 >
 > 原生控制台入口：Operator「大模型服务」页直接打开当前访问 host 的 `NEWAPI_PORT`（默认 9300）；Manager「知识库」和「记忆管理」页分别直接打开当前访问 host 的 `LIGHTRAG_PORT`（默认 9621）与 Hindsight UI（默认 9999）。三个服务均由组件自身登录页认证，超链接不会携带 token/密码。
 ---

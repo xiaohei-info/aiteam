@@ -122,19 +122,19 @@ class RagIngestionStatus:
 
 
 class RagIngestionPort(Protocol):
-    def validate_submission(self, *, workspace: str, file_source: str, text: str) -> None: ...
+    def validate_submission(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> None: ...
 
-    def submit_text(self, *, workspace: str, file_source: str, text: str) -> str: ...
+    def submit_text(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> str: ...
 
-    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None) -> RagIngestionStatus: ...
+    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None, instance_id: str | None = None) -> RagIngestionStatus: ...
 
-    def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult: ...
+    def ingest_text(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> RagIngestionResult: ...
 
-    def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]: ...
+    def list_documents(self, *, workspace: str, instance_id: str | None = None) -> list[RagDocumentInfo]: ...
 
-    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]: ...
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str], instance_id: str | None = None) -> list[str]: ...
 
-    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None: ...
+    def resolve_document_id(self, *, workspace: str, aliases: list[str], instance_id: str | None = None) -> str | None: ...
 
     def delete_document(
         self,
@@ -143,9 +143,10 @@ class RagIngestionPort(Protocol):
         doc_ids: list[str],
         delete_file: bool,
         delete_llm_cache: bool,
+        instance_id: str | None = None,
     ) -> RagDeletionResult: ...
 
-    def document_ids_present(self, *, workspace: str, doc_ids: list[str]) -> set[str]: ...
+    def document_ids_present(self, *, workspace: str, doc_ids: list[str], instance_id: str | None = None) -> set[str]: ...
 
 
 def _response_json(
@@ -268,12 +269,15 @@ class LightRagIngestionClient:
     def instance_registry(self) -> RagInstanceRegistry | None:
         return self.settings.instance_registry if self.settings is not None else None
 
-    def instance_for_workspace(self, workspace: str) -> RagInstance:
+    def instance_for_workspace(self, workspace: str, *, instance_id: str | None = None) -> RagInstance:
         settings = self.settings
         if settings is None:
             raise RagIngestionUnavailable("knowledge indexing unavailable")
         try:
             if settings.instance_registry is not None:
+                if instance_id:
+                    settings.instance_registry.validate_workspace(workspace)
+                    return settings.instance_registry.by_id(instance_id)
                 return settings.instance_registry.resolve(workspace)
             return RagInstance("legacy", settings.url, settings.api_key)
         except RagInstanceConfigurationError as exc:
@@ -282,15 +286,15 @@ class LightRagIngestionClient:
     def close(self) -> None:
         self._http.close()
 
-    def validate_submission(self, *, workspace: str, file_source: str, text: str) -> None:
+    def validate_submission(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> None:
         if not self.settings or not _valid_document_alias(file_source) or not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
             raise RagIngestionUnavailable("knowledge indexing unavailable")
-        self.instance_for_workspace(workspace)
+        self.instance_for_workspace(workspace, instance_id=instance_id)
 
-    def submit_text(self, *, workspace: str, file_source: str, text: str) -> str:
+    def submit_text(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> str:
         """One submission only. Callers persist a fence BEFORE entering this method."""
-        self.validate_submission(workspace=workspace, file_source=file_source, text=text)
-        instance = self.instance_for_workspace(workspace)
+        self.validate_submission(workspace=workspace, file_source=file_source, text=text, instance_id=instance_id)
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         payload = self._recovery_request(instance, workspace, "/documents/text", method="POST", body={"text": text, "file_source": file_source})
         track_id = payload.get("track_id")
         if not _successful_response(payload) or not isinstance(track_id, str) or not track_id or not all(c.isalnum() or c in "_-" for c in track_id) or len(track_id) > 256:
@@ -318,8 +322,8 @@ class LightRagIngestionClient:
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             raise RagIngestionUnavailable("knowledge reconciliation unavailable") from exc
 
-    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None) -> RagIngestionStatus:
-        instance = self.instance_for_workspace(workspace)
+    def reconcile_ingestion(self, *, workspace: str, file_source: str, track_id: str | None = None, instance_id: str | None = None) -> RagIngestionStatus:
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         if not _valid_document_alias(file_source):
             raise RagIngestionUnavailable("knowledge reconciliation unavailable")
         if track_id:
@@ -358,11 +362,11 @@ class LightRagIngestionClient:
         state = "processed" if record.status == "processed" else "failed" if record.status == "failed" else "pending" if record.status in {"pending", "processing", "preprocessed"} else "unknown"
         return RagIngestionStatus(state, record.upstream_document_id, record.chunks_count)
 
-    def ingest_text(self, *, workspace: str, file_source: str, text: str) -> RagIngestionResult:
+    def ingest_text(self, *, workspace: str, file_source: str, text: str, instance_id: str | None = None) -> RagIngestionResult:
         settings = self.settings
         if settings is None or not workspace.strip() or not file_source.strip():
             raise RagIngestionUnavailable("knowledge indexing unavailable")
-        instance = self.instance_for_workspace(workspace)
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         if not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
             raise RagIngestionUnavailable("knowledge indexing unavailable")
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
@@ -402,7 +406,7 @@ class LightRagIngestionClient:
             logger.warning("LightRAG ingestion request failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
 
-    def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]:
+    def list_documents(self, *, workspace: str, instance_id: str | None = None) -> list[RagDocumentInfo]:
         """List only validated metadata from the requested tenant workspace."""
         settings = self.settings
         if not isinstance(workspace, str) or not workspace.strip():
@@ -410,7 +414,7 @@ class LightRagIngestionClient:
         try:
             if settings is None:
                 raise RagIngestionUnavailable("knowledge analytics unavailable")
-            instance = self.instance_for_workspace(workspace)
+            instance = self.instance_for_workspace(workspace, instance_id=instance_id)
             timeout = settings.request_timeout_ms / 1000
             headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
             return list(self._paginated_documents(instance, workspace=workspace, headers=headers, timeout=timeout))
@@ -420,13 +424,13 @@ class LightRagIngestionClient:
             logger.warning("LightRAG document analytics failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
 
-    def resolve_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
+    def resolve_document_ids(self, *, workspace: str, aliases: list[str], instance_id: str | None = None) -> list[str]:
         """Resolve all workspace-local IDs behind Manager/source aliases."""
         settings = self.settings
         requested = _validated_aliases(aliases)
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
             raise RagIngestionUnavailable("knowledge deletion unavailable")
-        instance = self.instance_for_workspace(workspace)
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         matches: dict[str, set[str]] = {alias: set() for alias in requested}
@@ -456,9 +460,9 @@ class LightRagIngestionClient:
             logger.warning("LightRAG document alias resolution failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
 
-    def resolve_document_id(self, *, workspace: str, aliases: list[str]) -> str | None:
+    def resolve_document_id(self, *, workspace: str, aliases: list[str], instance_id: str | None = None) -> str | None:
         """Backward-compatible single-ID resolver."""
-        resolved = self.resolve_document_ids(workspace=workspace, aliases=aliases)
+        resolved = self.resolve_document_ids(workspace=workspace, aliases=aliases, instance_id=instance_id)
         if len(resolved) > 1:
             raise RagIngestionUnavailable("knowledge deletion unavailable")
         return resolved[0] if resolved else None
@@ -470,6 +474,7 @@ class LightRagIngestionClient:
         doc_ids: list[str],
         delete_file: bool = False,
         delete_llm_cache: bool = True,
+        instance_id: str | None = None,
     ) -> RagDeletionResult:
         """Delete already-resolved workspace-local LightRAG ids."""
         settings = self.settings
@@ -477,7 +482,7 @@ class LightRagIngestionClient:
             raise RagIngestionUnavailable("knowledge deletion unavailable")
         if any(not isinstance(doc_id, str) or not doc_id.strip() for doc_id in doc_ids):
             raise RagIngestionUnavailable("knowledge deletion unavailable")
-        instance = self.instance_for_workspace(workspace)
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         try:
@@ -521,13 +526,13 @@ class LightRagIngestionClient:
             logger.warning("LightRAG deletion request failed: %s", type(exc).__name__)
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
 
-    def document_ids_present(self, *, workspace: str, doc_ids: list[str]) -> set[str]:
+    def document_ids_present(self, *, workspace: str, doc_ids: list[str], instance_id: str | None = None) -> set[str]:
         """Return requested, already-resolved LightRAG ids still present."""
         settings = self.settings
         requested = _validated_aliases(doc_ids)
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
             raise RagIngestionUnavailable("knowledge deletion unavailable")
-        instance = self.instance_for_workspace(workspace)
+        instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         present: set[str] = set()

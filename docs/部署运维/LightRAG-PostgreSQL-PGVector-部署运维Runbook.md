@@ -45,7 +45,7 @@ LIGHTRAG_DB_ADMIN_PASSWORD=<secret-store>
 # 容器内连接参数通常为 LIGHTRAG_CLIENT_DB_HOST=127.0.0.1 / PORT=5432
 ```
 
-legacy 配置中的 `LIGHTRAG_WORKSPACE` 仅为兼容提示，Manager 不把它作为进程身份；workspace 由当前 tenant 的 `rag_workspace` 映射或确定性规则得到，不能由前端/Agent 请求覆盖。多实例配置若启用，只描述 endpoint pool，workspace 仍按 tenant 路由。生产校验：
+legacy 配置中的 `LIGHTRAG_WORKSPACE` 仅为兼容提示，Manager 不把它作为进程身份；workspace 由当前 tenant 的 `rag_workspace` 映射读取，缺失时才按受控规则派生并持久化。新 mapping 同时记录已验证 `instance_id`；多 endpoint 下既有 NULL mapping 没有 provenance，必须显式 reconciliation，不能猜测。前端/Agent 不能覆盖 workspace 或 endpoint。多实例配置只描述 endpoint pool，workspace 仍按 tenant 路由。生产校验：
 
 ```bash
 # taiyi/生产；只读校验，不调用 LightRAG，不打印 key/password
@@ -56,9 +56,9 @@ legacy 配置下 URL 或 API key 任一缺失时 Manager 应保持 fail-closed�
 
 ### 1.1 Manager `rag_workspace` 映射的边界
 
-Manager 控制库的 `rag_workspace.workspace` 与 `instance_id` 是当前 tenant 映射的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy URL/key）registry；数据库不保存凭据，客户端也不能传入 `workspace`/`instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
+Manager 控制库的 `rag_workspace.workspace` 与 `instance_id` 是当前 tenant 映射的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy URL/key）registry；数据库不保存凭据，北向客户端不能传入 `workspace`/`instance_id`，内部 downstream call 必须沿用已验证 mapping 的 `instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
 
-首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行只有在 registry 仅含一个 endpoint 时才可 bootstrap NULL；多 endpoint 且无历史 `instance_id` 必须先由运营核对并回填，Manager 不猜测。已写入的 instance、tenant 或 workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作凭据来源。
+首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行只有在 registry 仅含一个 endpoint 时才可 bootstrap NULL；多 endpoint 且无历史 `instance_id` 必须先由运营核对并回填，Manager 不猜测。旧 workspace suffix 若对应多个候选 `knowledge_space_id`，企业默认空间也必须先显式 reconciliation，不能按创建时间取第一行。已写入的 instance、tenant 或 workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作凭据来源。
 
 ## 2. 初始化独立数据库、role、pgvector
 

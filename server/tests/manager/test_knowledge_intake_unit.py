@@ -412,6 +412,7 @@ class _FakeRag:
             "tenant_id": ctx.tenant_id,
             "knowledge_space_id": knowledge_space_id,
             "workspace": f"t{ctx.tenant_id}__{knowledge_space_id}",
+            "instance_id": "legacy",
         })()
 
 
@@ -430,7 +431,7 @@ class _FakeIngestion:
         self.present = set(present or ())
         self.probe_error = probe_error
 
-    def ingest_text(self, *, workspace, file_source, text):
+    def ingest_text(self, *, workspace, file_source, text, instance_id=None):
         self.calls.append((workspace, file_source, text))
         if self.error:
             raise self.error
@@ -438,26 +439,30 @@ class _FakeIngestion:
             file_source, self.result.chunk_count, self.result.upstream_document_id
         )
 
-    def validate_submission(self, *, workspace, file_source, text):
+    def validate_submission(self, *, workspace, file_source, text, instance_id=None):
         if not workspace or not file_source or not text or len(text.encode("utf-8")) > 4 * 1024 * 1024:
             raise RagIngestionUnavailable("invalid fixture submission")
 
-    def submit_text(self, *, workspace, file_source, text):
-        self.validate_submission(workspace=workspace, file_source=file_source, text=text)
-        self.ingest_text(workspace=workspace, file_source=file_source, text=text)
+    def submit_text(self, *, workspace, file_source, text, instance_id=None):
+        self.validate_submission(
+            workspace=workspace, file_source=file_source, text=text, instance_id=instance_id
+        )
+        self.ingest_text(
+            workspace=workspace, file_source=file_source, text=text, instance_id=instance_id
+        )
         return "fixture-track"
 
-    def reconcile_ingestion(self, *, workspace, file_source, track_id=None):
+    def reconcile_ingestion(self, *, workspace, file_source, track_id=None, instance_id=None):
         from manager_service.rag_ingestion import RagIngestionStatus
         return RagIngestionStatus("processed", self.result.upstream_document_id or file_source.split("/")[0], self.result.chunk_count)
 
-    def delete_document(self, *, workspace, doc_ids, delete_file, delete_llm_cache):
+    def delete_document(self, *, workspace, doc_ids, delete_file, delete_llm_cache, instance_id=None):
         self.delete_calls.append((workspace, doc_ids, delete_file, delete_llm_cache))
         if self.delete_error:
             raise self.delete_error
         return self.delete_result
 
-    def document_ids_present(self, *, workspace, doc_ids):
+    def document_ids_present(self, *, workspace, doc_ids, instance_id=None):
         self.probe_calls.append((workspace, doc_ids))
         if self.probe_error:
             raise self.probe_error
@@ -470,7 +475,7 @@ class _ResolvingFakeIngestion(_FakeIngestion):
         self.resolved_id = resolved_id
         self.resolve_calls = []
 
-    def resolve_document_id(self, *, workspace, aliases):
+    def resolve_document_id(self, *, workspace, aliases, instance_id=None):
         self.resolve_calls.append((workspace, aliases))
         return self.resolved_id
 
@@ -481,7 +486,7 @@ class _MultiResolvingFakeIngestion(_FakeIngestion):
         self.resolved_ids = list(resolved_ids or [])
         self.resolve_calls = []
 
-    def resolve_document_ids(self, *, workspace, aliases):
+    def resolve_document_ids(self, *, workspace, aliases, instance_id=None):
         self.resolve_calls.append((workspace, aliases))
         return list(self.resolved_ids)
 
@@ -777,14 +782,14 @@ def test_cannot_retry_non_terminal_state(tmp_path: Path) -> None:
 
 def test_resolver_handles_empty_and_legacy_alias_results(tmp_path: Path) -> None:
     class EmptyMany(_FakeIngestion):
-        def resolve_document_ids(self, *, workspace, aliases):
+        def resolve_document_ids(self, *, workspace, aliases, instance_id=None):
             return None
 
     empty = _make_service(space_root=tmp_path / "empty", existing_spaces={"ks"}, ingestion=EmptyMany())
     assert empty._resolve_rag_document_ids(workspace="t__ks", aliases=["doc"]) == []
 
     class InvalidMany(_FakeIngestion):
-        def resolve_document_ids(self, *, workspace, aliases):
+        def resolve_document_ids(self, *, workspace, aliases, instance_id=None):
             return "invalid"
 
     invalid = _make_service(space_root=tmp_path / "invalid", existing_spaces={"ks"}, ingestion=InvalidMany())

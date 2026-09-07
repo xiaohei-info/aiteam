@@ -225,9 +225,14 @@ def _ensure_can_write(ctx: TenantContext) -> None:
         raise Forbidden("knowledge space write requires owner or enterprise_admin")
 
 
-def ensure_enterprise_knowledge_space(dsn: str, tenant_id: str) -> KnowledgeSpaceRow:
+def ensure_enterprise_knowledge_space(
+    dsn: str,
+    tenant_id: str,
+    *,
+    instance_registry=None,
+) -> KnowledgeSpaceRow:
     """Idempotently provision the tenant-owned enterprise space."""
-    repo = KnowledgeSpaceRepository(PgTenantRouter(dsn))
+    repo = KnowledgeSpaceRepository(PgTenantRouter(dsn), instance_registry=instance_registry)
     ctx = TenantContext(tenant_id=tenant_id, user_id="manager-system", roles=["service"])
     return repo.ensure(
         ctx,
@@ -271,10 +276,12 @@ def _to_binding_out(row, *, tenant_id: str) -> KnowledgeSpaceBindingOut:
 
 def build_knowledge_space_service(
     router: PgTenantRouter,
+    *,
+    instance_registry=None,
 ) -> KnowledgeSpaceService:
     """组装单企业知识空间服务（业务连接 app_rw，#60）。"""
     return KnowledgeSpaceService(
-        repo=KnowledgeSpaceRepository(router),
+        repo=KnowledgeSpaceRepository(router, instance_registry=instance_registry),
         binding_repo=KnowledgeSpaceBindingRepository(router),
         expert_binding=ExpertKnowledgeBinding(router),
         enterprise_only=True,

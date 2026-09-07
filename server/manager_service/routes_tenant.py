@@ -71,7 +71,11 @@ def provision_tenant(
 
     # 2. Manager 开通即幂等初始化企业共享知识空间；文档索引仍由 Manager 后续 intake 负责。
     if business_dsn:
-        ensure_enterprise_knowledge_space(business_dsn, body.tenant_id)
+        ensure_enterprise_knowledge_space(
+            business_dsn,
+            body.tenant_id,
+            instance_registry=getattr(request.app.state, "_rag_instance_registry", None),
+        )
 
     # 3. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
     if body.initial_quota_policy:

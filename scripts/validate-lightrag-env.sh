@@ -6,7 +6,7 @@ set -euo pipefail
 usage() {
   printf '%s\n' \
     'Usage: scripts/validate-lightrag-env.sh [--production] [--env-file FILE]' \
-    'Required in production: LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_IMAGE' \
+    'Required in production: LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_IMAGE and either LIGHTRAG_URL+LIGHTRAG_API_KEY or LIGHTRAG_INSTANCES' \
     'Required for bootstrap: LIGHTRAG_DB_* values are checked by deploy/lightrag/init-db.sh.'
 }
 
@@ -40,15 +40,53 @@ required() {
   fi
 }
 
-if (( PRODUCTION )); then
+if [[ -n "${LIGHTRAG_INSTANCES:-}" ]]; then
+  if ! python3 - <<'PY'
+import json
+import os
+import sys
+from urllib.parse import urlsplit
+
+try:
+    values = json.loads(os.environ["LIGHTRAG_INSTANCES"])
+    if not isinstance(values, list) or not values or len(values) > 32:
+        raise ValueError
+    seen = set()
+    for item in values:
+        if not isinstance(item, dict) or set(item) - {"instance_id", "url", "api_key", "workspace"}:
+            raise ValueError
+        if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("instance_id", "url", "api_key")):
+            raise ValueError
+        instance_id = item["instance_id"].strip()
+        if instance_id in seen or len(instance_id) > 128 or any(c in instance_id for c in "\r\n,/"):
+            raise ValueError
+        seen.add(instance_id)
+        url = urlsplit(item["url"].strip())
+        if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password or url.query or url.fragment:
+            raise ValueError
+        if any(any(c in value for c in "\r\n") for value in item.values() if isinstance(value, str)):
+            raise ValueError
+except (KeyError, TypeError, ValueError, json.JSONDecodeError, UnicodeError):
+    sys.exit(1)
+PY
+  then
+    echo "[lightrag-env][ERR] LIGHTRAG_INSTANCES must be a valid non-empty endpoint pool" >&2
+    ((error_count += 1))
+  fi
+elif (( PRODUCTION )); then
   required LIGHTRAG_URL
   required LIGHTRAG_API_KEY
+fi
+
+if (( PRODUCTION )); then
   required LIGHTRAG_AUTH_ACCOUNTS
   required LIGHTRAG_TOKEN_SECRET
   required LIGHTRAG_IMAGE
 fi
 
 url="${LIGHTRAG_URL:-}"
+# In endpoint-pool mode the URL/key pair is optional for Manager routing; each
+# pool entry is validated by RagInstanceRegistry before the service starts.
 if [[ -n "${url}" && ! "${url}" =~ ^https?://[^[:space:]]+$ ]]; then
   echo "[lightrag-env][ERR] LIGHTRAG_URL must be an absolute http(s) URL" >&2
   ((error_count += 1))

@@ -11,6 +11,8 @@ import pytest
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter  # 派生规则（纯函数）
 
+from manager_service.knowledge_space_repository import KnowledgeSpaceRepository
+
 from manager_service.rag import PgManagerRagService
 from manager_service.rag_instances import RagInstance, RagInstanceRegistry
 
@@ -43,6 +45,26 @@ def test_workspace_mapping_isolated_across_tenants(two_tenants, migrated_db):
     assert ManagerRagService.derive_workspace(tid_a, "enterprise_shared") in a_ws
     # tenant B 看不到 tenant A 的 workspace 映射。
     assert ManagerRagService.derive_workspace(tid_a, "enterprise_shared") not in b_ws
+
+
+def test_registry_aware_space_creation_stamps_instance_mapping(two_tenants, migrated_db):
+    tid_a, _ = two_tenants
+    context = _ctx(tid_a)
+    knowledge_space_id = f"ks_created_{uuid.uuid4().hex[:8]}"
+    registry = RagInstanceRegistry((
+        RagInstance("rag-a", "http://rag-a", "secret-a"),
+        RagInstance("rag-b", "http://rag-b", "secret-b"),
+    ))
+    workspace = ManagerRagService.derive_workspace(tid_a, knowledge_space_id)
+    KnowledgeSpaceRepository(
+        PgTenantRouter(migrated_db), instance_registry=registry
+    ).create(context, knowledge_space_id=knowledge_space_id, display_name="Created")
+    with PgTenantRouter(migrated_db).session(context) as session:
+        row = session.execute(
+            "SELECT workspace, instance_id FROM rag_workspace WHERE knowledge_space_id = %s",
+            (knowledge_space_id,),
+        ).fetchone()
+    assert row == (workspace, registry.resolve(workspace).instance_id)
 
 
 def test_instance_mapping_bootstraps_legacy_row_and_replays_without_drift(two_tenants, migrated_db):

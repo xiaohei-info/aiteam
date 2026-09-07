@@ -236,10 +236,13 @@ class KnowledgeIntakeService:
                 raise RagIngestionUnavailable("knowledge analytics unavailable")
             registry = getattr(self._ingestion_client, "instance_registry", None)
             if registry is not None:
-                instance = registry.resolve(handle.workspace)
+                instance = registry.by_id(getattr(handle, "instance_id", "legacy"))
                 if getattr(handle, "instance_id", "legacy") != instance.instance_id:
                     raise RagIngestionUnavailable("knowledge analytics unavailable")
-            upstream = list_documents(workspace=handle.workspace)
+            upstream = list_documents(
+                workspace=handle.workspace,
+                instance_id=getattr(handle, "instance_id", "legacy"),
+            )
             upstream_status = "available"
         except RagIngestionUnavailable:
             upstream_status = (
@@ -591,7 +594,8 @@ class KnowledgeIntakeService:
                 ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
             )
             resolved_ids = self._resolve_rag_document_ids(
-                workspace=handle.workspace, aliases=aliases
+                workspace=handle.workspace, aliases=aliases,
+                instance_id=getattr(handle, "instance_id", "legacy")
             )
             if not resolved_ids:
                 operation = self._update_operation_or_replace(
@@ -608,6 +612,7 @@ class KnowledgeIntakeService:
                 doc_ids=resolved_ids,
                 delete_file=False,
                 delete_llm_cache=True,
+                instance_id=getattr(handle, "instance_id", "legacy"),
             )
             started = _result_flag(result, "deletion_started")
             busy = _result_flag(result, "busy")
@@ -716,13 +721,15 @@ class KnowledgeIntakeService:
                 ctx, document_id=document_id, knowledge_space_id=knowledge_space_id
             )
             resolved_ids = self._resolve_rag_document_ids(
-                workspace=handle.workspace, aliases=aliases
+                workspace=handle.workspace, aliases=aliases,
+                instance_id=getattr(handle, "instance_id", "legacy")
             )
             if not resolved_ids:
                 present_ids: set[str] = set()
             else:
                 present = self._ingestion_client.document_ids_present(
-                    workspace=handle.workspace, doc_ids=resolved_ids
+                    workspace=handle.workspace, doc_ids=resolved_ids,
+                    instance_id=getattr(handle, "instance_id", "legacy")
                 )
                 if not isinstance(present, (set, frozenset)) or any(
                     not isinstance(value, str) for value in present
@@ -763,6 +770,7 @@ class KnowledgeIntakeService:
                     doc_ids=resolved_ids,
                     delete_file=False,
                     delete_llm_cache=True,
+                    instance_id=getattr(handle, "instance_id", "legacy"),
                 )
                 started = _result_flag(retry, "deletion_started")
                 busy = _result_flag(retry, "busy")
@@ -1158,10 +1166,11 @@ class KnowledgeIntakeService:
         registry = getattr(self._ingestion_client, "instance_registry", None)
         if registry is not None:
             try:
-                instance = registry.resolve(handle.workspace)
+                handle_instance_id = getattr(handle, "instance_id", "legacy")
+                instance = registry.by_id(handle_instance_id)
             except Exception as exc:
                 raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
-            if getattr(handle, "instance_id", "legacy") != instance.instance_id:
+            if handle_instance_id != instance.instance_id:
                 raise RagIngestionUnavailable("knowledge deletion unavailable")
         return handle
 
@@ -1197,11 +1206,13 @@ class KnowledgeIntakeService:
             ids.add(rag_document_id)
         return sorted(ids)
 
-    def _resolve_rag_document_ids(self, *, workspace: str, aliases: list[str]) -> list[str]:
+    def _resolve_rag_document_ids(
+        self, *, workspace: str, aliases: list[str], instance_id: str | None = None
+    ) -> list[str]:
         """Resolve aliases before a delete/probe; support duplicate content aliases."""
         resolver_many = getattr(self._ingestion_client, "resolve_document_ids", None)
         if callable(resolver_many):
-            resolved = resolver_many(workspace=workspace, aliases=aliases)
+            resolved = resolver_many(workspace=workspace, aliases=aliases, instance_id=instance_id)
             if resolved is None:
                 return []
             if not isinstance(resolved, (list, tuple, set, frozenset)):
@@ -1211,7 +1222,7 @@ class KnowledgeIntakeService:
             resolver = getattr(self._ingestion_client, "resolve_document_id", None)
             if resolver is None:
                 return aliases
-            resolved = resolver(workspace=workspace, aliases=aliases)
+            resolved = resolver(workspace=workspace, aliases=aliases, instance_id=instance_id)
             if resolved is None:
                 return []
             values = [resolved]

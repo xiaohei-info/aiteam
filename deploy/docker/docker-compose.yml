@@ -76,7 +76,8 @@ services:
       POSTGRES_USER: ${LIGHTRAG_DB_USER:-lightrag}
       POSTGRES_PASSWORD: ${LIGHTRAG_DB_PASSWORD:-}
       POSTGRES_DATABASE: ${LIGHTRAG_DB_NAME:-lightrag}
-      POSTGRES_WORKSPACE: ${LIGHTRAG_WORKSPACE:-}
+      # Workspace is selected per request by Manager's LIGHTRAG-WORKSPACE header;
+      # do not set a process-global POSTGRES_WORKSPACE here.
       LIGHTRAG_KV_STORAGE: PGKVStorage
       LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
       LIGHTRAG_GRAPH_STORAGE: PGTableGraphStorage
@@ -247,6 +248,7 @@ services:
       # explicitly reachable Manager-side URL or leave unset (fail closed).
       LIGHTRAG_URL: ${LIGHTRAG_URL:-}
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-}
+      LIGHTRAG_INSTANCES: ${LIGHTRAG_INSTANCES:-}
       LIGHTRAG_TIMEOUT_MS: ${LIGHTRAG_TIMEOUT_MS:-5000}
       LIGHTRAG_PIPELINE_TIMEOUT_MS: ${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}
       LIGHTRAG_POLL_INTERVAL_MS: ${LIGHTRAG_POLL_INTERVAL_MS:-250}

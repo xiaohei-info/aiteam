@@ -6,11 +6,11 @@
 
 用户授权完成[全局审查原编号30项](../../评审记录/2026-09-06-v1全局完整性审查.md)，继续分阶段测试、独立审查、CI和 taiyi TEST 交付。基线 `5483218edecc35eb3e199d3985c4b0b4dda587a0`（PR56）；初始分支 `feat/v1-completion-wave1`。本文把已有审查变成执行合同，**不是重新审计，也不代表30项已实现**。
 
-当前裁决以 v1 概要设计00、08-25 Pi-native 06/07、08-26 一企业一 Manager 为准：
+当前裁决以 v1 概要设计00、08-25 Pi-native 06/07、09-07 会话级 Manager 多租户计划与 Stage B 实现为准；本文件早期 08-26 单企业进程文字仅为历史背景：
 
 - Pi `0.84.2` 是唯一执行内核；不升级SDK，不恢复 Gateway/Executor/Driver/Run/Task/Loop/DAG，不复制 Pi JSONL 正文到第二套 Message/Timeline/执行库。
-- Operator 持跨企业目录、模型/价格、企业部署注册及平台账号；每套 Manager 只持一个企业的认证、配置授权、RAG/员工记忆及治理；Agent 持本地执行、附件与脱敏 outbox。
-- 企业 RAG 单空间与 employee-private Hindsight bank 分离；Manager facade 的明确能力调用是内容边界例外，不允许借此上传普通会话、工具IO或原始日志。
+- Operator 持跨企业目录、模型/价格、企业部署注册及平台账号；Manager 按 JWT/TenantContext 持当前会话企业的认证、配置授权、RAG/员工记忆及治理（每次请求单租户）；Agent 持本地执行、附件与脱敏 outbox。
+- 每个 tenant 的企业 RAG 单空间与 employee-private Hindsight bank 分离；workspace/endpoint instance_id 由 Manager 持久化映射，Manager facade 的明确能力调用是内容边界例外，不允许借此上传普通会话、工具IO或原始日志。
 - macOS 复合客户端按模块/正确身份访问相应端；三个普通 Web SPA 仍只调本端，不能让 Manager Web 直调 Agent/Jira，不能把三端代码塞进 Agent 包。
 - 不访问冻结 `app/`、真实凭据/企业数据，不动外部 Hermes、开发者钥匙串/ACL/防火墙，不做旧库迁移、跨库直写、向用户机器入站。
 
