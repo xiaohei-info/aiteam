@@ -1,9 +1,8 @@
-"""Manager-owned enterprise RAG routing (04 §6.1.2, D21).
+"""Manager-owned tenant-scoped RAG routing (04 §6.1.2, D21).
 
-A Manager deployment serves one enterprise and routes every enterprise document
-through one startup-fixed LightRAG workspace.  Existing tenant/space keys remain
-only as database/citation compatibility metadata; callers never choose a raw
-workspace or a second enterprise.
+The Manager endpoint registry contains only LightRAG URL/credential entries.
+Each tenant's enterprise knowledge key resolves to a persisted or deterministic
+workspace under that tenant; callers never choose a raw workspace.
 """
 
 from __future__ import annotations
@@ -44,63 +43,61 @@ class RagHandle:
 
 
 class PgManagerRagService(ManagerRagService):
-    """Route one enterprise workspace and retain legacy internal key mappings."""
+    """Route tenant-owned workspaces and retain legacy internal key mappings."""
 
     def __init__(
         self,
         dsn: str,
         *,
         instance_registry: RagInstanceRegistry | None = None,
-        enterprise_workspace: str | None = None,
     ):
         self._router = PgTenantRouter(dsn)
-        # Startup callers may inject the already-loaded registry.  The default
-        # path loads the same static Manager configuration used by the clients.
+        # Startup callers may inject the already-loaded endpoint pool.  The
+        # pool carries URL/credential identity only; workspace routing is below.
         self._instances = instance_registry if instance_registry is not None else RagInstanceRegistry.from_env()
-        self._enterprise_workspace = enterprise_workspace or (
-            self._instances.instances[0].workspace if self._instances is not None else None
-        )
-        self._enterprise_space_id = enterprise_knowledge_space_id(self._enterprise_workspace)
 
     @property
     def default_space_id(self) -> str:
-        return getattr(self, "_enterprise_space_id", DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID)
-
-    @property
-    def is_enterprise_scope(self) -> bool:
-        return bool(getattr(self, "_enterprise_workspace", None))
+        return DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
-        # A Manager process serves one enterprise.  Keep the legacy key in the
-        # handle for existing citations/bindings, but never route a second space.
-        enterprise_workspace = getattr(self, "_enterprise_workspace", None)
-        if enterprise_workspace:
+        if not isinstance(knowledge_space_id, str) or not knowledge_space_id.strip():
+            raise ValueError("knowledge service unavailable")
+
+        # Existing rows are authoritative for legacy aliases and preserve their
+        # workspace/instance mapping. A missing key derives only the canonical
+        # enterprise workspace; unknown legacy keys cannot create new mappings.
+        with self._router.session(ctx) as s:
+            existing = s.execute(
+                "SELECT workspace, instance_id FROM rag_workspace WHERE knowledge_space_id = %s",
+                (knowledge_space_id,),
+            ).fetchone()
+        if existing is None:
             if knowledge_space_id != self.default_space_id:
-                # Existing citations/bindings may carry a legacy internal key;
-                # accept it only when the Manager DB already knows that key.
-                with self._router.session(ctx) as s:
-                    legacy = s.execute(
-                        "SELECT 1 FROM rag_workspace WHERE knowledge_space_id = %s",
-                        (knowledge_space_id,),
-                    ).fetchone()
-                if legacy is None:
-                    raise ValueError("knowledge service unavailable")
-            workspace = enterprise_workspace
-        else:
-            # Compatibility for isolated unit tests and unconfigured development.
+                raise ValueError("knowledge service unavailable")
             workspace = self.derive_workspace(ctx.tenant_id, knowledge_space_id)
+            stored_instance_id = None
+        else:
+            if len(existing) < 1 or not isinstance(existing[0], str) or not existing[0].strip():
+                raise ValueError("knowledge service unavailable")
+            workspace = existing[0]
+            stored_instance_id = existing[1] if len(existing) > 1 else None
+
         instance = self._resolve_instance(workspace)
-        instance_id = instance.instance_id if instance is not None else "legacy"
+        if instance is None:
+            instance_id = str(stored_instance_id or "legacy")
+        else:
+            if stored_instance_id and str(stored_instance_id) != instance.instance_id:
+                raise ValueError("knowledge service unavailable")
+            instance_id = instance.instance_id
+
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO rag_workspace AS target "
                 "(tenant_id, knowledge_space_id, workspace, instance_id) "
                 "VALUES (%s, %s, %s, %s) "
                 "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE "
-                "SET instance_id = CASE "
-                "WHEN target.workspace = EXCLUDED.workspace "
-                "THEN COALESCE(target.instance_id, EXCLUDED.instance_id) "
-                "ELSE target.instance_id END "
+                "SET workspace = target.workspace, instance_id = COALESCE(target.instance_id, EXCLUDED.instance_id) "
                 "RETURNING tenant_id, knowledge_space_id, workspace, instance_id",
                 (ctx.tenant_id, knowledge_space_id, workspace, instance_id),
             ).fetchone()
@@ -110,11 +107,8 @@ class PgManagerRagService(ManagerRagService):
                 or str(row[0]) != str(ctx.tenant_id)
                 or row[1] != knowledge_space_id
                 or row[2] != workspace
-                or row[3] != instance_id
+                or str(row[3] or "legacy") != instance_id
             ):
-                # Existing non-null instance_id is immutable evidence of the
-                # startup binding.  Never overwrite it after a restart/config
-                # change; a workspace/tenant/instance drift fails closed.
                 raise ValueError("knowledge service unavailable")
         return RagHandle(
             tenant_id=ctx.tenant_id,

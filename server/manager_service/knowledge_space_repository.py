@@ -71,9 +71,8 @@ def _row_to_binding(row: Any) -> KnowledgeSpaceBindingRow:
 class KnowledgeSpaceRepository:
     """知识空间管理面 CRUD（复用 rag_workspace 表）。tenant_id 取自 ctx（D22）。"""
 
-    def __init__(self, router: PgTenantRouter, *, enterprise_workspace: str | None = None):
+    def __init__(self, router: PgTenantRouter):
         self._router = router
-        self._enterprise_workspace = enterprise_workspace
 
     def create(
         self,
@@ -83,7 +82,7 @@ class KnowledgeSpaceRepository:
         display_name: str,
     ) -> KnowledgeSpaceRow:
         """建知识空间：workspace 由 ManagerRagService 派生（D21，禁止外部直传）。"""
-        workspace = self._enterprise_workspace or ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
@@ -95,9 +94,10 @@ class KnowledgeSpaceRepository:
         return _row_to_space(row)
 
     def ensure(
-        self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str, workspace: str,
+        self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str,
     ) -> KnowledgeSpaceRow:
-        """Idempotently materialize the single enterprise KB mapping for this deployment."""
+        """Idempotently materialize a tenant-owned workspace mapping."""
+        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
         with self._router.session(ctx) as s:
             row = s.execute(
                 "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "

@@ -109,7 +109,7 @@ cd web && pnpm install --frozen-lockfile && pnpm build
 
 ## LightRAG 生产部署前置
 
-LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管。taiyi/生产发布前，按 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md) 在目标 PG 上执行独立 database/role/`vector` extension bootstrap，并将 Manager-only `LIGHTRAG_URL`、API key、固定 workspace 和已验证镜像引用放入部署机的 mode-600 secret env。不要把这些值放入 Agent 配置或 GitHub 日志。
+LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管。taiyi/生产发布前，按 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md) 在目标 PG 上执行独立 database/role/`vector` extension bootstrap，并将 Manager-only `LIGHTRAG_URL`、API key 和已验证镜像引用放入部署机的 mode-600 secret env。Manager 按 tenant 生成并持久化 workspace；不要将这些值放入 Agent 配置或 GitHub 日志。
 
 部署前只读检查：
 

@@ -21,8 +21,7 @@ from manager_service.routes_knowledge_intake import build_knowledge_intake_route
 from shared.app_factory import create_app
 from shared.config import Settings
 from shared.contracts.tenancy import TenantContext
-from shared.db import PgTenantRouter, apply_migrations
-from shared.errors import Conflict
+from shared.db import ManagerRagService, PgTenantRouter, apply_migrations
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
 
 pytestmark = pytest.mark.integration
@@ -34,7 +33,8 @@ class Crash(BaseException):
 
 
 class Upstream:
-    def __init__(self):
+    def __init__(self, workspace: str | None = None):
+        self.workspace = workspace
         self.posts = 0
         self.probes = 0
         self.docs = {}
@@ -45,7 +45,8 @@ class Upstream:
         self.duplicate_source = False
 
     def __call__(self, request):
-        assert request.headers["LIGHTRAG-WORKSPACE"] == SPACE
+        if self.workspace is not None:
+            assert request.headers["LIGHTRAG-WORKSPACE"] == self.workspace
         assert request.headers["X-API-Key"] == "fixture-only"
         if request.url.path == "/documents/text":
             self.posts += 1
@@ -79,14 +80,14 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
     router = PgTenantRouter(migrated_db)
     ctx = TenantContext(tenant_id=two_tenants[0], user_id=str(uuid.uuid4()), roles=["owner"])
     other = TenantContext(tenant_id=two_tenants[1], user_id=str(uuid.uuid4()), roles=["owner"])
-    KnowledgeSpaceRepository(router, enterprise_workspace=SPACE).create(ctx, knowledge_space_id=SPACE, display_name="Fixture")
-    upstream = Upstream()
-    client = LightRagIngestionClient(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000, workspace=SPACE), transport=httpx.MockTransport(upstream))
+    KnowledgeSpaceRepository(router).create(ctx, knowledge_space_id=SPACE, display_name="Fixture")
+    upstream = Upstream(ManagerRagService.derive_workspace(ctx.tenant_id, SPACE))
+    client = LightRagIngestionClient(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000), transport=httpx.MockTransport(upstream))
     def build():
         return build_knowledge_intake_service(
             PgTenantRouter(migrated_db),
             storage_root=tmp_path,
-            rag_service=PgManagerRagService(migrated_db, enterprise_workspace=SPACE),
+            rag_service=PgManagerRagService(migrated_db),
             ingestion_client=client,
         )
     service = build()

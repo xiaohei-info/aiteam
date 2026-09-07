@@ -43,7 +43,6 @@ class LightRagIngestionSettings:
     request_timeout_ms: int
     pipeline_timeout_ms: int
     poll_interval_ms: int = 250
-    workspace: str | None = None
     instance_registry: RagInstanceRegistry | None = None
 
     @classmethod
@@ -71,7 +70,7 @@ class LightRagIngestionSettings:
         first = registry.instances[0]
         return cls(
             first.url, first.api_key, request_timeout_ms, pipeline_timeout_ms,
-            poll_interval_ms, first.workspace, registry,
+            poll_interval_ms, registry,
         )
 
 
@@ -276,9 +275,7 @@ class LightRagIngestionClient:
         try:
             if settings.instance_registry is not None:
                 return settings.instance_registry.resolve(workspace)
-            if settings.workspace is not None and workspace != settings.workspace:
-                raise RagInstanceConfigurationError("LightRAG workspace is not configured")
-            return RagInstance("legacy", settings.url, settings.api_key, workspace)
+            return RagInstance("legacy", settings.url, settings.api_key)
         except RagInstanceConfigurationError as exc:
             raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
 
@@ -294,18 +291,18 @@ class LightRagIngestionClient:
         """One submission only. Callers persist a fence BEFORE entering this method."""
         self.validate_submission(workspace=workspace, file_source=file_source, text=text)
         instance = self.instance_for_workspace(workspace)
-        payload = self._recovery_request(instance, "/documents/text", method="POST", body={"text": text, "file_source": file_source})
+        payload = self._recovery_request(instance, workspace, "/documents/text", method="POST", body={"text": text, "file_source": file_source})
         track_id = payload.get("track_id")
         if not _successful_response(payload) or not isinstance(track_id, str) or not track_id or not all(c.isalnum() or c in "_-" for c in track_id) or len(track_id) > 256:
             raise RagIngestionUnavailable("knowledge submission outcome unknown")
         return track_id
 
-    def _recovery_request(self, instance, path, *, method="GET", body=None, timeout=None):
+    def _recovery_request(self, instance, workspace, path, *, method="GET", body=None, timeout=None):
         timeout = timeout or self.settings.request_timeout_ms / 1000
         deadline = self._clock() + timeout
         try:
             with self._http.stream(method, f"{instance.url}{path}",
-                                   headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                                   headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace},
                                    json=body, timeout=timeout) as response:
                 if response.status_code != 200:
                     raise RagIngestionUnavailable("knowledge reconciliation unavailable")
@@ -328,7 +325,7 @@ class LightRagIngestionClient:
         if track_id:
             if len(track_id) > 256 or not all(c.isalnum() or c in "_-" for c in track_id):
                 raise RagIngestionUnavailable("knowledge reconciliation unavailable")
-            payload = self._recovery_request(instance, f"/documents/track_status/{track_id}")
+            payload = self._recovery_request(instance, workspace, f"/documents/track_status/{track_id}")
             docs = payload.get("documents")
             count = payload.get("total_count")
             if payload.get("track_id") != track_id or type(count) is not int or not isinstance(docs, list) or count != len(docs) or count not in (0, 1):
@@ -340,7 +337,8 @@ class LightRagIngestionClient:
             # Exhaust the bounded listing before accepting a match: a second
             # matching source on a later page makes identity ambiguous.
             records = [doc for doc in self._paginated_documents(
-                instance, headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                instance, workspace=workspace,
+                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace},
                 timeout=self.settings.request_timeout_ms / 1000, deadline=self._clock() + 30,
             ) if doc.file_path == file_source]
         if len(records) != 1:
@@ -350,7 +348,8 @@ class LightRagIngestionClient:
             # A duplicate marker alone is NOT completion proof. Resolve the
             # original in this exact workspace and verify it is processed.
             originals = [doc for doc in self._paginated_documents(
-                instance, headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                instance, workspace=workspace,
+                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace},
                 timeout=self.settings.request_timeout_ms / 1000, deadline=self._clock() + 30,
             ) if doc.upstream_document_id == record.original_document_id]
             if len(originals) != 1 or originals[0].status != "processed" or originals[0].is_duplicate:
@@ -366,7 +365,7 @@ class LightRagIngestionClient:
         instance = self.instance_for_workspace(workspace)
         if not isinstance(text, str) or not text or len(text.encode("utf-8")) > _MAX_TEXT_BYTES:
             raise RagIngestionUnavailable("knowledge indexing unavailable")
-        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         try:
             response = self._http.post(
@@ -404,7 +403,7 @@ class LightRagIngestionClient:
             raise RagIngestionUnavailable("knowledge indexing unavailable") from exc
 
     def list_documents(self, *, workspace: str) -> list[RagDocumentInfo]:
-        """List only validated metadata from the Manager's fixed workspace."""
+        """List only validated metadata from the requested tenant workspace."""
         settings = self.settings
         if not isinstance(workspace, str) or not workspace.strip():
             raise RagIngestionUnavailable("knowledge analytics unavailable")
@@ -413,8 +412,8 @@ class LightRagIngestionClient:
                 raise RagIngestionUnavailable("knowledge analytics unavailable")
             instance = self.instance_for_workspace(workspace)
             timeout = settings.request_timeout_ms / 1000
-            headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
-            return list(self._paginated_documents(instance, headers=headers, timeout=timeout))
+            headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
+            return list(self._paginated_documents(instance, workspace=workspace, headers=headers, timeout=timeout))
         except RagIngestionUnavailable as exc:
             raise RagIngestionUnavailable("knowledge analytics unavailable") from exc
         except Exception as exc:  # noqa: BLE001 - upstream details never cross Manager boundary
@@ -428,12 +427,12 @@ class LightRagIngestionClient:
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
             raise RagIngestionUnavailable("knowledge deletion unavailable")
         instance = self.instance_for_workspace(workspace)
-        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         matches: dict[str, set[str]] = {alias: set() for alias in requested}
         direct_matches: dict[str, set[str]] = {alias: set() for alias in requested}
         try:
-            for document in self._paginated_documents(instance, headers=headers, timeout=timeout):
+            for document in self._paginated_documents(instance, workspace=workspace, headers=headers, timeout=timeout):
                 document_id = document.upstream_document_id
                 file_path = document.file_path
                 matched = requested.intersection({document_id, file_path})
@@ -479,7 +478,7 @@ class LightRagIngestionClient:
         if any(not isinstance(doc_id, str) or not doc_id.strip() for doc_id in doc_ids):
             raise RagIngestionUnavailable("knowledge deletion unavailable")
         instance = self.instance_for_workspace(workspace)
-        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         try:
             response = self._http.request(
@@ -529,12 +528,12 @@ class LightRagIngestionClient:
         if settings is None or not isinstance(workspace, str) or not workspace.strip():
             raise RagIngestionUnavailable("knowledge deletion unavailable")
         instance = self.instance_for_workspace(workspace)
-        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace}
+        headers = {"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace}
         timeout = settings.request_timeout_ms / 1000
         present: set[str] = set()
         try:
             for document_id, _file_path in self._paginated_document_identities(
-                instance, headers=headers, timeout=timeout
+                instance, workspace=workspace, headers=headers, timeout=timeout
             ):
                 if document_id in requested:
                     present.add(document_id)
@@ -549,12 +548,13 @@ class LightRagIngestionClient:
         self,
         instance: RagInstance,
         *,
+        workspace: str,
         headers: dict[str, str],
         timeout: float,
     ):
         """Yield only validated ids from the bounded Manager workspace listing."""
         try:
-            for document in self._paginated_documents(instance, headers=headers, timeout=timeout):
+            for document in self._paginated_documents(instance, workspace=workspace, headers=headers, timeout=timeout):
                 yield document.upstream_document_id, document.file_path
         except RagIngestionUnavailable as exc:
             raise RagIngestionUnavailable("knowledge deletion unavailable") from exc
@@ -563,6 +563,7 @@ class LightRagIngestionClient:
         self,
         instance: RagInstance,
         *,
+        workspace: str,
         headers: dict[str, str],
         timeout: float,
         deadline: float | None = None,
@@ -578,7 +579,7 @@ class LightRagIngestionClient:
                     raise RagIngestionUnavailable("knowledge reconciliation unavailable")
                 timeout = min(timeout, remaining)
             payload = self._recovery_request(
-                instance, "/documents/paginated", method="POST", timeout=timeout,
+                instance, workspace, "/documents/paginated", method="POST", timeout=timeout,
                 body={"page": page, "page_size": _MAX_PAGINATED_PAGE_SIZE,
                       "sort_field": "created_at", "sort_direction": "desc"},
             )
@@ -603,7 +604,7 @@ class LightRagIngestionClient:
             ):
                 raise RagIngestionUnavailable("knowledge analytics unavailable")
             records = [
-                _document_info(document, workspace=instance.workspace)
+                _document_info(document, workspace=workspace)
                 for document in documents
             ]
             total_pages = pagination.get("total_pages")

@@ -6,7 +6,7 @@
 
 - 适用：taiyi / 生产 Manager 部署，以及可选的本地 Compose 联调。
 - LightRAG 只被 Manager 服务访问；不向 Agent 镜像、Agent 环境或用户端下发 API key。
-- LightRAG 使用独立 PostgreSQL/pgvector 数据库、独立 role 和固定 workspace；不复用 AI Team 控制面数据库/role。
+- LightRAG 使用独立 PostgreSQL/pgvector 数据库、独立 role 和 tenant-scoped workspace；不复用 AI Team 控制面数据库/role。
 - LightRAG 默认绑定 Manager 主机 loopback；Manager「知识库」页直接打开当前 host 的 LightRAG UI 端口。若需远程浏览器访问，必须将绑定地址放在防火墙/TLS 保护之后。
 - 本文命令中的 `--dry-run` 不连接数据库、不拉镜像、不停止服务、不写备份；没有标注的 bootstrap/恢复/升级命令只在 taiyi/生产执行。
 
@@ -26,9 +26,10 @@ LIGHTRAG_TOKEN_SECRET=<secret-store>
 LIGHTRAG_JWT_ALGORITHM=HS256
 LIGHTRAG_BIND_HOST=0.0.0.0
 LIGHTRAG_PORT=9621
-LIGHTRAG_WORKSPACE=<fixed-enterprise-workspace>
-# 一个 Manager 部署只绑定一个企业；LIGHTRAG_INSTANCES 仅作为未来同企业 HA/分片扩展，不能表达多企业路由。
-# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag.manager.internal","api_key":"<secret-store>","workspace":"<fixed-enterprise-workspace>"}]
+# Legacy workspace hint; Manager ignores it and derives/persists one workspace per tenant.
+# LIGHTRAG_WORKSPACE=<ignored-legacy-hint>
+# LIGHTRAG_INSTANCES 只描述 URL/key endpoint pool，不能表达企业或 workspace 身份。
+# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag.manager.internal","api_key":"<secret-store>"}]
 LIGHTRAG_IMAGE=ghcr.io/hkuds/lightrag:1.5.6
 
 # LightRAG 专用 PG；管理员凭据只给 bootstrap，运行时使用 lightrag role
@@ -44,18 +45,18 @@ LIGHTRAG_DB_ADMIN_PASSWORD=<secret-store>
 # 容器内连接参数通常为 LIGHTRAG_CLIENT_DB_HOST=127.0.0.1 / PORT=5432
 ```
 
-legacy 三变量模式下，`LIGHTRAG_WORKSPACE` 必须是该 Manager 企业部署固定的实例 namespace，不能由前端/Agent 请求覆盖；多实例配置若启用，只能服务同一企业且每个条目的 workspace 必须属于该部署。生产校验：
+legacy 配置中的 `LIGHTRAG_WORKSPACE` 仅为兼容提示，Manager 不把它作为进程身份；workspace 由当前 tenant 的 `rag_workspace` 映射或确定性规则得到，不能由前端/Agent 请求覆盖。多实例配置若启用，只描述 endpoint pool，workspace 仍按 tenant 路由。生产校验：
 
 ```bash
 # taiyi/生产；只读校验，不调用 LightRAG，不打印 key/password
 bash scripts/validate-lightrag-env.sh --production --env-file /etc/aiteam/manager.env
 ```
 
-legacy 三变量模式下 URL、API key、workspace 任一缺失时 Manager 应保持 fail-closed；LightRAG 原生认证还必须配置 `LIGHTRAG_AUTH_ACCOUNTS` 与 `LIGHTRAG_TOKEN_SECRET`。多实例模式下每个 registry 条目的四个字段都必须完整有效。不要用空 key 或空认证配置作为生产默认值。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 profile 前必须由 secret store 注入真实值。
+legacy 配置下 URL 或 API key 任一缺失时 Manager 应保持 fail-closed；`LIGHTRAG_WORKSPACE` 不参与路由。LightRAG 原生认证还必须配置 `LIGHTRAG_AUTH_ACCOUNTS` 与 `LIGHTRAG_TOKEN_SECRET`。多实例模式下每个 registry 条目的 instance_id、URL、API key 都必须完整有效。不要用空 key 或空认证配置作为生产默认值。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 profile 前必须由 secret store 注入真实值。
 
 ### 1.1 Manager `rag_workspace` 映射的边界
 
-Manager 控制库的 `rag_workspace.instance_id` 是当前企业固定 workspace 的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 和实例固定 workspace 仍只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy 三变量）registry；数据库不保存这些值，客户端也不能传入 `workspace`/`instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
+Manager 控制库的 `rag_workspace.workspace` 与 `instance_id` 是当前 tenant 映射的**审计投影**，不是 endpoint、API key 或 secret registry。`url`、`api_key` 只来自 Manager 启动时加载的 `LIGHTRAG_INSTANCES`（或 legacy URL/key）registry；数据库不保存凭据，客户端也不能传入 `workspace`/`instance_id`。`knowledge_space_id` 只保留作旧文档/citation/binding 的内部兼容键。
 
 首次访问会在同一租户事务中原子写入缺失的 `instance_id`。既有 legacy 行可以先保持 NULL 并由可信 registry bootstrap；已写入的 instance、tenant 或 derived workspace 在重启后必须一致，否则 Manager fail-closed，禁止用当前配置覆盖漂移映射。迁移可重复执行，映射修复应先核对启动 registry 与审计记录，不要把数据库值当作路由或凭据来源。
 
@@ -90,7 +91,6 @@ bash deploy/lightrag/init-db.sh --dry-run
 export LIGHTRAG_DB_ADMIN_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_DB_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_API_KEY="$(openssl rand -hex 32)"
-export LIGHTRAG_WORKSPACE=enterprise_demo_shared
 export LIGHTRAG_URL=http://lightrag:9621
 
 # 启动独立 pgvector + LightRAG（Manager-only network）
@@ -100,7 +100,7 @@ bash deploy/lightrag/init-db.sh
 docker compose -f deploy/docker/docker-compose.yml --profile lightrag up -d lightrag
 ```
 
-Compose 的 LightRAG 服务只使用 `expose: 9621`，不把服务端口发布给 Agent 或主机；Manager 容器通过 `LIGHTRAG_URL=http://lightrag:9621` 访问。要让 Manager 使用它，启动三端时显式提供同一个 Manager-only `LIGHTRAG_URL`、key 和 workspace；Agent service 的 environment 没有这些变量。
+Compose 的 LightRAG 服务只使用 `expose: 9621`，不把服务端口发布给 Agent 或主机；Manager 容器通过 `LIGHTRAG_URL=http://lightrag:9621` 访问。要让 Manager 使用它，启动三端时显式提供 Manager-only URL 与 key；workspace 由 tenant 映射生成，Agent service 的 environment 没有这些变量。
 
 ## 4. 备份与恢复
 

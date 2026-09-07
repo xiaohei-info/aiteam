@@ -61,7 +61,7 @@ class KnowledgeDocumentAnalyticsOut(BaseModel):
 
 
 class KnowledgeAnalyticsOut(BaseModel):
-    """企业固定 LightRAG workspace 的安全管理面统计。"""
+    """当前租户 LightRAG workspace 的安全管理面统计。"""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -33,8 +33,7 @@ class _FakeIngestion(LightRagIngestionClient):
     def __init__(self):
         from tests.manager.test_knowledge_intake_recovery_pg import Upstream
         self.upstream = Upstream()
-        super().__init__(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000,
-                         workspace=ENTERPRISE_SPACE_ID), transport=httpx.MockTransport(self.upstream))
+        super().__init__(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000), transport=httpx.MockTransport(self.upstream))
 
 
 def _client(db_url, admin_url=None):

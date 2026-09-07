@@ -1,4 +1,4 @@
-"""rag.py (PgManagerRagService) branch coverage (issue #234, target >=90%)."""
+"""rag.py (PgManagerRagService) tenant workspace routing tests."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from shared.db import ManagerRagService
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
 _TID = "12345678-1234-1234-1234-123456789abc"
+_SPACE = "enterprise_shared"
 
 
 def _make_svc(
@@ -25,75 +26,78 @@ def _make_svc(
     return svc
 
 
-def _registry_for(tenant_id: str, *, instance_id: str = "rag-a") -> RagInstanceRegistry:
-    workspace = ManagerRagService.derive_workspace(tenant_id, "ks-default")
-    return RagInstanceRegistry((RagInstance(instance_id, "http://rag", "secret", workspace),))
+def _registry_for(*, instance_id: str = "rag-a") -> RagInstanceRegistry:
+    return RagInstanceRegistry((RagInstance(instance_id, "http://rag", "secret"),))
 
 
-def test_get_returns_rag_handle_with_verified_instance():
-    workspace = ManagerRagService.derive_workspace(_TID, "ks-default")
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(_TID, "ks-default", workspace, "legacy")))
-    svc = _make_svc(router)
-    handle = svc.get(ctx(tid=_TID), knowledge_space_id="ks-default")
+def test_get_returns_existing_tenant_mapping():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    router = FakeRouter().queue_many(
+        FakeCursor(fetchone=(workspace, "legacy")),
+        FakeCursor(fetchone=(_TID, _SPACE, workspace, "legacy")),
+    )
+    handle = _make_svc(router).get(ctx(tid=_TID), knowledge_space_id=_SPACE)
     assert isinstance(handle, RagHandle)
     assert handle.tenant_id == _TID
-    assert handle.knowledge_space_id == "ks-default"
+    assert handle.knowledge_space_id == _SPACE
     assert handle.workspace == workspace
     assert handle.instance_id == "legacy"
-    assert "instance_id" in router.last_sql
-    assert router.executed[-1][1][-1] == "legacy"
-
-
-def test_get_resolves_registry_before_atomic_mapping_upsert():
-    workspace = ManagerRagService.derive_workspace(_TID, "ks-default")
-    registry = _registry_for(_TID)
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchone=(_TID, "ks-default", workspace, "rag-a")))
-    handle = _make_svc(router, instance_registry=registry).get(ctx(tid=_TID), "ks-default")
-    assert handle.instance_id == "rag-a"
-    assert router.executed[-1][1] == (_TID, "ks-default", workspace, "rag-a")
+    assert router.executed[0][1] == (_SPACE,)
     assert "COALESCE(target.instance_id, EXCLUDED.instance_id)" in router.last_sql
 
 
-def test_get_replays_verified_legacy_mapping_without_overwrite():
-    workspace = ManagerRagService.derive_workspace(_TID, "ks-default")
-    registry = _registry_for(_TID, instance_id="legacy")
+def test_get_derives_workspace_and_assigns_registry_instance():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
     router = FakeRouter().queue_many(
-        FakeCursor(fetchone=(_TID, "ks-default", workspace, "legacy")),
-        FakeCursor(fetchone=(_TID, "ks-default", workspace, "legacy")),
+        FakeCursor(fetchone=None),
+        FakeCursor(fetchone=(_TID, _SPACE, workspace, "rag-a")),
     )
-    svc = _make_svc(router, instance_registry=registry)
-    first = svc.get(ctx(tid=_TID), "ks-default")
-    second = svc.get(ctx(tid=_TID), "ks-default")
+    handle = _make_svc(router, instance_registry=_registry_for()).get(ctx(tid=_TID), _SPACE)
+    assert handle.workspace == workspace
+    assert handle.instance_id == "rag-a"
+    assert router.executed[-1][1] == (_TID, _SPACE, workspace, "rag-a")
+    assert "SET workspace = target.workspace" in router.last_sql
+
+
+def test_get_replays_legacy_mapping_without_overwrite():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    router = FakeRouter().queue_many(
+        FakeCursor(fetchone=(workspace, "legacy")),
+        FakeCursor(fetchone=(_TID, _SPACE, workspace, "legacy")),
+        FakeCursor(fetchone=(workspace, "legacy")),
+        FakeCursor(fetchone=(_TID, _SPACE, workspace, "legacy")),
+    )
+    svc = _make_svc(router, instance_registry=_registry_for(instance_id="legacy"))
+    first = svc.get(ctx(tid=_TID), _SPACE)
+    second = svc.get(ctx(tid=_TID), _SPACE)
     assert first.instance_id == second.instance_id == "legacy"
-    assert all("COALESCE(target.instance_id, EXCLUDED.instance_id)" in sql for sql, _ in router.executed)
+    assert len(router.executed) == 4
 
 
-def test_get_rejects_unknown_registry_without_writing_mapping():
-    registry = RagInstanceRegistry((RagInstance("rag-a", "http://rag", "secret", "not-derived"),))
-    router = FakeRouter()
-    svc = _make_svc(router, instance_registry=registry)
+def test_get_rejects_unknown_space_without_mapping():
+    router = FakeRouter().queue(FakeCursor(fetchone=None))
     with pytest.raises(ValueError, match="knowledge service unavailable"):
-        svc.get(ctx(tid=_TID), "ks-default")
-    assert router.executed == []
+        _make_svc(router).get(ctx(tid=_TID), "legacy-unknown")
+    assert len(router.executed) == 1
 
 
-@pytest.mark.parametrize(
-    "mapped_row",
-    [
-        ("other-tenant", "ks-default", ManagerRagService.derive_workspace(_TID, "ks-default"), "rag-a"),
-        (_TID, "ks-default", "wrong-workspace", "rag-a"),
-        (_TID, "ks-default", ManagerRagService.derive_workspace(_TID, "ks-default"), "rag-old"),
-    ],
-)
-def test_get_fails_closed_on_mapping_drift(mapped_row):
-    workspace = ManagerRagService.derive_workspace(_TID, "ks-default")
-    router = FakeRouter().queue(FakeCursor(fetchone=mapped_row))
-    svc = _make_svc(router, instance_registry=_registry_for(_TID))
+def test_get_fails_closed_on_persisted_instance_drift():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    router = FakeRouter().queue(FakeCursor(fetchone=(workspace, "rag-old")))
     with pytest.raises(ValueError, match="knowledge service unavailable"):
-        svc.get(ctx(tid=_TID), "ks-default")
-    assert router.executed[-1][1] == (_TID, "ks-default", workspace, "rag-a")
+        _make_svc(router, instance_registry=_registry_for()).get(ctx(tid=_TID), _SPACE)
+    assert len(router.executed) == 1
+
+
+def test_get_fails_closed_on_mapping_return_drift():
+    workspace = ManagerRagService.derive_workspace(_TID, _SPACE)
+    router = FakeRouter().queue_many(
+        FakeCursor(fetchone=(workspace, "rag-a")),
+        FakeCursor(fetchone=("other-tenant", _SPACE, workspace, "rag-a")),
+    )
+    with pytest.raises(ValueError, match="knowledge service unavailable"):
+        _make_svc(router, instance_registry=_registry_for()).get(ctx(tid=_TID), _SPACE)
+    assert len(router.executed) == 2
 
 
 def test_list_workspaces_returns_rows():
@@ -102,22 +106,20 @@ def test_list_workspaces_returns_rows():
         ("ks-1", "ws-1"),
         ("ks-2", "ws-2"),
     ]))
-    svc = _make_svc(router)
-    rows = svc.list_workspaces(ctx())
-    assert len(rows) == 2
-    assert rows[0] == {"knowledge_space_id": "ks-1", "workspace": "ws-1"}
-    assert rows[1] == {"knowledge_space_id": "ks-2", "workspace": "ws-2"}
+    rows = _make_svc(router).list_workspaces(ctx())
+    assert rows == [
+        {"knowledge_space_id": "ks-1", "workspace": "ws-1"},
+        {"knowledge_space_id": "ks-2", "workspace": "ws-2"},
+    ]
 
 
 def test_init_creates_pg_router():
-    """PgManagerRagService.__init__ stores a PgTenantRouter (covers line 30)."""
+    """PgManagerRagService.__init__ stores a PgTenantRouter."""
     from shared.db import PgTenantRouter
-    svc = PgManagerRagService('postgresql://localhost/test')
+    svc = PgManagerRagService("postgresql://localhost/test")
     assert isinstance(svc._router, PgTenantRouter)
 
 
 def test_list_workspaces_empty():
-    router = FakeRouter()
-    router.queue(FakeCursor(fetchall=[]))
-    svc = _make_svc(router)
-    assert svc.list_workspaces(ctx()) == []
+    router = FakeRouter().queue(FakeCursor(fetchall=[]))
+    assert _make_svc(router).list_workspaces(ctx()) == []

@@ -1,14 +1,14 @@
 """Enterprise document intake orchestration (issue #416; 04 §6.1.2/6.6; D21/D22).
 
 The existing internal space key is retained for document/citation compatibility,
-while one Manager deployment routes all new enterprise documents to its fixed
-LightRAG workspace. The state machine is uploaded → parsing → indexing → ready | failed;
+while the Manager routes each tenant's enterprise documents to its persisted or
+per-tenant-derived LightRAG workspace. The state machine is uploaded → parsing → indexing → ready | failed;
 reindex uses reindex_requested and delete uses deleting (LightRAG acknowledgement
 never masquerades as deleted).
 
 Red lines (D21):
 - Real LightRAG writes use only the Manager-owned ingestion client; API keys never enter Agent/business state.
-- The workspace is fixed by Manager deployment configuration; this service accepts no raw workspace.
+- The workspace is selected by Manager from TenantContext; this service accepts no raw workspace.
 - Existing TenantContext/RLS remains the database compatibility boundary.
 """
 
@@ -207,7 +207,7 @@ class KnowledgeIntakeService:
         """Build a safe management projection from Manager and LightRAG metadata.
 
         Manager rows remain the business source of truth. LightRAG contributes
-        only bounded status/count metadata from the startup-fixed workspace;
+        only bounded status/count metadata from the tenant-selected workspace;
         upstream outages therefore leave the local inventory usable and visible.
         """
         self._require_space(ctx, knowledge_space_id)

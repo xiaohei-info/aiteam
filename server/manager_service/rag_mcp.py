@@ -149,7 +149,6 @@ class LightRagSettings:
     api_key: str = field(repr=False)
     timeout_ms: int = 5_000
     query_mode: str = "naive"
-    workspace: str | None = None
     instance_registry: RagInstanceRegistry | None = None
 
     @classmethod
@@ -165,7 +164,7 @@ class LightRagSettings:
         query_mode = os.getenv("LIGHTRAG_QUERY_MODE", "naive").strip().lower()
         if query_mode not in {"local", "global", "hybrid", "naive", "mix"}:
             query_mode = "naive"
-        return cls(first.url, first.api_key, timeout_ms, query_mode, first.workspace, registry)
+        return cls(first.url, first.api_key, timeout_ms, query_mode, registry)
 
 
 class LightRagClient:
@@ -187,10 +186,8 @@ class LightRagClient:
             if settings.instance_registry is not None:
                 return settings.instance_registry.resolve(workspace)
             # Explicit constructor settings remain useful to tests and local
-            # callers. Environment-created settings always have a fixed map.
-            if settings.workspace is not None and workspace != settings.workspace:
-                raise RagInstanceConfigurationError("LightRAG workspace is not configured")
-            return RagInstance("legacy", settings.url, settings.api_key, workspace)
+            # callers; the workspace is always the caller-supplied tenant route.
+            return RagInstance("legacy", settings.url, settings.api_key)
         except RagInstanceConfigurationError as exc:
             raise RagUnavailable("knowledge service unavailable") from exc
 
@@ -219,7 +216,7 @@ class LightRagClient:
         try:
             response = await self._http.post(
                 f"{instance.url}/query/data",
-                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace},
                 json=body,
                 timeout=settings.timeout_ms / 1000,
             )
@@ -570,10 +567,9 @@ class RagAccessService:
         }
 
     def _is_enterprise_scope(self, space_id: str) -> bool:
-        # PgManagerRagService validates canonical and known legacy keys before
-        # returning a fixed enterprise handle; the key itself is not a second
-        # LightRAG workspace.
-        return bool(getattr(self._rag, "is_enterprise_scope", False) and space_id)
+        # The canonical key is enterprise-scoped for every tenant; the actual
+        # LightRAG workspace is still tenant-specific and comes from the handle.
+        return space_id == getattr(self._rag, "default_space_id", None)
 
     @staticmethod
     def _valid_binding(row: Any, *, ctx: TenantContext, employee_id: str, space_id: str) -> bool:

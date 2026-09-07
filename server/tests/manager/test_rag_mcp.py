@@ -21,6 +21,7 @@ from manager_service.rag_mcp import (
 from shared.auth import DevTokenService
 from shared.contracts.auth import TokenClaims
 from shared.contracts.tenancy import TenantContext
+from shared.db import ManagerRagService
 from shared.errors import Forbidden
 
 
@@ -112,11 +113,14 @@ class FakeRag:
 
 class EnterpriseRag(FakeRag):
     default_space_id = "enterprise_shared"
-    is_enterprise_scope = True
 
     def get(self, ctx: TenantContext, knowledge_space_id: str):
         assert knowledge_space_id == self.default_space_id
-        return Handle(ctx.tenant_id, knowledge_space_id, "enterprise-fixed-workspace")
+        return Handle(
+            ctx.tenant_id,
+            knowledge_space_id,
+            ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id),
+        )
 
 
 class EmptySnapshot(FakeSnapshots):
@@ -178,20 +182,25 @@ def test_lightrag_client_uses_manager_headers_and_bounded_query():
     assert request_body["include_references"] is True
 
 
-def test_lightrag_client_rejects_workspace_not_owned_by_fixed_instance():
-    client = LightRagClient(
-        LightRagSettings("http://rag", "secret", workspace="fixed-space"),
-        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
-    )
+def test_lightrag_client_routes_requested_workspace_without_static_pin():
+    seen: list[str] = []
 
+    async def handler(request: httpx.Request):
+        seen.append(request.headers["lightrag-workspace"])
+        return httpx.Response(200, json={"status": "success", "data": {"references": []}})
+
+    client = LightRagClient(
+        LightRagSettings("http://rag", "secret"),
+        transport=httpx.MockTransport(handler),
+    )
     async def run():
         try:
-            with pytest.raises(RagUnavailable, match="knowledge service unavailable"):
-                await client.query(workspace="other-space", query="hello", limit=5)
+            return await client.query(workspace="tenant-b__enterprise_shared", query="hello", limit=5)
         finally:
             await client.aclose()
 
-    asyncio.run(run())
+    assert asyncio.run(run())["status"] == "success"
+    assert seen == ["tenant-b__enterprise_shared"]
 
 
 def test_lightrag_documented_no_context_response_is_empty_success():
@@ -255,7 +264,7 @@ def test_enterprise_scope_allows_ready_documents_without_employee_bindings(tmp_p
         return auth, result
 
     auth, result = asyncio.run(run())
-    assert auth.handle.workspace == "enterprise-fixed-workspace"
+    assert auth.handle.workspace == ManagerRagService.derive_workspace("tenant-a", "enterprise_shared")
     assert result["items"][0]["document_id"] == "doc-1"
 
 

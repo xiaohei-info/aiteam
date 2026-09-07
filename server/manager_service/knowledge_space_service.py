@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
-from shared.db import ManagerRagService, PgTenantRouter
+from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
 
 from .knowledge_space_repository import (
@@ -17,9 +17,9 @@ from .knowledge_space_repository import (
     ExpertKnowledgeBinding,
     KnowledgeSpaceBindingRepository,
     KnowledgeSpaceRepository,
+    KnowledgeSpaceRow,
 )
-from .rag import enterprise_knowledge_space_id
-from .rag_instances import RagInstanceRegistry
+from .rag import DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID
 from .schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceBindingOut,
@@ -44,28 +44,20 @@ class KnowledgeSpaceService:
         repo: KnowledgeSpaceRepository,
         binding_repo: KnowledgeSpaceBindingRepository,
         expert_binding: ExpertKnowledgeBinding,
-        instance_registry: RagInstanceRegistry | None = None,
-        enterprise_workspace: str | None = None,
+        enterprise_only: bool = False,
     ):
         self._repo = repo
         self._binding_repo = binding_repo
         self._expert_binding = expert_binding
-        self._instance_registry = instance_registry
-        self._enterprise_workspace = enterprise_workspace
+        self._enterprise_only = enterprise_only
 
     # ---- 知识空间 CRUD ----
     def create(self, ctx: TenantContext, body: KnowledgeSpaceCreate) -> KnowledgeSpaceOut:
         _ensure_can_write(ctx)
         if self._repo.get(ctx, knowledge_space_id=body.knowledge_space_id) is not None:
             raise Conflict("knowledge space already exists in this tenant")
-        workspace = self._enterprise_workspace or ManagerRagService.derive_workspace(ctx.tenant_id, body.knowledge_space_id)
-        if self._enterprise_workspace and body.knowledge_space_id != enterprise_knowledge_space_id(self._enterprise_workspace):
+        if self._enterprise_only and body.knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
             raise Conflict("Manager exposes one enterprise knowledge base")
-        if self._instance_registry is not None:
-            try:
-                self._instance_registry.resolve(workspace)
-            except ValueError as exc:
-                raise Conflict("knowledge space has no configured LightRAG instance") from exc
         row = self._repo.create(
             ctx,
             knowledge_space_id=body.knowledge_space_id,
@@ -78,11 +70,9 @@ class KnowledgeSpaceService:
         return _to_space_out(row)
 
     def list_all(self, ctx: TenantContext) -> list[KnowledgeSpaceOut]:
-        if self._enterprise_workspace:
-            space_id = enterprise_knowledge_space_id(self._enterprise_workspace)
+        if self._enterprise_only:
             ensured = self._repo.ensure(
-                ctx, knowledge_space_id=space_id, display_name="企业知识库",
-                workspace=self._enterprise_workspace,
+                ctx, knowledge_space_id=DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID, display_name="企业知识库",
             )
             return [_to_space_out(ensured)]
         return [_to_space_out(r) for r in self._repo.list_all(ctx)]
@@ -91,7 +81,7 @@ class KnowledgeSpaceService:
         self, ctx: TenantContext, knowledge_space_id: str, body: KnowledgeSpaceUpdate
     ) -> KnowledgeSpaceOut:
         _ensure_can_write(ctx)
-        if self._enterprise_workspace and knowledge_space_id != enterprise_knowledge_space_id(self._enterprise_workspace):
+        if self._enterprise_only and knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
             raise Conflict("Manager exposes one enterprise knowledge base")
         if self._require(ctx, knowledge_space_id) is None:
             raise NotFound("knowledge space not found in this tenant")
@@ -104,9 +94,11 @@ class KnowledgeSpaceService:
 
     def delete(self, ctx: TenantContext, *, knowledge_space_id: str) -> None:
         _ensure_can_write(ctx)
-        if self._enterprise_workspace:
+        if self._enterprise_only:
             raise Conflict("enterprise knowledge base cannot be deleted")
-        # Legacy non-enterprise rows retain the old cleanup path for compatibility.
+        # Legacy rows retain their controlled cleanup path for compatibility in
+        # non-production embedding callers; Manager routes expose only the
+        # canonical enterprise key.
         if not self._repo.delete(ctx, knowledge_space_id=knowledge_space_id):
             raise NotFound("knowledge space not found in this tenant")
         self._binding_repo.delete_by_space(ctx, knowledge_space_id=knowledge_space_id)
@@ -128,7 +120,7 @@ class KnowledgeSpaceService:
     # ---- 绑定 ----
     def bind(self, ctx: TenantContext, body: KnowledgeSpaceBindingCreate) -> KnowledgeSpaceBindingOut:
         _ensure_can_write(ctx)
-        if self._enterprise_workspace and body.knowledge_space_id != enterprise_knowledge_space_id(self._enterprise_workspace):
+        if self._enterprise_only and body.knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
             raise Conflict("Manager exposes one enterprise knowledge base")
         # 目标知识空间必须存在（跨 tenant 行 RLS 不可见 → NotFound）。
         if self._repo.get(ctx, knowledge_space_id=body.knowledge_space_id) is None:
@@ -200,6 +192,8 @@ class KnowledgeSpaceService:
         resource_id: str,
     ) -> None:
         _ensure_can_write(ctx)
+        if self._enterprise_only and knowledge_space_id != DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID:
+            raise Conflict("Manager exposes one enterprise knowledge base")
         if resource_type == "expert":
             removed = self._expert_binding.unbind(
                 ctx, employee_id=resource_id, knowledge_space_id=knowledge_space_id
@@ -221,15 +215,14 @@ def _ensure_can_write(ctx: TenantContext) -> None:
         raise Forbidden("knowledge space write requires owner or enterprise_admin")
 
 
-def ensure_enterprise_knowledge_space(dsn: str, tenant_id: str, workspace: str) -> KnowledgeSpaceRow:
-    """Idempotently provision the one Manager-owned enterprise space."""
-    repo = KnowledgeSpaceRepository(PgTenantRouter(dsn), enterprise_workspace=workspace)
+def ensure_enterprise_knowledge_space(dsn: str, tenant_id: str) -> KnowledgeSpaceRow:
+    """Idempotently provision the tenant-owned enterprise space."""
+    repo = KnowledgeSpaceRepository(PgTenantRouter(dsn))
     ctx = TenantContext(tenant_id=tenant_id, user_id="manager-system", roles=["service"])
     return repo.ensure(
         ctx,
-        knowledge_space_id=enterprise_knowledge_space_id(workspace),
+        knowledge_space_id=DEFAULT_ENTERPRISE_KNOWLEDGE_SPACE_ID,
         display_name="企业知识库",
-        workspace=workspace,
     )
 
 
@@ -268,16 +261,13 @@ def _to_binding_out(row, *, tenant_id: str) -> KnowledgeSpaceBindingOut:
 
 def build_knowledge_space_service(
     router: PgTenantRouter,
-    instance_registry: RagInstanceRegistry | None = None,
-    enterprise_workspace: str | None = None,
 ) -> KnowledgeSpaceService:
-    """组装知识空间服务（业务连接 app_rw，#60）。三个 repository 共享同一 router。"""
+    """组装单企业知识空间服务（业务连接 app_rw，#60）。"""
     return KnowledgeSpaceService(
-        repo=KnowledgeSpaceRepository(router, enterprise_workspace=enterprise_workspace),
+        repo=KnowledgeSpaceRepository(router),
         binding_repo=KnowledgeSpaceBindingRepository(router),
         expert_binding=ExpertKnowledgeBinding(router),
-        instance_registry=instance_registry,
-        enterprise_workspace=enterprise_workspace,
+        enterprise_only=True,
     )
 
 

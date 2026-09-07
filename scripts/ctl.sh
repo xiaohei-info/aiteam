@@ -181,8 +181,7 @@ validate_lightrag_production_env() {
   # LightRAG may be disabled for deployments that do not install the optional
   # component; when configured, its native UI must not run in guest mode.
   [[ -n "${LIGHTRAG_URL:-}" ]] || return 0
-  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_WORKSPACE; do
-    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
+  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET; do    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
   done
   [[ ${#LIGHTRAG_TOKEN_SECRET} -ge 32 ]] || { echo "[ctl] ERROR: LIGHTRAG_TOKEN_SECRET must be at least 32 characters" >&2; exit 1; }
   [[ "${LIGHTRAG_URL}" =~ ^https://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: production LIGHTRAG_URL must use HTTPS" >&2; exit 1; }
@@ -510,7 +509,7 @@ start_service_local() {
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
       nohup setsid env \
         -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
-        -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
+        -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u LIGHTRAG_WORKSPACE -u AUTH_ACCOUNTS -u TOKEN_SECRET \
         -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
         APP_TIER=manager \
         AITEAM_ENV="${AITEAM_ENV:-dev}" \
@@ -528,7 +527,6 @@ start_service_local() {
         HINDSIGHT_STATS_PATH="${HINDSIGHT_STATS_PATH:-}" \
         LIGHTRAG_URL="${LIGHTRAG_URL:-}" \
         LIGHTRAG_API_KEY="${LIGHTRAG_API_KEY:-}" \
-        LIGHTRAG_WORKSPACE="${LIGHTRAG_WORKSPACE:-}" \
         LIGHTRAG_TIMEOUT_MS="${LIGHTRAG_TIMEOUT_MS:-5000}" \
         LIGHTRAG_PIPELINE_TIMEOUT_MS="${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}" \
         LIGHTRAG_POLL_INTERVAL_MS="${LIGHTRAG_POLL_INTERVAL_MS:-250}" \

@@ -15,7 +15,7 @@ from tests.manager.test_knowledge_intake_unit import _make_service, _owner_ctx
 
 
 def client(handler):
-    return LightRagIngestionClient(LightRagIngestionSettings("https://fixture.invalid", "synthetic", 1000, 2000, workspace="enterprise"), transport=httpx.MockTransport(handler))
+    return LightRagIngestionClient(LightRagIngestionSettings("https://fixture.invalid", "synthetic", 1000, 2000), transport=httpx.MockTransport(handler))
 
 
 def document(source="source/job", *, status="processed", id="native-1", **extra):
@@ -32,7 +32,7 @@ def test_recovery_claims_under_request_tenant_context():
     repo.claim.assert_called_once()
 
 
-def test_submission_uses_only_supported_pinned_text_fields_and_persists_track_shape():
+def test_submission_uses_only_supported_text_fields_without_workspace_pin():
     seen = []
     def handler(request):
         seen.append(request)
@@ -40,8 +40,7 @@ def test_submission_uses_only_supported_pinned_text_fields_and_persists_track_sh
     adapter = client(handler)
     assert adapter.submit_text(workspace="enterprise", file_source="source/job", text="fixture") == "insert_fixture"
     assert json.loads(seen[0].content) == {"text": "fixture", "file_source": "source/job"}
-    with pytest.raises(RagIngestionUnavailable):
-        adapter.validate_submission(workspace="other", file_source="source/job", text="fixture")
+    adapter.validate_submission(workspace="other", file_source="source/job", text="fixture")
     assert len(seen) == 1
     adapter.close()
 

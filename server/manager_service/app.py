@@ -238,8 +238,8 @@ if settings.db_url:
         platform_catalog=app.state._operator_catalog,
     )
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
-    # Load the static registry once at Manager startup and share that exact
-    # immutable routing map between query, ingestion, and workspace derivation.
+    # Load the static endpoint pool once at Manager startup; tenant workspace
+    # routing is resolved from the current TenantContext at request time.
     _rag_light = LightRagClient(_rag_settings)
     _rag_ingestion = LightRagIngestionClient(
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
@@ -248,7 +248,6 @@ if settings.db_url:
     _rag_service = PgManagerRagService(
         settings.db_url,
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
-        enterprise_workspace=_rag_settings.workspace if _rag_settings is not None else None,
     )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,

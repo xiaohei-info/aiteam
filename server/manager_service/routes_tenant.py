@@ -16,7 +16,6 @@ from .exceptions import ManagerAdminDbNotConfigured
 from .multitenancy_phase import require_control_plane_writes_ready
 from .openapi_schemas import TenantProvisionOut
 from .knowledge_space_service import ensure_enterprise_knowledge_space
-from .rag_instances import RagInstanceRegistry
 
 router = APIRouter(tags=["manager", "control-plane"])
 
@@ -72,9 +71,7 @@ def provision_tenant(
 
     # 2. Manager 开通即幂等初始化企业共享知识空间；文档索引仍由 Manager 后续 intake 负责。
     if business_dsn:
-        registry = RagInstanceRegistry.from_env()
-        if registry is not None:
-            ensure_enterprise_knowledge_space(business_dsn, body.tenant_id, registry.instances[0].workspace)
+        ensure_enterprise_knowledge_space(business_dsn, body.tenant_id)
 
     # 3. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
     if body.initial_quota_policy:

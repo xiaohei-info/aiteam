@@ -136,9 +136,12 @@ isolated synthetic seed identity, not a real enterprise account.
 
 ## Enterprise RAG permission and citation contract (S03)
 
-A Manager still owns **one enterprise workspace**. Unconfigured employees inherit
-its default knowledge capability, subject to active member, employee lifecycle,
-member grant, and the current employee tool allowlist. A nonempty `tools` list
+Each Manager tenant owns one canonical enterprise workspace. The workspace is
+persisted in `rag_workspace` or derived from the current tenant and internal
+knowledge-space key; it is never selected from a process-level environment pin.
+Unconfigured employees inherit its default knowledge capability, subject to
+active member, employee lifecycle, member grant, and the current employee tool
+allowlist. A nonempty `tools` list
 permits only the listed operations: `knowledge_search` and `knowledge_get` are
 independent. Legacy empty employee tools mean platform defaults, **not** an
 escape hatch from a denied knowledge policy.
@@ -402,7 +405,7 @@ The existing `/api/manager/skills` POST and `/skills/{catalog_id}` PUT routes di
 
 Knowledge source bytes remain in the existing Manager storage root. Migration **0039** adds metadata-only claims/receipts to the existing ingestion jobs. New source document and job records are committed together. BackgroundTasks is now only a low-latency delivery hint: the Manager lifespan also scans immediately at startup and every five seconds, with at most eight claims per sweep. Each claim has an owner, heartbeat, 90-second expiry, CAS updates, attempts and bounded backoff (up to 300 seconds). API readiness does not require an upstream RAG connection.
 
-Each new job uses its server-generated document/job correlation as `file_source`. Before the one LightRAG POST, Manager commits a submission fence; after receiving it, the server track ID is persisted immediately. Restart reconciles the track first, or the unique source in the fixed workspace when the track was lost. `processed` (or a duplicate's independently confirmed processed original) is required before an atomic document/job/binding-ready publication. A stale claimant cannot publish, and index publication does not alter S03 administrator deny/tombstone fields. Retry/reindex keeps the existing Idempotency-Key receipt and creates a new generation only after a safe terminal result.
+Each new job uses its server-generated document/job correlation as `file_source`. Before the one LightRAG POST, Manager commits a submission fence; after receiving it, the server track ID is persisted immediately. Restart reconciles the track first, or the unique source in the tenant-selected workspace when the track was lost. `processed` (or a duplicate's independently confirmed processed original) is required before an atomic document/job/binding-ready publication. A stale claimant cannot publish, and index publication does not alter S03 administrator deny/tombstone fields. Retry/reindex keeps the existing Idempotency-Key receipt and creates a new generation only after a safe terminal result.
 
 ### Unknown submissions: protected, not ordinary retryable failures
 

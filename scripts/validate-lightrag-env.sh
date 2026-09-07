@@ -6,7 +6,7 @@ set -euo pipefail
 usage() {
   printf '%s\n' \
     'Usage: scripts/validate-lightrag-env.sh [--production] [--env-file FILE]' \
-    'Required in production: LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_WORKSPACE LIGHTRAG_IMAGE' \
+    'Required in production: LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_IMAGE' \
     'Required for bootstrap: LIGHTRAG_DB_* values are checked by deploy/lightrag/init-db.sh.'
 }
 
@@ -45,7 +45,6 @@ if (( PRODUCTION )); then
   required LIGHTRAG_API_KEY
   required LIGHTRAG_AUTH_ACCOUNTS
   required LIGHTRAG_TOKEN_SECRET
-  required LIGHTRAG_WORKSPACE
   required LIGHTRAG_IMAGE
 fi
 
@@ -67,12 +66,6 @@ fi
 token_secret="${LIGHTRAG_TOKEN_SECRET:-}"
 if (( PRODUCTION )) && (( ${#token_secret} < 32 )); then
   echo "[lightrag-env][ERR] LIGHTRAG_TOKEN_SECRET must be at least 32 characters" >&2
-  ((error_count += 1))
-fi
-
-workspace="${LIGHTRAG_WORKSPACE:-}"
-if [[ -n "${workspace}" && ! "${workspace}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
-  echo "[lightrag-env][ERR] LIGHTRAG_WORKSPACE must be a stable <=128-char namespace" >&2
   ((error_count += 1))
 fi
 
