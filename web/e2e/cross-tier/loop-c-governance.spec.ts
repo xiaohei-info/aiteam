@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import {
   apiLogin,
+  boundManagerTenantId,
   defaultCredentials,
   TIER_API_ORIGIN,
 } from "../support/auth";
@@ -32,12 +33,12 @@ function uniquePhone(): string {
 }
 
 async function createOwnerToken(request: APIRequestContext): Promise<string> {
-  const tenantId = randomUUID();
+  const tenantId = boundManagerTenantId();
   const enterpriseId = randomUUID();
   const enterpriseCode = `gov-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
   const ownerPhone = uniquePhone();
-  const bootstrapSecret = `Boot-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const newPassword = `New-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const bootstrapSecret = `Boot!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const newPassword = `New!1-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
   const tenantResp = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/tenants`, {
     data: {

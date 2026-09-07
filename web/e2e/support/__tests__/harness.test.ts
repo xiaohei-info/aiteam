@@ -21,6 +21,8 @@ import {
   storageStatePath,
   defaultCredentials,
   buildStorageState,
+  boundManagerTenantId,
+  DEFAULT_E2E_TENANT_ID,
 } from "../auth";
 import { tierFromProject } from "../fixtures";
 
@@ -91,6 +93,39 @@ test.describe("AITEAM-224 harness: 凭据默认值", () => {
       else process.env.E2E_OPERATION_USERNAME = prevUser;
       if (prevPwd === undefined) delete process.env.E2E_OPERATION_PASSWORD;
       else process.env.E2E_OPERATION_PASSWORD = prevPwd;
+    }
+  });
+
+  test("boundManagerTenantId defaults to the synthetic Playwright tenant", () => {
+    const prevE2e = process.env.E2E_TENANT_ID;
+    const prevManager = process.env.MANAGER_TENANT_ID;
+    delete process.env.E2E_TENANT_ID;
+    delete process.env.MANAGER_TENANT_ID;
+    try {
+      expect(DEFAULT_E2E_TENANT_ID).toBe("00000000-0000-4000-8000-000000000001");
+      expect(boundManagerTenantId()).toBe(DEFAULT_E2E_TENANT_ID);
+    } finally {
+      if (prevE2e === undefined) delete process.env.E2E_TENANT_ID;
+      else process.env.E2E_TENANT_ID = prevE2e;
+      if (prevManager === undefined) delete process.env.MANAGER_TENANT_ID;
+      else process.env.MANAGER_TENANT_ID = prevManager;
+    }
+  });
+
+  test("boundManagerTenantId prefers E2E_TENANT_ID and rejects a non-UUID", () => {
+    const prevE2e = process.env.E2E_TENANT_ID;
+    const prevManager = process.env.MANAGER_TENANT_ID;
+    process.env.MANAGER_TENANT_ID = "11111111-1111-4111-8111-111111111111";
+    process.env.E2E_TENANT_ID = "22222222-2222-4222-8222-222222222222";
+    try {
+      expect(boundManagerTenantId()).toBe("22222222-2222-4222-8222-222222222222");
+      process.env.E2E_TENANT_ID = "not-a-uuid";
+      expect(() => boundManagerTenantId()).toThrow(/must be a UUID/);
+    } finally {
+      if (prevE2e === undefined) delete process.env.E2E_TENANT_ID;
+      else process.env.E2E_TENANT_ID = prevE2e;
+      if (prevManager === undefined) delete process.env.MANAGER_TENANT_ID;
+      else process.env.MANAGER_TENANT_ID = prevManager;
     }
   });
 });

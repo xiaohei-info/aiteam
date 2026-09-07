@@ -20,7 +20,7 @@
 
 import { test, expect } from "@playwright/test";
 import { randomUUID } from "node:crypto";
-import { TIER_API_ORIGIN } from "../support/auth";
+import { boundManagerTenantId, TIER_API_ORIGIN } from "../support/auth";
 
 // ── helpers ──
 
@@ -56,9 +56,9 @@ test.describe("ServiceToken 合法访问", () => {
   test("Manager /api/manager/tenants 带正确 service token → 201 + envelope data.tenant_id（token 守卫通过 + 租户成功落库）", async ({
     request,
   }) => {
-    // 正确 service token 必须通过守卫并成功 provision tenant。
+    // 正确 service token 必须通过守卫并成功 provision the bound Manager tenant。
     // 5xx（无 PG）→ 测试失败（非误报），因为这代表 service token 守卫之后的业务链路断裂。
-    const tenantId = randomUUID();
+    const tenantId = boundManagerTenantId();
     const enterpriseId = randomUUID();
     const code = `svctok-${randomUUID().replace(/-/g, "").slice(0, 6)}`;
 
@@ -103,8 +103,8 @@ test.describe("ServiceToken 合法访问", () => {
   test("Manager /api/manager/owner-bootstrap 带正确 service token → 201（或幂等 200）envelope", async ({
     request,
   }) => {
-    // 先 provision tenant（同一条测试内建前置，确保 tenant 存在）。
-    const tenantId = randomUUID();
+    // 先 provision the bound tenant（同一条测试内建前置，确保 deployment tenant 存在）。
+    const tenantId = boundManagerTenantId();
     const enterpriseId = randomUUID();
     const code = `svctok-bs-${randomUUID().replace(/-/g, "").slice(0, 6)}`;
 
@@ -131,13 +131,14 @@ test.describe("ServiceToken 合法访问", () => {
       throw new Error(`tenant provision 前置失败: ${provResp.status()} body=${text.slice(0, 300)}`);
     }
 
-    // 对已存在的 tenant 做 owner-bootstrap。
+    // 对已绑定 tenant 做 owner-bootstrap。账号必须唯一，不能依赖新建 tenant 行。
+    const ownerPhone = `138${randomUUID().replace(/\D/g, "").padEnd(8, "0").slice(0, 8)}`;
     const resp = await request.post(
       `${TIER_API_ORIGIN.manager}/api/manager/owner-bootstrap`,
       {
         data: {
           tenant_id: tenantId,
-          owner_phone: "13800000001",
+          owner_phone: ownerPhone,
           bootstrap_secret: "Test-bootstrap-secret1",
           must_reset: true,
         },
@@ -335,7 +336,7 @@ test.describe("ServiceToken 错误/过期/越权", () => {
     // 唯一约束导致 500，故使用随机 code；断言收紧为 201 + JSON envelope + data.tenant_id，
     // 不再把 4xx/5xx 当作通过。
     const token = serviceToken();
-    const tenantId = randomUUID();
+    const tenantId = boundManagerTenantId();
     const enterpriseId = randomUUID();
     const code = `bear-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
     const resp = await request.post(
