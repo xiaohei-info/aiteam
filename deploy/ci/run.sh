@@ -101,6 +101,47 @@ sync_persistent_venv_requirements() {
 }
 # --- end persistent venv requirements sync ---
 
+# --- dependency start diagnostics ---
+# Capture ctl start output instead of hiding it. Redact assignment-like secrets
+# and connection URLs; names/status lines pass through unchanged. On failure,
+# print a bounded compose ps (no config/env dumps) and exit immediately.
+redact_dependency_start_output() {
+  sed -E \
+    -e 's#postgresql://[^[:space:]]+#postgresql://<redacted>#g' \
+    -e 's#redis://:[^@[:space:]]+@#redis://:<redacted>@#g' \
+    -e 's#(--requirepass[[:space:]]+)[^[:space:]]+#\1<redacted>#g' \
+    -e 's/(^|[[:space:]])((ADMIN_)?DB_URL|(POSTGRES|NEWAPI_DB|NEWAPI_REDIS|APP_RW)_PASSWORD|NEWAPI_(SESSION|CRYPTO)_SECRET|NEWAPI_ADMIN_TOKEN|SERVICE_TOKEN)=[^[:space:]]+/\1\2=<redacted>/g'
+}
+
+dump_dependency_compose_ps() {
+  local compose_dir="${DEPLOY_ROOT}/deploy/docker"
+  if [[ ! -f "${compose_dir}/docker-compose.yml" ]]; then
+    log "dependency compose file missing; skipping docker compose ps"
+    return 0
+  fi
+  log "dependency compose ps --all (names/status only)"
+  (
+    cd "${compose_dir}"
+    docker compose --profile newapi ps --all --format '{{.Name}} {{.Service}} {{.Status}}'
+  ) 2>&1 | redact_dependency_start_output | head -n 50 || true
+}
+
+start_release_dependency() {
+  local server="$1"
+  local label="$2"
+  local output=""
+  local rc=0
+  output="$("${DEPLOY_ROOT}/scripts/ctl.sh" start --env "${ENV_TARGET}" --deploy docker --server "${server}" 2>&1)" || rc=$?
+  if [[ -n "${output}" ]]; then
+    printf '%s\n' "${output}" | redact_dependency_start_output
+  fi
+  if (( rc != 0 )); then
+    dump_dependency_compose_ps
+    fail "${label} dependency is not available for backup/DDL"
+  fi
+}
+# --- end dependency start diagnostics ---
+
 cd "$DEPLOY_ROOT"
 
 # TEST 发布先停止应用 writers。systemd ExecStop 可能同时停止依赖；依赖会
@@ -179,12 +220,8 @@ set +a
 # migration/backup dependencies back while application writers remain stopped;
 # never run backup or DDL against a stopped/unknown database.
 log "starting PostgreSQL/NewAPI dependencies while applications remain stopped"
-if ! scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server postgres >/dev/null 2>&1; then
-  fail "PostgreSQL dependency is not available for backup/DDL"
-fi
-if ! scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server newapi >/dev/null 2>&1; then
-  fail "NewAPI dependency is not available for backup/DDL"
-fi
+start_release_dependency postgres PostgreSQL
+start_release_dependency newapi NewAPI
 
 persist_env_value() {
   local name="$1" value="$2"
