@@ -105,6 +105,8 @@ sync_persistent_venv_requirements() {
 # Capture ctl start output instead of hiding it. Redact assignment-like secrets
 # and connection URLs; names/status lines pass through unchanged. On failure,
 # print a bounded compose ps (no config/env dumps) and exit immediately.
+# A fixed-name aiteam-pg conflict may reuse a verified existing container via
+# docker start; never remove/rename containers or volumes.
 redact_dependency_start_output() {
   sed -E \
     -e 's#postgresql://[^[:space:]]+#postgresql://<redacted>#g' \
@@ -126,6 +128,86 @@ dump_dependency_compose_ps() {
   ) 2>&1 | redact_dependency_start_output | head -n 50 || true
 }
 
+postgres_container_name_conflict() {
+  grep -Eq 'container name "/?aiteam-pg" is already in use' <<<"$1"
+}
+
+recover_existing_postgres_container() {
+  local inspect_meta inspect_env line
+  local name="" image="" status="" volume_name=""
+  local pg_user="" pg_db=""
+  local expected_image expected_volume
+  local start_output="" start_rc=0
+
+  expected_image="${POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
+  expected_volume="${POSTGRES_VOLUME:-aiteam_pg_data_${ENV_TARGET}}"
+
+  if ! inspect_meta="$(docker inspect --format '{{.Name}}|{{.Config.Image}}|{{.State.Status}}|{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' aiteam-pg 2>/dev/null)"; then
+    log "cannot inspect existing PostgreSQL container aiteam-pg; leaving it untouched"
+    return 1
+  fi
+  IFS='|' read -r name image status volume_name _ <<<"${inspect_meta}"
+  name="${name#/}"
+  if [[ -z "${name}" || -z "${image}" || -z "${status}" ]]; then
+    log "existing PostgreSQL container inspect metadata is incomplete; leaving it untouched"
+    return 1
+  fi
+  if [[ "${name}" != "aiteam-pg" ]]; then
+    log "existing container name is not aiteam-pg; leaving it untouched"
+    return 1
+  fi
+  if [[ "${image}" != "${expected_image}" ]]; then
+    log "existing PostgreSQL image mismatch (expected ${expected_image}); leaving it untouched"
+    return 1
+  fi
+
+  if ! inspect_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' aiteam-pg 2>/dev/null)"; then
+    log "cannot inspect existing PostgreSQL container environment; leaving it untouched"
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    case "${line}" in
+      POSTGRES_USER=*) pg_user="${line#POSTGRES_USER=}" ;;
+      POSTGRES_DB=*) pg_db="${line#POSTGRES_DB=}" ;;
+    esac
+  done <<<"${inspect_env}"
+  inspect_env=""
+  unset inspect_env
+
+  if [[ "${pg_user}" != "aiteam" || "${pg_db}" != "aiteam_v1" ]]; then
+    log "existing PostgreSQL POSTGRES_USER/POSTGRES_DB mismatch; leaving it untouched"
+    return 1
+  fi
+  if [[ "${volume_name}" != "${expected_volume}" ]]; then
+    log "existing PostgreSQL data volume mismatch (expected ${expected_volume}); leaving it untouched"
+    return 1
+  fi
+
+  case "${status}" in
+    running)
+      log "reusing verified running PostgreSQL container aiteam-pg"
+      return 0
+      ;;
+    exited|created)
+      log "starting verified existing PostgreSQL container aiteam-pg"
+      start_output="$(docker start aiteam-pg 2>&1)" || start_rc=$?
+      if [[ -n "${start_output}" ]]; then
+        printf '%s\n' "${start_output}" | redact_dependency_start_output
+      fi
+      if (( start_rc != 0 )); then
+        log "docker start aiteam-pg failed; leaving it untouched"
+        return 1
+      fi
+      log "started verified existing PostgreSQL container aiteam-pg"
+      return 0
+      ;;
+    *)
+      log "existing PostgreSQL container aiteam-pg has unsupported status ${status}; leaving it untouched"
+      return 1
+      ;;
+  esac
+}
+
 start_release_dependency() {
   local server="$1"
   local label="$2"
@@ -135,10 +217,16 @@ start_release_dependency() {
   if [[ -n "${output}" ]]; then
     printf '%s\n' "${output}" | redact_dependency_start_output
   fi
-  if (( rc != 0 )); then
-    dump_dependency_compose_ps
-    fail "${label} dependency is not available for backup/DDL"
+  if (( rc == 0 )); then
+    return 0
   fi
+  if [[ "${server}" == "postgres" ]] && postgres_container_name_conflict "${output}"; then
+    if recover_existing_postgres_container; then
+      return 0
+    fi
+  fi
+  dump_dependency_compose_ps
+  fail "${label} dependency is not available for backup/DDL"
 }
 # --- end dependency start diagnostics ---
 

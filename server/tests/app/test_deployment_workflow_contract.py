@@ -85,3 +85,9 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     assert "docker compose config" not in helper
     assert "for attempt" not in helper
     assert "up -d" not in helper
+    assert "docker start aiteam-pg" in helper
+    assert "docker rm" not in helper
+    assert "compose down" not in helper
+    assert "volume rm" not in helper
+    assert '"${server}" == "postgres"' in helper
+    assert "postgres_container_name_conflict" in helper
