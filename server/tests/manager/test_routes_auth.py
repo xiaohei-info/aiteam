@@ -88,11 +88,18 @@ def test_auth_422(endpoint, body):
 # ---- happy path ----
 
 def test_unbound_manager_is_ready_without_process_tenant():
-    client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
-    assert client.get("/healthz").status_code == 200
-    ready = client.get("/readyz")
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("tenant_registry",)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        client = _client("postgresql://fake/fake", admin_db_url="postgresql://admin/admin")
+        assert client.get("/healthz").status_code == 200
+        ready = client.get("/readyz")
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
+    connect.assert_called_once_with(
+        "postgresql://fake/fake", autocommit=True, connect_timeout=5,
+    )
 
 
 def test_resolve_tenant_ignores_host_headers():

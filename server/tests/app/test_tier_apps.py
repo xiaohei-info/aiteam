@@ -24,9 +24,16 @@ def test_healthz(client):
 
 
 def test_readyz(client, tier):
-    r = client.get("/readyz")
-    assert r.status_code == 200
-    assert r.json()["status"] == "ready"
+    app = get_app(tier)
+    original_settings = app.state.settings
+    app.state.settings = original_settings.model_copy(update={"db_url": None, "admin_db_url": None})
+    try:
+        r = client.get("/readyz")
+    finally:
+        app.state.settings = original_settings
+    assert r.status_code == 503
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == "service_unavailable"
 
 
 def test_openapi_and_docs(client, tier):

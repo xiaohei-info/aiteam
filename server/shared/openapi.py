@@ -1095,6 +1095,8 @@ def _install_control_plane_schema_overrides(schemas: dict[str, Any]) -> None:
 
 
 _BODY_NOT_FOUND_OPERATION_IDS = frozenset({
+    "manager_login",
+    "manager_owner_reset",
     "manager_owner_bootstrap",
     "manager_employee_config_create",
     "manager_recruit_expert",
@@ -1118,6 +1120,13 @@ _NO_NOT_FOUND_OPERATION_IDS = frozenset({
     "manager_connector_test",
     "manager_connector_grants",
     "manager_oauth_unlink",
+})
+
+
+_PHASE_GATED_OPERATION_IDS = frozenset({
+    "manager_provision_tenant",
+    "manager_owner_bootstrap",
+    "manager_inbox_deliver_from_operation",
 })
 
 
@@ -1766,6 +1775,36 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
             "ServiceUnavailable": _problem_response(
                 "依赖服务暂时不可用。", status=503, code="service_unavailable", detail="A required service is unavailable."
             ),
+            "MultitenancyPhasePending": {
+                "description": "Manager 多租户控制面写入仍处于相位闸。",
+                "content": {
+                    "application/problem+json": {
+                        "schema": {"$ref": "#/components/schemas/Problem"},
+                        "examples": {
+                            "phasePending": {
+                                "summary": "多租户阶段尚未开放控制面写入",
+                                "value": _problem_example(
+                                    503,
+                                    "multitenancy_phase_pending",
+                                    "Control-plane tenant writes are unavailable until the Manager multi-tenancy stages complete.",
+                                ),
+                            },
+                            "databaseUnconfigured": {
+                                "summary": "Manager 本端数据库尚未配置",
+                                "value": _problem_example(
+                                    503,
+                                    "manager_admin_db_unconfigured",
+                                    "Manager database is not configured.",
+                                ),
+                            },
+                        },
+                    }
+                },
+                "headers": {
+                    "X-Request-ID": {"$ref": "#/components/headers/RequestId"},
+                    "X-Trace-ID": {"$ref": "#/components/headers/TraceId"},
+                },
+            },
             "InternalError": _problem_response(
                 "服务内部错误；详细信息只写入受控日志。", status=500, code="internal_error", detail="Unexpected server error."
             ),
@@ -1870,7 +1909,11 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
                 responses["409"] = {"$ref": "#/components/responses/HindsightClientUpgradeRequired"}
             if operation_id in _OPERATION_429_OPERATION_IDS:
                 responses.setdefault("429", {"$ref": "#/components/responses/TooManyRequests"})
-            if is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
+            if operation_id == "readyz_readyz_get":
+                responses["503"] = {"$ref": "#/components/responses/ServiceUnavailable"}
+            elif operation_id in _PHASE_GATED_OPERATION_IDS:
+                responses["503"] = {"$ref": "#/components/responses/MultitenancyPhasePending"}
+            elif is_api and not is_mcp and (kind in {"bearer", "service"} or path.startswith("/api/auth/") or operation_id in {"operation_system_login", "manager_login", "manager_owner_reset", "manager_passkey_login", "manager_oauth_callback"}):
                 responses.setdefault("503", {"$ref": "#/components/responses/ServiceUnavailable"})
             if operation_id in {
                 "operation_system_login", "manager_login", "manager_owner_reset",

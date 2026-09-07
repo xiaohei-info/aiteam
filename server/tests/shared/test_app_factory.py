@@ -6,6 +6,7 @@ mount_frontend 挂载静态资源 + SPA 回退（用真实临时 dist 目录，�
 
 import shutil
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import APIRouter
@@ -33,39 +34,96 @@ def _empty_router(prefix="/api/operation") -> APIRouter:
 
 
 def test_healthz_and_readyz():
-    app = create_app(_settings(), _empty_router())
-    client = TestClient(app)
-    r = client.get("/healthz")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "ok"
-    assert body["service"] == "test-operation"
+    app = create_app(
+        _settings().model_copy(update={"admin_db_url": "postgresql://readyz.test/operation"}),
+        _empty_router(),
+    )
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("enterprise_account",)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        client = TestClient(app)
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["service"] == "test-operation"
 
-    r2 = client.get("/readyz")
-    assert r2.status_code == 200
-    assert r2.json()["status"] == "ready"
+        r2 = client.get("/readyz")
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "ready"
+    connect.assert_called_once_with(
+        "postgresql://readyz.test/operation", autocommit=True, connect_timeout=5,
+    )
 
 
 def test_healthz_and_readyz_follow_current_app_state_settings():
     """Rebinding the injected app state updates health/readiness decisions."""
     configured = _settings(tier="manager").model_copy(
-        update={"service_name": "configured-manager"}
+        update={
+            "service_name": "configured-manager",
+            "db_url": "postgresql://readyz.test/manager",
+            "admin_db_url": "postgresql://admin.test/manager",
+        }
     )
     app = create_app(configured, _empty_router(prefix="/api/manager"))
     original_state = dict(app.state._state)
     app.state.settings = configured.model_copy(update={"service_name": "rebound-manager"})
-    client = TestClient(app)
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("tenant_registry",)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        client = TestClient(app)
 
-    assert client.get("/healthz").json()["service"] == "rebound-manager"
-    assert client.get("/readyz").status_code == 200
-    assert client.get("/readyz").json()["service"] == "rebound-manager"
+        assert client.get("/healthz").json()["service"] == "rebound-manager"
+        assert client.get("/readyz").status_code == 200
+        assert client.get("/readyz").json()["service"] == "rebound-manager"
 
-    app.state._state.clear()
-    app.state._state.update(original_state)
-    assert client.get("/healthz").json()["service"] == "configured-manager"
-    restored = client.get("/readyz")
-    assert restored.status_code == 200
-    assert restored.json()["status"] == "ready"
+        app.state._state.clear()
+        app.state._state.update(original_state)
+        assert client.get("/healthz").json()["service"] == "configured-manager"
+        restored = client.get("/readyz")
+        assert restored.status_code == 200
+        assert restored.json()["status"] == "ready"
+
+    assert connect.call_count == 3
+
+
+def test_readyz_without_local_database_is_not_ready():
+    app = create_app(_settings(tier="manager"), _empty_router(prefix="/api/manager"))
+    response = TestClient(app).get("/readyz")
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "service_unavailable"
+
+
+def test_readyz_unreachable_database_is_not_ready():
+    app = create_app(
+        _settings(tier="manager").model_copy(update={
+            "db_url": "postgresql://unreachable.test/manager",
+            "admin_db_url": "postgresql://admin.test/manager",
+        }),
+        _empty_router(prefix="/api/manager"),
+    )
+    with patch("psycopg.connect", side_effect=OSError("private DSN details")):
+        response = TestClient(app).get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
+    assert "private DSN details" not in response.text
+
+
+def test_readyz_missing_schema_is_not_ready():
+    app = create_app(
+        _settings().model_copy(update={"admin_db_url": "postgresql://readyz.test/operation"}),
+        _empty_router(),
+    )
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = (None,)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        response = TestClient(app).get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
 
 
 def test_docs_enabled():

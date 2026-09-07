@@ -19,11 +19,66 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from shared.config import Settings
-from shared.errors import NotFound, install_exception_handlers
+from shared.errors import NotFound, ServiceUnavailable, install_exception_handlers
 from shared.observability import RequestContextMiddleware, configure_logging
 from shared.openapi import install_openapi_enrichment
 
 logger = logging.getLogger(__name__)
+
+_READINESS_RELATIONS = {
+    "operation": "enterprise_account",
+    "manager": "tenant_registry",
+}
+_READINESS_CONNECT_TIMEOUT_SECONDS = 5
+
+
+def _readiness_target(settings: Settings) -> tuple[str, str]:
+    """Return the local DSN and required schema relation for one control plane."""
+    if settings.tier == "manager":
+        # Manager needs both connection boundaries: app_rw serves tenant SQL and
+        # the admin DSN provisions/reads control-plane schema and signing keys.
+        if not settings.db_url or not settings.admin_db_url:
+            raise ServiceUnavailable("本端数据库连接未完整配置")
+        return settings.db_url, _READINESS_RELATIONS[settings.tier]
+    dsn = settings.admin_db_url or settings.db_url
+    if not dsn:
+        raise ServiceUnavailable("本端数据库连接未配置")
+    return dsn, _READINESS_RELATIONS[settings.tier]
+
+
+def _check_local_readiness(settings: Settings) -> None:
+    """Check only this service's database connection and required schema.
+
+    This deliberately does not inspect MANAGER_TENANT_ID or any upstream service:
+    tenant selection is request/JWT scoped, and upstream outages are a degraded
+    dependency rather than a reason for the local control plane to claim it is
+    not ready.
+    """
+    try:
+        dsn, relation = _readiness_target(settings)
+    except ServiceUnavailable:
+        logger.warning("local database readiness check failed: service=%s reason=unconfigured", settings.service_name)
+        raise
+
+    try:
+        import psycopg
+
+        with psycopg.connect(
+            dsn,
+            autocommit=True,
+            connect_timeout=_READINESS_CONNECT_TIMEOUT_SECONDS,
+        ) as conn:
+            row = conn.execute(
+                "SELECT to_regclass(%s)",
+                (f"public.{relation}",),
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 - readiness must fail closed without exposing DSN details
+        logger.warning("local database readiness check failed: service=%s reason=unreachable", settings.service_name)
+        raise ServiceUnavailable("本端数据库不可用") from exc
+
+    if not row or row[0] is None:
+        logger.warning("local database readiness check failed: service=%s reason=schema_missing", settings.service_name)
+        raise ServiceUnavailable("本端数据库 schema 尚未就绪")
 
 
 class HealthResponse(BaseModel):
@@ -75,6 +130,7 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
         # Manager tenants are session-scoped; leftover MANAGER_TENANT_ID is not a
         # readiness pin and registry first-row inference is forbidden.
         runtime_settings = request.app.state.settings
+        _check_local_readiness(runtime_settings)
         return HealthResponse(status="ready", service=runtime_settings.service_name)
 
     app.include_router(router)

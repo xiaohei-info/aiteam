@@ -144,7 +144,7 @@ def test_facade_missing_lease_does_not_touch_upstream():
 
 def test_facade_authorizes_using_lease_tenant_not_process_pin():
     leases = HindsightLeaseStore(token_factory=lambda: "opaque-lease")
-    lease = leases.issue(tenant_id="tenant-a", member_id="member-a", employee_id="employee-a",
+    lease = leases.issue(tenant_id="tenant-a", member_id="member-a", employee_id="employee-1",
                          snapshot_version="snap-a", policy={"enabled": True, "allowed_operations": ["recall"]},
                          bank_id="bank-a")
     calls = []
@@ -156,7 +156,11 @@ def test_facade_authorizes_using_lease_tenant_not_process_pin():
     )))
     response = client.post("/api/manager/hindsight/v1/default/banks/bank-a/memories/recall",
                            headers={"Authorization": f"Bearer {lease.token}"}, json={"query": "fixture"})
-    assert response.status_code != 503
+    assert response.status_code == 200
+    assert response.json() == {"results": []}
+    assert len(calls) == 1
+    assert calls[0].headers["x-tenant-id"] == "tenant-a"
+    assert calls[0].headers["x-employee-id"] == "employee-1"
     assert principals.find_user.called
     ctx = principals.find_user.call_args.args[0]
     assert ctx.tenant_id == "tenant-a"

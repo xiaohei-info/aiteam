@@ -148,6 +148,12 @@ def test_control_plane_openapi_documents_known_bounds(tier: str) -> None:
     assert spec["components"]["headers"]["RequestId"]["schema"]["maxLength"] == 128
     assert spec["components"]["headers"]["TraceId"]["schema"]["maxLength"] == 128
     assert spec["components"]["responses"]["ValidationError"]["content"]["application/problem+json"]["examples"]
+    readyz = spec["paths"]["/readyz"]["get"]
+    assert readyz["responses"]["200"]
+    assert readyz["responses"]["503"]["$ref"] == "#/components/responses/ServiceUnavailable"
+    readyz_error = _resolve_ref(spec, readyz["responses"]["503"])
+    readyz_examples = readyz_error["content"]["application/problem+json"]["examples"]
+    assert next(iter(readyz_examples.values()))["value"]["code"] == "service_unavailable"
 
     if tier == "operation":
         report = spec["paths"]["/api/operation/rollups/report"]["get"]
@@ -271,20 +277,21 @@ def test_control_plane_openapi_documents_known_bounds(tier: str) -> None:
                 assert {"success", "async", "operation_id"} <= set(ack_schema["required"])
                 ack_example = next(iter(response["content"]["application/json"]["examples"].values()))["value"]["data"]
                 assert ack_example == {"success": True, "async": True, "operation_id": "00000000-0000-4000-8000-000000000004"}
-        readyz = spec["paths"]["/readyz"]["get"]
-        assert readyz["responses"]["200"]
-        assert "503" not in readyz["responses"]
+        for operation_id in ("manager_provision_tenant", "manager_owner_bootstrap", "manager_inbox_deliver_from_operation"):
+            operation = next(operation for _path, _method, operation in _operations(spec) if operation.get("operationId") == operation_id)
+            assert operation["responses"]["503"]["$ref"] == "#/components/responses/MultitenancyPhasePending"
         dumped = json.dumps(spec)
         assert "manager deployment tenant binding" not in dumped
         assert "manager_binding_required" not in dumped
         assert "必须先绑定唯一部署企业" not in dumped
-        assert "ReadinessUnavailable" not in dumped
         login = spec["paths"]["/api/auth/login"]["post"]
         reset = spec["paths"]["/api/auth/owner-reset"]["post"]
         resolve = spec["paths"]["/api/auth/resolve-tenant"]["post"]
         resolve_account = spec["paths"]["/api/auth/resolve-tenant-by-account"]["post"]
         for operation in (login, reset, resolve, resolve_account):
             assert operation["responses"]["409"]["$ref"] == "#/components/responses/AuthConflict"
+        assert login["responses"]["404"]["$ref"] == "#/components/responses/NotFound"
+        assert reset["responses"]["404"]["$ref"] == "#/components/responses/NotFound"
         auth_conflict = spec["components"]["responses"]["AuthConflict"]
         conflict_codes = {
             example["value"]["code"]
