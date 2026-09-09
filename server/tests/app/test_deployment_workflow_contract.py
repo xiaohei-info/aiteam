@@ -108,6 +108,9 @@ def test_deploy_script_syncs_checked_out_requirements_into_persistent_venv():
     assert 'OPERATION_ADMIN_DB_URL_FOR_MIGRATION=' in script
     assert 'createdb --if-not-exists' not in script
     assert 'SELECT 1 FROM pg_database' in script
+    assert 'for attempt in $(seq 1 30); do' in script
+    assert '[[ "${state}" == "healthy" ]] && break' in script
+    assert '[[ "${state}" == "healthy" ]] || fail "${container} is not healthy (state=${state:-missing})"' in script
     ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
     assert 'createdb --if-not-exists' not in ctl
     assert 'SELECT 1 FROM pg_database' in ctl
