@@ -21,6 +21,17 @@ test("HttpManagerClient keeps employee-scoped memory deletion for management ope
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
 });
 
+test("HttpManagerClient preserves the safe Manager problem detail for runtime failures", async () => {
+  const client = new HttpManagerClient("https://manager.test", async () => Response.json(
+    { type: "about:blank", title: "Not Found", status: 404, code: "not_found", detail: "platform model is unavailable" },
+    { status: 404 },
+  ));
+  await assert.rejects(
+    () => client.pullRuntimeConfig(caller, "employee-1"),
+    /Manager returned HTTP 404 for \/api\/manager\/provider-credentials\/runtime-config: not_found: platform model is unavailable/,
+  );
+});
+
 test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async () => {
   let request: { url: string; init: RequestInit } | undefined;
   const client = new HttpManagerClient("https://manager.test", async (input, init) => {

@@ -232,7 +232,10 @@ export class HttpManagerClient implements ManagerClient {
     }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
-      throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
+      const detail = await readManagerProblemDetail(response);
+      throw new ManagerUnavailableError(
+        `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`,
+      );
     }
     return response;
   }
@@ -248,6 +251,18 @@ export class ManagerUnavailableError extends Error {
   constructor(message = "Manager is unavailable", options?: { cause?: unknown }) {
     super(message, options);
     this.name = "ManagerUnavailableError";
+  }
+}
+
+async function readManagerProblemDetail(response: Response): Promise<string> {
+  try {
+    const value = JSON.parse(await response.text()) as Record<string, unknown>;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    const code = typeof value.code === "string" ? value.code.trim() : "";
+    const detail = typeof value.detail === "string" ? value.detail.trim() : "";
+    return [code, detail].filter(Boolean).join(": ").slice(0, 300);
+  } catch {
+    return "";
   }
 }
 
