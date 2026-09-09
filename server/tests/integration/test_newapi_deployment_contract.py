@@ -10,6 +10,8 @@ def service_block(name: str, next_name: str) -> str:
 
 
 def test_internal_newapi_is_pinned_private_and_persistent():
+    # Keep the client network first: taiyi's Docker backend attaches the host
+    # publish to the primary endpoint while NewAPI also needs its DB/Redis net.
     postgres = service_block("newapi-postgres", "newapi-redis")
     redis = service_block("newapi-redis", "newapi")
     relay = service_block("newapi", "operation")
