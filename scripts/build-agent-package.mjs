@@ -46,7 +46,7 @@ const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AI
 
 function isForbiddenChildEnvironmentName(name) {
   const upper = name.toUpperCase();
-  if (SAFE_AGENT_URLS.has(upper)) return false;
+  if (upper === "PATH" || SAFE_AGENT_URLS.has(upper)) return false;
   if (FORBIDDEN_CHILD_ENV.has(upper)) return true;
   if (/(?:^|_)(?:API_KEY|APIKEY|PASSWORD|PASSWD|TOKEN|SECRET|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|PEPPER|PRIVATE_KEY|ACCESS_KEY|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIAL|CREDENTIALS|CREDENTIAL_PATH|CREDENTIALS_FILE|CREDENTIAL_FILE|KEY_FILE|KEYFILE)$/u.test(upper)) return true;
   if (/(?:^|_)(?:URL|URI|DSN|CONNECTION_STRING|KEY_PATH|PATH)$/u.test(upper)) return true;
@@ -422,8 +422,15 @@ function createArchive(packageRoot, archivePath, archiveType) {
 }
 
 function run(command, args, cwd) {
-  const executable = process.platform === "win32" && command === "pnpm" ? "pnpm.cmd" : command;
-  execFileSync(executable, args, {
+  // Hosted macOS runners may expose Corepack without installing a `pnpm`
+  // shim on the child PATH. Invoke the pinned package manager through
+  // Corepack so packaging is independent of runner-specific shims.
+  const usesPnpm = command === "pnpm";
+  const executable = usesPnpm
+    ? process.platform === "win32" ? "corepack.cmd" : "corepack"
+    : command;
+  const commandArgs = usesPnpm ? ["pnpm", ...args] : args;
+  execFileSync(executable, commandArgs, {
     cwd,
     stdio: "inherit",
     shell: process.platform === "win32",
