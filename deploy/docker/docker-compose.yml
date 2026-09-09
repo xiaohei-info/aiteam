@@ -204,7 +204,9 @@ services:
       - newapi_logs:/app/logs
     # NewAPI must reach its private PostgreSQL/Redis network while exposing
     # the management surface only to Operation through operation-newapi.
-    networks: [newapi-internal, operation-newapi]
+    # Keep Operation's private client network first so Docker's published
+    # loopback port remains attached while the DB/Redis network stays private.
+    networks: [operation-newapi, newapi-internal]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
       interval: 10s
@@ -395,8 +397,10 @@ networks:
     internal: true
   control-plane-db:
     internal: true
+  # Only Operation and NewAPI join this network. It intentionally remains
+  # externally-capable so NewAPI can reach configured upstreams and Docker can
+  # publish its loopback management port; no Agent/Manager service is attached.
   operation-newapi:
-    internal: true
   lightrag-internal:
     internal: true
   newapi-internal:
