@@ -424,13 +424,8 @@ def _validate_facade_url(value: str) -> None:
         raise ValueError(
             "Hindsight facade URL must not contain query, fragment, or credentials"
         )
+    if parsed.scheme or parsed.netloc or not value.startswith("/"):
+        raise ValueError("Hindsight facade URL must be root-relative")
     path = parsed.path.rstrip("/") or "/"
     if path != _FACADE_PATH:
         raise ValueError(f"Hindsight facade URL must be {_FACADE_PATH}")
-    if parsed.scheme:
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("Hindsight facade URL must be an HTTP(S) URL")
-    elif not value.startswith("/"):
-        raise ValueError(
-            "Hindsight facade URL must be absolute HTTP(S) or root-relative"
-        )

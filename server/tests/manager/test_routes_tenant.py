@@ -105,6 +105,22 @@ def test_provision_stage_a_phase_gate():
     assert not mc.called
 
 
+def test_provision_initializes_enterprise_space_after_phase_gate_opens():
+    mc = _mock_psycopg()
+    with (
+        patch("psycopg.connect", mc),
+        patch("manager_service.routes_tenant.require_control_plane_writes_ready"),
+        patch("manager_service.routes_tenant.ensure_enterprise_knowledge_space") as ensure_space,
+    ):
+        c = _client("postgresql://fake/business", admin_db_url="postgresql://admin/admin")
+        response = c.post("/api/manager/tenants", json=_body())
+
+    assert response.status_code == 201
+    ensure_space.assert_called_once_with(
+        "postgresql://fake/business", _BOUND_TENANT, instance_registry=None,
+    )
+
+
 def test_provision_with_quota_policy_only_is_phase_gated():
     mc = _mock_psycopg()
     quota_policy = {"policy_slug": "default", "display_name": "Default",

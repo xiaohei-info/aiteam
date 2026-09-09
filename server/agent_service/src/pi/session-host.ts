@@ -959,6 +959,10 @@ export class SessionHost {
       return { employeeId, entryId, text };
     } catch (error) {
       this.recordEntrySources(record, command, entriesBefore);
+      // Session initialization can fail before Pi emits any lifecycle event
+      // (for example when Manager runtime-config returns 404). Publish the
+      // existing terminal event so the local composer cannot remain "running".
+      if (!record.session) this.publish(record, { type: "agent_settled" });
       throw error;
     } finally {
       unsubscribeSource?.();

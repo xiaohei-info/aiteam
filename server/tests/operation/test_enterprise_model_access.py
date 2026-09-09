@@ -177,6 +177,7 @@ def test_platform_provider_builder_wires_enterprise_repository(monkeypatch):
     import operation_service.platform_provider_service as module
     import operation_service.repository as repository_module
 
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw.test/operation")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin.test/operation")
     monkeypatch.setenv("NEWAPI_URL", "http://newapi.test")
     monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://relay.test/v1")

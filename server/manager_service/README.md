@@ -1,7 +1,8 @@
 # Manager identity and configuration contracts
 
-Manager is the online identity/configuration authority for one enterprise. Its
-JWT signature verification remains local (`shared/auth`); the Manager-only
+Manager is the online identity/configuration authority for multiple enterprises
+in one process, with each browser session/JWT/request bound to one TenantContext.
+Its JWT signature verification remains local (`shared/auth`); the Manager-only
 `ActivePrincipalVerifier` then reads the current account under `TenantContext` /
 RLS and supplies current roles. Deleted or disabled principals cannot obtain new
 password/Passkey/OAuth tokens, reset passwords, pull authorized configuration or

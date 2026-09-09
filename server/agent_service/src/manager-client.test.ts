@@ -155,6 +155,25 @@ test("runtime config accepts only the Pi protocols implemented by this contract"
   }), /invalid runtime provider protocol/);
 });
 
+test("production runtime provider config rejects local relay destinations", () => {
+  const original = process.env.AITEAM_ENV;
+  process.env.AITEAM_ENV = "production";
+  const base = {
+    api_protocol: "openai-completions" as const, api_key: "secret", model: "m1", provider_ref: "p1",
+    provider_version: 1, model_version: 1, version: 1,
+    pricing: { pricing_version: 1, pricing_status: "known" as const, billing_mode: "token" as const, input_usd_per_million: "1", output_usd_per_million: "2", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD" as const, effective_from: new Date().toISOString() },
+  };
+  try {
+    for (const base_url of ["https://127.0.0.2/v1", "https://198.51.100.1/v1", "https://203.0.113.1/v1", "https://[fec0::1]/v1", "https://[2001:0::1]/v1", "https://[64:ff9b::1]/v1", "https://[2002::1]/v1", "https://[3ffe::1]/v1", "https://[0:0:0:0:0:0:0:1]/v1", "https://[::ffff:127.0.0.1]/v1", "https://localhost/v1", "https://service.local/v1", "https://newapi/v1"]) {
+      assert.throws(() => normalizeRuntimeProviderConfig({ ...base, base_url }), /invalid runtime relay URL/);
+    }
+    assert.equal(normalizeRuntimeProviderConfig({ ...base, base_url: "https://relay.example/v1" }).base_url, "https://relay.example/v1");
+  } finally {
+    if (original === undefined) delete process.env.AITEAM_ENV;
+    else process.env.AITEAM_ENV = original;
+  }
+});
+
 test("normalizes the Manager AuthorizedConfig contract into local projection fields", () => {
   const config = normalizeAuthorizedConfig({
     experts: [{ employee_id: "employee-1", employee_slug: "helper", display_name: "Helper", version: 7, model: "model-1", provider_ref: "provider-1", tools: ["memory_recall"], skills: ["skill-1"] }],

@@ -5,6 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Remove inherited control-plane credentials before loading the package config or runtime.
+const { scrubAgentEnvironment } = await import("../dist/launch-guards.js");
+scrubAgentEnvironment();
 const options = parseArgs(process.argv.slice(2));
 const configFile = options.config ?? process.env.AITEAM_CONFIG_FILE ?? join(packageRoot, "config", "agent.env");
 
@@ -13,6 +16,7 @@ else if (options.config) throw new Error(`Agent config file does not exist: ${co
 if (process.env.AITEAM_CONFIG_FILE && existsSync(process.env.AITEAM_CONFIG_FILE)) {
   const { loadAgentConfig } = await import("../dist/config.js");
   loadAgentConfig();
+  scrubAgentEnvironment();
 }
 
 process.env.HOST ??= "127.0.0.1";

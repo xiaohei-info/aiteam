@@ -5,29 +5,28 @@
 `SERVICE_TOKEN` 是跨端服务间调用的共享密钥（平面③ 代码层守卫，CLAUDE.md §3 / 03 §9.1），用于以下场景：
 
 - **Operator → Manager**：运营端调用企业端开通 tenant、bootstrap 负责人凭据
-- **Agent → Manager**：用户端主动访问企业端 pull 配置、上报治理摘要
+- **Agent → Manager**：用户端使用当前用户 bearer token 主动 pull 配置、上报治理摘要；不注入 SERVICE_TOKEN
 
 ## 安全模式
 
-### Dev 模式（fail-open）
+### Dev 模式（显式占位值）
 
-适用于**本地开发和测试**环境，便于快速迭代。
+适用于**本地开发**环境，便于快速迭代。
 
-**判定条件**（满足任一）：
-- `SERVICE_TOKEN` 未配置（为空）
-- `SERVICE_TOKEN` 值为 `dev-service-token-placeholder`
-- `SERVICE_TOKEN` 值以 `dev-` 开头
+**判定条件**：仅当 `AITEAM_ENV=dev` 或 `AITEAM_ENV=development` 且明确使用 `dev-service-token-placeholder`。
+未配置 token、使用其它 `dev-*` 值或 production 使用占位值都不会进入此模式。
 
 **行为**：
 - 未携带 token 的请求会被**放行**（仅日志警告）
 - 携带错误 token 的请求会被**拒绝**（便于测试 token 校验逻辑）
+- `AITEAM_ENV=test`、缺失环境标记或 production 使用占位值都 fail-closed；test 必须配置并携带真实 `SERVICE_TOKEN`
 
 ### 生产模式（fail-closed）
 
 适用于**生产部署**环境，严格校验服务身份。
 
 **判定条件**：
-- `SERVICE_TOKEN` 配置了非 dev 占位值的强密钥
+- `SERVICE_TOKEN` 配置了非 dev 占位值的强密钥；或 production 使用了 dev 占位值（该配置直接拒绝）
 
 **行为**：
 - 所有服务间调用必须携带正确的 `X-Service-Token` 或 `Authorization: Bearer <token>`
@@ -53,27 +52,9 @@ openssl rand -hex 32
 
 #### Docker Compose 部署
 
-编辑 `deploy/docker/docker-compose.yml`，替换所有服务的 `SERVICE_TOKEN` 为生成的强密钥：
+不要把密钥硬编码进 `deploy/docker/docker-compose.yml`。将生成值放入宿主机 mode-600 `.env.prod`/secret store；Compose 仅通过 `${SERVICE_TOKEN:-dev-service-token-placeholder}` 插值，`AITEAM_ENV=test` 也必须显式提供非占位 token，`ctl.sh` 会在 production start 前拒绝缺失、占位或过短值，并只注入 Operation/Manager。Agent 不接收 `SERVICE_TOKEN`。
 
-```yaml
-services:
-  operation:
-    environment:
-      SERVICE_TOKEN: <generated-secret>
-      # ... 其他配置
-
-  manager:
-    environment:
-      SERVICE_TOKEN: <generated-secret>
-      # ... 其他配置
-
-  agent:
-    environment:
-      SERVICE_TOKEN: <generated-secret>
-      # ... 其他配置
-```
-
-**重要**：所有端必须使用**相同的 SERVICE_TOKEN**。
+**重要**：Operation 与 Manager 必须使用**相同的 SERVICE_TOKEN**；Agent 不属于该服务间控制面。
 
 #### 环境变量部署
 
@@ -118,7 +99,7 @@ spec:
 生产环境应定期轮换 SERVICE_TOKEN（建议至少每 90 天）：
 
 1. 生成新密钥
-2. 更新所有端的配置
+2. 更新 Operation 与 Manager 的 `.env.prod`/secret store 配置（Agent 不接收该 token）
 3. 重启服务（可使用滚动更新策略）
 4. 验证跨端调用正常
 5. 销毁旧密钥
@@ -132,7 +113,7 @@ spec:
 **Dev 模式**（使用占位值）：
 ```
 WARNING: SERVICE_TOKEN 使用 dev 占位值（dev-service-token-placeholder），服务间调用无真实校验。
-生产环境必须替换为强密钥（见 deploy/SERVICE_TOKEN.md）
+生产环境必须替换为强密钥（见 deploy/docker/SERVICE_TOKEN.md）
 ```
 
 **生产模式**（使用强密钥）：
@@ -181,7 +162,7 @@ curl -X POST http://localhost:8002/api/manager/internal/test \
 ### 服务间调用返回 401
 
 **原因 1：token 不匹配**
-- 检查所有端的 `SERVICE_TOKEN` 环境变量是否一致
+- 检查 Operation 与 Manager 的 `SERVICE_TOKEN` 环境变量是否一致；Agent 不应存在该变量
 - 验证配置文件中没有多余空格或换行
 
 **原因 2：生产模式未配置**

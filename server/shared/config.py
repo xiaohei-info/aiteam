@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,18 +46,36 @@ class Settings(BaseModel):
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
     agent_url: str | None = Field(default=None)
-    # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-open（dev 友好）；
-    # 配置后 fail-closed：跨端收端校验 X-Service-Token 匹配。完整 mTLS 留部署层 follow-up。
+    # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-closed；
+    # 仅显式 dev/development 占位值允许降级；test/production 必须真实鉴权。完整 mTLS 留部署层 follow-up。
     service_token: str | None = Field(default=None)
     service_client_timeout_ms: int = Field(default=30_000, ge=1_000, le=120_000)
-    # 部署环境标记。取值 dev | test | production；未配置按 dev 处理。
-    aiteam_env: str | None = Field(default=None, description="部署环境：dev | test | production；未配置=dev")
+    # 部署环境标记。运行时取值 dev | development | test | production；load_settings 拒绝缺失/未知值。
+    aiteam_env: Literal["dev", "development", "test", "production"] = Field(
+        default="development", description="部署环境：dev | development | test | production；运行时必须显式设置"
+    )
     expose_public_docs: bool = Field(default=True, description="/docs /redoc 是否公网公开（02 §10.3.1）")
 
     @property
     def is_production(self) -> bool:
         """是否生产部署：AITEAM_ENV=production（runtime 必须真实，禁止 Fake）。"""
         return self.aiteam_env == "production"
+
+
+def _database_target(value: str) -> tuple[str, int, str, str]:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"postgresql", "postgres"} or not parsed.hostname or not parsed.path.strip("/"):
+        raise ValueError
+    return parsed.hostname.lower(), parsed.port or 5432, parsed.path.strip("/"), parsed.username or ""
+
+
+def _required_environment() -> Literal["dev", "development", "test", "production"]:
+    raw = os.getenv("AITEAM_ENV")
+    if raw is None or not raw.strip():
+        raise ValueError("AITEAM_ENV must be explicitly set to dev, development, test, or production")
+    if raw not in {"dev", "development", "test", "production"}:
+        raise ValueError("AITEAM_ENV must be one of dev, development, test, or production")
+    return raw  # type: ignore[return-value]
 
 
 def _bounded_timeout_ms(raw: str | None) -> int:
@@ -71,17 +90,48 @@ def load_settings(tier: Tier | None = None) -> Settings:
     resolved = tier or os.getenv("APP_TIER")
     if resolved not in _VALID_TIERS:
         raise ValueError(f"无效 tier={resolved!r}，应为 {_VALID_TIERS} 之一（见 09 §14.2）")
+    environment = _required_environment()
+    if resolved == "operation" and environment == "test" and os.getenv("DB_URL") and (not os.getenv("OPERATION_DB_URL") or not os.getenv("OPERATION_ADMIN_DB_URL")):
+        raise ValueError("Operation requires OPERATION_DB_URL and OPERATION_ADMIN_DB_URL when a test database is configured")
+    configured_db_url = (os.getenv("OPERATION_DB_URL") or os.getenv("DB_URL")) if resolved == "operation" else os.getenv("DB_URL")
+    configured_admin_db_url = (os.getenv("OPERATION_ADMIN_DB_URL") or os.getenv("ADMIN_DB_URL")) if resolved == "operation" else os.getenv("ADMIN_DB_URL")
+    if environment == "production":
+        db_url = configured_db_url or ""
+        admin_db_url = configured_admin_db_url or ""
+        try:
+            db_user = urlsplit(db_url).username
+            admin_user = urlsplit(admin_db_url).username
+        except ValueError as exc:
+            raise ValueError("production DB_URL/ADMIN_DB_URL must be valid PostgreSQL URLs") from exc
+        if not db_url or not admin_db_url or db_user != "app_rw" or not admin_user or admin_user == "app_rw":
+            raise ValueError("production DB_URL must use app_rw and ADMIN_DB_URL must use a distinct migration role")
+        if resolved == "operation" and (not os.getenv("OPERATION_DB_URL") or not os.getenv("OPERATION_ADMIN_DB_URL")):
+            raise ValueError("production Operation requires OPERATION_DB_URL and OPERATION_ADMIN_DB_URL")
+        manager_db_name = os.getenv("MANAGER_DB_NAME") or os.getenv("POSTGRES_DB") or "manager_control_db"
+        operation_db_name = os.getenv("OPERATION_DB_NAME") or "oper"
+        if manager_db_name == operation_db_name:
+            raise ValueError("production Manager and Operation databases must be distinct")
+        expected_name = operation_db_name if resolved == "operation" else manager_db_name
+        if _database_target(db_url)[2] != expected_name or _database_target(admin_db_url)[2] != expected_name:
+            raise ValueError("production database DSNs do not match their tier database name")
+        for paired in ((os.getenv("DB_URL"), os.getenv("OPERATION_DB_URL")), (os.getenv("ADMIN_DB_URL"), os.getenv("OPERATION_ADMIN_DB_URL"))):
+            if paired[0] and paired[1] and _database_target(paired[0])[:3] == _database_target(paired[1])[:3]:
+                raise ValueError("production Manager and Operation DSNs must target distinct databases")
     legacy_tenant = os.getenv("MANAGER_TENANT_ID")
     if legacy_tenant and str(legacy_tenant).strip():
         logger.warning(
             "MANAGER_TENANT_ID is ignored; Manager tenants are selected per session, not process binding"
         )
+    # Operation owns the separate `oper` database; its process-specific names
+    # are explicit so a shared shell cannot accidentally route both tiers to
+    # the Manager database. The generic names remain a dev/test compatibility
+    # fallback for direct unit construction.
     return Settings(
         tier=resolved,  # type: ignore[arg-type]
         service_name=f"aiteam-{resolved}-service",
         log_level=os.getenv("LOG_LEVEL", "INFO"),
-        db_url=os.getenv("DB_URL"),
-        admin_db_url=os.getenv("ADMIN_DB_URL"),
+        db_url=configured_db_url,
+        admin_db_url=configured_admin_db_url,
         app_rw_password=os.getenv("APP_RW_PASSWORD"),
         manager_data_root=Path(os.getenv("AITEAM_MANAGER_DATA_ROOT") or (Path.cwd() / ".data" / "manager")),
         manager_url=os.getenv("MANAGER_URL"),
@@ -89,7 +139,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
         agent_url=os.getenv("AGENT_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
         service_client_timeout_ms=_bounded_timeout_ms(os.getenv("SERVICE_CLIENT_TIMEOUT_MS")),
-        aiteam_env=os.getenv("AITEAM_ENV"),
+        aiteam_env=environment,
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )
 

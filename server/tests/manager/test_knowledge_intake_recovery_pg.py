@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,7 @@ class Crash(BaseException):
 
 
 class Upstream:
-    def __init__(self, workspace: str | None = None):
+    def __init__(self, workspace: str | set[str] | None = None):
         self.workspace = workspace
         self.posts = 0
         self.probes = 0
@@ -45,8 +46,16 @@ class Upstream:
         self.duplicate_source = False
 
     def __call__(self, request):
-        if self.workspace is not None:
-            assert request.headers["LIGHTRAG-WORKSPACE"] == self.workspace
+        workspace = request.headers["LIGHTRAG-WORKSPACE"]
+        if isinstance(self.workspace, set):
+            assert workspace in self.workspace
+        elif self.workspace is not None:
+            assert workspace == self.workspace
+        else:
+            # The e2e client must provide an explicit tenant workspace set; the
+            # shape fallback protects older callers that intentionally use the
+            # generic fixture without that set.
+            assert re.fullmatch(r"t[0-9a-f]{32}__enterprise_shared", workspace)
         assert request.headers["X-API-Key"] == "fixture-only"
         if request.url.path == "/documents/text":
             self.posts += 1

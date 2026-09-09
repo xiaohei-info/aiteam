@@ -107,14 +107,17 @@ PATH=/opt/homebrew/bin:$PATH corepack pnpm@11.4.0 -r typecheck
 PATH=/opt/homebrew/bin:$PATH corepack pnpm@11.4.0 -r build
 ```
 
-Playwright 使用干净的测试 PostgreSQL，并覆盖三端真实装配、API contract、Axe、键盘焦点、light/dark/reduced-motion 和视觉快照。CI 的 Linux baseline 使用 `*-linux.png`；macOS baseline 使用 `*-darwin.png`。改变主题、壳、聊天布局、表格或主要交互时，必须更新两套基线并让 `v1-web-ci` 通过。
+Playwright 使用干净的测试 PostgreSQL（`manager_control_db` 与独立 `operation_control_db`），并覆盖三端真实装配、API contract、Axe、键盘焦点、light/dark/reduced-motion 和视觉快照。CI 的 Linux baseline 使用 `*-linux.png`；macOS baseline 使用 `*-darwin.png`。改变主题、壳、聊天布局、表格或主要交互时，必须更新两套基线并让 `v1-web-ci` 通过。
 
 ```bash
 PATH=/opt/homebrew/bin:$PATH \
+AITEAM_ENV=test \
 MANAGER_CREDENTIAL_KEY='vAkjGKeadpMSZuL5h21AanI5tjHmoOh87WNukUbEFhE=' \
 APP_RW_PASSWORD=apprwpass \
 DB_URL='postgresql://app_rw:apprwpass@127.0.0.1:5433/manager_control_db' \
 ADMIN_DB_URL='postgresql://postgres:postgres@127.0.0.1:5433/manager_control_db' \
+OPERATION_DB_URL='postgresql://app_rw:apprwpass@127.0.0.1:5433/operation_control_db' \
+OPERATION_ADMIN_DB_URL='postgresql://postgres:postgres@127.0.0.1:5433/operation_control_db' \
 corepack pnpm@11.4.0 e2e
 ```
 

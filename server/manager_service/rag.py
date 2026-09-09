@@ -28,6 +28,17 @@ def legacy_knowledge_space_id(workspace: str | None) -> str | None:
     return suffix if _SAFE_SPACE_ID.fullmatch(suffix) else None
 
 
+def workspace_is_tenant_scoped(tenant_id: str, workspace: str | None, knowledge_space_id: str) -> bool:
+    """Accept only the current tenant's derived or legacy-suffixed workspace."""
+    if not isinstance(workspace, str) or not workspace.strip():
+        return False
+    expected = ManagerRagService.derive_workspace(tenant_id, knowledge_space_id)
+    if workspace == expected:
+        return True
+    prefix = f"t{str(tenant_id).replace('-', '')}__"
+    return workspace.startswith(prefix) and legacy_knowledge_space_id(workspace) == knowledge_space_id
+
+
 def enterprise_knowledge_space_id(workspace: str | None = None) -> str:
     """Return the configured/default internal key for the enterprise KB."""
     configured = os.getenv("AITEAM_ENTERPRISE_KNOWLEDGE_SPACE_ID", "").strip()
@@ -74,30 +85,44 @@ class PgManagerRagService(ManagerRagService):
             ).fetchall()
         for row in rows:
             if row[0] == configured:
-                return configured
+                return (
+                    configured
+                    if len(row) > 1
+                    and workspace_is_tenant_scoped(ctx.tenant_id, row[1], configured)
+                    else None
+                )
         candidates = {
             row[0]
             for row in rows
             if len(row) > 1
             and isinstance(row[0], str)
+            and workspace_is_tenant_scoped(ctx.tenant_id, row[1], row[0])
             and legacy_knowledge_space_id(row[1]) == row[0]
         }
         if len(candidates) == 1:
             return next(iter(candidates))
-        # Multiple legacy suffixes cannot identify the enterprise KB. Returning
-        # None makes the caller deny access instead of creating/using a guessed
-        # canonical alias and hiding another retained knowledge base.
-        return configured if not candidates else None
+        # Any existing row is authoritative, even when malformed or from the
+        # retired fixed-workspace scheme. Do not create a new canonical alias
+        # that would silently hide retained legacy data; only a truly empty
+        # tenant mapping may bootstrap the canonical key.
+        return configured if not rows else None
 
     def is_enterprise_space(self, ctx: TenantContext, space_id: str) -> bool:
         if space_id == enterprise_knowledge_space_id():
-            return True
+            # A snapshot may carry the canonical compatibility key even when
+            # the tenant has only a retired/malformed mapping. Re-resolve the
+            # persisted mapping instead of treating the key as unconditional.
+            return self.default_space_id_for(ctx) == space_id
         with self._router.session(ctx) as s:
             row = s.execute(
                 "SELECT workspace FROM rag_workspace WHERE knowledge_space_id = %s",
                 (space_id,),
             ).fetchone()
-        return bool(row and legacy_knowledge_space_id(row[0]) == space_id)
+        return bool(
+            row
+            and workspace_is_tenant_scoped(ctx.tenant_id, row[0], space_id)
+            and legacy_knowledge_space_id(row[0]) == space_id
+        )
 
     def get(self, ctx: TenantContext, knowledge_space_id: str) -> RagHandle:
         if not isinstance(knowledge_space_id, str) or not knowledge_space_id.strip():
@@ -121,8 +146,22 @@ class PgManagerRagService(ManagerRagService):
                 raise ValueError("knowledge service unavailable")
             workspace = existing[0]
             stored_instance_id = existing[1] if len(existing) > 1 else None
+            if not workspace_is_tenant_scoped(ctx.tenant_id, workspace, knowledge_space_id):
+                raise ValueError("knowledge service unavailable")
 
         instances = getattr(self, "_instances", None)
+        if instances is None:
+            # Disabled LightRAG is read-only for already persisted mappings. A
+            # missing mapping must not create the synthetic ``legacy`` instance
+            # record that would block later pool bootstrap/reconciliation.
+            if existing is None:
+                raise ValueError("knowledge service unavailable")
+            return RagHandle(
+                tenant_id=ctx.tenant_id,
+                knowledge_space_id=knowledge_space_id,
+                workspace=workspace,
+                instance_id=str(stored_instance_id or "legacy"),
+            )
         if instances is not None and stored_instance_id:
             # A persisted instance_id is historical routing evidence. Reuse it
             # directly rather than re-hashing the workspace after a pool/order

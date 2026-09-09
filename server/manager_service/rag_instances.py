@@ -12,7 +12,9 @@ import hashlib
 import json
 import logging
 import os
+import socket
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from types import MappingProxyType
 from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Mapping
@@ -25,6 +27,38 @@ _MAX_API_KEY = 4_096
 _MAX_WORKSPACE = 256
 
 log = logging.getLogger(__name__)
+
+
+def _production_environment() -> bool:
+    return os.getenv("AITEAM_ENV", "").strip() == "production"
+
+
+def _validate_production_endpoint(url: str) -> None:
+    if not _production_environment():
+        return
+    parsed = urlsplit(url)
+    host = parsed.hostname
+    if parsed.scheme != "https" or not host:
+        raise RagInstanceConfigurationError("production LightRAG endpoints must use HTTPS")
+    normalized_host = host.rstrip(".").lower()
+    if normalized_host == "localhost" or normalized_host.endswith(".localhost") or normalized_host.endswith(".local") or normalized_host.endswith(".localdomain") or normalized_host.endswith(".internal") or normalized_host.endswith(".intranet"):
+        raise RagInstanceConfigurationError("production LightRAG endpoints must not target local destinations")
+    try:
+        address = ip_address(normalized_host.strip("[]"))
+    except ValueError:
+        address = None
+    if address is not None and (address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_multicast):
+        raise RagInstanceConfigurationError("production LightRAG endpoints must not target local destinations")
+    try:
+        resolved = {
+            ip_address(info[4][0])
+            for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            if info[4] and info[4][0]
+        }
+    except (OSError, ValueError) as exc:
+        raise RagInstanceConfigurationError("production LightRAG endpoint DNS resolution failed") from exc
+    if not resolved or any(not item.is_global for item in resolved):
+        raise RagInstanceConfigurationError("production LightRAG endpoints must resolve only to global destinations")
 
 
 class RagInstanceConfigurationError(ValueError):
@@ -59,6 +93,7 @@ class RagInstanceRegistry:
         by_id: dict[str, RagInstance] = {}
         for instance in self.instances:
             _validate_instance(instance)
+            _validate_production_endpoint(instance.url)
             if instance.instance_id in by_id:
                 raise RagInstanceConfigurationError("duplicate LightRAG instance_id")
             by_id[instance.instance_id] = instance
@@ -100,22 +135,29 @@ class RagInstanceRegistry:
                 raise RagInstanceConfigurationError("invalid LightRAG instance configuration") from exc
             if not isinstance(decoded, list):
                 raise RagInstanceConfigurationError("LightRAG instance configuration must be a JSON list")
-            instances = tuple(_instance_from_mapping(item) for item in decoded)
+            require_https = _production_environment()
+            instances = tuple(
+                _instance_from_mapping(item, require_https=require_https) for item in decoded
+            )
             return cls(instances)
 
         url_raw = os.getenv("LIGHTRAG_URL")
         key_raw = os.getenv("LIGHTRAG_API_KEY")
         workspace_raw = os.getenv("LIGHTRAG_WORKSPACE")
-        if not any(value is not None and value.strip() for value in (url_raw, key_raw, workspace_raw)):
+        if not any(value is not None and value.strip() for value in (url_raw, key_raw)):
+            if workspace_raw and workspace_raw.strip():
+                log.warning("LIGHTRAG_WORKSPACE is ignored; Manager derives workspace per tenant")
             return None
         if not all(value is not None and value.strip() for value in (url_raw, key_raw)):
             raise RagInstanceConfigurationError("LIGHTRAG_URL and LIGHTRAG_API_KEY are required together")
         if workspace_raw and workspace_raw.strip():
             log.warning("LIGHTRAG_WORKSPACE is ignored; Manager derives workspace per tenant")
-        return cls((RagInstance("legacy", _normalize_url(url_raw or ""), (key_raw or "").strip()),))
+        normalized_url = _normalize_url(url_raw or "")
+        _validate_production_endpoint(normalized_url)
+        return cls((RagInstance("legacy", normalized_url, (key_raw or "").strip()),))
 
 
-def _instance_from_mapping(item: Any) -> RagInstance:
+def _instance_from_mapping(item: Any, *, require_https: bool = False) -> RagInstance:
     if not isinstance(item, dict):
         raise RagInstanceConfigurationError("LightRAG instance must be an object")
     required = {"instance_id", "url", "api_key"}
@@ -135,15 +177,21 @@ def _instance_from_mapping(item: Any) -> RagInstance:
             raise RagInstanceConfigurationError("LightRAG instance fields contain a control character")
         if legacy_workspace.strip():
             log.warning("LIGHTRAG_INSTANCES workspace field is ignored; Manager derives workspace per tenant")
+    normalized_url = _normalize_url(values["url"])
+    if require_https and not normalized_url.startswith("https://"):
+        raise RagInstanceConfigurationError("production LightRAG endpoints must use HTTPS")
+    _validate_production_endpoint(normalized_url)
     return RagInstance(
         values["instance_id"].strip(),
-        _normalize_url(values["url"]),
+        normalized_url,
         values["api_key"].strip(),
     )
 
 
 def _normalize_url(value: str) -> str:
-    value = value.strip().rstrip("/")
+    if any(char.isspace() for char in value):
+        raise RagInstanceConfigurationError("LightRAG URL must not contain whitespace")
+    value = value.rstrip("/")
     if len(value) > _MAX_URL:
         raise RagInstanceConfigurationError("LightRAG URL is too long")
     try:
@@ -154,6 +202,10 @@ def _normalize_url(value: str) -> str:
         raise RagInstanceConfigurationError("LightRAG URL must use http(s) without credentials")
     if parsed.query or parsed.fragment:
         raise RagInstanceConfigurationError("LightRAG URL must not contain query or fragment")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise RagInstanceConfigurationError("LightRAG URL has an invalid port") from exc
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 

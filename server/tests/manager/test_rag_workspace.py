@@ -25,7 +25,8 @@ def _ctx(tid: str) -> TenantContext:
 
 def test_workspace_derived_from_tenant_context(two_tenants, migrated_db):
     tid_a, _ = two_tenants
-    rag = PgManagerRagService(migrated_db)
+    registry = RagInstanceRegistry((RagInstance("rag-test", "http://rag", "secret"),))
+    rag = PgManagerRagService(migrated_db, instance_registry=registry)
     handle = rag.get(_ctx(tid_a), "enterprise_shared")
     # workspace 与派生规则一致（去连字符 tenant + 空间后缀）。
     assert handle.workspace == ManagerRagService.derive_workspace(tid_a, "enterprise_shared")
@@ -35,7 +36,8 @@ def test_workspace_derived_from_tenant_context(two_tenants, migrated_db):
 def test_workspace_mapping_isolated_across_tenants(two_tenants, migrated_db):
     """tenant A 建的 workspace 映射行，tenant B 在 PG 第二防线看不到（RLS）。"""
     tid_a, tid_b = two_tenants
-    rag = PgManagerRagService(migrated_db)
+    registry = RagInstanceRegistry((RagInstance("rag-test", "http://rag", "secret"),))
+    rag = PgManagerRagService(migrated_db, instance_registry=registry)
     rag.get(_ctx(tid_a), "enterprise_shared")  # 同名空间，不同 tenant
 
     a_rows = rag.list_workspaces(_ctx(tid_a))

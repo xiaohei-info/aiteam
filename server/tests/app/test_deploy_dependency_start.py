@@ -24,6 +24,8 @@ MATCHING_ENV = (
     "POSTGRES_PASSWORD=inspect-secret-value\n"
     "POSTGRES_DB=aiteam_v1\n"
 )
+MATCHING_PORTS = '{"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":"5433"}]}'
+MATCHING_NETWORK_MODE = "aiteam_default"
 DOCKER_STUB = r"""#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${DOCKER_LOG}"
@@ -39,8 +41,16 @@ if [[ "$1" == inspect ]]; then
   if [[ "${INSPECT_RC}" -ne 0 ]]; then
     exit "${INSPECT_RC}"
   fi
+  if [[ "$*" == *'.HostConfig.NetworkMode'* ]]; then
+    printf '%s' "${INSPECT_NETWORK_MODE}"
+    exit 0
+  fi
   if [[ "$*" == *'.Config.Env'* ]]; then
     printf '%s' "${INSPECT_ENV}"
+    exit 0
+  fi
+  if [[ "$*" == *'.HostConfig.PortBindings'* ]]; then
+    printf '%s' "${INSPECT_PORTS}"
     exit 0
   fi
   printf '%s\n' "${INSPECT_META}"
@@ -87,6 +97,8 @@ def _run_start(
     inspect_rc: int = 0,
     start_rc: int = 0,
     start_output: str = "aiteam-pg",
+    inspect_ports: str = MATCHING_PORTS,
+    inspect_network_mode: str = MATCHING_NETWORK_MODE,
     postgres_volume: str | None = None,
     postgres_image: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
@@ -146,9 +158,14 @@ def _run_start(
         "ALLOW_INSPECT": "1" if allow_inspect else "0",
         "INSPECT_META": inspect_meta,
         "INSPECT_ENV": inspect_env,
+        "INSPECT_PORTS": inspect_ports,
+        "INSPECT_NETWORK_MODE": inspect_network_mode,
         "INSPECT_RC": str(inspect_rc),
         "START_RC": str(start_rc),
         "START_OUTPUT": start_output,
+        "POSTGRES_DB": "aiteam_v1",
+        "MANAGER_DB_NAME": "aiteam_v1",
+        "POSTGRES_SUPER_USER": "aiteam",
     }
     result = subprocess.run(
         ["bash", str(wrapper)],
@@ -241,7 +258,7 @@ def test_name_conflict_starts_matching_stopped_postgres_container(tmp_path):
     assert "POSTGRES_PASSWORD=<redacted>" in combined
     assert ctl_log.read_text(encoding="utf-8").count("\n") == 1
     docker_calls = _docker_calls(docker_log)
-    assert docker_calls.count("inspect ") == 2
+    assert docker_calls.count("inspect ") == 4
     assert docker_calls.count("start aiteam-pg") == 1
     assert "ps --all" not in docker_calls
     assert "up -d" not in docker_calls
@@ -266,10 +283,40 @@ def test_name_conflict_accepts_matching_running_postgres_container(tmp_path):
     assert "compose ps" not in combined
     assert "inspect-secret-value" not in combined
     docker_calls = _docker_calls(docker_log)
-    assert docker_calls.count("inspect ") == 2
+    assert docker_calls.count("inspect ") == 4
     assert "start aiteam-pg" not in docker_calls
     assert "ps --all" not in docker_calls
     assert " rm " not in f" {docker_calls} "
+
+
+def test_name_conflict_rejects_publicly_bound_postgres_container(tmp_path):
+    result, _ctl_log, docker_log = _run_start(
+        tmp_path,
+        ctl_rc=1,
+        ctl_output=PG_NAME_CONFLICT,
+        allow_inspect=True,
+        inspect_ports='{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5433"}]}',
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "existing PostgreSQL host binding is not loopback-only" in combined
+    assert "PostgreSQL dependency is not available for backup/DDL" in combined
+    assert "start aiteam-pg" not in _docker_calls(docker_log)
+
+
+def test_name_conflict_rejects_host_network_postgres_container(tmp_path):
+    result, _ctl_log, docker_log = _run_start(
+        tmp_path,
+        ctl_rc=1,
+        ctl_output=PG_NAME_CONFLICT,
+        allow_inspect=True,
+        inspect_network_mode="host",
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "network mode is not isolated" in combined
+    assert "PostgreSQL dependency is not available for backup/DDL" in combined
+    assert "start aiteam-pg" not in _docker_calls(docker_log)
 
 
 def test_name_conflict_rejects_mismatched_postgres_container(tmp_path):

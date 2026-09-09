@@ -18,6 +18,55 @@ const TARGETS = {
   "win32-x64": { nodeTarget: "win-x64", archive: "zip", runtimeName: "node.exe" },
 };
 
+const FORBIDDEN_CHILD_ENV = new Set([
+  "AITEAM_CONSOLE_CREDENTIALS_FILE", "MANAGER_CREDENTIAL_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_KEYFILE_JSON", "AWS_SHARED_CREDENTIALS_FILE", "AWS_PROFILE", "AZURE_CONFIG_DIR", "CLOUDSDK_CONFIG", "BOTO_CONFIG", "KUBECONFIG", "DOCKER_AUTH_CONFIG", "GIT_ASKPASS", "SSH_AUTH_SOCK", "NPM_CONFIG_USERCONFIG", "DB_URL", "ADMIN_DB_URL",
+  "DATABASE_URL", "DATABASE_URI", "DATABASE_DSN", "DATABASE_CONNECTION_STRING", "TEST_DATABASE_URL",
+  "DSN", "SQL_DSN", "CONNECTION_STRING", "DB_URI", "DB_DSN", "DB_CONNECTION_STRING", "REDIS_URL",
+  "REDIS_URI", "REDIS_DSN", "REDIS_CONNECTION_STRING", "MYSQL_URL", "MYSQL_URI", "MYSQL_DSN",
+  "MYSQL_CONNECTION_STRING", "MONGO_URL", "MONGO_URI", "MONGO_DSN", "MONGO_CONNECTION_STRING",
+  "POSTGRES_URL", "POSTGRES_URI", "POSTGRES_DSN", "POSTGRES_CONNECTION_STRING", "REDIS_CONN_STRING",
+  "PROVIDER_URL", "PROVIDER_URI", "PROVIDER_API_KEY", "PROVIDER_TOKEN", "PROVIDER_SECRET",
+  "MODEL_PRICING_URL", "NEWAPI_BASE_URL", "NEWAPI_PUBLIC_BASE_URL", "NEWAPI_API_KEY", "NEWAPI_TOKEN", "OPERATION_URL",
+  "OPERATION_API_KEY", "OPERATOR_URL", "AITEAM_OPERATOR_URL", "MANAGER_BASE_URL", "MANAGER_API_KEY", "API_KEY", "PASSWORD", "PASSWD",
+  "DB_PASSWORD", "DATABASE_PASSWORD", "REDIS_PASSWORD", "MYSQL_PASSWORD", "MONGO_PASSWORD",
+  "NEWAPI_PASSWORD", "SERVICE_PASSWORD", "PROVIDER_PASSWORD", "HINDSIGHT_PASSWORD", "LIGHTRAG_PASSWORD",
+  "OAUTH_GOOGLE_CLIENT_SECRET", "OAUTH_GITHUB_CLIENT_SECRET", "LOGIN_AUDIT_PEPPER", "SESSION_SECRET",
+  "CRYPTO_SECRET", "APP_RW_PASSWORD", "POSTGRES_PASSWORD", "POSTGRES_SUPER_PASSWORD", "SERVICE_TOKEN",
+  "SERVICE_SECRET", "SERVICE_API_KEY", "SERVICE_APIKEY", "NEWAPI_ADMIN_USERNAME", "NEWAPI_ADMIN_PASSWORD",
+  "NEWAPI_ADMIN_USER_ID", "NEWAPI_ADMIN_TOKEN", "NEWAPI_DB_PASSWORD", "NEWAPI_REDIS_PASSWORD",
+  "NEWAPI_SESSION_SECRET", "NEWAPI_CRYPTO_SECRET", "OPERATION_SYSTEM_USERNAME", "OPERATION_SYSTEM_PASSWORD",
+  "OPERATION_SIGNING_PRIVATE_KEY", "OPERATION_PROVIDER_CREDENTIAL_KEY", "LIGHTRAG_INSTANCES",
+  "LIGHTRAG_AUTH_ACCOUNTS", "LIGHTRAG_TOKEN_SECRET", "LIGHTRAG_API_KEY", "LIGHTRAG_URL", "LIGHTRAG_WORKSPACE",
+  "AITEAM_HINDSIGHT_URL", "HINDSIGHT_URL", "HINDSIGHT_BASE_URL", "HINDSIGHT_FACADE_URL",
+  "HINDSIGHT_CP_ACCESS_KEY", "HINDSIGHT_API_TOKEN", "HINDSIGHT_API_KEY", "HINDSIGHT_API_KEY_REF",
+  "AUTH_ACCOUNTS", "TOKEN_SECRET", "AITEAM_SKILL_SIGNING_PRIVATE_KEY", "AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY",
+  "AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY",
+]);
+const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AITEAM_AGENT_JWKS_PATH", "AITEAM_CONFIG_FILE"]);
+
+function isForbiddenChildEnvironmentName(name) {
+  const upper = name.toUpperCase();
+  if (SAFE_AGENT_URLS.has(upper)) return false;
+  if (FORBIDDEN_CHILD_ENV.has(upper)) return true;
+  if (/(?:^|_)(?:API_KEY|APIKEY|PASSWORD|PASSWD|TOKEN|SECRET|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|PEPPER|PRIVATE_KEY|ACCESS_KEY|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIAL|CREDENTIALS|CREDENTIAL_PATH|CREDENTIALS_FILE|CREDENTIAL_FILE|KEY_FILE|KEYFILE)$/u.test(upper)) return true;
+  if (/(?:^|_)(?:URL|URI|DSN|CONNECTION_STRING|KEY_PATH|PATH)$/u.test(upper)) return true;
+  return false;
+}
+
+function childEnvironment(extra = {}) {
+  // Package/build helpers receive only the platform essentials. Do not rely on
+  // a denylist to scrub an ever-growing ambient CI/operator environment.
+  const env = {};
+  for (const key of ["PATH", "HOME", "USER", "TMPDIR", "TMP", "TEMP", "COREPACK_HOME", "SystemRoot", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA"]) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  Object.assign(env, extra);
+  for (const key of Object.keys(env)) {
+    if (isForbiddenChildEnvironmentName(key)) delete env[key];
+  }
+  return env;
+}
+
 await main().catch((error) => {
   console.error(`[agent-package][ERR] ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
@@ -69,11 +118,15 @@ async function main() {
   cpSync(join(WEB_ROOT, "agent", "dist"), join(packageRoot, "web", "agent", "dist"), { recursive: true });
   cpSync(join(ROOT, "deploy", "agent", "README.md"), join(packageRoot, "README.md"));
   cpSync(join(ROOT, "deploy", "agent", "CLIENT-INTEGRATION.md"), join(packageRoot, "CLIENT-INTEGRATION.md"));
-  if (process.platform !== "win32") execFileSync("chmod", ["755", join(packageRoot, "bin", "start-agent.sh")]);
+  if (process.platform !== "win32") execFileSync("chmod", ["755", join(packageRoot, "bin", "start-agent.sh")], { env: childEnvironment() });
   mkdirSync(join(packageRoot, "config"), { recursive: true });
 
   const config = prepareConfig(options);
   materializeJwks(config, packageRoot);
+  if (config.values.AITEAM_AGENT_JWKS_JSON?.trim()) {
+    config.text = setEnvValue(config.text, "AITEAM_AGENT_JWKS_JSON", JSON.stringify(validateJwks(config.values.AITEAM_AGENT_JWKS_JSON)));
+    config.values = parseEnv(config.text, config.source);
+  }
   validateConfigForPackage(config.values, options.config !== undefined);
   writeFileSync(join(packageRoot, "config", "agent.env"), config.text, { mode: 0o600 });
   cpSync(CONFIG_TEMPLATE, join(packageRoot, "config", "agent.env.example"));
@@ -155,7 +208,7 @@ function prepareConfig(options) {
   if (options.managerUrl && !options.config) {
     let parsed;
     try { parsed = new URL(options.managerUrl); } catch { throw new Error("--manager-url must be an absolute HTTP(S) URL without embedded credentials"); }
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) throw new Error("--manager-url must be an absolute HTTP(S) URL without embedded credentials");
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("--manager-url must be an absolute HTTP(S) URL without embedded credentials");
     text = setEnvValue(text, "AITEAM_MANAGER_URL", options.managerUrl);
   }
   return { text, values: parseEnv(text, source), configured: options.config !== undefined, source: options.config ? "provided" : "template", configPath: source };
@@ -168,8 +221,8 @@ function materializeJwks(config, packageRoot) {
   if (!existsSync(sourcePath) || !lstatSync(sourcePath).isFile()) throw new Error(`AITEAM_AGENT_JWKS_PATH is not a readable file: ${sourcePath}`);
   const filename = "manager-jwks.json";
   const content = readFileSync(sourcePath, "utf8");
-  validateJwks(content);
-  cpSync(sourcePath, join(packageRoot, "config", filename));
+  const publicJwks = validateJwks(content);
+  writeFileSync(join(packageRoot, "config", filename), JSON.stringify(publicJwks), { mode: 0o600 });
   config.text = setEnvValue(config.text, "AITEAM_AGENT_JWKS_PATH", filename);
   config.values = parseEnv(config.text, config.source);
 }
@@ -183,6 +236,7 @@ function parseEnv(text, source) {
     const separator = assignment.indexOf("=");
     if (separator <= 0) throw new Error(`${source}:${index + 1} must contain KEY=VALUE`);
     const key = assignment.slice(0, separator).trim();
+    if (Object.hasOwn(values, key)) throw new Error(`${source}:${index + 1} defines ${key} more than once`);
     values[key] = parseBuildValue(assignment.slice(separator + 1).trim(), source, index + 1);
   }
   return values;
@@ -204,19 +258,16 @@ function setEnvValue(text, key, value) {
 }
 
 function validateConfigForPackage(values, strict) {
-  const forbidden = Object.keys(values).filter((key) => (
-    /(?:PRIVATE_KEY|LIGHTRAG_|HINDSIGHT_SERVICE_TOKEN|MANAGER_CREDENTIAL|NEWAPI_|OPERATION_PROVIDER_CREDENTIAL|(?:OPENAI|ANTHROPIC|AZURE|AWS)_API_KEY)/u.test(key)
-    || key === "DB_URL"
-    || key === "ADMIN_DB_URL"
-  ) && values[key].trim() !== "");
+  const forbidden = Object.keys(values).filter((key) => isForbiddenChildEnvironmentName(key) && values[key].trim() !== "");
   if (forbidden.length) throw new Error(`Agent package config contains control-plane/upstream secret settings: ${forbidden.join(", ")}`);
+  if (values.AITEAM_AGENT_JWKS_JSON?.trim() && values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("Agent JWT config must set exactly one of AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
   if (!strict) return;
 
   const environment = values.AITEAM_ENV;
   if (environment !== "production" && environment !== "test") throw new Error("packaged Agent config must set AITEAM_ENV=production or test");
   if (!values.AITEAM_MANAGER_URL?.trim()) throw new Error("packaged Agent config requires AITEAM_MANAGER_URL");
   const managerUrl = new URL(values.AITEAM_MANAGER_URL);
-  if ((managerUrl.protocol !== "https:" && managerUrl.protocol !== "http:") || managerUrl.username || managerUrl.password) throw new Error("AITEAM_MANAGER_URL must be an HTTP(S) URL without embedded credentials");
+  if ((managerUrl.protocol !== "https:" && managerUrl.protocol !== "http:") || managerUrl.username || managerUrl.password || managerUrl.search || managerUrl.hash) throw new Error("AITEAM_MANAGER_URL must be an HTTP(S) URL without embedded credentials");
   if (environment === "production" && managerUrl.protocol !== "https:") throw new Error("AITEAM_MANAGER_URL must use HTTPS in a production package");
   const devAuth = values.AITEAM_AGENT_DEV_AUTH?.toLowerCase() === "true";
   if (environment === "production" && devAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in a production package");
@@ -225,7 +276,8 @@ function validateConfigForPackage(values, strict) {
       if (!values[name]?.trim()) throw new Error(`packaged Agent config requires ${name} when development auth is disabled`);
     }
     const issuer = new URL(values.AITEAM_AGENT_JWT_ISSUER);
-    if ((issuer.protocol !== "https:" && issuer.protocol !== "http:") || issuer.username || issuer.password || (environment === "production" && issuer.protocol !== "https:")) throw new Error("AITEAM_AGENT_JWT_ISSUER must be an HTTP(S) URL without credentials");
+    if ((issuer.protocol !== "https:" && issuer.protocol !== "http:") || issuer.username || issuer.password || issuer.search || issuer.hash || (environment === "production" && issuer.protocol !== "https:")) throw new Error("AITEAM_AGENT_JWT_ISSUER must be an HTTP(S) URL without credentials");
+    if (environment === "production" && values.AITEAM_AGENT_JWT_ISSUER.trim() !== values.AITEAM_MANAGER_URL.trim()) throw new Error("AITEAM_AGENT_JWT_ISSUER must exactly match AITEAM_MANAGER_URL in production");
     if (!values.AITEAM_AGENT_JWKS_JSON?.trim() && !values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("packaged Agent config requires AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
   }
   if (values.AITEAM_AGENT_JWKS_JSON?.includes('"d"') || values.AITEAM_AGENT_JWKS_JSON?.includes("BEGIN PRIVATE KEY")) throw new Error("Agent config must contain public JWKS only");
@@ -248,11 +300,19 @@ function validateConfigForPackage(values, strict) {
 function validateJwks(value) {
   let document;
   try { document = JSON.parse(value); } catch { throw new Error("AITEAM_AGENT_JWKS_JSON must be valid JSON"); }
-  if (!document || !Array.isArray(document.keys) || document.keys.length === 0) throw new Error("AITEAM_AGENT_JWKS_JSON must contain at least one key");
-  for (const key of document.keys) {
-    if (!key || key.kty !== "RSA" || key.alg !== "RS256" || typeof key.kid !== "string" || typeof key.n !== "string" || typeof key.e !== "string") throw new Error("AITEAM_AGENT_JWKS_JSON must contain RSA RS256 public keys");
+  if (!document || typeof document !== "object" || Array.isArray(document) || Object.keys(document).some((name) => name !== "keys") || !Array.isArray(document.keys) || document.keys.length === 0) throw new Error("AITEAM_AGENT_JWKS_JSON must contain only the keys member and at least one key");
+  const allowedMembers = new Set(["kty", "alg", "kid", "n", "e", "use"]);
+  const privateMembers = ["d", "p", "q", "dp", "dq", "qi", "oth"];
+  const seenKids = new Set();
+  const publicKeys = document.keys.map((key) => {
+    if (!key || typeof key !== "object" || Array.isArray(key) || Object.keys(key).some((member) => !allowedMembers.has(member)) || privateMembers.some((member) => Object.hasOwn(key, member))) throw new Error("AITEAM_AGENT_JWKS_JSON must contain only RSA RS256 public keys");
+    if (key.kty !== "RSA" || key.alg !== "RS256" || (key.use !== undefined && key.use !== "sig") || typeof key.kid !== "string" || !key.kid.trim() || typeof key.n !== "string" || !key.n || typeof key.e !== "string" || !key.e) throw new Error("AITEAM_AGENT_JWKS_JSON must contain RSA RS256 public keys");
+    if (seenKids.has(key.kid)) throw new Error("AITEAM_AGENT_JWKS_JSON must not contain duplicate kid values");
+    seenKids.add(key.kid);
     try { createPublicKey({ key, format: "jwk" }); } catch { throw new Error(`AITEAM_AGENT_JWKS_JSON contains an invalid RSA key: ${key.kid}`); }
-  }
+    return { kty: "RSA", alg: "RS256", kid: key.kid, n: key.n, e: key.e, ...(key.use === undefined ? {} : { use: "sig" }) };
+  });
+  return { keys: publicKeys };
 }
 
 function validateSkillKeys(value) {
@@ -265,12 +325,12 @@ function validateSkillKeys(value) {
 async function installNodeRuntime(packageRoot, spec, requestedVersion, providedPath) {
   const source = providedPath ?? await downloadNodeRuntime(spec.nodeTarget, spec.archive, requestedVersion);
   if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`Node runtime is not a regular file: ${source}`);
-  const version = execFileSync(source, ["--version"], { encoding: "utf8" }).trim().replace(/^v/u, "");
+  const version = execFileSync(source, ["--version"], { encoding: "utf8", env: childEnvironment() }).trim().replace(/^v/u, "");
   if (!/^22\./u.test(version)) throw new Error(`Node runtime ${version} is unsupported; Agent requires Node 22`);
   const destination = join(packageRoot, "runtime", spec.runtimeName);
   mkdirSync(dirname(destination), { recursive: true });
   cpSync(source, destination);
-  if (process.platform !== "win32") execFileSync("chmod", ["755", destination]);
+  if (process.platform !== "win32") execFileSync("chmod", ["755", destination], { env: childEnvironment() });
   return { path: destination, version };
 }
 
@@ -304,15 +364,15 @@ async function downloadNodeRuntime(nodeTarget, archiveType, version) {
 
   const extracted = mkdtempSync(join(tmpdir(), "aiteam-node-"));
   try {
-    if (archiveType === "tar.gz") execFileSync("tar", ["-xzf", archive, "-C", extracted]);
-    else execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Expand-Archive -LiteralPath $env:AITEAM_NODE_ARCHIVE -DestinationPath $env:AITEAM_NODE_EXTRACT -Force"], { env: { ...process.env, AITEAM_NODE_ARCHIVE: archive, AITEAM_NODE_EXTRACT: extracted } });
+    if (archiveType === "tar.gz") execFileSync("tar", ["-xzf", archive, "-C", extracted], { env: childEnvironment() });
+    else execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Expand-Archive -LiteralPath $env:AITEAM_NODE_ARCHIVE -DestinationPath $env:AITEAM_NODE_EXTRACT -Force"], { env: childEnvironment({ AITEAM_NODE_ARCHIVE: archive, AITEAM_NODE_EXTRACT: extracted }) });
     const root = readdirSync(extracted, { withFileTypes: true }).find((entry) => entry.isDirectory());
     if (!root) throw new Error(`Node archive ${filename} has no top-level directory`);
     const binary = archiveType === "zip" ? join(extracted, root.name, "node.exe") : join(extracted, root.name, "bin", "node");
     if (!existsSync(binary)) throw new Error(`Node archive ${filename} has no runtime binary`);
     const cachedBinary = join(cacheRoot, `${filename}.runtime`);
     cpSync(binary, cachedBinary);
-    if (process.platform !== "win32") execFileSync("chmod", ["755", cachedBinary]);
+    if (process.platform !== "win32") execFileSync("chmod", ["755", cachedBinary], { env: childEnvironment() });
     return cachedBinary;
   } finally {
     rmSync(extracted, { recursive: true, force: true });
@@ -331,7 +391,7 @@ function removeNodeBinDirs(root) {
 }
 
 function verifyDependencyImports(runtime, packageRoot) {
-  execFileSync(runtime.path, ["--import", "tsx/esm", "--input-type=module", "-e", "await import('fastify'); await import('@earendil-works/pi-coding-agent'); await import('@deepseek-ai/dsh-sandbox-local'); await import('./dist/pi/resources.js');"], { cwd: packageRoot, stdio: "ignore" });
+  execFileSync(runtime.path, ["--import", "tsx/esm", "--input-type=module", "-e", "await import('fastify'); await import('@earendil-works/pi-coding-agent'); await import('@deepseek-ai/dsh-sandbox-local'); await import('./dist/pi/resources.js');"], { cwd: packageRoot, stdio: "ignore", env: childEnvironment() });
 }
 
 function assertNoControlPlaneFiles(packageRoot) {
@@ -355,10 +415,10 @@ function collectFiles(root, current = root) {
 
 function createArchive(packageRoot, archivePath, archiveType) {
   if (archiveType === "tar.gz") {
-    execFileSync("tar", ["-czf", archivePath, "-C", dirname(packageRoot), relative(dirname(packageRoot), packageRoot)], { stdio: "inherit" });
+    execFileSync("tar", ["-czf", archivePath, "-C", dirname(packageRoot), relative(dirname(packageRoot), packageRoot)], { stdio: "inherit", env: childEnvironment() });
     return;
   }
-  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive -LiteralPath $env:AITEAM_AGENT_PACKAGE -DestinationPath $env:AITEAM_AGENT_ARCHIVE -Force"], { env: { ...process.env, AITEAM_AGENT_PACKAGE: packageRoot, AITEAM_AGENT_ARCHIVE: archivePath }, stdio: "inherit" });
+  execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive -LiteralPath $env:AITEAM_AGENT_PACKAGE -DestinationPath $env:AITEAM_AGENT_ARCHIVE -Force"], { env: childEnvironment({ AITEAM_AGENT_PACKAGE: packageRoot, AITEAM_AGENT_ARCHIVE: archivePath }), stdio: "inherit" });
 }
 
 function run(command, args, cwd) {
@@ -367,6 +427,6 @@ function run(command, args, cwd) {
     cwd,
     stdio: "inherit",
     shell: process.platform === "win32",
-    env: { ...process.env, CI: process.env.CI ?? "1" },
+    env: childEnvironment({ CI: process.env.CI ?? "1" }),
   });
 }

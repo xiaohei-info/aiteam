@@ -29,7 +29,7 @@ AGENT_DIR/config/agent.env         → CLIENT_DATA_ROOT/agent.env
 AGENT_DIR/config/manager-jwks.json → CLIENT_DATA_ROOT/manager-jwks.json（文件型 JWKS 包）
 ```
 
-下文称目标配置文件为 `CONFIG_FILE`。有企业公共配置的包可使用随包配置；模板包不能直接登录。文件型 JWKS 打包后通常写为 `AITEAM_AGENT_JWKS_PATH=manager-jwks.json`，相对路径以 **CONFIG_FILE 所在目录**解析，不以 `cwd` 或可执行文件目录解析。因此不能只复制 env；自定义相对路径也必须保持对应目录结构，或由宿主设置可信公钥文件的绝对路径。内联 `AITEAM_AGENT_JWKS_JSON` 非空时优先于文件，两者不要保留相互矛盾的配置。
+下文称目标配置文件为 `CONFIG_FILE`。有企业公共配置的包可使用随包配置；模板包不能直接登录。文件型 JWKS 打包后通常写为 `AITEAM_AGENT_JWKS_PATH=manager-jwks.json`，相对路径以 **CONFIG_FILE 所在目录**解析，不以 `cwd` 或可执行文件目录解析。因此不能只复制 env；自定义相对路径也必须保持对应目录结构，或由宿主设置可信公钥文件的绝对路径。`AITEAM_AGENT_JWKS_JSON` 与 `AITEAM_AGENT_JWKS_PATH` 必须二选一；同时配置会被 runtime/package/ctl 拒绝，不存在优先级或 fallback。
 
 正式交付需要企业确认 Manager HTTPS 正式地址、与 Manager `AITEAM_JWT_ISSUER` **逐字相同**的 `AITEAM_AGENT_JWT_ISSUER`、与 JWT aud 一致的 `AITEAM_AGENT_JWT_AUDIENCE`、可信 RSA RS256 公共 JWKS（kid/n/e）和技能验证公钥。Manager URL 不自动等于 issuer；不能改写 scheme/path/末尾斜杠来“修复”验签。现有严格打包器要求 URL 型 issuer，生产包要求 HTTPS；如 Manager 仍用开发默认 `aiteam-manager`，应由部署方正式配置一致的 issuer 后交付，不能客户端自行猜一个 URL。
 

@@ -1,10 +1,12 @@
 ---
 created: 2026-08-21
-status: completed-taiyi-smoke
+status: completed-historical-snapshot
 scope: taiyi-playwright
 ---
 
-# taiyi 外部部署 Playwright profile
+# taiyi 外部部署 Playwright profile（历史快照）
+
+> 本文仅记录 2026-08-21 的外部 Playwright 试验结果；其中 `48 passed`、`54 passed/1 skipped`、RAG smoke 和“当前 reused-tenant”均不是当前 taiyi 或 release 证据。当前外部验证须使用最新 E2E 配置、独立 tenant 和实际 CI checkout SHA。
 
 ## 目标
 
@@ -29,7 +31,7 @@ scope: taiyi-playwright
 - 本地默认 Playwright 配置仍列出 114 tests / 17 files；
 - taiyi external profile 已连接三端 root/health/login；
 - 外部运行必须提供 `E2E_TENANT_ID`、`E2E_AGENT_EMPLOYEE_ID`、成员凭据和 Operation 凭据；
-- 最新 taiyi 部署（8781/8782/8783）三端 smoke：Operation `15 passed`、Manager `23 passed`、Agent `10 passed`，合计 `48 passed`；
+- 历史 taiyi 部署（2026-08-21，8781/8782/8783）三端 smoke：Operation `15 passed`、Manager `23 passed`、Agent `10 passed`，合计 `48 passed`；不代表当前部署。
 - Manager audit/governance 截图基线已随当前页面导航/投影刷新；
 - Agent prompt 真实 endpoint 返回 202，RAG deletion/reconcile 真实 upstream-id smoke 已通过；
 - taiyi 当前 reused-tenant cross-tier 重跑：`54 passed / 1 skipped`；唯一跳过是专家招募/Provider matching，测试按设计要求 isolated tenant/provider seed，不能用共享租户伪造通过。

@@ -1,0 +1,44 @@
+# Production dependency-only overlay. The base docker-compose.yml is dev/test
+# for control-plane services; this overlay is used only by validated
+# LightRAG/NewAPI maintenance scripts and ctl dependency starts.
+services:
+  aiteam-compose-guard:
+    profiles: [maintenance-disabled]
+
+  # PostgreSQL is a required dependency for the separately managed control
+  # planes; only the application services and guard are disabled below.
+  postgres:
+    depends_on: !override {}
+
+  operation:
+    profiles: [maintenance-disabled]
+    depends_on: !override {}
+
+  manager:
+    profiles: [maintenance-disabled]
+    depends_on: !override {}
+
+  agent:
+    profiles: [maintenance-disabled]
+    depends_on: !override {}
+
+  lightrag-postgres:
+    depends_on: !override {}
+
+  lightrag:
+    depends_on: !override
+      lightrag-postgres:
+        condition: service_healthy
+
+  newapi-postgres:
+    depends_on: !override {}
+
+  newapi-redis:
+    depends_on: !override {}
+
+  newapi:
+    depends_on: !override
+      newapi-postgres:
+        condition: service_healthy
+      newapi-redis:
+        condition: service_healthy

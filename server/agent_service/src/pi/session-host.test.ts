@@ -270,6 +270,36 @@ test("group participant sessions receive bounded roster and solution context", a
   }
 });
 
+test("SessionHost publishes a terminal event when Manager runtime setup fails", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  try {
+    const now = new Date().toISOString();
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: "model-1", provider_ref: "provider-1" } },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "Helper", model_policy: { model: "model-1", provider_ref: "provider-1" } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const manager: ManagerClient = {
+      pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+      getOrgTree: async () => ({}),
+      pullRuntimeConfig: async () => { throw new Error("Manager returned HTTP 404"); },
+    };
+    const host = fixture.createHost(undefined, manager);
+    const events: string[] = [];
+    await host.subscribe("conversation-1", (envelope) => events.push(envelope.event.type));
+
+    await assert.rejects(
+      host.prompt("conversation-1", "hello", undefined, caller),
+      /Manager returned HTTP 404/,
+    );
+    assert(events.includes("agent_settled"));
+    assert.equal(host.isPrompting("conversation-1"), false);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost persists a Pi session and replays entries", async () => {
   const fixture = await createFixture();
   try {

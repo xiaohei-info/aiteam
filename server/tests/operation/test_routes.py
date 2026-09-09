@@ -12,10 +12,29 @@ from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.service import ProvisioningService
 from run import get_app
-from shared.auth import DevTokenService
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.enums import EnterpriseRole, PlatformRole
+from shared.config import Settings
+
+
+def test_operation_production_startup_guards(monkeypatch):
+    import operation_service.app as operation_app
+
+    production = Settings(
+        tier="operation", service_name="operation", aiteam_env="production",
+        db_url="postgresql://app_rw@localhost/operation",
+        admin_db_url="postgresql://admin@localhost/operation",
+    )
+    monkeypatch.setenv("AITEAM_COMPOSE_MODE", "1")
+    with pytest.raises(RuntimeError, match="Docker Compose is unsupported"):
+        operation_app._validate_production_startup(production)
+    monkeypatch.delenv("AITEAM_COMPOSE_MODE")
+    monkeypatch.setattr(operation_app, "newapi_urls", lambda **_: ("http://newapi", None))
+    with pytest.raises(ValueError, match="NEWAPI_PUBLIC_BASE_URL"):
+        operation_app._validate_production_startup(production)
+    monkeypatch.setattr(operation_app, "newapi_urls", lambda **_: ("http://newapi", "https://relay.example/v1"))
+    operation_app._validate_production_startup(production)
 
 
 class FakeManagerGateway(ManagerGateway):

@@ -17,14 +17,15 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     assert "profiles: [newapi]" in relay
     assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}" in relay
     assert "latest" not in relay
-    assert '"${NEWAPI_BIND_HOST:-127.0.0.1}:${NEWAPI_PORT:-9300}:3000"' in relay
+    assert '"127.0.0.1:${NEWAPI_PORT:-9300}:3000"' in relay
     assert "newapi-postgres:" in relay and "newapi-redis:" in relay
     assert "ports:" not in postgres
     assert "ports:" not in redis
     assert "networks: [newapi-internal]" in postgres
     assert "networks: [newapi-internal]" in redis
-    assert "networks: [default, newapi-internal]" in relay
+    assert "networks: [operation-newapi]" in relay
     assert "newapi-internal:\n    internal: true" in COMPOSE
+    assert "operation-newapi:\n    internal: true" in COMPOSE
     assert "/var/lib/postgresql/data" in postgres
     assert "- newapi_redisdata:/data" in redis
     assert "- newapi_data:/data" in relay
@@ -33,10 +34,19 @@ def test_internal_newapi_is_pinned_private_and_persistent():
 def test_newapi_admin_secrets_only_enter_operation_process():
     operation = service_block("operation", "manager")
     manager = service_block("manager", "agent")
-    agent = COMPOSE.split("  agent:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    agent = COMPOSE.split("  agent:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     assert "NEWAPI_ADMIN_TOKEN:" in operation
+    assert "OPERATION_SYSTEM_USERNAME:" in operation
+    assert "OPERATION_SYSTEM_PASSWORD:" in operation
+    assert "OPERATION_DB_URL: postgresql://app_rw:" in operation
+    assert "OPERATION_ADMIN_DB_URL:" in operation
     assert "NEWAPI_ADMIN_TOKEN:" not in manager
     assert "NEWAPI_ADMIN_TOKEN:" not in agent
+    assert "MANAGER_CREDENTIAL_KEY:" in manager
+    assert "aiteam-compose-guard:" in agent
+    assert "postgres:" not in agent
+    assert "newapi-internal" not in agent and "operation-newapi" not in agent
+    assert "networks: [control-plane]" in agent
 
     ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
     assert "-u NEWAPI_ADMIN_TOKEN" in ctl
@@ -45,10 +55,17 @@ def test_newapi_admin_secrets_only_enter_operation_process():
     assert "-u AUTH_ACCOUNTS" in ctl
     assert "-u TOKEN_SECRET" in ctl
     assert 'NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"' in ctl
-    assert 'if [[ "${SERVER}" != "newapi" ]]' in ctl
+    assert "OPERATION_SYSTEM_USERNAME" in ctl
+    assert "MANAGER_CREDENTIAL_KEY" in ctl
+    assert 'local operation_needs_relay=1' in ctl
+    assert '[[ "${SERVER}" == "newapi" ]] && operation_needs_relay=0' in ctl
     assert '-u NEWAPI_URL' in ctl
     assert "chmod 600 \"${ENV_FILE}\"" in ctl
     assert "dc --profile newapi up -d newapi" in ctl
+    assert 'elif [[ "${SERVER}" == "agent" ]]; then' in ctl
+    assert "dc up -d agent" in ctl
+    assert 'elif [[ "${SERVER}" == "operation" ]]; then' in ctl
+    assert 'dc --profile newapi up -d newapi' in ctl
 
 
 def test_release_gate_and_deployer_cover_newapi_backup_and_health():

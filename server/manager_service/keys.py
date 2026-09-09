@@ -8,14 +8,16 @@ key rotation 口径（D23，03 §9.5）：
 - signer(tenant_id)：取 is_current=true 的行签发新 token。
 - jwks(tenant_id)：返回 is_current=true + 宽限期内（retired_at > now() - GRACE）的所有公钥，
   保证在用 token 平滑失效、不静默拒绝已登录会话（D23 红线：轮换期新旧公钥并存）。
-- public_pem_for_kid(kid)：按 kid 跨所有行（含 retired）反查公钥（宽限期内仍有效）。
+- resolved_public_key_for_kid(kid)：按 kid 反查公钥并保留 registry tenant scope；旧 public_pem_for_kid 仅作兼容读取。
 """
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import psycopg
 
-from shared.auth import RS256TokenSigner, RS256TokenVerifier, generate_rsa_keypair, jwks_from_public_pem
+from shared.auth import ResolvedPublicKey, RS256TokenSigner, RS256TokenVerifier, generate_rsa_keypair, jwks_from_public_pem
 
 # 宽限期：轮换后旧公钥保留在 JWKS 的时长（秒）。旧 token exp 通常 1h，默认 24h 覆盖所有在用会话。
 ROTATION_GRACE_SECONDS = 86400
@@ -131,22 +133,27 @@ class TenantKeyStore:
     def verifier(self, tenant_id: str) -> RS256TokenVerifier:
         return RS256TokenVerifier.from_jwks(self.jwks(tenant_id))
 
-    def public_pem_for_kid(self, kid: str) -> str | None:
-        """按 kid 跨所有行反查公钥（宽限期内仍有效，含 retired）。
-
-        kid 形如 "{tenant_id}:{version}"。验签时只有 token header.kid，据此反查公钥。
-        不调 ensure()（验签只读，不应产生建密钥副作用）；kid 格式错/无记录返回 None。
-        """
+    def resolved_public_key_for_kid(self, kid: str) -> ResolvedPublicKey | None:
+        """按 kid 反查公钥并保留 registry tenant scope，供绑定验签使用。"""
         if ":" not in kid:
             return None
         tenant_id = kid.split(":", 1)[0]
+        try:
+            UUID(tenant_id)
+        except (ValueError, AttributeError):
+            return None
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             row = conn.execute(
-                "SELECT public_pem FROM tenant_signing_key"
+                "SELECT tenant_id, public_pem FROM tenant_signing_key"
                 " WHERE tenant_id = %s AND kid = %s"
                 "   AND (is_current = true"
                 "        OR (retired_at IS NOT NULL"
                 "            AND retired_at > now() - interval '%s seconds'))",
                 (tenant_id, kid, ROTATION_GRACE_SECONDS),
             ).fetchone()
-        return row[0] if row else None
+        return ResolvedPublicKey(str(row[0]), row[1]) if row else None
+
+    def public_pem_for_kid(self, kid: str) -> str | None:
+        """兼容旧的 PEM 查询调用；生产验签应使用 resolved_public_key_for_kid。"""
+        resolved = self.resolved_public_key_for_kid(kid)
+        return resolved.public_pem if resolved else None

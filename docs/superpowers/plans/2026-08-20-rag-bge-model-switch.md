@@ -1,10 +1,12 @@
 ---
 created: 2026-08-20
-status: completed-taiyi-test
+status: completed-historical-snapshot
 scope: taiyi-test-rag-model-switch
 ---
 
-# taiyi RAG Embedding/Reranker 切换计划
+# taiyi RAG Embedding/Reranker 切换计划（历史快照）
+
+> 本文记录 2026-08-20 的 taiyi 测试实验；不代表当前 pinned LightRAG 1.5.6 行为、生产配置或 release 证据。当前 RAG endpoint/workspace 以 Stage B 代码与最新部署验证为准。
 
 ## 目标
 

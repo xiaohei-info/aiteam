@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 
 import httpx
 import pytest
@@ -52,6 +53,8 @@ def test_registry_fails_closed_for_invalid_workspace_or_duplicate_instance():
         json.dumps([{"instance_id": "a", "url": "ftp://rag", "api_key": "k"}]),
         json.dumps([{"instance_id": "a", "url": "http://rag", "api_key": "k\n"}]),
         json.dumps([{"instance_id": "a", "url": "http://rag", "workspace": "w"}]),
+        json.dumps([{"instance_id": "a", "url": "http://rag", "api_key": "k", "workspace": 1}]),
+        json.dumps([{"instance_id": "a", "url": "http://rag", "api_key": "k", "workspace": "w\n"}]),
     ],
 )
 def test_registry_config_bounds_and_protocol_fail_closed(monkeypatch, raw):
@@ -70,6 +73,33 @@ def test_registry_discards_legacy_workspace_configuration(monkeypatch):
     assert registry.resolve("tenant-b__enterprise_shared").instance_id == "rag-a"
 
 
+def test_workspace_only_legacy_hint_is_ignored(monkeypatch):
+    monkeypatch.delenv("LIGHTRAG_INSTANCES", raising=False)
+    monkeypatch.delenv("LIGHTRAG_URL", raising=False)
+    monkeypatch.delenv("LIGHTRAG_API_KEY", raising=False)
+    monkeypatch.setenv("LIGHTRAG_WORKSPACE", "old-fixed")
+    assert RagInstanceRegistry.from_env() is None
+
+
+def test_legacy_env_requires_url_and_api_key(monkeypatch):
+    monkeypatch.delenv("LIGHTRAG_INSTANCES", raising=False)
+    monkeypatch.delenv("LIGHTRAG_URL", raising=False)
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    with pytest.raises(RagInstanceConfigurationError, match="URL and LIGHTRAG_API_KEY"):
+        RagInstanceRegistry.from_env()
+
+
+def test_query_settings_load_from_legacy_env(monkeypatch):
+    monkeypatch.delenv("LIGHTRAG_INSTANCES", raising=False)
+    monkeypatch.setenv("LIGHTRAG_URL", "http://rag/base/")
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    settings = LightRagSettings.from_env()
+    assert settings is not None
+    assert settings.url == "http://rag/base"
+    assert settings.api_key == "secret"
+    assert settings.instance_registry is not None
+
+
 def test_empty_instance_pool_env_uses_legacy_endpoint(monkeypatch):
     monkeypatch.setenv("LIGHTRAG_INSTANCES", "")
     monkeypatch.setenv("LIGHTRAG_URL", "http://rag")
@@ -77,6 +107,60 @@ def test_empty_instance_pool_env_uses_legacy_endpoint(monkeypatch):
     registry = RagInstanceRegistry.from_env()
     assert registry is not None
     assert registry.instances[0].instance_id == "legacy"
+
+
+def test_production_registry_requires_global_dns_resolution(monkeypatch):
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    monkeypatch.setenv("LIGHTRAG_INSTANCES", json.dumps([
+        {"instance_id": "rag-a", "url": "https://rag.example", "api_key": "secret-a"},
+    ]))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))])
+    assert RagInstanceRegistry.from_env() is not None
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.2", 443))])
+    with pytest.raises(RagInstanceConfigurationError, match="global destinations"):
+        RagInstanceRegistry.from_env()
+
+
+def test_production_registry_fails_closed_when_dns_lookup_fails(monkeypatch):
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    monkeypatch.setenv("LIGHTRAG_URL", "https://rag.example")
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("dns down")))
+    with pytest.raises(RagInstanceConfigurationError, match="DNS resolution failed"):
+        RagInstanceRegistry.from_env()
+
+
+def test_production_registry_requires_https_for_pool_and_legacy_modes(monkeypatch):
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    monkeypatch.setenv("LIGHTRAG_INSTANCES", json.dumps([
+        {"instance_id": "rag-a", "url": "http://rag-a", "api_key": "secret-a"},
+    ]))
+    with pytest.raises(RagInstanceConfigurationError, match="must use HTTPS"):
+        RagInstanceRegistry.from_env()
+
+    monkeypatch.delenv("LIGHTRAG_INSTANCES", raising=False)
+    monkeypatch.setenv("LIGHTRAG_URL", "http://rag")
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    with pytest.raises(RagInstanceConfigurationError, match="must use HTTPS"):
+        RagInstanceRegistry.from_env()
+
+
+@pytest.mark.parametrize("url", ["https://127.0.0.2", "https://[::ffff:127.0.0.1]", "https://localhost.local"])
+def test_production_registry_rejects_all_local_endpoint_literals(monkeypatch, url):
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    monkeypatch.setenv("LIGHTRAG_URL", url)
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    with pytest.raises(RagInstanceConfigurationError, match="local destinations"):
+        RagInstanceRegistry.from_env()
+
+
+@pytest.mark.parametrize("url", ["https://rag.example/v1 bad", "https://rag.example:bad"])
+def test_registry_rejects_malformed_url(monkeypatch, url):
+    monkeypatch.setenv("LIGHTRAG_URL", url)
+    monkeypatch.setenv("LIGHTRAG_API_KEY", "secret")
+    with pytest.raises(RagInstanceConfigurationError):
+        RagInstanceRegistry.from_env()
 
 
 def test_legacy_env_workspace_is_ignored(monkeypatch):

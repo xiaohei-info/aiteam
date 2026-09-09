@@ -1,13 +1,13 @@
 ---
 created: 2026-08-19
 status: historical-supplement-superseded-by-stage-b
-implementation: first-read-and-ingestion-slices-live
+implementation: historical-first-read-and-ingestion-slice
 scope: aiteam-rag
 ---
 
-# AI Team RAG 详细设计
+# AI Team RAG 详细设计（历史补充）
 
-> 本文是 AI Team Pi 重构后的 RAG 详细设计补充。当前已完成 Manager-owned LightRAG ingestion + read-only MCP query 首个垂直切片，以及 taiyi/目标部署统一的 PostgreSQL + pgvector 存储切换。
+> 本文是 2026-08-19 的历史设计/证据补充，已由 Stage B 和 v1 completeness closure 取代。文中的“当前/taiyi 已完成”与部署数字均不是当前源码、CI 或 release 证据；不得按本文的旧运行态、旧 fixed-workspace 或旧镜像引用实施。当前唯一口径以 v1 概要设计 04/06/11、Stage B 代码和实际 CI checkout SHA 为准。
 >
 > **Stage B 覆盖说明（2026-09-07）**：当前 Manager 进程可承载多个企业会话，但每个企业只有一个逻辑共享知识库；`knowledge_space`/workspace 仍是现有文档、citation、binding 的内部兼容键。workspace 由 TenantContext 派生/持久化，endpoint pool 只保存 URL/凭据并通过持久化 `instance_id` 选路。本文早期关于固定 `POSTGRES_WORKSPACE`、单企业进程或请求级 workspace 不可用的段落均为历史背景，以 v1 概要设计 04 和 Stage B 实现为准。员工个人级先由 Hindsight employee-private memory 承担，不在企业共享 LightRAG 中复制个人文档。
 >
@@ -51,7 +51,7 @@ tenant A / enterprise_shared
 
 Manager 通过 binding/grant 控制谁可以查询同一个 workspace。不同 tenant 永远不能共用同一个企业 workspace。
 
-### 0.3 当前目标路线
+### 0.3 历史目标路线（已由 Stage B 覆盖）
 
 首个 Agent 直连 MCP 垂直切片已经落地。Agent 不能连接原始 LightRAG Server，而是连接 Manager-owned MCP facade：
 
@@ -64,7 +64,7 @@ Agent Pi
 
 Manager-owned MCP facade 不是第二套业务 RAG；它只是把 LightRAG 的 query/data 能力包装成受控 MCP 工具，负责身份、workspace、工具白名单和 citation 授权。
 
-当前已实现 `knowledge_search` 只读工具；`knowledge_get`、多 workspace fan-out 和更大规模存储升级仍是后续切片。
+历史快照曾实现 `knowledge_search` 只读工具；`knowledge_get`、多 workspace fan-out 和存储升级的后续状态以 Stage B/当前 CI 为准，本文不作发布判断。
 
 ---
 
@@ -88,17 +88,17 @@ Manager-owned MCP facade 不是第二套业务 RAG；它只是把 LightRAG 的 q
 - 不把 LightRAG WebUI 当作 AI Team 的权限管理面。
 - 不把 LightRAG 原生文档写入/删除/图谱修改工具暴露给 Pi。
 - 不迁移旧 MVP 知识数据；旧文档需要重新 intake。
-- 当前切片只实现 `knowledge_search` 只读 MCP 和 Manager ingestion；`knowledge_get`、完整 RAG 前端和多实例 workspace 编排仍未完成。
+- 历史快照当时只实现 `knowledge_search` 只读 MCP 和 Manager ingestion；后续 `knowledge_get`、完整 RAG 前端和多实例 workspace 编排由 Stage B 覆盖，本文不再作为实施清单。
 
 ---
 
-## 2. 当前 taiyi LightRAG 基线
+## 2. 历史 taiyi LightRAG 基线（非当前部署证据）
 
-当前 taiyi 使用 LightRAG `1.5.6` 容器：
+历史记录曾使用 LightRAG `1.5.6` 容器；以下信息仅供追溯，不能证明当前 taiyi 状态：
 
 ```text
 container:   aiteam-lightrag
-docker image: ghcr.1ms.run/hkuds/lightrag:latest
+docker image: <historical registry reference; not an approved release image>
 listen:      127.0.0.1:9621 → container:9621
 working_dir: /data
 input_dir:   /app/data/inputs
@@ -127,7 +127,7 @@ LOG_LEVEL=INFO
 WHITELIST_PATHS=/health
 ```
 
-当前 taiyi 已使用带 `pgvector` 扩展的 PostgreSQL 数据库，LightRAG 四类存储均落 PG；旧 Qwen/JSON 索引只作为备份保留，不参与查询。
+历史记录称 taiyi 曾使用带 `pgvector` 扩展的 PostgreSQL 数据库；该记录未经当前部署复核，不证明当前 LightRAG adapter 或存储状态。
 
 `PGTableGraphStorage` 不需要 Apache AGE；`PGVectorStorage` 使用 `vector(1024)` 和 HNSW 索引。endpoint 实例不再配置进程级 workspace；Manager 通过请求级 `LIGHTRAG-WORKSPACE` header 选择持久化的 tenant workspace，并通过持久化 `instance_id` 选择正确 endpoint。Compose 不设置 `POSTGRES_WORKSPACE`。
 
@@ -227,7 +227,7 @@ LightRAG 原生表/文件不是 AI Team 的业务表。Manager 需要维护以�
 
 ### 4.1 `knowledge_space`（内部兼容键）
 
-在当前一企业一 Manager 部署中，企业知识库只有一个产品对象。`knowledge_space` 只保留为既有文档、citation、binding 和数据库迁移的内部兼容键；它不再表示普通管理员可创建的多套知识库。
+在当前 Stage B 会话级多租户 Manager 中，每个 tenant 只有一个企业共享知识库对象。`knowledge_space` 只保留为既有文档、citation、binding 和数据库迁移的内部兼容键；它不再表示普通管理员可创建的多套知识库。
 
 ```text
 id                  knowledge_space_id
@@ -326,7 +326,7 @@ status                   active | revoked
 version
 ```
 
-企业共享知识库默认属于当前 Manager 所绑定企业，文档只索引一次。成员/专家/方案授权是访问控制，不复制文档；员工个人长期记忆由 Hindsight employee-private bank 承担。
+企业共享知识库按当前 TenantContext 所选 tenant 派生，文档只索引一次。成员/专家/方案授权是访问控制，不复制文档；员工个人长期记忆由 Hindsight employee-private bank 承担。
 
 ---
 
@@ -385,7 +385,7 @@ LightRAG 的 API key 只能证明“请求者可以访问这个 LightRAG 服务�
 Agent JWT / capability token
   → Manager-owned MCP facade
   → 根据 tenant/member/employee 解析允许的 space
-  → 注入固定 workspace
+  → 注入按 tenant 派生/持久化的 request workspace
   → 调用 LightRAG REST/query_data
 ```
 
@@ -708,7 +708,7 @@ reconcile 前由 Manager 通过有界 `/documents/paginated` 将 binding/Manager
 | Storage | `WORKING_DIR` | 持久化卷，不能使用临时目录 | 数据迁移 |
 | Storage | `WORKSPACE` | 每个 tenant/space 唯一 | 新 workspace |
 
-### 8.3 当前 taiyi 的优先建议
+### 8.3 历史 taiyi 优先建议（非当前发布口径）
 
 1. 暂时保持 `Qwen/Qwen3-Embedding-8B + 4096`，不要改维度。
 2. 为中文知识明确测试 `SUMMARY_LANGUAGE=Chinese`。
@@ -722,7 +722,7 @@ reconcile 前由 Manager 通过有界 `/documents/paginated` 将 binding/Manager
 
 ## 9. 部署架构
 
-### 9.1 当前 taiyi 测试架构
+### 9.1 历史 taiyi 测试架构（非当前部署证据）
 
 ```text
 Operation :8781
@@ -733,7 +733,7 @@ Hindsight :9290
 LightRAG  :9621
 ```
 
-当前 LightRAG 仅主机 loopback 暴露，且启用 API key。它适合作为测试环境的 Manager 侧组件。
+历史测试记录中的 LightRAG 曾仅主机 loopback 暴露并启用 API key；当前部署状态必须以实际 CI/taiyi 证据为准。
 
 ### 9.2 目标部署架构
 
@@ -871,21 +871,21 @@ LightRAG 内部路径
 
 ## 12. 后续 RAG 切片
 
-当前已完成：
+历史快照曾记录：
 
 - Manager-owned FastMCP Streamable HTTP facade；
 - Agent controlled MCP client；
 - `knowledge_search` 只读工具；
 - LightRAG `/query/data` 检索和引用映射；
 - Manager 文档 intake → LightRAG per-document track status → ready/binding；
-- taiyi live intake → MCP citation smoke；
+- 历史 taiyi live intake → MCP citation smoke（不作为当前发布证据）；
 - BGE-M3 + BGE-Reranker-v2-M3；
 - PostgreSQL/pgvector/PGTableGraph/PGDocStatus 存储；
 - PG workspace 持久化和重启恢复。
 
 后续优先做：
 
-1. 用当前 LightRAG `1.5.6` 验证 workspace header/query/graph/vector 是否完全按 workspace 隔离；
+1. （历史未决项）用部署中的 pinned LightRAG 版本验证 workspace header/query/graph/vector 是否完全按 workspace 隔离；
 2. 验证 `query_data` 的引用结构和 chunk provenance；
 3. 对比原始社区 `lightrag-mcp` 与 Manager-owned 两工具 facade；
 4. 冻结 enterprise_shared + private/department space 的授权矩阵；
@@ -893,7 +893,7 @@ LightRAG 内部路径
 
 ---
 
-## 13. 官方参考
+## 13. 官方参考（不等同于部署验证）
 
 - LightRAG API Server：<https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md>
 - LightRAG 环境变量完整示例：<https://raw.githubusercontent.com/HKUDS/LightRAG/HEAD/env.example>

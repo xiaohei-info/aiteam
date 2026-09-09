@@ -4,6 +4,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_web_playwright_operation_and_job_have_explicit_environment():
+    config = (ROOT / "web/playwright.config.ts").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/web-ci.yml").read_text(encoding="utf-8")
+    assert "AITEAM_ENV: \"test\"" in config
+    assert "OPERATION_SYSTEM_PASSWORD," in config
+    assert "OPERATION_SYSTEM_PASSWORD=${" not in config
+    assert "      AITEAM_ENV: test" in workflow
+
+
+def test_production_run_launcher_requires_loopback_host():
+    script = (ROOT / "server/run.py").read_text(encoding="utf-8")
+    assert "production control-plane services must bind to loopback" in script
+
+
+def test_compose_production_requires_ctl_guard():
+    compose = (ROOT / "deploy/docker/docker-compose.yml").read_text(encoding="utf-8")
+    assert "aiteam-compose-guard" in compose
+    assert "service_completed_successfully" in compose
+    assert "production control-plane Compose is unsupported" in compose
+    maintenance = (ROOT / "deploy/docker/docker-compose.maintenance.yml").read_text(encoding="utf-8")
+    assert "maintenance-disabled" in maintenance
+    ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
+    assert 'if [[ "${action}" == "start" || "${action}" == "restart" ]]; then' in ctl
+    assert 'start_service_local postgres' in ctl
+
+
 def test_deployment_checks_pin_compose_environment():
     workflow = (ROOT / ".github/workflows/deploy-ops.yml").read_text(encoding="utf-8")
     assert "env:\n  AITEAM_ENV: test" in workflow
@@ -19,6 +45,8 @@ def test_taiyi_deploy_uses_persistent_root_without_workspace_checkout():
     assert 'bash "${{ env.DEPLOY_ROOT }}/deploy/ci/run.sh"' in workflow
     assert "concurrency:" in workflow
     assert "cancel-in-progress: false" in workflow
+    assert "umask 077" in workflow
+    assert 'chmod 600 "${env_file}"' in workflow
 
 
 def test_taiyi_deploy_refreshes_run_sh_from_origin_before_exec():
@@ -28,6 +56,15 @@ def test_taiyi_deploy_refreshes_run_sh_from_origin_before_exec():
     invoke = workflow.index('bash "${{ env.DEPLOY_ROOT }}/deploy/ci/run.sh"')
     assert fetch < refresh < invoke
     assert "actions/checkout@v4" not in workflow
+
+
+def test_deploy_unit_is_rendered_for_the_selected_persistent_root():
+    unit = (ROOT / "deploy/ci/aiteam-v1.service").read_text(encoding="utf-8")
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    assert "@DEPLOY_ROOT@" in unit
+    assert "@ENV_TARGET@" in unit
+    assert 'DEPLOY_ROOT="${DEPLOY_ROOT:-$(pwd)}"' in script
+    assert 's|@DEPLOY_ROOT@|' in script
 
 
 def test_deploy_script_fetches_requested_remote_branch_and_requires_enable():
@@ -63,6 +100,12 @@ def test_deploy_script_syncs_checked_out_requirements_into_persistent_venv():
     assert ".aiteam-requirements.sha256" in script
     assert "application writers remain stopped" in script
     assert 'never source TEST secrets into pip' in script
+    assert 'if ! env -i \\' in script
+    assert 'DB_URL_FOR_MIGRATION="postgresql://app_rw:' in script
+    assert 'DB_URL="${DB_URL_FOR_MIGRATION}" ADMIN_DB_URL=' not in script
+    assert 'AITEAM_MIGRATION_ENV_FILE=' in script
+    assert 'OPERATION_DB_URL_FOR_MIGRATION=' in script
+    assert 'OPERATION_ADMIN_DB_URL_FOR_MIGRATION=' in script
 
 
 def test_deploy_script_exposes_dependency_start_failure_before_restart():
@@ -81,7 +124,7 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server postgres >/dev/null 2>&1' not in script
     assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server newapi >/dev/null 2>&1' not in script
     assert 'start --env "${ENV_TARGET}" --deploy docker --server "${server}"' in helper
-    assert "docker compose --profile newapi ps --all" in helper
+    assert "docker compose \"${compose_files[@]}\" --profile newapi ps --all" in helper
     assert "docker compose config" not in helper
     assert "for attempt" not in helper
     assert "up -d" not in helper
@@ -91,3 +134,5 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     assert "volume rm" not in helper
     assert '"${server}" == "postgres"' in helper
     assert "postgres_container_name_conflict" in helper
+    assert ".HostConfig.PortBindings" in helper
+    assert "host binding is not loopback-only" in helper

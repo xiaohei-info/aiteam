@@ -39,11 +39,18 @@ Typical first deployment:
   ./scripts/ctl.sh start --env prod --deploy docker --server newapi
   scripts/bootstrap-console-credentials.sh \
     --env-file .env.prod --newapi-url http://127.0.0.1:9300
-  ./scripts/ctl.sh start --env prod --deploy docker
+  ./scripts/ctl.sh start --env prod --deploy docker --server manager
+  ./scripts/ctl.sh start --env prod --deploy docker --server operation
 
 The generated credential file is sourced by ctl.sh when
 AITEAM_CONSOLE_CREDENTIALS_FILE is present in the selected env file.
 EOF
+}
+
+python3_clean() {
+  # Helpers receive only non-secret process metadata; credentials travel via
+  # protected file descriptors/files and never through inherited environment.
+  env -i PATH="${PATH:-/usr/bin:/bin}" HOME="${HOME:-}" python3 "$@"
 }
 
 quote_env() {
@@ -55,7 +62,7 @@ quote_env() {
 
 random_value() {
   local length="$1"
-  python3 - "$length" <<'PY'
+  python3_clean - "$length" <<'PY'
 import secrets
 import string
 import sys
@@ -67,11 +74,14 @@ PY
 
 set_env_value() {
   local path="$1" key="$2" value="$3"
-  python3 - "$path" "$key" "$value" <<'PY'
+  # The value travels over a dedicated pipe file descriptor, never as a Python
+  # argv or inherited env item. The script itself remains on stdin.
+  python3_clean - "$path" "$key" 3<<<"$value" <<'PY'
 from pathlib import Path
 import os
 import sys
-path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+path, key = Path(sys.argv[1]), sys.argv[2]
+value = os.fdopen(3, "r", encoding="utf-8").read().rstrip("\n")
 if "'" in value:
     raise SystemExit("credential value cannot contain a single quote")
 lines = path.read_text().splitlines()
@@ -92,7 +102,7 @@ PY
 
 set_env_pointer() {
   local path="$1" pointer="$2"
-  python3 - "$path" "$pointer" <<'PY'
+  python3_clean - "$path" "$pointer" <<'PY'
 from pathlib import Path
 import os
 import shlex
@@ -123,7 +133,7 @@ hash_lightrag_password() {
     exit 1
   }
   # Feed the password over stdin so it is not present in docker argv.
-  printf '%s' "$password" | docker run --rm -i --entrypoint python "$LIGHTRAG_HASH_IMAGE" -c '
+  printf '%s' "$password" | env -i PATH="${PATH:-/usr/bin:/bin}" docker run --rm -i --entrypoint python "$LIGHTRAG_HASH_IMAGE" -c '
 import sys
 from lightrag.api.passwords import hash_password
 print(hash_password(sys.stdin.read()))
@@ -132,15 +142,12 @@ print(hash_password(sys.stdin.read()))
 
 provision_newapi() {
   local base_url="$1" credentials_file="$2" token_file="$3"
-  NEWAPI_BOOTSTRAP_USERNAME="$NEWAPI_ADMIN_USERNAME" \
-  NEWAPI_BOOTSTRAP_PASSWORD="$NEWAPI_ADMIN_PASSWORD" \
-  NEWAPI_BOOTSTRAP_USER_ID="$NEWAPI_ADMIN_USER_ID" \
-  NEWAPI_BOOTSTRAP_TOKEN="${NEWAPI_ADMIN_TOKEN:-}" \
-  python3 - "$base_url" "$token_file" <<'PY'
+  python3_clean - "$base_url" "$credentials_file" "$token_file" <<'PY'
 from __future__ import annotations
 
 import json
 import os
+import shlex
 from pathlib import Path
 import sys
 import urllib.error
@@ -148,11 +155,27 @@ import urllib.parse
 import urllib.request
 
 base = sys.argv[1].rstrip("/")
-token_file = Path(sys.argv[2])
-username = os.environ["NEWAPI_BOOTSTRAP_USERNAME"]
-password = os.environ["NEWAPI_BOOTSTRAP_PASSWORD"]
-user_id = os.environ["NEWAPI_BOOTSTRAP_USER_ID"]
-existing_token = os.environ.get("NEWAPI_BOOTSTRAP_TOKEN", "")
+credentials_file = Path(sys.argv[2])
+token_file = Path(sys.argv[3])
+
+def read_credentials(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        parsed = shlex.split(raw_value, comments=False)
+        values[key] = parsed[0] if parsed else ""
+    return values
+
+credentials = read_credentials(credentials_file)
+username = credentials.get("NEWAPI_ADMIN_USERNAME", "")
+password = credentials.get("NEWAPI_ADMIN_PASSWORD", "")
+user_id = credentials.get("NEWAPI_ADMIN_USER_ID", "")
+existing_token = credentials.get("NEWAPI_ADMIN_TOKEN", "")
+if not username or not password or not user_id:
+    raise RuntimeError("console credential file is missing NewAPI bootstrap fields")
 
 
 def request(method: str, path: str, body: dict | None = None, headers: dict[str, str] | None = None) -> tuple[int, dict]:

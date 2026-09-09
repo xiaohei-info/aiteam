@@ -25,11 +25,12 @@ from .solution_repository import PgSolutionRepository, SolutionRepository
 
 @lru_cache(maxsize=1)
 def get_solution_repository() -> SolutionRepository:
-    """单例行业方案统计仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例行业方案统计业务仓储。有 db_url → app_rw PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    db_url = settings.admin_db_url
+    db_url = settings.db_url
     if db_url:
-        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
         return PgSolutionRepository(db_url)
     return SolutionRepository()
 

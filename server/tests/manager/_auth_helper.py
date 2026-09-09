@@ -11,15 +11,29 @@ Manager 受保护端点用 DynamicRS256TokenVerifier（按 token kid 解析 tena
 
 from __future__ import annotations
 
-from shared.auth import DynamicRS256TokenVerifier, RS256TokenSigner, generate_rsa_keypair
+import jwt
+
+from shared.auth import DynamicRS256TokenVerifier, ResolvedPublicKey, RS256TokenSigner, generate_rsa_keypair
 from shared.contracts.auth import TokenClaims
+
+
+class _TenantTestSigner(RS256TokenSigner):
+    """Test signer whose kid mirrors each claim tenant for bound-verifier tests."""
+
+    def sign(self, claims: TokenClaims) -> str:
+        return jwt.encode(
+            claims.model_dump(exclude_none=True),
+            self._private_pem,
+            algorithm="RS256",
+            headers={"kid": f"{claims.tenant_id}:test"},
+        )
 
 
 def make_verifier(admin_url: str) -> DynamicRS256TokenVerifier:
     """构造绑定本测试 admin_url 的动态验签器（真 PG 闭环）。"""
     from manager_service.keys import TenantKeyStore
 
-    return DynamicRS256TokenVerifier(TenantKeyStore(admin_url).public_pem_for_kid)
+    return DynamicRS256TokenVerifier(TenantKeyStore(admin_url).resolved_public_key_for_kid)
 
 
 def sign_token(admin_url: str, tenant_id: str, roles: list[str], *, user_id: str = "u") -> str:
@@ -34,12 +48,18 @@ def sign_token(admin_url: str, tenant_id: str, roles: list[str], *, user_id: str
 def make_inmem_verifier_and_signer() -> tuple[DynamicRS256TokenVerifier, RS256TokenSigner]:
     """无 DB 测试用：固定 RSA key（不依赖 PG），返回 (verifier, signer)。
 
-    verifier 是 DynamicRS256TokenVerifier，resolver 固定返回本 signer 的公钥（任意 kid）。
+    verifier 是 DynamicRS256TokenVerifier，resolver 返回 kid 中的 tenant scope 与公钥。
     """
     priv, _ = generate_rsa_keypair()
-    signer = RS256TokenSigner(priv, kid="test-manager:1")
+    signer = _TenantTestSigner(priv, kid="test-manager:1")
     pub = signer.public_pem()
-    verifier = DynamicRS256TokenVerifier(lambda _kid: pub)
+
+    def resolve(kid):
+        if not isinstance(kid, str) or ":" not in kid:
+            return None
+        return ResolvedPublicKey(kid.split(":", 1)[0], pub)
+
+    verifier = DynamicRS256TokenVerifier(resolve)
     return verifier, signer
 
 

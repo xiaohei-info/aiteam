@@ -1,8 +1,8 @@
 """服务间共享密钥守卫验收（缺口3 代码层，平面③）。
 
 fail-closed（未配置 / 误配 dev-* 前缀 / 占位值各自对应不同行为）：未配置 SERVICE_TOKEN → fail-closed 401；
-dev-* 前缀视为生产 token 严格校验（AITEAM-331 B2）；仅占位值 `dev-service-token-placeholder` 在明确 dev
-profile 下 fail-open（日志提醒）；其他非空 token → fail-closed 严格校验 X-Service-Token。
+dev-* 前缀视为生产 token 严格校验（AITEAM-331 B2）；仅占位值 `dev-service-token-placeholder` 在明确 `dev`/`development`
+profile 下 fail-open（日志提醒）；`test` 和 production 均 fail-closed，其他非空 token 需严格校验 X-Service-Token。
 """
 
 from fastapi import Depends, FastAPI
@@ -13,10 +13,10 @@ from shared.errors import install_exception_handlers
 from shared.service_token import verify_service_token
 
 
-def _app(service_token: str | None) -> FastAPI:
+def _app(service_token: str | None, *, aiteam_env: str | None = None) -> FastAPI:
     app = FastAPI()
     install_exception_handlers(app)  # 装 AppError → problem+json 处理器，Unauthorized → 401
-    app.state.settings = Settings(tier="manager", service_name="mgr-test", service_token=service_token)
+    app.state.settings = Settings(tier="manager", service_name="mgr-test", service_token=service_token, aiteam_env=aiteam_env or "development")
 
     @app.post("/protected")
     def protected(_=Depends(verify_service_token)):
@@ -72,6 +72,17 @@ def test_dev_prefix_accepted_with_matching_token():
 
 
 # ========== 生产模式测试（fail-closed）==========
+
+
+def test_test_mode_does_not_fail_open_with_dev_placeholder():
+    client = TestClient(_app(service_token="dev-service-token-placeholder", aiteam_env="test"))
+    assert client.post("/protected").status_code == 401
+
+
+def test_production_mode_rejects_dev_placeholder_even_when_supplied():
+    client = TestClient(_app(service_token="dev-service-token-placeholder", aiteam_env="production"))
+    r = client.post("/protected", headers={"X-Service-Token": "dev-service-token-placeholder"})
+    assert r.status_code == 401
 
 
 def test_production_mode_requires_token_when_configured():

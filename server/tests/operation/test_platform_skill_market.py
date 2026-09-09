@@ -1,11 +1,13 @@
 from zipfile import ZIP_DEFLATED, ZipFile
 from io import BytesIO
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from operation_service.platform_skill_market import ClawHubClient, parse_skill_zip
-from operation_service.routes_skill_market import _verified_text_manifest
+import operation_service.routes_skill_market as skill_routes
+from operation_service.routes_skill_market import _repo, _verified_text_manifest
 from shared.errors import ValidationProblem
 
 
@@ -15,6 +17,13 @@ def _zip(files):
         for path, content in files.items():
             archive.writestr(path, content)
     return out.getvalue()
+
+
+def test_skill_route_repository_uses_business_dsn(monkeypatch):
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(db_url="postgresql://app_rw/operation"))))
+    monkeypatch.setattr(skill_routes, "PlatformSkillRepository", lambda dsn: ("repo", dsn))
+    assert _repo(request) == ("repo", "postgresql://app_rw/operation")
+    assert request.app.state._platform_skill_repository == ("repo", "postgresql://app_rw/operation")
 
 
 def test_parse_skill_zip_accepts_only_text_skill_files():

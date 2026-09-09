@@ -2,11 +2,22 @@ from datetime import UTC, datetime
 
 import pytest
 
-from manager_service.provider_credential_service import ProviderCredentialService
+from manager_service.provider_credential_service import ProviderCredentialService, _safe_runtime_relay_url
 from shared.contracts.platform_provider import PricingSnapshot
 from shared.contracts.snapshot import EmployeeExecutionSnapshot, ModelPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import NotFound
+
+
+def test_runtime_relay_url_rejects_unsafe_and_private_destinations(monkeypatch):
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    with pytest.raises(NotFound):
+        _safe_runtime_relay_url("https://user:secret@relay.example/v1")
+    monkeypatch.setattr("manager_service.provider_credential_service.socket.getaddrinfo", lambda *_args, **_kwargs: [(2, 1, 6, "", ("10.0.0.2", 443))])
+    with pytest.raises(NotFound):
+        _safe_runtime_relay_url("https://relay.example/v1")
+    monkeypatch.setattr("manager_service.provider_credential_service.socket.getaddrinfo", lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))])
+    assert _safe_runtime_relay_url("https://relay.example/v1/") == "https://relay.example/v1"
 
 
 class _Snapshot:
@@ -88,14 +99,16 @@ def test_runtime_config_uses_operator_tenant_access_and_frozen_price():
 
 @pytest.mark.parametrize("status", ["draft", "provisioning", "paused", "provisioning_failed", "archived"])
 def test_runtime_config_fails_closed_for_non_runnable_employee(status):
-    snapshot = _Snapshot(); snapshot.status = status
+    snapshot = _Snapshot()
+    snapshot.status = status
     svc = ProviderCredentialService(object(), object(), snapshot, _Operator())
     with pytest.raises(NotFound):
         svc.runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]), employee_id="e1")
 
 
 def test_runtime_config_fails_closed_without_pricing_snapshot():
-    snapshot = _Snapshot(); snapshot.pricing = None
+    snapshot = _Snapshot()
+    snapshot.pricing = None
     svc = ProviderCredentialService(object(), object(), snapshot, _Operator())
     with pytest.raises(NotFound):
         svc.runtime_config(TenantContext(tenant_id="t1", user_id="m1", roles=["member"]), employee_id="e1")

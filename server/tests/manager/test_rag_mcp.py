@@ -216,6 +216,27 @@ def test_lightrag_documented_no_context_response_is_empty_success():
     assert asyncio.run(run()) == {"status": "success", "data": {"references": [], "chunks": []}}
 
 
+def test_access_uses_tenant_aware_enterprise_scope_checker():
+    class CheckingRag(FakeRag):
+        def __init__(self):
+            self.calls = []
+
+        def is_enterprise_space(self, ctx, space_id):
+            self.calls.append((ctx.tenant_id, space_id))
+            return space_id == "space-a"
+
+    rag = CheckingRag()
+    access = RagAccessService(
+        snapshot_service=FakeSnapshots(), member_repository=FakeMembers(),
+        employee_config=FakeEmployees(), binding_repository=FakeBindings(),
+        rag_service=rag, light_rag=object(),
+    )
+    ctx = TenantContext(tenant_id="tenant-a", user_id="member-a")
+    assert access._is_enterprise_scope("space-a", ctx)
+    assert not access._is_enterprise_scope("space-b", ctx)
+    assert rag.calls == [("tenant-a", "space-a"), ("tenant-a", "space-b")]
+
+
 @pytest.mark.parametrize("status", ["disabled", "revoked"])
 @pytest.mark.parametrize("role", ["owner", "enterprise_admin"])
 def test_access_denies_inactive_members_even_when_they_are_management_roles(status, role):

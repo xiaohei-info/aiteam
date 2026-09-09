@@ -13,6 +13,7 @@
 #
 # 两类连接（#60）：管理连接（postgres 超管，跑迁移/建角色/DDL）+ 业务连接（app_rw，受 RLS）。
 
+export AITEAM_ENV="${AITEAM_ENV:-test}"
 export PG_HOST="${PG_HOST:-localhost}"
 export PG_PORT="${PG_PORT:-5432}"
 export PG_SUPER_USER="${PG_SUPER_USER:-postgres}"
@@ -22,6 +23,8 @@ export APP_RW_PASSWORD="${APP_RW_PASSWORD:-apprwpass}"
 
 export ADMIN_DB_URL="postgresql://${PG_SUPER_USER}:${PG_SUPER_PASSWORD}@${PG_HOST}:${PG_PORT}/manager_control_db"
 export DB_URL="postgresql://app_rw:${APP_RW_PASSWORD}@${PG_HOST}:${PG_PORT}/manager_control_db"
+export OPERATION_ADMIN_DB_URL="postgresql://${PG_SUPER_USER}:${PG_SUPER_PASSWORD}@${PG_HOST}:${PG_PORT}/operation_control_db"
+export OPERATION_DB_URL="postgresql://app_rw:${APP_RW_PASSWORD}@${PG_HOST}:${PG_PORT}/operation_control_db"
 
 # 运营端 app 装配需要（缺则三端 app 构建 setup 阶段 ERROR）。
 export OPERATION_SYSTEM_USERNAME="${OPERATION_SYSTEM_USERNAME:-sysadmin}"
@@ -31,3 +34,5 @@ export SERVICE_TOKEN="${SERVICE_TOKEN:-test-service-token}"
 # sanity（口令脱敏后打印，确认 URL 已真实展开、不是 ***）：
 echo "ADMIN_DB_URL=postgresql://${PG_SUPER_USER}:****@${PG_HOST}:${PG_PORT}/manager_control_db"
 echo "DB_URL=postgresql://app_rw:****@${PG_HOST}:${PG_PORT}/manager_control_db"
+echo "OPERATION_ADMIN_DB_URL=postgresql://${PG_SUPER_USER}:****@${PG_HOST}:${PG_PORT}/operation_control_db"
+echo "OPERATION_DB_URL=postgresql://app_rw:****@${PG_HOST}:${PG_PORT}/operation_control_db"

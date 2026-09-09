@@ -502,6 +502,28 @@ class _FakeSpaceExists:
 # ─────────────────────────────── 服务层状态机 ───────────────────────────────
 
 
+def test_rag_handle_validates_persisted_instance_identity(tmp_path: Path) -> None:
+    class Registry:
+        def __init__(self, returned_id: str):
+            self.returned_id = returned_id
+
+        def by_id(self, _instance_id: str):
+            return type("Instance", (), {"instance_id": self.returned_id})()
+
+    ingestion = _FakeIngestion()
+    svc = _make_service(
+        space_root=tmp_path / "store", existing_spaces={"ks"}, ingestion=ingestion,
+    )
+    ctx = _owner_ctx()
+
+    ingestion.instance_registry = Registry("legacy")
+    assert svc._rag_handle(ctx, "ks").instance_id == "legacy"
+
+    ingestion.instance_registry = Registry("different")
+    with pytest.raises(RagIngestionUnavailable, match="knowledge deletion unavailable"):
+        svc._rag_handle(ctx, "ks")
+
+
 def _make_service(*, space_root: Path, experts=None, employees=None, existing_spaces=None,
                   ingestion=None, operation_repo=None):
     doc_repo = _FakeDocRepo()

@@ -20,6 +20,15 @@ test("JWT Agent identity rejects null, non-string and empty tenant claims", asyn
   }
 });
 
+test("JWT authenticator rejects duplicate or empty JWKS key ids", () => {
+  const signed = token();
+  assert.throws(() => createJwtAuthenticator({ jwks: { keys: [signed.jwks.keys[0], { ...signed.jwks.keys[0] }] }, issuer: "manager", audience: "agent" }), /duplicate or empty kid/);
+  assert.throws(() => createJwtAuthenticator({ jwks: { keys: [{ ...signed.jwks.keys[0], kid: "" }] }, issuer: "manager", audience: "agent" }), /duplicate or empty kid/);
+  assert.throws(() => createJwtAuthenticator({ jwks: { keys: [{ ...signed.jwks.keys[0], alg: "RS384" }] }, issuer: "manager", audience: "agent" }), /only RSA RS256/);
+  assert.throws(() => createJwtAuthenticator({ jwks: { keys: [{ ...signed.jwks.keys[0], extra: "secret" } as never] }, issuer: "manager", audience: "agent" }), /only RSA RS256/);
+  assert.throws(() => createJwtAuthenticator({ jwks: { keys: signed.jwks.keys, extra: "secret" } as never, issuer: "manager", audience: "agent" }), /only the keys member/);
+});
+
 test("JWT authenticator verifies tenant identity and rejects expiry", async () => {
   const valid = token();
   const authenticate = createJwtAuthenticator({ jwks: valid.jwks, issuer: "manager", audience: "agent" });

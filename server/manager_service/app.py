@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -99,12 +101,14 @@ def _build_verifier():
     恒 401（密钥库未配置不静默放行；dev 无 DB 时受保护端点本就需要 DB 才有意义）。
     """
     settings = load_settings("manager")
+    if settings.is_production and os.getenv("AITEAM_COMPOSE_MODE") == "1":
+        raise RuntimeError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
     admin_dsn = settings.admin_db_url
     if not admin_dsn or not settings.db_url:
         return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
     key_store = TenantKeyStore(admin_dsn)
     return ActivePrincipalVerifier(
-        DynamicRS256TokenVerifier(key_store.public_pem_for_kid),
+        DynamicRS256TokenVerifier(key_store.resolved_public_key_for_kid),
         TenantAuthRepository(PgTenantRouter(settings.db_url)),
     )
 
@@ -131,6 +135,27 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 settings = load_settings("manager")
+if settings.is_production:
+    from urllib.parse import urlsplit
+
+    configured_issuer = os.getenv("AITEAM_JWT_ISSUER", "").strip()
+    configured_audience = os.getenv("AITEAM_JWT_AUDIENCE", "").strip()
+    issuer = urlsplit(configured_issuer)
+    if (
+        not configured_issuer
+        or issuer.scheme != "https"
+        or not issuer.hostname
+        or issuer.username
+        or issuer.password
+        or issuer.query
+        or issuer.fragment
+        or not configured_audience
+    ):
+        raise RuntimeError("Production Manager requires an absolute HTTPS AITEAM_JWT_ISSUER and non-empty AITEAM_JWT_AUDIENCE")
+    if os.getenv("AITEAM_AGENT_JWT_ISSUER", "").strip() and os.getenv("AITEAM_AGENT_JWT_ISSUER", "").strip() != configured_issuer:
+        raise RuntimeError("Manager and Agent JWT issuer values must match exactly in production")
+    if os.getenv("AITEAM_AGENT_JWT_AUDIENCE", "").strip() and os.getenv("AITEAM_AGENT_JWT_AUDIENCE", "").strip() != configured_audience:
+        raise RuntimeError("Manager and Agent JWT audience values must match exactly in production")
 _skill_signer = SkillPackageSigner.from_env()
 if settings.is_production and (_skill_signer is None or not _skill_signer.has_next):
     raise RuntimeError(

@@ -74,8 +74,8 @@ jobs:
   integration:
     name: 集成测试（真 PostgreSQL + RLS）
     runs-on: ubuntu-latest
-    # 真 PG service：库名须为 manager_control_db（0001 迁移硬编码
-    # `GRANT CONNECT ON DATABASE manager_control_db`，库不存在该 GRANT 会失败）。
+    # 真 PG service：Manager 与 Operation 使用两个独立数据库；迁移通过
+    # current_database() 动态授予 CONNECT，不把数据库名硬编码进 SQL。
     services:
       postgres:
         image: postgres:16
@@ -92,11 +92,18 @@ jobs:
           --health-retries 10
     # 两类连接分离（#60）：管理连接（postgres 超管，跑迁移/建角色/DDL）+ 业务连接（app_rw，受 RLS）。
     # app_rw 的 LOGIN 口令由 apply_migrations 用 APP_RW_PASSWORD 幂等下发（不入迁移脚本）。
-    # env 命名统一为 DB_URL/ADMIN_DB_URL（对齐 shared/config.py + deploy/，#103）。
+    # env 命名统一为 DB_URL/ADMIN_DB_URL（对齐 shared/config.py + deploy/，#103）；
+    # Operation PG contract tests use a separate database and also receive
+    # OPER_TEST_* aliases so they cannot silently skip.
     env:
       ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/manager_control_db
       DB_URL: postgresql://app_rw:apprwpass@localhost:5432/manager_control_db
+      OPERATION_ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/operation_control_db
+      OPERATION_DB_URL: postgresql://app_rw:apprwpass@localhost:5432/operation_control_db
       APP_RW_PASSWORD: apprwpass
+      OPER_TEST_ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/operation_control_db
+      OPER_TEST_DB_URL: postgresql://app_rw:apprwpass@localhost:5432/operation_control_db
+      OPER_TEST_APP_RW_PASSWORD: apprwpass
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +118,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r server/requirements.txt pytest pytest-asyncio
+
+      - name: Create separate Operation database
+        run: |
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgresql://postgres:postgres@localhost:5432/manager_control_db", autocommit=True) as conn:
+              conn.execute("CREATE DATABASE operation_control_db")
+          PY
 
       - name: Run integration tests (真 PG + RLS)
         working-directory: server
@@ -167,7 +182,12 @@ jobs:
     env:
       ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/manager_control_db
       DB_URL: postgresql://app_rw:apprwpass@localhost:5432/manager_control_db
+      OPERATION_ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/operation_control_db
+      OPERATION_DB_URL: postgresql://app_rw:apprwpass@localhost:5432/operation_control_db
       APP_RW_PASSWORD: apprwpass
+      OPER_TEST_ADMIN_DB_URL: postgresql://postgres:postgres@localhost:5432/operation_control_db
+      OPER_TEST_DB_URL: postgresql://app_rw:apprwpass@localhost:5432/operation_control_db
+      OPER_TEST_APP_RW_PASSWORD: apprwpass
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -188,10 +208,9 @@ jobs:
           cache: pip
           cache-dependency-path: head/server/requirements.txt
 
-      - name: 覆盖率 - PR head（全量套件 + 分支）
+      - name: 覆盖率 - PR head（非集成套件 + 分支）
         working-directory: head/server
-        # 跑全量套件（含 integration，PG 已就绪）以反映真实总覆盖；
-        # 测试是否全绿由上面的 contracts/integration job 把关，此处只取覆盖数字。
+        # 跑非 integration 套件取覆盖数字；真实 PG/integration 由上面的专门 job 把关。
         # continue-on-error：用例失败不应让棘轮红（那是 contracts/integration 的职责）；
         # pytest-cov 在会话结束仍写出 json，比对步骤据此取数。否则「修失败用例的 PR」会
         # 因 base 分支仍带旧失败用例 → base 步 pytest 非零退出 → 棘轮假阴性（对齐 web-ci.yml）。
@@ -199,12 +218,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest pytest-asyncio pytest-cov diff-cover
-          python -m pytest -q \
+          python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgresql://postgres:postgres@localhost:5432/manager_control_db", autocommit=True) as conn:
+              conn.execute("CREATE DATABASE operation_control_db")
+          PY
+          python -m pytest -q -m "not integration" \
             --cov=operation_service --cov=manager_service --cov=shared \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
-      # base(main) 的覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过
-      # base 全量跑（棘轮 job 原本每个 PR 要跑两遍全量套件，这里砍掉恒定的那一半）。
+      # base(main) 的非 integration 覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过。
       - name: 缓存 base 覆盖率（按 base sha）
         id: base-cov
         uses: actions/cache@v4
@@ -220,9 +243,11 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/base-cov"
           pip install -r requirements.txt pytest pytest-asyncio pytest-cov
-          python -m pytest -q \
-            --cov=operation_service --cov=manager_service --cov=shared \
-            --cov-branch --cov-report=json:"$GITHUB_WORKSPACE/base-cov/base.json"
+          env -u DB_URL -u ADMIN_DB_URL -u OPERATION_DB_URL -u OPERATION_ADMIN_DB_URL \
+            -u OPER_TEST_DB_URL -u OPER_TEST_ADMIN_DB_URL -u OPER_TEST_APP_RW_PASSWORD \
+            python -m pytest -q -m "not integration" \
+              --cov=operation_service --cov=manager_service --cov=shared \
+              --cov-branch --cov-report=json:"$GITHUB_WORKSPACE/base-cov/base.json"
 
       - name: 改动分支覆盖门槛（diff-cover ≥90%）
         # F1: skill 要求的 CI 物理层 diff-cover 门——改动行分支覆盖 <90% → CI 红灯。

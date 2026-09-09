@@ -11,7 +11,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
-from shared.errors import AppError
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
@@ -42,9 +41,15 @@ def test_billing_balance_401():
     r = c.get("/api/manager/billing/balance")
     assert r.status_code == 401
 
+def test_billing_balance_requires_financial_role():
+    from manager_service.routes_billing import build_billing_router
+    c = _build_app("postgresql://x", build_billing_router)
+    response = c.get("/api/manager/billing/balance", headers=_hdr(("member",)))
+    assert response.status_code == 403
+
+
 def test_billing_balance_ok():
     from manager_service.routes_billing import build_billing_router
-    from manager_service.routes_billing import BillingBalanceOut
     from decimal import Decimal
 
     svc = MagicMock()
@@ -62,15 +67,61 @@ def test_billing_recharge_create():
 
     svc = MagicMock()
     svc.create_recharge.return_value = {
-        "recharge_id": "r-1", "amount": Decimal("10"), "payment_method": "mock_pay",
-        "status": "success", "order_no": "R1", "token_credited": 10000,
+        "recharge_id": "r-1", "amount": Decimal("10"), "payment_method": "wechat_pay",
+        "status": "pending", "order_no": "R1", "token_credited": 10000,
         "created_at": datetime.utcnow(),
     }
     with patch("manager_service.routes_billing._service", return_value=svc):
         c = _build_app("postgresql://x", build_billing_router)
-        r = c.post("/api/manager/billing/recharges", json={"amount": 10, "payment_method": "mock_pay"}, headers=_hdr())
+        r = c.post("/api/manager/billing/recharges", json={"amount": 10, "payment_method": "wechat_pay"}, headers=_hdr())
     assert r.status_code == 200
-    assert r.json()["data"]["status"] == "success"
+    assert r.json()["data"]["payment_method"] == "wechat_pay"
+    assert r.json()["data"]["status"] == "pending"
+
+
+def test_billing_recharge_history_normalizes_legacy_method():
+    from manager_service.routes_billing import build_billing_router
+    from decimal import Decimal
+
+    svc = MagicMock()
+    svc.list_recharges.return_value = [{
+        "recharge_id": "legacy", "amount": Decimal("10"), "payment_method": "bank_transfer",
+        "status": "failed", "order_no": "R0", "token_credited": 0, "created_at": datetime.utcnow(),
+    }]
+    with patch("manager_service.routes_billing._service", return_value=svc):
+        c = _build_app("postgresql://x", build_billing_router)
+        response = c.get("/api/manager/billing/recharges", headers=_hdr())
+    assert response.status_code == 200
+    assert response.json()["data"][0]["payment_method"] == "bank_transfer"
+    assert response.json()["data"][0]["status"] == "failed"
+
+
+def test_billing_recharge_rejects_mock_payment():
+    from manager_service.routes_billing import build_billing_router
+
+    c = _build_app("postgresql://x", build_billing_router)
+    response = c.post(
+        "/api/manager/billing/recharges",
+        json={"amount": 10, "payment_method": "mock_pay"},
+        headers=_hdr(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+def test_billing_recharge_rejects_legacy_wechat_value():
+    from manager_service.routes_billing import build_billing_router
+
+    c = _build_app("postgresql://x", build_billing_router)
+    response = c.post(
+        "/api/manager/billing/recharges",
+        json={"amount": 10, "payment_method": "wechat"},
+        headers=_hdr(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
 
 # ---- llm routes ----
 

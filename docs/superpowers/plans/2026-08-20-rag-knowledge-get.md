@@ -1,10 +1,12 @@
 ---
 created: 2026-08-20
-status: approved-by-current-request
+status: superseded-by-stage-b
 scope: rag-knowledge-get
 ---
 
-# RAG knowledge_get 切片计划
+# RAG knowledge_get 切片计划（历史）
+
+> Stage B 已覆盖本计划的 knowledge_get、tenant-derived workspace 与 endpoint mapping 语义；本文仅保留早期设计背景，不是当前实施清单。当前以 v1 概要设计 04/06/11 和代码为准。
 
 ## 目标
 

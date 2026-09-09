@@ -7,7 +7,7 @@
 - Operator 配置上游 channel、发布模型/价格、签发 tenant 受限 token。
 - Manager/Agent 永远不获得 NewAPI 管理 token 或上游 channel key。
 - Agent 只使用 tenant 独立、可撤销、可限模型/限额的推理 token。
-- NewAPI DB/Redis 不发布公网；HTTP 默认绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。Operator「大模型服务」页直接打开当前 host 的 NewAPI UI 端口；远程访问必须将端口放在防火墙/TLS 保护之后。
+- NewAPI DB/Redis 不发布公网；生产 HTTP 固定绑定 `127.0.0.1:${NEWAPI_PORT:-9300}`。Operator「大模型服务」页在受控本机访问；远程访问必须经独立 TLS 反代，不直接把原生端口绑定公网。
 
 ## 2. 配置
 
@@ -16,7 +16,7 @@
 ```dotenv
 NEWAPI_IMAGE=calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b
 NEWAPI_PORT=9300
-NEWAPI_BIND_HOST=0.0.0.0  # 仅在防火墙/TLS 已保护、需要浏览器直连时设置
+NEWAPI_BIND_HOST=127.0.0.1  # 生产固定 loopback；远程浏览器经独立 TLS 反代，不直接暴露 NewAPI
 NEWAPI_DB_USER=newapi
 NEWAPI_DB_PASSWORD=<strong-random>
 NEWAPI_DB_NAME=newapi

@@ -6,7 +6,7 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 
 - `aiteam-v1.service` — systemd unit（`Type=simple`）。由 `run.sh` 装到
   `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
-- `run.sh` — 部署编排脚本。在部署根（默认 `/root/app/aiteam`）执行；TEST
+- `run.sh` — 部署编排脚本。在 `DEPLOY_ROOT` 指定的部署根（未指定时为当前目录）执行；TEST
   维护窗口先停止应用 writers，再保持应用停止拉取/构建代码，显式启动并确认
   PostgreSQL/NewAPI 依赖后备份、执行 DDL/迁移，最后启动新栈并做 healthz/readyz +
   HTML smoke。失败时保持应用停机，不回退到旧 writer 并行运行。
@@ -37,13 +37,15 @@ PR merge → GitHub Actions → self-hosted runner(taiyi)
 
 本轮允许的是**完整应用停机**，不是零停机、旧新栈并行或可选的复杂 systemd
 cgroup cutover。任务给定的已部署基线是 `5483218e`（PR56）；当前工作树为未提交的
-`e5a29890`，不能在发布记录中把两者写成同一个已部署版本。只有主控完成审查、CI 和
+`feature/manager-session-multitenancy-stage-b` 上的未提交累计变更，不能在发布记录中把两者写成同一个已部署版本；发布记录必须填写 CI 实际 checkout SHA。只有主控完成审查、CI 和
 TEST 维护窗口后，当前工作树才可成为新的 release checkout。
+
+TEST 数据库约束：Manager 使用 `MANAGER_DB_NAME`（默认 `manager_control_db`），Operation 使用独立 `OPERATION_DB_NAME`（默认 `oper`）；两端的业务/管理 DSN 不得指向同一个数据库。`run.sh` 会在迁移前幂等创建 Operation database。
 
 TEST 顺序固定为：
 
 1. 暂停新的应用写入/知识导入，停止 Manager、Operation、Agent writers，并确认旧进程已退出；
-2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用。若 `ctl` 因固定名 `aiteam-pg` 已存在而无法 `compose up`，只在镜像、非秘密 `POSTGRES_USER`/`POSTGRES_DB` 与数据卷都与当前 TEST 期望一致时 `docker start` 复用该容器，不删除容器或卷；
+2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用。若 `ctl` 因固定名 `aiteam-pg` 已存在而无法 `compose up`，只在镜像、容器内的迁移角色（对应 `.env` 的 `POSTGRES_SUPER_USER`）/`POSTGRES_DB` 与数据卷都与当前 TEST 期望一致时 `docker start` 复用该容器，不删除容器或卷；业务配置中的 `POSTGRES_USER` 必须是 `app_rw`。
 3. 依赖可用后执行数据库备份；
 4. 切换已批准 checkout；`run.sh` 按 `server/requirements.txt` 内容 hash 同步持久化 `.venv`（失败保持停机），再在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
 5. 迁移成功后启动新应用栈，再检查 healthz/readyz/OpenAPI 与 HTML 入口。
@@ -109,7 +111,7 @@ cd web && pnpm install --frozen-lockfile && pnpm build
 
 ## LightRAG 生产部署前置
 
-LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管。taiyi/生产发布前，按 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md) 在目标 PG 上执行独立 database/role/`vector` extension bootstrap，并将 Manager-only `LIGHTRAG_URL`、API key 和已验证镜像引用放入部署机的 mode-600 secret env。Manager 按 tenant 生成并持久化 workspace；不要将这些值放入 Agent 配置或 GitHub 日志。
+LightRAG 是 Manager-side 外部组件，不由三端 systemd unit 直接托管。taiyi/生产发布前，按 [`docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md`](../../docs/部署运维/LightRAG-PostgreSQL-PGVector-部署运维Runbook.md) 在目标 PG 上执行独立 database/role/`vector` extension bootstrap；Manager-only 配置使用本机 profile 的 URL/API key/认证/运行时 DB 字段，或使用受边界校验的 HTTPS `LIGHTRAG_INSTANCES` endpoint pool。Manager 按 tenant 生成并持久化 workspace；不要将这些值放入 Agent 配置或 GitHub 日志。Remote pool-only 模式不启动本机 lightrag Compose profile；disabled 模式不设置上述组件变量。
 
 部署前只读检查：
 
@@ -157,9 +159,8 @@ cd /root/app/aiteam && git pull --ff-only && bash deploy/ci/run.sh --branch main
   持久化 `.venv` 落后于当前 `server/requirements.txt`。新的 `run.sh` 会在 checkout 后、迁移/启动前按 hash 自动 `pip install --requirement`；pip 失败则保持应用停机。也可按清单步骤 5 手工重建 venv。
 
 - **CI 报 PostgreSQL `container name "/aiteam-pg" is already in use`**
-  现有同名容器不是自动删除对象。`run.sh` 会检查该容器的镜像、`POSTGRES_USER=aiteam`、`POSTGRES_DB=aiteam_v1` 以及 `/var/lib/postgresql/data` 是否挂在 `POSTGRES_VOLUME` 或 `aiteam_pg_data_<env>` 上；匹配则复用（已运行则接受，已停止则 `docker start`）。不匹配或非同名冲突仍 fail-closed。不要手工 `docker rm` / `volume rm`。
+  现有同名容器不是自动删除对象。`run.sh` 会检查该容器的镜像、容器内迁移角色（默认 `aiteam`，由 `.env` 的 `POSTGRES_SUPER_USER` 决定）、Manager 数据库（默认 `manager_control_db`，由 `MANAGER_DB_NAME` 决定） 以及 `/var/lib/postgresql/data` 是否挂在 `POSTGRES_VOLUME` 或 `aiteam_pg_data_<env>` 上；匹配则复用（已运行则接受，已停止则 `docker start`）。不匹配或非同名冲突仍 fail-closed。不要手工 `docker rm` / `volume rm`。
 
 - **`systemctl status` 显示 `activating (auto-restart) (exit-code 209/STDOUT)`**
   旧 unit 里 `StandardOutput=append:/.../logs/stdout.log` 指向不存在的文件。
-  已不再使用；如仍遇到，重新 cp `deploy/ci/aiteam-v1.service` → `/etc/systemd/system/` +
-  `systemctl daemon-reload && systemctl restart aiteam-v1`。
+  已不再使用；如仍遇到，重新运行 `deploy/ci/run.sh --branch <branch> --env test`，由脚本按目标环境渲染并安装 unit，再执行 `systemctl daemon-reload`。

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
@@ -40,10 +41,11 @@ def _readiness_target(settings: Settings) -> tuple[str, str]:
         if not settings.db_url or not settings.admin_db_url:
             raise ServiceUnavailable("本端数据库连接未完整配置")
         return settings.db_url, _READINESS_RELATIONS[settings.tier]
-    dsn = settings.admin_db_url or settings.db_url
-    if not dsn:
-        raise ServiceUnavailable("本端数据库连接未配置")
-    return dsn, _READINESS_RELATIONS[settings.tier]
+    # Operation readiness probes the app_rw business DSN; ADMIN_DB_URL is only
+    # for migrations and signing-key administration.
+    if not settings.db_url:
+        raise ServiceUnavailable("本端业务数据库未配置")
+    return settings.db_url, _READINESS_RELATIONS[settings.tier]
 
 
 def _check_local_readiness(settings: Settings) -> None:
@@ -68,6 +70,13 @@ def _check_local_readiness(settings: Settings) -> None:
             autocommit=True,
             connect_timeout=_READINESS_CONNECT_TIMEOUT_SECONDS,
         ) as conn:
+            if settings.is_production:
+                role = conn.execute(
+                    "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+                ).fetchone()
+                if not role or role[0] != "app_rw" or role[1] is not False or role[2] is not False:
+                    logger.warning("local database readiness check failed: service=%s reason=business_role", settings.service_name)
+                    raise ServiceUnavailable("本端业务数据库角色不符合 app_rw 隔离要求")
             row = conn.execute(
                 "SELECT to_regclass(%s)",
                 (f"public.{relation}",),
@@ -89,6 +98,10 @@ class HealthResponse(BaseModel):
 
 
 def create_app(settings: Settings, router: APIRouter) -> FastAPI:
+    if settings.is_production and os.getenv("AITEAM_COMPOSE_MODE") == "1":
+        raise ValueError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
+    if settings.is_production and settings.expose_public_docs:
+        raise ValueError("production control-plane services must disable public OpenAPI docs")
     configure_logging(settings.service_name, settings.log_level)
 
     app = FastAPI(
@@ -100,7 +113,7 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
         ),
         docs_url="/docs" if settings.expose_public_docs else None,
         redoc_url="/redoc" if settings.expose_public_docs else None,
-        openapi_url="/openapi.json",
+        openapi_url="/openapi.json" if (not settings.is_production or settings.expose_public_docs) else None,
     )
     app.state.settings = settings
 

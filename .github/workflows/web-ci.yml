@@ -100,8 +100,11 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      AITEAM_ENV: test
       ADMIN_DB_URL: postgresql://postgres:postgres@127.0.0.1:5433/manager_control_db
       DB_URL: postgresql://app_rw:apprwpass@127.0.0.1:5433/manager_control_db
+      OPERATION_ADMIN_DB_URL: postgresql://postgres:postgres@127.0.0.1:5433/operation_control_db
+      OPERATION_DB_URL: postgresql://app_rw:apprwpass@127.0.0.1:5433/operation_control_db
       APP_RW_PASSWORD: apprwpass
       OPERATOR_URL: http://127.0.0.1:8000
       # Synthetic, per-job deployment binding; never use this value outside CI.
@@ -142,6 +145,14 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/pip install -r server/requirements.txt pytest pytest-asyncio pytest-timeout pytest-cov
+
+      - name: Create separate Operation database
+        run: |
+          .venv/bin/python - <<'PY'
+          import psycopg
+          with psycopg.connect("postgresql://postgres:postgres@127.0.0.1:5433/manager_control_db", autocommit=True) as conn:
+              conn.execute("CREATE DATABASE operation_control_db")
+          PY
 
       - name: Cache pnpm store
         uses: actions/cache@v4

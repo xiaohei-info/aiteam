@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -19,11 +21,23 @@ from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
 from .routes_admin import build_admin_router
+from .platform_provider_service import newapi_urls
 
 # 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
 # 从该表加载/落库——故迁移必须先于 build_operation_auth_service 执行（fail-fast；/readyz 绿
 # 时 schema 必已就绪）。无 ADMIN_DB_URL 的骨架/测试态 → 内部 no-op（契约不破）。
+def _validate_production_startup(current_settings) -> None:
+    if not current_settings.is_production:
+        return
+    if os.getenv("AITEAM_COMPOSE_MODE") == "1":
+        raise RuntimeError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
+    _, public_relay_url = newapi_urls(production=True)
+    if not public_relay_url:
+        raise ValueError("NEWAPI_PUBLIC_BASE_URL is required in production")
+
+
 settings = load_settings("operation")
+_validate_production_startup(settings)
 if settings.admin_db_url:
     from .repository import apply_migrations as _apply_oper_migrations
 

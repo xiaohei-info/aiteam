@@ -1,6 +1,7 @@
 """Enterprise knowledge compatibility mapping orchestration (M3, D21).
 
-The visible product is one enterprise knowledge base per Manager deployment.
+The visible product is one enterprise knowledge base per tenant; a Manager
+process may serve multiple tenants, with each request isolated by TenantContext.
 `rag_workspace`/binding rows remain internal compatibility metadata for existing
 citations and projections; raw LightRAG workspaces are never accepted from HTTP.
 """
@@ -279,7 +280,7 @@ def build_knowledge_space_service(
     *,
     instance_registry=None,
 ) -> KnowledgeSpaceService:
-    """组装单企业知识空间服务（业务连接 app_rw，#60）。"""
+    """组装每 tenant 唯一知识空间服务（业务连接 app_rw，#60）。"""
     return KnowledgeSpaceService(
         repo=KnowledgeSpaceRepository(router, instance_registry=instance_registry),
         binding_repo=KnowledgeSpaceBindingRepository(router),

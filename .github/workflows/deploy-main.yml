@@ -99,6 +99,7 @@ jobs:
         working-directory: ${{ env.DEPLOY_ROOT }}
         run: |
           set -euo pipefail
+          umask 077
           if [[ -z "${{ env.DEPLOY_BRANCH }}" ]]; then
             echo "::error::DEPLOY_BRANCH empty; abort."; exit 2
           fi
@@ -106,6 +107,7 @@ jobs:
           cat > "${env_file}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
+          chmod 600 "${env_file}"
           # Keep host-generated component credentials when the repository secret
           # predates a component rollout. Values from the secret always win;
           # only absent keys are recovered from the latest local backup.

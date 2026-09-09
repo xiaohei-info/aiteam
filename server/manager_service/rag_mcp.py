@@ -348,7 +348,8 @@ class RagAccessService:
             ref for ref in getattr(snapshot, "knowledge_refs", [])
             if isinstance(ref, str) and ref
         ))
-        # A Manager deployment owns one enterprise-shared knowledge base.  The
+        # Each tenant owns one enterprise-shared knowledge base; a Manager
+        # process can serve multiple tenant sessions.  The
         # legacy snapshot binding list remains accepted for old projections, but
         # a new snapshot need not carry a per-space grant just to query it.
         default_space_resolver = getattr(self._rag, "default_space_id_for", None)

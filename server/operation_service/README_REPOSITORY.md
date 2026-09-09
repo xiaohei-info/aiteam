@@ -1,5 +1,7 @@
 # Operation 企业账号仓储 PostgreSQL 实现
 
+> 本文包含早期 `oper_db_url` 命名的历史示例。当前实现使用 `Settings.db_url` 作为 app_rw 业务连接，`Settings.admin_db_url` 仅用于迁移和签名密钥等受限管理操作；不要按下方旧代码片段恢复 admin DSN 业务访问。
+
 ## 概述
 
 本实现将 Operation 端企业账号仓储从内存骨架替换为 PostgreSQL 持久化，满足生产环境需求。
@@ -37,8 +39,8 @@ enterprise_account (
 ### 约束与索引
 
 - **主键**: `enterprise_id`
-- **唯一约束**: `tenant_id`, `enterprise_code`（UNIQUE NULLS NOT DISTINCT）
-- **索引**: `tenant_id`, `enterprise_code`（WHERE NOT NULL）
+- **唯一约束**: `enterprise_id` 与非空 `enterprise_code`；PostgreSQL 默认 `NULLS DISTINCT`，多个未填写 code 的企业可以并存
+- **索引**: `enterprise_code`（`WHERE enterprise_code IS NOT NULL`）
 
 ## 配置
 
@@ -47,14 +49,15 @@ enterprise_account (
 生产环境需配置以下环境变量：
 
 ```bash
+AITEAM_ENV=production
 # 业务连接（app_rw 身份）
-OPER_DB_URL=postgresql://app_rw:password@localhost:5432/oper
+OPERATION_DB_URL=postgresql://app_rw:password@localhost:5432/oper
 
 # 管理连接（超管/DDL owner，用于迁移）
-OPER_ADMIN_DB_URL=postgresql://admin:adminpass@localhost:5432/oper
+OPERATION_ADMIN_DB_URL=postgresql://admin:adminpass@localhost:5432/oper
 
 # app_rw 角色密码（从配置/env 取，不硬编码）
-OPER_APP_RW_PASSWORD=secure_password
+APP_RW_PASSWORD=secure_password
 ```
 
 ### 配置逻辑
@@ -64,16 +67,11 @@ OPER_APP_RW_PASSWORD=secure_password
 ```python
 def get_repository() -> EnterpriseRepository:
     settings = load_settings("operation")
-    oper_db_url = settings.raw.get("oper_db_url")
-    
-    if oper_db_url:
-        # PostgreSQL 实现：自动应用迁移
-        admin_url = settings.raw.get("oper_admin_db_url") or oper_db_url
-        app_rw_password = settings.raw.get("oper_app_rw_password")
-        apply_migrations(admin_url, app_rw_password)
-        return PgEnterpriseRepository(oper_db_url)
-    
-    # 内存实现（dev/测试，无配置时自动降级）
+    if settings.db_url:
+        # 仅管理 DSN 执行迁移；业务仓储固定使用 app_rw DSN。
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        return PgEnterpriseRepository(settings.db_url)
     return InMemoryEnterpriseRepository()
 ```
 
@@ -81,16 +79,16 @@ def get_repository() -> EnterpriseRepository:
 
 ### 开发环境（内存）
 
-无需配置，自动使用内存仓储：
+无需数据库配置，但必须显式选择 development profile：
 
 ```bash
 cd server
-python run.py --tier=operation
+AITEAM_ENV=development python run.py --tier=operation
 ```
 
 ### 生产环境（PostgreSQL）
 
-1. **创建数据库**:
+1. **创建独立 Operation 数据库**:
 
 ```bash
 createdb oper
@@ -99,16 +97,17 @@ createdb oper
 2. **配置环境变量**（或在配置文件中）:
 
 ```bash
-export OPER_DB_URL=postgresql://app_rw:password@localhost:5432/oper
-export OPER_ADMIN_DB_URL=postgresql://postgres:adminpass@localhost:5432/oper
-export OPER_APP_RW_PASSWORD=secure_password
+export AITEAM_ENV=production
+export OPERATION_DB_URL=postgresql://app_rw:password@localhost:5432/oper
+export OPERATION_ADMIN_DB_URL=postgresql://postgres:adminpass@localhost:5432/oper
+export APP_RW_PASSWORD=secure_password
 ```
 
 3. **启动服务**（自动应用迁移）:
 
 ```bash
 cd server
-python run.py --tier=operation
+AITEAM_ENV=production python run.py --tier=operation
 ```
 
 ## 测试
@@ -129,6 +128,7 @@ pytest tests/operation/test_service.py -v
 
 ```bash
 # 配置测试数据库
+export AITEAM_ENV=test
 export OPER_TEST_ADMIN_DB_URL=postgresql://postgres:password@localhost:5432/oper_test
 export OPER_TEST_DB_URL=postgresql://app_rw:password@localhost:5432/oper_test
 export OPER_TEST_APP_RW_PASSWORD=test_password
@@ -186,13 +186,13 @@ local_hash = hashlib.sha256(secret.encode()).hexdigest()
 
 ### 连接失败
 
-- 检查 `OPER_DB_URL` 配置是否正确
+- 检查 `OPERATION_DB_URL` 配置是否正确（不要指向 Manager 数据库）
 - 检查 PostgreSQL 服务是否运行
 - 检查 `app_rw` 角色是否创建且有正确权限
 
 ### 迁移失败
 
-- 检查 `OPER_ADMIN_DB_URL` 是否有 DDL 权限
+- 检查 `OPERATION_ADMIN_DB_URL` 是否有 DDL 权限
 - 查看日志中的 SQL 错误信息
 - 手动连接数据库检查表状态
 

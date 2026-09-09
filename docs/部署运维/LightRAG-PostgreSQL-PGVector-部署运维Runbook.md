@@ -7,7 +7,7 @@
 - 适用：taiyi / 生产 Manager 部署，以及可选的本地 Compose 联调。
 - LightRAG 只被 Manager 服务访问；不向 Agent 镜像、Agent 环境或用户端下发 API key。
 - LightRAG 使用独立 PostgreSQL/pgvector 数据库、独立 role 和 tenant-scoped workspace；不复用 AI Team 控制面数据库/role。
-- LightRAG 默认绑定 Manager 主机 loopback；Manager「知识库」页直接打开当前 host 的 LightRAG UI 端口。若需远程浏览器访问，必须将绑定地址放在防火墙/TLS 保护之后。
+- LightRAG 生产绑定 Manager 主机 loopback；Manager「知识库」页可在受控本机访问。远程浏览器访问必须经独立 TLS 反代，不得把原生组件绑定到公网地址。
 - 本文命令中的 `--dry-run` 不连接数据库、不拉镜像、不停止服务、不写备份；没有标注的 bootstrap/恢复/升级命令只在 taiyi/生产执行。
 
 当前验证基线为 LightRAG `1.5.6`，Compose 默认使用 `ghcr.io/hkuds/lightrag:1.5.6`，禁止 `latest`。生产可替换为已经验证的同版本 `@sha256:<64位摘要>`；更换 LightRAG、embedding dimension 或 storage adapter 前必须先在隔离 PG 数据库完成 clean-install smoke，并把镜像引用写入受控环境文件。`pgvector/pgvector:pg16` 同样固定 PG major，不要漂移到 `latest`。
@@ -18,19 +18,22 @@
 
 ```dotenv
 # Manager -> LightRAG（生产使用内网 TLS/服务发现地址）
-LIGHTRAG_URL=https://lightrag.manager.internal
+LIGHTRAG_URL=https://lightrag.example.com
 LIGHTRAG_API_KEY=<secret-store>
 # 原生 UI/API 账号由 LightRAG 自己校验；使用 bcrypt 密码值，不能写进超链接。
 LIGHTRAG_AUTH_ACCOUNTS=aiteam-admin:{bcrypt}<bcrypt-hash>
 LIGHTRAG_TOKEN_SECRET=<secret-store>
 LIGHTRAG_JWT_ALGORITHM=HS256
-LIGHTRAG_BIND_HOST=0.0.0.0
+LIGHTRAG_BIND_HOST=127.0.0.1  # 生产固定 loopback；远程访问经独立 TLS 反代
 LIGHTRAG_PORT=9621
 # Legacy workspace hint; Manager ignores it and derives/persists one workspace per tenant.
 # LIGHTRAG_WORKSPACE=<ignored-legacy-hint>
 # LIGHTRAG_INSTANCES 只描述 URL/key endpoint pool，不能表达企业或 workspace 身份。
-# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag.manager.internal","api_key":"<secret-store>"}]
-LIGHTRAG_IMAGE=ghcr.io/hkuds/lightrag:1.5.6
+# Remote pool-only mode（不启动本机 lightrag profile）可只配置此项；生产 URL 必须 HTTPS。
+# LIGHTRAG_INSTANCES=[{"instance_id":"rag-a","url":"https://lightrag.example.com","api_key":"<secret-store>"}]
+# 本机 lightrag profile 启动时仍必须配置 LIGHTRAG_IMAGE、AUTH_ACCOUNTS、TOKEN_SECRET 与数据库参数。
+# 仅启用本机 lightrag profile 时设置镜像 pin；remote pool-only 不设置此项。
+# LIGHTRAG_IMAGE=ghcr.io/hkuds/lightrag:1.5.6
 
 # LightRAG 专用 PG；管理员凭据只给 bootstrap，运行时使用 lightrag role
 LIGHTRAG_DB_HOST=<private-pg-host>
@@ -52,7 +55,7 @@ legacy 配置中的 `LIGHTRAG_WORKSPACE` 仅为兼容提示，Manager 不把它�
 bash scripts/validate-lightrag-env.sh --production --env-file /etc/aiteam/manager.env
 ```
 
-legacy 配置下 URL 或 API key 任一缺失时 Manager 应保持 fail-closed；`LIGHTRAG_WORKSPACE` 不参与路由。LightRAG 原生认证还必须配置 `LIGHTRAG_AUTH_ACCOUNTS` 与 `LIGHTRAG_TOKEN_SECRET`。多实例模式下每个 registry 条目的 instance_id、URL、API key 都必须完整有效。不要用空 key 或空认证配置作为生产默认值。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 profile 前必须由 secret store 注入真实值。
+本机 lightrag profile 启动时 URL/API key、原生认证和运行时数据库字段任一缺失，`validate-lightrag-env.sh --production` 与 Manager/部署校验都必须 fail-closed；数据库 bootstrap 管理员字段由 `deploy/lightrag/init-db.sh` 单独校验，不能注入 Manager。`LIGHTRAG_WORKSPACE` 不参与路由。Remote pool-only 模式不启动本机 profile，可省略这些本机组件字段，但每个 registry 条目的 instance_id、HTTPS URL、API key 都必须完整有效。三者均未设置时表示 LightRAG disabled，validator 返回 OK；不要用空 key 或空认证配置启动本机生产组件。Compose 的空密码只为保持默认三端 `docker compose config` 可解析，启用 lightrag profile 前必须由 secret store 注入真实值。
 
 ### 1.1 Manager `rag_workspace` 映射的边界
 
@@ -88,6 +91,7 @@ bash deploy/lightrag/init-db.sh --dry-run
 
 ```bash
 # 开发/测试；值由临时 secret 注入，不要提交到文件
+export AITEAM_ENV=test
 export LIGHTRAG_DB_ADMIN_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_DB_PASSWORD="$(openssl rand -hex 32)"
 export LIGHTRAG_API_KEY="$(openssl rand -hex 32)"
@@ -100,7 +104,7 @@ bash deploy/lightrag/init-db.sh
 docker compose -f deploy/docker/docker-compose.yml --profile lightrag up -d lightrag
 ```
 
-Compose 的 LightRAG 服务只使用 `expose: 9621`，不把服务端口发布给 Agent 或主机；Manager 容器通过 `LIGHTRAG_URL=http://lightrag:9621` 访问。要让 Manager 使用它，启动三端时显式提供 Manager-only URL 与 key；workspace 由 tenant 映射生成，Agent service 的 environment 没有这些变量。
+Compose 的 LightRAG 与专用 PG 只加入 `lightrag-internal` 私网，Operation/Agent 不在该网络；管理用端口按 Compose 默认仅发布到宿主机 loopback（不是 Agent 暴露面），Manager 容器通过私网服务名访问。生产 endpoint 必须使用 HTTPS，并解析到全球可路由地址（本机/私网/未解析 DNS 均 fail-closed）；下面的 `http://lightrag:9621` 仅用于本地/test profile。要让 Manager 使用它，启动三端时显式提供 Manager-only URL 与 key；workspace 由 tenant 映射生成，Agent service 的 environment 没有这些变量。
 
 ## 4. 备份与恢复
 
@@ -108,18 +112,18 @@ Compose 的 LightRAG 服务只使用 `expose: 9621`，不把服务端口发布�
 
 ```bash
 # 任何真实变更前先 dry-run（本命令不 mkdir、不连接 PG）
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env --dry-run backup
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env --dry-run backup
 
 # taiyi/生产真实备份（密码来自 env；输出文件 chmod 600）
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   backup --output /var/backups/aiteam/lightrag/pre-change-$(date -u +%Y%m%dT%H%M%SZ).dump
 
 # dry-run 恢复：需要存在的 dump，但不停止服务
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   --dry-run restore --input /var/backups/aiteam/lightrag/known-good.dump --yes
 
 # taiyi/生产真实恢复：维护窗口执行，会停止 LightRAG writer，再启动
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   restore --input /var/backups/aiteam/lightrag/known-good.dump --yes
 ```
 
@@ -131,15 +135,15 @@ bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
 
 ```bash
 # dry-run，确认备份路径与将执行的动作
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env --dry-run \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env --dry-run \
   upgrade --image ghcr.io/hkuds/lightrag:1.5.6
 
 # taiyi/生产升级：先在 staging clean-install + query/ingestion smoke
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   upgrade --image ghcr.io/hkuds/lightrag:1.5.7 --yes
 
 # taiyi/生产 rollback 到已验证的上一版本；同样先备份
-bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
+AITEAM_ENV=production bash scripts/lightrag-ops.sh --env-file /etc/aiteam/lightrag.env \
   rollback --image ghcr.io/hkuds/lightrag:1.5.6 --yes
 ```
 

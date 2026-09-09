@@ -32,7 +32,7 @@ function sessionValue(): SessionContextValue {
 }
 
 const rechargeRecords = [
-  { recharge_id: "r1", amount: "100.00", payment_method: "wechat", status: "success", order_no: "ORD001", token_credited: 400000, created_at: "2026-06-28T08:00:00Z" },
+  { recharge_id: "r1", amount: "100.00", payment_method: "wechat_pay", status: "success", order_no: "ORD001", token_credited: 400000, created_at: "2026-06-28T08:00:00Z" },
   { recharge_id: "r2", amount: "50.00", payment_method: "alipay", status: "pending", order_no: "ORD002", token_credited: 200000, created_at: "2026-06-29T09:30:00Z" },
 ];
 
@@ -100,7 +100,7 @@ describe("RechargePage 充值", () => {
     fireEvent.change(input, { target: { value: "200" } });
     fireEvent.click(screen.getByText("立即充值"));
 
-    await waitFor(() => expect(api.createRecharge).toHaveBeenCalledWith(200, "wechat"));
+    await waitFor(() => expect(api.createRecharge).toHaveBeenCalledWith(200, "wechat_pay"));
   });
 
   it("提交后刷新充值列表", async () => {
