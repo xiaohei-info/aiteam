@@ -555,13 +555,13 @@ done
 
 newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}}"
 newapi_ok=0
-for attempt in 1 2 3 4 5 6 7 8 9 10; do
+for attempt in $(seq 1 30); do
   if curl -fsS --max-time 3 "${newapi_admin_url%/}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
     newapi_ok=1; break
   fi
   sleep 2
 done
-(( newapi_ok )) || fail "internal NewAPI /api/status failed after 10 attempts"
+(( newapi_ok )) || fail "internal NewAPI /api/status failed after 30 attempts"
 for container in aiteam-newapi-pg aiteam-newapi-redis aiteam-newapi; do
   state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
   [[ "${state}" == "healthy" || "${state}" == "running" ]] || fail "${container} is not healthy (state=${state:-missing})"
