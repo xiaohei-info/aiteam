@@ -72,6 +72,8 @@ test("HttpManagerClient pulls only the employee-scoped runtime provider config",
   });
   const config = await client.pullRuntimeConfig(caller, "employee-1");
   assert.equal(config.model, "m1");
+  assert.equal("provider_version" in config, false);
+  assert.equal("model_version" in config, false);
   assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
@@ -89,6 +91,8 @@ test("HttpManagerClient pulls member-scoped speech runtime config without employ
   });
   const config = await client.pullSpeechRuntimeConfig(caller);
   assert.equal(config.model, "XingChenAGI/XingChenASR-V3.2-Ultra");
+  assert.equal("provider_version" in config, false);
+  assert.equal("model_version" in config, false);
   assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/speech/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({}));
   assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
@@ -191,6 +195,7 @@ test("normalizes the Manager AuthorizedConfig contract into local projection fie
   assert.equal(config.snapshots?.[0].version, "7");
   assert.deepEqual(config.snapshots?.[0].skill_refs, ["skill-1"]);
   assert.deepEqual(config.snapshots?.[0].tool_policy, { allowed_tools: ["memory_recall"] });
+  assert.deepEqual(config.snapshots?.[0].model_policy, { model: "model-1" });
 });
 
 test("authorized config and snapshot accept only public skill signing metadata", () => {

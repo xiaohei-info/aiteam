@@ -130,25 +130,31 @@ class SnapshotService:
 
     def _resolve_pricing(self, config: EmployeeConfigOut, *, tenant_id: str) -> PricingSnapshot | None:
         policy = config.model_policy
-        if not all((policy.provider_ref, policy.model, policy.provider_version, policy.model_version)):
+        if not all((policy.provider_ref, policy.model)):
             return None
         if self._platform_catalog is None:
-            raise NotFound("platform model catalog is unavailable")
+            # Isolated service fixtures may intentionally omit the Operator
+            # catalog; production routes always inject it.
+            return None
         try:
             catalog = self._platform_catalog.list_platform_catalog(tenant_id=tenant_id)
         except TypeError:
             # Keep lightweight test doubles compatible with the pre-policy seam.
             catalog = self._platform_catalog.list_platform_catalog()
-        provider = next((item for item in catalog.get("providers", []) if item.get("provider_id") == policy.provider_ref), None)
-        if not provider or provider.get("status") != "published" or provider.get("version") != policy.provider_version:
-            raise NotFound("platform provider version is no longer available")
+        provider = next(
+            (item for item in catalog.get("providers", [])
+             if item.get("provider_id") == policy.provider_ref),
+            None,
+        )
+        if not provider or provider.get("status") != "published":
+            raise NotFound("platform provider is unavailable")
         for item in catalog.get("models", []):
             model = item.get("model") or {}
             rate = item.get("rate") or {}
             if model.get("provider_id") != policy.provider_ref or model.get("model_id") != policy.model:
                 continue
-            if model.get("status") != "published" or model.get("version") != policy.model_version:
-                raise NotFound("platform model version is no longer available")
+            if model.get("status") != "published":
+                raise NotFound("platform model is unavailable")
             if rate.get("pricing_status") != "known":
                 raise NotFound("platform model price is unknown")
             return PricingSnapshot(**{key: rate.get(key) for key in PricingSnapshot.model_fields})

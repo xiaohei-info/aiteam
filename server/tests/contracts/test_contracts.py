@@ -126,8 +126,16 @@ def test_platform_pricing_is_decimal_versioned_and_secret_free():
         pricing=pricing,
     )
     assert isinstance(policy.pricing.input_usd_per_million, Decimal)
-    assert policy.model_dump(mode="json")["pricing"]["input_usd_per_million"] == "0.30"
-    assert "token" not in policy.model_dump(mode="json")
+    dumped = policy.model_dump(mode="json")
+    assert dumped["pricing"]["input_usd_per_million"] == "0.30"
+    assert "provider_version" not in dumped
+    assert "model_version" not in dumped
+    assert "token" not in dumped
+
+
+def test_platform_model_ref_drops_legacy_release_fields():
+    ref = C.PlatformModelRef(provider_id="p1", provider_version=9, model_id="m1", model_version=7)
+    assert ref.model_dump(mode="json") == {"provider_id": "p1", "model_id": "m1"}
 
 
 def test_platform_rate_rejects_float_like_extra_or_negative_values():

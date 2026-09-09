@@ -332,6 +332,53 @@ def test_generate_resolves_pricing_with_legacy_catalog_signature():
     )
 
 
+def test_generate_uses_current_effective_release_for_stable_model_ref():
+    """Changing Operator release metadata does not invalidate an employee ref."""
+    from shared.contracts.platform_provider import PricingSnapshot
+    from shared.contracts.snapshot import ModelPolicy
+
+    class CurrentCatalog:
+        def list_platform_catalog(self, *, tenant_id=None):
+            return {
+                "providers": [{"provider_id": "p1", "status": "published", "version": 9}],
+                "models": [{
+                    "model": {"provider_id": "p1", "model_id": "m1", "status": "published", "version": 12},
+                    "rate": {
+                        "pricing_version": 4, "pricing_status": "known", "billing_mode": "token",
+                        "input_usd_per_million": "1", "output_usd_per_million": "2",
+                        "currency": "USD", "effective_from": "2026-01-01T00:00:00Z",
+                    },
+                }],
+            }
+
+    config = EmployeeConfigOut(
+        employee_id="e-current", employee_slug="current", version=1, status="active",
+        display_name="Current", model_policy=ModelPolicy(model="m1", provider_ref="p1"),
+    )
+
+    class ConfigService:
+        def get(self, _ctx, *, employee_id):
+            assert employee_id == "e-current"
+            return config
+
+    members = _FakeMemberService()
+    members.set_member("t-a", "admin-1")
+    snapshot = SnapshotService(
+        config_service=ConfigService(), grant_service=_FakeGrantService(),
+        member_service=members, platform_catalog=CurrentCatalog(),
+    ).generate(_ctx("t-a", roles=["owner"], user_id="admin-1"), member_id="admin-1", employee_id="e-current")
+
+    assert snapshot.model_policy.model == "m1"
+    assert snapshot.model_policy.provider_ref == "p1"
+    assert snapshot.model_policy.pricing == PricingSnapshot(
+        pricing_version=4, pricing_status="known", billing_mode="token",
+        input_usd_per_million="1", output_usd_per_million="2", currency="USD",
+        effective_from="2026-01-01T00:00:00Z",
+    )
+    assert "provider_version" not in snapshot.model_policy.model_dump()
+    assert "model_version" not in snapshot.model_policy.model_dump()
+
+
 def test_generate_maps_all_fields():
     config_svc, grant_svc, member_svc, snap_svc = _services()
     created = config_svc.create(_ctx("t-a", roles=["owner"]), _full_body(), employee_slug="exp-a")

@@ -1188,11 +1188,12 @@ export class SessionHost {
     const policy = authorization.snapshot.model_policy;
     const expectedModel = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).model === "string" ? (policy as Record<string, unknown>).model : undefined;
     const expectedProvider = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).provider_ref === "string" ? (policy as Record<string, unknown>).provider_ref : undefined;
-    const expectedProviderVersion = policy && typeof policy === "object" ? (policy as Record<string, unknown>).provider_version : undefined;
-    const expectedModelVersion = policy && typeof policy === "object" ? (policy as Record<string, unknown>).model_version : undefined;
     const expectedPricing = policy && typeof policy === "object" ? (policy as Record<string, unknown>).pricing : undefined;
     const expectedPricingVersion = expectedPricing && typeof expectedPricing === "object" ? (expectedPricing as Record<string, unknown>).pricing_version : undefined;
-    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider || config.provider_version !== expectedProviderVersion || config.model_version !== expectedModelVersion || config.pricing.pricing_version !== expectedPricingVersion) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
+    // Provider/model release versions are Operator-internal. The Agent binds
+    // to stable identities and keeps only the frozen pricing snapshot for
+    // usage accounting.
+    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider || config.pricing.pricing_version !== expectedPricingVersion) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
     const providerId = `aiteam:${createHash("sha256").update(`${authorization.caller.tenantId}:${memberId}:${authorization.employeeId}:${config.version}:${authorization.runtimeScope ?? "session"}`).digest("hex").slice(0, 32)}`;
     const model = await registerRuntimeProvider(this.options.modelRuntime, config, providerId);
     authorization.runtimeProviderId = providerId;

@@ -67,9 +67,7 @@ def _resolve_platform_model(catalog: OperatorCatalogPort, ctx: TenantContext, te
     recommended = dict(template.recommended_config or {})
     recommended.update({
         "provider_ref": ref.provider_id,
-        "provider_version": ref.provider_version,
         "model": ref.model_id,
-        "model_version": ref.model_version,
         "platform_model_ref": ref.model_dump(mode="json"),
     })
     return recommended, ProviderMatchResult(

@@ -449,12 +449,10 @@ class CatalogService:
         persona = payload.get("system_prompt") or None
         recommended: dict = {}
         if payload.get("platform_model_ref"):
-            model_ref = dict(payload["platform_model_ref"])
+            model_ref = _parse_platform_model_ref(payload["platform_model_ref"]).model_dump(mode="json")
             recommended["platform_model_ref"] = model_ref
             recommended["provider_ref"] = model_ref["provider_id"]
-            recommended["provider_version"] = model_ref["provider_version"]
             recommended["model"] = model_ref["model_id"]
-            recommended["model_version"] = model_ref["model_version"]
         recommended["thinking_level"] = _normalize_thinking_level(payload.get("thinking_level"))
         refs = payload.get("platform_skill_refs") or []
         if refs:

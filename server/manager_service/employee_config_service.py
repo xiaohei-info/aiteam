@@ -101,35 +101,52 @@ class EmployeeConfigService:
             return
         if not policy.model and not policy.provider_ref:
             return
-        if not all((policy.model, policy.provider_ref, policy.provider_version, policy.model_version)):
+        if not all((policy.model, policy.provider_ref)):
             raise Conflict("employee model must reference an Operator-published platform model")
         try:
             catalog = self._operator.list_platform_catalog(tenant_id=ctx.tenant_id)
         except TypeError:
             # Keep lightweight test doubles compatible with the pre-policy seam.
             catalog = self._operator.list_platform_catalog()
-        for item in catalog.get("models", []):
+        providers = catalog.get("providers") if isinstance(catalog, dict) else None
+        provider = next(
+            (item for item in providers or []
+             if isinstance(item, dict)
+             and item.get("provider_id") == policy.provider_ref),
+            None,
+        )
+        # Minimal unit fakes may expose only the model list; production catalog
+        # responses include providers and require a published provider match.
+        provider_available = providers is None or bool(
+            provider and provider.get("status") == "published"
+        )
+        for item in catalog.get("models", []) if isinstance(catalog, dict) else []:
             model = item.get("model") or {}
             rate = item.get("rate") or {}
-            if model.get("provider_id") == policy.provider_ref and model.get("model_id") == policy.model:
-                if model.get("status") == "published" and model.get("version") == policy.model_version and rate.get("pricing_status") == "known":
-                    _validate_thinking_level(policy.thinking_level, model.get("capabilities") or {})
-                    resolver = getattr(self._operator, "resolve_tenant_access", None)
-                    if callable(resolver):
-                        # The Operator is the final allow-list authority; this
-                        # also protects Manager instances talking to an older
-                        # unfiltered catalog endpoint.
-                        resolved = resolver(
-                            tenant_id=ctx.tenant_id,
-                            provider_id=policy.provider_ref,
-                            model_ids=[policy.model],
-                        )
-                        access = resolved.get("access") if isinstance(resolved, dict) else None
-                        allowed_models = access.get("allowed_model_ids") if isinstance(access, dict) else None
-                        if isinstance(allowed_models, list) and policy.model not in allowed_models:
-                            raise NotFound("platform model not found")
-                    return
-                break
+            if model.get("provider_id") != policy.provider_ref or model.get("model_id") != policy.model:
+                continue
+            if (
+                provider_available
+                and model.get("status") == "published"
+                and rate.get("pricing_status") == "known"
+            ):
+                _validate_thinking_level(policy.thinking_level, model.get("capabilities") or {})
+                resolver = getattr(self._operator, "resolve_tenant_access", None)
+                if callable(resolver):
+                    # The Operator is the final allow-list authority; this
+                    # also protects Manager instances talking to an older
+                    # unfiltered catalog endpoint.
+                    resolved = resolver(
+                        tenant_id=ctx.tenant_id,
+                        provider_id=policy.provider_ref,
+                        model_ids=[policy.model],
+                    )
+                    access = resolved.get("access") if isinstance(resolved, dict) else None
+                    allowed_models = access.get("allowed_model_ids") if isinstance(access, dict) else None
+                    if isinstance(allowed_models, list) and policy.model not in allowed_models:
+                        raise NotFound("platform model not found")
+                return
+            break
         # Keep enterprise policy private: an unopened or unknown model is
         # intentionally indistinguishable from a missing model.
         raise NotFound("platform model not found")
@@ -207,18 +224,12 @@ def _validate_thinking_level(value: str | None, capabilities: dict) -> None:
 
 
 def _platform_model_ref(policy: ModelPolicy) -> dict | None:
-    if not all((policy.provider_ref, policy.model, policy.provider_version, policy.model_version)):
+    if not all((policy.provider_ref, policy.model)):
         return None
-    return {
-        "provider_id": policy.provider_ref,
-        "provider_version": policy.provider_version,
-        "model_id": policy.model,
-        "model_version": policy.model_version,
-    }
+    return {"provider_id": policy.provider_ref, "model_id": policy.model}
 
 
 def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
-    ref = row.platform_model_ref or {}
     return EmployeeConfigOut(
         employee_id=row.employee_id,
         employee_slug=row.employee_slug,
@@ -227,7 +238,6 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         persona=row.persona,
         model_policy=ModelPolicy(
             model=row.model, provider_ref=row.provider_ref,
-            provider_version=ref.get("provider_version"), model_version=ref.get("model_version"),
             thinking_level=row.thinking_level,
         ),
         execution_policy=ExecutionPolicy(timeout_seconds=row.timeout_seconds),

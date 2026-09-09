@@ -1,20 +1,34 @@
 """Operator-owned platform Provider/model/rate contracts (D18, 04 §6.7)."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PlatformModelRef(BaseModel):
+    """Stable consumer-facing Provider/model identity.
+
+    Operator owns release history and resolves the effective release. Legacy
+    version keys are accepted at the boundary and discarded from projections.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     provider_id: str
-    provider_version: int = Field(ge=1)
     model_id: str
-    model_version: int = Field(ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_versions(cls, value):
+        if isinstance(value, Mapping):
+            value = dict(value)
+            value.pop("provider_version", None)
+            value.pop("model_version", None)
+        return value
 
 
 class PlatformProvider(BaseModel):

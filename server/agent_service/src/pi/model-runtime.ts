@@ -47,8 +47,6 @@ export interface RuntimeProviderConfig {
   api_key: string;
   model: string;
   provider_ref: string;
-  provider_version: number;
-  model_version: number;
   pricing: RuntimePricingSnapshot;
   version: number;
   model_capabilities?: RuntimeModelCapabilities;

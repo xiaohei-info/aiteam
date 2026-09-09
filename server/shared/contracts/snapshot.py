@@ -6,26 +6,40 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .platform_provider import PricingSnapshot
 from .skill import SkillSigningKeyMetadata
 
 
 class ModelPolicy(BaseModel):
+    """Consumer-facing model identity and effective runtime policy.
+
+    Provider/model release versions belong to Operator catalog history, not to
+    an employee or Agent reference. Legacy keys are accepted once and dropped.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     model: str | None = Field(default=None, description="Operator 发布的 Pi model id")
     provider_ref: str | None = Field(default=None, description="Operator 平台 provider 引用（04 §6.7）")
-    provider_version: int | None = Field(default=None, ge=1)
-    model_version: int | None = Field(default=None, ge=1)
     pricing: PricingSnapshot | None = None
     thinking_level: str | None = Field(
         default=None,
         description="思考档位：由模型能力目录决定（off/minimal/low/medium/high/xhigh/max）。",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_versions(cls, value):
+        if isinstance(value, Mapping):
+            value = dict(value)
+            value.pop("provider_version", None)
+            value.pop("model_version", None)
+        return value
 
 
 class ExecutionPolicy(BaseModel):

@@ -30,7 +30,6 @@ def runtime_out():
     return RuntimeProviderConfigOut(
         base_url="https://relay.example/v1", api_protocol="openai-completions",
         api_key="tenant-token", model="minimax-m3", provider_ref="provider-1",
-        provider_version=2, model_version=3,
         pricing=PricingSnapshot(
             pricing_version=4, pricing_status="known", input_usd_per_million="0.30",
             output_usd_per_million="1.20", effective_from=datetime.now(UTC),
@@ -46,8 +45,11 @@ def test_runtime_config_is_protected_and_is_no_store():
         response = c.post("/api/manager/provider-credentials/runtime-config", headers=auth(), json={"employee_id": "e1"})
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert response.json()["data"]["pricing"]["pricing_version"] == 4
-    assert response.json()["data"]["api_key"] == "tenant-token"
+    data = response.json()["data"]
+    assert data["pricing"]["pricing_version"] == 4
+    assert data["api_key"] == "tenant-token"
+    assert "provider_version" not in data
+    assert "model_version" not in data
     assert c.get("/api/manager/provider-credentials", headers=auth()).status_code == 404
     assert c.post("/api/manager/provider-credentials", headers=auth(), json={}).status_code == 404
 

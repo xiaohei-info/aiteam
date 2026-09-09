@@ -122,7 +122,11 @@ class PlatformProviderService:
         return result
 
     def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
-        """Return the published platform catalog, optionally tenant-filtered."""
+        """Return the current effective platform catalog, optionally tenant-filtered.
+
+        Provider/model release history is Operator-owned; consumers reference
+        only stable provider/model identities.
+        """
         providers = self.list_providers(published_only=True)
         allowed = self._allowed_model_refs(tenant_id)
         models = [
@@ -233,10 +237,9 @@ class PlatformProviderService:
         return {"published": len(published)}
 
     def validate_model_ref(self, ref: PlatformModelRef, *, require_published: bool = False) -> PlatformModelRef:
+        """Validate stable Provider/model identity against the current catalog."""
         provider = self._require_provider(ref.provider_id)
         model = self._require_model(ref.provider_id, ref.model_id)
-        if provider.version != ref.provider_version or model.version != ref.model_version:
-            raise Conflict("platform model reference version is stale")
         if require_published and (provider.status != "published" or model.status != "published"):
             raise Conflict("platform provider/model is not published")
         if require_published:
