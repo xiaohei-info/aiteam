@@ -15,7 +15,9 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     relay = service_block("newapi", "operation")
 
     assert "profiles: [newapi]" in relay
-    assert "networks: [newapi-internal, operation-newapi]" in relay
+    # Keep the client network first: taiyi's Docker backend attaches the host
+    # publish to the primary endpoint while NewAPI also needs its DB/Redis net.
+    assert "networks: [operation-newapi, newapi-internal]" in relay
     assert "${NEWAPI_IMAGE:-calciumion/new-api:v1.0.0-rc.25@sha256:54a0b10924aa75fa5b5947208b820ced66b6ef4b445b35f122b31d80676aba2b}" in relay
     assert "latest" not in relay
     assert '"127.0.0.1:${NEWAPI_PORT:-9300}:3000"' in relay
@@ -26,7 +28,8 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     assert "networks: [newapi-internal]" in redis
     assert "operation-newapi" in relay
     assert "newapi-internal:\n    internal: true" in COMPOSE
-    assert "operation-newapi:\n    internal: true" in COMPOSE
+    assert "operation-newapi:\n    internal: true" not in COMPOSE
+    assert "Only Operation and NewAPI join this network" in COMPOSE
     assert "/var/lib/postgresql/data" in postgres
     assert "- newapi_redisdata:/data" in redis
     assert "- newapi_data:/data" in relay
