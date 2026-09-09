@@ -6,6 +6,7 @@ name: v1-server-ci
 #   2) 集成测试（真 PostgreSQL + RLS）——堵住「集成测试在无 PG 机器上被 deselect、门是绿的
 #      但集成路径从没真跑过」的假绿漏洞（该漏洞曾让 M3/M5 的 jsonb→text[] 等真 bug 漏到合并后）。
 # Node Agent 的 typecheck/test 由 node-agent job 独立执行；Python jobs 仅覆盖控制面与 shared。
+# Web Playwright artifacts are diagnostic only; the web workflow tolerates repository artifact quota exhaustion.
 # OpenAPI 文档门禁会从三端真实 app 生成文档，再检查 schema/鉴权/错误响应/路由清单。
 #
 # 注：仅作用于 v1 新代码 server/；不触碰冻结的 app/（旧单体有自己的测试）。

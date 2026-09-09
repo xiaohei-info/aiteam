@@ -195,6 +195,7 @@ jobs:
         working-directory: web
         run: pnpm e2e
 
+      # Artifact storage is observability-only; quota exhaustion must not turn a green smoke suite red.
       - name: Upload Playwright report
         if: always()
         continue-on-error: true
