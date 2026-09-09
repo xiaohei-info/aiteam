@@ -224,7 +224,9 @@ jobs:
           with psycopg.connect("postgresql://postgres:postgres@localhost:5432/manager_control_db", autocommit=True) as conn:
               conn.execute("CREATE DATABASE operation_control_db")
           PY
-          python -m pytest -q -m "not integration" \
+          env -u OPERATION_DB_URL -u OPERATION_ADMIN_DB_URL \
+            -u OPER_TEST_DB_URL -u OPER_TEST_ADMIN_DB_URL -u OPER_TEST_APP_RW_PASSWORD \
+            python -m pytest -q -m "not integration" \
             --cov=operation_service --cov=manager_service --cov=shared \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 

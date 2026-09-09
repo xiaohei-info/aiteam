@@ -81,6 +81,10 @@ load_env() {
   # 环境文件将承载 NewAPI/Provider 管理凭据；启动前收紧为仅当前用户可读写。
   chmod 600 "${ENV_FILE}"
 
+  # Derived DSNs must come from the selected environment file/target, not
+  # from a caller's ambient Manager/Operation connection variables.
+  unset DB_URL ADMIN_DB_URL OPERATION_DB_URL OPERATION_ADMIN_DB_URL
+
   # 加载配置
   set -a
   # shellcheck source=/dev/null
