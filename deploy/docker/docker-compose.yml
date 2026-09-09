@@ -202,7 +202,9 @@ services:
     volumes:
       - newapi_data:/data
       - newapi_logs:/app/logs
-    networks: [operation-newapi]
+    # NewAPI must reach its private PostgreSQL/Redis network while exposing
+    # the management surface only to Operation through operation-newapi.
+    networks: [newapi-internal, operation-newapi]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/status | grep -q '\"success\":true'"]
       interval: 10s
