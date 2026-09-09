@@ -8,7 +8,6 @@ import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { ApiError } from "@aiteam/shared";
 import { useI18n } from "../../i18n/context";
 import type { ApiClient } from "../../api";
 import { ProvisionForm } from "./ProvisionForm";
@@ -98,7 +97,7 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
       setProvisionResult(result);
       return true;
     } catch (err) {
-      setProvisionError(err instanceof ApiError ? err.message : i18n.t("operation.enterprise.error"));
+      setProvisionError(err instanceof Error ? err.message : i18n.t("operation.enterprise.error"));
       return false;
     } finally {
       setProvisionLoading(false);
