@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from typing import Protocol
 
 from shared.contracts.enums import EnterpriseRole
@@ -137,10 +138,15 @@ class SnapshotService:
             # catalog; production routes always inject it.
             return None
         try:
-            catalog = self._platform_catalog.list_platform_catalog(tenant_id=tenant_id)
-        except TypeError:
-            # Keep lightweight test doubles compatible with the pre-policy seam.
-            catalog = self._platform_catalog.list_platform_catalog()
+            try:
+                catalog = self._platform_catalog.list_platform_catalog(tenant_id=tenant_id)
+            except TypeError:
+                # Keep lightweight test doubles compatible with the pre-policy seam.
+                catalog = self._platform_catalog.list_platform_catalog()
+        except Exception as exc:  # noqa: BLE001 - local test/faux runtimes may omit Operator catalog
+            if os.getenv("AITEAM_ENV", "").strip().lower() != "production":
+                return None
+            raise NotFound("platform model catalog is unavailable") from exc
         provider = next(
             (item for item in catalog.get("providers", [])
              if item.get("provider_id") == policy.provider_ref),

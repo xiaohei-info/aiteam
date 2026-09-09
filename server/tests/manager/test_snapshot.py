@@ -332,6 +332,34 @@ def test_generate_resolves_pricing_with_legacy_catalog_signature():
     )
 
 
+def test_generate_allows_local_snapshot_without_operator_catalog(monkeypatch):
+    from shared.contracts.snapshot import ModelPolicy
+
+    monkeypatch.setenv("AITEAM_ENV", "test")
+
+    class UnavailableCatalog:
+        def list_platform_catalog(self, *, tenant_id=None):
+            raise RuntimeError("operator catalog unavailable")
+
+    config = EmployeeConfigOut(
+        employee_id="e-local", employee_slug="local", version=1, status="active",
+        display_name="Local", model_policy=ModelPolicy(model="m1", provider_ref="p1"),
+    )
+
+    class ConfigService:
+        def get(self, _ctx, *, employee_id):
+            return config
+
+    members = _FakeMemberService()
+    members.set_member("t-a", "admin-1")
+    snapshot = SnapshotService(
+        config_service=ConfigService(), grant_service=_FakeGrantService(),
+        member_service=members, platform_catalog=UnavailableCatalog(),
+    ).generate(_ctx("t-a", roles=["owner"], user_id="admin-1"), member_id="admin-1", employee_id="e-local")
+
+    assert snapshot.model_policy.pricing is None
+
+
 def test_generate_uses_current_effective_release_for_stable_model_ref():
     """Changing Operator release metadata does not invalidate an employee ref."""
     from shared.contracts.platform_provider import PricingSnapshot
