@@ -37,6 +37,9 @@ if [[ -n "${ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
   source "${ENV_FILE}"
   set +a
+  # Older deployment files may omit AITEAM_ENV; .env.prod is still an
+  # explicit production selector for this maintenance-only profile.
+  [[ "${AITEAM_ENV:-}" == "production" || "${ENV_FILE}" == *.env.prod ]] && export AITEAM_ENV=production
 fi
 
 COMMAND="${1:-}"
@@ -61,7 +64,13 @@ done
 : "${NEWAPI_SERVICE:=newapi}"
 : "${NEWAPI_BACKUP_DIR:=/var/backups/aiteam/newapi}"
 
-compose() { docker compose -f "${COMPOSE_FILE}" --profile newapi "$@"; }
+compose() {
+  local files=(-f "${COMPOSE_FILE}")
+  if [[ "${AITEAM_ENV:-}" == "production" && -f "${ROOT}/deploy/docker/docker-compose.maintenance.yml" ]]; then
+    files+=(-f "${ROOT}/deploy/docker/docker-compose.maintenance.yml")
+  fi
+  docker compose "${files[@]}" --profile newapi "$@"
+}
 valid_image() {
   [[ -n "$1" && "$1" != *:latest && "$1" != *:dev && "$1" != *:test && "$1" != *:edge ]] || return 1
   [[ "$1" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ ]]
@@ -72,6 +81,28 @@ require_real_env() {
   mode="$(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}")"
   [[ "${mode}" == "600" ]] || { echo "[newapi-ops][ERR] env file must be mode 600" >&2; exit 1; }
   [[ -n "${NEWAPI_DB_PASSWORD}" ]] || { echo "[newapi-ops][ERR] NEWAPI_DB_PASSWORD is required" >&2; exit 1; }
+  if [[ "${AITEAM_ENV:-}" == "production" ]]; then
+    for name in NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
+      [[ -n "${!name:-}" ]] || { echo "[newapi-ops][ERR] ${name} is required in production" >&2; exit 1; }
+    done
+    [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || { echo "[newapi-ops][ERR] NEWAPI_IMAGE must be pinned" >&2; exit 1; }
+    if ! NEWAPI_BIND_HOST_CHECK="${NEWAPI_BIND_HOST:-127.0.0.1}" python3 - <<'PY'
+import ipaddress
+import os
+value = os.environ["NEWAPI_BIND_HOST_CHECK"].strip()
+try:
+    if value != "localhost" and not ipaddress.ip_address(value.strip("[]")).is_loopback:
+        raise ValueError
+except ValueError:
+    raise SystemExit(1)
+PY
+    then
+      echo "[newapi-ops][ERR] production NEWAPI_BIND_HOST must be loopback" >&2
+      exit 1
+    fi
+    # Production maintenance uses the dedicated dependency-only Compose overlay;
+    # it never starts production control-plane services.
+  fi
 }
 require_yes() {
   (( YES || DRY_RUN )) || { echo "[newapi-ops][ERR] destructive operation requires --yes" >&2; exit 2; }
@@ -89,8 +120,9 @@ run_backup() {
     return
   fi
   mkdir -p "$(dirname "${output}")"
-  docker exec -e "PGPASSWORD=${NEWAPI_DB_PASSWORD}" "${NEWAPI_PG_CONTAINER}" \
-    pg_dump --format=custom --no-owner --no-privileges --username="${NEWAPI_DB_USER}" --dbname="${NEWAPI_DB_NAME}" >"${output}"
+  printf '%s\n' "${NEWAPI_DB_PASSWORD}" | docker exec -i "${NEWAPI_PG_CONTAINER}" \
+    sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; exec pg_dump "$@"' sh \
+    --format=custom --no-owner --no-privileges --username="${NEWAPI_DB_USER}" --dbname="${NEWAPI_DB_NAME}" >"${output}"
   chmod 600 "${output}"
   echo "[newapi-ops] backup written: ${output}"
 }
@@ -125,9 +157,10 @@ case "${COMMAND}" in
       echo "[newapi-ops][dry-run] stop ${NEWAPI_SERVICE}; pg_restore --clean --if-exists ${INPUT}; start ${NEWAPI_SERVICE}"
     else
       compose stop "${NEWAPI_SERVICE}"
-      docker exec -i -e "PGPASSWORD=${NEWAPI_DB_PASSWORD}" "${NEWAPI_PG_CONTAINER}" \
-        pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error \
-        --username="${NEWAPI_DB_USER}" --dbname="${NEWAPI_DB_NAME}" <"${INPUT}"
+      { printf '%s\n' "${NEWAPI_DB_PASSWORD}"; cat "${INPUT}"; } | docker exec -i "${NEWAPI_PG_CONTAINER}" \
+        sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; tmp=/tmp/aiteam-newapi-restore.dump; cat >"$tmp"; pg_restore "$@" "$tmp"; rc=$?; rm -f "$tmp"; exit "$rc"' sh \
+        --clean --if-exists --no-owner --no-privileges --exit-on-error \
+        --username="${NEWAPI_DB_USER}" --dbname="${NEWAPI_DB_NAME}"
       compose up -d "${NEWAPI_SERVICE}"
       echo "[newapi-ops] restore complete"
     fi

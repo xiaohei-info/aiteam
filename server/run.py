@@ -31,6 +31,7 @@ def get_app(tier: str) -> FastAPI:
 
 
 def main() -> None:
+    import ipaddress
     import os
 
     parser = argparse.ArgumentParser(description="AI Team v1 统一启动器")
@@ -40,6 +41,13 @@ def main() -> None:
     args = parser.parse_args()
     if not args.tier:
         parser.error("必须指定 --tier 或设置 APP_TIER")
+    if os.getenv("AITEAM_ENV") == "production":
+        try:
+            host_is_loopback = args.host == "localhost" or ipaddress.ip_address(args.host.strip("[]")).is_loopback
+        except ValueError:
+            host_is_loopback = False
+        if not host_is_loopback:
+            parser.error("production control-plane services must bind to loopback; use a TLS reverse proxy for external access")
 
     import uvicorn
 

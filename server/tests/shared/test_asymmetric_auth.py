@@ -93,6 +93,28 @@ def test_verifier_from_jwks_roundtrip():
     assert out.user_id == "u1"
 
 
+def test_from_jwks_rejects_empty_and_invalid_key_documents():
+    with pytest.raises(ValueError, match="at least one key"):
+        RS256TokenVerifier.from_jwks({"keys": []})
+    with pytest.raises(ValueError, match="invalid RSA"):
+        RS256TokenVerifier.from_jwks({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "bad", "n": "!", "e": "!"}]})
+
+
+def test_from_jwks_rejects_unsupported_duplicate_and_private_keys():
+    _, pub = generate_rsa_keypair()
+    key = jwks_from_public_pem("k1", pub)["keys"][0]
+    with pytest.raises(ValueError):
+        RS256TokenVerifier.from_jwks({"keys": [{**key, "alg": "RS384"}]})
+    with pytest.raises(ValueError):
+        RS256TokenVerifier.from_jwks({"keys": [{**key, "d": "private"}]})
+    with pytest.raises(ValueError):
+        RS256TokenVerifier.from_jwks({"keys": [key, {**key}]})
+    with pytest.raises(ValueError):
+        RS256TokenVerifier.from_jwks({"keys": [key], "secret": "must-reject"})
+    with pytest.raises(ValueError):
+        RS256TokenVerifier.from_jwks({"keys": [{**key, "extra": "must-reject"}]})
+
+
 def test_malformed_token_rejected():
     priv, pub = generate_rsa_keypair()
     RS256TokenSigner(priv, kid="k1")

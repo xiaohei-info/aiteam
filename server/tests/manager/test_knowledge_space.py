@@ -11,6 +11,8 @@ integration（真 PG）见 test_knowledge_space_e2e.py。
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from shared.contracts.tenancy import TenantContext
@@ -21,8 +23,10 @@ from manager_service.knowledge_space_repository import (
     KnowledgeSpaceBindingRow,
     KnowledgeSpaceRow,
 )
-from manager_service.knowledge_space_service import KnowledgeSpaceService
-from manager_service.rag_instances import RagInstance, RagInstanceRegistry
+from manager_service.knowledge_space_service import (
+    KnowledgeSpaceService,
+    ensure_enterprise_knowledge_space,
+)
 from manager_service.schemas import (
     KnowledgeSpaceBindingCreate,
     KnowledgeSpaceCreate,
@@ -31,6 +35,13 @@ from manager_service.schemas import (
 
 
 # ---- D21 红线：workspace 不在入参 ----
+
+
+def test_build_knowledge_space_service_uses_tenant_router():
+    from manager_service.knowledge_space_service import build_knowledge_space_service
+
+    service = build_knowledge_space_service(object())
+    assert isinstance(service, KnowledgeSpaceService)
 
 
 def test_create_schema_has_no_workspace_input():
@@ -166,13 +177,12 @@ def _ctx(tid: str, roles=None) -> TenantContext:
     return TenantContext(tenant_id=tid, user_id="u", roles=roles or ["owner"])
 
 
-def _svc(space=None, binding=None, expert=None, *, enterprise_workspace=None, instance_registry=None) -> KnowledgeSpaceService:
+def _svc(space=None, binding=None, expert=None, *, enterprise_only=False) -> KnowledgeSpaceService:
     return KnowledgeSpaceService(
         repo=space or _FakeSpaceRepo(),
         binding_repo=binding or _FakeBindingRepo(),
         expert_binding=expert or _FakeExpertBinding(),
-        enterprise_workspace=enterprise_workspace,
-        instance_registry=instance_registry,
+        enterprise_only=enterprise_only,
     )
 
 
@@ -201,14 +211,41 @@ def test_knowledge_space_crud_roundtrip():
         svc.get(ctx, knowledge_space_id="ks_default")
 
 
-def test_bound_manager_exposes_only_the_enterprise_knowledge_key():
-    workspace = "enterprise-workspace"
-    registry = RagInstanceRegistry((RagInstance("rag", "http://rag", "secret", workspace),))
-    svc = _svc(enterprise_workspace=workspace, instance_registry=registry)
+def test_enterprise_only_list_ensures_single_space():
+    class EnsuringRepo(_FakeSpaceRepo):
+        def ensure(self, ctx, *, knowledge_space_id, display_name):
+            return self.create(ctx, knowledge_space_id=knowledge_space_id, display_name=display_name)
+
+    svc = _svc(space=EnsuringRepo(), enterprise_only=True)
+    rows = svc.list_all(_ctx("t-list"))
+    assert [row.knowledge_space_id for row in rows] == ["enterprise_shared"]
+
+
+def test_enterprise_only_delete_is_rejected():
+    svc = _svc(enterprise_only=True)
+    with pytest.raises(Conflict, match="cannot be deleted"):
+        svc.delete(_ctx("t-delete"), knowledge_space_id="enterprise_shared")
+
+
+def test_manager_exposes_only_the_enterprise_knowledge_key():
+    svc = _svc(enterprise_only=True)
     created = svc.create(_ctx("t-a"), KnowledgeSpaceCreate(knowledge_space_id="enterprise_shared"))
     assert created.knowledge_space_id == "enterprise_shared"
     with pytest.raises(Conflict, match="one enterprise knowledge base"):
         svc.create(_ctx("t-a"), KnowledgeSpaceCreate(knowledge_space_id="ks-other"))
+
+
+def test_enterprise_only_create_rejects_existing_legacy_space():
+    class EnterpriseAwareSpaceRepo(_FakeSpaceRepo):
+        def is_enterprise_space(self, ctx, *, knowledge_space_id):
+            return knowledge_space_id == "enterprise_shared"
+
+    space = EnterpriseAwareSpaceRepo()
+    ctx = _ctx("t-a")
+    space.create(ctx, knowledge_space_id="enterprise_shared", display_name="企业知识库")
+    svc = _svc(space=space, enterprise_only=True)
+    with pytest.raises(Conflict, match="already exists in this tenant"):
+        svc.create(ctx, KnowledgeSpaceCreate(knowledge_space_id="ks-other"))
 
 
 def test_knowledge_space_conflict_within_tenant():
@@ -310,6 +347,15 @@ def test_unbind_department():
     assert all(b.resource_id != dept_id for b in svc.list_bindings(ctx, knowledge_space_id="ks"))
 
 
+def test_enterprise_only_unbind_rejects_non_enterprise_space():
+    svc = _svc(enterprise_only=True)
+    with pytest.raises(Conflict, match="one enterprise knowledge base"):
+        svc.unbind(
+            _ctx("t-a"), knowledge_space_id="ks-other",
+            resource_type="member", resource_id="member-1",
+        )
+
+
 # ---- 绑定：专家（真相态 = employee.knowledge_refs）----
 
 
@@ -404,3 +450,28 @@ def test_binding_cross_tenant_not_visible():
     ))
     with pytest.raises(NotFound):
         svc.list_bindings(ctx_b, knowledge_space_id="ks")
+
+
+def test_ensure_enterprise_knowledge_space_builds_tenant_scoped_repository(monkeypatch):
+    monkeypatch.delenv("AITEAM_ENTERPRISE_KNOWLEDGE_SPACE_ID", raising=False)
+    row = KnowledgeSpaceRow(
+        knowledge_space_id="enterprise_shared", workspace="t-a__enterprise_shared",
+        display_name="企业知识库", created_at=None,
+    )
+    registry = object()
+    with (
+        patch("manager_service.knowledge_space_service.PgTenantRouter") as router_cls,
+        patch("manager_service.knowledge_space_service.KnowledgeSpaceRepository") as repo_cls,
+    ):
+        repo_cls.return_value.ensure.return_value = row
+        result = ensure_enterprise_knowledge_space(
+            "postgresql://manager", "t-a", instance_registry=registry,
+        )
+
+    assert result == row
+    router_cls.assert_called_once_with("postgresql://manager")
+    repo_cls.assert_called_once_with(router_cls.return_value, instance_registry=registry)
+    repo_cls.return_value.ensure.assert_called_once_with(
+        TenantContext(tenant_id="t-a", user_id="manager-system", roles=["service"]),
+        knowledge_space_id="enterprise_shared", display_name="企业知识库",
+    )

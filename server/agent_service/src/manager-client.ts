@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
@@ -128,7 +130,7 @@ export class HttpManagerClient implements ManagerClient {
 
   async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
     const response = await this.request("/api/manager/provider-credentials/runtime-config", caller, { employee_id: employeeId });
-    return normalizeRuntimeProviderConfig(this.unwrap(response));
+    return normalizeRuntimeProviderConfigWithDns(this.unwrap(response));
   }
 
   async pullSpeechRuntimeConfig(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig> {
@@ -137,7 +139,7 @@ export class HttpManagerClient implements ManagerClient {
       caller,
       model ? { model } : {},
     );
-    return normalizeRuntimeProviderConfig(this.unwrap(response));
+    return normalizeRuntimeProviderConfigWithDns(this.unwrap(response));
   }
 
   async pullHindsightRuntimeConfig(caller: AuthenticatedCaller, employeeId: string, rotate = false): Promise<HindsightRuntimeConfig> {
@@ -399,6 +401,52 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   };
 }
 
+function isLocalIpv4(host: string): boolean {
+  const octets = host.split(".").map(Number);
+  const [first, second] = octets;
+  return first === 0 || first === 10 || first === 127 || (first === 100 && second >= 64 && second <= 127) || (first === 169 && second === 254) || (first === 172 && second >= 16 && second <= 31) || (first === 192 && (second === 0 || second === 168)) || (first === 198 && (second === 18 || second === 19 || second === 51)) || (first === 203 && second === 0) || first >= 224;
+}
+
+function isLocalRelayHost(hostValue: string): boolean {
+  const host = hostValue.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.$/u, "").toLowerCase();
+  if ((host && !host.includes(".") && !host.includes(":")) || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".localdomain") || host.endsWith(".internal") || host.endsWith(".intranet")) return true;
+  const version = isIP(host);
+  if (version === 4) return isLocalIpv4(host);
+  if (version === 6) {
+    if (host === "::" || host === "::1") return true;
+    if (host.startsWith("::ffff:")) {
+      const mapped = host.slice("::ffff:".length);
+      return isIP(mapped) === 4 ? isLocalIpv4(mapped) : true;
+    }
+    const [firstPart, secondPart] = host.split(":");
+    const first = Number.parseInt(firstPart || "0", 16);
+    const second = Number.parseInt(secondPart || "0", 16);
+    // Reject non-global/special-purpose IPv6 ranges as well as private,
+    // link-local, multicast and documentation space.  Relay destinations must
+    // be globally routable, not merely syntactically valid IPv6.
+    return first === 0 || first === 0x0100 || (first >= 0xfe00 && first <= 0xfeff) || (first >= 0xfc00 && first <= 0xfdff) || first >= 0xff00 || host.startsWith("2001:db8") || (first === 0x2001 && second <= 0x0020) || (first === 0x0064 && second === 0xff9b) || first === 0x2002 || first === 0x3ffe;
+  }
+  return false;
+}
+
+function isLocalRelayDestination(url: URL): boolean {
+  return isLocalRelayHost(url.hostname);
+}
+
+function isGlobalRelayAddress(address: string): boolean {
+  const version = isIP(address);
+  if (version === 4) return !isLocalIpv4(address);
+  if (version === 6) {
+    const normalized = address.toLowerCase();
+    if (isLocalRelayHost(normalized)) return false;
+    const parts = normalized.split(":");
+    const first = Number.parseInt(parts[0] || "0", 16);
+    const second = Number.parseInt(parts[1] || "0", 16);
+    return !(first === 0x2001 && second <= 0x0020) && !(first === 0x0064 && second === 0xff9b) && first !== 0x2002 && first !== 0x3ffe;
+  }
+  return false;
+}
+
 function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned invalid runtime pricing");
   const raw = value as Record<string, unknown>;
@@ -412,15 +460,35 @@ function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing
   return raw as unknown as RuntimeProviderConfig["pricing"];
 }
 
+export async function normalizeRuntimeProviderConfigWithDns(value: unknown): Promise<RuntimeProviderConfig> {
+  const config = normalizeRuntimeProviderConfig(value);
+  if (process.env.AITEAM_ENV !== "production") return config;
+  try {
+    const url = new URL(config.base_url);
+    const addresses = await lookup(url.hostname, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some((item) => !isGlobalRelayAddress(item.address))) throw new Error("non-global relay destination");
+  } catch {
+    throw new ManagerUnavailableError("Manager returned a relay URL with an invalid production destination");
+  }
+  return config;
+}
+
 export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   const raw = value as Record<string, unknown>;
   if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
+  let relayUrl: URL;
+  try {
+    relayUrl = new URL(raw.base_url as string);
+    if ((relayUrl.protocol !== "http:" && relayUrl.protocol !== "https:") || relayUrl.username || relayUrl.password || relayUrl.search || relayUrl.hash || /\s/u.test(raw.base_url as string) || !relayUrl.pathname.replace(/\/$/u, "").endsWith("/v1") || (process.env.AITEAM_ENV === "production" && (relayUrl.protocol !== "https:" || isLocalRelayDestination(relayUrl)))) throw new Error("invalid relay URL");
+  } catch {
+    throw new ManagerUnavailableError("Manager returned an invalid runtime relay URL");
+  }
   if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
   for (const key of ["version", "provider_version", "model_version"]) if (typeof raw[key] !== "number" || !Number.isInteger(raw[key]) || Number(raw[key]) < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
   const capabilities = normalizeRuntimeModelCapabilities(raw.model_capabilities);
-  return { ...raw, pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
+  return { ...raw, base_url: relayUrl.toString().replace(/\/$/u, ""), pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
 }
 
 function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfig["model_capabilities"] | undefined {

@@ -6,11 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/app/aiteam
-ExecStart=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh start --env test --daemon
-ExecStop=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh stop --env test
-ExecReload=/usr/bin/env bash /root/app/aiteam/scripts/ctl.sh restart --env test --daemon
-Environment=PATH=/root/app/aiteam/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=@DEPLOY_ROOT@
+ExecStart=/usr/bin/env bash @DEPLOY_ROOT@/scripts/ctl.sh start --env @ENV_TARGET@ --daemon
+ExecStop=/usr/bin/env bash @DEPLOY_ROOT@/scripts/ctl.sh stop --env @ENV_TARGET@
+ExecReload=/usr/bin/env bash @DEPLOY_ROOT@/scripts/ctl.sh restart --env @ENV_TARGET@ --daemon
+Environment=PATH=@DEPLOY_ROOT@/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=aiteam-v1

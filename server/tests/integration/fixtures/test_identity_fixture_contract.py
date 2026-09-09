@@ -79,7 +79,7 @@ def test_service_token_unconfigured_fail_closed_401():
 
 def test_service_token_dev_placeholder_fail_open():
     """dev 占位值 `dev-service-token-placeholder` 在显式 dev profile 下 fail-open（AITEAM-331 B2）。"""
-    app = build_service_token_probe_app("dev-service-token-placeholder")
+    app = build_service_token_probe_app("dev-service-token-placeholder", aiteam_env="development")
     client = TestClient(app, raise_server_exceptions=False)
     # 占位值：无 X-Service-Token → fail-open（日志提醒，不阻断）。
     assert client.get("/svc/ping").status_code == 200

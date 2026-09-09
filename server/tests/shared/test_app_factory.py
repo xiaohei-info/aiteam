@@ -33,9 +33,44 @@ def _empty_router(prefix="/api/operation") -> APIRouter:
     return APIRouter(prefix=prefix)
 
 
+def test_production_rejects_public_openapi_docs():
+    with pytest.raises(ValueError, match="disable public OpenAPI docs"):
+        create_app(_settings().model_copy(update={"aiteam_env": "production"}), _empty_router())
+
+
+def test_production_readiness_requires_app_rw_role(monkeypatch):
+    monkeypatch.delenv("AITEAM_COMPOSE_MODE", raising=False)
+    app = create_app(
+        _settings(docs=False).model_copy(update={
+            "aiteam_env": "production",
+            "db_url": "postgresql://app_rw@readyz.test/operation",
+            "admin_db_url": "postgresql://admin@readyz.test/operation",
+        }),
+        _empty_router(),
+    )
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("admin", True, True)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        response = TestClient(app).get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
+
+
+def test_production_hides_openapi_with_public_docs_disabled():
+    app = create_app(_settings(docs=False).model_copy(update={"aiteam_env": "production"}), _empty_router())
+    assert TestClient(app).get("/openapi.json").status_code == 404
+
+
+def test_production_compose_control_plane_is_rejected(monkeypatch):
+    monkeypatch.setenv("AITEAM_COMPOSE_MODE", "1")
+    with pytest.raises(ValueError, match="control-plane Docker Compose is unsupported"):
+        create_app(_settings(docs=False).model_copy(update={"aiteam_env": "production"}), _empty_router())
+
+
 def test_healthz_and_readyz():
     app = create_app(
-        _settings().model_copy(update={"admin_db_url": "postgresql://readyz.test/operation"}),
+        _settings().model_copy(update={"db_url": "postgresql://app_rw@readyz.test/operation", "admin_db_url": "postgresql://readyz.test/operation"}),
         _empty_router(),
     )
     conn = MagicMock()
@@ -53,7 +88,7 @@ def test_healthz_and_readyz():
         assert r2.status_code == 200
         assert r2.json()["status"] == "ready"
     connect.assert_called_once_with(
-        "postgresql://readyz.test/operation", autocommit=True, connect_timeout=5,
+        "postgresql://app_rw@readyz.test/operation", autocommit=True, connect_timeout=5,
     )
 
 
@@ -114,7 +149,7 @@ def test_readyz_unreachable_database_is_not_ready():
 
 def test_readyz_missing_schema_is_not_ready():
     app = create_app(
-        _settings().model_copy(update={"admin_db_url": "postgresql://readyz.test/operation"}),
+        _settings().model_copy(update={"db_url": "postgresql://app_rw@readyz.test/operation", "admin_db_url": "postgresql://readyz.test/operation"}),
         _empty_router(),
     )
     conn = MagicMock()

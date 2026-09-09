@@ -12,7 +12,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.auth import require_claims, tenant_context_from
+from shared.auth import authorize, require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
@@ -33,14 +33,14 @@ class BillingBalanceOut(BaseModel):
 class RechargeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: Decimal = Field(gt=0)
-    payment_method: Literal["wechat_pay", "alipay", "bank_transfer", "mock_pay"]
+    payment_method: Literal["wechat_pay", "alipay", "bank_transfer"]
 
 
 class RechargeOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     recharge_id: str
     amount: Decimal
-    payment_method: str
+    payment_method: Literal["wechat_pay", "alipay", "bank_transfer"]
     status: Literal["pending", "success", "failed", "refunded"]
     order_no: str
     token_credited: int
@@ -72,6 +72,9 @@ class UsageRecordOut(BaseModel):
     cost: Decimal
 
 
+_BILLING_ROLES = ["owner", "finance_admin"]
+
+
 class _ManagerNotConfigured(AppError):
     status, code, title = 503, "manager_db_unconfigured", "Manager DB Unconfigured"
 
@@ -91,55 +94,60 @@ def build_billing_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/manager/billing", tags=["manager", "billing"])
     require = require_claims(verifier)
 
-    @router.get("/balance", summary="查询企业余额", operation_id="manager_billing_balance")
+    @router.get("/balance", summary="查询企业余额（owner/finance_admin）", operation_id="manager_billing_balance")
     async def get_balance(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[BillingBalanceOut]:
+        authorize(claims, _BILLING_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         data = svc.get_balance(ctx)
         return Envelope(data=BillingBalanceOut(**data))
 
-    @router.get("/recharges", summary="查询充值记录", operation_id="manager_billing_recharge_list")
+    @router.get("/recharges", summary="查询充值记录（owner/finance_admin）", operation_id="manager_billing_recharge_list")
     async def list_recharges(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[RechargeOut]:
+        authorize(claims, _BILLING_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         items = svc.list_recharges(ctx)
         return ListEnvelope(data=[RechargeOut(**r) for r in items])
 
-    @router.post("/recharges", summary="发起充值", operation_id="manager_billing_recharge_create")
+    @router.post("/recharges", summary="发起充值（owner/finance_admin）", operation_id="manager_billing_recharge_create")
     async def create_recharge(
         body: RechargeIn,
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[RechargeOut]:
+        authorize(claims, _BILLING_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         data = svc.create_recharge(ctx, body.amount, body.payment_method)
         return Envelope(data=RechargeOut(**data))
 
-    @router.get("/usage/overview", summary="查询用量总览", operation_id="manager_billing_usage_overview")
+    @router.get("/usage/overview", summary="查询用量总览（owner/finance_admin）", operation_id="manager_billing_usage_overview")
     async def get_usage_overview(
         request: Request,
         period: str = Query(default="month", description="统计周期：month / last_month / all"),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[UsageOverviewOut]:
+        authorize(claims, _BILLING_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         data = svc.get_usage_overview(ctx, period=period)
         return Envelope(data=UsageOverviewOut(**data))
 
-    @router.get("/usage/records", summary="查询员工用量明细", operation_id="manager_billing_usage_records")
+    @router.get("/usage/records", summary="查询员工用量明细（owner/finance_admin）", operation_id="manager_billing_usage_records")
     async def list_usage_records(
         request: Request,
         period: str = Query(default="month", description="统计周期：month / last_month / all"),
         employee_id: str | None = Query(default=None, description="可选员工 id 过滤"),
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[UsageRecordOut]:
+        authorize(claims, _BILLING_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         items = svc.list_usage_records(ctx, period=period, employee_id=employee_id)

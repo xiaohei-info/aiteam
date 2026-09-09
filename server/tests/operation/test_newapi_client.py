@@ -7,10 +7,20 @@ import pytest
 
 from operation_service.newapi_client import NewApiAdminClient, NewApiError
 from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
-from operation_service.platform_provider_service import PlatformProviderService, newapi_urls
+from operation_service.platform_provider_service import PlatformProviderService, _validated_relay_url, newapi_urls
 from shared.errors import Conflict
 from shared.contracts.platform_provider import PlatformModelRef
 from operation_service.public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError, _model_capabilities
+
+
+def test_validated_relay_url_covers_production_dns_and_invalid_ports(monkeypatch):
+    monkeypatch.setattr("operation_service.platform_provider_service.socket.getaddrinfo", lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))])
+    monkeypatch.setenv("AITEAM_ENV", "production")
+    assert _validated_relay_url("https://relay.example/v1/", name="NEWAPI_PUBLIC_BASE_URL", https_only=True, reject_local=True) == "https://relay.example/v1"
+    with pytest.raises(ValueError, match="qualified public"):
+        _validated_relay_url("https://newapi/v1", name="NEWAPI_PUBLIC_BASE_URL", https_only=True, reject_local=True)
+    with pytest.raises(ValueError, match="invalid port"):
+        _validated_relay_url("https://relay.example:bad/v1", name="NEWAPI_PUBLIC_BASE_URL", https_only=True, reject_local=True)
 
 
 def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
@@ -18,6 +28,42 @@ def test_newapi_url_is_configurable_like_other_manager_services(monkeypatch):
     monkeypatch.delenv("NEWAPI_ADMIN_BASE_URL", raising=False)
     monkeypatch.delenv("NEWAPI_PUBLIC_BASE_URL", raising=False)
     assert newapi_urls() == ("https://relay.example/ai", None)
+
+
+@pytest.mark.parametrize("value", [
+    "https://user:secret@relay.example/v1",
+    "https://relay.example/v1?token=secret",
+    "https://relay.example/v1#fragment",
+    "https://relay.example/ v1",
+    "https://relay.example/not-v1",
+])
+def test_newapi_urls_reject_unsafe_public_url(monkeypatch, value):
+    monkeypatch.setenv("NEWAPI_URL", "https://newapi.example")
+    monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", value)
+    with pytest.raises(ValueError, match="NEWAPI_PUBLIC_BASE_URL"):
+        newapi_urls()
+
+
+def test_newapi_urls_rejects_dns_private_public_url_in_production(monkeypatch):
+    monkeypatch.setenv("NEWAPI_URL", "https://newapi.example")
+    monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://relay.example/v1")
+    monkeypatch.setattr("operation_service.platform_provider_service.socket.getaddrinfo", lambda *_args, **_kwargs: [(2, 1, 6, "", ("10.0.0.2", 443))])
+    with pytest.raises(ValueError, match="global destinations"):
+        newapi_urls(production=True)
+
+
+def test_newapi_urls_rejects_local_public_url_in_production(monkeypatch):
+    monkeypatch.setenv("NEWAPI_URL", "https://newapi.example")
+    monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://127.0.0.2/v1")
+    with pytest.raises(ValueError, match="local destination"):
+        newapi_urls(production=True)
+
+
+def test_newapi_urls_rejects_http_public_url_in_production(monkeypatch):
+    monkeypatch.setenv("NEWAPI_URL", "https://newapi.example")
+    monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "http://relay.example/v1")
+    with pytest.raises(ValueError, match="HTTPS"):
+        newapi_urls(production=True)
 
 
 def test_public_relay_url_never_falls_back_to_private_newapi_url(monkeypatch):
@@ -190,7 +236,9 @@ def test_internal_provider_bootstrap_enriches_model_capabilities():
         def get_provider(self, _): return provider
         def upsert_discovered_models(self, *_): return [model, missing]
         def current_rate(self, _provider_id, model_id): return rate if model_id == "minimax-m3" else rate
-        def update_model_metadata(self, provider_id, model_id, **values): enriched.append((provider_id, model_id, values)); return model
+        def update_model_metadata(self, provider_id, model_id, **values):
+            enriched.append((provider_id, model_id, values))
+            return model
         def publish_priced_models(self, _): return []
 
     class NewAPI:

@@ -14,7 +14,11 @@
 
 from __future__ import annotations
 
+import os
+import socket
+from ipaddress import ip_address
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.platform_provider import PricingSnapshot
@@ -24,6 +28,7 @@ from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound
 
 from .provider_credential_repository import ProviderCredentialRepository, ProviderCredentialRow
+
 from .schemas_provider import (
     ProviderCredentialCreate,
     ProviderCredentialOut,
@@ -31,6 +36,44 @@ from .schemas_provider import (
     ProviderModelCapability,
     RuntimeProviderConfigOut,
 )
+
+
+def _safe_runtime_relay_url(value: object) -> str:
+    if not isinstance(value, str) or not value or any(character.isspace() for character in value):
+        raise NotFound("runtime provider config is unavailable")
+    try:
+        parsed = urlsplit(value)
+        parsed.port
+    except ValueError as exc:
+        raise NotFound("runtime provider config is unavailable") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or not parsed.path.rstrip("/").endswith("/v1"):
+        raise NotFound("runtime provider config is unavailable")
+    if os.getenv("AITEAM_ENV", "").strip() == "production":
+        if parsed.scheme != "https":
+            raise NotFound("runtime provider config is unavailable")
+        host = parsed.hostname.rstrip(".").lower()
+        if "." not in host and ":" not in host:
+            raise NotFound("runtime provider config is unavailable")
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or host.endswith(".localdomain") or host.endswith(".internal") or host.endswith(".intranet"):
+            raise NotFound("runtime provider config is unavailable")
+        try:
+            address = ip_address(host)
+        except ValueError:
+            address = None
+        if address is not None and (address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_multicast):
+            raise NotFound("runtime provider config is unavailable")
+        try:
+            resolved = {
+                ip_address(info[4][0])
+                for info in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+                if info[4] and info[4][0]
+            }
+        except (OSError, ValueError) as exc:
+            raise NotFound("runtime provider config is unavailable") from exc
+        if not resolved or any(not item.is_global for item in resolved):
+            raise NotFound("runtime provider config is unavailable")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
 
 # 配置写操作允许的企业角色（03 §9.7）。Member 只读（由 routes 层 authorize 强制）。
 _CRED_WRITE_ROLES = [
@@ -164,7 +207,7 @@ class ProviderCredentialService:
             if model not in access.get("allowed_model_ids", []):
                 raise NotFound("runtime provider model is unavailable")
             return RuntimeProviderConfigOut(
-                base_url=resolved["relay_base_url"],
+                base_url=_safe_runtime_relay_url(resolved.get("relay_base_url")),
                 api_protocol=resolved["api_protocol"],
                 api_key=resolved["relay_token"],
                 model=model,
@@ -256,7 +299,7 @@ class ProviderCredentialService:
                 key: rate.get(key) for key in PricingSnapshot.model_fields
             })
             return RuntimeProviderConfigOut(
-                base_url=str(resolved["relay_base_url"]),
+                base_url=_safe_runtime_relay_url(resolved.get("relay_base_url")),
                 api_protocol=str(resolved["api_protocol"]),
                 api_key=str(resolved["relay_token"]),
                 model=model_id,

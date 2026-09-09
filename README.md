@@ -27,10 +27,10 @@
 ## 核心能力
 
 - **本地优先执行**：私聊、群聊、Run、Task、Loop 和运行时会话在 Agent 本机执行与落库。
-- **三端职责清晰**：Operator 管理平台目录，Manager 管理单个企业，Agent 负责用户本地执行。
+- **三端职责清晰**：Operator 管理平台目录，Manager 按 JWT/TenantContext 管理当前会话 tenant，Agent 负责用户本地执行。
 - **多 Agent 协作**：通过专家实例、授权快照和本地 Pi Session 组合完成私聊与群聊协作。
 - **企业知识与记忆**：Manager 管理企业共享 RAG；员工个人记忆通过受控 Hindsight facade 管理。
-- **统一运行时边界**：Codex、Claude Code、OpenCode、Hermes 等 runtime 通过 Executor/Driver 接入。
+- **Pi-native 运行时边界**：Node Agent 进程内 Pi SDK/SessionHost 统一管理会话、受控工具、Skill、Extension 与 sandbox；不新增独立多 runtime Executor/Driver 链。
 - **可审计、可治理**：只上报脱敏的 usage、审计和治理摘要，不上传会话正文或 runtime 原始事件。
 - **可验证 API 契约**：三端提供 FastAPI/Node OpenAPI 文档、统一错误模型和 CI schema 门禁。
 
@@ -39,7 +39,7 @@
 ```text
                          云侧控制面
   ┌──────────────────────┐       service call       ┌────────────────────────┐
-  │ Operator              │ ◀────────────────────▶ │ Manager（每企业一套）  │
+  │ Operator              │ ◀────────────────────▶ │ Manager（会话级多租户） │
   │ 平台目录 / 企业开通   │                         │ 成员 / 专家 / 授权 / RAG │
   │ Provider / 价格 / 汇总 │                         │ 企业治理与计量汇总      │
   └──────────────────────┘                         └──────────────┬─────────┘
@@ -61,7 +61,7 @@
 | 端 | 部署方式 | 主要职责 | 数据边界 |
 | --- | --- | --- | --- |
 | **Operator** | 平台方部署 | 企业开通、人才市场与方案目录、Provider/模型/价格、跨企业治理 | `oper` 控制库；不执行 Agent、不持会话 |
-| **Manager** | 每个企业独立部署 | 企业成员认证、专家/方案配置、成员授权、共享 RAG、员工记忆与企业治理 | 当前企业控制库和数据空间；不持会话、不提交执行 |
+| **Manager** | 会话级多租户部署 | 企业成员认证、专家/方案配置、成员授权、每 tenant 共享 RAG、员工记忆与企业治理 | 当前 TenantContext 数据空间；不持会话、不提交执行 |
 | **Agent** | 每个用户本机部署 | 工作台、私聊、群聊、Run/Task/Loop、本地 runtime 执行 | 本机 `agent` 库；会话和执行内容不上传 |
 
 跨端通信遵循最小原则：Agent 主动访问 Manager；Operator 与 Manager 通过受控服务调用；云端不向用户机器建立入站连接。
@@ -148,11 +148,12 @@ pnpm -r build
 控制面服务使用 FastAPI，用户端 Agent 使用独立 Node 进程：
 
 ```bash
-# Operation
-.venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000
+# Operation（显式开发 profile；接数据库时同时提供 OPERATION_DB_URL/OPERATION_ADMIN_DB_URL）
+AITEAM_ENV=development OPERATION_SYSTEM_USERNAME=sysadmin OPERATION_SYSTEM_PASSWORD=dev-password SERVICE_TOKEN=dev-service-token-placeholder \
+  .venv/bin/python server/run.py --tier operation --host 127.0.0.1 --port 8000
 
 # Manager（另开终端）
-DB_URL=... ADMIN_DB_URL=... OPERATOR_URL=http://127.0.0.1:8000 \
+AITEAM_ENV=development DB_URL=... ADMIN_DB_URL=... OPERATOR_URL=http://127.0.0.1:8000 SERVICE_TOKEN=dev-service-token-placeholder \
   .venv/bin/python server/run.py --tier manager --host 127.0.0.1 --port 8001
 
 # Agent（另开终端）
@@ -166,7 +167,7 @@ pnpm --dir server/agent_service start
 - `/readyz`：本端依赖就绪检查
 - `/docs`：Swagger UI
 - `/redoc`：ReDoc
-- `/openapi.json`：运行时 OpenAPI 文档
+- `/openapi.json`：dev/test 运行时 OpenAPI 文档；production 不提供公网路由，使用受控导出
 
 ### 本地 Compose
 
@@ -200,7 +201,7 @@ bash scripts/ctl.sh stop --env dev
 # 非集成测试（无需 PostgreSQL）
 .venv/bin/pytest -q -m "not integration" server
 
-# 集成测试（需要 ADMIN_DB_URL、DB_URL、APP_RW_PASSWORD 和真实 PostgreSQL）
+# 集成测试（需要 Manager 的 ADMIN_DB_URL/DB_URL、Operation 的 OPERATION_ADMIN_DB_URL/OPERATION_DB_URL、APP_RW_PASSWORD 和真实 PostgreSQL）
 .venv/bin/pytest -q -m integration server
 ```
 
@@ -237,7 +238,7 @@ GitHub Actions 在 `main`/`feature/**` 和相关 Pull Request 上运行：
 
 ### 测试环境自动部署
 
-合并 Pull Request 到 `main` 后，`deploy-main.yml` 会在带 `taiyi` 标签的 self-hosted runner 上执行。当前发布基线为 `5483218e`；本轮未提交工作树当前为 `e5a29890`，两者不可混写成“已部署版本”。
+合并 Pull Request 到 `main` 后，`deploy-main.yml` 会在带 `taiyi` 标签的 self-hosted runner 上执行。发布记录必须区分已部署 checkout SHA 与未提交工作树；当前 Stage B 工作树尚未合并或部署。
 
 ### taiyi TEST 维护窗口（完整停机）
 

@@ -82,7 +82,7 @@ class _Rag:
         assert ctx is CTX
         return SimpleNamespace(
             tenant_id="tenant-a", knowledge_space_id=knowledge_space_id,
-            workspace="enterprise-fixed",
+            workspace="enterprise-fixed", instance_id="legacy",
         )
 
 
@@ -90,7 +90,7 @@ class _RagList:
     settings = object()
     instance_registry = None
 
-    def list_documents(self, *, workspace):
+    def list_documents(self, *, workspace, instance_id=None):
         assert workspace == "enterprise-fixed"
         return [RagDocumentInfo(
             upstream_document_id="upstream-ready",
@@ -180,6 +180,9 @@ def test_knowledge_analytics_handles_registry_mismatch_and_generic_probe_error()
         def resolve(self, workspace):
             return SimpleNamespace(instance_id="expected")
 
+        def by_id(self, instance_id):
+            return SimpleNamespace(instance_id="expected")
+
     class RAG:
         def get(self, ctx, knowledge_space_id):
             return SimpleNamespace(tenant_id="tenant-a", knowledge_space_id=knowledge_space_id, workspace="fixed", instance_id="actual")
@@ -187,7 +190,7 @@ def test_knowledge_analytics_handles_registry_mismatch_and_generic_probe_error()
     class Ingestion:
         settings = object()
         instance_registry = Registry()
-        def list_documents(self, *, workspace):
+        def list_documents(self, *, workspace, instance_id=None):
             raise RuntimeError("offline")
 
     result = _knowledge_service([], [], [], Ingestion()).analytics(CTX, knowledge_space_id="enterprise_shared")
@@ -195,7 +198,7 @@ def test_knowledge_analytics_handles_registry_mismatch_and_generic_probe_error()
 
     class GenericFailure(Ingestion):
         instance_registry = None
-        def list_documents(self, *, workspace):
+        def list_documents(self, *, workspace, instance_id=None):
             raise RuntimeError("offline")
 
     assert _knowledge_service([], [], [], GenericFailure()).analytics(CTX, knowledge_space_id="enterprise_shared").status == "unavailable"

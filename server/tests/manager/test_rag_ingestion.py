@@ -25,7 +25,7 @@ def _settings(**kwargs):
 
 def test_client_rebinds_explicit_instance_registry():
     from manager_service.rag_instances import RagInstance, RagInstanceRegistry
-    registry = RagInstanceRegistry((RagInstance("fixed", "http://rag", "manager-secret", "derived"),))
+    registry = RagInstanceRegistry((RagInstance("fixed", "http://rag", "manager-secret"),))
     client = LightRagIngestionClient(_settings(), instance_registry=registry)
     try:
         assert client.instance_for_workspace("derived").instance_id == "fixed"
@@ -174,14 +174,12 @@ def test_ingestion_fails_on_missing_config(monkeypatch: pytest.MonkeyPatch):
         client.close()
 
 
-def test_ingestion_rejects_workspace_not_owned_by_fixed_instance():
-    client = LightRagIngestionClient(
-        _settings(workspace="fixed-workspace"),
-        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
-    )
+def test_ingestion_routes_workspace_without_static_pin():
+    client = LightRagIngestionClient(_settings())
     try:
-        with pytest.raises(RagIngestionUnavailable, match="knowledge indexing unavailable"):
-            client.ingest_text(workspace="other-workspace", file_source="doc-1", text="hello")
+        instance = client.instance_for_workspace("tenant-b__enterprise_shared")
+        assert instance.instance_id == "legacy"
+        assert instance.url == "http://rag"
     finally:
         client.close()
 

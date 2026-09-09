@@ -8,7 +8,7 @@
   （或 Authorization Bearer）匹配，否则 401。
 - 未配置 SERVICE_TOKEN → **fail-closed**：拒绝所有服务间调用，返回 401
   （历史版本未配置时 fail-open，等同隐藏的后门；AITEAM-331 B2 已 fail-closed）。
-- 占位值 `dev-service-token-placeholder` 仅在明确声明的 dev profile 下生效；
+- 占位值 `dev-service-token-placeholder` 仅在明确声明的 `dev`/`development` profile 下生效；`test` 也必须使用真实 token；
   `dev-*` 前缀不再视为 dev——任意非占位的真实 token 一律按生产严格校验，
   防止线上误配 `dev-*` 导致 fully-open（AITEAM-331 B2）。
 
@@ -61,8 +61,15 @@ def verify_service_token(request: Request) -> None:
     settings = getattr(request.app.state, "settings", None)
     expected = getattr(settings, "service_token", None) if settings else None
 
+    environment = getattr(settings, "aiteam_env", None)
+    # A production app must never treat the known development placeholder as a
+    # valid/fail-open service identity, even when launched outside ctl.sh.
+    if environment == "production" and _is_dev_mode(expected):
+        raise Unauthorized("SERVICE_TOKEN production secret is not configured")
+    if _is_dev_mode(expected) and environment not in {"dev", "development"}:
+        raise Unauthorized("SERVICE_TOKEN development placeholder is not allowed for this environment")
     # dev profile：唯一允许的占位值在此处生效；任意 dev-* token 按生产严格校验。
-    is_dev = _is_dev_mode(expected)
+    is_dev = _is_dev_mode(expected) and environment in {"dev", "development"}
 
     if not expected:
         # 未配置 SERVICE_TOKEN → fail-closed（AITEAM-331 B2）。
@@ -74,7 +81,7 @@ def verify_service_token(request: Request) -> None:
         # 占位值模式：fail-open，仅日志提醒（仅允许占位值；dev-* 前缀不走这条）。
         logger.warning(
             "SERVICE_TOKEN 使用 dev 占位值（dev-service-token-placeholder），服务间调用无真实校验。"
-            "生产环境必须替换为强密钥（见 deploy/SERVICE_TOKEN.md）"
+            "生产环境必须替换为强密钥（见 deploy/docker/SERVICE_TOKEN.md）"
         )
         # dev 模式下仍然校验 token 是否匹配（允许测试 token 校验逻辑）。
         provided = _extract_service_token(request)

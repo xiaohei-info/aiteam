@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import { createManagerApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
-import type { UsageOverview, UsageRecord, BillingBalance, Recharge } from "./types";
+import type { UsageOverview, UsageRecord, BillingBalance, Recharge, RechargePaymentMethod } from "./types";
 
 export interface BillingApi {
   getOverview: (period?: string) => Promise<UsageOverview | null>;
   getRecords: (period?: string, employeeId?: string) => Promise<UsageRecord[]>;
   getBalance: () => Promise<BillingBalance | null>;
   listRecharges: () => Promise<Recharge[]>;
-  createRecharge: (amount: number | string, payment_method: string) => Promise<Recharge | null>;
+  createRecharge: (amount: number | string, payment_method: RechargePaymentMethod) => Promise<Recharge | null>;
 }
 
 export function useBillingApi(): BillingApi {

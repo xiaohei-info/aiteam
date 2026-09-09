@@ -25,7 +25,7 @@ docker compose -f server/tests/integration/docker-compose.test-pg.yml up -d
 docker compose -f server/tests/integration/docker-compose.test-pg.yml ps
 ```
 
-> 无 docker 时，任意 PostgreSQL 16 实例均可，只要库名 `manager_control_db`、超管可建角色。
+> 无 docker 时，任意 PostgreSQL 16 实例均可，只要同时提供 `manager_control_db` 与独立的 `operation_control_db`（或通过 `OPERATION_*` URL 指向等价独立库），超管可建角色。
 
 ## 3. 环境变量（两类连接，#60）
 
@@ -39,13 +39,15 @@ source server/tests/integration/setup-test-env.sh
 PG_PORT=5440 source server/tests/integration/setup-test-env.sh
 ```
 
-脚本会 export `ADMIN_DB_URL` / `DB_URL` / `APP_RW_PASSWORD` / 运营端凭据，并打印**口令脱敏后**的
+脚本会 export `ADMIN_DB_URL` / `DB_URL` / `OPERATION_ADMIN_DB_URL` / `OPERATION_DB_URL` / `APP_RW_PASSWORD` / 运营端凭据，并打印**口令脱敏后**的
 URL 供你核对已真实展开。口令/连接对照（一次性本地测试值，与 `docker-compose.test-pg.yml`、`ci.yml` 完全一致）：
 
 | 连接 | 角色 | 口令 | 形态 |
 |---|---|---|---|
 | 管理连接 `ADMIN_DB_URL` | `postgres`（超管） | `postgres` | `postgresql://postgres:<口令>@localhost:5432/manager_control_db` |
 | 业务连接 `DB_URL` | `app_rw`（受 RLS） | `apprwpass` | `postgresql://app_rw:<口令>@localhost:5432/manager_control_db` |
+| 管理连接 `OPERATION_ADMIN_DB_URL` | `postgres`（超管） | `postgres` | `postgresql://postgres:<口令>@localhost:5432/operation_control_db` |
+| 业务连接 `OPERATION_DB_URL` | `app_rw` | `apprwpass` | `postgresql://app_rw:<口令>@localhost:5432/operation_control_db` |
 
 > 文档/日志里把 `<口令>` 显示成 `***` 属正常脱敏，**仅展示用**；真实值见上表第三列，或直接 source 脚本。
 

@@ -149,7 +149,6 @@ class LightRagSettings:
     api_key: str = field(repr=False)
     timeout_ms: int = 5_000
     query_mode: str = "naive"
-    workspace: str | None = None
     instance_registry: RagInstanceRegistry | None = None
 
     @classmethod
@@ -165,7 +164,7 @@ class LightRagSettings:
         query_mode = os.getenv("LIGHTRAG_QUERY_MODE", "naive").strip().lower()
         if query_mode not in {"local", "global", "hybrid", "naive", "mix"}:
             query_mode = "naive"
-        return cls(first.url, first.api_key, timeout_ms, query_mode, first.workspace, registry)
+        return cls(first.url, first.api_key, timeout_ms, query_mode, registry)
 
 
 class LightRagClient:
@@ -179,30 +178,31 @@ class LightRagClient:
     def instance_registry(self) -> RagInstanceRegistry | None:
         return self.settings.instance_registry if self.settings is not None else None
 
-    def instance_for_workspace(self, workspace: str) -> RagInstance:
+    def instance_for_workspace(self, workspace: str, *, instance_id: str | None = None) -> RagInstance:
         settings = self.settings
         if settings is None:
             raise RagUnavailable("knowledge service unavailable")
         try:
             if settings.instance_registry is not None:
+                if instance_id:
+                    settings.instance_registry.validate_workspace(workspace)
+                    return settings.instance_registry.by_id(instance_id)
                 return settings.instance_registry.resolve(workspace)
             # Explicit constructor settings remain useful to tests and local
-            # callers. Environment-created settings always have a fixed map.
-            if settings.workspace is not None and workspace != settings.workspace:
-                raise RagInstanceConfigurationError("LightRAG workspace is not configured")
-            return RagInstance("legacy", settings.url, settings.api_key, workspace)
+            # callers; the workspace is always the caller-supplied tenant route.
+            return RagInstance("legacy", settings.url, settings.api_key)
         except RagInstanceConfigurationError as exc:
             raise RagUnavailable("knowledge service unavailable") from exc
 
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def query(self, *, workspace: str, query: str, limit: int) -> dict[str, Any]:
+    async def query(self, *, workspace: str, query: str, limit: int, instance_id: str | None = None) -> dict[str, Any]:
         settings = self.settings
         if settings is None:
             raise RagUnavailable("knowledge service unavailable")
         try:
-            instance = self.instance_for_workspace(workspace)
+            instance = self.instance_for_workspace(workspace, instance_id=instance_id)
         except RagUnavailable:
             raise
         if len(query) > _MAX_QUERY_CHARS:
@@ -219,7 +219,7 @@ class LightRagClient:
         try:
             response = await self._http.post(
                 f"{instance.url}/query/data",
-                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": instance.workspace},
+                headers={"X-API-Key": instance.api_key, "LIGHTRAG-WORKSPACE": workspace},
                 json=body,
                 timeout=settings.timeout_ms / 1000,
             )
@@ -348,10 +348,16 @@ class RagAccessService:
             ref for ref in getattr(snapshot, "knowledge_refs", [])
             if isinstance(ref, str) and ref
         ))
-        # A Manager deployment owns one enterprise-shared knowledge base.  The
+        # Each tenant owns one enterprise-shared knowledge base; a Manager
+        # process can serve multiple tenant sessions.  The
         # legacy snapshot binding list remains accepted for old projections, but
         # a new snapshot need not carry a per-space grant just to query it.
-        default_space_id = getattr(self._rag, "default_space_id", None)
+        default_space_resolver = getattr(self._rag, "default_space_id_for", None)
+        default_space_id = (
+            default_space_resolver(ctx)
+            if callable(default_space_resolver)
+            else getattr(self._rag, "default_space_id", None)
+        )
         if not refs and isinstance(default_space_id, str) and default_space_id:
             refs = [default_space_id]
         if not refs:
@@ -360,7 +366,7 @@ class RagAccessService:
         handles: list[RagHandle] = []
         valid_bindings: list[Any] = []
         for space_id in refs:
-            enterprise_scope = self._is_enterprise_scope(space_id)
+            enterprise_scope = self._is_enterprise_scope(space_id, ctx)
             space_bindings = tuple(
                 row for row in all_bindings
                 if self._valid_binding(row, ctx=ctx, employee_id=employee_id, space_id=space_id)
@@ -379,11 +385,13 @@ class RagAccessService:
             if not handle or handle.tenant_id != ctx.tenant_id or handle.knowledge_space_id != space_id:
                 raise Forbidden("employee knowledge binding is unavailable")
             if self._light_rag.settings is not None:
+                handle_instance_id = getattr(handle, "instance_id", "legacy")
                 try:
-                    instance = self._light_rag.instance_for_workspace(handle.workspace)
+                    instance = self._light_rag.instance_for_workspace(
+                        handle.workspace, instance_id=handle_instance_id,
+                    )
                 except RagUnavailable:
                     raise Forbidden("employee knowledge binding is unavailable")
-                handle_instance_id = getattr(handle, "instance_id", "legacy")
                 if self._light_rag.instance_registry is not None and handle_instance_id != instance.instance_id:
                     raise Forbidden("employee knowledge binding is unavailable")
             handles.append(handle)
@@ -404,7 +412,10 @@ class RagAccessService:
 
         async def query_space(handle: RagHandle):
             try:
-                payload = await self._light_rag.query(workspace=handle.workspace, query=query, limit=limit)
+                payload = await self._light_rag.query(
+                    workspace=handle.workspace, query=query, limit=limit,
+                    instance_id=getattr(handle, "instance_id", "legacy"),
+                )
                 return handle, payload, None
             except Exception:  # noqa: BLE001 - never expose upstream details
                 return handle, [], RagUnavailable("knowledge service unavailable")
@@ -462,7 +473,7 @@ class RagAccessService:
              )),
             None,
         )
-        if binding is None and not self._is_enterprise_scope(parsed.knowledge_space_id):
+        if binding is None and not self._is_enterprise_scope(parsed.knowledge_space_id, current.ctx):
             raise RagUnavailable("knowledge service unavailable")
         document = self._documents.get(current.ctx, document_id=parsed.document_id)
         if (
@@ -569,11 +580,13 @@ class RagAccessService:
             "display_name": display_name,
         }
 
-    def _is_enterprise_scope(self, space_id: str) -> bool:
-        # PgManagerRagService validates canonical and known legacy keys before
-        # returning a fixed enterprise handle; the key itself is not a second
-        # LightRAG workspace.
-        return bool(getattr(self._rag, "is_enterprise_scope", False) and space_id)
+    def _is_enterprise_scope(self, space_id: str, ctx: TenantContext | None = None) -> bool:
+        # The canonical/legacy enterprise key is resolved per tenant; its
+        # LightRAG workspace remains tenant-specific and comes from the handle.
+        checker = getattr(self._rag, "is_enterprise_space", None)
+        if callable(checker) and ctx is not None:
+            return bool(checker(ctx, space_id))
+        return space_id == getattr(self._rag, "default_space_id", None)
 
     @staticmethod
     def _valid_binding(row: Any, *, ctx: TenantContext, employee_id: str, space_id: str) -> bool:
@@ -629,7 +642,7 @@ class RagAccessService:
         blocked_aliases: set[str] = set()
         if self._documents is None:
             return allowed, ambiguous
-        enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id)
+        enterprise_scope = self._is_enterprise_scope(handle.knowledge_space_id, auth.ctx)
         rows: list[Any] = list(auth.bindings)
         if enterprise_scope:
             # Enterprise documents are shared once; legacy employee binding rows

@@ -79,7 +79,7 @@ describe("useBillingApi", () => {
   it("createRecharge 调用 client.post", async () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useBillingApi(), { wrapper });
-    await result.current.createRecharge(100, "wechat");
-    expect(client.post).toHaveBeenCalledWith("/api/manager/billing/recharges", { body: { amount: 100, payment_method: "wechat" } });
+    await result.current.createRecharge(100, "wechat_pay");
+    expect(client.post).toHaveBeenCalledWith("/api/manager/billing/recharges", { body: { amount: 100, payment_method: "wechat_pay" } });
   });
 });

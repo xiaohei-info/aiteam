@@ -1,14 +1,14 @@
 ---
 created: 2026-08-18
-status: active-addendum
+status: historical-addendum-superseded-by-stage-b
 supersedes: docs/superpowers/specs/2026-08-17-pi-coding-agent-sdk-agent架构重构设计.md §9.1 及其本地知识 bundle 实施段落
 ---
 
-# Pi Agent Manager RAG / Provider 路线修订
+# Pi Agent Manager RAG / Provider 路线修订（历史背景）
 
 > 本文记录 2026-08-18 用户对当前实现方向的明确修订。与旧的“Agent pull knowledge bundle + 本地索引”方案冲突时，以本文为准。
 >
-> **2026-08-26 部署边界修订**：一个 Manager 部署只服务一个企业；Manager 端企业知识只有一个共享 LightRAG workspace，员工个人级记忆由 Hindsight employee-private bank 承担。多企业隔离归 Operator/多套 Manager 部署，不在同一 Manager 内通过 knowledge-space fan-out 实现。
+> **2026-08-26 部署边界修订（已被 2026-09-07 Stage B 覆盖）**：本文当时记录一个 Manager 部署只服务一个企业的形态。当前 Manager 进程可承载多个企业会话，但每个请求由 JWT/TenantContext 隔离，企业仍各自拥有一个共享 LightRAG workspace；workspace/endpoint `instance_id` 由 Manager 持久化映射决定。
 
 ## 1. Agent 职责边界
 

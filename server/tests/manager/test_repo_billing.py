@@ -3,8 +3,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import MagicMock
 
-from manager_service.billing_repository import BillingRepository, BillingBalanceRow, RechargeRecordRow
+import pytest
+
+from manager_service.billing_repository import BillingRepository, RechargeRecordRow
+from manager_service.billing_service import BillingService, _public_recharge
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
@@ -17,6 +21,25 @@ def _rec_row(rid="r-1", amt=Decimal("10"), pm="mock_pay", status="success",
              order="R123", tc=1000):
     from datetime import datetime
     return (rid, amt, pm, status, order, tc, datetime.utcnow())
+
+
+def test_public_recharge_serializer_hides_legacy_method():
+    row = RechargeRecordRow("legacy", Decimal("10"), "mock_pay", "success", "R0", 1000, datetime.utcnow())
+    assert _public_recharge(row)["payment_method"] == "bank_transfer"
+    assert _public_recharge(row)["status"] == "failed"
+    assert _public_recharge(row)["token_credited"] == 0
+
+
+def test_billing_service_rejects_mock_and_serializes_history():
+    row = RechargeRecordRow("r1", Decimal("10"), "wechat_pay", "pending", "R1", 1000, datetime.utcnow())
+    repo = MagicMock()
+    repo.list_recharges.return_value = [row]
+    repo.create_recharge.return_value = row
+    service = BillingService(repo)
+    assert service.list_recharges(ctx())[0]["payment_method"] == "wechat_pay"
+    with pytest.raises(ValueError, match="unsupported payment method"):
+        service.create_recharge(ctx(), Decimal("1"), "mock_pay")
+    assert service.create_recharge(ctx(), Decimal("1"), "wechat_pay")["status"] == "pending"
 
 
 def test_get_balance_found():
@@ -58,3 +81,13 @@ def test_list_recharges_empty():
     router = FakeRouter()
     router.queue(FakeCursor(fetchall=[]))
     assert BillingRepository(router).list_recharges(ctx()) == []
+
+
+def test_list_usage_records_filters_unattributed_rollups():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchall=[("r1", "employee-1", "Helper", datetime(2026, 1, 1), 10, Decimal("1.25"))]))
+    records = BillingRepository(router).list_usage_records(ctx(), period="all")
+    assert records[0]["employee_id"] == "employee-1"
+    query, _ = router.executed[0]
+    assert "u.employee_id IS NOT NULL" in query
+    assert "LEFT JOIN employee AS e" in query

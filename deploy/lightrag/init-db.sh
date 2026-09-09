@@ -30,9 +30,24 @@ done
 : "${LIGHTRAG_DB_NAME:=lightrag}"
 : "${LIGHTRAG_DB_USER:=lightrag}"
 : "${LIGHTRAG_DB_ADMIN_USER:=lightrag_admin}"
+is_placeholder_secret() {
+  local value="${1:-}" lower
+  lower="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${lower}" == *change-me* || "${lower}" == *change_me* || "${lower}" == *change\ me* || "${lower}" == *changeme* || "${lower}" == *lightrag_dev* || "${lower}" == *lightrag_test* ]]
+}
+
 if (( ! DRY_RUN )); then
   : "${LIGHTRAG_DB_PASSWORD:?LIGHTRAG_DB_PASSWORD is required}"
   : "${LIGHTRAG_DB_ADMIN_PASSWORD:?LIGHTRAG_DB_ADMIN_PASSWORD is required}"
+  if [[ "${AITEAM_ENV:-}" == "production" ]]; then
+    for name in LIGHTRAG_DB_PASSWORD LIGHTRAG_DB_ADMIN_PASSWORD; do
+      value="${!name}"
+      [[ ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
+        echo "[lightrag-db][ERR] ${name} must be a non-placeholder production secret of at least 24 characters" >&2
+        exit 1
+      }
+    done
+  fi
 fi
 
 for value_name in LIGHTRAG_DB_NAME LIGHTRAG_DB_USER LIGHTRAG_DB_ADMIN_USER; do
@@ -58,7 +73,8 @@ psql_admin=(psql -X -v ON_ERROR_STOP=1 -h "${LIGHTRAG_DB_ADMIN_HOST}" -p "${LIGH
 
 # psql variables keep identifiers and passwords out of shell SQL interpolation.
 "${psql_admin[@]}" -d "${LIGHTRAG_DB_ADMIN_DATABASE}" \
-  -v role_name="${LIGHTRAG_DB_USER}" -v role_password="${LIGHTRAG_DB_PASSWORD}" <<'SQL'
+  -v role_name="${LIGHTRAG_DB_USER}" <<'SQL'
+\getenv role_password LIGHTRAG_DB_PASSWORD
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'role_name', :'role_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'role_name')\gexec
 SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'role_name', :'role_password')\gexec

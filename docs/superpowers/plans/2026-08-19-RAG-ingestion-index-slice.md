@@ -1,12 +1,14 @@
 ---
 created: 2026-08-19
-status: approved-by-current-request
+status: superseded-by-stage-b
 scope: rag-ingestion-index
 ---
 
 # RAG 文档 ingestion/index 首个切片计划
 
-## 1. 目标
+## 1. 目标（历史，已由 Stage B 覆盖）
+
+> 当前 workspace 不由配置或客户端提供，而是按 tenant/TenantContext 派生并持久化，endpoint `instance_id` 也由 Manager mapping 固定；本文保留 intake 只读/有界/失败不伪造 ready 的原则，不再作为固定 workspace 或旧 storage 行为的实施依据。
 
 把 Manager 当前 knowledge intake 的“解析 + 估算 chunk + ready 占位”替换为真实 LightRAG 索引链：
 

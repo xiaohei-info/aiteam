@@ -11,6 +11,21 @@ from shared.contracts.tenancy import TenantContext
 
 from .billing_repository import BillingRepository
 
+_ALLOWED_PAYMENT_METHODS = {"wechat_pay", "alipay", "bank_transfer"}
+
+
+def _public_recharge(row) -> dict:
+    legacy = row.payment_method not in _ALLOWED_PAYMENT_METHODS
+    return {
+        "recharge_id": row.recharge_id,
+        "amount": row.amount,
+        "payment_method": row.payment_method if not legacy else "bank_transfer",
+        "status": row.status if not legacy else "failed",
+        "order_no": row.order_no,
+        "token_credited": row.token_credited if not legacy else 0,
+        "created_at": row.created_at,
+    }
+
 
 class BillingService:
     def __init__(self, repo: BillingRepository):
@@ -27,33 +42,20 @@ class BillingService:
 
     def list_recharges(self, ctx: TenantContext) -> list[dict]:
         rows = self._repo.list_recharges(ctx)
-        return [
-            {
-                "recharge_id": r.recharge_id,
-                "amount": r.amount,
-                "payment_method": r.payment_method,
-                "status": r.status,
-                "order_no": r.order_no,
-                "token_credited": r.token_credited,
-                "created_at": r.created_at,
-            }
-            for r in rows
-        ]
+        return [_public_recharge(row) for row in rows]
 
     def create_recharge(self, ctx: TenantContext, amount: Decimal, payment_method: str) -> dict:
         now = datetime.now(timezone.utc)
         order_no = f"R{now.strftime('%Y%m%d%H%M%S')}{uuid4().hex[:8]}"
+        if payment_method not in {"wechat_pay", "alipay", "bank_transfer"}:
+            raise ValueError("unsupported payment method")
         token_credited = int(amount * Decimal("1000"))
-        status: Literal["pending", "success"] = "success" if payment_method == "mock_pay" else "pending"
+        status: Literal["pending"] = "pending"
 
         row = self._repo.create_recharge(
             ctx, amount=amount, payment_method=payment_method,
             status=status, order_no=order_no, token_credited=token_credited,
         )
-        if status == "success":
-            self._repo.upsert_balance(
-                ctx, balance=amount, estimated_tokens=token_credited,
-            )
         return {
             "recharge_id": row.recharge_id,
             "amount": row.amount,

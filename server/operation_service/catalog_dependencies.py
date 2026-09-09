@@ -21,11 +21,12 @@ from .repository import apply_migrations
 
 @lru_cache(maxsize=1)
 def get_catalog_repository() -> CatalogRepository:
-    """单例目录仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例目录业务仓储。有 db_url → app_rw PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    db_url = settings.admin_db_url
+    db_url = settings.db_url
     if db_url:
-        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
         return PgCatalogRepository(db_url)
     return CatalogRepository()
 
@@ -43,7 +44,7 @@ def get_catalog_gateway() -> CatalogManagerGateway:
 
 def get_catalog_service() -> CatalogService:
     settings = load_settings("operation")
-    skills = PlatformSkillRepository(settings.admin_db_url) if settings.admin_db_url else None
+    skills = PlatformSkillRepository(settings.db_url) if settings.db_url else None
     try:
         providers = build_platform_provider_service()
     except RuntimeError:

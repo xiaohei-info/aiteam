@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
+from shared.db import ManagerRagService
 from tests.manager._auth_helper import (
     make_inmem_verifier_and_signer,
     make_verifier,
@@ -79,8 +80,8 @@ def test_knowledge_space_crud_e2e_and_cross_tenant_rls(migrated_db, admin_url, t
     assert r.status_code == 201, r.text
     created = r.json()["data"]
     assert created["knowledge_space_id"] == ENTERPRISE_SPACE_ID
-    # Manager deployment has one fixed enterprise workspace (D21).
-    assert created["workspace"] == ENTERPRISE_SPACE_ID
+    # Workspace is derived from the current tenant, not a process-level env value.
+    assert created["workspace"] == ManagerRagService.derive_workspace(tid_a, ENTERPRISE_SPACE_ID)
     # 入参 schema 不含 workspace（D21 红线）
     assert "workspace" not in {"knowledge_space_id", "display_name"}
 

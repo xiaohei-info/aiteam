@@ -27,16 +27,14 @@ from .platform_provider_service import build_platform_provider_service
 
 @lru_cache(maxsize=1)
 def get_repository() -> EnterpriseRepository:
-    """单例企业账号仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例企业账号仓储。有 db_url → app_rw PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    # 运营端使用 admin_db_url 作为数据库连接（运营端表是控制面表，直连管理库）
-    db_url = settings.admin_db_url
+    db_url = settings.db_url
 
     if db_url:
-        # PostgreSQL 实现：自动应用迁移，连管理 DSN。
-        admin_url = settings.admin_db_url
-        app_rw_password = settings.app_rw_password
-        apply_migrations(admin_url, app_rw_password)
+        # 迁移仅使用管理 DSN；业务查询始终使用受限 app_rw DSN。
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
         return PgEnterpriseRepository(db_url)
 
     # 内存实现（dev/测试）。
@@ -45,22 +43,24 @@ def get_repository() -> EnterpriseRepository:
 
 @lru_cache(maxsize=1)
 def get_admin_repository() -> AdminRepository:
-    """单例 admin 仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例运营业务管理仓储。有 db_url → app_rw PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    db_url = settings.admin_db_url
+    db_url = settings.db_url
     if db_url:
-        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
         return PgAdminRepository(db_url)
     return AdminRepository()
 
 
 @lru_cache(maxsize=1)
 def get_rollup_repository() -> CrossEnterpriseRollupRepository:
-    """单例跨企业 rollup 仓储。有 admin_db_url → PostgreSQL；否则内存（dev/测试）。"""
+    """单例跨企业 rollup 业务仓储。有 db_url → app_rw PostgreSQL；否则内存（dev/测试）。"""
     settings = load_settings("operation")
-    db_url = settings.admin_db_url
+    db_url = settings.db_url
     if db_url:
-        apply_migrations(settings.admin_db_url, settings.app_rw_password)
+        if settings.admin_db_url:
+            apply_migrations(settings.admin_db_url, settings.app_rw_password)
         return PgRollupRepository(db_url)
     return CrossEnterpriseRollupRepository()
 

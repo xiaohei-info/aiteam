@@ -102,6 +102,7 @@ def test_get_catalog_repository_memory(monkeypatch):
 # ---- PG path (admin_db_url set) ----
 
 def test_get_repository_pg(monkeypatch):
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     called = {"migrations": False}
@@ -112,10 +113,12 @@ def test_get_repository_pg(monkeypatch):
     monkeypatch.setattr(deps, "apply_migrations", _fake_apply_migrations)
     repo = get_repository()
     assert isinstance(repo, PgEnterpriseRepository)
+    assert repo._dsn == "postgresql://app_rw@localhost/oper"
     assert called["migrations"] is True
 
 
 def test_get_admin_repository_pg(monkeypatch):
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     _stub_migrations(monkeypatch)
@@ -124,6 +127,7 @@ def test_get_admin_repository_pg(monkeypatch):
 
 
 def test_get_rollup_repository_pg(monkeypatch):
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     _stub_migrations(monkeypatch)
@@ -132,6 +136,7 @@ def test_get_rollup_repository_pg(monkeypatch):
 
 
 def test_get_solution_repository_pg(monkeypatch):
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     _stub_migrations(monkeypatch)
@@ -140,6 +145,7 @@ def test_get_solution_repository_pg(monkeypatch):
 
 
 def test_get_catalog_repository_pg(monkeypatch):
+    monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     _stub_migrations(monkeypatch)

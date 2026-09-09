@@ -130,6 +130,9 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
 
 _APP_ROLE = "app_rw"
 _MIGRATION_LOCK = threading.Lock()
+# Keep cluster-wide app_rw role creation/alteration serialized with Manager's
+# migration runner when both control-plane services start together.
+_MIGRATION_ADVISORY_LOCK = 0x415445414D
 
 
 class PgEnterpriseRepository(EnterpriseRepository):
@@ -304,34 +307,42 @@ def _apply_migrations_unlocked(db_url: str | None, app_rw_password: str | None =
 
     files = sorted(f for f in mig_dir.glob("*.sql"))
     with psycopg.connect(db_url, autocommit=True) as conn:
-        for fpath in files:
-            sql = fpath.read_text(encoding="utf-8")
+        # Manager and Operation can first-migrate concurrently while sharing a
+        # PostgreSQL cluster; serialize their cluster-wide app_rw role work.
+        with conn.cursor() as lock_cursor:
+            lock_cursor.execute("SELECT pg_advisory_lock(%s)", (_MIGRATION_ADVISORY_LOCK,))
+        try:
+            for fpath in files:
+                sql = fpath.read_text(encoding="utf-8")
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+
+            # 动态授予 CONNECT 权限（问题2修复：迁移脚本无法硬编码数据库名）
             with conn.cursor() as cur:
-                cur.execute(sql)
+                # 获取当前数据库名
+                cur.execute("SELECT current_database()")
+                db_name = cur.fetchone()[0]
+                # 幂等授权：GRANT 可重复执行
+                from psycopg import sql as _sql
 
-        # 动态授予 CONNECT 权限（问题2修复：迁移脚本无法硬编码数据库名）
-        with conn.cursor() as cur:
-            # 获取当前数据库名
-            cur.execute("SELECT current_database()")
-            db_name = cur.fetchone()[0]
-            # 幂等授权：GRANT 可重复执行
-            from psycopg import sql as _sql
-
-            cur.execute(
-                _sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                    _sql.Identifier(db_name), _sql.Identifier(_APP_ROLE)
-                )
-            )
-
-        if app_rw_password:
-            # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
-            from psycopg import sql as _sql
-
-            with conn.cursor() as cur:
                 cur.execute(
-                    _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                        _sql.Identifier(_APP_ROLE),
-                        _sql.Literal(app_rw_password),
+                    _sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                        _sql.Identifier(db_name), _sql.Identifier(_APP_ROLE)
                     )
                 )
+
+            if app_rw_password:
+                # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
+                from psycopg import sql as _sql
+
+                with conn.cursor() as cur:
+                    cur.execute(
+                        _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                            _sql.Identifier(_APP_ROLE),
+                            _sql.Literal(app_rw_password),
+                        )
+                    )
+        finally:
+            with conn.cursor() as unlock_cursor:
+                unlock_cursor.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_ADVISORY_LOCK,))
     return None

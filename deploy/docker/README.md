@@ -15,7 +15,7 @@ AI Team v1 是「云侧双控制面 + 用户本地数据面」架构，三端是
 | 运营端 Operation | 平台方部署 | `Dockerfile.operation` | 8001 | `server/operation_service` + `shared` | `web/operation` |
 | 企业端 Manager | 平台托管多租户 SaaS | `Dockerfile.manager` | 8002 | `server/manager_service` + `shared` | `web/manager` |
 | 用户端 Agent | 每用户本机自部署 | `Dockerfile.agent` | 8003 | Node `server/agent_service` | `web/agent` |
-| 内部 NewAPI Relay | 平台方部署、Operator 管理 | `calciumion/new-api:v1.0.0-rc.25` + 固定 sha256 digest | 9300（可配置绑定地址） | 独立组件 | 自带认证管理 UI |
+| 内部 NewAPI Relay | 平台方部署、Operator 管理 | `calciumion/new-api:v1.0.0-rc.25` + 固定 sha256 digest | 9300（主机 loopback 绑定） | 独立组件 | 自带认证管理 UI |
 
 通信面（05 §5.5 窄通信面）：
 - Operator ↔ Manager：云侧服务间调用（`MANAGER_URL` / `OPERATOR_URL`）。
@@ -83,6 +83,8 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 ./scripts/ctl.sh stop --env dev                     # 停止服务
 ```
 
+> Docker Compose 的 Agent 仅用于 dev/test；生产 Agent 必须使用 loopback 本机 sidecar/package。`ctl.sh --env prod --deploy docker --server agent|all` 会 fail-closed，避免容器内 `0.0.0.0` 监听。
+
 **Docker 构建与清理**：
 ```bash
 ./deploy/docker/docker-utils.sh build         # 构建三端镜像
@@ -90,12 +92,12 @@ operation (:8001) ⇄ manager (:8002) ◀── manager_url ── agent (:8003)
 ./deploy/docker/docker-utils.sh clean         # 清理容器 + 数据卷（谨慎！）
 ```
 
-**直接使用 docker compose**（高级用户）：
+**直接使用 docker compose（仅 dev/test，高级用户）**：生产控制面不使用此 Compose graph；Manager/Operation 会拒绝 production Compose 启动。生产依赖（PostgreSQL/NewAPI/LightRAG）由 CI/ctl 维护窗口按专门流程启动，Agent 使用本机 loopback sidecar/package。
 ```bash
-AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build   # 构建三端并启动内部 Relay
-AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml ps              # 查看状态
-AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml logs -f agent   # 查看日志
-AITEAM_ENV=test docker compose -f deploy/docker/docker-compose.yml down            # 停止（保留数据）
+AITEAM_ENV=test SERVICE_TOKEN=test-service-token docker compose -f deploy/docker/docker-compose.yml --profile newapi up -d --build   # 构建三端并启动内部 Relay
+AITEAM_ENV=test SERVICE_TOKEN=test-service-token docker compose -f deploy/docker/docker-compose.yml ps              # 查看状态
+AITEAM_ENV=test SERVICE_TOKEN=test-service-token docker compose -f deploy/docker/docker-compose.yml logs -f agent   # 查看日志
+AITEAM_ENV=test SERVICE_TOKEN=test-service-token docker compose -f deploy/docker/docker-compose.yml down            # 停止（保留数据）
 ```
 
 ### 验证按端精简产物（D15 红线）
@@ -124,14 +126,19 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | 变量 | 用于 | 示例 |
 |------|------|------|
 | `AITEAM_AGENT_DATA_DIR` | Node Agent 本地数据目录 | `/app/data` |
-| `DB_URL` | 业务连接串（受约束 `app_rw` 角色 + RLS） | `postgresql://...` |
-| `ADMIN_DB_URL` | 管理连接串（超管/DDL owner，仅供迁移/DDL） | `postgresql://...` |
-| `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令 | `aiteam_test` |
+| `EXPOSE_PUBLIC_DOCS` | dev/test 可开启 `/docs`、`/redoc` 和 OpenAPI；production 必须关闭，production OpenAPI 也不提供公网路由 | `false` |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` | 业务角色必须为 `app_rw`；不用于 Compose postgres 容器的迁移账号 | `app_rw` / `***` |
+| `POSTGRES_SUPER_USER` / `POSTGRES_SUPER_PASSWORD` | Compose PostgreSQL 容器与迁移/DDL 管理角色，必须与 `app_rw` 分离 | `aiteam` / `***` |
+| `DB_URL` | Manager 业务连接串（受约束 `app_rw` 角色 + RLS） | `postgresql://.../manager_control_db` |
+| `OPERATION_DB_URL` | Operation 独立业务连接串（受约束 `app_rw` 角色） | `postgresql://.../oper` |
+| `ADMIN_DB_URL` | Manager 管理连接串（超管/DDL owner，仅供 Manager 迁移/密钥） | `postgresql://.../manager_control_db` |
+| `OPERATION_ADMIN_DB_URL` | Operation 管理连接串（仅 Operation 迁移/签名密钥） | `postgresql://.../oper` |
+| `APP_RW_PASSWORD` | 迁移时为 `app_rw` 下发的 LOGIN 口令（production 必须由 secret store 注入） | `***` |
 | `MANAGER_URL` | 用户端 / 运营端访问企业端 | `http://manager:8000` |
 | `OPERATOR_URL` | 企业端访问运营端 | `http://operation:8000` |
 | `NEWAPI_URL` | NewAPI 私有管理地址，仅供 Operator 访问 channel/token 管理面 | `http://newapi:3000` |
 | `NEWAPI_ADMIN_BASE_URL` | Operation-only NewAPI 管理地址（可覆盖 `NEWAPI_URL`） | `http://newapi:3000` |
-| `NEWAPI_PUBLIC_BASE_URL` | **Manager/Agent/自定义客户端唯一使用的外部推理地址**；必须是可访问的 `/v1` URL | `https://relay.example.com/v1` |
+| `NEWAPI_PUBLIC_BASE_URL` | **Manager/Agent/自定义客户端唯一使用的外部推理地址**；必须是无凭据/query/fragment 的可访问 `/v1` URL；production 必须 HTTPS 且不得为本机/私网 | `https://relay.example.com/v1` |
 | `MODEL_PRICING_URL` | Operator 公开模型价格源（仅补齐未知价格） | `https://models.dev/api.json` |
 | `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
 | `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
@@ -150,18 +157,19 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `HINDSIGHT_STATS_PATH` | Manager-side Hindsight bank stats path（可选，按原生 list path 推导） | `/v1/default/banks/{bank_id}/stats` |
 | `HINDSIGHT_LEASE_TTL_SECONDS` | Manager opaque bank lease TTL（30–3600 秒） | `300` |
 | `LIGHTRAG_URL` | Manager-only LightRAG API/UI URL（未配置时 Agent lease fail-closed） | `http://lightrag:9621` |
-| `LIGHTRAG_API_KEY` | Manager-only LightRAG API key | `***` |
+| `LIGHTRAG_API_KEY` | Manager-only LightRAG API key（legacy 单 endpoint 模式） | `***` |
+| `LIGHTRAG_INSTANCES` | 可选 JSON endpoint/credential pool（`instance_id`、`url`、`api_key`）；新配置省略 `workspace`，旧字段会被忽略；禁用时留空/不设置 | （留空） |
 | `LIGHTRAG_AUTH_ACCOUNTS` | LightRAG 原生 UI/API 登录账号（映射为组件 `AUTH_ACCOUNTS`） | `***` |
 | `LIGHTRAG_TOKEN_SECRET` | LightRAG JWT 签名密钥（映射为组件 `TOKEN_SECRET`） | `***` |
-| `LIGHTRAG_WORKSPACE` | Manager-only 固定企业 workspace | `enterprise_shared` |
+| `LIGHTRAG_WORKSPACE` | 兼容旧配置的 workspace hint；Manager 忽略并按 tenant 派生/持久化。Compose 不将其映射为 `POSTGRES_WORKSPACE` | （忽略） |
 | `NEWAPI_BIND_HOST` | NewAPI 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
 | `LIGHTRAG_BIND_HOST` | LightRAG 原生 UI/API 绑定地址；默认 loopback | `127.0.0.1` |
 
 > 本地启动不设置 `AITEAM_MANAGER_DATA_ROOT`：Settings 会回退到工作树 `.data/manager`。只有 Compose 容器显式使用 `/app/data`，并通过 `MANAGER_DATA_VOLUME` 持久化；这两个路径不要混用。
 >
-> NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布公网。`NEWAPI_URL`/`NEWAPI_ADMIN_BASE_URL` 只给 Operator 管理面使用；`NEWAPI_PUBLIC_BASE_URL` 是 Manager、Agent 和自定义客户端访问推理的唯一地址，不能填 `http://newapi:3000` 等 Docker 内部地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
+> Manager 与 Operation 在 Compose/ctl/CI 中使用独立 PostgreSQL databases（默认 `manager_control_db` 与 `oper`）；不要把两端 DSN 互换。NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布公网。`NEWAPI_URL`/`NEWAPI_ADMIN_BASE_URL` 只给 Operator 管理面使用；`NEWAPI_PUBLIC_BASE_URL` 是 Manager、Agent 和自定义客户端访问推理的唯一地址，不能填 `http://newapi:3000` 等 Docker 内部地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
 >
-> LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role 和固定企业 workspace；Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
+> LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role，Manager 按 tenant 选择并持久化 workspace 与 endpoint `instance_id`；请求通过 `LIGHTRAG-WORKSPACE` header 选择 workspace，Compose 不设置全局 `POSTGRES_WORKSPACE`。生产校验中显式设置 `LIGHTRAG_IMAGE` 表示本机 profile，并要求运行时 `LIGHTRAG_DB_*`；不设置 image 时可使用远端 legacy URL/key、endpoint pool 或 disabled 模式，bootstrap 管理员字段由 `init-db.sh` 单独校验。Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
 >
 > 原生控制台入口：Operator「大模型服务」页直接打开当前访问 host 的 `NEWAPI_PORT`（默认 9300）；Manager「知识库」和「记忆管理」页分别直接打开当前访问 host 的 `LIGHTRAG_PORT`（默认 9621）与 Hindsight UI（默认 9999）。三个服务均由组件自身登录页认证，超链接不会携带 token/密码。
 ---

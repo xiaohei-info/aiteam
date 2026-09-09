@@ -116,7 +116,7 @@ class PgRollupRepository(CrossEnterpriseRollupRepositoryBase):
     """Postgres-backed cross-enterprise usage-rollup repository (oper library).
 
     Idempotent by ``summary_id`` (via UNIQUE). Selected by the DI factory when
-    ``admin_db_url`` is configured.
+    ``db_url`` is configured (the constrained app_rw business DSN).
     """
 
     def __init__(self, dsn):

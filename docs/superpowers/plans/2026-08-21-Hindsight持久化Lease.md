@@ -1,10 +1,12 @@
 ---
 created: 2026-08-21
-status: approved-by-current-request
+status: superseded-by-stage-b
 scope: hindsight-production-lease
 ---
 
-# Hindsight Manager Lease 持久化切片
+# Hindsight Manager Lease 持久化切片（历史）
+
+> 2026-09-07 当前契约：Manager 按 JWT/TenantContext 服务多个 tenant；bank identity 为 tenant + employee（不含 member），member 仅用于当前请求/lease 鉴权。本文保留 lease 持久化、expiry/revoke、secret redaction 原则，旧 bank 派生文字不再作为实现依据。
 
 ## 目标
 
@@ -12,7 +14,7 @@ scope: hindsight-production-lease
 
 ## 约束
 
-- bank_id 始终由 Manager 从 tenant/member/employee 派生；Agent/模型不得传 bank_id。
+- 历史 bank 派生曾包含 member；当前由 Manager 从 tenant/employee 派生，Agent/模型不得传 bank_id，member 仅参与请求/lease 鉴权。
 - raw lease token 只在签发响应和 Agent 进程内存在，不进 DB、snapshot、SQLite、Session、SSE、日志。
 - Hindsight 0.12.0 没有 native scoped token；当前 lease 仍是 Manager facade authorization，不能宣称 upstream token revoke。
 - Manager 业务连接使用 app_rw + TenantContext；lease token lookup 需要不依赖 caller tenant 的受控管理读路径，结果必须显式校验 tenant/member/employee/bank。

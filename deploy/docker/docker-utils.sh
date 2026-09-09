@@ -11,6 +11,9 @@ DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 REPO_ROOT="$(cd "${DEPLOY_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
+# Compose requires an explicit supported environment; this utility is a
+# dev/test build/cleanup helper and defaults only its own invocation to test.
+export AITEAM_ENV="${AITEAM_ENV:-test}"
 
 log() { printf '\033[1;34m[docker-utils]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[docker-utils:err]\033[0m %s\n' "$*" >&2; }

@@ -2,14 +2,16 @@
 --
 -- Endpoint and credentials remain process-local Manager startup registry data.
 -- This table stores only the derived workspace and its verified instance_id; it is
--- not an endpoint or secret registry.  Existing rows intentionally keep a
--- nullable instance_id until PgManagerRagService verifies and bootstraps them.
+-- not an endpoint or secret registry. Existing rows intentionally keep a
+-- nullable instance_id as legacy data; registry-aware new workspace writes
+-- stamp it before any request can route to a multi-entry pool.
 
 ALTER TABLE rag_workspace
     ADD COLUMN IF NOT EXISTS instance_id text;
 
--- A malformed manual mapping must not become a routable identity.  NULL is
--- retained for legacy rows and is filled atomically by PgManagerRagService.
+-- A malformed manual mapping must not become a routable identity. NULL is
+-- retained only for legacy rows; new registry-aware writes stamp the selected
+-- instance before downstream routing.
 DO $$
 BEGIN
     IF NOT EXISTS (

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
@@ -99,12 +101,14 @@ def _build_verifier():
     恒 401（密钥库未配置不静默放行；dev 无 DB 时受保护端点本就需要 DB 才有意义）。
     """
     settings = load_settings("manager")
+    if settings.is_production and os.getenv("AITEAM_COMPOSE_MODE") == "1":
+        raise RuntimeError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
     admin_dsn = settings.admin_db_url
     if not admin_dsn or not settings.db_url:
         return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
     key_store = TenantKeyStore(admin_dsn)
     return ActivePrincipalVerifier(
-        DynamicRS256TokenVerifier(key_store.public_pem_for_kid),
+        DynamicRS256TokenVerifier(key_store.resolved_public_key_for_kid),
         TenantAuthRepository(PgTenantRouter(settings.db_url)),
     )
 
@@ -131,6 +135,27 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
 
 
 settings = load_settings("manager")
+if settings.is_production:
+    from urllib.parse import urlsplit
+
+    configured_issuer = os.getenv("AITEAM_JWT_ISSUER", "").strip()
+    configured_audience = os.getenv("AITEAM_JWT_AUDIENCE", "").strip()
+    issuer = urlsplit(configured_issuer)
+    if (
+        not configured_issuer
+        or issuer.scheme != "https"
+        or not issuer.hostname
+        or issuer.username
+        or issuer.password
+        or issuer.query
+        or issuer.fragment
+        or not configured_audience
+    ):
+        raise RuntimeError("Production Manager requires an absolute HTTPS AITEAM_JWT_ISSUER and non-empty AITEAM_JWT_AUDIENCE")
+    if os.getenv("AITEAM_AGENT_JWT_ISSUER", "").strip() and os.getenv("AITEAM_AGENT_JWT_ISSUER", "").strip() != configured_issuer:
+        raise RuntimeError("Manager and Agent JWT issuer values must match exactly in production")
+    if os.getenv("AITEAM_AGENT_JWT_AUDIENCE", "").strip() and os.getenv("AITEAM_AGENT_JWT_AUDIENCE", "").strip() != configured_audience:
+        raise RuntimeError("Manager and Agent JWT audience values must match exactly in production")
 _skill_signer = SkillPackageSigner.from_env()
 if settings.is_production and (_skill_signer is None or not _skill_signer.has_next):
     raise RuntimeError(
@@ -225,6 +250,11 @@ app.include_router(oauth_mgmt_router)
 # Manager-owned read-only RAG MCP facade. It is unavailable (rather than
 # bypassed) when the Manager business database is not configured.
 _rag_settings = LightRagSettings.from_env() if settings.db_url else None
+# Knowledge-space creation/ensure must stamp the startup-selected endpoint id;
+# the registry itself contains only endpoint credentials and never workspace data.
+app.state._rag_instance_registry = (
+    _rag_settings.instance_registry if _rag_settings is not None else None
+)
 if settings.db_url:
     _rag_router = PgTenantRouter(settings.db_url)
     _rag_member_repo = MemberDeptRepository(_rag_router)
@@ -238,8 +268,8 @@ if settings.db_url:
         platform_catalog=app.state._operator_catalog,
     )
     _rag_doc_repo, _, _rag_doc_binding = build_knowledge_intake_repositories(_rag_router)
-    # Load the static registry once at Manager startup and share that exact
-    # immutable routing map between query, ingestion, and workspace derivation.
+    # Load the static endpoint pool once at Manager startup; tenant workspace
+    # routing is resolved from the current TenantContext at request time.
     _rag_light = LightRagClient(_rag_settings)
     _rag_ingestion = LightRagIngestionClient(
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
@@ -248,7 +278,6 @@ if settings.db_url:
     _rag_service = PgManagerRagService(
         settings.db_url,
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
-        enterprise_workspace=_rag_settings.workspace if _rag_settings is not None else None,
     )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,
@@ -258,7 +287,10 @@ if settings.db_url:
         knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(_rag_router), _rag_doc_binding),
         rag_service=_rag_service,
         light_rag=_rag_light,
-        space_repository=KnowledgeSpaceRepository(_rag_router),
+        space_repository=KnowledgeSpaceRepository(
+            _rag_router,
+            instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
+        ),
         document_repository=_rag_doc_repo,
         storage_root=ensure_storage_root(manager_storage_root(settings)),
     )

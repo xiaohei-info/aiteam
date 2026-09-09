@@ -1,10 +1,12 @@
 ---
 created: 2026-08-25
-status: active
+status: historical-snapshot-superseded-by-stage-b
 scope: operator-manager-agent-solution-group-chat
 ---
 
-# Pi 原生行业解决方案 → 多 Session 群聊实施计划
+# Pi 原生行业解决方案 → 多 Session 群聊实施计划（历史快照）
+
+> 本文保留 2026-08-25 的方案/群聊设计与历史 E2E 记录；其中 taiyi `55 passed/1 skipped`、healthz 和 `AITEAM_PI_FAKE=false` 不代表当前源码或 release。当前以 v1 概要设计、Stage A/B 计划、实际 CI checkout 和独立审查为准。
 
 ## 1. 目标与边界
 

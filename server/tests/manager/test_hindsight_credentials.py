@@ -9,6 +9,7 @@ from manager_service.hindsight_client import HindsightSettings, HindsightUnavail
 from manager_service.hindsight_credentials import (
     HindsightLeaseStore,
     HindsightRuntimeService,
+    _validate_facade_url,
     derive_hindsight_bank_id,
 )
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
@@ -50,6 +51,12 @@ def _settings() -> HindsightSettings:
 
 def _ctx(member_id: str = "member-1") -> TenantContext:
     return TenantContext(tenant_id="tenant-1", user_id=member_id, roles=["member"])
+
+
+def test_facade_url_is_root_relative_only():
+    _validate_facade_url("/api/manager/hindsight")
+    with pytest.raises(ValueError, match="root-relative"):
+        _validate_facade_url("https://other.example/api/manager/hindsight")
 
 
 def test_employee_bank_scope_ignores_member_but_separates_employees():

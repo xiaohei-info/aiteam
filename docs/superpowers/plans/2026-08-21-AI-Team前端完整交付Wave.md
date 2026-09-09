@@ -1,10 +1,12 @@
 ---
 created: 2026-08-21
-status: completed-baseline-residuals
+status: historical-snapshot-superseded-by-stage-b
 scope: frontend-complete-wave
 ---
 
-# AI Team 前端完整交付 Wave
+# AI Team 前端完整交付 Wave（历史快照）
+
+> 本文记录 2026-08-21 的前端阶段快照，已由当前 Stage A/B 与 v1 completeness closure 取代。文中的 smoke/test 数字和“taiyi latest static dist 已部署”均不代表当前源码或部署证据；当前发布状态只能引用实际 CI checkout SHA、独立审查和 taiyi 现场验证。
 
 ## 目标
 

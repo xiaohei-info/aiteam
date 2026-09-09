@@ -72,6 +72,7 @@ until docker exec aiteam-pg pg_isready -U postgres -d manager_control_db >/dev/n
   sleep 1
 done
 echo "PostgreSQL ready"
+docker exec aiteam-pg createdb -U postgres operation_control_db
 ```
 
 **说明**：
@@ -82,8 +83,11 @@ echo "PostgreSQL ready"
 ### 5. 设置环境变量（每个终端 session 需要 export 一次）
 
 ```bash
+export AITEAM_ENV=test
 export ADMIN_DB_URL=postgresql://postgres:postgres@localhost:5432/manager_control_db
 export DB_URL=postgresql://app_rw:apprwpass@localhost:5432/manager_control_db
+export OPERATION_ADMIN_DB_URL=postgresql://postgres:postgres@localhost:5432/operation_control_db
+export OPERATION_DB_URL=postgresql://app_rw:apprwpass@localhost:5432/operation_control_db
 export APP_RW_PASSWORD=apprwpass
 export OPERATION_SYSTEM_USERNAME=sysadmin
 export OPERATION_SYSTEM_PASSWORD=changeme-me
@@ -216,7 +220,7 @@ cd server
 
 **处理**：
 1. 确认 PG 容器运行：`docker ps | grep aiteam-pg`
-2. 确认环境变量已 export：`echo $ADMIN_DB_URL`
+2. 确认环境变量已 export：`echo $ADMIN_DB_URL` 与 `echo $OPERATION_DB_URL`（两者数据库名必须不同）
 3. 重新 export 环境变量（见步骤 5）
 
 ### Q3: Playwright 报 "Executable doesn't exist"

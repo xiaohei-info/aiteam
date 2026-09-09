@@ -1,4 +1,6 @@
-# AI Team 当前单机部署 SOP
+# AI Team 单机部署 SOP（MVP 历史文档）
+
+> 本文仅保留冻结 MVP `app/` 的历史部署记录，**不是 v1 当前部署口径**。v1 禁止读取/调用 `app/`、`app/.env`、`app/ctl.sh` 或旧 `Team Panel` 路径；当前三端部署请使用 `deploy/docker/README.md`、`deploy/ci/README.md` 与 v1 概要设计 09/11。
 
 ## 1. 适用范围
 

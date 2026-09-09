@@ -130,7 +130,7 @@ def _repo(request: Request) -> PlatformSkillRepository:
     injected = getattr(request.app.state, "_platform_skill_repository", None)
     if injected is not None:
         return injected
-    dsn = request.app.state.settings.admin_db_url
+    dsn = request.app.state.settings.db_url
     if not dsn:
         raise _OperatorSkillStoreUnavailable("Operator DB is not configured")
     repo = PlatformSkillRepository(dsn)

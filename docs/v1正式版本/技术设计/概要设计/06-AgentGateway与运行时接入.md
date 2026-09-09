@@ -65,7 +65,7 @@ EmployeeExecutionSnapshot
 - 禁止 ambient `~/.pi`、项目 `.pi`、未审核 package/extension/context 自动发现；
 - 仅加载 Manager 授权、签名、固定 hash/version 的 Skill；
 - 平台内置工具/Extension 默认随 Agent 产物提供；业务能力仍按 Manager 快照和本地会话权限生效；
-- Hindsight、Manager RAG、审批和 sandbox 为产品自有受控扩展/工具；默认 Memory 使用 employee-private scope，默认 RAG 使用 Manager 唯一企业知识空间。
+- Hindsight、Manager RAG、审批和 sandbox 为产品自有受控扩展/工具；默认 Memory 使用 employee-private scope，默认 RAG 使用当前 tenant 唯一企业知识空间。
 
 Pi Project Trust、tool allowlist 和 prompt 不是 sandbox。coding tools 必须全部经过 Agent 的外部非特权 sandbox boundary；sandbox 不可用时 fail-closed。
 

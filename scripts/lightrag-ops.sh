@@ -42,6 +42,9 @@ if [[ -n "${ENV_FILE}" ]]; then
   # shellcheck source=/dev/null
   source "${ENV_FILE}"
   set +a
+  # The env file name is the deployment selector when older files do not carry
+  # AITEAM_ENV; production maintenance must still pass the Compose gate.
+  [[ "${AITEAM_ENV:-}" == "production" || "${ENV_FILE}" == *.env.prod ]] && export AITEAM_ENV=production
 fi
 
 COMMAND="${1:-}"
@@ -92,10 +95,22 @@ require_secret_env_file() {
   local mode
   mode="$(stat -c '%a' "${ENV_FILE}" 2>/dev/null || stat -f '%Lp' "${ENV_FILE}")"
   [[ "${mode}" == "600" ]] || { echo "[lightrag-ops][ERR] env file must be mode 600" >&2; exit 1; }
+  if [[ "${AITEAM_ENV:-}" == "production" ]]; then
+    "${ROOT}/scripts/validate-lightrag-env.sh" --production >/dev/null || {
+      echo "[lightrag-ops][ERR] production LightRAG configuration is invalid" >&2
+      exit 1
+    }
+    # Production maintenance uses the dedicated dependency-only Compose overlay;
+    # it never starts production control-plane services.
+  fi
 }
 
 compose() {
-  docker compose -f "${COMPOSE_FILE}" --profile lightrag "$@"
+  local files=(-f "${COMPOSE_FILE}")
+  if [[ "${AITEAM_ENV:-}" == "production" && -f "${ROOT}/deploy/docker/docker-compose.maintenance.yml" ]]; then
+    files+=(-f "${ROOT}/deploy/docker/docker-compose.maintenance.yml")
+  fi
+  docker compose "${files[@]}" --profile lightrag "$@"
 }
 
 persist_image() {
@@ -137,8 +152,18 @@ backup_path() {
   fi
 }
 
+create_pgpass_file() {
+  local file escaped
+  file="$(mktemp "${TMPDIR:-/tmp}/aiteam-pgpass.XXXXXX")" || return 1
+  chmod 600 "${file}"
+  escaped="${LIGHTRAG_DB_PASSWORD//\\/\\\\}"
+  escaped="${escaped//:/\\:}"
+  printf '%s:%s:%s:%s:%s\n' "${LIGHTRAG_DB_HOST}" "${LIGHTRAG_DB_PORT}" "${LIGHTRAG_DB_NAME}" "${LIGHTRAG_DB_USER}" "${escaped}" >"${file}"
+  printf '%s\n' "${file}"
+}
+
 run_backup() {
-  local output="$1"
+  local output="$1" pgpass_file rc
   if (( DRY_RUN )); then
     printf '%s\n' "[lightrag-ops][dry-run] pg_dump --format=custom --no-owner --file=${output} ${LIGHTRAG_DB_HOST}:${LIGHTRAG_DB_PORT}/${LIGHTRAG_DB_NAME} (password omitted)"
     return 0
@@ -146,14 +171,22 @@ run_backup() {
   [[ -n "${LIGHTRAG_DB_PASSWORD}" ]] || { echo "[lightrag-ops][ERR] LIGHTRAG_DB_PASSWORD is required" >&2; exit 1; }
   mkdir -p "$(dirname "${output}")"
   if command -v pg_dump >/dev/null 2>&1; then
-    PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_dump \
+    pgpass_file="$(create_pgpass_file)" || { echo "[lightrag-ops][ERR] cannot create protected pgpass file" >&2; exit 1; }
+    if PGPASSFILE="${pgpass_file}" pg_dump \
       --format=custom --no-owner --no-privileges \
       --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
       --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" \
-      --file="${output}"
+      --file="${output}"; then
+      rm -f -- "${pgpass_file}"
+    else
+      rc=$?
+      rm -f -- "${pgpass_file}"
+      return "${rc}"
+    fi
   elif [[ -n "${LIGHTRAG_PG_CLIENT_CONTAINER}" ]]; then
-    docker exec -e "PGPASSWORD=${LIGHTRAG_DB_PASSWORD}" "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
-      pg_dump --format=custom --no-owner --no-privileges \
+    printf '%s\n' "${LIGHTRAG_DB_PASSWORD}" | docker exec -i "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
+      sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; exec pg_dump "$@"' sh \
+      --format=custom --no-owner --no-privileges \
       --host="${LIGHTRAG_CLIENT_DB_HOST}" --port="${LIGHTRAG_CLIENT_DB_PORT}" \
       --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" >"${output}"
   else
@@ -179,15 +212,23 @@ case "${COMMAND}" in
       [[ -n "${LIGHTRAG_DB_PASSWORD}" ]] || { echo "[lightrag-ops][ERR] LIGHTRAG_DB_PASSWORD is required" >&2; exit 1; }
       compose stop "${LIGHTRAG_SERVICE}"
       if command -v pg_restore >/dev/null 2>&1; then
-        PGPASSWORD="${LIGHTRAG_DB_PASSWORD}" pg_restore \
+        pgpass_file="$(create_pgpass_file)" || { echo "[lightrag-ops][ERR] cannot create protected pgpass file" >&2; exit 1; }
+        if PGPASSFILE="${pgpass_file}" pg_restore \
           --clean --if-exists --no-owner --no-privileges --exit-on-error \
           --host="${LIGHTRAG_DB_HOST}" --port="${LIGHTRAG_DB_PORT}" \
-          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" "${INPUT}"
+          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" "${INPUT}"; then
+          rm -f -- "${pgpass_file}"
+        else
+          rc=$?
+          rm -f -- "${pgpass_file}"
+          exit "${rc}"
+        fi
       elif [[ -n "${LIGHTRAG_PG_CLIENT_CONTAINER}" ]]; then
-        docker exec -i -e "PGPASSWORD=${LIGHTRAG_DB_PASSWORD}" "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
-          pg_restore --clean --if-exists --no-owner --no-privileges --exit-on-error \
+        { printf '%s\n' "${LIGHTRAG_DB_PASSWORD}"; cat "${INPUT}"; } | docker exec -i "${LIGHTRAG_PG_CLIENT_CONTAINER}" \
+          sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; tmp=/tmp/aiteam-lightrag-restore.dump; cat >"$tmp"; pg_restore "$@" "$tmp"; rc=$?; rm -f "$tmp"; exit "$rc"' sh \
+          --clean --if-exists --no-owner --no-privileges --exit-on-error \
           --host="${LIGHTRAG_CLIENT_DB_HOST}" --port="${LIGHTRAG_CLIENT_DB_PORT}" \
-          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}" <"${INPUT}"
+          --username="${LIGHTRAG_DB_USER}" --dbname="${LIGHTRAG_DB_NAME}"
       else
         echo "[lightrag-ops][ERR] pg_restore is not installed; set LIGHTRAG_PG_CLIENT_CONTAINER" >&2
         exit 1

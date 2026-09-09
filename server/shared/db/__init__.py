@@ -48,7 +48,7 @@ class TenantRouter(ABC):
 class ManagerRagService(ABC):
     """Manager-owned RAG routing boundary (04 §6.1.2, D21).
 
-    A deployment owns one enterprise workspace; the legacy signature remains so
+    Each tenant owns one enterprise workspace; the legacy signature remains so
     existing citation/binding callers can be migrated without accepting a raw
     LightRAG workspace from them.
     """
@@ -111,6 +111,9 @@ class InMemoryTenantRouter(TenantRouter):
 
 _APP_ROLE = "app_rw"
 _MIGRATION_LOCK = threading.Lock()
+# Session-level PostgreSQL lock coordinates Manager/Operation startup when both
+# databases share one cluster and both first-run migrations touch app_rw.
+_MIGRATION_ADVISORY_LOCK = 0x415445414D
 
 
 class PgTenantSession(TenantDataSession):
@@ -221,36 +224,45 @@ def _apply_migrations_unlocked(db_url: str | None, app_rw_password: str | None =
         return None
     files = sorted(f for f in os.listdir(mig_dir) if f.endswith(".sql"))
     with psycopg.connect(db_url, autocommit=True) as conn:
-        for fname in files:
-            with open(os.path.join(mig_dir, fname), encoding="utf-8") as fh:
-                sql = fh.read()
+        # Manager and Operation may start together against one PostgreSQL
+        # cluster. Their first migration both creates/alters the cluster-wide
+        # app_rw role, so coordinate across processes as well as threads.
+        with conn.cursor() as lock_cursor:
+            lock_cursor.execute("SELECT pg_advisory_lock(%s)", (_MIGRATION_ADVISORY_LOCK,))
+        try:
+            for fname in files:
+                with open(os.path.join(mig_dir, fname), encoding="utf-8") as fh:
+                    sql = fh.read()
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+
+            # 动态授予 CONNECT 权限（问题2修复：迁移脚本无法硬编码数据库名）
             with conn.cursor() as cur:
-                cur.execute(sql)
+                # 获取当前数据库名
+                cur.execute("SELECT current_database()")
+                db_name = cur.fetchone()[0]
+                # 幂等授权：GRANT 可重复执行
+                from psycopg import sql as _sql
 
-        # 动态授予 CONNECT 权限（问题2修复：迁移脚本无法硬编码数据库名）
-        with conn.cursor() as cur:
-            # 获取当前数据库名
-            cur.execute("SELECT current_database()")
-            db_name = cur.fetchone()[0]
-            # 幂等授权：GRANT 可重复执行
-            from psycopg import sql as _sql
-
-            cur.execute(
-                _sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                    _sql.Identifier(db_name), _sql.Identifier(_APP_ROLE)
-                )
-            )
-
-        if app_rw_password:
-            # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
-            # 用 psycopg.sql 安全拼接（ALTER ROLE 的 PASSWORD 不支持参数占位符）。
-            from psycopg import sql as _sql
-
-            with conn.cursor() as cur:
                 cur.execute(
-                    _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                        _sql.Identifier(_APP_ROLE),
-                        _sql.Literal(app_rw_password),
+                    _sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                        _sql.Identifier(db_name), _sql.Identifier(_APP_ROLE)
                     )
                 )
+
+            if app_rw_password:
+                # 幂等下发业务角色登录口令（口令来自配置/env，绝不入源码/迁移脚本）。
+                # 用 psycopg.sql 安全拼接（ALTER ROLE 的 PASSWORD 不支持参数占位符）。
+                from psycopg import sql as _sql
+
+                with conn.cursor() as cur:
+                    cur.execute(
+                        _sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                            _sql.Identifier(_APP_ROLE),
+                            _sql.Literal(app_rw_password),
+                        )
+                    )
+        finally:
+            with conn.cursor() as unlock_cursor:
+                unlock_cursor.execute("SELECT pg_advisory_unlock(%s)", (_MIGRATION_ADVISORY_LOCK,))
     return None

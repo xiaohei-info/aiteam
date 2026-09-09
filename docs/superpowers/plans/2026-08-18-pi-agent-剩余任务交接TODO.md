@@ -1,13 +1,13 @@
 ---
 created: 2026-08-18
-status: handoff-active
+status: superseded-by-stage-b
 canonical: false
 scope: pi-agent-completion
 ---
 
 # AI Team Pi Agent 重构剩余任务交接 TODO
 
-> **2026-08-26 架构修订**：Manager 按企业一部署；企业共享 RAG 只有一个固定 workspace，employee-private Hindsight memory 是个人隔离边界。本文早期的多租户/多知识空间描述仅作历史交接参考，以最新 Manager 单企业计划为准。
+> **历史文档（已由 2026-09-07 Stage A/B 覆盖）**：本文保留早期交接背景；当前 Manager 为会话级多租户进程，每个 JWT/TenantContext/request 单一 tenant，RAG workspace 与 endpoint `instance_id` 按 tenant 持久化映射。以 `docs/v1正式版本/技术设计/概要设计/00-架构总纲与裁决索引.md` 及 Stage B 实现为准，不按本文的一企业固定 workspace 文字实施。
 
 > 本文用于把剩余工作交给其他开发者/Agent。不要重复重写已完成的 Pi Agent 基础切换；先阅读本文件、`AGENTS.md`、Pi 架构设计和当前 HEAD，再按优先级领取任务。
 >

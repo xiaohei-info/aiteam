@@ -1,7 +1,7 @@
 """Enterprise knowledge compatibility mapping data access (M3, 04 §6.1.2/6.6; 05 F08; D21).
 
-The `rag_workspace` row remains an internal mapping for the one enterprise
-knowledge base.  Existing TenantContext/RLS access is retained for compatibility;
+The `rag_workspace` row remains an internal mapping for one enterprise
+knowledge base per tenant. Existing TenantContext/RLS access is retained for compatibility;
 callers cannot provide a raw LightRAG workspace or create another one.
 """
 
@@ -15,6 +15,9 @@ from uuid import UUID
 from shared.contracts.tenancy import TenantContext
 from shared.db import ManagerRagService, PgTenantRouter
 from shared.errors import NotFound, ValidationProblem
+
+from .rag import enterprise_knowledge_space_id, legacy_knowledge_space_id, workspace_is_tenant_scoped
+from .rag_instances import RagInstanceConfigurationError, RagInstanceRegistry
 
 # 绑定目标类型（本表承载的部门/成员；专家授权走 employee_knowledge_binding）。
 BINDING_RESOURCE_TYPES = ("department", "member")
@@ -32,6 +35,7 @@ class KnowledgeSpaceRow:
     workspace: str
     display_name: str
     created_at: datetime | None = None
+    instance_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,16 +49,20 @@ class KnowledgeSpaceBindingRow:
     created_at: datetime | None = None
 
 
-_SPACE_COLUMNS = "knowledge_space_id, workspace, display_name, created_at"
+_SPACE_COLUMNS = "knowledge_space_id, workspace, display_name, instance_id, created_at"
 _BINDING_COLUMNS = "id, knowledge_space_id, resource_type, resource_id, created_at"
 
 
 def _row_to_space(row: Any) -> KnowledgeSpaceRow:
+    # Keep four-column fake/legacy cursors readable while production queries
+    # return the persisted instance_id before created_at.
+    has_instance = len(row) >= 5
     return KnowledgeSpaceRow(
         knowledge_space_id=row[0],
         workspace=row[1],
         display_name=row[2],
-        created_at=row[3],
+        instance_id=row[3] if has_instance else None,
+        created_at=row[4] if has_instance else row[3],
     )
 
 
@@ -71,9 +79,56 @@ def _row_to_binding(row: Any) -> KnowledgeSpaceBindingRow:
 class KnowledgeSpaceRepository:
     """知识空间管理面 CRUD（复用 rag_workspace 表）。tenant_id 取自 ctx（D22）。"""
 
-    def __init__(self, router: PgTenantRouter, *, enterprise_workspace: str | None = None):
+    def __init__(self, router: PgTenantRouter, *, instance_registry: RagInstanceRegistry | None = None):
         self._router = router
-        self._enterprise_workspace = enterprise_workspace
+        self._instance_registry = instance_registry
+
+    def _validate_existing_instance(self, row: KnowledgeSpaceRow) -> None:
+        """Validate persisted routing provenance before returning a mapping."""
+        if self._instance_registry is None:
+            return
+        try:
+            self._instance_registry.validate_workspace(row.workspace)
+            if row.instance_id:
+                self._instance_registry.by_id(row.instance_id)
+            elif len(self._instance_registry.instances) > 1:
+                raise RagInstanceConfigurationError("legacy instance mapping has no provenance")
+            else:
+                self._instance_registry.resolve(row.workspace)
+        except RagInstanceConfigurationError as exc:
+            raise ValidationProblem(
+                detail="LightRAG workspace routing is unavailable",
+                errors=None,
+            ) from exc
+
+    def _instance_id_for(self, workspace: str) -> str | None:
+        if self._instance_registry is None:
+            return None
+        try:
+            return self._instance_registry.resolve(workspace).instance_id
+        except RagInstanceConfigurationError as exc:
+            raise ValidationProblem(
+                detail="LightRAG workspace routing is unavailable",
+                errors=None,
+            ) from exc
+
+    def _stamp_existing_instance(self, ctx: TenantContext, row: KnowledgeSpaceRow) -> KnowledgeSpaceRow:
+        """Bootstrap the sole endpoint for a legacy NULL mapping atomically."""
+        if self._instance_registry is None or row.instance_id:
+            return row
+        try:
+            instance_id = self._instance_registry.resolve(row.workspace).instance_id
+        except RagInstanceConfigurationError as exc:
+            raise ValidationProblem(detail="LightRAG workspace routing is unavailable", errors=None) from exc
+        with self._router.session(ctx) as s:
+            stamped = s.execute(
+                "UPDATE rag_workspace SET instance_id = %s WHERE knowledge_space_id = %s "
+                "RETURNING " + _SPACE_COLUMNS,
+                (instance_id, row.knowledge_space_id),
+            ).fetchone()
+        if stamped is None:
+            raise ValidationProblem(detail="LightRAG workspace mapping disappeared", errors=None)
+        return _row_to_space(stamped)
 
     def create(
         self,
@@ -83,32 +138,88 @@ class KnowledgeSpaceRepository:
         display_name: str,
     ) -> KnowledgeSpaceRow:
         """建知识空间：workspace 由 ManagerRagService 派生（D21，禁止外部直传）。"""
-        workspace = self._enterprise_workspace or ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        instance_id = self._instance_id_for(workspace)
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
-                "VALUES (%s, %s, %s, %s) "
-                "RETURNING " + _SPACE_COLUMNS,
-                (ctx.tenant_id, knowledge_space_id, workspace, display_name),
-            ).fetchone()
+            if instance_id is None:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name),
+                ).fetchone()
+            else:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name, instance_id) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name, instance_id),
+                ).fetchone()
         assert row is not None  # INSERT RETURNING 必有行
         return _row_to_space(row)
 
     def ensure(
-        self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str, workspace: str,
+        self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str,
     ) -> KnowledgeSpaceRow:
-        """Idempotently materialize the single enterprise KB mapping for this deployment."""
+        """Idempotently materialize a tenant-owned workspace mapping.
+
+        If a legacy deployment already persisted its enterprise key under a
+        workspace suffix, return that row instead of creating an empty
+        canonical alias and hiding the existing documents.
+        """
+        existing = self.get(ctx, knowledge_space_id=knowledge_space_id)
+        if existing is not None:
+            return self._stamp_existing_instance(ctx, existing)
+        if knowledge_space_id == enterprise_knowledge_space_id():
+            legacy_rows = [
+                legacy for legacy in self.list_all(ctx)
+                if workspace_is_tenant_scoped(
+                    ctx.tenant_id, legacy.workspace, legacy.knowledge_space_id
+                )
+                and legacy_knowledge_space_id(legacy.workspace) == legacy.knowledge_space_id
+            ]
+            candidates = {legacy.knowledge_space_id for legacy in legacy_rows}
+            if len(candidates) == 1:
+                return self._stamp_existing_instance(ctx, legacy_rows[0])
+            if len(candidates) > 1:
+                raise ValidationProblem(
+                    detail="legacy enterprise knowledge-space mapping is ambiguous",
+                    errors=None,
+                )
+        workspace = ManagerRagService.derive_workspace(ctx.tenant_id, knowledge_space_id)
+        instance_id = self._instance_id_for(workspace)
         with self._router.session(ctx) as s:
-            row = s.execute(
-                "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
-                "VALUES (%s, %s, %s, %s) "
-                "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
-                "workspace = rag_workspace.workspace, display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
-                "RETURNING " + _SPACE_COLUMNS,
-                (ctx.tenant_id, knowledge_space_id, workspace, display_name),
-            ).fetchone()
+            if instance_id is None:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name) "
+                    "VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                    "workspace = rag_workspace.workspace, display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name),
+                ).fetchone()
+            else:
+                row = s.execute(
+                    "INSERT INTO rag_workspace (tenant_id, knowledge_space_id, workspace, display_name, instance_id) "
+                    "VALUES (%s, %s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                    "workspace = rag_workspace.workspace, instance_id = COALESCE(rag_workspace.instance_id, EXCLUDED.instance_id), "
+                    "display_name = COALESCE(NULLIF(rag_workspace.display_name, ''), EXCLUDED.display_name) "
+                    "RETURNING " + _SPACE_COLUMNS,
+                    (ctx.tenant_id, knowledge_space_id, workspace, display_name, instance_id),
+                ).fetchone()
         assert row is not None
         return _row_to_space(row)
+
+    def is_enterprise_space(self, ctx: TenantContext, *, knowledge_space_id: str) -> bool:
+        if knowledge_space_id == enterprise_knowledge_space_id():
+            return True
+        row = self.get(ctx, knowledge_space_id=knowledge_space_id)
+        return (
+            row is not None
+            and workspace_is_tenant_scoped(ctx.tenant_id, row.workspace, knowledge_space_id)
+            and legacy_knowledge_space_id(row.workspace) == knowledge_space_id
+        )
 
     def get(self, ctx: TenantContext, *, knowledge_space_id: str) -> KnowledgeSpaceRow | None:
         with self._router.session(ctx) as s:
@@ -116,14 +227,34 @@ class KnowledgeSpaceRepository:
                 "SELECT " + _SPACE_COLUMNS + " FROM rag_workspace WHERE knowledge_space_id = %s",
                 (knowledge_space_id,),
             ).fetchone()
-        return _row_to_space(row) if row is not None else None
+        if row is None:
+            return None
+        mapped = _row_to_space(row)
+        if not workspace_is_tenant_scoped(ctx.tenant_id, mapped.workspace, knowledge_space_id):
+            raise ValidationProblem(
+                detail="knowledge workspace mapping is unavailable",
+                errors=None,
+            )
+        self._validate_existing_instance(mapped)
+        return mapped
 
     def list_all(self, ctx: TenantContext) -> list[KnowledgeSpaceRow]:
         with self._router.session(ctx) as s:
             rows = s.execute(
                 "SELECT " + _SPACE_COLUMNS + " FROM rag_workspace ORDER BY created_at"
             ).fetchall()
-        return [_row_to_space(r) for r in rows]
+        mapped = [_row_to_space(r) for r in rows]
+        for row in mapped:
+            self._validate_existing_instance(row)
+        if any(
+            not workspace_is_tenant_scoped(ctx.tenant_id, row.workspace, row.knowledge_space_id)
+            for row in mapped
+        ):
+            raise ValidationProblem(
+                detail="knowledge workspace mapping is unavailable",
+                errors=None,
+            )
+        return mapped
 
     def update(
         self, ctx: TenantContext, *, knowledge_space_id: str, display_name: str
@@ -134,7 +265,16 @@ class KnowledgeSpaceRepository:
                 "RETURNING " + _SPACE_COLUMNS,
                 (display_name, knowledge_space_id),
             ).fetchone()
-        return _row_to_space(row) if row is not None else None
+        if row is None:
+            return None
+        mapped = _row_to_space(row)
+        if not workspace_is_tenant_scoped(ctx.tenant_id, mapped.workspace, knowledge_space_id):
+            raise ValidationProblem(
+                detail="knowledge workspace mapping is unavailable",
+                errors=None,
+            )
+        self._validate_existing_instance(mapped)
+        return mapped
 
     def delete(self, ctx: TenantContext, *, knowledge_space_id: str) -> bool:
         with self._router.session(ctx) as s:

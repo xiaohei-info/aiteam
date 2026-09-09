@@ -15,8 +15,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import uuid4
-
 from shared.contracts.enums import (
     AuditResult,
     AuditSeverity,
@@ -158,7 +156,7 @@ class AdminRepositoryBase(ABC):
     """Common shape for the Operation admin (lifecycle / quota / audit) repository.
 
     Concrete: :class:`AdminRepository` (in-process dev/test default) and
-    :class:`PgAdminRepository` (Oper library, selected by ``admin_db_url``).
+    :class:`PgAdminRepository` (Oper business library, selected by ``db_url``).
     """
 
     @abstractmethod
@@ -459,7 +457,7 @@ class AdminRepository(AdminRepositoryBase):
 class PgAdminRepository(AdminRepositoryBase):
     """Operation lifecycle / quota / audit repository backed by PostgreSQL (oper library).
 
-    Selected by the DI factory when ``admin_db_url`` is configured. Same method shape
+    Selected by the DI factory when ``db_url`` is configured. Same method shape
     as :class:`AdminRepository`.
     """
 
@@ -581,23 +579,20 @@ class PgAdminRepository(AdminRepositoryBase):
         with psycopg.connect(self._dsn, autocommit=False) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO operation_recharge_record (enterprise_id, amount) VALUES (%s::uuid, %s)",
+                    """
+                    INSERT INTO operation_recharge_record (enterprise_id, amount)
+                    VALUES (%s::uuid, %s)
+                    RETURNING recharge_id, enterprise_id, amount, created_at
+                    """,
                     (enterprise_id, amount),
                 )
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("recharge insert returned no row")
                 cur.execute(
                     "UPDATE enterprise_account SET total_recharged = total_recharged + %s, updated_at = now() WHERE enterprise_id = %s::uuid",
                     (amount, enterprise_id),
                 )
-                cur.execute(
-                    """
-                    SELECT recharge_id, enterprise_id, amount, created_at
-                    FROM operation_recharge_record
-                    WHERE enterprise_id = %s::uuid
-                    ORDER BY created_at DESC LIMIT 1
-                    """,
-                    (enterprise_id,),
-                )
-                row = cur.fetchone()
             conn.commit()
         created = row[3]
         if getattr(created, "tzinfo", None) is None:
@@ -687,7 +682,8 @@ class PgAdminRepository(AdminRepositoryBase):
         from datetime import timezone
         where, args = [], []
         if status:
-            where.append("operation_status = %s"); args.append(_normalize_operation_status(status))
+            where.append("operation_status = %s")
+            args.append(_normalize_operation_status(status))
         if keyword:
             where.append("(lower(enterprise_name) LIKE %s OR lower(enterprise_id::text) LIKE %s)")
             args.extend([f"%{keyword.lower()}%", f"%{keyword.lower()}%"])
@@ -701,7 +697,8 @@ class PgAdminRepository(AdminRepositoryBase):
         sql += " ORDER BY created_at DESC"
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, args); rows = cur.fetchall()
+                cur.execute(sql, args)
+                rows = cur.fetchall()
         out = []
         for r in rows:
             reg = r[5]
@@ -723,10 +720,12 @@ class PgAdminRepository(AdminRepositoryBase):
         if enterprise_id is None:
             sql += " ORDER BY created_at DESC"
         else:
-            sql += " WHERE enterprise_id = %s::uuid ORDER BY created_at DESC"; args.append(enterprise_id)
+            sql += " WHERE enterprise_id = %s::uuid ORDER BY created_at DESC"
+            args.append(enterprise_id)
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, args); rows = cur.fetchall()
+                cur.execute(sql, args)
+                rows = cur.fetchall()
         recs = []
         for r in rows:
             c = r[3]
@@ -747,9 +746,11 @@ class PgAdminRepository(AdminRepositoryBase):
         from datetime import timezone
         where, args = [], []
         if enterprise_id is not None:
-            where.append("enterprise_id = %s::uuid"); args.append(enterprise_id)
+            where.append("enterprise_id = %s::uuid")
+            args.append(enterprise_id)
         if severity:
-            where.append("severity = %s"); args.append(severity)
+            where.append("severity = %s")
+            args.append(severity)
         base_from = " FROM operation_audit_event" + (" WHERE " + " AND ".join(where) if where else "")
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -760,7 +761,8 @@ class PgAdminRepository(AdminRepositoryBase):
                     "severity, result, ip_address, user_agent, created_at"
                     + base_from + " ORDER BY created_at DESC LIMIT %s OFFSET %s"
                 )
-                cur.execute(sql, args + [limit, cursor]); rows = cur.fetchall()
+                cur.execute(sql, args + [limit, cursor])
+                rows = cur.fetchall()
         events = []
         for r in rows:
             c = r[10]

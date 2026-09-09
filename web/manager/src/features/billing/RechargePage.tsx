@@ -12,12 +12,12 @@ import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useBillingApi } from "./useBillingApi";
-import type { Recharge } from "./types";
+import type { Recharge, RechargePaymentMethod } from "./types";
 
 const PAYMENT_METHODS = [
-  { key: "wechat", label: "微信支付" },
+  { key: "wechat_pay", label: "微信支付" },
   { key: "alipay", label: "支付宝" },
-];
+] as const;
 
 type RechargeRow = Recharge & Record<string, unknown>;
 const columns: TableColumn<RechargeRow>[] = [
@@ -34,7 +34,7 @@ export function RechargePage(): ReactNode {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState("wechat");
+  const [method, setMethod] = useState<RechargePaymentMethod>("wechat_pay");
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {

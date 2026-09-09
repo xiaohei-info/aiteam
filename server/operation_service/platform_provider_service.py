@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import os
 import secrets
+import socket
+from ipaddress import ip_address
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet
 
@@ -363,36 +366,77 @@ class PlatformProviderService:
         return row
 
 
-def newapi_urls() -> tuple[str | None, str | None]:
+def _validated_relay_url(value: str, *, name: str, https_only: bool = False, reject_local: bool = False) -> str:
+    if not value or any(character.isspace() for character in value):
+        raise ValueError(f"{name} must be an absolute HTTP(S) URL without credentials or query data")
+    parsed = urlsplit(value)
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{name} has an invalid port") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(f"{name} must be an absolute HTTP(S) URL without credentials or query data")
+    if name == "NEWAPI_PUBLIC_BASE_URL" and not parsed.path.rstrip("/").endswith("/v1"):
+        raise ValueError(f"{name} must end with /v1")
+    if https_only and parsed.scheme != "https":
+        raise ValueError(f"{name} must use HTTPS")
+    if reject_local:
+        host = parsed.hostname.rstrip(".").lower()
+        if "." not in host and ":" not in host:
+            raise ValueError(f"{name} must use a qualified public hostname")
+        if host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or host.endswith(".localdomain") or host.endswith(".internal") or host.endswith(".intranet"):
+            raise ValueError(f"{name} must not target a local destination")
+        try:
+            address = ip_address(parsed.hostname)
+        except ValueError:
+            address = None
+        if address is not None and (address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_multicast):
+            raise ValueError(f"{name} must not target a local destination")
+        try:
+            resolved = {
+                ip_address(info[4][0])
+                for info in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+                if info[4] and info[4][0]
+            }
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"{name} DNS resolution failed") from exc
+        if not resolved or any(not item.is_global for item in resolved):
+            raise ValueError(f"{name} must resolve only to global destinations")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def newapi_urls(*, production: bool = False) -> tuple[str | None, str | None]:
     """Resolve separate NewAPI admin and externally reachable relay URLs.
 
     NEWAPI_URL is allowed to point at the private Operator→NewAPI network. It
     is never used as a fallback for the URL returned to Manager/Agent.
     """
-    base_url = (os.getenv("NEWAPI_URL") or "").rstrip("/") or None
-    admin_url = (os.getenv("NEWAPI_ADMIN_BASE_URL") or base_url or "").rstrip("/") or None
-    public_url = (os.getenv("NEWAPI_PUBLIC_BASE_URL") or "").rstrip("/") or None
+    base_raw = os.getenv("NEWAPI_URL") or ""
+    admin_raw = os.getenv("NEWAPI_ADMIN_BASE_URL") or base_raw
+    public_raw = os.getenv("NEWAPI_PUBLIC_BASE_URL") or ""
+    admin_url = _validated_relay_url(admin_raw, name="NEWAPI_ADMIN_BASE_URL") if admin_raw else None
+    public_url = _validated_relay_url(public_raw, name="NEWAPI_PUBLIC_BASE_URL", https_only=production, reject_local=production) if public_raw else None
     return admin_url, public_url
 
 
 @lru_cache(maxsize=1)
 def build_platform_provider_service() -> PlatformProviderService:
     settings = load_settings("operation")
-    admin_url, public_url = newapi_urls()
+    admin_url, public_url = newapi_urls(production=settings.is_production)
     admin_token = os.getenv("NEWAPI_ADMIN_TOKEN")
     admin_user_id = os.getenv("NEWAPI_ADMIN_USER_ID")
     encryption_key = os.getenv("OPERATION_PROVIDER_CREDENTIAL_KEY")
-    if not all((settings.admin_db_url, admin_url, public_url, admin_token, admin_user_id, encryption_key)):
+    if not all((settings.db_url, admin_url, public_url, admin_token, admin_user_id, encryption_key)):
         raise RuntimeError("Operator LLM gateway settings are incomplete")
     from .repository import PgEnterpriseRepository
 
     return PlatformProviderService(
-        PlatformProviderRepository(settings.admin_db_url),
+        PlatformProviderRepository(settings.db_url),
         NewApiAdminClient(admin_url, admin_token, admin_user_id, timeout=settings.service_client_timeout_ms / 1000),
         CryptoService(Fernet(encryption_key.encode())),
         public_url,
         ModelsDevPricingClient(os.getenv("MODEL_PRICING_URL", "https://models.dev/api.json"), timeout=settings.service_client_timeout_ms / 1000),
-        enterprise_repository=PgEnterpriseRepository(settings.admin_db_url),
+        enterprise_repository=PgEnterpriseRepository(settings.db_url),
     )
 
 

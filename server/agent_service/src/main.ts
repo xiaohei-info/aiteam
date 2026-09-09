@@ -1,8 +1,7 @@
-import { createPublicKey } from "node:crypto";
 import { accessSync, chmodSync, constants, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
-import { createJwtAuthenticator, type JwtJwk } from "./http/auth.js";
+import { createJwtAuthenticator, parsePublicJwks } from "./http/auth.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
@@ -12,10 +11,11 @@ import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } from "./skills.js";
-import { assertAgentLaunchConfiguration } from "./launch-guards.js";
+import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
 
 loadAgentConfig();
+scrubAgentEnvironment();
 const launchConfiguration = assertAgentLaunchConfiguration();
 const configuredDataRoot = resolve(process.env.AITEAM_AGENT_DATA_DIR ?? join(process.cwd(), ".data"));
 mkdirSync(configuredDataRoot, { recursive: true, mode: 0o700 });
@@ -218,24 +218,11 @@ function removePortFile(filename: string): void {
 
 function loadJwtOptions() {
   const inline = process.env.AITEAM_AGENT_JWKS_JSON?.trim();
-  const raw = inline || (process.env.AITEAM_AGENT_JWKS_PATH ? readFileSync(process.env.AITEAM_AGENT_JWKS_PATH, "utf8") : undefined);
+  const configuredPath = process.env.AITEAM_AGENT_JWKS_PATH?.trim();
+  if (inline && configuredPath) throw new Error("Agent JWT auth must configure exactly one of AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
+  const raw = inline || (configuredPath ? readFileSync(configuredPath, "utf8") : undefined);
   if (!raw) throw new Error("Agent JWT auth is not configured; set AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
-  let jwks: { keys: JwtJwk[] };
-  try {
-    jwks = JSON.parse(raw) as { keys: JwtJwk[] };
-  } catch {
-    throw new Error("AITEAM_AGENT_JWKS_JSON must be valid JSON");
-  }
-  if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) throw new Error("Agent JWKS must contain at least one key");
-  const usableKeys = jwks.keys.filter((key) => key.kty === "RSA" && key.alg === "RS256" && typeof key.kid === "string" && typeof key.n === "string" && typeof key.e === "string");
-  if (!usableKeys.length || !usableKeys.every((key) => {
-    try {
-      createPublicKey({ key: key as unknown as import("node:crypto").JsonWebKey, format: "jwk" });
-      return true;
-    } catch {
-      return false;
-    }
-  })) throw new Error("Agent JWKS must contain a valid RSA RS256 key with kid, n, and e");
+  const jwks = parsePublicJwks(raw, "Agent JWKS");
   const issuer = process.env.AITEAM_AGENT_JWT_ISSUER?.trim();
   const audience = process.env.AITEAM_AGENT_JWT_AUDIENCE?.trim();
   if (!issuer || !audience) throw new Error("Agent JWT issuer and audience are required");

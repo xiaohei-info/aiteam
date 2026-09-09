@@ -1,10 +1,12 @@
 ---
 created: 2026-08-25
-status: completed
+status: completed-historical-snapshot
 scope: mandatory-production-closure
 ---
 
-# AI Team 必须项收口计划
+# AI Team 必须项收口计划（历史快照）
+
+> 本文记录 2026-08-25 的阶段性完成证据；其中 taiyi `56 passed`、生产 smoke 和基础闸门均不代表当前部署或当前 release。当前以 2026-09-07/08 Stage A/B 父控、最新 CI checkout SHA 与独立审查为准，未合并/未部署的工作树不得按本文宣称完成。
 
 ## 目标与边界
 
@@ -26,7 +28,7 @@ scope: mandatory-production-closure
 1. **隔离 E2E**（已完成）
    - `seed-e2e-tenant.py` 在 external seed 下读取已发布 Operator provider/model，生成版本化快照，并校验真实 Manager runtime-config；
    - 专家 E2E 更新为当前 `platform_model_ref` 契约，不再创建旧式 Manager provider；
-   - taiyi external clean seed 专家私聊 2/2 通过，完整 cross-tier `56 passed / 0 skipped`；provider secret 未写入仓库。
+   - 历史 taiyi external clean seed（2026-08-25）专家私聊 2/2 通过，完整 cross-tier `56 passed / 0 skipped`；provider secret 未写入仓库；不代表当前部署。
 
 2. **知识绑定可靠性**（已完成最小生产闭环）
    - 批量绑定继续调用现有幂等 binding API，不复制方案级知识配置；

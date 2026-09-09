@@ -22,11 +22,12 @@ import base64
 import hashlib
 import json
 from abc import ABC, abstractmethod
+from typing import NamedTuple
 
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import Depends, Request
+from fastapi import Request
 
 from shared.contracts.auth import TokenClaims
 from shared.contracts.tenancy import TenantContext
@@ -174,11 +175,36 @@ class RS256TokenVerifier(TokenVerifier):
 
     @classmethod
     def from_jwks(cls, jwks: dict) -> "RS256TokenVerifier":
-        """从 JWKS 构造验签器（用户端首登领取 JWKS 后用此）。"""
+        """从严格的公开 RSA RS256 JWKS 构造验签器。"""
+        if not isinstance(jwks, dict) or set(jwks) != {"keys"}:
+            raise ValueError("JWKS must contain only the keys member")
+        keys = jwks.get("keys")
+        if not isinstance(keys, list) or not keys:
+            raise ValueError("JWKS must contain at least one key")
+        allowed_members = {"kty", "alg", "kid", "n", "e", "use"}
+        private_members = {"d", "p", "q", "dp", "dq", "qi", "oth"}
         pems: dict[str, str] = {}
-        for key in jwks.get("keys", []):
-            algo = jwt.algorithms.RSAAlgorithm  # type: ignore[attr-defined]
-            pub = algo.from_jwk(json.dumps(key))
+        for key in keys:
+            if (
+                not isinstance(key, dict)
+                or not set(key).issubset(allowed_members)
+                or key.get("kty") != "RSA"
+                or key.get("alg") != _ALG
+                or ("use" in key and key.get("use") != "sig")
+                or not isinstance(key.get("kid"), str)
+                or not key["kid"].strip()
+                or not isinstance(key.get("n"), str)
+                or not key["n"]
+                or not isinstance(key.get("e"), str)
+                or not key["e"]
+                or private_members.intersection(key)
+                or key["kid"] in pems
+            ):
+                raise ValueError("JWKS must contain unique RSA RS256 public keys")
+            try:
+                pub = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key))  # type: ignore[attr-defined]
+            except Exception as exc:
+                raise ValueError("JWKS contains an invalid RSA public key") from exc
             pem = pub.public_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -218,15 +244,23 @@ def _decode_rs256(token: str, public_pem: str) -> TokenClaims:
         raise Unauthorized("undecodable token") from exc
 
 
+class ResolvedPublicKey(NamedTuple):
+    """Public key plus the tenant scope proven by the key registry lookup."""
+
+    tenant_id: str
+    public_pem: str
+
+
 class DynamicRS256TokenVerifier(TokenVerifier):
     """按 token header.kid 动态解析公钥的 RS256 验签器（多 tenant / 未知 tenant 场景）。
 
     生产口径（D23）：Manager 作为多租户身份源，验签时还不知道 tenant_id——需先从 token
-    header 的 kid 解析（kid 形如 "{tenant_id}:1"），再按 tenant 查公钥。本类把"kid → 公钥"
-    的解析策略交给调用方（resolve_public_pem 回调），自身只负责"取到公钥后 RS256 验签"。
+    header 的 kid 解析（kid 形如 "{tenant_id}:1"），再按 tenant 查公钥。本类要求调用方返回
+    带 tenant scope 的 ResolvedPublicKey，自身在验签后比较该 scope 与 claims.tenant_id。
 
-    - resolve_public_pem(kid) -> public_pem(str) | None：kid 未知 / 格式错 / 无记录返回 None。
-    - kid 缺失 / resolver 返回 None → 一律 Unauthorized("unknown signing key")，不回退不放行。
+    - resolve_public_key(kid) -> ResolvedPublicKey | None：kid 未知 / 格式错 / 无记录返回 None。
+    - 未携带 tenant scope 的 resolver 结果一律 Unauthorized("unbound signing key")，不回退不放行。
+    - claims.tenant_id 与 registry tenant 不一致一律 Unauthorized("token tenant mismatch")。
     - 不缓存（单一职责）；缓存由 resolver 内部决定。
     """
 
@@ -239,10 +273,20 @@ class DynamicRS256TokenVerifier(TokenVerifier):
         except jwt.PyJWTError as exc:
             raise Unauthorized("malformed token") from exc
         kid = header.get("kid")
-        public_pem = self._resolve(kid) if kid else None
-        if public_pem is None:
+        if not isinstance(kid, str) or not kid.strip():
             raise Unauthorized("unknown signing key")
-        return _decode_rs256(token, public_pem)
+        try:
+            resolved = self._resolve(kid)
+        except Exception as exc:  # noqa: BLE001 - resolver/DB errors must fail closed as 401
+            raise Unauthorized("unknown signing key") from exc
+        if resolved is None:
+            raise Unauthorized("unknown signing key")
+        if not isinstance(resolved, ResolvedPublicKey):
+            raise Unauthorized("unbound signing key")
+        claims = _decode_rs256(token, resolved.public_pem)
+        if claims.tenant_id != resolved.tenant_id:
+            raise Unauthorized("token tenant mismatch")
+        return claims
 
 
 class RejectingTokenVerifier(TokenVerifier):

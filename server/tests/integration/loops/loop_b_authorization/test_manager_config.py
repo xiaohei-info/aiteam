@@ -283,6 +283,7 @@ def test_manager_config_knowledge_space_create_and_workspace_derived(
     from manager_service.routes_knowledge_space import build_knowledge_space_router
     from shared.app_factory import create_app
     from shared.config import Settings
+    from shared.db import ManagerRagService
 
     import psycopg
     from shared.db import apply_migrations
@@ -313,7 +314,7 @@ def test_manager_config_knowledge_space_create_and_workspace_derived(
     }, headers=hdr)
     assert r.status_code == 201, r.text
     ws = r.json()["data"]["workspace"]
-    assert ws == "enterprise_shared"
+    assert ws == ManagerRagService.derive_workspace(tid, "enterprise_shared")
 
 
 # ── 招募/方案（通过 recruit service 直接调用，验证 employee 实例 + grant 绑定）──

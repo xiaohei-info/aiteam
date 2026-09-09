@@ -60,7 +60,7 @@ def make_identity(scope, roles: list[str], *, user_id: str | None = None) -> Ide
     )
 
 
-def build_service_token_probe_app(expected_token: str | None):
+def build_service_token_probe_app(expected_token: str | None, *, aiteam_env: str = "test"):
     """构造一个仅挂 verify_service_token 守卫的最小 FastAPI app（真实守卫，非桩）。
 
     供契约测试硬验"服务 token 负例不 fail-open"：生产模式（强密钥）下缺/错 token → 401。
@@ -77,7 +77,9 @@ def build_service_token_probe_app(expected_token: str | None):
     class _Settings:
         service_token = expected_token
 
-    app.state.settings = _Settings()
+    settings = _Settings()
+    settings.aiteam_env = aiteam_env
+    app.state.settings = settings
 
     @app.get("/svc/ping")
     def _ping(_guard=Depends(verify_service_token)) -> dict:

@@ -1,12 +1,14 @@
 ---
 created: 2026-08-19
-status: approved-by-current-request
+status: superseded-by-stage-b
 scope: rag-multispace
 ---
 
 # RAG 多知识空间 fan-out 切片计划
 
-## 目标
+## 目标（历史，已废止）
+
+> Stage B/当前 D21 不支持 employee fan-out 多知识空间；每个 tenant 只有一个企业共享 workspace，知识访问由 Manager policy 控制。本文仅保留早期方案背景，不得按此实施。
 
 让一个 authorized employee 同时查询多个知识空间，例如：
 

@@ -46,7 +46,7 @@ Options:
 Examples:
   ./scripts/ctl.sh start                              # Start dev env, local mode
   ./scripts/ctl.sh start --env prod                   # Start prod env, local mode
-  ./scripts/ctl.sh start --env prod --deploy docker   # Start prod env, docker mode
+  ./scripts/ctl.sh start --env test --deploy docker   # Start test Docker stack (production Docker Agent is disabled)
   ./scripts/ctl.sh restart --server manager           # Restart only manager
   ./scripts/ctl.sh status --env test                  # Check test env status
   ./scripts/ctl.sh logs --server operation --follow   # Follow operation logs
@@ -65,6 +65,7 @@ EOF
 
 # 加载环境配置
 load_env() {
+  local action="${1:-}"
   ENV_FILE="${REPO_ROOT}/.env.${ENV_CONFIG}"
 
   if [[ ! -f "${ENV_FILE}" ]]; then
@@ -88,7 +89,7 @@ load_env() {
 
   # 每台部署的原生控制台凭据由一次性 bootstrap 文件持久化；只加载本机
   # mode-600 文件，避免把明文账号/密码写进仓库环境样例。
-  if [[ -n "${AITEAM_CONSOLE_CREDENTIALS_FILE:-}" ]]; then
+  if [[ ( "${action}" == "start" || "${action}" == "restart" ) && -n "${AITEAM_CONSOLE_CREDENTIALS_FILE:-}" ]]; then
     [[ -f "${AITEAM_CONSOLE_CREDENTIALS_FILE}" && -r "${AITEAM_CONSOLE_CREDENTIALS_FILE}" ]] || {
       echo "[ctl] ERROR: AITEAM_CONSOLE_CREDENTIALS_FILE is not readable" >&2
       exit 1
@@ -107,51 +108,256 @@ load_env() {
     dev)  export AITEAM_ENV="development" ;;
   esac
 
-  # 构建数据库连接串
-  DB_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}"
-  # ADMIN_DB_URL：管理连接串，用于 Migration / RLS 启用 / 控制面表直读直写
-  # (04 §6.1)。PG16 Alpine 镜像无 `postgres` 系统超管角色（taiyi 实测唯一
-  # super 角色是 ${POSTGRES_USER}）；未显式声明 ADMIN_DB_URL 时 fallback 到
-  # POSTGRES_SUPER_USER（缺省同 POSTGRES_USER）。单账号承担 DDL+DML 是现状
-  # 权宜，独立 manager_admin 角色留 PR TODO。
-  ADMIN_DB_URL="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${POSTGRES_DB}}"
-  APP_RW_PASSWORD="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD}}"
+  # Build separate Manager and Operation database URLs only for start/restart
+  # services that use the control plane. Standalone NewAPI bootstrap and
+  # non-start lifecycle commands must work without DB variables.
+  local manager_db_name="${MANAGER_DB_NAME:-${POSTGRES_DB:-manager_control_db}}"
+  local operation_db_name="${OPERATION_DB_NAME:-oper}"
+  [[ "${manager_db_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "${operation_db_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+    echo "[ctl] ERROR: MANAGER_DB_NAME/OPERATION_DB_NAME must be safe PostgreSQL identifiers" >&2
+    exit 1
+  }
+  [[ "${manager_db_name}" != "${operation_db_name}" ]] || {
+    echo "[ctl] ERROR: MANAGER_DB_NAME and OPERATION_DB_NAME must be distinct" >&2
+    exit 1
+  }
+  if [[ "${action}" == "start" || "${action}" == "restart" ]] && [[ "${SERVER}" =~ ^(all|manager|operation)$ ]]; then
+    if [[ "${ENV_CONFIG}" == "prod" ]]; then
+      [[ "${POSTGRES_USER:-}" == "app_rw" ]] || { echo "[ctl] ERROR: POSTGRES_USER must be app_rw for production control-plane business DB access" >&2; exit 1; }
+      [[ -n "${POSTGRES_SUPER_USER:-}" && "${POSTGRES_SUPER_USER}" != "app_rw" ]] || { echo "[ctl] ERROR: POSTGRES_SUPER_USER must be a distinct production migration role" >&2; exit 1; }
+    fi
+    APP_RW_PASSWORD="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD}}"
+    DB_URL="postgresql://app_rw:${APP_RW_PASSWORD}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${manager_db_name}"
+    OPERATION_DB_URL="postgresql://app_rw:${APP_RW_PASSWORD}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${operation_db_name}"
+    # ADMIN_DB_URL：管理连接串，用于 Migration / RLS 启用 / 控制面表直读直写
+    # (04 §6.1)。生产必须显式使用与 app_rw 分离的迁移/DDL 角色；dev/test
+    # 允许兼容旧 env 的 superuser 名称，但业务 DSN 仍永远固定为 app_rw。
+    ADMIN_DB_URL="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${manager_db_name}}"
+    OPERATION_ADMIN_DB_URL="${OPERATION_ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT}/${operation_db_name}}"
+  else
+    DB_URL="${DB_URL:-}"
+    ADMIN_DB_URL="${ADMIN_DB_URL:-}"
+    OPERATION_DB_URL="${OPERATION_DB_URL:-}"
+    OPERATION_ADMIN_DB_URL="${OPERATION_ADMIN_DB_URL:-}"
+    APP_RW_PASSWORD="${APP_RW_PASSWORD:-}"
+  fi
+  export APP_RW_PASSWORD
 
   # PG/Manager 数据卷名默认带 env 后缀，使 dev/test/prod 各用各卷、互不覆盖；
   # .env 里显式设置时以其为准（可指向共用卷）。显式 export 让 docker compose 子进程插值。
   export POSTGRES_VOLUME="${POSTGRES_VOLUME:-aiteam_pg_data_${ENV_CONFIG}}"
   export MANAGER_DATA_VOLUME="${MANAGER_DATA_VOLUME:-managerdata_${ENV_CONFIG}}"
+  export MANAGER_DB_NAME="${manager_db_name}"
+  export OPERATION_DB_NAME="${operation_db_name}"
 
   # 启动前最小 env 校验：占位分支（routes_member.py:39 等）是正确的安全门；
   # 触发 503 的真正原因是 DB_URL/ADMIN_DB_URL 未注入 .env.*，应在部署侧修，
   # 而不是焊死成 200 空结果。
-  if [[ -z "${DB_URL:-}" ]]; then
-    echo "[ctl] ERROR: DB_URL empty — check POSTGRES_* in .env.${ENV_CONFIG}" >&2
-    exit 1
-  fi
-  if [[ -z "${ADMIN_DB_URL:-}" ]]; then
-    echo "[ctl] ERROR: ADMIN_DB_URL empty — check ADMIN_DB_URL / POSTGRES_SUPER_* in .env.${ENV_CONFIG}" >&2
-    exit 1
+  if [[ "${action}" == "start" || "${action}" == "restart" ]] && [[ "${SERVER}" =~ ^(all|manager|operation)$ ]]; then
+    if [[ -z "${DB_URL:-}" ]]; then
+      echo "[ctl] ERROR: DB_URL empty — check POSTGRES_* in .env.${ENV_CONFIG}" >&2
+      exit 1
+    fi
+    if [[ -z "${ADMIN_DB_URL:-}" ]]; then
+      echo "[ctl] ERROR: ADMIN_DB_URL empty — check ADMIN_DB_URL / POSTGRES_SUPER_* in .env.${ENV_CONFIG}" >&2
+      exit 1
+    fi
   fi
 
-  validate_agent_production_env
-  validate_newapi_production_env
-  validate_lightrag_production_env
-
-  # 自动探测 Python 解释器：优先 venv 内的 python（能直接获得 venv 依赖），
-  # 否则 fallback 到系统 python3。避免部署必须 source .venv/bin/activate。
+  # Resolve the repository interpreter before any production validator runs;
+  # Fernet/JWK checks must use the same dependency environment as the service.
   if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
     VENV_PYTHON="${REPO_ROOT}/.venv/bin/python"
+  elif [[ "${ENV_CONFIG}" == "prod" && ( "${action}" == "start" || "${action}" == "restart" ) ]]; then
+    echo "[ctl] ERROR: production start requires ${REPO_ROOT}/.venv/bin/python" >&2
+    exit 1
   elif command -v python3 >/dev/null 2>&1; then
     VENV_PYTHON="$(command -v python3)"
   else
     echo "[ctl] ERROR: 找不到 Python 解释器（.venv/bin/python 或系统 python3）" >&2
     exit 1
   fi
+
+  if [[ "${action}" == "start" || "${action}" == "restart" ]]; then
+    validate_control_plane_database_layout
+    validate_postgres_production_env
+    validate_control_plane_production_env
+    validate_agent_production_env
+    validate_newapi_production_env
+    validate_lightrag_production_env
+  fi
+
+}
+
+validate_control_plane_database_layout() {
+  [[ "${SERVER}" =~ ^(all|manager|operation)$ ]] || return 0
+  if ! MANAGER_DB_URL_CHECK="${DB_URL:-}" MANAGER_ADMIN_DB_URL_CHECK="${ADMIN_DB_URL:-}" OPERATION_DB_URL_CHECK="${OPERATION_DB_URL:-}" OPERATION_ADMIN_DB_URL_CHECK="${OPERATION_ADMIN_DB_URL:-}" MANAGER_DB_NAME_CHECK="${manager_db_name}" OPERATION_DB_NAME_CHECK="${operation_db_name}" "${VENV_PYTHON}" - <<'PY'
+import os
+from urllib.parse import urlsplit
+
+urls = {
+    "manager business": os.environ.get("MANAGER_DB_URL_CHECK", ""),
+    "manager admin": os.environ.get("MANAGER_ADMIN_DB_URL_CHECK", ""),
+    "operation business": os.environ.get("OPERATION_DB_URL_CHECK", ""),
+    "operation admin": os.environ.get("OPERATION_ADMIN_DB_URL_CHECK", ""),
+}
+def target(raw):
+    parsed = urlsplit(raw)
+    if parsed.scheme not in {"postgres", "postgresql"} or not parsed.hostname or not parsed.path.strip("/"):
+        raise ValueError
+    parsed.port
+    return parsed.hostname.lower(), parsed.port or 5432, parsed.path.strip("/")
+
+try:
+    parsed = {name: urlsplit(raw) for name, raw in urls.items()}
+    if any(not raw for raw in urls.values()):
+        raise ValueError
+    targets = {name: target(raw) for name, raw in urls.items()}
+    if targets["manager business"][2] != os.environ["MANAGER_DB_NAME_CHECK"] or targets["manager admin"][2] != os.environ["MANAGER_DB_NAME_CHECK"]:
+        raise ValueError
+    if targets["operation business"][2] != os.environ["OPERATION_DB_NAME_CHECK"] or targets["operation admin"][2] != os.environ["OPERATION_DB_NAME_CHECK"]:
+        raise ValueError
+    if targets["manager business"] == targets["operation business"] or targets["manager admin"] == targets["operation admin"]:
+        raise ValueError
+    if parsed["manager business"].username != "app_rw" or parsed["operation business"].username != "app_rw":
+        raise ValueError
+    if parsed["manager admin"].username == "app_rw" or parsed["operation admin"].username == "app_rw":
+        raise ValueError
+except (KeyError, TypeError, ValueError):
+    raise SystemExit(1)
+PY
+  then
+    echo "[ctl] ERROR: Manager/Operation DB URLs must use app_rw business roles and distinct database targets" >&2
+    exit 1
+  fi
+}
+
+is_placeholder_secret() {
+  local value="${1:-}" lower
+  lower="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${lower}" == *change-me* || "${lower}" == *change_me* || "${lower}" == *change\ me* || "${lower}" == *changeme* || "${lower}" == *app_rw_dev* || "${lower}" == *aiteam_dev* || "${lower}" == *newapi_dev* || "${lower}" == *newapi_test* || "${lower}" == *dev-service-token-placeholder* || "${lower}" == *dev-service-token-changeme* ]]
+}
+
+validate_postgres_production_env() {
+  [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|postgres)$ ]] || return 0
+  local names=(POSTGRES_PASSWORD POSTGRES_SUPER_PASSWORD APP_RW_PASSWORD)
+  [[ "${POSTGRES_USER:-}" == "app_rw" ]] || { echo "[ctl] ERROR: POSTGRES_USER must be app_rw for production control-plane business access" >&2; exit 1; }
+  [[ -n "${POSTGRES_SUPER_USER:-}" && "${POSTGRES_SUPER_USER}" != "app_rw" ]] && ! is_placeholder_secret "${POSTGRES_SUPER_USER}" || { echo "[ctl] ERROR: POSTGRES_SUPER_USER must be a distinct production migration role" >&2; exit 1; }
+  for name in "${names[@]}"; do
+    value="${!name:-}"
+    [[ -n "${value}" && ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
+      echo "[ctl] ERROR: ${name} must be a non-placeholder production secret of at least 24 characters" >&2
+      exit 1
+    }
+  done
+}
+
+validate_control_plane_production_env() {
+  [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|manager|operation)$ ]] || return 0
+  if [[ "${DEPLOY_MODE}" == "docker" ]]; then
+    echo "[ctl] ERROR: production control-plane Docker Compose is unsupported; use the local/systemd deployment or a separately TLS-wrapped topology" >&2
+    exit 1
+  fi
+  for name in POSTGRES_PASSWORD POSTGRES_SUPER_PASSWORD APP_RW_PASSWORD SERVICE_TOKEN; do
+    value="${!name:-}"
+    [[ -n "${value}" && ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
+      echo "[ctl] ERROR: ${name} must be a non-placeholder production secret of at least 24 characters" >&2
+      exit 1
+    }
+  done
+  [[ ${#SERVICE_TOKEN} -ge 32 ]] || { echo "[ctl] ERROR: SERVICE_TOKEN must be at least 32 characters in production" >&2; exit 1; }
+  local expose_docs="${EXPOSE_PUBLIC_DOCS:-true}"
+  expose_docs="$(printf '%s' "${expose_docs}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${expose_docs}" == "false" || "${expose_docs}" == "0" ]] || {
+    echo "[ctl] ERROR: EXPOSE_PUBLIC_DOCS=false is required for production control-plane services" >&2
+    exit 1
+  }
+  local manager_host="${MANAGER_HOST:-127.0.0.1}"
+  local operation_host="${OPERATION_HOST:-127.0.0.1}"
+  if ! MANAGER_HOST_CHECK="${manager_host}" OPERATION_HOST_CHECK="${operation_host}" CONTROL_SERVER_CHECK="${SERVER}" "${VENV_PYTHON}" - <<'PY'
+import ipaddress
+import os
+
+names = []
+if os.environ["CONTROL_SERVER_CHECK"] in {"all", "manager"}:
+    names.append("MANAGER_HOST_CHECK")
+if os.environ["CONTROL_SERVER_CHECK"] in {"all", "operation"}:
+    names.append("OPERATION_HOST_CHECK")
+for name in names:
+    value = os.environ[name].strip()
+    if value == "localhost":
+        continue
+    try:
+        if not ipaddress.ip_address(value.strip("[]")).is_loopback:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(1)
+PY
+  then
+    echo "[ctl] ERROR: production control-plane hosts must be loopback; use a TLS reverse proxy for external access" >&2
+    exit 1
+  fi
+  if [[ "${SERVER}" =~ ^(all|operation)$ ]]; then
+    [[ -n "${OPERATION_SYSTEM_USERNAME:-}" ]] || { echo "[ctl] ERROR: OPERATION_SYSTEM_USERNAME is required for production Operation" >&2; exit 1; }
+    local operation_password="${OPERATION_SYSTEM_PASSWORD:-}"
+    [[ ${#operation_password} -ge 16 ]] && ! is_placeholder_secret "${operation_password}" || {
+      echo "[ctl] ERROR: OPERATION_SYSTEM_PASSWORD must be a non-placeholder production secret of at least 16 characters" >&2
+      exit 1
+    }
+  fi
+  if [[ "${SERVER}" =~ ^(all|manager)$ ]]; then
+    local manager_key="${MANAGER_CREDENTIAL_KEY:-}"
+    [[ -n "${manager_key}" ]] && ! is_placeholder_secret "${manager_key}" || {
+      echo "[ctl] ERROR: MANAGER_CREDENTIAL_KEY is required for production Manager" >&2
+      exit 1
+    }
+    if ! MANAGER_CREDENTIAL_KEY_CHECK="${manager_key}" "${VENV_PYTHON}" - <<'PY'
+import os
+from cryptography.fernet import Fernet
+try:
+    Fernet(os.environ["MANAGER_CREDENTIAL_KEY_CHECK"].encode())
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      echo "[ctl] ERROR: MANAGER_CREDENTIAL_KEY must be a valid Fernet key" >&2
+      exit 1
+    fi
+    [[ -n "${AITEAM_JWT_ISSUER:-}" && -n "${AITEAM_JWT_AUDIENCE:-}" ]] || {
+      echo "[ctl] ERROR: AITEAM_JWT_ISSUER and AITEAM_JWT_AUDIENCE are required for production Manager" >&2
+      exit 1
+    }
+    if ! AITEAM_JWT_ISSUER_CHECK="${AITEAM_JWT_ISSUER}" "${VENV_PYTHON}" - <<'PY'
+import os
+from urllib.parse import urlsplit
+try:
+    parsed = urlsplit(os.environ["AITEAM_JWT_ISSUER_CHECK"])
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError
+except (KeyError, TypeError, ValueError):
+    raise SystemExit(1)
+PY
+    then
+      echo "[ctl] ERROR: AITEAM_JWT_ISSUER must be an absolute HTTPS URL without credentials/query/fragment" >&2
+      exit 1
+    fi
+    if [[ -n "${AITEAM_AGENT_JWT_ISSUER:-}" && "${AITEAM_AGENT_JWT_ISSUER}" != "${AITEAM_JWT_ISSUER}" ]]; then
+      echo "[ctl] ERROR: Manager and Agent JWT issuer values must match exactly in production" >&2
+      exit 1
+    fi
+    if [[ -n "${AITEAM_AGENT_JWT_AUDIENCE:-}" && "${AITEAM_AGENT_JWT_AUDIENCE}" != "${AITEAM_JWT_AUDIENCE}" ]]; then
+      echo "[ctl] ERROR: Manager and Agent JWT audience values must match exactly in production" >&2
+      exit 1
+    fi
+  fi
 }
 
 validate_agent_production_env() {
-  [[ "${ENV_CONFIG}" == "prod" ]] || return 0
+  [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|agent)$ ]] || return 0
+  if [[ "${DEPLOY_MODE}" == "docker" && "${SERVER}" =~ ^(all|agent)$ ]]; then
+    echo "[ctl] ERROR: production Docker Agent is disabled; use the local loopback Agent deployment" >&2
+    exit 1
+  fi
 
   local dev_auth="${AITEAM_AGENT_DEV_AUTH:-false}"
   local faux="${AITEAM_PI_FAKE:-false}"
@@ -160,16 +366,157 @@ validate_agent_production_env() {
   [[ "${dev_auth}" != "true" ]] || { echo "[ctl] ERROR: AITEAM_AGENT_DEV_AUTH=true is forbidden for --env prod" >&2; exit 1; }
   [[ "${faux}" != "true" ]] || { echo "[ctl] ERROR: AITEAM_PI_FAKE=true is forbidden for --env prod" >&2; exit 1; }
   [[ "${AITEAM_AGENT_SANDBOX_READY:-false}" == "true" ]] || { echo "[ctl] ERROR: AITEAM_AGENT_SANDBOX_READY=true is required for --env prod" >&2; exit 1; }
+  local agent_local_only="${AITEAM_AGENT_LOCAL_ONLY:-true}"
+  [[ "${agent_local_only}" == "true" ]] || { echo "[ctl] ERROR: AITEAM_AGENT_LOCAL_ONLY=true is required for --env prod" >&2; exit 1; }
+  local agent_host="${AGENT_HOST:-127.0.0.1}"
+  [[ "${agent_host}" =~ ^(127\.0\.0\.1|localhost|::1|\[::1\])$ ]] || { echo "[ctl] ERROR: production Agent host must be loopback" >&2; exit 1; }
 
   local manager_url="${AITEAM_MANAGER_URL:-${MANAGER_URL:-}}"
-  [[ "${manager_url}" =~ ^https?://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: AITEAM_MANAGER_URL (or MANAGER_URL) must be an absolute http(s) URL for --env prod" >&2; exit 1; }
   [[ -n "${AITEAM_AGENT_JWT_ISSUER:-}" && -n "${AITEAM_AGENT_JWT_AUDIENCE:-}" ]] || { echo "[ctl] ERROR: production Agent JWT issuer and audience are required" >&2; exit 1; }
+  if ! AITEAM_MANAGER_URL_CHECK="${manager_url}" AITEAM_AGENT_JWT_ISSUER_CHECK="${AITEAM_AGENT_JWT_ISSUER}" "${VENV_PYTHON}" - <<'PY'
+import os
+import sys
+from urllib.parse import urlsplit
+
+try:
+    manager_raw = os.environ["AITEAM_MANAGER_URL_CHECK"]
+    issuer_raw = os.environ["AITEAM_AGENT_JWT_ISSUER_CHECK"]
+    if manager_raw != issuer_raw:
+        raise ValueError
+    manager = urlsplit(manager_raw)
+    issuer = urlsplit(issuer_raw)
+    parsed = (manager, issuer)
+    if any(
+        part.scheme != "https"
+        or not part.hostname
+        or part.username
+        or part.password
+        or part.query
+        or part.fragment
+        for part in parsed
+    ):
+        raise ValueError
+    def canonical(part):
+        port = part.port
+        default_port = 443 if part.scheme == "https" else 80
+        host = part.hostname.lower()
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        normalized_port = "" if port in (None, default_port) else f":{port}"
+        return f"{part.scheme}://{host}{normalized_port}{part.path.rstrip('/')}"
+    if canonical(manager) != canonical(issuer):
+        raise ValueError
+except (KeyError, TypeError, ValueError):
+    sys.exit(1)
+PY
+  then
+    echo "[ctl] ERROR: production Agent Manager URL and JWT issuer must be identical HTTPS URLs (apart from a trailing slash)" >&2
+    exit 1
+  fi
+  if [[ -n "${AITEAM_AGENT_JWKS_PATH:-}" && -n "${AITEAM_AGENT_JWKS_JSON:-}" ]]; then
+    echo "[ctl] ERROR: production Agent JWT config must set exactly one of AITEAM_AGENT_JWKS_PATH or AITEAM_AGENT_JWKS_JSON" >&2
+    exit 1
+  fi
   if [[ -n "${AITEAM_AGENT_JWKS_PATH:-}" ]]; then
-    [[ -r "${AITEAM_AGENT_JWKS_PATH}" ]] || { echo "[ctl] ERROR: production Agent JWKS path is not readable" >&2; exit 1; }
+    if ! AITEAM_AGENT_JWKS_PATH_CHECK="${AITEAM_AGENT_JWKS_PATH}" "${VENV_PYTHON}" - <<'PY'
+import base64
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+try:
+    raw = Path(os.environ["AITEAM_AGENT_JWKS_PATH_CHECK"]).read_text(encoding="utf-8")
+    document = json.loads(raw)
+    if not isinstance(document, dict) or set(document) != {"keys"}:
+        raise ValueError
+    keys = document["keys"]
+    private = {"d", "p", "q", "dp", "dq", "qi", "oth"}
+    if not isinstance(keys, list) or not keys:
+        raise ValueError
+    seen_kids = set()
+    for key in keys:
+        if (
+            not isinstance(key, dict)
+            or not set(key).issubset({"kty", "alg", "kid", "n", "e", "use"})
+            or key.get("kty") != "RSA"
+            or key.get("alg") != "RS256"
+            or ("use" in key and key.get("use") != "sig")
+            or not isinstance(key.get("kid"), str)
+            or not key["kid"].strip()
+            or key["kid"] in seen_kids
+            or not isinstance(key.get("n"), str)
+            or not isinstance(key.get("e"), str)
+            or private.intersection(key)
+        ):
+            raise ValueError
+        seen_kids.add(key["kid"])
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", key["n"]) or not re.fullmatch(r"[A-Za-z0-9_-]+", key["e"]):
+            raise ValueError
+        try:
+            n = int.from_bytes(base64.urlsafe_b64decode(key["n"] + "=" * (-len(key["n"]) % 4)), "big")
+            e = int.from_bytes(base64.urlsafe_b64decode(key["e"] + "=" * (-len(key["e"]) % 4)), "big")
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError from exc
+        if n.bit_length() < 512 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
+            raise ValueError
+except (OSError, UnicodeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    sys.exit(1)
+PY
+    then
+      echo "[ctl] ERROR: production Agent JWKS file is invalid or contains private material" >&2
+      exit 1
+    fi
   elif [[ -n "${AITEAM_AGENT_JWKS_JSON:-}" ]]; then
-    python3 -c 'import json, os; value=json.loads(os.environ["AITEAM_AGENT_JWKS_JSON"]); assert isinstance(value.get("keys"), list) and value["keys"]' || {
-      echo "[ctl] ERROR: production AITEAM_AGENT_JWKS_JSON is invalid" >&2; exit 1;
-    }
+    if ! AITEAM_AGENT_JWKS_JSON_CHECK="${AITEAM_AGENT_JWKS_JSON}" "${VENV_PYTHON}" - <<'PY'
+import base64
+import json
+import os
+import re
+import sys
+
+try:
+    document = json.loads(os.environ["AITEAM_AGENT_JWKS_JSON_CHECK"])
+    if not isinstance(document, dict) or set(document) != {"keys"}:
+        raise ValueError
+    keys = document["keys"]
+    private = {"d", "p", "q", "dp", "dq", "qi", "oth"}
+    if not isinstance(keys, list) or not keys:
+        raise ValueError
+    seen_kids = set()
+    for key in keys:
+        if (
+            not isinstance(key, dict)
+            or not set(key).issubset({"kty", "alg", "kid", "n", "e", "use"})
+            or key.get("kty") != "RSA"
+            or key.get("alg") != "RS256"
+            or ("use" in key and key.get("use") != "sig")
+            or not isinstance(key.get("kid"), str)
+            or not key["kid"].strip()
+            or key["kid"] in seen_kids
+            or not isinstance(key.get("n"), str)
+            or not isinstance(key.get("e"), str)
+            or private.intersection(key)
+        ):
+            raise ValueError
+        seen_kids.add(key["kid"])
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", key["n"]) or not re.fullmatch(r"[A-Za-z0-9_-]+", key["e"]):
+            raise ValueError
+        try:
+            n = int.from_bytes(base64.urlsafe_b64decode(key["n"] + "=" * (-len(key["n"]) % 4)), "big")
+            e = int.from_bytes(base64.urlsafe_b64decode(key["e"] + "=" * (-len(key["e"]) % 4)), "big")
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError from exc
+        if n.bit_length() < 512 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
+            raise ValueError
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    sys.exit(1)
+PY
+    then
+      echo "[ctl] ERROR: production AITEAM_AGENT_JWKS_JSON is invalid or contains private material" >&2
+      exit 1
+    fi
   else
     echo "[ctl] ERROR: production Agent JWKS is required" >&2
     exit 1
@@ -178,43 +525,120 @@ validate_agent_production_env() {
 
 validate_lightrag_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|manager)$ ]] || return 0
-  # LightRAG may be disabled for deployments that do not install the optional
-  # component; when configured, its native UI must not run in guest mode.
-  [[ -n "${LIGHTRAG_URL:-}" ]] || return 0
-  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_WORKSPACE; do
-    [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production LightRAG service" >&2; exit 1; }
+  # Validate every supplied LightRAG component marker. An all-unset set is the
+  # explicit disabled mode; URL/key without a local image is remote legacy.
+  local configured=0
+  for name in LIGHTRAG_URL LIGHTRAG_API_KEY LIGHTRAG_INSTANCES LIGHTRAG_IMAGE LIGHTRAG_AUTH_ACCOUNTS LIGHTRAG_TOKEN_SECRET LIGHTRAG_JWT_ALGORITHM LIGHTRAG_BIND_HOST LIGHTRAG_PORT LIGHTRAG_PG_PORT LIGHTRAG_PG_IMAGE LIGHTRAG_EMBEDDING_DIM LIGHTRAG_DB_HOST LIGHTRAG_DB_PORT LIGHTRAG_DB_NAME LIGHTRAG_DB_USER LIGHTRAG_DB_PASSWORD LIGHTRAG_TIMEOUT_MS LIGHTRAG_PIPELINE_TIMEOUT_MS LIGHTRAG_POLL_INTERVAL_MS LIGHTRAG_QUERY_MODE; do
+    if [[ -n "${!name:-}" ]]; then configured=1; break; fi
   done
-  [[ ${#LIGHTRAG_TOKEN_SECRET} -ge 32 ]] || { echo "[ctl] ERROR: LIGHTRAG_TOKEN_SECRET must be at least 32 characters" >&2; exit 1; }
-  [[ "${LIGHTRAG_URL}" =~ ^https://[^[:space:]]+$ ]] || { echo "[ctl] ERROR: production LIGHTRAG_URL must use HTTPS" >&2; exit 1; }
+  (( configured )) || return 0
+  "${REPO_ROOT}/scripts/validate-lightrag-env.sh" --production >/dev/null || {
+    echo "[ctl] ERROR: invalid production LightRAG configuration" >&2
+    exit 1
+  }
 }
 
 validate_newapi_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|newapi|operation)$ ]] || return 0
   local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-}"
-  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
+  local newapi_bind_host="${NEWAPI_BIND_HOST:-127.0.0.1}"
+  if ! NEWAPI_BIND_HOST_CHECK="${newapi_bind_host}" "${VENV_PYTHON}" - <<'PY'
+import ipaddress
+import os
+
+value = os.environ["NEWAPI_BIND_HOST_CHECK"].strip()
+try:
+    if value != "localhost" and not ipaddress.ip_address(value.strip("[]")).is_loopback:
+        raise ValueError
+except ValueError:
+    raise SystemExit(1)
+PY
+  then
+    echo "[ctl] ERROR: production NEWAPI_BIND_HOST must be loopback" >&2
+    exit 1
+  fi
+  local operation_needs_relay=1
+  [[ "${SERVER}" == "newapi" ]] && operation_needs_relay=0
+
+  # Starting the standalone NewAPI container is the bootstrap first step: it
+  # needs only its own pinned image/database/Redis/session material. Operator
+  # access and public relay URL belong to the later operation/all launch.
+  for name in NEWAPI_IMAGE NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
     [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
   done
-  # The standalone NewAPI container does not need an Operator dashboard token
-  # to start. bootstrap-console-credentials.sh provisions the root account and
-  # token after this first start; operation/all still require both values.
-  if [[ "${SERVER}" != "newapi" ]]; then
-    for name in NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
+  if (( operation_needs_relay )); then
+    for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_ADMIN_TOKEN NEWAPI_ADMIN_USER_ID; do
       [[ -n "${!name:-}" ]] || { echo "[ctl] ERROR: ${name} is required for the production internal NewAPI relay" >&2; exit 1; }
     done
+    [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
   fi
-  [[ -n "${newapi_public_url}" ]] || { echo "[ctl] ERROR: NEWAPI_PUBLIC_BASE_URL is required for the production internal NewAPI relay" >&2; exit 1; }
   [[ "${NEWAPI_IMAGE}" =~ (:[[:alnum:]][[:alnum:]._-]*|@sha256:[a-f0-9]{64})$ && "${NEWAPI_IMAGE}" != *:latest ]] || {
     echo "[ctl] ERROR: NEWAPI_IMAGE must use a fixed version tag or sha256 digest" >&2; exit 1;
   }
-  for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET NEWAPI_ADMIN_TOKEN; do
+  for name in NEWAPI_DB_PASSWORD NEWAPI_REDIS_PASSWORD NEWAPI_SESSION_SECRET NEWAPI_CRYPTO_SECRET; do
     value="${!name}"
-    [[ ${#value} -ge 24 && "${value}" != *change-me* && "${value}" != newapi_dev && "${value}" != newapi_test ]] || {
+    [[ ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
       echo "[ctl] ERROR: ${name} must be a non-placeholder secret of at least 24 characters" >&2; exit 1;
     }
   done
-  [[ "${newapi_public_url}" =~ ^https://[^[:space:]]+/v1/?$ ]] || {
-    echo "[ctl] ERROR: production NEWAPI_PUBLIC_BASE_URL must resolve to an absolute HTTPS /v1 URL" >&2; exit 1;
-  }
+  if (( operation_needs_relay )); then
+    for name in OPERATION_PROVIDER_CREDENTIAL_KEY NEWAPI_ADMIN_TOKEN; do
+      value="${!name}"
+      [[ ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
+        echo "[ctl] ERROR: ${name} must be a non-placeholder secret of at least 24 characters" >&2; exit 1;
+      }
+    done
+    if ! NEWAPI_PUBLIC_URL_CHECK="${newapi_public_url}" "${VENV_PYTHON}" - <<'PY'
+from ipaddress import ip_address
+from urllib.parse import urlsplit
+import os
+import socket
+
+raw = os.environ["NEWAPI_PUBLIC_URL_CHECK"]
+try:
+    parsed = urlsplit(raw)
+    parsed.port
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or any(char.isspace() for char in raw)
+        or not parsed.path.rstrip("/").endswith("/v1")
+    ):
+        raise ValueError
+    host = host.rstrip(".").lower()
+    if "." not in host and ":" not in host:
+        raise ValueError
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or host.endswith(".localdomain") or host.endswith(".internal") or host.endswith(".intranet"):
+        raise ValueError
+    try:
+        address = ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_multicast):
+        raise ValueError
+    try:
+        resolved = {
+            ip_address(info[4][0])
+            for info in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            if info[4] and info[4][0]
+        }
+    except (OSError, ValueError):
+        raise ValueError
+    if not resolved or any(not item.is_global for item in resolved):
+        raise ValueError
+except (TypeError, ValueError):
+    raise SystemExit(1)
+PY
+    then
+      echo "[ctl] ERROR: production NEWAPI_PUBLIC_BASE_URL must be an absolute HTTPS /v1 URL without credentials/query or local destinations" >&2
+      exit 1
+    fi
+  fi
 }
 
 # 解析参数
@@ -294,7 +718,11 @@ resolve_compose_cmd() {
 # 统一的 compose 调用入口，替代硬编码的 docker-compose。
 dc() {
   resolve_compose_cmd
-  "${COMPOSE_CMD[@]}" "$@"
+  if [[ "${AITEAM_ENV:-}" == "production" && -f "${REPO_ROOT}/deploy/docker/docker-compose.maintenance.yml" ]]; then
+    "${COMPOSE_CMD[@]}" -f "${REPO_ROOT}/deploy/docker/docker-compose.yml" -f "${REPO_ROOT}/deploy/docker/docker-compose.maintenance.yml" "$@"
+  else
+    "${COMPOSE_CMD[@]}" -f "${REPO_ROOT}/deploy/docker/docker-compose.yml" "$@"
+  fi
 }
 
 # Docker Compose 操作
@@ -315,6 +743,13 @@ docker_compose_cmd() {
       elif [[ "${SERVER}" == "newapi" ]]; then
         dc --profile newapi up -d newapi
         echo "[ctl] Started newapi (docker)"
+      elif [[ "${SERVER}" == "agent" ]]; then
+        dc up -d agent
+        echo "[ctl] Started agent (docker)"
+      elif [[ "${SERVER}" == "operation" ]]; then
+        dc --profile newapi up -d newapi
+        dc up -d postgres operation
+        echo "[ctl] Started operation (docker)"
       else
         dc up -d postgres "${SERVER}"
         echo "[ctl] Started ${SERVER} (docker)"
@@ -351,6 +786,26 @@ docker_compose_cmd() {
       fi
       ;;
   esac
+}
+
+# Remove credential-like aliases from the sourced environment before launching
+# the local Agent. Explicit exceptions are the two Manager endpoint URLs the
+# Agent is allowed to use; the same case-insensitive policy is also enforced by
+# the packaged/runtime TypeScript launch guard.
+scrub_agent_environment() {
+  local name upper
+  while IFS= read -r name; do
+    upper="$(printf '%s' "${name}" | tr '[:lower:]' '[:upper:]')"
+    case "${upper}" in
+      AITEAM_MANAGER_URL|AITEAM_RAG_MCP_URL|AITEAM_AGENT_JWKS_PATH|AITEAM_CONFIG_FILE) continue ;;
+      AITEAM_CONSOLE_CREDENTIALS_FILE|MANAGER_CREDENTIAL_KEY|OPERATOR_URL|AITEAM_OPERATOR_URL|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_CLOUD_KEYFILE_JSON|AWS_SHARED_CREDENTIALS_FILE|AWS_PROFILE|AZURE_CONFIG_DIR|CLOUDSDK_CONFIG|BOTO_CONFIG|KUBECONFIG|DOCKER_AUTH_CONFIG|GIT_ASKPASS|SSH_AUTH_SOCK|NPM_CONFIG_USERCONFIG|DB_URL|ADMIN_DB_URL|DATABASE_URI|DATABASE_DSN|DATABASE_CONNECTION_STRING|TEST_DATABASE_URL|DSN|SQL_DSN|CONNECTION_STRING|DB_URI|DB_DSN|DB_CONNECTION_STRING|REDIS_URL|REDIS_URI|REDIS_DSN|REDIS_CONNECTION_STRING|MYSQL_URL|MYSQL_URI|MYSQL_DSN|MYSQL_CONNECTION_STRING|MONGO_URL|MONGO_URI|MONGO_DSN|MONGO_CONNECTION_STRING|POSTGRES_URL|POSTGRES_URI|POSTGRES_DSN|POSTGRES_CONNECTION_STRING|REDIS_CONN_STRING|PROVIDER_URL|PROVIDER_URI|PROVIDER_API_KEY|PROVIDER_TOKEN|PROVIDER_SECRET|NEWAPI_BASE_URL|NEWAPI_API_KEY|NEWAPI_TOKEN|OPERATION_URL|OPERATION_API_KEY|MANAGER_BASE_URL|MANAGER_API_KEY|MODEL_PRICING_URL|API_KEY|PASSWORD|PASSWD|DB_PASSWORD|DATABASE_PASSWORD|REDIS_PASSWORD|MYSQL_PASSWORD|MONGO_PASSWORD|NEWAPI_PASSWORD|SERVICE_PASSWORD|PROVIDER_PASSWORD|HINDSIGHT_PASSWORD|LIGHTRAG_PASSWORD|OAUTH_GOOGLE_CLIENT_SECRET|OAUTH_GITHUB_CLIENT_SECRET|LOGIN_AUDIT_PEPPER|SESSION_SECRET|CRYPTO_SECRET|APP_RW_PASSWORD|POSTGRES_PASSWORD|POSTGRES_SUPER_PASSWORD|SERVICE_TOKEN|SERVICE_SECRET|SERVICE_API_KEY|SERVICE_APIKEY|OPERATION_SYSTEM_USERNAME|OPERATION_SYSTEM_PASSWORD|OPERATION_SIGNING_PRIVATE_KEY|OPERATION_PROVIDER_CREDENTIAL_KEY|NEWAPI_ADMIN_USERNAME|NEWAPI_ADMIN_PASSWORD|NEWAPI_ADMIN_USER_ID|NEWAPI_ADMIN_TOKEN|NEWAPI_DB_PASSWORD|NEWAPI_REDIS_PASSWORD|NEWAPI_SESSION_SECRET|NEWAPI_CRYPTO_SECRET|LIGHTRAG_INSTANCES|LIGHTRAG_AUTH_ACCOUNTS|LIGHTRAG_TOKEN_SECRET|LIGHTRAG_API_KEY|LIGHTRAG_URL|LIGHTRAG_WORKSPACE|LIGHTRAG_DB_HOST|LIGHTRAG_DB_PORT|LIGHTRAG_DB_NAME|LIGHTRAG_DB_USER|LIGHTRAG_DB_PASSWORD|LIGHTRAG_DB_ADMIN_USER|LIGHTRAG_DB_ADMIN_PASSWORD|AITEAM_HINDSIGHT_URL|HINDSIGHT_URL|HINDSIGHT_BASE_URL|HINDSIGHT_FACADE_URL|HINDSIGHT_RECALL_PATH|HINDSIGHT_RETAIN_PATH|HINDSIGHT_DELETE_PATH|HINDSIGHT_UPDATE_PATH|HINDSIGHT_LIST_PATH|HINDSIGHT_STATS_PATH|HINDSIGHT_LEASE_TTL_SECONDS|HINDSIGHT_SERVICE_TOKEN|HINDSIGHT_API_TOKEN|HINDSIGHT_API_KEY|HINDSIGHT_API_KEY_REF|HINDSIGHT_CP_ACCESS_KEY|AUTH_ACCOUNTS|TOKEN_SECRET|AITEAM_SKILL_SIGNING_PRIVATE_KEY|AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY|AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY)
+        unset "${name}"
+        ;;
+      *_TOKEN|*_SECRET|*_SECRET_KEY|*_ENCRYPTION_KEY|*_MASTER_KEY|*_PASSWORD|*_PASSWD|*_PEPPER|*_API_KEY|*_APIKEY|*_PRIVATE_KEY|*_ACCESS_KEY|*_ACCESS_KEY_ID|*_SECRET_ACCESS_KEY|*_SESSION_TOKEN|*_CREDENTIAL|*_CREDENTIALS|*_CREDENTIAL_PATH|*_CREDENTIALS_FILE|*_CREDENTIAL_FILE|*_KEY_FILE|*_KEYFILE|*_KEY_PATH|*_PATH|*_URL|*_URI|*_DSN|*_CONNECTION_STRING)
+        unset "${name}"
+        ;;
+    esac
+  done < <(compgen -e)
 }
 
 # Local 模式 - PID 和日志文件路径
@@ -453,6 +908,14 @@ get_pid() {
   return 1
 }
 
+ensure_operation_database() {
+  local database="${OPERATION_DB_NAME:-oper}"
+  local username="${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}"
+  local password="${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+  [[ "${database}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --if-not-exists --username="$1" "$2"' sh "${username}" "${database}"
+}
+
 # 启动单个服务（local 模式）
 start_service_local() {
   local service="$1"
@@ -489,6 +952,7 @@ start_service_local() {
     postgres)
       # 检查容器是否已运行
       if docker ps --format '{{.Names}}' | grep -q "aiteam-pg"; then
+        ensure_operation_database || { echo "[ctl] Operation database bootstrap failed" >&2; return 1; }
         echo "[ctl] postgres is already running (docker)"
         return 0
       fi
@@ -498,63 +962,76 @@ start_service_local() {
       dc up -d postgres
       # 等待 postgres 就绪
       echo "[ctl] Waiting for postgres to be ready..."
+      local postgres_ready=0
       for i in {1..30}; do
-        if dc exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
+        if dc exec -T postgres pg_isready -U "${POSTGRES_SUPER_USER:-${POSTGRES_USER}}" -d "${MANAGER_DB_NAME:-${POSTGRES_DB}}" >/dev/null 2>&1; then
+          postgres_ready=1
           echo "[ctl] Postgres is ready"
           break
         fi
         sleep 1
       done
+      (( postgres_ready == 1 )) || { echo "[ctl] Postgres failed readiness" >&2; return 1; }
+      ensure_operation_database || { echo "[ctl] Operation database bootstrap failed" >&2; return 1; }
       ;;
     manager)
       echo "[ctl] Starting manager on port ${MANAGER_PORT}..."
-      nohup setsid env \
-        -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
-        -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
-        -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
-        APP_TIER=manager \
-        AITEAM_ENV="${AITEAM_ENV:-dev}" \
-        DB_URL="${DB_URL}" \
-        ADMIN_DB_URL="${ADMIN_DB_URL}" \
-        APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
-        MANAGER_CREDENTIAL_KEY="${MANAGER_CREDENTIAL_KEY:-}" \
-        HINDSIGHT_URL="${HINDSIGHT_URL:-}" \
-        HINDSIGHT_SERVICE_TOKEN="${HINDSIGHT_SERVICE_TOKEN:-}" \
-        HINDSIGHT_RECALL_PATH="${HINDSIGHT_RECALL_PATH:-}" \
-        HINDSIGHT_RETAIN_PATH="${HINDSIGHT_RETAIN_PATH:-}" \
-        HINDSIGHT_DELETE_PATH="${HINDSIGHT_DELETE_PATH:-}" \
-        HINDSIGHT_UPDATE_PATH="${HINDSIGHT_UPDATE_PATH:-}" \
-        HINDSIGHT_LIST_PATH="${HINDSIGHT_LIST_PATH:-}" \
-        HINDSIGHT_STATS_PATH="${HINDSIGHT_STATS_PATH:-}" \
-        LIGHTRAG_URL="${LIGHTRAG_URL:-}" \
-        LIGHTRAG_API_KEY="${LIGHTRAG_API_KEY:-}" \
-        LIGHTRAG_WORKSPACE="${LIGHTRAG_WORKSPACE:-}" \
-        LIGHTRAG_TIMEOUT_MS="${LIGHTRAG_TIMEOUT_MS:-5000}" \
-        LIGHTRAG_PIPELINE_TIMEOUT_MS="${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}" \
-        LIGHTRAG_POLL_INTERVAL_MS="${LIGHTRAG_POLL_INTERVAL_MS:-250}" \
-        LIGHTRAG_QUERY_MODE="${LIGHTRAG_QUERY_MODE:-naive}" \
-        SERVICE_TOKEN="${SERVICE_TOKEN}" \
-        SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}" \
-        AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}" \
-        AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY:-}" \
-        AITEAM_SKILL_SIGNING_CURRENT_KEY_ID="${AITEAM_SKILL_SIGNING_CURRENT_KEY_ID:-}" \
-        AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
-        AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev-current}" \
-        AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY:-}" \
-        AITEAM_SKILL_SIGNING_NEXT_KEY_ID="${AITEAM_SKILL_SIGNING_NEXT_KEY_ID:-}" \
-        AITEAM_SKILL_SIGNING_CURRENT_NOT_BEFORE="${AITEAM_SKILL_SIGNING_CURRENT_NOT_BEFORE:-}" \
-        AITEAM_SKILL_SIGNING_CURRENT_EXPIRES_AT="${AITEAM_SKILL_SIGNING_CURRENT_EXPIRES_AT:-}" \
-        AITEAM_SKILL_SIGNING_NEXT_NOT_BEFORE="${AITEAM_SKILL_SIGNING_NEXT_NOT_BEFORE:-}" \
-        AITEAM_SKILL_SIGNING_NEXT_EXPIRES_AT="${AITEAM_SKILL_SIGNING_NEXT_EXPIRES_AT:-}" \
-        AITEAM_SKILL_SIGNING_REVOKED_KEY_IDS="${AITEAM_SKILL_SIGNING_REVOKED_KEY_IDS:-}" \
-        AITEAM_SKILL_SIGNING_REVOKED_KEYS_JSON="${AITEAM_SKILL_SIGNING_REVOKED_KEYS_JSON:-}" \
-        AITEAM_MANAGER_DATA_ROOT="${AITEAM_MANAGER_DATA_ROOT:-${REPO_ROOT}/.data/manager}" \
-        OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}" \
-        LOG_LEVEL="${LOG_LEVEL}" \
-        EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=manager \
-          --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}" \
-        >> "${LOG_FILE}" 2>&1 &
+      # LIGHTRAG_INSTANCES is inherited from load_env; do not repeat pool JSON
+      # as an argv assignment because each entry contains an API key.
+      (
+        export APP_TIER=manager
+        export AITEAM_ENV="${AITEAM_ENV:-dev}"
+        export DB_URL="${DB_URL}"
+        export ADMIN_DB_URL="${ADMIN_DB_URL}"
+        export APP_RW_PASSWORD="${APP_RW_PASSWORD}"
+        export MANAGER_CREDENTIAL_KEY="${MANAGER_CREDENTIAL_KEY:-}"
+        export HINDSIGHT_URL="${HINDSIGHT_URL:-}"
+        export HINDSIGHT_SERVICE_TOKEN="${HINDSIGHT_SERVICE_TOKEN:-}"
+        export HINDSIGHT_RECALL_PATH="${HINDSIGHT_RECALL_PATH:-}"
+        export HINDSIGHT_RETAIN_PATH="${HINDSIGHT_RETAIN_PATH:-}"
+        export HINDSIGHT_DELETE_PATH="${HINDSIGHT_DELETE_PATH:-}"
+        export HINDSIGHT_UPDATE_PATH="${HINDSIGHT_UPDATE_PATH:-}"
+        export HINDSIGHT_LIST_PATH="${HINDSIGHT_LIST_PATH:-}"
+        export HINDSIGHT_STATS_PATH="${HINDSIGHT_STATS_PATH:-}"
+        export HINDSIGHT_FACADE_URL="${HINDSIGHT_FACADE_URL:-/api/manager/hindsight}"
+        export HINDSIGHT_LEASE_TTL_SECONDS="${HINDSIGHT_LEASE_TTL_SECONDS:-300}"
+        export LIGHTRAG_URL="${LIGHTRAG_URL:-}"
+        export LIGHTRAG_API_KEY="${LIGHTRAG_API_KEY:-}"
+        export LIGHTRAG_INSTANCES="${LIGHTRAG_INSTANCES:-}"
+        export LIGHTRAG_TIMEOUT_MS="${LIGHTRAG_TIMEOUT_MS:-5000}"
+        export LIGHTRAG_PIPELINE_TIMEOUT_MS="${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}"
+        export LIGHTRAG_POLL_INTERVAL_MS="${LIGHTRAG_POLL_INTERVAL_MS:-250}"
+        export LIGHTRAG_QUERY_MODE="${LIGHTRAG_QUERY_MODE:-naive}"
+        export SERVICE_TOKEN="${SERVICE_TOKEN}"
+        export SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}"
+        export AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}"
+        export AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY:-}"
+        export AITEAM_SKILL_SIGNING_CURRENT_KEY_ID="${AITEAM_SKILL_SIGNING_CURRENT_KEY_ID:-}"
+        export AITEAM_SKILL_SIGNING_PUBLIC_KEY=""
+        export AITEAM_SKILL_SIGNING_KEY_ID="${AITEAM_SKILL_SIGNING_KEY_ID:-skills-dev-current}"
+        export AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY:-}"
+        export AITEAM_SKILL_SIGNING_NEXT_KEY_ID="${AITEAM_SKILL_SIGNING_NEXT_KEY_ID:-}"
+        export AITEAM_SKILL_SIGNING_CURRENT_NOT_BEFORE="${AITEAM_SKILL_SIGNING_CURRENT_NOT_BEFORE:-}"
+        export AITEAM_SKILL_SIGNING_CURRENT_EXPIRES_AT="${AITEAM_SKILL_SIGNING_CURRENT_EXPIRES_AT:-}"
+        export AITEAM_SKILL_SIGNING_NEXT_NOT_BEFORE="${AITEAM_SKILL_SIGNING_NEXT_NOT_BEFORE:-}"
+        export AITEAM_SKILL_SIGNING_NEXT_EXPIRES_AT="${AITEAM_SKILL_SIGNING_NEXT_EXPIRES_AT:-}"
+        export AITEAM_SKILL_SIGNING_REVOKED_KEY_IDS="${AITEAM_SKILL_SIGNING_REVOKED_KEY_IDS:-}"
+        export AITEAM_SKILL_SIGNING_REVOKED_KEYS_JSON="${AITEAM_SKILL_SIGNING_REVOKED_KEYS_JSON:-}"
+        export AITEAM_MANAGER_DATA_ROOT="${AITEAM_MANAGER_DATA_ROOT:-${REPO_ROOT}/.data/manager}"
+        export OPERATOR_URL="${OPERATOR_URL:-http://${OPERATOR_HOST:-127.0.0.1}:${OPERATION_PORT}}"
+        export LOG_LEVEL="${LOG_LEVEL}"
+        export EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}"
+        exec nohup setsid env \
+          -u AITEAM_CONSOLE_CREDENTIALS_FILE \
+          -u OPERATION_DB_URL -u OPERATION_ADMIN_DB_URL -u OPERATION_DB_NAME -u DATABASE_URL -u DATABASE_URI -u DATABASE_DSN -u DATABASE_CONNECTION_STRING -u TEST_DATABASE_URL -u DB_URI -u DB_DSN -u DB_CONNECTION_STRING -u DSN -u SQL_DSN -u CONNECTION_STRING -u REDIS_URL -u REDIS_URI -u REDIS_DSN -u REDIS_CONNECTION_STRING -u REDIS_CONN_STRING -u MYSQL_URL -u MYSQL_URI -u MYSQL_DSN -u MYSQL_CONNECTION_STRING -u MONGO_URL -u MONGO_URI -u MONGO_DSN -u MONGO_CONNECTION_STRING -u POSTGRES_URL -u POSTGRES_URI -u POSTGRES_DSN -u POSTGRES_CONNECTION_STRING -u POSTGRES_USER -u POSTGRES_PASSWORD -u POSTGRES_HOST -u POSTGRES_PORT -u POSTGRES_DB -u POSTGRES_SUPER_USER -u POSTGRES_SUPER_PASSWORD -u API_KEY -u PASSWORD -u PASSWD -u DB_PASSWORD -u DATABASE_PASSWORD -u REDIS_PASSWORD -u MYSQL_PASSWORD -u MONGO_PASSWORD -u NEWAPI_PASSWORD -u SERVICE_PASSWORD -u PROVIDER_PASSWORD -u HINDSIGHT_PASSWORD -u LIGHTRAG_PASSWORD \
+          -u SERVICE_SECRET -u SERVICE_API_KEY -u SERVICE_APIKEY -u PROVIDER_URL -u PROVIDER_URI -u PROVIDER_API_KEY -u PROVIDER_TOKEN -u PROVIDER_SECRET -u MANAGER_BASE_URL -u MANAGER_API_KEY -u OPERATION_URL -u OPERATION_API_KEY \
+          -u NEWAPI_URL -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u AZURE_OPENAI_API_KEY -u GOOGLE_API_KEY -u GEMINI_API_KEY -u GROQ_API_KEY -u MISTRAL_API_KEY -u COHERE_API_KEY -u DEEPSEEK_API_KEY -u XAI_API_KEY -u PERPLEXITY_API_KEY -u TOGETHER_API_KEY -u OPENROUTER_API_KEY -u FIREWORKS_API_KEY -u HF_TOKEN -u GITHUB_TOKEN -u GH_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
+          -u HINDSIGHT_CP_ACCESS_KEY -u HINDSIGHT_BASE_URL -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF -u AITEAM_HINDSIGHT_URL \
+          -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u LIGHTRAG_WORKSPACE -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE -u AUTH_ACCOUNTS -u TOKEN_SECRET \
+          -u OPERATION_SYSTEM_USERNAME -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
+          "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=manager \
+            --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}"
+      ) >> "${LOG_FILE}" 2>&1 &
       disown
       echo $! > "${PID_FILE}"
       sleep 1
@@ -570,33 +1047,47 @@ start_service_local() {
       local newapi_url="${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}"
       local newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${newapi_url}}"
       local newapi_public_url="${NEWAPI_PUBLIC_BASE_URL:-}"
-      nohup setsid env \
-        -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
-        -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
-        APP_TIER=operation \
-        AITEAM_ENV="${AITEAM_ENV:-dev}" \
-        ADMIN_DB_URL="${ADMIN_DB_URL}" \
-        APP_RW_PASSWORD="${APP_RW_PASSWORD}" \
-        MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}" \
-        NEWAPI_URL="${newapi_url}" \
-        NEWAPI_ADMIN_BASE_URL="${newapi_admin_url}" \
-        NEWAPI_PUBLIC_BASE_URL="${newapi_public_url}" \
-        MODEL_PRICING_URL="${MODEL_PRICING_URL:-https://models.dev/api.json}" \
-        NEWAPI_ADMIN_USER_ID="${NEWAPI_ADMIN_USER_ID:-}" \
-        NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}" \
-        OPERATION_PROVIDER_CREDENTIAL_KEY="${OPERATION_PROVIDER_CREDENTIAL_KEY:-}" \
-        SERVICE_TOKEN="${SERVICE_TOKEN}" \
-        SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}" \
-        AITEAM_SKILL_SIGNING_PRIVATE_KEY="" \
-        AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="" \
-        AITEAM_SKILL_SIGNING_PUBLIC_KEY="" \
-        AITEAM_SKILL_SIGNING_PUBLIC_KEYS="" \
-        AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY="" \
-        LOG_LEVEL="${LOG_LEVEL}" \
-        EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}" \
-        "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
-          --host="${OPERATION_HOST:-127.0.0.1}" --port="${OPERATION_PORT}" \
-        >> "${LOG_FILE}" 2>&1 &
+      (
+        export APP_TIER=operation
+        export AITEAM_ENV="${AITEAM_ENV:-dev}"
+        export OPERATION_DB_URL="${OPERATION_DB_URL}"
+        export OPERATION_ADMIN_DB_URL="${OPERATION_ADMIN_DB_URL}"
+        export APP_RW_PASSWORD="${APP_RW_PASSWORD}"
+        export MANAGER_URL="${MANAGER_URL:-http://${MANAGER_HOST:-127.0.0.1}:${MANAGER_PORT}}"
+        export NEWAPI_URL="${newapi_url}"
+        export NEWAPI_ADMIN_BASE_URL="${newapi_admin_url}"
+        export NEWAPI_PUBLIC_BASE_URL="${newapi_public_url}"
+        export MODEL_PRICING_URL="${MODEL_PRICING_URL:-https://models.dev/api.json}"
+        export NEWAPI_ADMIN_USER_ID="${NEWAPI_ADMIN_USER_ID:-}"
+        export NEWAPI_ADMIN_TOKEN="${NEWAPI_ADMIN_TOKEN:-}"
+        export OPERATION_PROVIDER_CREDENTIAL_KEY="${OPERATION_PROVIDER_CREDENTIAL_KEY:-}"
+        export OPERATION_SYSTEM_USERNAME="${OPERATION_SYSTEM_USERNAME:-}"
+        export OPERATION_SYSTEM_PASSWORD="${OPERATION_SYSTEM_PASSWORD:-}"
+        export OPERATION_SIGNING_PRIVATE_KEY="${OPERATION_SIGNING_PRIVATE_KEY:-}"
+        export OPERATION_SIGNING_KEY_ID="${OPERATION_SIGNING_KEY_ID:-}"
+        export SERVICE_TOKEN="${SERVICE_TOKEN}"
+        export SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}"
+        export AITEAM_SKILL_SIGNING_PRIVATE_KEY=""
+        export AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY=""
+        export AITEAM_SKILL_SIGNING_PUBLIC_KEY=""
+        export AITEAM_SKILL_SIGNING_PUBLIC_KEYS=""
+        export AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY=""
+        export LOG_LEVEL="${LOG_LEVEL}"
+        export EXPOSE_PUBLIC_DOCS="${EXPOSE_PUBLIC_DOCS}"
+        exec nohup setsid env \
+          -u AITEAM_CONSOLE_CREDENTIALS_FILE \
+          -u DB_URL -u ADMIN_DB_URL -u DATABASE_URL -u DATABASE_URI -u DATABASE_DSN -u DATABASE_CONNECTION_STRING -u TEST_DATABASE_URL -u DB_URI -u DB_DSN -u DB_CONNECTION_STRING -u DSN -u SQL_DSN -u CONNECTION_STRING -u REDIS_URL -u REDIS_URI -u REDIS_DSN -u REDIS_CONNECTION_STRING -u REDIS_CONN_STRING -u MYSQL_URL -u MYSQL_URI -u MYSQL_DSN -u MYSQL_CONNECTION_STRING -u MONGO_URL -u MONGO_URI -u MONGO_DSN -u MONGO_CONNECTION_STRING -u POSTGRES_URL -u POSTGRES_URI -u POSTGRES_DSN -u POSTGRES_CONNECTION_STRING -u POSTGRES_USER -u POSTGRES_PASSWORD -u POSTGRES_HOST -u POSTGRES_PORT -u POSTGRES_DB -u POSTGRES_SUPER_USER -u POSTGRES_SUPER_PASSWORD -u API_KEY -u PASSWORD -u PASSWD -u DB_PASSWORD -u DATABASE_PASSWORD -u REDIS_PASSWORD -u MYSQL_PASSWORD -u MONGO_PASSWORD -u NEWAPI_PASSWORD -u SERVICE_PASSWORD -u PROVIDER_PASSWORD -u HINDSIGHT_PASSWORD -u LIGHTRAG_PASSWORD \
+          -u SERVICE_SECRET -u SERVICE_API_KEY -u SERVICE_APIKEY -u PROVIDER_URL -u PROVIDER_URI -u PROVIDER_API_KEY -u PROVIDER_TOKEN -u PROVIDER_SECRET -u MANAGER_BASE_URL -u MANAGER_API_KEY -u OPERATION_URL -u OPERATION_API_KEY -u OAUTH_GOOGLE_CLIENT_SECRET -u OAUTH_GITHUB_CLIENT_SECRET -u LOGIN_AUDIT_PEPPER \
+          -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN \
+          -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u AZURE_OPENAI_API_KEY -u GOOGLE_API_KEY -u GEMINI_API_KEY -u GROQ_API_KEY -u MISTRAL_API_KEY -u COHERE_API_KEY -u DEEPSEEK_API_KEY -u XAI_API_KEY -u PERPLEXITY_API_KEY -u TOGETHER_API_KEY -u OPENROUTER_API_KEY -u FIREWORKS_API_KEY -u HF_TOKEN -u GITHUB_TOKEN -u GH_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
+          -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
+          -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD \
+          -u MANAGER_CREDENTIAL_KEY \
+          -u HINDSIGHT_URL -u HINDSIGHT_BASE_URL -u HINDSIGHT_FACADE_URL -u HINDSIGHT_LEASE_TTL_SECONDS -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_UPDATE_PATH -u HINDSIGHT_LIST_PATH -u HINDSIGHT_STATS_PATH -u HINDSIGHT_CP_ACCESS_KEY -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF -u AITEAM_HINDSIGHT_URL \
+          -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_INSTANCES -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE -u LIGHTRAG_WORKSPACE -u AUTH_ACCOUNTS -u TOKEN_SECRET \
+          "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
+            --host="${OPERATION_HOST:-127.0.0.1}" --port="${OPERATION_PORT}"
+      ) >> "${LOG_FILE}" 2>&1 &
       disown
       echo $! > "${PID_FILE}"
       sleep 1
@@ -614,6 +1105,7 @@ start_service_local() {
       # Test and production must exercise the configured Manager model. Keep
       # faux as the development-only default when the env file omits the flag.
       local agent_fake="${AITEAM_PI_FAKE:-}"
+      local agent_local_only="${AITEAM_AGENT_LOCAL_ONLY:-true}"
       if [[ -z "${agent_fake}" ]]; then
         [[ "${agent_env}" == "dev" || "${agent_env}" == "development" ]] && agent_fake=true || agent_fake=false
       fi
@@ -622,22 +1114,25 @@ start_service_local() {
         [[ -n "${AITEAM_AGENT_DEV_AUTH:-}" ]] || agent_dev_auth=false
         [[ -n "${AITEAM_PI_FAKE:-}" ]] || agent_fake=false
       fi
-      # ctl sources the whole .env.* file; explicitly remove Manager-only
-      # credentials before starting Agent so they cannot leak through inheritance.
+      # ctl sources the whole .env.* file; apply the shared case-insensitive
+      # policy before the explicit env -u defense-in-depth list.
+      scrub_agent_environment
       nohup setsid env \
-        -u DB_URL -u ADMIN_DB_URL -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u SERVICE_TOKEN -u MANAGER_CREDENTIAL_KEY \
-        -u NEWAPI_URL -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
+        -u AITEAM_CONSOLE_CREDENTIALS_FILE \
+        -u DB_URL -u ADMIN_DB_URL -u DATABASE_URL -u DATABASE_URI -u DATABASE_DSN -u DATABASE_CONNECTION_STRING -u TEST_DATABASE_URL -u DSN -u SQL_DSN -u CONNECTION_STRING -u DB_URI -u DB_DSN -u DB_CONNECTION_STRING -u REDIS_URL -u REDIS_URI -u REDIS_DSN -u REDIS_CONNECTION_STRING -u MYSQL_URL -u MYSQL_URI -u MYSQL_DSN -u MYSQL_CONNECTION_STRING -u MONGO_URL -u MONGO_URI -u MONGO_DSN -u MONGO_CONNECTION_STRING -u POSTGRES_URL -u POSTGRES_URI -u POSTGRES_DSN -u POSTGRES_CONNECTION_STRING -u REDIS_CONN_STRING -u PROVIDER_URL -u PROVIDER_URI -u PROVIDER_API_KEY -u PROVIDER_TOKEN -u PROVIDER_SECRET -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u OPERATION_URL -u OPERATION_API_KEY -u MANAGER_BASE_URL -u MANAGER_API_KEY -u OAUTH_GOOGLE_CLIENT_SECRET -u OAUTH_GITHUB_CLIENT_SECRET -u LOGIN_AUDIT_PEPPER -u API_KEY -u PASSWORD -u PASSWD -u DB_PASSWORD -u DATABASE_PASSWORD -u REDIS_PASSWORD -u MYSQL_PASSWORD -u MONGO_PASSWORD -u NEWAPI_PASSWORD -u SERVICE_PASSWORD -u PROVIDER_PASSWORD -u HINDSIGHT_PASSWORD -u LIGHTRAG_PASSWORD -u SESSION_SECRET -u CRYPTO_SECRET -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u POSTGRES_SUPER_PASSWORD -u SERVICE_TOKEN -u SERVICE_SECRET -u SERVICE_API_KEY -u SERVICE_APIKEY -u MANAGER_CREDENTIAL_KEY \
+        -u NEWAPI_URL -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u AZURE_OPENAI_API_KEY -u GOOGLE_API_KEY -u GEMINI_API_KEY -u GROQ_API_KEY -u MISTRAL_API_KEY -u COHERE_API_KEY -u DEEPSEEK_API_KEY -u XAI_API_KEY -u PERPLEXITY_API_KEY -u TOGETHER_API_KEY -u OPENROUTER_API_KEY -u FIREWORKS_API_KEY -u HF_TOKEN -u GITHUB_TOKEN -u GH_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
-        -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
-        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
+        -u OPERATION_SYSTEM_USERNAME -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
+        -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_INSTANCES -u LIGHTRAG_WORKSPACE -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE \
         -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE \
-        -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_URL -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_UPDATE_PATH -u HINDSIGHT_LIST_PATH -u HINDSIGHT_STATS_PATH -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
+        -u AITEAM_HINDSIGHT_URL -u HINDSIGHT_URL -u HINDSIGHT_BASE_URL -u HINDSIGHT_FACADE_URL -u HINDSIGHT_LEASE_TTL_SECONDS -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_UPDATE_PATH -u HINDSIGHT_LIST_PATH -u HINDSIGHT_STATS_PATH -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF \
         -u AITEAM_SKILL_SIGNING_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY -u AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY \
         PORT="${AGENT_PORT}" \
         HOST="${AGENT_HOST:-127.0.0.1}" \
         AITEAM_AGENT_DATA_DIR="${AGENT_DATA_DIR:-${REPO_ROOT}/.state/agent}" \
         AITEAM_ENV="${agent_env}" \
         AITEAM_AGENT_DEV_AUTH="${agent_dev_auth}" \
+        AITEAM_AGENT_LOCAL_ONLY="${agent_local_only}" \
         AITEAM_PI_FAKE="${agent_fake}" \
         AITEAM_MANAGER_URL="${agent_manager_url}" \
         AITEAM_RAG_MCP_URL="${AITEAM_RAG_MCP_URL:-${agent_manager_url%/}/api/manager/rag/mcp}" \
@@ -723,8 +1218,9 @@ start_local() {
     sleep 1
     start_service_local agent
   else
-    if [[ "${SERVER}" =~ ^(manager|operation|agent)$ ]]; then
-      # 控制面/Agent 服务确保主 PostgreSQL 已运行；NewAPI 使用自己的数据库。
+    if [[ "${SERVER}" =~ ^(manager|operation)$ ]]; then
+      # Control-plane services need the main PostgreSQL; Agent uses its local
+      # SQLite store and Manager HTTP API, so it must not start PostgreSQL.
       if ! get_pid postgres >/dev/null 2>&1; then
         echo "[ctl] Starting postgres first..."
         start_service_local postgres
@@ -777,7 +1273,7 @@ status_local() {
       # 检查 docker postgres
       if docker ps --format '{{.Names}}' | grep -q "aiteam-pg"; then
         echo "● ${service} — running (docker)"
-        echo "  Port:    ${POSTGRES_PORT}"
+        echo "  Port:    ${POSTGRES_PORT:-5433}"
       else
         echo "● ${service} — stopped"
       fi
@@ -787,9 +1283,9 @@ status_local() {
         local uptime port
         uptime="$(ps -p "${pid}" -o etime= 2>/dev/null | sed 's/^ *//' || echo 'unknown')"
         case "${service}" in
-          manager) port="${MANAGER_PORT}" ;;
-          operation) port="${OPERATION_PORT}" ;;
-          agent) port="${AGENT_PORT}" ;;
+          manager) port="${MANAGER_PORT:-8782}" ;;
+          operation) port="${OPERATION_PORT:-8781}" ;;
+          agent) port="${AGENT_PORT:-8783}" ;;
         esac
         echo "● ${service} — running"
         echo "  PID:     ${pid}"
@@ -865,7 +1361,7 @@ main() {
   esac
 
   parse_args "$@"
-  load_env
+  load_env "${cmd}"
 
   case "${cmd}" in
     start)

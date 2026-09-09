@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # v1 部署编排脚本，在 self-hosted runner 的 ta iy 机器上运行。
 #
-# 假定调用时已在持久化部署根（DEPLOY_ROOT，默认 /root/app/aiteam）执行。
+# 默认在当前持久化部署根执行；DEPLOY_ROOT 可由 CI/运维显式指定。
 # 该目录应已是一个 git 仓库（origin = git@github.com:...）并具备可用的 .venv。
 #
 # 与此前"条件性 build / fallback 到默认分支"的行为不同，本脚本
@@ -22,11 +22,14 @@ set -euo pipefail
 # Git refuses a persistent checkout with a different owner unless it is marked
 # safe. Self-hosted runner services may also omit HOME entirely.
 export HOME="${HOME:-/root}"
+umask 077
 
 BRANCH="${DEPLOY_BRANCH:-}"
 ENV_TARGET="${DEPLOY_ENV:-test}"
 UNIT_NAME="${UNIT_NAME:-aiteam-v1}"
-DEPLOY_ROOT="$(pwd)"
+DEPLOY_ROOT="${DEPLOY_ROOT:-$(pwd)}"
+[[ -d "${DEPLOY_ROOT}" ]] || { echo "[deploy-run][ERR] DEPLOY_ROOT does not exist: ${DEPLOY_ROOT}" >&2; exit 2; }
+DEPLOY_ROOT="$(cd "${DEPLOY_ROOT}" && pwd -P)"
 
 while (( $# > 0 )); do
   case "$1" in
@@ -62,6 +65,11 @@ fi
 
 log()  { printf '[deploy-run][%s][%s] %s\n' "$ENV_TARGET" "$BRANCH" "$*"; }
 fail() { printf '[deploy-run][%s][%s][ERR] %s\n' "$ENV_TARGET" "$BRANCH" "$*" >&2; exit 1; }
+is_placeholder_secret() {
+  local value="${1:-}" lower
+  lower="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${lower}" == *change-me* || "${lower}" == *change_me* || "${lower}" == *change\ me* || "${lower}" == *changeme* || "${lower}" == *app_rw_dev* || "${lower}" == *aiteam_dev* || "${lower}" == *newapi_dev* || "${lower}" == *newapi_test* || "${lower}" == *dev-service-token-placeholder* || "${lower}" == *dev-service-token-changeme* ]]
+}
 
 # --- persistent venv requirements sync ---
 sync_persistent_venv_requirements() {
@@ -112,11 +120,15 @@ redact_dependency_start_output() {
     -e 's#postgresql://[^[:space:]]+#postgresql://<redacted>#g' \
     -e 's#redis://:[^@[:space:]]+@#redis://:<redacted>@#g' \
     -e 's#(--requirepass[[:space:]]+)[^[:space:]]+#\1<redacted>#g' \
-    -e 's/(^|[[:space:]])((ADMIN_)?DB_URL|(POSTGRES|NEWAPI_DB|NEWAPI_REDIS|APP_RW)_PASSWORD|NEWAPI_(SESSION|CRYPTO)_SECRET|NEWAPI_ADMIN_TOKEN|SERVICE_TOKEN)=[^[:space:]]+/\1\2=<redacted>/g'
+    -e 's/(^|[[:space:]])([A-Za-z_][A-Za-z0-9_]*(PASSWORD|TOKEN|SECRET|API_KEY|DB_URL|DSN|URI))=[^[:space:]]+/\1\2=<redacted>/g'
 }
 
 dump_dependency_compose_ps() {
   local compose_dir="${DEPLOY_ROOT}/deploy/docker"
+  local compose_files=(-f "${compose_dir}/docker-compose.yml")
+  if [[ "${AITEAM_ENV:-}" == "production" && -f "${compose_dir}/docker-compose.maintenance.yml" ]]; then
+    compose_files+=(-f "${compose_dir}/docker-compose.maintenance.yml")
+  fi
   if [[ ! -f "${compose_dir}/docker-compose.yml" ]]; then
     log "dependency compose file missing; skipping docker compose ps"
     return 0
@@ -124,7 +136,7 @@ dump_dependency_compose_ps() {
   log "dependency compose ps --all (names/status only)"
   (
     cd "${compose_dir}"
-    docker compose --profile newapi ps --all --format '{{.Name}} {{.Service}} {{.Status}}'
+    docker compose "${compose_files[@]}" --profile newapi ps --all --format '{{.Name}} {{.Service}} {{.Status}}'
   ) 2>&1 | redact_dependency_start_output | head -n 50 || true
 }
 
@@ -133,14 +145,16 @@ postgres_container_name_conflict() {
 }
 
 recover_existing_postgres_container() {
-  local inspect_meta inspect_env line
+  local inspect_meta inspect_env port_bindings network_mode line
   local name="" image="" status="" volume_name=""
   local pg_user="" pg_db=""
-  local expected_image expected_volume
+  local expected_image expected_volume expected_pg_user expected_pg_db
   local start_output="" start_rc=0
 
   expected_image="${POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
   expected_volume="${POSTGRES_VOLUME:-aiteam_pg_data_${ENV_TARGET}}"
+  expected_pg_user="${POSTGRES_SUPER_USER:-aiteam}"
+  expected_pg_db="${MANAGER_DB_NAME:-${POSTGRES_DB:-manager_control_db}}"
 
   if ! inspect_meta="$(docker inspect --format '{{.Name}}|{{.Config.Image}}|{{.State.Status}}|{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' aiteam-pg 2>/dev/null)"; then
     log "cannot inspect existing PostgreSQL container aiteam-pg; leaving it untouched"
@@ -161,6 +175,45 @@ recover_existing_postgres_container() {
     return 1
   fi
 
+  if ! network_mode="$(docker inspect --format '{{.HostConfig.NetworkMode}}' aiteam-pg 2>/dev/null)"; then
+    log "cannot inspect existing PostgreSQL network mode; leaving it untouched"
+    return 1
+  fi
+  case "${network_mode}" in
+    host|container:*)
+      log "existing PostgreSQL network mode is not isolated (${network_mode}); leaving it untouched"
+      return 1
+      ;;
+  esac
+  if ! port_bindings="$(docker inspect --format '{{json .HostConfig.PortBindings}}' aiteam-pg 2>/dev/null)"; then
+    log "cannot inspect existing PostgreSQL host bindings; leaving it untouched"
+    return 1
+  fi
+  if ! PORT_BINDINGS_CHECK="${port_bindings}" python3 - <<'PY'
+import json
+import os
+
+try:
+    bindings = json.loads(os.environ["PORT_BINDINGS_CHECK"] or "{}")
+    if bindings is None:
+        bindings = {}
+    if not isinstance(bindings, dict):
+        raise ValueError
+    for entries in bindings.values():
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            raise ValueError
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("HostIp") not in {"127.0.0.1", "::1", "localhost"}:
+                raise ValueError
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+  then
+    log "existing PostgreSQL host binding is not loopback-only; leaving it untouched"
+    return 1
+  fi
   if ! inspect_env="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' aiteam-pg 2>/dev/null)"; then
     log "cannot inspect existing PostgreSQL container environment; leaving it untouched"
     return 1
@@ -174,7 +227,7 @@ recover_existing_postgres_container() {
   inspect_env=""
   unset inspect_env
 
-  if [[ "${pg_user}" != "aiteam" || "${pg_db}" != "aiteam_v1" ]]; then
+  if [[ "${pg_user}" != "${expected_pg_user}" || "${pg_db}" != "${expected_pg_db}" || "${expected_pg_user}" == "app_rw" ]]; then
     log "existing PostgreSQL POSTGRES_USER/POSTGRES_DB mismatch; leaving it untouched"
     return 1
   fi
@@ -303,12 +356,48 @@ set -a
 # shellcheck source=/dev/null
 source "${ENV_FILE}"
 set +a
+# The deployment target is the authoritative Compose environment marker when
+# the persisted env file predates this requirement; normalize ctl's prod/dev
+# aliases to the values accepted by Settings and Compose.
+case "${ENV_TARGET}" in
+  prod) _default_aiteam_env=production ;;
+  dev) _default_aiteam_env=development ;;
+  test) _default_aiteam_env=test ;;
+  *) _default_aiteam_env="" ;;
+esac
+if [[ -n "${AITEAM_ENV:-}" && "${AITEAM_ENV}" != "${_default_aiteam_env}" ]]; then
+  fail "${ENV_FILE} AITEAM_ENV=${AITEAM_ENV} does not match selected deployment environment ${ENV_TARGET}"
+fi
+export AITEAM_ENV="${_default_aiteam_env}"
+MANAGER_DB_NAME="${MANAGER_DB_NAME:-${POSTGRES_DB:-manager_control_db}}"
+OPERATION_DB_NAME="${OPERATION_DB_NAME:-oper}"
+export MANAGER_DB_NAME OPERATION_DB_NAME
+for database_name in "${MANAGER_DB_NAME}" "${OPERATION_DB_NAME}"; do
+  [[ "${database_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "invalid control-plane database name: ${database_name}"
+done
+[[ "${MANAGER_DB_NAME}" != "${OPERATION_DB_NAME}" ]] || fail "Manager and Operation database names must be distinct"
+
+ensure_operation_database() {
+  local password="${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+  local username="${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}"
+  local ready=0
+  for _ in {1..60}; do
+    if docker exec aiteam-pg pg_isready -U "${username}" -d "${MANAGER_DB_NAME}" >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  (( ready == 1 )) || return 1
+  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --if-not-exists --username="$1" "$2"' sh "${username}" "${OPERATION_DB_NAME}"
+}
 
 # systemd's simple stop also stops the local dependency containers.  Bring the
 # migration/backup dependencies back while application writers remain stopped;
 # never run backup or DDL against a stopped/unknown database.
 log "starting PostgreSQL/NewAPI dependencies while applications remain stopped"
 start_release_dependency postgres PostgreSQL
+ensure_operation_database || fail "Operation database bootstrap failed"
 start_release_dependency newapi NewAPI
 
 persist_env_value() {
@@ -368,20 +457,50 @@ fi
 
 # 4) 应用迁移/DDL。此时应用 writers 仍停止、PostgreSQL 已由上面显式启动；
 #    只用管理 DSN 执行 Manager/Operation migration，绝不让 app_rw 承担 DDL。
-DB_URL_FOR_MIGRATION="${DB_URL:-postgresql://${POSTGRES_USER:-app_rw}:${POSTGRES_PASSWORD:-}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-aiteam_v1}}"
-ADMIN_DB_URL_FOR_MIGRATION="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-app_rw}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-aiteam_v1}}"
+if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
+  [[ "${POSTGRES_USER:-}" == "app_rw" ]] || fail "POSTGRES_USER must be app_rw for production control-plane business access"
+  [[ -n "${POSTGRES_SUPER_USER:-}" && "${POSTGRES_SUPER_USER}" != "app_rw" ]] && ! is_placeholder_secret "${POSTGRES_SUPER_USER}" || fail "POSTGRES_SUPER_USER must be a distinct production migration role"
+fi
 APP_RW_PASSWORD_FOR_MIGRATION="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD:-}}"
-if ! DB_URL="${DB_URL_FOR_MIGRATION}" ADMIN_DB_URL="${ADMIN_DB_URL_FOR_MIGRATION}" APP_RW_PASSWORD="${APP_RW_PASSWORD_FOR_MIGRATION}" \
-  PYTHONPATH="${DEPLOY_ROOT}/server" "${VENV_PYTHON}" - <<'PY'
+if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
+  [[ ${#APP_RW_PASSWORD_FOR_MIGRATION} -ge 24 ]] && ! is_placeholder_secret "${APP_RW_PASSWORD_FOR_MIGRATION}" || fail "APP_RW_PASSWORD must be a non-placeholder secret of at least 24 characters"
+else
+  [[ -n "${APP_RW_PASSWORD_FOR_MIGRATION}" ]] || fail "APP_RW_PASSWORD is required for control-plane migrations"
+fi
+DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}"
+ADMIN_DB_URL_FOR_MIGRATION="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}}"
+OPERATION_DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}"
+OPERATION_ADMIN_DB_URL_FOR_MIGRATION="${OPERATION_ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}}"
+migration_env_file="$(mktemp "${DEPLOY_ROOT}/.aiteam-migration-env.XXXXXX")" || fail "cannot create protected migration environment file"
+chmod 600 "${migration_env_file}"
+trap 'rm -f -- "${UNIT_RENDERED:-}"; if [[ -n "${migration_env_file:-}" ]]; then rm -f -- "${migration_env_file}"; fi' EXIT
+{
+  printf 'DB_URL=%s\n' "${DB_URL_FOR_MIGRATION}"
+  printf 'ADMIN_DB_URL=%s\n' "${ADMIN_DB_URL_FOR_MIGRATION}"
+  printf 'OPERATION_DB_URL=%s\n' "${OPERATION_DB_URL_FOR_MIGRATION}"
+  printf 'OPERATION_ADMIN_DB_URL=%s\n' "${OPERATION_ADMIN_DB_URL_FOR_MIGRATION}"
+  printf 'APP_RW_PASSWORD=%s\n' "${APP_RW_PASSWORD_FOR_MIGRATION}"
+} >"${migration_env_file}"
+if ! env -i \
+  PATH="${PATH}" \
+  PYTHONPATH="${DEPLOY_ROOT}/server" \
+  AITEAM_MIGRATION_ENV_FILE="${migration_env_file}" \
+  "${VENV_PYTHON}" - <<'PY'
 import os
+from pathlib import Path
+
+for line in Path(os.environ["AITEAM_MIGRATION_ENV_FILE"]).read_text(encoding="utf-8").splitlines():
+    key, value = line.split("=", 1)
+    os.environ[key] = value
 
 from shared.db import apply_migrations as apply_manager_migrations
 from operation_service.repository import apply_migrations as apply_operation_migrations
 
-admin_url = os.environ["ADMIN_DB_URL"]
+manager_admin_url = os.environ["ADMIN_DB_URL"]
+operation_admin_url = os.environ["OPERATION_ADMIN_DB_URL"]
 password = os.environ.get("APP_RW_PASSWORD")
-apply_manager_migrations(admin_url, password)
-apply_operation_migrations(admin_url, password)
+apply_manager_migrations(manager_admin_url, password)
+apply_operation_migrations(operation_admin_url, password)
 PY
 then
   fail "Manager/Operation DDL or migration failed; application writers remain stopped"
@@ -392,9 +511,17 @@ log "Manager/Operation migrations complete while applications remain stopped"
 UNIT_SRC="${DEPLOY_ROOT}/deploy/ci/${UNIT_NAME}.service"
 UNIT_DST="/etc/systemd/system/${UNIT_NAME}.service"
 [[ -f "$UNIT_SRC" ]] || fail "unit file not found: ${UNIT_SRC}"
+[[ "${ENV_TARGET}" =~ ^(dev|test|prod)$ ]] || fail "unsupported deployment environment: ${ENV_TARGET}"
+UNIT_RENDERED="$(mktemp)" || fail "cannot create rendered systemd unit"
+[[ "${DEPLOY_ROOT}" != *'|'* && "${DEPLOY_ROOT}" != *'&'* && "${DEPLOY_ROOT}" != *'\\'* ]] || fail "DEPLOY_ROOT contains characters unsafe for unit rendering"
+escaped_deploy_root="${DEPLOY_ROOT//\\/\\\\}"
+escaped_deploy_root="${escaped_deploy_root//&/\\&}"
+escaped_deploy_root="${escaped_deploy_root//|/\\|}"
+sed -e "s|@ENV_TARGET@|${ENV_TARGET}|g" -e "s|@DEPLOY_ROOT@|${escaped_deploy_root}|g" "${UNIT_SRC}" >"${UNIT_RENDERED}"
+if grep -Eq '@(ENV_TARGET|DEPLOY_ROOT)@' "${UNIT_RENDERED}"; then fail "systemd unit placeholder was not rendered"; fi
 mkdir -p /etc/systemd/system
-if ! cmp -s "$UNIT_SRC" "$UNIT_DST" 2>/dev/null; then
-  cp "$UNIT_SRC" "$UNIT_DST"
+if ! cmp -s "$UNIT_RENDERED" "$UNIT_DST" 2>/dev/null; then
+  cp "$UNIT_RENDERED" "$UNIT_DST"
   log "installed ${UNIT_DST} (content changed)"
   systemctl daemon-reload >/dev/null 2>&1 || fail "systemctl daemon-reload failed"
 else

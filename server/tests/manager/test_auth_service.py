@@ -19,6 +19,25 @@ from manager_service.auth_service import (
     TenantSelectionRequired,
 )
 from shared.contracts.enums import AuthProvider, EnterpriseRole
+from manager_service.keys import TenantKeyStore
+
+
+def test_tenant_key_store_rejects_malformed_kid_before_database_query():
+    store = TenantKeyStore("postgresql://fake")
+    with patch("manager_service.keys.psycopg.connect") as connect:
+        assert store.resolved_public_key_for_kid("not-a-uuid:1") is None
+    connect.assert_not_called()
+
+
+def test_tenant_key_store_resolves_valid_kid_with_tenant_scope():
+    tenant = "11111111-1111-4111-8111-111111111111"
+    connection = MagicMock()
+    connection.__enter__.return_value.execute.return_value.fetchone.return_value = (tenant, "PUBLIC")
+    with patch("manager_service.keys.psycopg.connect", return_value=connection):
+        resolved = TenantKeyStore("postgresql://fake").resolved_public_key_for_kid(f"{tenant}:1")
+    assert resolved is not None
+    assert resolved.tenant_id == tenant
+    assert resolved.public_pem == "PUBLIC"
 
 
 def _svc():

@@ -1,11 +1,13 @@
 ---
 created: 2026-08-18
-status: active
+status: historical-snapshot-superseded-by-stage-b
 canonical: false
 scope: pi-completion-wave
 ---
 
-# Pi Agent 完成波次实施计划
+# Pi Agent 完成波次实施计划（历史快照）
+
+> 本文为 2026-08-18 的历史实施计划，已由当前 Stage A/B 与 v1 completeness closure 取代；其中 taiyi/LightRAG 状态和后续项不代表当前 release 证据。当前 workspace/tenant 语义以 v1 概要设计和 Stage B 代码为准。
 
 ## 目标
 

@@ -117,6 +117,21 @@ class BillingRepository:
                 "RETURNING id, amount, payment_method, status, order_no, token_credited, created_at",
                 (ctx.tenant_id, str(amount), payment_method, status, order_no, token_credited),
             ).fetchone()
+            if row is None:
+                raise RuntimeError("recharge insert returned no row")
+            # A settled recharge credits the ledger and visible aggregate in
+            # the same tenant transaction. Pending payment intents deliberately
+            # do not credit balance until a later, equally atomic settlement.
+            if status == "success":
+                s.execute(
+                    "INSERT INTO billing_balance (tenant_id, balance, estimated_tokens) "
+                    "VALUES (%s, %s, %s) "
+                    "ON CONFLICT (tenant_id) DO UPDATE SET "
+                    "balance = billing_balance.balance + EXCLUDED.balance, "
+                    "estimated_tokens = billing_balance.estimated_tokens + EXCLUDED.estimated_tokens, "
+                    "updated_at = now()",
+                    (ctx.tenant_id, str(amount), token_credited),
+                )
         return _row_to_recharge(row)
 
     def list_recharges(self, ctx: TenantContext) -> list[RechargeRecordRow]:
@@ -203,25 +218,25 @@ class BillingRepository:
     ) -> list[dict]:
         """列脱敏 usage_rollup 摘要；不读取 runtime/run 明细。"""
         window_start, window_end = _period_to_window(period)
-        clauses: list[str] = []
+        clauses: list[str] = ["u.employee_id IS NOT NULL"]
         params: list[Any] = []
         if window_start is not None:
-            clauses.append("window_start >= %s")
+            clauses.append("u.window_start >= %s")
             params.append(window_start)
         if window_end is not None:
-            clauses.append("window_end <= %s")
+            clauses.append("u.window_end <= %s")
             params.append(window_end)
         if employee_id is not None:
-            clauses.append("employee_id = %s::uuid")
+            clauses.append("u.employee_id = %s::uuid")
             params.append(employee_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where = " WHERE " + " AND ".join(clauses)
         with self._router.session(ctx) as s:
             rows = s.execute(
                 "SELECT u.id, u.employee_id, "
                 "COALESCE(NULLIF(e.display_name, ''), NULLIF(e.employee_slug, ''), '已删除专家') AS employee_name, "
                 "u.window_start, u.token_total, u.cost_total "
                 "FROM usage_rollup AS u "
-                "LEFT JOIN employee AS e ON e.id = u.employee_id" + where.replace("window_start", "u.window_start").replace("window_end", "u.window_end").replace("employee_id", "u.employee_id") + " ORDER BY u.window_start DESC LIMIT 500",
+                "LEFT JOIN employee AS e ON e.id = u.employee_id" + where + " ORDER BY u.window_start DESC LIMIT 500",
                 tuple(params),
             ).fetchall()
         return [

@@ -110,6 +110,23 @@ def _dt(y=2026, m=1, d=1):
     return datetime(y, m, d, tzinfo=timezone.utc)
 
 
+def test_operation_migrations_use_cluster_advisory_lock(monkeypatch, tmp_path):
+    import operation_service.repository as repository_module
+
+    (tmp_path / "0001_test.sql").write_text("SELECT 1", encoding="utf-8")
+    monkeypatch.setattr(repository_module, "_migrations_dir", lambda: tmp_path)
+    cursor = _FakeCursor()
+    _set_one(cursor, ("operation_control_db",))
+    conn = _FakeConn(cursor)
+    _install_psycopg(monkeypatch, conn)
+
+    repository_module.apply_migrations("postgresql://admin", "secret")
+    sql_text = "\\n".join(str(sql) for sql, _ in cursor.calls)
+    assert "pg_advisory_lock" in sql_text
+    assert "pg_advisory_unlock" in sql_text
+    assert "ALTER ROLE" in sql_text
+
+
 # 一行企业账号 SELECT（_fetch_state / list_enterprises / top_consumers 共用列序）
 _ACC_COLS = (
     "ent-1", "Test Corp", "13800000000", "active", Decimal("0"),
@@ -204,6 +221,8 @@ class TestPgAdminRepository:
         assert rec.amount == Decimal("50")
         joined = "\n".join(s for s, _ in self.cursor.calls)
         assert "INSERT INTO operation_recharge_record" in joined
+        assert "RETURNING recharge_id" in joined
+        assert "ORDER BY created_at DESC" not in joined
         assert "UPDATE enterprise_account" in joined
 
     def test_add_recharge_naive_datetime(self, repo):
@@ -692,6 +711,7 @@ class TestDIFactoryBranch:
         assert isinstance(cd.get_catalog_repository(), CatalogRepository)
 
     def test_all_pg_when_db_set(self, monkeypatch):
+        monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
         monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
         monkeypatch.setenv("APP_RW_PASSWORD", "secret")
         from operation_service import catalog_dependencies as cd

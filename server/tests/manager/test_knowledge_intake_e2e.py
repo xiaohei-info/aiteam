@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from shared.config import Settings
+from shared.db import ManagerRagService
 from manager_service.rag_ingestion import LightRagIngestionClient, LightRagIngestionSettings
 from tests.manager._auth_helper import (
     make_inmem_verifier_and_signer,
@@ -30,14 +31,13 @@ _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
 
 class _FakeIngestion(LightRagIngestionClient):
-    def __init__(self):
+    def __init__(self, expected_workspaces: set[str]):
         from tests.manager.test_knowledge_intake_recovery_pg import Upstream
-        self.upstream = Upstream()
-        super().__init__(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000,
-                         workspace=ENTERPRISE_SPACE_ID), transport=httpx.MockTransport(self.upstream))
+        self.upstream = Upstream(expected_workspaces)
+        super().__init__(LightRagIngestionSettings("https://fixture.invalid", "fixture-only", 1000, 2000), transport=httpx.MockTransport(self.upstream))
 
 
-def _client(db_url, admin_url=None):
+def _client(db_url, admin_url=None, *, expected_tenant_ids: set[str]):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_auth import router as auth_router
@@ -60,7 +60,10 @@ def _client(db_url, admin_url=None):
     app.include_router(build_knowledge_intake_router(verifier))
     # Integration tests exercise Manager DB/RLS, while upstream LightRAG is an
     # explicit fake transport boundary rather than an accidental live dependency.
-    app.state._knowledge_intake_ingestion_client = _FakeIngestion()
+    app.state._knowledge_intake_ingestion_client = _FakeIngestion({
+        ManagerRagService.derive_workspace(tenant_id, ENTERPRISE_SPACE_ID)
+        for tenant_id in expected_tenant_ids
+    })
     return TestClient(app)
 
 
@@ -93,7 +96,9 @@ def _wait_ready(client, token, document_id: str) -> dict:
 
 def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     tid_a, tid_b = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     owner_b = _token(tid_b, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
@@ -138,20 +143,40 @@ def test_intake_happy_path(migrated_db, admin_url, two_tenants):
     assert job["status"] == "done"
     assert job["chunk_count"] and job["chunk_count"] >= 1
 
-    # 跨租户 RLS：t-b 看不到 t-a 的知识空间/documents
+    # Materialize and index a separate tenant through a separate test app so
+    # the shared upstream double checks the exact tenant-derived workspace.
+    client_b = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_b}
+    )
+    _make_space(client_b, owner_b, name="tenant-b")
+    uploaded_b = client_b.post(
+        f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
+        files={"file": ("report-b.txt", b"tenant b knowledge", "text/plain")},
+        headers={"Authorization": f"Bearer {owner_b}"},
+    )
+    assert uploaded_b.status_code == 201, uploaded_b.text
+    doc_b = _wait_ready(client_b, owner_b, uploaded_b.json()["data"]["id"])
+    assert doc_b["status"] == "ready"
+
+    # Cross-tenant RLS: t-b sees only its own workspace/document, never t-a's.
     r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}",
                    headers={"Authorization": f"Bearer {owner_b}"})
-    assert r.status_code == 404
+    assert r.status_code == 200
     r = client.get(f"/api/manager/knowledge-spaces/{ENTERPRISE_SPACE_ID}/documents",
                    headers={"Authorization": f"Bearer {owner_b}"})
-    assert r.status_code == 404
+    assert r.status_code == 200
+    items_b = r.json()["data"]
+    assert [item["id"] for item in items_b] == [doc_b["id"]]
+    assert doc_b["id"] != doc_id
 
 
 def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
     migrated_db, admin_url, two_tenants
 ):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     member = _token(tid_a, ["member"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
@@ -198,7 +223,9 @@ def test_delete_reconcile_returns_envelope_and_completes_only_after_probe(
 
 def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     auth = {"Authorization": f"Bearer {owner}"}
     _make_space(client, owner, name="Backfill")
@@ -231,7 +258,9 @@ def test_new_employee_binding_backfills_ready_documents(migrated_db, admin_url, 
 
 def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
@@ -245,7 +274,9 @@ def test_upload_empty_returns_422(migrated_db, admin_url, two_tenants):
 
 def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
     r = client.post(
@@ -258,7 +289,9 @@ def test_import_url_invalid_returns_400(migrated_db, admin_url, two_tenants):
 
 def test_intake_missing_space_returns_404(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     r = client.post(
         "/api/manager/knowledge-spaces/no-such-space/documents",
@@ -270,7 +303,9 @@ def test_intake_missing_space_returns_404(migrated_db, admin_url, two_tenants):
 
 def test_intake_member_forbidden(migrated_db, admin_url, two_tenants):
     tid_a, _ = two_tenants
-    client = _client(migrated_db, admin_url=admin_url)
+    client = _client(
+        migrated_db, admin_url=admin_url, expected_tenant_ids={tid_a}
+    )
     owner_a = _token(tid_a, ["owner"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     member_a = _token(tid_a, ["member"], user_id=str(uuid.uuid4()), admin_url=admin_url)
     _make_space(client, owner_a)
