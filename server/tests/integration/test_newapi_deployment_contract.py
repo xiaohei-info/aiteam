@@ -29,7 +29,8 @@ def test_internal_newapi_is_pinned_private_and_persistent():
     assert "networks: [newapi-internal]" in redis
     assert "operation-newapi" in relay
     assert "newapi-internal:\n    internal: true" in COMPOSE
-    assert "operation-newapi:\n    internal: true" in COMPOSE
+    assert "operation-newapi:\n    internal: true" not in COMPOSE
+    assert "Only Operation and NewAPI join this network" in COMPOSE
     assert "/var/lib/postgresql/data" in postgres
     assert "- newapi_redisdata:/data" in redis
     assert "- newapi_data:/data" in relay

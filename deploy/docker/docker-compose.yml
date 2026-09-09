@@ -397,8 +397,10 @@ networks:
     internal: true
   control-plane-db:
     internal: true
+  # Only Operation and NewAPI join this network. It intentionally remains
+  # externally-capable so NewAPI can reach configured upstreams and Docker can
+  # publish its loopback management port; no Agent/Manager service is attached.
   operation-newapi:
-    internal: true
   lightrag-internal:
     internal: true
   newapi-internal:
