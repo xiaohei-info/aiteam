@@ -38,7 +38,7 @@ class TenantProvisionRequest(BaseModel):
     visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="可见目录策略（可选）")
     allowed_model_refs: list[PlatformModelRef] | None = Field(
         default=None,
-        description="企业允许的平台模型引用；null=不限制，空列表=不开放模型。",
+        description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",
     )
 
 

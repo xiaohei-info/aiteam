@@ -232,7 +232,10 @@ export class HttpManagerClient implements ManagerClient {
     }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
-      throw new ManagerUnavailableError(`Manager returned HTTP ${response.status}`);
+      const detail = await readManagerProblemDetail(response);
+      throw new ManagerUnavailableError(
+        `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`,
+      );
     }
     return response;
   }
@@ -248,6 +251,18 @@ export class ManagerUnavailableError extends Error {
   constructor(message = "Manager is unavailable", options?: { cause?: unknown }) {
     super(message, options);
     this.name = "ManagerUnavailableError";
+  }
+}
+
+async function readManagerProblemDetail(response: Response): Promise<string> {
+  try {
+    const value = JSON.parse(await response.text()) as Record<string, unknown>;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    const code = typeof value.code === "string" ? value.code.trim() : "";
+    const detail = typeof value.detail === "string" ? value.detail.trim() : "";
+    return [code, detail].filter(Boolean).join(": ").slice(0, 300);
+  } catch {
+    return "";
   }
 }
 
@@ -309,7 +324,7 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
     display_name: typeof raw.display_name === "string" ? raw.display_name : employeeId,
     revoked: raw.revoked === true,
     synced_at: typeof raw.synced_at === "string" ? raw.synced_at : new Date().toISOString(),
-    model_policy: modelPolicy,
+    model_policy: normalizeModelPolicy(modelPolicy),
     ...employeeDisplay(raw),
     tools: stringArray(raw.tools),
     skills,
@@ -476,7 +491,10 @@ export async function normalizeRuntimeProviderConfigWithDns(value: unknown): Pro
 export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities"].includes(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
+  // Legacy Manager responses may still contain release fields. They are
+  // compatibility input only and are never retained in Agent state.
+  const allowed = new Set(["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
   let relayUrl: URL;
   try {
@@ -486,9 +504,12 @@ export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderC
     throw new ManagerUnavailableError("Manager returned an invalid runtime relay URL");
   }
   if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
-  for (const key of ["version", "provider_version", "model_version"]) if (typeof raw[key] !== "number" || !Number.isInteger(raw[key]) || Number(raw[key]) < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime provider version");
+  if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime access version");
   const capabilities = normalizeRuntimeModelCapabilities(raw.model_capabilities);
-  return { ...raw, base_url: relayUrl.toString().replace(/\/$/u, ""), pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
+  const normalized = { ...raw };
+  delete normalized.provider_version;
+  delete normalized.model_version;
+  return { ...normalized, base_url: relayUrl.toString().replace(/\/$/u, ""), pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
 }
 
 function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfig["model_capabilities"] | undefined {
@@ -519,6 +540,14 @@ function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfi
     output.thinking_level_map = map as unknown as NonNullable<typeof output.thinking_level_map>;
   }
   return output;
+}
+
+function normalizeModelPolicy(value: unknown): Record<string, unknown> {
+  const policy = objectValue(value) ?? {};
+  const normalized = { ...policy };
+  delete normalized.provider_version;
+  delete normalized.model_version;
+  return normalized;
 }
 
 function normalizeKnowledgePolicy(value: unknown): Record<string, unknown> | undefined {
@@ -567,7 +596,7 @@ function normalizeSnapshot(value: unknown, tenantId?: string, memberId?: string)
     version,
     snapshot_version: snapshotVersion,
     display_name: typeof raw.display_name === "string" ? raw.display_name : employeeId,
-    model_policy: objectValue(raw.model_policy) ?? {},
+    model_policy: normalizeModelPolicy(raw.model_policy),
     tools: stringArray(raw.tools),
     // Keep the canonical and compatibility fields equivalent in local
     // projections so consumers cannot advertise stale legacy refs.

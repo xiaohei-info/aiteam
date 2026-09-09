@@ -197,7 +197,7 @@ class ProviderCredentialService:
         policy = snapshot.model_policy
         provider_ref = policy.provider_ref
         model = policy.model
-        if not provider_ref or not model or not policy.provider_version or not policy.model_version or policy.pricing is None or self._operator is None:
+        if not provider_ref or not model or policy.pricing is None or self._operator is None:
             raise NotFound("runtime provider config is unavailable")
         try:
             resolved = self._operator.resolve_tenant_access(
@@ -212,12 +212,10 @@ class ProviderCredentialService:
                 api_key=resolved["relay_token"],
                 model=model,
                 provider_ref=provider_ref,
-                provider_version=policy.provider_version,
-                model_version=policy.model_version,
                 pricing=policy.pricing,
                 version=int(access["version"]),
                 model_capabilities=_runtime_model_capabilities(
-                    self._operator, provider_ref, model, policy.model_version, tenant_id=ctx.tenant_id,
+                    self._operator, provider_ref, model, tenant_id=ctx.tenant_id,
                 ),
             )
         except NotFound:
@@ -304,12 +302,10 @@ class ProviderCredentialService:
                 api_key=str(resolved["relay_token"]),
                 model=model_id,
                 provider_ref=provider_ref,
-                provider_version=int(provider.get("version")),
-                model_version=int(model_data.get("version")),
                 pricing=pricing,
                 version=int(access["version"]),
                 model_capabilities=_runtime_model_capabilities(
-                    self._operator, provider_ref, model_id, int(model_data.get("version")),
+                    self._operator, provider_ref, model_id,
                     tenant_id=ctx.tenant_id, catalog=catalog,
                 ),
             )
@@ -376,7 +372,7 @@ def _is_speech_model(model_id: Any) -> bool:
 
 
 def _runtime_model_capabilities(
-    operator, provider_ref: str, model_id: str, model_version: int, *, tenant_id: str | None = None,
+    operator, provider_ref: str, model_id: str, *, tenant_id: str | None = None,
     catalog: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Expose only non-sensitive capability fields needed by the local Pi model."""
@@ -396,7 +392,7 @@ def _runtime_model_capabilities(
         if not isinstance(item, dict):
             continue
         model = item.get("model") if isinstance(item.get("model"), dict) else item
-        if not isinstance(model, dict) or model.get("provider_id") != provider_ref or model.get("model_id") != model_id or model.get("version") != model_version:
+        if not isinstance(model, dict) or model.get("provider_id") != provider_ref or model.get("model_id") != model_id:
             continue
         raw = model.get("capabilities")
         if not isinstance(raw, dict):

@@ -262,11 +262,11 @@ def test_internal_provider_bootstrap_enriches_model_capabilities():
 
 def test_platform_provider_rejects_unsupported_template_thinking_level():
     now = datetime.now(UTC)
-    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 7, now)
     model = ModelRow(
         "p1", "minimax-m3", "MiniMax M3",
         {"reasoning": True, "thinking_levels": ["off", "high"]},
-        "published", "discovery", 1, now,
+        "published", "discovery", 9, now,
     )
     rate = RateRow("r1", "p1", "minimax-m3", 1, "known", "token", Decimal("0.3"), Decimal("1.2"), None, None, None, "USD", "public_reference", "models.dev/api.json", now, None, False)
 
@@ -284,13 +284,13 @@ def test_platform_provider_rejects_unsupported_template_thinking_level():
 
 def test_platform_provider_thinking_validation_handles_map_and_non_reasoning_model():
     now = datetime.now(UTC)
-    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 1, now)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", 1, "published", 7, now)
     mapping_model = ModelRow(
         "p1", "mapped", "Mapped", {"thinking_level_map": {"off": "none", "high": "high", "low": None}},
-        "published", "discovery", 1, now,
+        "published", "discovery", 9, now,
     )
     plain_model = ModelRow(
-        "p1", "plain", "Plain", {"reasoning": False}, "published", "discovery", 1, now,
+        "p1", "plain", "Plain", {"reasoning": False}, "published", "discovery", 11, now,
     )
     rate = RateRow("r1", "p1", "mapped", 1, "known", "token", Decimal("1"), Decimal("2"), None, None, None, "USD", "manual", None, now, None, False)
 

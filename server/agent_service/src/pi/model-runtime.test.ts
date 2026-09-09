@@ -12,7 +12,7 @@ const pricing = {
 } as const;
 const runtimeConfig = (overrides: Partial<RuntimeProviderConfig> = {}): RuntimeProviderConfig => ({
   base_url: "https://newapi.test/v1", api_protocol: "openai-completions", api_key: "k",
-  model: "m", provider_ref: "p", provider_version: 1, model_version: 1, pricing, version: 1,
+  model: "m", provider_ref: "p", pricing, version: 1,
   ...overrides,
 });
 

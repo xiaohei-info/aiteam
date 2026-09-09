@@ -118,7 +118,11 @@ class SpeechRuntimeConfigRequest(BaseModel):
 
 
 class RuntimeProviderConfigOut(BaseModel):
-    """最小运行时配置；仅受保护 runtime-config 端点可返回 api_key。"""
+    """当前 effective Provider 的最小运行时配置；仅受保护 runtime-config 端点可返回 api_key。
+
+    Provider/model release versions are Operator-internal and are not exposed
+    across the Manager→Agent runtime contract.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -127,8 +131,6 @@ class RuntimeProviderConfigOut(BaseModel):
     api_key: str
     model: str
     provider_ref: str
-    provider_version: int
-    model_version: int
     pricing: PricingSnapshot
     version: int
     model_capabilities: dict[str, Any] = Field(

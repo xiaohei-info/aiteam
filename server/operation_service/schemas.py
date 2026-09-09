@@ -28,7 +28,7 @@ class ProvisionEnterpriseRequest(BaseModel):
     visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的目录可见范围策略。")
     allowed_model_refs: list[PlatformModelRef] | None = Field(
         default=None,
-        description="企业允许使用的平台模型引用；null=不限制，空列表=不开放模型。",
+        description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",
     )
 
 
@@ -46,7 +46,7 @@ class EnterpriseProvisioned(BaseModel):
     must_reset: bool = Field(default=True, description="负责人首登强制重置")
     allowed_model_refs: list[PlatformModelRef] | None = Field(
         default=None,
-        description="企业允许使用的平台模型引用；null=不限制，空列表=不开放模型。",
+        description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",
     )
 
 
@@ -56,7 +56,7 @@ class EnterpriseModelAccessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allowed_model_refs: list[PlatformModelRef] | None = Field(
-        description="允许的平台模型引用；null=全部已发布模型，空列表=不开放模型。",
+        description="允许的当前 effective 平台模型身份；null=全部当前模型，空列表=不开放模型。",
     )
 
 
@@ -66,7 +66,7 @@ class EnterpriseModelAccessOut(BaseModel):
     enterprise_id: str
     tenant_id: str
     allowed_model_refs: list[PlatformModelRef] | None = Field(
-        description="允许的平台模型引用；null=全部已发布模型，空列表=不开放模型。",
+        description="允许的当前 effective 平台模型身份；null=全部当前模型，空列表=不开放模型。",
     )
 
 

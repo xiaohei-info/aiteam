@@ -289,7 +289,7 @@ describe("EnterprisePage 企业开通", () => {
     fireEvent.click(screen.getByRole("button", { name: "开通" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("操作失败，请重试");
+      expect(screen.getByRole("alert")).toHaveTextContent("网络错误");
     });
     expect(screen.getByRole("textbox", { name: /企业名称/ })).toHaveValue("测试企业");
     expect(screen.getByRole("textbox", { name: /负责人手机号/ })).toHaveValue("13800138000");

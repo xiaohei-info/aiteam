@@ -229,6 +229,9 @@ def test_model_thinking_level_must_match_operator_capabilities():
         employee_slug="minimax-high",
     )
     assert accepted.model_policy.thinking_level == "high"
+    assert accepted.model_policy.model_dump(exclude_none=True) == {
+        "model": "minimax-m3", "provider_ref": "p1", "thinking_level": "high",
+    }
 
 
 def test_thinking_validation_accepts_off_and_maps_capabilities():

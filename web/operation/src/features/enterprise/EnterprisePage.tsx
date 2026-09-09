@@ -96,8 +96,8 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
       });
       setProvisionResult(result);
       return true;
-    } catch {
-      setProvisionError(i18n.t("operation.enterprise.error"));
+    } catch (err) {
+      setProvisionError(err instanceof Error ? err.message : i18n.t("operation.enterprise.error"));
       return false;
     } finally {
       setProvisionLoading(false);

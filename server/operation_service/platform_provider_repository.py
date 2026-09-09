@@ -105,11 +105,9 @@ class PlatformProviderRepository:
                      api_protocol=EXCLUDED.api_protocol,
                      newapi_channel_id=EXCLUDED.newapi_channel_id,
                      status='published',
-                     version=CASE WHEN platform_provider.status <> 'published'
-                       OR platform_provider.relay_base_url IS DISTINCT FROM EXCLUDED.relay_base_url
-                       OR platform_provider.api_protocol IS DISTINCT FROM EXCLUDED.api_protocol
-                       OR platform_provider.newapi_channel_id IS DISTINCT FROM EXCLUDED.newapi_channel_id
-                       THEN platform_provider.version + 1 ELSE platform_provider.version END,
+                     -- Reconciliation is not a release. Relay URL/channel
+                     -- changes must not invalidate stable employee references.
+                     version=platform_provider.version,
                      updated_at=now()
                    RETURNING provider_id::text,provider_code,display_name,relay_base_url,api_protocol,newapi_channel_id,status,version,updated_at""",
                 (provider_code, display_name, relay_base_url, api_protocol, newapi_channel_id),

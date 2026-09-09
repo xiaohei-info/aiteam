@@ -87,8 +87,6 @@ def test_runtime_config_uses_operator_tenant_access_and_frozen_price():
         "api_key": "tenant-scoped-token",
         "model": "minimax-m3",
         "provider_ref": "provider-1",
-        "provider_version": 2,
-        "model_version": 3,
         "pricing": result.pricing.model_dump(mode="json"),
         "version": 4,
         "model_capabilities": {},

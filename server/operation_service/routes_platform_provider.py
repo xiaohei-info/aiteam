@@ -83,7 +83,7 @@ class PublishedCountOut(BaseModel):
 
 
 class PlatformCatalogOut(BaseModel):
-    """Manager 使用的已发布 Provider/Model 目录。"""
+    """Manager 使用的当前 effective Provider/Model 目录。"""
 
     model_config = ConfigDict(extra="forbid")
     providers: list[PlatformProvider] = Field(default_factory=list, description="已发布平台 Provider。")
