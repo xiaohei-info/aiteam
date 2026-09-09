@@ -563,8 +563,13 @@ for attempt in $(seq 1 30); do
 done
 (( newapi_ok )) || fail "internal NewAPI /api/status failed after 30 attempts"
 for container in aiteam-newapi-pg aiteam-newapi-redis aiteam-newapi; do
-  state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
-  [[ "${state}" == "healthy" || "${state}" == "running" ]] || fail "${container} is not healthy (state=${state:-missing})"
+  state=""
+  for attempt in $(seq 1 30); do
+    state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
+    [[ "${state}" == "healthy" ]] && break
+    sleep 2
+  done
+  [[ "${state}" == "healthy" ]] || fail "${container} is not healthy (state=${state:-missing})"
 done
 log "  internal NewAPI + PostgreSQL + Redis OK"
 
