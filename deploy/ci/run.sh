@@ -380,7 +380,7 @@ done
 ensure_operation_database() {
   local password="${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}"
   local username="${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}"
-  local ready=0
+  local ready=0 exists
   for _ in {1..60}; do
     if docker exec aiteam-pg pg_isready -U "${username}" -d "${MANAGER_DB_NAME}" >/dev/null 2>&1; then
       ready=1
@@ -389,7 +389,10 @@ ensure_operation_database() {
     sleep 1
   done
   (( ready == 1 )) || return 1
-  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --if-not-exists --username="$1" "$2"' sh "${username}" "${OPERATION_DB_NAME}"
+  [[ "${MANAGER_DB_NAME}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "${OPERATION_DB_NAME}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  exists="$(printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; psql -XAtq --username="$1" --dbname="$3" -c "SELECT 1 FROM pg_database WHERE datname = '\''$2'\''"' sh "${username}" "${OPERATION_DB_NAME}" "${MANAGER_DB_NAME}")" || return 1
+  [[ "${exists}" == "1" ]] && return 0
+  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --username="$1" "$2"' sh "${username}" "${OPERATION_DB_NAME}"
 }
 
 # systemd's simple stop also stops the local dependency containers.  Bring the

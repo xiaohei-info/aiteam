@@ -106,6 +106,11 @@ def test_deploy_script_syncs_checked_out_requirements_into_persistent_venv():
     assert 'AITEAM_MIGRATION_ENV_FILE=' in script
     assert 'OPERATION_DB_URL_FOR_MIGRATION=' in script
     assert 'OPERATION_ADMIN_DB_URL_FOR_MIGRATION=' in script
+    assert 'createdb --if-not-exists' not in script
+    assert 'SELECT 1 FROM pg_database' in script
+    ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
+    assert 'createdb --if-not-exists' not in ctl
+    assert 'SELECT 1 FROM pg_database' in ctl
 
 
 def test_deploy_script_exposes_dependency_start_failure_before_restart():

@@ -910,10 +910,14 @@ get_pid() {
 
 ensure_operation_database() {
   local database="${OPERATION_DB_NAME:-oper}"
+  local manager_database="${MANAGER_DB_NAME:-${POSTGRES_DB:-manager_control_db}}"
   local username="${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}"
   local password="${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}"
-  [[ "${database}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
-  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --if-not-exists --username="$1" "$2"' sh "${username}" "${database}"
+  local exists
+  [[ "${database}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "${manager_database}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
+  exists="$(printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; psql -XAtq --username="$1" --dbname="$3" -c "SELECT 1 FROM pg_database WHERE datname = '\''$2'\''"' sh "${username}" "${database}" "${manager_database}")" || return 1
+  [[ "${exists}" == "1" ]] && return 0
+  printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --username="$1" "$2"' sh "${username}" "${database}"
 }
 
 # 启动单个服务（local 模式）
