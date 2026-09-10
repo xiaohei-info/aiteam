@@ -16,6 +16,8 @@ import type { TokenClaims } from "@aiteam/shared/contracts";
 export interface AgentLoginRequest {
   account: string;
   password: string;
+  /** 同账号跨企业时用于消歧的企业代码或名称。 */
+  enterprise?: string | null;
   /** 可选租户；缺失时由同源 Node Agent 通过 Manager resolver 解析。 */
   tenant_id?: string | null;
 }
@@ -32,6 +34,8 @@ export interface AgentPasswordResetRequest {
   /** UI 保留 password 字段；发送到 Manager-compatible Agent API 时映射为 old_password。 */
   password: string;
   new_password: string;
+  /** 同账号跨企业时用于消歧的企业代码或名称。 */
+  enterprise?: string | null;
   /** 可选租户；缺失时由同源 Node Agent 通过 Manager resolver 解析。 */
   tenant_id?: string | null;
 }
@@ -65,7 +69,7 @@ export class AgentApiClient extends ApiClient {
 
   /** 本地登录（对齐 server /api/agent/login，公开端点）。 */
   async login(req: AgentLoginRequest): Promise<AgentLoginResult> {
-    const tenant_id = await this.resolveTenant(req.account, req.tenant_id);
+    const tenant_id = await this.resolveTenant(req.account, req.tenant_id, req.enterprise);
     const result = await this.post<AgentLoginResult>("/api/agent/login", {
       body: { account: req.account, password: req.password, tenant_id },
     });
@@ -78,7 +82,7 @@ export class AgentApiClient extends ApiClient {
 
   /** 密码重置（对齐 server /api/agent/reset-password，公开端点）。 */
   async resetPassword(req: AgentPasswordResetRequest): Promise<AgentLoginResult> {
-    const tenant_id = await this.resolveTenant(req.account, req.tenant_id);
+    const tenant_id = await this.resolveTenant(req.account, req.tenant_id, req.enterprise);
     const result = await this.post<AgentLoginResult>("/api/agent/reset-password", {
       body: {
         account: req.account,
@@ -97,10 +101,10 @@ export class AgentApiClient extends ApiClient {
     return this.get<TokenClaims>("/api/agent/whoami");
   }
 
-  private async resolveTenant(account: string, tenantId?: string | null): Promise<string> {
+  private async resolveTenant(account: string, tenantId?: string | null, enterprise?: string | null): Promise<string> {
     if (tenantId) return tenantId;
     const result = await this.post<{ tenant_id: string }>("/api/auth/resolve-tenant-by-account", {
-      body: { account },
+      body: { account, ...(enterprise?.trim() ? { enterprise: enterprise.trim() } : {}) },
     });
     if (!result?.tenant_id) throw new Error("resolve tenant: empty response");
     return result.tenant_id;

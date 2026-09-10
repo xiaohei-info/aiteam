@@ -123,7 +123,10 @@ const ConversationScheduleInput = Type.Union([
     one_shot: Type.Optional(Type.Literal(false, { description: "重复调度应为 false 或省略。" })),
   }, { additionalProperties: false, description: "重复调度：必须提供 interval_seconds，one_shot 不能为 true。" }),
 ], { $id: "ConversationScheduleInput", description: "创建或更新调度配置；一次性和重复调度使用不同字段组合。" });
-const ResolveTenantRequest = Type.Object({ account: Type.String({ minLength: 1, maxLength: 256, description: "员工手机号或账号。" }) }, { $id: "ResolveTenantRequest", additionalProperties: false, description: "员工账号企业解析请求。" });
+const ResolveTenantRequest = Type.Object({
+  account: Type.String({ minLength: 1, maxLength: 256, description: "员工手机号或账号。" }),
+  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "账号跨企业时用于消歧的企业代码或名称。" })),
+}, { $id: "ResolveTenantRequest", additionalProperties: false, description: "员工账号企业解析请求。" });
 const AgentLoginRequest = Type.Object({
   tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；先调用 resolve-tenant-by-account 获取。" }),
   account: Type.String({ minLength: 1, maxLength: 256, description: "登录账号或手机号。" }),
@@ -1187,8 +1190,9 @@ export class AgentHttpServer {
     if (!this.options.managerClient?.resolveTenantByAccount) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is not configured");
     const body = await this.readJson(request);
     const account = this.stringField(body.account, "account", 256);
+    const enterprise = typeof body.enterprise === "string" && body.enterprise.trim() ? this.stringField(body.enterprise, "enterprise", 200) : undefined;
     try {
-      const payload = await this.options.managerClient.resolveTenantByAccount(account);
+      const payload = await this.options.managerClient.resolveTenantByAccount(account, enterprise);
       const tenantId = payload && typeof payload === "object" ? (payload as { data?: { tenant_id?: unknown } }).data?.tenant_id : undefined;
       if (typeof tenantId !== "string" || !tenantId.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
       this.writeJson(response, 200, payload);

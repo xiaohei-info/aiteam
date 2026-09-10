@@ -86,14 +86,14 @@ describe("AgentApiClient 边界", () => {
   it("login resolves tenant and sends Manager-compatible tenant_id", async () => {
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       if (String(url).endsWith("/api/auth/resolve-tenant-by-account")) {
-        expect(JSON.parse(String(init?.body))).toEqual({ account: "alice" });
+        expect(JSON.parse(String(init?.body))).toEqual({ account: "alice", enterprise: "acme" });
         return new Response(envelope({ tenant_id: "tenant-a" }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       expect(String(url)).toContain("/api/agent/login");
       expect(JSON.parse(String(init?.body))).toEqual({ account: "alice", password: "pw", tenant_id: "tenant-a" });
       return new Response(envelope({ token: "token", claims: { user_id: "alice", tenant_id: "tenant-a", roles: [] } }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
-    await expect(makeClient(fetchImpl as unknown as typeof fetch).login({ account: "alice", password: "pw" })).resolves.toMatchObject({ token: "token" });
+    await expect(makeClient(fetchImpl as unknown as typeof fetch).login({ account: "alice", password: "pw", enterprise: " acme " })).resolves.toMatchObject({ token: "token" });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

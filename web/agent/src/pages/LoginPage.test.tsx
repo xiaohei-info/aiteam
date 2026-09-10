@@ -73,7 +73,7 @@ function mockFetchForbidden(): ReturnType<typeof vi.fn> {
 const originalFetch = globalThis.fetch;
 
 describe("LoginPage", () => {
-  it("渲染标题与两个字段（account/password），不再出现企业提示字段", () => {
+  it("渲染登录字段，支持同账号多企业时填写企业", () => {
     globalThis.fetch = mockFetch() as unknown as typeof fetch;
     try {
       render(
@@ -86,8 +86,8 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { level: 1, name: "登录" })).toBeInTheDocument();
       expect(screen.getByRole("form", { name: "用户端登录" })).toBeInTheDocument();
       expect(screen.getByLabelText("账号（手机号 / 用户名）")).toBeInTheDocument();
+      expect(screen.getByLabelText("企业代码/名称（同账号多企业时填写）")).toBeInTheDocument();
       expect(screen.getByLabelText("密码")).toBeInTheDocument();
-      expect(screen.queryByLabelText("企业提示（tenant_id）")).not.toBeInTheDocument();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -107,6 +107,7 @@ describe("LoginPage", () => {
       fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
         target: { value: "alice" },
       });
+      fireEvent.change(screen.getByLabelText("企业代码/名称（同账号多企业时填写）"), { target: { value: "acme" } });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
