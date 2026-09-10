@@ -224,7 +224,7 @@ describe("EnterprisePage 企业开通", () => {
     await waitFor(() => {
       expect(client.post).toHaveBeenCalledWith(
         "/api/operation/enterprises/ent_001/owner-bootstrap/reset",
-        {},
+        expect.objectContaining({ idempotencyKey: expect.stringMatching(/^owner-bootstrap-reset:/) }),
       );
     });
     await waitFor(() => {
