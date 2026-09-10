@@ -318,7 +318,7 @@ export function EmployeeConfigDrawer({
       onOpenChange={(isOpen) => { if (!isOpen && !submitting) onClose(); }}
     >
       <Layout
-        height="auto"
+        height="fill"
         header={
           <DialogHeader
             title={i18n.t("manager.experts.detail_title")}
