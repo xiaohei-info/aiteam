@@ -128,12 +128,14 @@ const ResolveTenantRequest = Type.Object({
   enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "账号跨企业时用于消歧的企业代码或名称。" })),
 }, { $id: "ResolveTenantRequest", additionalProperties: false, description: "员工账号企业解析请求。" });
 const AgentLoginRequest = Type.Object({
-  tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；先调用 resolve-tenant-by-account 获取。" }),
+  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。" })),
+  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称；同账号跨企业时用于消歧。" })),
   account: Type.String({ minLength: 1, maxLength: 256, description: "登录账号或手机号。" }),
   password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "登录密码；仅通过请求发送，服务端不会回显。" }),
-}, { $id: "AgentLoginRequest", additionalProperties: false, description: "Agent 登录请求；成功后返回本地短期 access token。" });
+}, { $id: "AgentLoginRequest", additionalProperties: false, description: "Agent 登录请求；不填 tenant_id 时按 account/enterprise 解析企业，成功后返回本地短期 access token。" });
 const AgentResetPasswordRequest = Type.Object({
-  tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID。" }),
+  tenant_id: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "已解析的企业租户 UUID；省略时服务端按 account/enterprise 自动解析。" })),
+  enterprise: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "企业代码或名称；同账号跨企业时用于消歧。" })),
   account: Type.String({ minLength: 1, maxLength: 256, description: "需要重置密码的负责人账号。" }),
   old_password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "当前密码；仅通过请求发送。" }),
   new_password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "新密码；仅通过请求发送。" }),
@@ -1211,12 +1213,32 @@ export class AgentHttpServer {
     if (!expected.trim() || data?.claims?.tenant_id !== expected) throw new ManagerUnavailableError("Manager returned an invalid Agent tenant identity");
   }
 
+  /** 公开认证端点的企业解析：显式 tenant_id 优先；否则按 account/enterprise 让 Manager 解析。 */
+  private async resolveAuthTenant(tenantId: string | null, account: string, enterprise: string | null): Promise<string> {
+    const explicit = tenantId?.trim();
+    if (explicit) return explicit;
+    if (!this.options.managerClient?.resolveTenantByAccount) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is not configured");
+    try {
+      const payload = await this.options.managerClient.resolveTenantByAccount(account, enterprise ?? undefined);
+      const resolved = payload && typeof payload === "object" ? (payload as { data?: { tenant_id?: unknown } }).data?.tenant_id : undefined;
+      if (typeof resolved !== "string" || !resolved.trim()) throw new ManagerUnavailableError("Manager returned an invalid tenant resolution");
+      return resolved;
+    } catch (error) {
+      if (error instanceof ManagerAuthError) {
+        const body = error.body && typeof error.body === "object" ? error.body as Record<string, unknown> : undefined;
+        throw new HttpProblem(error.status, typeof body?.code === "string" ? body.code : "tenant_resolution_failed", typeof body?.detail === "string" ? body.detail : "Manager tenant resolution failed", body?.errors);
+      }
+      if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager tenant resolution is unavailable");
+      throw error;
+    }
+  }
+
   private async login(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (!this.options.managerClient?.login) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is not configured");
     const body = await this.readJson(request);
-    const tenantId = this.stringField(body.tenant_id, "tenant_id", 200);
     const account = this.stringField(body.account, "account", 256);
     const password = this.stringField(body.password, "password", 512);
+    const tenantId = await this.resolveAuthTenant(this.optionalString(body.tenant_id, "tenant_id"), account, this.optionalString(body.enterprise, "enterprise"));
     try {
       const payload = await this.options.managerClient.login({ tenant_id: tenantId, account, password });
       this.validateAuthTenant(payload, tenantId);
@@ -1234,9 +1256,10 @@ export class AgentHttpServer {
   private async resetPassword(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (!this.options.managerClient?.ownerReset) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is not configured");
     const body = await this.readJson(request);
+    const account = this.stringField(body.account, "account", 256);
     const input = {
-      tenant_id: this.stringField(body.tenant_id, "tenant_id", 200),
-      account: this.stringField(body.account, "account", 256),
+      tenant_id: await this.resolveAuthTenant(this.optionalString(body.tenant_id, "tenant_id"), account, this.optionalString(body.enterprise, "enterprise")),
+      account,
       old_password: this.stringField(body.old_password, "old_password", 512),
       new_password: this.stringField(body.new_password, "new_password", 512),
     };

@@ -154,12 +154,13 @@ http://127.0.0.1:PORT_VALUE/
 Agent 自带页面/本地聊天模块使用下面的既有认证窄通道；它不是所有业务的通用代理。复合客户端企业招募、组织/知识管理、企业汇总直接访问 Manager 并使用该企业身份；平台运营模块直接访问 Operator 并使用平台身份，不能复用企业 token 冒充平台权限。首次本地登录按以下顺序：
 
 ```text
-POST /api/auth/resolve-tenant-by-account
-POST /api/agent/login
+POST /api/agent/login       # 只需 account + password（+ 同账号多企业时的 enterprise）
 GET  /api/agent/whoami
 POST /api/agent/grants/sync
 GET  /api/agent/grants/readiness
 ```
+
+`/api/agent/login` 自行解析企业：传 `tenant_id` 则直接使用；否则由同源 Agent 按 `account`、`enterprise` 访问 Manager 解析。客户端**不必**先调 `POST /api/auth/resolve-tenant-by-account`（该端点仍保留给需要提前展示企业选择/消歧的 UI）；同账号跨多企业时传 `enterprise` 消歧，缺省企业则不传。密码重置 `/api/agent/reset-password` 采用同一入参解析规则。
 
 登录或同步返回 `503` 表示 Manager 不可达，客户端展示离线状态；不要把它当成本地 Agent 启动失败。
 

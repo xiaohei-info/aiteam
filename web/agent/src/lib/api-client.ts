@@ -40,6 +40,12 @@ export interface AgentPasswordResetRequest {
   tenant_id?: string | null;
 }
 
+/** 企业消歧字段：显式 tenant_id 优先；否则由同源 Agent 按 enterprise 解析，前端不必先调 resolve。 */
+function tenantFields(req: { tenant_id?: string | null; enterprise?: string | null }): Record<string, string> {
+  if (req.tenant_id) return { tenant_id: req.tenant_id };
+  return req.enterprise?.trim() ? { enterprise: req.enterprise.trim() } : {};
+}
+
 export interface AgentClientOptions {
   /** 同 origin 部署留空；测试时显式给 origin。 */
   baseUrl?: string;
@@ -69,9 +75,8 @@ export class AgentApiClient extends ApiClient {
 
   /** 本地登录（对齐 server /api/agent/login，公开端点）。 */
   async login(req: AgentLoginRequest): Promise<AgentLoginResult> {
-    const tenant_id = await this.resolveTenant(req.account, req.tenant_id, req.enterprise);
     const result = await this.post<AgentLoginResult>("/api/agent/login", {
-      body: { account: req.account, password: req.password, tenant_id },
+      body: { account: req.account, password: req.password, ...tenantFields(req) },
     });
     if (result === null) {
       // 不应发生：登录端点约定返回 envelope.data；防御性兜底，消除「null 当结果用」。
@@ -82,13 +87,12 @@ export class AgentApiClient extends ApiClient {
 
   /** 密码重置（对齐 server /api/agent/reset-password，公开端点）。 */
   async resetPassword(req: AgentPasswordResetRequest): Promise<AgentLoginResult> {
-    const tenant_id = await this.resolveTenant(req.account, req.tenant_id, req.enterprise);
     const result = await this.post<AgentLoginResult>("/api/agent/reset-password", {
       body: {
         account: req.account,
-        tenant_id,
         old_password: req.password,
         new_password: req.new_password,
+        ...tenantFields(req),
       },
     });    if (result === null) {
       throw new Error("resetPassword: empty envelope");
@@ -99,14 +103,5 @@ export class AgentApiClient extends ApiClient {
   /** 解出当前身份（对齐 server /api/agent/whoami，受保护）。 */
   async whoami(): Promise<TokenClaims | null> {
     return this.get<TokenClaims>("/api/agent/whoami");
-  }
-
-  private async resolveTenant(account: string, tenantId?: string | null, enterprise?: string | null): Promise<string> {
-    if (tenantId) return tenantId;
-    const result = await this.post<{ tenant_id: string }>("/api/auth/resolve-tenant-by-account", {
-      body: { account, ...(enterprise?.trim() ? { enterprise: enterprise.trim() } : {}) },
-    });
-    if (!result?.tenant_id) throw new Error("resolve tenant: empty response");
-    return result.tenant_id;
   }
 }

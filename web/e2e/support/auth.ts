@@ -222,7 +222,7 @@ export async function loginViaPage(
   const textInputs = form.locator("input[type=text], input:not([type])");
   const passwordInput = form.locator("input[type=password]");
 
-  // Manager 保留 tenant_id 输入；Agent 由同源 Node Agent 按账号解析租户。
+  // Manager 保持 tenant_id 输入框；Agent 改由同源 Node Agent 按 account/enterprise 解析租户。
   if (tier === "manager" && creds.tenant_id) {
     await textInputs.first().fill(creds.tenant_id);
   }
