@@ -30,6 +30,18 @@ def get_trace_id() -> str | None:
     return _trace_id_var.get()
 
 
+def get_propagation_headers() -> dict[str, str]:
+    """Create a fresh W3C child span header for a downstream request."""
+    trace_id = _trace_id_var.get()
+    if not isinstance(trace_id, str) or len(trace_id) != 32:
+        trace_id = uuid.uuid4().hex
+    request_id = _request_id_var.get()
+    return {
+        "traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01",
+        **({"X-Request-ID": request_id} if request_id else {}),
+    }
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """为每个请求分配/透传 request_id 与 trace_id，写入 request.state 与响应头。"""
 

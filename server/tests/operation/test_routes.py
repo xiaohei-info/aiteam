@@ -82,6 +82,10 @@ def _auth(role: str) -> dict:
     return {"Authorization": f"Bearer {_token(role)}"}
 
 
+def _headers(role: str, key: str) -> dict:
+    return {**_auth(role), "Idempotency-Key": key}
+
+
 _BODY = {"enterprise_name": "Acme", "owner_phone": "13800000000"}
 
 
@@ -94,7 +98,7 @@ def test_provision_requires_auth(client):
 
 def test_provision_forbidden_for_non_platform_role(client):
     r = client.post(
-        "/api/operation/enterprises", json=_BODY, headers=_auth(EnterpriseRole.MEMBER.value)
+        "/api/operation/enterprises", json=_BODY, headers=_headers(EnterpriseRole.MEMBER.value, "forbidden-provision")
     )
     assert r.status_code == 403
     assert r.json()["code"] == "forbidden"
@@ -104,7 +108,7 @@ def test_provision_forbidden_for_non_platform_role(client):
     "role", [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR.value]
 )
 def test_provision_success_envelope(client, manager, role):
-    r = client.post("/api/operation/enterprises", json=_BODY, headers=_auth(role))
+    r = client.post("/api/operation/enterprises", json=_BODY, headers=_headers(role, f"provision-{role}"))
     assert r.status_code == 201
     data = r.json()["data"]
     assert data["enterprise_name"] == "Acme"
@@ -128,13 +132,13 @@ def test_provision_validation_error_422(client):
 
 def test_reset_flow(client):
     created = client.post(
-        "/api/operation/enterprises", json=_BODY, headers=_auth(PlatformRole.SYSTEM_ADMIN.value)
+        "/api/operation/enterprises", json=_BODY, headers=_headers(PlatformRole.SYSTEM_ADMIN.value, "reset-provision")
     ).json()["data"]
     eid = created["enterprise_id"]
 
     r = client.post(
         f"/api/operation/enterprises/{eid}/owner-bootstrap/reset",
-        headers=_auth(PlatformRole.SYSTEM_ADMIN.value),
+        headers=_headers(PlatformRole.SYSTEM_ADMIN.value, "reset-key"),
     )
     assert r.status_code == 200
     data = r.json()["data"]
@@ -146,7 +150,7 @@ def test_reset_flow(client):
 def test_reset_unknown_enterprise_404(client):
     r = client.post(
         "/api/operation/enterprises/nope/owner-bootstrap/reset",
-        headers=_auth(PlatformRole.SYSTEM_OPERATOR.value),
+        headers=_headers(PlatformRole.SYSTEM_OPERATOR.value, "reset-unknown"),
     )
     assert r.status_code == 404
     assert r.json()["code"] == "not_found"

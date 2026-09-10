@@ -108,7 +108,14 @@ load_env() {
   # 控制面环境名必须由 ctl 的 --env 选择器决定，不能让 .env.prod 缺省值回落为 dev。
   case "${ENV_CONFIG}" in
     prod) export AITEAM_ENV="production" ;;
-    test) export AITEAM_ENV="test" ;;
+    test)
+      export AITEAM_ENV="test"
+      # TEST onboarding writes require an explicit deployment env value; there
+      # is no implicit default and production has no equivalent bypass.
+      if [[ -n "${AITEAM_TEST_ENABLE_ONBOARDING_WRITES:-}" ]]; then
+        export AITEAM_TEST_ENABLE_ONBOARDING_WRITES
+      fi
+      ;;
     dev)  export AITEAM_ENV="development" ;;
   esac
 
@@ -463,7 +470,7 @@ try:
             e = int.from_bytes(base64.urlsafe_b64decode(key["e"] + "=" * (-len(key["e"]) % 4)), "big")
         except (ValueError, base64.binascii.Error) as exc:
             raise ValueError from exc
-        if n.bit_length() < 512 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
+        if n.bit_length() < 2048 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
             raise ValueError
 except (OSError, UnicodeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
     sys.exit(1)
@@ -512,7 +519,7 @@ try:
             e = int.from_bytes(base64.urlsafe_b64decode(key["e"] + "=" * (-len(key["e"]) % 4)), "big")
         except (ValueError, base64.binascii.Error) as exc:
             raise ValueError from exc
-        if n.bit_length() < 512 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
+        if n.bit_length() < 2048 or e < 3 or e % 2 == 0 or e.bit_length() > 32:
             raise ValueError
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     sys.exit(1)

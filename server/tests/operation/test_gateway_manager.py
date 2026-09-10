@@ -6,7 +6,7 @@
 from unittest.mock import MagicMock
 
 from operation_service.manager_gateway import HttpManagerGateway
-from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
 
 
 def _make_gateway():
@@ -30,6 +30,10 @@ def test_provision_tenant_calls_post():
     body = kwargs["json"]
     assert body["enterprise_id"] == "ent-1"
     assert body["tenant_id"] == "ten-1"
+    assert kwargs["service_purpose"] == "enterprise:provision"
+    assert kwargs["service_capability"] == "provision-enterprise"
+    assert kwargs["service_enterprise_id"] == "ent-1"
+    assert kwargs["service_tenant_id"] == "ten-1"
 
 
 def test_sync_owner_bootstrap_calls_post():
@@ -48,3 +52,20 @@ def test_sync_owner_bootstrap_calls_post():
     assert body["tenant_id"] == "ten-1"
     assert body["bootstrap_secret"] == "secret123"
     assert body["must_reset"] is True
+    assert kwargs["service_purpose"] == "owner:bootstrap"
+    assert kwargs["service_tenant_id"] == "ten-1"
+
+
+def test_notify_enterprise_scopes_service_assertion_to_target():
+    gw, client = _make_gateway()
+    req = EnterpriseNotifyRequest(
+        tenant_id="ten-1",
+        org_id="ent-1",
+        message="maintenance",
+    )
+    gw.notify_enterprise(req, idempotency_key="key-3")
+    args, kwargs = client.post.call_args
+    assert args[0] == "/api/manager/enterprise/notify"
+    assert kwargs["service_purpose"] == "notification:write"
+    assert kwargs["service_enterprise_id"] == "ent-1"
+    assert kwargs["service_tenant_id"] == "ten-1"

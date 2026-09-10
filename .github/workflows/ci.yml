@@ -133,6 +133,13 @@ jobs:
         # 显式 -m integration；迁移在首次连接自动应用（apply_migrations），无需手动建表。
         run: python -m pytest -q -m integration
 
+      - name: Verify TEST onboarding HTTP contract
+        working-directory: server
+        env:
+          AITEAM_ENV: test
+          AITEAM_TEST_ENABLE_ONBOARDING_WRITES: "true"
+        run: python -m pytest -q -m integration tests/integration/loops/loop_a_open_enterprise/test_onboarding_idempotency.py::test_manager_http_onboarding_opt_in_runs_f01_f02_f17_idempotently
+
   node-agent:
     name: Node Agent typecheck + tests
     runs-on: ubuntu-latest
@@ -227,7 +234,7 @@ jobs:
           env -u OPERATION_DB_URL -u OPERATION_ADMIN_DB_URL \
             -u OPER_TEST_DB_URL -u OPER_TEST_ADMIN_DB_URL -u OPER_TEST_APP_RW_PASSWORD \
             python -m pytest -q -m "not integration" \
-            --cov=operation_service --cov=manager_service --cov=shared \
+            --cov=. \
             --cov-branch --cov-report=json:"$RUNNER_TEMP/head.json" --cov-report=xml:coverage.xml
 
       # base(main) 的非 integration 覆盖数字对同一 base sha 恒定——按 sha 缓存，命中即跳过。
@@ -249,7 +256,7 @@ jobs:
           env -u DB_URL -u ADMIN_DB_URL -u OPERATION_DB_URL -u OPERATION_ADMIN_DB_URL \
             -u OPER_TEST_DB_URL -u OPER_TEST_ADMIN_DB_URL -u OPER_TEST_APP_RW_PASSWORD \
             python -m pytest -q -m "not integration" \
-              --cov=operation_service --cov=manager_service --cov=shared \
+              --cov=. \
               --cov-branch --cov-report=json:"$GITHUB_WORKSPACE/base-cov/base.json"
 
       - name: 改动分支覆盖门槛（diff-cover ≥90%）

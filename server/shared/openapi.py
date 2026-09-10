@@ -1679,12 +1679,23 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
         },
     )
     components["securitySchemes"].setdefault(
+        "serviceIdentity",
+        {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "生产 Operator↔Manager 服务调用使用每请求短期 RS256 service assertion；绑定 audience、scope、origin、target、path/body 与 jti。",
+        },
+    )
+    # Compatibility documentation only: routes never advertise this scheme;
+    # the X-Service-Token guard is available solely in explicit dev/test mode.
+    components["securitySchemes"].setdefault(
         "serviceToken",
         {
             "type": "apiKey",
             "in": "header",
             "name": "X-Service-Token",
-            "description": "仅用于 Operator↔Manager 服务间窄通信；不是用户登录 token。",
+            "description": "仅 dev/test 兼容的 legacy shared token；production 不接受，不是用户登录 token。",
         },
     )
     components.setdefault("headers", {})
@@ -1868,7 +1879,7 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
 
             kind = _security_kind(path, operation_id)
             is_mcp = operation.get("x-protocol") == "mcp"
-            operation["security"] = [] if kind is None else [{"serviceToken": []}] if kind == "service" else [{"bearerAuth": []}]
+            operation["security"] = [] if kind is None else [{"serviceIdentity": []}] if kind == "service" else [{"bearerAuth": []}]
             responses = operation.setdefault("responses", {})
             public_auth_forbidden = operation_id in {
                 "manager_login", "manager_owner_reset", "manager_passkey_authentication_options",

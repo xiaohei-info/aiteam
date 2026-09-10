@@ -24,6 +24,11 @@ def _claims(exp_in: int = 3600, **kw) -> TokenClaims:
     return TokenClaims(**base)
 
 
+def test_rsa_keypair_rejects_weak_key_size():
+    with pytest.raises(ValueError, match="at least 2048"):
+        generate_rsa_keypair(1024)
+
+
 def test_rs256_sign_and_verify_roundtrip():
     priv, pub = generate_rsa_keypair()
     signer = RS256TokenSigner(priv, kid="k1")

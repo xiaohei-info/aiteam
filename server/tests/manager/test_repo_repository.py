@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from manager_service.repository import IdentityRow, TenantAuthRepository
 from shared.contracts.enums import AuthProvider
 
@@ -49,6 +51,30 @@ class TestFindIdentity:
         router.queue(FakeCursor(fetchone=("i-1", "m-1", "secret", False, None, None, "active")))
         row = TenantAuthRepository(router).find_identity(ctx(), provider=AuthProvider.PASSWORD, external_id="a")
         assert row.roles == []
+
+
+class TestSyncOwnerBootstrapInSession:
+    def test_creates_owner_in_one_session(self):
+        router = FakeRouter().queue_many(FakeCursor(fetchone=None), FakeCursor(fetchone=("owner-1",)), FakeCursor())
+        user_id, replaced = TenantAuthRepository(router).sync_owner_bootstrap_in_session(
+            router.session(ctx()), ctx(), phone="13800000000", secret="hash", must_reset=True,
+        )
+        assert user_id == "owner-1"
+        assert replaced is False
+        assert "tenant_id" in router.executed[0][0]
+
+    def test_replaces_active_owner_and_rejects_inactive(self):
+        router = FakeRouter().queue_many(FakeCursor(fetchone=("owner-1", "active")), FakeCursor())
+        user_id, replaced = TenantAuthRepository(router).sync_owner_bootstrap_in_session(
+            router.session(ctx()), ctx(), phone="13800000000", secret="hash", must_reset=True,
+        )
+        assert (user_id, replaced) == ("owner-1", True)
+        router = FakeRouter().queue(FakeCursor(fetchone=("owner-1", "disabled")))
+        from manager_service.active_principal import PrincipalInactive
+        with pytest.raises(PrincipalInactive):
+            TenantAuthRepository(router).sync_owner_bootstrap_in_session(
+                router.session(ctx()), ctx(), phone="13800000000", secret="hash", must_reset=True,
+            )
 
 
 class TestUpdateSecret:

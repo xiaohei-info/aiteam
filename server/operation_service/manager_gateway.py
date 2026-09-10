@@ -1,7 +1,7 @@
 """Operator → Manager 窄通信网关（05 §5.1/§5.4 F01/F02/F17，D4/D14）。
 
 封装云侧写调用：创建 tenant、同步负责人 bootstrap、运营通知企业。统一经 shared/service_client
-（TLS + 服务身份签名占位）发起，写调用必带 `Idempotency-Key`（05 §5.1）。
+（TLS + 每请求短期 signed service identity）发起，写调用必带 `Idempotency-Key`（05 §5.1）。
 
 设计要点：
 - Operator **不写 Manager 租户库**——这里只是 service-to-service 调用，Manager 自行在租户上下文内落库。
@@ -48,6 +48,10 @@ class HttpManagerGateway:
             self._PROVISION_PATH,
             json=req.model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
+            service_purpose="enterprise:provision",
+            service_capability="provision-enterprise",
+            service_enterprise_id=req.enterprise_id,
+            service_tenant_id=req.tenant_id,
         )
 
     def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> None:
@@ -55,6 +59,8 @@ class HttpManagerGateway:
             self._BOOTSTRAP_PATH,
             json=req.model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
+            service_purpose="owner:bootstrap",
+            service_tenant_id=req.tenant_id,
         )
 
     def notify_enterprise(self, req: EnterpriseNotifyRequest, *, idempotency_key: str) -> None:
@@ -62,4 +68,7 @@ class HttpManagerGateway:
             self._NOTIFY_PATH,
             json=req.model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
+            service_purpose="notification:write",
+            service_enterprise_id=req.org_id,
+            service_tenant_id=req.tenant_id,
         )

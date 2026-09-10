@@ -92,6 +92,8 @@ def generate_rsa_keypair(bits: int = 2048) -> tuple[str, str]:
 
     生产环境密钥应由控制面安全生成/托管并按 tenant 持有；本 helper 供初始化与测试。
     """
+    if bits < 2048:
+        raise ValueError("RSA key size must be at least 2048 bits")
     key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
     private_pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,

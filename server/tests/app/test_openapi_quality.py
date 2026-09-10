@@ -44,6 +44,8 @@ def _has_example(value: dict[str, Any]) -> bool:
 def test_control_plane_openapi_is_documented(tier: str) -> None:
     spec = TestClient(get_app(tier)).get("/openapi.json").json()
     assert "bearerAuth" in spec["components"]["securitySchemes"]
+    assert "serviceIdentity" in spec["components"]["securitySchemes"]
+    assert spec["components"]["securitySchemes"]["serviceIdentity"]["scheme"] == "bearer"
     assert "serviceToken" in spec["components"]["securitySchemes"]
     assert spec["components"]["responses"]["ValidationError"]["content"]["application/problem+json"]
     operation_ids: set[str] = set()
@@ -75,7 +77,7 @@ def test_control_plane_openapi_is_documented(tier: str) -> None:
                 "manager_catalog_notify",
                 "manager_inbox_deliver_from_operation",
             } or path.startswith("/api/operation/catalog/pull/") or path.startswith("/api/operation/skill-market/pull/"):
-                assert operation["security"] == [{"serviceToken": []}]
+                assert operation["security"] == [{"serviceIdentity": []}]
                 assert "403" not in operation["responses"], f"{label} service-token route must not claim role-based 403"
             else:
                 assert operation["security"] == [{"bearerAuth": []}]

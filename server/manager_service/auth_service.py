@@ -28,7 +28,7 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, NotFound, Unauthorized, ValidationProblem
+from shared.errors import Conflict, NotFound, ServiceUnavailable, Unauthorized, ValidationProblem
 
 from .active_principal import require_active
 from .auth_password_policy import (
@@ -138,6 +138,41 @@ class AuthService:
         )
         return existing.user_id, True
 
+    def sync_owner_bootstrap_idempotent(
+        self,
+        tenant_id,
+        *,
+        phone,
+        bootstrap_password,
+        must_reset: bool,
+        idempotency_repository,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ):
+        """Apply F02 and its durable receipt in one tenant/RLS transaction."""
+        validate_password_complexity(bootstrap_password)
+        ctx = TenantContext(tenant_id=tenant_id, user_id="system", roles=[EnterpriseRole.OWNER.value])
+        hashed = hash_password(bootstrap_password)
+
+        def effect(session):
+            user_id, _replaced = self._repo.sync_owner_bootstrap_in_session(
+                session,
+                ctx,
+                phone=phone,
+                secret=hashed,
+                must_reset=must_reset,
+            )
+            return {"tenant_id": str(tenant_id), "user_id": str(user_id)}
+
+        return idempotency_repository.execute(
+            ctx,
+            operation="owner-bootstrap",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            effect=effect,
+            status_code=201,
+        )
+
     def create_member(
         self, tenant_id, *, phone, initial_password, display_name="", must_reset=True
     ):
@@ -223,10 +258,11 @@ class AuthService:
         ctx = TenantContext(tenant_id=tenant_id, user_id=user_id, roles=[])
         principal = require_active(self._repo.find_user(ctx, user_id=user_id))
         roles = list(principal.roles)
+        enterprise_id = self._enterprise_id_for_tenant(tenant_id)
         now = int(time.time())
         claims = TokenClaims(
             tenant_id=tenant_id,
-            enterprise_id=tenant_id,
+            enterprise_id=enterprise_id,
             user_id=user_id,
             roles=roles,
             iss=os.getenv("AITEAM_JWT_ISSUER", "aiteam-manager"),
@@ -236,6 +272,20 @@ class AuthService:
         )
         token = self._keys.signer(tenant_id).sign(claims)
         return AuthResult(token=token, claims=claims)
+
+    def _enterprise_id_for_tenant(self, tenant_id: str) -> str | None:
+        """Resolve the persisted Operator enterprise binding for token claims."""
+        import psycopg
+
+        try:
+            with psycopg.connect(self._admin_dsn, autocommit=True) as conn:
+                row = conn.execute(
+                    "SELECT enterprise_id FROM tenant_registry WHERE tenant_id = %s",
+                    (tenant_id,),
+                ).fetchone()
+        except psycopg.Error as exc:
+            raise ServiceUnavailable("Manager enterprise mapping is unavailable") from exc
+        return None if row is None or row[0] is None else str(row[0])
 
     def issue(self, tenant_id, user_id, roles):
         """单一 token 出口（MFA Authenticator 共用）。"""

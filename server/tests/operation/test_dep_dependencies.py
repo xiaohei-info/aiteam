@@ -62,6 +62,11 @@ def _stub_migrations(monkeypatch):
     monkeypatch.setattr(admin_deps, "apply_migrations", lambda *a, **k: None)
 
 
+def _set_operation_dsns(monkeypatch):
+    monkeypatch.setenv("OPERATION_DB_URL", "postgresql://app_rw@localhost/oper")
+    monkeypatch.setenv("OPERATION_ADMIN_DB_URL", "postgresql://admin@localhost/oper")
+
+
 # ---- memory path (default) ----
 
 def test_get_repository_memory(monkeypatch):
@@ -105,6 +110,7 @@ def test_get_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    _set_operation_dsns(monkeypatch)
     called = {"migrations": False}
 
     def _fake_apply_migrations(db_url, pw=None):
@@ -121,6 +127,7 @@ def test_get_admin_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    _set_operation_dsns(monkeypatch)
     _stub_migrations(monkeypatch)
     repo = get_admin_repository()
     assert isinstance(repo, PgAdminRepository)
@@ -130,6 +137,7 @@ def test_get_rollup_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    _set_operation_dsns(monkeypatch)
     _stub_migrations(monkeypatch)
     repo = get_rollup_repository()
     assert isinstance(repo, PgRollupRepository)
@@ -139,6 +147,7 @@ def test_get_solution_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    _set_operation_dsns(monkeypatch)
     _stub_migrations(monkeypatch)
     repo = get_solution_repository()
     assert isinstance(repo, PgSolutionRepository)
@@ -148,6 +157,7 @@ def test_get_catalog_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
+    _set_operation_dsns(monkeypatch)
     _stub_migrations(monkeypatch)
     repo = cat_deps.get_catalog_repository()
     assert isinstance(repo, PgCatalogRepository)

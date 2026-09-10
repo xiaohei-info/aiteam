@@ -1,7 +1,7 @@
 """企业开通 + 负责人 bootstrap 签发/重置编排（05 F01/F02，03 §9.2，D1）。
 
 流程（F01+F02）：
-1. 生成 enterprise_id / tenant_id；生成一次性 bootstrap 明文，只在响应里返回一次。
+1. 生成 enterprise_id / tenant_id；一次性 bootstrap 仅在内存 fanout/响应中使用，耐久 receipt 只存加密密文。
 2. 调 Manager(窄通信) 创建 tenant（F01）。
 3. 调 Manager 同步负责人 bootstrap 明文（F02，TLS 服务间）；Manager 单次 scrypt 落库（单一 hash 真相源）。
 4. 本端 oper 库只持 sha256 校验材料（Operator 永不持长期密码）。
@@ -19,9 +19,15 @@ import uuid
 
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.platform_provider import PlatformModelRef
+from shared.errors import Conflict, NotFound
 
 from .admin_repository import AdminRepository
 from .manager_gateway import ManagerGateway
+from .onboarding_receipt import (
+    build_onboarding_receipt_store,
+    canonical_request_fingerprint,
+    normalize_idempotency_key,
+)
 from .repository import EnterpriseAccount, EnterpriseRepository
 from .schemas import (
     EnterpriseProvisioned,
@@ -93,75 +99,123 @@ class ProvisioningService:
         self._manager = manager
         self._admin = admin_repo
         self._platform_providers = platform_provider_service
+        self._onboarding_receipts = build_onboarding_receipt_store(repo)
 
-    def provision_enterprise(self, req: ProvisionEnterpriseRequest) -> EnterpriseProvisioned:
-        allowed_model_refs = None if req.allowed_model_refs is None else _dedupe_model_refs(req.allowed_model_refs)
-        self._validate_allowed_model_refs(allowed_model_refs)
+    def provision_enterprise(
+        self,
+        req: ProvisionEnterpriseRequest,
+        *,
+        idempotency_key: str | None = None,
+    ) -> EnterpriseProvisioned:
+        request_body = req.model_dump(mode="json", exclude_none=False)
+        request_fingerprint = canonical_request_fingerprint(
+            req.model_dump(mode="json", exclude_none=True)
+        )
         enterprise_id = str(uuid.uuid4())
         tenant_id = str(uuid.uuid4())
-        secret = _new_bootstrap_secret()
-        local_hash = _hash_bootstrap_local(secret)  # Operator 本端只持 sha256 校验材料
-
-        # F01：请求 Manager 建 tenant（写调用带 Idempotency-Key）。
-        self._manager.provision_tenant(
-            TenantProvisionRequest(
-                enterprise_id=enterprise_id,
-                tenant_id=tenant_id,
-                enterprise_name=req.enterprise_name,
-                enterprise_code=req.enterprise_code,
-                initial_quota_policy=req.initial_quota_policy,
-                visible_catalog_policy=req.visible_catalog_policy,
-                allowed_model_refs=allowed_model_refs,
-            ),
-            idempotency_key=f"provision:{enterprise_id}",
-        )
-
-        # F02：同步负责人 bootstrap 明文（TLS 服务间；Manager 单次 scrypt，单一 hash 真相源）。
-        self._manager.sync_owner_bootstrap(
-            OwnerBootstrapSync(
-                tenant_id=tenant_id,
-                owner_phone=req.owner_phone,
-                bootstrap_secret=secret,
-                must_reset=True,
-            ),
-            idempotency_key=f"bootstrap:{enterprise_id}:0",
-        )
-
-        # 本端只在跨端写成功后落账，避免悬挂账号（最终一致：失败由上层重试同 key）。
-        self._repo.create(
-            EnterpriseAccount(
-                enterprise_id=enterprise_id,
-                tenant_id=tenant_id,
-                enterprise_name=req.enterprise_name,
-                enterprise_code=req.enterprise_code,
-                owner_phone=req.owner_phone,
-                owner_bootstrap_hash=local_hash,
-                allowed_model_refs=(
-                    [ref.model_dump(mode="json") for ref in allowed_model_refs]
-                    if allowed_model_refs is not None else None
-                ),
-            )
-        )
-
-        # 同步注册 admin 状态（概览/账号管理/财务管理等 admin 页面查询 AdminRepository；
-        # 不注册则开通后这些页面看不到新企业）。
-        if self._admin is not None:
-            self._admin.register_enterprise(
-                enterprise_id=enterprise_id,
-                enterprise_name=req.enterprise_name,
-                owner_phone=req.owner_phone,
-            )
-
-        return EnterpriseProvisioned(
+        key = normalize_idempotency_key(idempotency_key) if idempotency_key else f"provision:{enterprise_id}"
+        receipt = self._onboarding_receipts.reserve(
+            idempotency_key=key,
+            request_fingerprint=request_fingerprint,
+            request_body=request_body,
             enterprise_id=enterprise_id,
             tenant_id=tenant_id,
             enterprise_name=req.enterprise_name,
             enterprise_code=req.enterprise_code,
             owner_phone=req.owner_phone,
-            owner_bootstrap_secret=secret,
+            bootstrap_secret=_new_bootstrap_secret(),
+        )
+        if receipt.state == "completed" and receipt.safe_response is not None:
+            return EnterpriseProvisioned(
+                **receipt.safe_response,
+                owner_bootstrap_secret=receipt.bootstrap_secret,
+            )
+
+        # Resume exactly the body/IDs/secret persisted before any fanout.  This
+        # makes a crash after Manager accepted F01/F02 safe to retry without a
+        # second enterprise or a different one-time secret.
+        original = ProvisionEnterpriseRequest.model_validate(receipt.request_body)
+        allowed_model_refs = (
+            None
+            if original.allowed_model_refs is None
+            else _dedupe_model_refs(original.allowed_model_refs)
+        )
+        self._validate_allowed_model_refs(allowed_model_refs)
+        local_hash = _hash_bootstrap_local(receipt.bootstrap_secret)
+
+        provision_manager_key = (
+            receipt.idempotency_key
+            if idempotency_key is None
+            else f"provision:{receipt.idempotency_key}"
+        )
+        bootstrap_manager_key = (
+            f"bootstrap:{receipt.enterprise_id}:0"
+            if idempotency_key is None
+            else f"bootstrap:{receipt.idempotency_key}"
+        )
+        self._manager.provision_tenant(
+            TenantProvisionRequest(
+                enterprise_id=receipt.enterprise_id,
+                tenant_id=receipt.tenant_id,
+                enterprise_name=original.enterprise_name,
+                enterprise_code=original.enterprise_code,
+                initial_quota_policy=original.initial_quota_policy,
+                allowed_model_refs=allowed_model_refs,
+            ),
+            idempotency_key=provision_manager_key,
+        )
+        self._manager.sync_owner_bootstrap(
+            OwnerBootstrapSync(
+                tenant_id=receipt.tenant_id,
+                owner_phone=original.owner_phone,
+                bootstrap_secret=receipt.bootstrap_secret,
+                must_reset=True,
+            ),
+            idempotency_key=bootstrap_manager_key,
+        )
+
+        account = EnterpriseAccount(
+            enterprise_id=receipt.enterprise_id,
+            tenant_id=receipt.tenant_id,
+            enterprise_name=original.enterprise_name,
+            enterprise_code=original.enterprise_code,
+            owner_phone=original.owner_phone,
+            owner_bootstrap_hash=local_hash,
+            allowed_model_refs=(
+                [ref.model_dump(mode="json") for ref in allowed_model_refs]
+                if allowed_model_refs is not None else None
+            ),
+        )
+        try:
+            existing = self._repo.get(receipt.enterprise_id)
+        except NotFound:
+            self._repo.create(account)
+        else:
+            if existing != account:
+                raise Conflict("enterprise receipt conflicts with the persisted Operator account")
+
+        if self._admin is not None:
+            self._admin.register_enterprise(
+                enterprise_id=receipt.enterprise_id,
+                enterprise_name=original.enterprise_name,
+                owner_phone=original.owner_phone,
+            )
+
+        result = EnterpriseProvisioned(
+            enterprise_id=receipt.enterprise_id,
+            tenant_id=receipt.tenant_id,
+            enterprise_name=original.enterprise_name,
+            enterprise_code=original.enterprise_code,
+            owner_phone=original.owner_phone,
+            owner_bootstrap_secret=receipt.bootstrap_secret,
             must_reset=True,
             allowed_model_refs=allowed_model_refs,
         )
+        self._onboarding_receipts.complete(
+            receipt.idempotency_key,
+            result.model_dump(mode="json", exclude={"owner_bootstrap_secret"}),
+        )
+        return result
 
     def get_model_access(self, enterprise_id: str) -> EnterpriseModelAccessOut:
         account = self._repo.get(enterprise_id)
@@ -200,28 +254,55 @@ class ProvisioningService:
         for ref in refs:
             self._platform_providers.validate_model_ref(ref, require_published=True)
 
-    def reset_owner_bootstrap(self, enterprise_id: str) -> OwnerBootstrapResetResult:
+    def reset_owner_bootstrap(
+        self,
+        enterprise_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> OwnerBootstrapResetResult:
         account = self._repo.get(enterprise_id)  # NotFound -> 404
-        secret = _new_bootstrap_secret()
-        local_hash = _hash_bootstrap_local(secret)
+        raw_key = normalize_idempotency_key(idempotency_key)
+        receipt_key = f"reset:{enterprise_id}:{raw_key}"
+        receipt_body = {"enterprise_id": enterprise_id, "operation": "owner-bootstrap-reset"}
+        receipt = self._onboarding_receipts.reserve(
+            idempotency_key=receipt_key,
+            request_fingerprint=canonical_request_fingerprint(receipt_body),
+            request_body=receipt_body,
+            enterprise_id=account.enterprise_id,
+            tenant_id=account.tenant_id,
+            enterprise_name=account.enterprise_name,
+            enterprise_code=account.enterprise_code,
+            owner_phone=account.owner_phone,
+            bootstrap_secret=_new_bootstrap_secret(),
+        )
+        if receipt.state == "completed" and receipt.safe_response is not None:
+            return OwnerBootstrapResetResult(
+                **receipt.safe_response,
+                owner_bootstrap_secret=receipt.bootstrap_secret,
+            )
 
-        # 用唯一 reset id 派生 Idempotency-Key：每次重置是一次新的写。
-        reset_id = uuid.uuid4().hex
         self._manager.sync_owner_bootstrap(
             OwnerBootstrapSync(
-                tenant_id=account.tenant_id,
-                owner_phone=account.owner_phone,
-                bootstrap_secret=secret,
+                tenant_id=receipt.tenant_id,
+                owner_phone=receipt.owner_phone,
+                bootstrap_secret=receipt.bootstrap_secret,
                 must_reset=True,
             ),
-            idempotency_key=f"bootstrap:{enterprise_id}:reset:{reset_id}",
+            idempotency_key=f"bootstrap:{receipt.idempotency_key}",
         )
-        self._repo.update_bootstrap_hash(enterprise_id, local_hash)
-
-        return OwnerBootstrapResetResult(
-            enterprise_id=enterprise_id,
-            tenant_id=account.tenant_id,
-            owner_phone=account.owner_phone,
-            owner_bootstrap_secret=secret,
+        self._repo.update_bootstrap_hash(
+            receipt.enterprise_id,
+            _hash_bootstrap_local(receipt.bootstrap_secret),
+        )
+        result = OwnerBootstrapResetResult(
+            enterprise_id=receipt.enterprise_id,
+            tenant_id=receipt.tenant_id,
+            owner_phone=receipt.owner_phone,
+            owner_bootstrap_secret=receipt.bootstrap_secret,
             must_reset=True,
         )
+        self._onboarding_receipts.complete(
+            receipt.idempotency_key,
+            result.model_dump(mode="json", exclude={"owner_bootstrap_secret"}),
+        )
+        return result

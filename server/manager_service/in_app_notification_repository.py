@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from .idempotency_repository import ManagerIdempotencyRepository
+
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 
@@ -69,6 +71,56 @@ class InAppNotificationRepository:
                 (ctx.tenant_id, org_id, message, notify_type, severity),
             ).fetchone()
         return _row_to_notification(row)
+
+    def add_idempotent(
+        self,
+        ctx: TenantContext,
+        *,
+        org_id: str,
+        message: str,
+        notify_type: str,
+        severity: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> InAppNotificationRow:
+        """Insert the notification and F17 receipt in one tenant transaction."""
+        receipts = ManagerIdempotencyRepository(self._router)
+
+        def effect(session):
+            row = session.execute(
+                "INSERT INTO in_app_notification "
+                "(tenant_id, org_id, message, notify_type, severity) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING " + _COLUMNS,
+                (ctx.tenant_id, org_id, message, notify_type, severity),
+            ).fetchone()
+            notification = _row_to_notification(row)
+            # The idempotency receipt stores only an opaque row ID.  The
+            # notification body remains in its normal tenant-scoped inbox row
+            # and is reloaded for both the first response and a replay.
+            return {"notification_id": notification.notification_id}
+
+        result = receipts.execute(
+            ctx,
+            operation="enterprise-notification",
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            effect=effect,
+            status_code=200,
+        )
+        notification_id = str(result.payload["notification_id"])
+        notification = self.get(ctx, notification_id)
+        if notification is None:
+            raise RuntimeError("notification disappeared after idempotent write")
+        return notification
+
+    def get(self, ctx: TenantContext, notification_id: str) -> InAppNotificationRow | None:
+        """Load one notification through the tenant-scoped inbox projection."""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT " + _COLUMNS + " FROM in_app_notification WHERE id = %s",
+                (notification_id,),
+            ).fetchone()
+        return _row_to_notification(row) if row is not None else None
 
     def list_all(self, ctx: TenantContext) -> list[InAppNotificationRow]:
         """列本 tenant 内全部站内信（RLS 自动限定），按时间倒序。"""

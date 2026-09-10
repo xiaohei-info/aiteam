@@ -58,8 +58,10 @@ URL 供你核对已真实展开。口令/连接对照（一次性本地测试值
 生产 Manager **不**再要求 `MANAGER_TENANT_ID`；遗留环境变量只告警并忽略，
 不会从 `tenant_registry` 猜租户。每个请求的租户来自已验签 JWT 或登录解析出的
 企业标识。`tenant_scope` 仍是 RLS 数据夹具。`fixtures/manager_binding.py` 只清理
-复用 app 的租户缓存，不是生产绑定。Stage A 的 F01/F02/F17 HTTP 写路径返回 503
-`multitenancy_phase_pending`（相位闸，不是 tenant binding）。
+复用 app 的租户缓存，不是生产绑定。默认情况下 F01/F02/F17 HTTP 写路径仍返回 503
+`multitenancy_phase_pending`（相位闸，不是 tenant binding）；部署控制器仅在 `--env test`
+启动时设置 `AITEAM_TEST_ENABLE_ONBOARDING_WRITES=true`，用于 TEST 环境验证 onboarding，
+生产环境没有该放行路径。
 
 浏览器 E2E 仍可使用固定测试 UUID `00000000-0000-4000-8000-000000000001`：
 `web/e2e/support/seed-e2e-tenant.py` 按 `E2E_TENANT_ID` 创建该行。遗留的

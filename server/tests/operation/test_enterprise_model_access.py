@@ -12,7 +12,7 @@ from run import get_app
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.platform_provider import PlatformModelRef
-from shared.errors import NotFound
+from shared.errors import Conflict, NotFound
 
 
 REF = PlatformModelRef(
@@ -31,6 +31,35 @@ class _Manager:
 def _token(role: str = "system_admin") -> str:
     from operation_service.app import _auth
     return _auth.signer.sign(TokenClaims(user_id="op-1", roles=[role], exp=9999999999))
+
+
+def test_f01_same_key_and_body_replays_original_result_without_second_fanout():
+    repository = InMemoryEnterpriseRepository()
+
+    class RecordingManager(_Manager):
+        def __init__(self):
+            self.provision_calls = []
+            self.bootstrap_calls = []
+
+        def provision_tenant(self, req, *, idempotency_key):
+            self.provision_calls.append((req, idempotency_key))
+
+        def sync_owner_bootstrap(self, req, *, idempotency_key):
+            self.bootstrap_calls.append((req, idempotency_key))
+
+    manager = RecordingManager()
+    service = ProvisioningService(repository, manager)
+    request = ProvisionEnterpriseRequest(enterprise_name="ReplayCo", owner_phone="13800000000")
+    first = service.provision_enterprise(request, idempotency_key="f01-replay")
+    second = service.provision_enterprise(request, idempotency_key="f01-replay")
+
+    assert second == first
+    assert len(manager.provision_calls) == len(manager.bootstrap_calls) == 1
+    with pytest.raises(Conflict):
+        service.provision_enterprise(
+            request.model_copy(update={"enterprise_name": "DifferentCo"}),
+            idempotency_key="f01-replay",
+        )
 
 
 def test_provision_persists_and_forwards_allowed_model_refs():
@@ -179,6 +208,8 @@ def test_platform_provider_builder_wires_enterprise_repository(monkeypatch):
 
     monkeypatch.setenv("DB_URL", "postgresql://app_rw.test/operation")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin.test/operation")
+    monkeypatch.setenv("OPERATION_DB_URL", "postgresql://app_rw.test/operation")
+    monkeypatch.setenv("OPERATION_ADMIN_DB_URL", "postgresql://admin.test/operation")
     monkeypatch.setenv("NEWAPI_URL", "http://newapi.test")
     monkeypatch.setenv("NEWAPI_PUBLIC_BASE_URL", "https://relay.test/v1")
     monkeypatch.setenv("NEWAPI_ADMIN_TOKEN", "admin-token")

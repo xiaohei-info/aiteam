@@ -713,6 +713,8 @@ class TestDIFactoryBranch:
     def test_all_pg_when_db_set(self, monkeypatch):
         monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
         monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
+        monkeypatch.setenv("OPERATION_DB_URL", "postgresql://app_rw@localhost/oper")
+        monkeypatch.setenv("OPERATION_ADMIN_DB_URL", "postgresql://admin@localhost/oper")
         monkeypatch.setenv("APP_RW_PASSWORD", "secret")
         from operation_service import catalog_dependencies as cd
         from operation_service.admin_repository import PgAdminRepository
