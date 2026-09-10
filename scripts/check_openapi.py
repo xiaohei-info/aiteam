@@ -102,7 +102,7 @@ def check(path: Path) -> list[str]:
     document = json.loads(path.read_text(encoding="utf-8"))
     components = document.get("components", {})
     errors: list[str] = []
-    required_schemes = {"bearerAuth"} if "agent" in path.name else {"bearerAuth", "serviceToken"}
+    required_schemes = {"bearerAuth"} if "agent" in path.name else {"bearerAuth", "serviceIdentity", "serviceToken"}
     if not required_schemes <= set(components.get("securitySchemes", {})):
         errors.append(f"components.securitySchemes must declare {sorted(required_schemes)}")
 
@@ -143,7 +143,7 @@ def check(path: Path) -> list[str]:
             errors.append(f"{label}: missing tags")
 
         kind = security_kind(route, operation)
-        expected_security = [] if kind is None else [{"serviceToken": []}] if kind == "service" else [{"bearerAuth": []}]
+        expected_security = [] if kind is None else [{"serviceIdentity": []}] if kind == "service" else [{"bearerAuth": []}]
         if operation.get("security") != expected_security:
             errors.append(f"{label}: security must be {expected_security!r}")
 

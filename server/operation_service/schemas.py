@@ -25,7 +25,6 @@ class ProvisionEnterpriseRequest(BaseModel):
     owner_phone: str = Field(min_length=1, description="负责人手机号，用于 Manager 校验登录身份")
     enterprise_code: str | None = Field(default=None, description="可读 slug，可选，需唯一")
     initial_quota_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的默认配额策略。")
-    visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="首次开通时的目录可见范围策略。")
     allowed_model_refs: list[PlatformModelRef] | None = Field(
         default=None,
         description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",

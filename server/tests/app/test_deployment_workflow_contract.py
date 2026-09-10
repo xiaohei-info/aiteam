@@ -28,6 +28,11 @@ def test_compose_production_requires_ctl_guard():
     ctl = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
     assert 'if [[ "${action}" == "start" || "${action}" == "restart" ]]; then' in ctl
     assert 'start_service_local postgres' in ctl
+    assert ctl.count("n.bit_length() < 2048") == 2
+    assert "n.bit_length() < 512" not in ctl
+    assert "AITEAM_TEST_ENABLE_ONBOARDING_WRITES=\"${AITEAM_TEST_ENABLE_ONBOARDING_WRITES:-true}\"" not in ctl
+    deploy = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
+    assert "AITEAM_TEST_ENABLE_ONBOARDING_WRITES=true" in deploy
 
 
 def test_deployment_checks_pin_compose_environment():

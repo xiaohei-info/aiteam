@@ -35,7 +35,6 @@ class TenantProvisionRequest(BaseModel):
     enterprise_name: str
     enterprise_code: str | None = Field(default=None, description="可读账号/slug，不参与 RLS 主键")
     initial_quota_policy: dict[str, Any] | None = Field(default=None, description="首次开通时默认配额策略（可选）")
-    visible_catalog_policy: dict[str, Any] | None = Field(default=None, description="可见目录策略（可选）")
     allowed_model_refs: list[PlatformModelRef] | None = Field(
         default=None,
         description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",

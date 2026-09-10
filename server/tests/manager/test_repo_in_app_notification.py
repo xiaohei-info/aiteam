@@ -43,6 +43,51 @@ def test_add_passes_tenant_id_from_ctx():
     assert params[2] == "m"
 
 
+def test_add_idempotent_keeps_message_out_of_receipt_and_reloads_projection():
+    router = FakeRouter()
+    row = _row(msg="private notification")
+    router.queue_many(
+        FakeCursor(fetchone=("fp", "pending", None)),
+        FakeCursor(fetchone=row),
+        FakeCursor(rowcount=1),
+        FakeCursor(fetchone=row),
+    )
+    notification = InAppNotificationRepository(router).add_idempotent(
+        ctx(),
+        org_id="o-1",
+        message="private notification",
+        notify_type="operation_announcement",
+        severity="info",
+        idempotency_key="f17-1",
+        request_fingerprint="fp",
+    )
+    assert notification.message == "private notification"
+    receipt_update = router.executed[2]
+    assert "private notification" not in str(receipt_update[1])
+    assert receipt_update[1][0] == '{"notification_id": "n-1"}'
+
+
+def test_add_idempotent_replay_loads_notification_by_opaque_id():
+    router = FakeRouter()
+    row = _row(msg="replayed body")
+    router.queue_many(
+        FakeCursor(fetchone=None),
+        FakeCursor(fetchone=("fp", "completed", '{"notification_id": "n-1"}')),
+        FakeCursor(fetchone=row),
+    )
+    notification = InAppNotificationRepository(router).add_idempotent(
+        ctx(),
+        org_id="o-1",
+        message="ignored on replay",
+        notify_type="operation_announcement",
+        severity="info",
+        idempotency_key="f17-1",
+        request_fingerprint="fp",
+    )
+    assert notification.message == "replayed body"
+    assert all("ignored on replay" not in str(params) for _, params in router.executed)
+
+
 def test_list_all_returns_rows_desc():
     router = FakeRouter()
     router.queue(FakeCursor(fetchall=[_row("n1"), _row("n2", msg="second")]))

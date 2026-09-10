@@ -104,7 +104,7 @@ def test_reset_resyncs_and_rotates_hash(service, manager):
     created = service.provision_enterprise(_req())
     first_secret = manager.bootstraps[0][0].bootstrap_secret
 
-    reset = service.reset_owner_bootstrap(created.enterprise_id)
+    reset = service.reset_owner_bootstrap(created.enterprise_id, idempotency_key="reset-legacy-test")
 
     assert reset.tenant_id == created.tenant_id
     assert reset.owner_phone == created.owner_phone
@@ -114,6 +114,15 @@ def test_reset_resyncs_and_rotates_hash(service, manager):
     assert new_secret != first_secret  # 凭据轮换
     # 重置幂等键与开通键不同（每次重置是新写）。
     assert manager.bootstraps[1][1] != manager.bootstraps[0][1]
+
+
+def test_reset_same_key_replays_original_secret_without_second_manager_write(service, manager):
+    created = service.provision_enterprise(_req())
+    before = len(manager.bootstraps)
+    first = service.reset_owner_bootstrap(created.enterprise_id, idempotency_key="reset-replay")
+    second = service.reset_owner_bootstrap(created.enterprise_id, idempotency_key="reset-replay")
+    assert second == first
+    assert len(manager.bootstraps) == before + 1
 
 
 def test_reset_unknown_enterprise_404(service):

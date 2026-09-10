@@ -6,10 +6,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 Tier = Literal["operation", "manager"]
 _VALID_TIERS = ("operation", "manager")
+_DEFAULT_PEER_AUDIENCE = {
+    "operation": "aiteam-manager-service",
+    "manager": "aiteam-operation-service",
+}
 
 
 class Settings(BaseModel):
@@ -46,9 +52,32 @@ class Settings(BaseModel):
     manager_url: str | None = Field(default=None)
     operator_url: str | None = Field(default=None)
     agent_url: str | None = Field(default=None)
-    # 服务间认证共享密钥（平面③ 代码层守卫，03 §9.1）。未配置→守卫 fail-closed；
-    # 仅显式 dev/development 占位值允许降级；test/production 必须真实鉴权。完整 mTLS 留部署层 follow-up。
+    # 服务间认证：生产使用短期 RS256 service identity；SERVICE_TOKEN 仅显式
+    # dev/test 兼容。完整 TLS/allowlist 仍由部署层提供，代码不把它们降级为身份。
     service_token: str | None = Field(default=None)
+    service_auth_mode: Literal["auto", "signed", "legacy"] = Field(default="auto")
+    service_identity_private_key: str | None = Field(default=None, repr=False)
+    service_identity_public_keys: dict[str, str] = Field(default_factory=dict, repr=False)
+    service_identity_trust: dict[str, dict[str, Any]] = Field(default_factory=dict, repr=False)
+    service_identity_key_id: str | None = Field(default=None)
+    service_identity_issuer: str | None = Field(default=None)
+    service_identity_audience: str | None = Field(default=None)
+    service_identity_peer_audience: str | None = Field(default=None)
+    service_identity_origin: str | None = Field(default=None)
+    service_identity_deployment_id: str | None = Field(default=None)
+    service_identity_ttl_seconds: int = Field(default=30, ge=1, le=60)
+    service_identity_clock_skew_seconds: int = Field(default=30, ge=0, le=30)
+    service_identity_allowed_origins: tuple[str, ...] = Field(default_factory=tuple)
+    service_identity_allowed_enterprises: tuple[str, ...] = Field(default_factory=tuple)
+    service_identity_allowed_tenants: tuple[str, ...] = Field(default_factory=tuple)
+    service_identity_allowed_scopes: tuple[str, ...] = Field(default_factory=tuple)
+    # The bounded replay implementation is process-local. Production launch
+    # must explicitly acknowledge a single receiver; multi-instance replay
+    # needs an approved shared mechanism instead.
+    service_identity_single_instance: bool = Field(default=False)
+    # Explicit TEST-only onboarding verification switch. Production never reads
+    # this as an authorization bypass.
+    test_onboarding_writes_enabled: bool = Field(default=False)
     service_client_timeout_ms: int = Field(default=30_000, ge=1_000, le=120_000)
     # 部署环境标记。运行时取值 dev | development | test | production；load_settings 拒绝缺失/未知值。
     aiteam_env: Literal["dev", "development", "test", "production"] = Field(
@@ -60,6 +89,40 @@ class Settings(BaseModel):
     def is_production(self) -> bool:
         """是否生产部署：AITEAM_ENV=production（runtime 必须真实，禁止 Fake）。"""
         return self.aiteam_env == "production"
+
+
+def service_peer_audience(settings: Settings) -> str:
+    """Return the configured peer audience, with a dev/test-only contract default."""
+
+    if settings.service_identity_peer_audience:
+        return settings.service_identity_peer_audience
+    if settings.is_production:
+        return ""
+    return _DEFAULT_PEER_AUDIENCE[settings.tier]
+
+
+def service_client_kwargs(settings: Settings) -> dict[str, Any]:
+    """Return explicit tier-validated signer inputs for an outbound client.
+
+    Production callers must not fall back to generic ambient
+    ``SERVICE_IDENTITY_*`` environment variables: Settings has already selected
+    the tier-prefixed values and validated their shape at launch.
+    """
+
+    return {
+        "service_identity": settings.service_name,
+        "service_token": settings.service_token,
+        "service_private_key": settings.service_identity_private_key,
+        "service_key_id": settings.service_identity_key_id,
+        "service_issuer": settings.service_identity_issuer,
+        "service_deployment_id": settings.service_identity_deployment_id,
+        "service_ttl_seconds": settings.service_identity_ttl_seconds,
+        "service_audience": service_peer_audience(settings),
+        "service_origin": settings.service_identity_origin,
+        "service_auth_mode": settings.service_auth_mode,
+        "aiteam_env": settings.aiteam_env,
+        "load_env_signer": False,
+    }
 
 
 def _database_target(value: str) -> tuple[str, int, str, str]:
@@ -83,6 +146,137 @@ def _bounded_timeout_ms(raw: str | None) -> int:
         return max(1_000, min(int(raw or "30000"), 120_000))
     except ValueError:
         return 30_000
+
+
+def _tier_env(name: str, tier: Tier | None = None) -> str | None:
+    """Read tier-specific service identity config before the generic alias."""
+
+    if tier:
+        value = os.getenv(f"{tier.upper()}_{name}")
+        if value is not None:
+            return value
+    return os.getenv(name)
+
+
+def _optional_secret(name: str, tier: Tier | None = None) -> str | None:
+    value = _tier_env(name, tier)
+    return value if value and value.strip() else None
+
+
+def _json_mapping(name: str, tier: Tier | None = None) -> dict[str, Any]:
+    raw = _tier_env(name, tier)
+    if not raw or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be a JSON object") from exc
+    if not isinstance(value, dict) or any(not isinstance(key, str) or not key.strip() for key in value):
+        raise ValueError(f"{name} must be a JSON object keyed by non-empty strings")
+    return value
+
+
+def _service_auth_mode(tier: Tier | None = None) -> Literal["auto", "signed", "legacy"]:
+    raw = (_tier_env("SERVICE_AUTH_MODE", tier) or "auto").strip().lower()
+    if raw not in {"auto", "signed", "legacy"}:
+        raise ValueError("SERVICE_AUTH_MODE must be auto, signed, or legacy")
+    return raw  # type: ignore[return-value]
+
+
+def _service_identity_ttl(tier: Tier | None = None) -> int:
+    raw = _tier_env("SERVICE_IDENTITY_TTL_SECONDS", tier) or "30"
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("SERVICE_IDENTITY_TTL_SECONDS must be an integer") from exc
+    if not 1 <= value <= 60:
+        raise ValueError("SERVICE_IDENTITY_TTL_SECONDS must be between 1 and 60")
+    return value
+
+
+def _service_identity_clock_skew(tier: Tier | None = None) -> int:
+    raw = _tier_env("SERVICE_IDENTITY_CLOCK_SKEW_SECONDS", tier) or "30"
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("SERVICE_IDENTITY_CLOCK_SKEW_SECONDS must be an integer") from exc
+    if not 0 <= value <= 30:
+        raise ValueError("SERVICE_IDENTITY_CLOCK_SKEW_SECONDS must be between 0 and 30")
+    return value
+
+
+def _boolean(name: str, tier: Tier | None = None, *, default: bool = False) -> bool:
+    raw = _tier_env(name, tier)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
+
+
+def validate_production_service_identity(settings: Settings) -> None:
+    """Fail before launch unless production has a complete signed trust setup."""
+
+    if not settings.is_production:
+        return
+    required = {
+        "SERVICE_AUTH_MODE": settings.service_auth_mode,
+        "SERVICE_IDENTITY_PRIVATE_KEY": settings.service_identity_private_key,
+        "SERVICE_IDENTITY_KEY_ID": settings.service_identity_key_id,
+        "SERVICE_IDENTITY_ISSUER": settings.service_identity_issuer,
+        "SERVICE_IDENTITY_AUDIENCE": settings.service_identity_audience,
+        "SERVICE_IDENTITY_PEER_AUDIENCE": settings.service_identity_peer_audience,
+        "SERVICE_IDENTITY_ORIGIN": settings.service_identity_origin,
+        "SERVICE_IDENTITY_DEPLOYMENT_ID": settings.service_identity_deployment_id,
+        "SERVICE_IDENTITY_TRUST_JSON": settings.service_identity_trust,
+    }
+    if settings.service_auth_mode != "signed":
+        raise ValueError("production service authentication requires SERVICE_AUTH_MODE=signed")
+    if any(value is None or value == "" or value == {} for value in required.values()):
+        raise ValueError("production signed service identity/trust configuration is incomplete")
+    now = int(time.time())
+    if not any(
+        isinstance(entry, dict)
+        and entry.get("status") in {"active", "next"}
+        and isinstance(entry.get("not_before"), int)
+        and isinstance(entry.get("expires_at"), int)
+        and entry["not_before"] <= now + settings.service_identity_clock_skew_seconds
+        and entry["expires_at"] > now
+        and not (
+            isinstance(entry.get("revoked_at"), int)
+            and entry["revoked_at"] <= now
+        )
+        for entry in settings.service_identity_trust.values()
+    ):
+        raise ValueError("production service identity trust manifest has no currently valid key")
+    if not settings.service_identity_single_instance:
+        raise ValueError(
+            "production service identity replay protection requires SERVICE_IDENTITY_SINGLE_INSTANCE=true"
+        )
+    from shared.service_identity import ServiceIdentitySigner, ServiceIdentityVerifier, canonical_origin
+
+    try:
+        canonical_origin(settings.service_identity_origin or "", require_https=True)
+        peer_url = settings.manager_url if settings.tier == "operation" else settings.operator_url
+        canonical_origin(peer_url or "", require_https=True)
+        ServiceIdentitySigner(
+            settings.service_identity_private_key or "",
+            kid=settings.service_identity_key_id or "",
+            issuer=settings.service_identity_issuer or "",
+            subject=settings.service_name,
+            deployment_id=settings.service_identity_deployment_id or "",
+            audience=settings.service_identity_audience,
+            origin=settings.service_identity_origin,
+            ttl_seconds=settings.service_identity_ttl_seconds,
+        )
+        verifier = ServiceIdentityVerifier.from_settings(settings)
+        if verifier is None:
+            raise ValueError("production service identity trust manifest is missing")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid production signed service identity/trust configuration") from exc
 
 
 def load_settings(tier: Tier | None = None) -> Settings:
@@ -126,7 +320,7 @@ def load_settings(tier: Tier | None = None) -> Settings:
     # are explicit so a shared shell cannot accidentally route both tiers to
     # the Manager database. The generic names remain a dev/test compatibility
     # fallback for direct unit construction.
-    return Settings(
+    settings = Settings(
         tier=resolved,  # type: ignore[arg-type]
         service_name=f"aiteam-{resolved}-service",
         log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -138,10 +332,30 @@ def load_settings(tier: Tier | None = None) -> Settings:
         operator_url=os.getenv("OPERATOR_URL"),
         agent_url=os.getenv("AGENT_URL"),
         service_token=os.getenv("SERVICE_TOKEN"),
+        service_auth_mode=_service_auth_mode(resolved),
+        service_identity_private_key=_optional_secret("SERVICE_IDENTITY_PRIVATE_KEY", resolved),
+        service_identity_public_keys=_json_mapping("SERVICE_IDENTITY_PUBLIC_KEYS", resolved),
+        service_identity_trust=_json_mapping("SERVICE_IDENTITY_TRUST_JSON", resolved),
+        service_identity_key_id=_optional_secret("SERVICE_IDENTITY_KEY_ID", resolved),
+        service_identity_issuer=_optional_secret("SERVICE_IDENTITY_ISSUER", resolved),
+        service_identity_audience=_optional_secret("SERVICE_IDENTITY_AUDIENCE", resolved),
+        service_identity_peer_audience=_optional_secret("SERVICE_IDENTITY_PEER_AUDIENCE", resolved),
+        service_identity_origin=_optional_secret("SERVICE_IDENTITY_ORIGIN", resolved),
+        service_identity_deployment_id=_optional_secret("SERVICE_IDENTITY_DEPLOYMENT_ID", resolved),
+        service_identity_ttl_seconds=_service_identity_ttl(resolved),
+        service_identity_clock_skew_seconds=_service_identity_clock_skew(resolved),
+        service_identity_allowed_origins=_csv(_tier_env("SERVICE_IDENTITY_ALLOWED_ORIGINS", resolved)),
+        service_identity_allowed_enterprises=_csv(_tier_env("SERVICE_IDENTITY_ALLOWED_ENTERPRISES", resolved)),
+        service_identity_allowed_tenants=_csv(_tier_env("SERVICE_IDENTITY_ALLOWED_TENANTS", resolved)),
+        service_identity_allowed_scopes=_csv(_tier_env("SERVICE_IDENTITY_ALLOWED_SCOPES", resolved)),
+        service_identity_single_instance=_boolean("SERVICE_IDENTITY_SINGLE_INSTANCE", resolved),
+        test_onboarding_writes_enabled=_boolean("AITEAM_TEST_ENABLE_ONBOARDING_WRITES", resolved),
         service_client_timeout_ms=_bounded_timeout_ms(os.getenv("SERVICE_CLIENT_TIMEOUT_MS")),
         aiteam_env=environment,
         expose_public_docs=os.getenv("EXPOSE_PUBLIC_DOCS", "1") not in ("0", "false", "False"),
     )
+    validate_production_service_identity(settings)
+    return settings
 
 
 def _csv(raw: str | None) -> tuple[str, ...]:

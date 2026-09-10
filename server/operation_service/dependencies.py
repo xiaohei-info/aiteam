@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from shared.config import load_settings
+from shared.config import load_settings, service_client_kwargs
 from shared.service_client import ServiceClient
 
 from .admin_repository import AdminRepository, PgAdminRepository
@@ -70,20 +70,22 @@ def get_manager_gateway() -> ManagerGateway:
     settings = load_settings("operation")
     client = ServiceClient(
         settings.manager_url or "http://manager.invalid",
-        service_identity=settings.service_name,
-        service_token=settings.service_token,
+        **service_client_kwargs(settings),
         timeout=settings.service_client_timeout_ms / 1000,
     )
     return HttpManagerGateway(client)
 
 
 def get_provisioning_service() -> ProvisioningService:
+    settings = load_settings("operation")
     try:
         platform_providers = build_platform_provider_service()
-    except Exception:
-        # Enterprise registration remains available before the optional NewAPI
-        # admin credentials are bootstrapped; model refs are checked when the
-        # platform catalog is available.
+    except (RuntimeError, ValueError):
+        # Development/test can defer optional Relay/provider bootstrap while
+        # enterprise registration remains available. Production must surface
+        # missing or malformed Relay configuration before any writer starts.
+        if settings.is_production:
+            raise
         platform_providers = None
     return ProvisioningService(
         get_repository(),

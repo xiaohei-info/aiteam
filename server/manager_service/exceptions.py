@@ -15,3 +15,11 @@ class ManagerAdminDbNotConfigured(AppError):
     status = 503
     code = "manager_admin_db_unconfigured"
     title = "Manager Admin DB Unconfigured"
+
+
+class ManagerControlPlaneUnavailable(AppError):
+    """Manager control-plane schema/connection unavailable (typed 503)."""
+
+    status = 503
+    code = "manager_control_plane_unavailable"
+    title = "Manager Control Plane Unavailable"

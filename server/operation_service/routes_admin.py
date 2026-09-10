@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import authorize, require_claims
@@ -463,8 +463,15 @@ def build_admin_router(verifier) -> APIRouter:
         body: EnterpriseActionRequest,
         _claims: TokenClaims = Depends(require_op),
         service: AdminService = Depends(get_admin_service),
+        idempotency_key: str = Header(..., alias="Idempotency-Key"),
     ) -> Envelope[EnterpriseActionResponse]:
-        result = service.execute_action(org_id, body.action, body.amount, body.message)
+        result = service.execute_action(
+            org_id,
+            body.action,
+            body.amount,
+            body.message,
+            idempotency_key=idempotency_key,
+        )
         return Envelope(data=EnterpriseActionResponse(**result))
 
     @router.get(

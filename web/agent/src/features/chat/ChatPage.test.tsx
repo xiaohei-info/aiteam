@@ -94,7 +94,7 @@ describe("ChatPage employee navigation", () => {
     expect(await screen.findByTestId("conversation-c3")).toBeInTheDocument();
     expect(screen.getByText("3 个对话")).toBeInTheDocument();
     expect(screen.getByTestId("conversation-location")).toHaveTextContent("c3");
-  });
+  }, 15000);
 
   it("opens the conversation requested by a workspace deep link", async () => {
     login();

@@ -107,6 +107,9 @@ jobs:
           cat > "${env_file}" << 'ENVEOF'
           ${{ secrets.ENV_CONTENTS_TEST }}
           ENVEOF
+          # This release explicitly enables the requested TEST-only onboarding
+          # verification. ctl.sh has no implicit bypass and production ignores it.
+          printf '%s\n' 'AITEAM_TEST_ENABLE_ONBOARDING_WRITES=true' >> "${env_file}"
           chmod 600 "${env_file}"
           # Keep host-generated component credentials when the repository secret
           # predates a component rollout. Values from the secret always win;

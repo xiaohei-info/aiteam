@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
@@ -45,8 +45,11 @@ async def provision_enterprise(
     body: ProvisionEnterpriseRequest,
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: ProvisioningService = Depends(get_provisioning_service),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Envelope[EnterpriseProvisioned]:
-    return Envelope[EnterpriseProvisioned](data=service.provision_enterprise(body))
+    return Envelope[EnterpriseProvisioned](
+        data=service.provision_enterprise(body, idempotency_key=idempotency_key)
+    )
 
 
 @router.post(
@@ -58,5 +61,8 @@ async def reset_owner_bootstrap(
     enterprise_id: str,
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: ProvisioningService = Depends(get_provisioning_service),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Envelope[OwnerBootstrapResetResult]:
-    return Envelope[OwnerBootstrapResetResult](data=service.reset_owner_bootstrap(enterprise_id))
+    return Envelope[OwnerBootstrapResetResult](
+        data=service.reset_owner_bootstrap(enterprise_id, idempotency_key=idempotency_key)
+    )

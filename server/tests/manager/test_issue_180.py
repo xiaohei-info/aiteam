@@ -2,7 +2,7 @@
 
 非 integration（不依赖 PG）：
 - solutions 裁剪：member 有 solution grant → 可见；无 grant → 不可见；管理角色豁免全量。
-- quota policy：initial_quota_policy / visible_catalog_policy 字段正常接收处理。
+- quota policy：initial_quota_policy 正常接收处理；未实现的 visible_catalog_policy 明确拒绝。
 - member 首登：must_reset 默认 True；must_reset=False 时成员直接登录。
 - key rotation：rotate() 生成新 kid；旧 kid 宽限期内仍可验签；新密钥签发新 token。
 """

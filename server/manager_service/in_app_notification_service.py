@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from shared.contracts.tenancy import TenantContext
 
+from .idempotency_repository import request_fingerprint
 from .in_app_notification_repository import InAppNotificationRepository, InAppNotificationRow
 
 
@@ -33,6 +34,36 @@ class InAppNotificationService:
             message=message,
             notify_type=notify_type,
             severity=severity,
+        )
+
+    def deliver_from_operation_idempotent(
+        self,
+        ctx: TenantContext,
+        *,
+        org_id: str,
+        message: str,
+        notify_type: str,
+        severity: str,
+        idempotency_key: str,
+    ) -> InAppNotificationRow:
+        """F17 durable replay/conflict path; request body is fingerprinted only."""
+        return self._repo.add_idempotent(
+            ctx,
+            org_id=org_id,
+            message=message,
+            notify_type=notify_type,
+            severity=severity,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint(
+                "enterprise-notification",
+                {
+                    "tenant_id": ctx.tenant_id,
+                    "org_id": org_id,
+                    "message": message,
+                    "notify_type": notify_type,
+                    "severity": severity,
+                },
+            ),
         )
 
     def list_inbox(self, ctx: TenantContext, *, limit: int | None = None) -> list[dict]:

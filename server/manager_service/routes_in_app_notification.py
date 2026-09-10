@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 
 from shared.auth import require_claims
 from shared.contracts.auth import TokenClaims
@@ -21,12 +21,13 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import AppError
-from shared.service_token import verify_service_token
-
 from .in_app_notification_repository import InAppNotificationRepository
+from .idempotency_repository import normalize_idempotency_key
 from .in_app_notification_service import InAppNotificationService
 from .multitenancy_phase import require_control_plane_writes_ready
+from .onboarding_repository import OperatorTenantBindingRepository
 from .schemas import InAppNotificationOut
+from .service_ingress import require_operator_service_principal, test_compatibility_principal, validate_onboarding_principal
 
 
 class _ManagerNotConfigured(AppError):
@@ -62,21 +63,66 @@ def build_in_app_notification_router(verifier) -> APIRouter:
     def deliver_from_operation(
         body: EnterpriseNotifyRequest,
         request: Request,
-        _svc_token=Depends(verify_service_token),  # 服务间认证守卫（平面③，03 §9.1）
+        principal=Depends(require_operator_service_principal),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> Envelope[InAppNotificationOut]:
         """同步路由（def）：psycopg 同步驱动，tenant 数据经 TenantContext（D22）。"""
-        require_control_plane_writes_ready()
+        require_control_plane_writes_ready(request.app.state.settings)
+        idempotency_key = normalize_idempotency_key(idempotency_key)
         if not body.message:
             from shared.errors import ValidationProblem
             raise ValidationProblem("message is required")
-        ctx = TenantContext(tenant_id=body.tenant_id, user_id="operation-service", roles=["service"])
-        row = _service(request).deliver_from_operation(
-            ctx,
-            org_id=body.org_id,
-            message=body.message,
-            notify_type=body.notify_type,
-            severity=body.severity,
+        if principal is None:
+            principal = test_compatibility_principal(
+                request, body, operation="notification", idempotency_key=idempotency_key,
+            )
+            if principal is None:
+                from shared.errors import Unauthorized
+
+                raise Unauthorized("signed service principal is required for onboarding writes")
+        validate_onboarding_principal(
+            request,
+            principal,
+            operation="notification",
+            enterprise_id=body.org_id,
+            tenant_id=body.tenant_id,
+            body=body,
+            idempotency_key=idempotency_key,
         )
+        try:
+            OperatorTenantBindingRepository(request.app.state.settings.admin_db_url).require_exact(
+                principal,
+                tenant_id=body.tenant_id,
+                enterprise_id=body.org_id,
+                require_enterprise_claim=True,
+            )
+        except Exception as exc:
+            import psycopg
+
+            if isinstance(exc, psycopg.Error):
+                from .exceptions import ManagerControlPlaneUnavailable
+
+                raise ManagerControlPlaneUnavailable("Manager binding control table is unavailable") from exc
+            raise
+        ctx = TenantContext(tenant_id=body.tenant_id, user_id="operation-service", roles=["service"])
+        service = _service(request)
+        try:
+            row = service.deliver_from_operation_idempotent(
+                ctx,
+                org_id=body.org_id,
+                message=body.message,
+                notify_type=body.notify_type,
+                severity=body.severity,
+                idempotency_key=idempotency_key,
+            )
+        except Exception as exc:
+            import psycopg
+
+            if isinstance(exc, psycopg.Error):
+                from .exceptions import ManagerControlPlaneUnavailable
+
+                raise ManagerControlPlaneUnavailable("Manager notification schema is unavailable") from exc
+            raise
         return Envelope(data=InAppNotificationOut(
             notification_id=row.notification_id,
             org_id=row.org_id,

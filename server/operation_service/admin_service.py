@@ -78,7 +78,7 @@ class AdminService:
 
     # ---- internal: F17 narrow-channel notification (Operator -> Manager) ----
 
-    def _dispatch_notify(self, org_id: str, message: str | None) -> str:
+    def _dispatch_notify(self, org_id: str, message: str | None, *, idempotency_key: str | None = None) -> str:
         text = message or ""
         if self._manager is None:
             return f"notification recorded (no manager channel): {text or '(no message)'}"
@@ -90,11 +90,11 @@ class AdminService:
             org_id=org_id,
             message=text,
         )
-        idempotency_key = (
+        manager_key = idempotency_key or (
             f"notify:{org_id}:"
             + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         )
-        self._manager.notify_enterprise(req, idempotency_key=idempotency_key)
+        self._manager.notify_enterprise(req, idempotency_key=manager_key)
         return f"notification dispatched to tenant {acct.tenant_id}: {text or '(no message)'}"
 
     # ---- internal: audit helper with enriched metadata ----
@@ -279,16 +279,22 @@ class AdminService:
         self._admin.add_recharge(enterprise_id, amount)
         self._record(enterprise_id, "recharge", f"recharged {amount}")
 
-    def notify(self, enterprise_id: str, message: str | None) -> str:
+    def notify(self, enterprise_id: str, message: str | None, *, idempotency_key: str | None = None) -> str:
         self._ensure_state(enterprise_id)
-        detail = self._dispatch_notify(enterprise_id, message)
+        detail = self._dispatch_notify(enterprise_id, message, idempotency_key=idempotency_key)
         self._record(enterprise_id, "notify", detail)
         return detail
 
     # ---- legacy execute action (kept for compatibility with history + existing tests) ----
 
     def execute_action(
-        self, org_id: str, action: str, amount: Decimal | None, message: str | None
+        self,
+        org_id: str,
+        action: str,
+        amount: Decimal | None,
+        message: str | None,
+        *,
+        idempotency_key: str | None = None,
     ) -> dict:
         """Execute a legacy admin action, re-routing to the new lifecycle/quota surface."""
         self._ensure_state(org_id)
@@ -315,7 +321,7 @@ class AdminService:
             self.reactivate(org_id)
             detail = "enterprise reactivated"
         elif action == "notify":
-            detail = self.notify(org_id, message)
+            detail = self.notify(org_id, message, idempotency_key=idempotency_key)
         elif action == "adjust_quota":
             if amount is not None:
                 self.set_quota(org_id, token_quota_limit=int(amount))

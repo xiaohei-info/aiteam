@@ -39,6 +39,8 @@ def test_get_catalog_repository_memory(monkeypatch):
 def test_get_catalog_repository_pg(monkeypatch):
     monkeypatch.setenv("DB_URL", "postgresql://app_rw@localhost/oper")
     monkeypatch.setenv("ADMIN_DB_URL", "postgresql://admin@localhost/oper")
+    monkeypatch.setenv("OPERATION_DB_URL", "postgresql://app_rw@localhost/oper")
+    monkeypatch.setenv("OPERATION_ADMIN_DB_URL", "postgresql://admin@localhost/oper")
     monkeypatch.setenv("APP_RW_PASSWORD", "secret")
     monkeypatch.setattr(cat_deps, "apply_migrations", lambda *a, **k: None)
     repo = get_catalog_repository()

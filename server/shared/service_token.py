@@ -1,37 +1,104 @@
-"""服务间认证共享密钥守卫（平面③ 代码层，03 §9.1）。
+"""Service-to-service authentication boundary.
 
-设计口径：跨端 pull（如 Operator→Manager 开通/bootstrap）属服务间调用，应以
-"TLS + 签名服务令牌"鉴权，与用户身份无关。完整 mTLS 是部署层工程（依赖 CA/证书），
-本模块提供**代码层共享密钥守卫**：
+Production service calls use a fresh short-lived RS256 service assertion in the
+``Authorization: Bearer`` header.  The assertion is verified against an
+explicit local trust registration and is bound to the request path/body,
+route scope, audience and enterprise/tenant target.
 
-- 配置了非 dev 的 SERVICE_TOKEN → fail-closed：校验请求头 X-Service-Token
-  （或 Authorization Bearer）匹配，否则 401。
-- 未配置 SERVICE_TOKEN → **fail-closed**：拒绝所有服务间调用，返回 401
-  （历史版本未配置时 fail-open，等同隐藏的后门；AITEAM-331 B2 已 fail-closed）。
-- 占位值 `dev-service-token-placeholder` 仅在明确声明的 `dev`/`development` profile 下生效；`test` 也必须使用真实 token；
-  `dev-*` 前缀不再视为 dev——任意非占位的真实 token 一律按生产严格校验，
-  防止线上误配 `dev-*` 导致 fully-open（AITEAM-331 B2）。
-
-生产模式判定：SERVICE_TOKEN 值为占位值 `dev-service-token-placeholder` 视为 dev；
-其他非空值视为生产；空/未配置视为 fail-closed 拒绝。
+The old shared ``SERVICE_TOKEN`` behavior remains only as an explicit
+non-production compatibility path.  It is never accepted in ``production``;
+a forgeable ``X-Service-Identity`` label is never an authentication factor.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import threading
+from typing import Any
 
 from fastapi import Request
 
-from shared.errors import Unauthorized
+from shared.contracts.service_identity import ServicePrincipal
+from shared.errors import Forbidden, Unauthorized
+from shared.service_identity import (
+    ServiceIdentitySigner,
+    ServiceIdentityVerifier,
+    TrustedServiceKey,
+    request_target,
+)
 
 logger = logging.getLogger(__name__)
+_VERIFIER_LOCK = threading.Lock()
 
-# 唯一允许的 dev 占位值；其余任意 dev-* 开头 token 一律按生产严格校验（AITEAM-331 B2）。
 _DEV_TOKEN_PLACEHOLDER = "dev-service-token-placeholder"
+
+# The map is deliberately kept in the shared boundary so Manager and Operation
+# routes cannot silently choose different purpose/scope semantics.
+_ROUTE_POLICIES: tuple[tuple[str, str], ...] = (
+    ("/api/manager/tenants", "enterprise:provision"),
+    ("/api/manager/owner-bootstrap", "owner:bootstrap"),
+    ("/api/manager/enterprise/notify", "notification:write"),
+    ("/api/manager/catalog/notify", "catalog:notify"),
+    ("/api/operation/rollups", "rollup:write"),
+    ("/api/operation/provider-access/resolve", "relay:resolve"),
+)
+
+_SERVICE_CAPABILITY_POLICIES: dict[str, str] = {
+    "/api/manager/tenants": "provision-enterprise",
+}
+
+_TARGET_BINDING_POLICIES: dict[str, tuple[str, bool]] = {
+    "/api/manager/tenants": ("provision-enterprise", False),
+    # The frozen OwnerBootstrapSync DTO is tenant_id-only.  An enterprise
+    # claim is deliberately rejected rather than guessed from the body.
+    "/api/manager/owner-bootstrap": ("tenant-only", True),
+    "/api/manager/enterprise/notify": ("enterprise-tenant", False),
+    "/api/operation/rollups": ("enterprise-tenant", False),
+    "/api/operation/provider-access/resolve": ("tenant-only", True),
+    "/api/operation/catalog/platform-providers": ("tenant-only", True),
+    # Enterprise-policy consumers must carry the exact enterprise/tenant target;
+    # signed scope alone is not a binding and must never authorize an arbitrary
+    # policy row.
+    "/api/operation/enterprise-policy": ("enterprise-tenant", False),
+    "/api/manager/enterprise-policy": ("enterprise-tenant", False),
+}
+
+
+def required_service_scope(path: str) -> str | None:
+    """Return the least scope required by a known service endpoint."""
+
+    for prefix, scope in _ROUTE_POLICIES:
+        if path == prefix:
+            return scope
+    if path.startswith("/api/operation/catalog/pull/") or path == "/api/operation/catalog/platform-providers":
+        return "catalog:read"
+    if path.startswith("/api/operation/skill-market/pull/"):
+        return "catalog:read"
+    if path.startswith("/api/operation/enterprise-policy"):
+        return "enterprise-policy:read"
+    if path.startswith("/api/manager/enterprise-policy"):
+        return "enterprise-policy:write"
+    return None
+
+
+def service_required_capability(path: str) -> str | None:
+    return _SERVICE_CAPABILITY_POLICIES.get(path)
+
+
+def service_target_binding_policy(path: str) -> tuple[str | None, bool]:
+    """Return (binding kind, reject enterprise claim) for a service route."""
+
+    for prefix, policy in _TARGET_BINDING_POLICIES.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return policy
+    return None, False
 
 
 def _extract_service_token(request: Request) -> str | None:
-    """取请求里的服务令牌：优先 X-Service-Token，其次 Authorization: Bearer。"""
+    """Read the legacy compatibility token, preferring X-Service-Token."""
+
     direct = request.headers.get("X-Service-Token")
     if direct:
         return direct.strip()
@@ -41,55 +108,208 @@ def _extract_service_token(request: Request) -> str | None:
     return None
 
 
-def _is_dev_mode(token: str | None) -> bool:
-    """判断是否为 dev 模式：仅占位值 `dev-service-token-placeholder` 视为 dev。
+def _extract_bearer(request: Request) -> str | None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        value = auth[len("Bearer "):].strip()
+        return value or None
+    return None
 
-    与历史实现的区别：不再以 `dev-` 前缀作为 dev 判定（任意 `dev-*` token 按生产严格校验），
-    也不再视未配置为 dev（未配置现在 fail-closed，AITEAM-331 B2）。
-    """
-    return token == _DEV_TOKEN_PLACEHOLDER
+
+def _environment(settings: Any) -> str:
+    return str(getattr(settings, "aiteam_env", None) or os.getenv("AITEAM_ENV", "development"))
 
 
-def verify_service_token(request: Request) -> None:
-    """FastAPI 依赖：校验服务令牌（AITEAM-331 B2 fail-closed）。
+def _service_mode(settings: Any) -> str:
+    return str(
+        getattr(settings, "service_auth_mode", None)
+        or os.getenv("SERVICE_AUTH_MODE", "auto")
+    ).strip().lower()
 
-    读 request.app.state.settings.service_token（被调端经 create_app 挂载的 settings）：
-    - expected 为空/未配置 → fail-closed：拒绝所有服务间调用，返回 401。
-    - expected 为 dev 占位值 → dev profile fail-open（仅占位值；生产必须替换为强密钥）。
-    - expected 非空且非 dev 占位值 → 生产模式 fail-closed：请求 token 必须匹配，否则 401。
-    """
+
+def _service_identity_verifier(request: Request, settings: Any) -> ServiceIdentityVerifier | None:
+    configured = getattr(request.app.state, "service_identity_verifier", None)
+    if configured is None:
+        configured = getattr(request.app.state, "_service_identity_verifier", None)
+    if configured is not None:
+        if not isinstance(configured, ServiceIdentityVerifier):
+            raise Unauthorized("service identity verifier is invalid")
+        return configured
+    try:
+        # Initialization is locked so concurrent first requests cannot create
+        # separate replay caches and lose the first assertion atomically.
+        with _VERIFIER_LOCK:
+            configured = getattr(request.app.state, "_service_identity_verifier", None)
+            if configured is not None:
+                if not isinstance(configured, ServiceIdentityVerifier):
+                    raise Unauthorized("service identity verifier is invalid")
+                return configured
+            verifier = ServiceIdentityVerifier.from_settings(settings)
+            if verifier is not None:
+                request.app.state._service_identity_verifier = verifier
+            return verifier
+    except (TypeError, ValueError) as exc:
+        logger.warning("service identity trust configuration is invalid", exc_info=True)
+        raise Unauthorized("service identity trust configuration is invalid") from exc
+
+
+def _request_body(request: Request) -> bytes | None:
+    """Read FastAPI's already-cached body without making a sync dependency async."""
+
+    body = getattr(request, "_body", None)
+    if body is None:
+        return None
+    return bytes(body)
+
+
+def _json_target(body: bytes | None, request: Request) -> tuple[str | None, str | None]:
+    """Extract target IDs only for binding; the body remains a route DTO authority."""
+
+    values: dict[str, Any] = {}
+    if body:
+        try:
+            parsed = json.loads(body)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            values = parsed
+    tenant_id = values.get("tenant_id")
+    enterprise_id = values.get("enterprise_id") or values.get("org_id")
+    if tenant_id is None:
+        tenant_id = request.query_params.get("tenant_id")
+    for name, value in (("enterprise", enterprise_id), ("tenant", tenant_id)):
+        if value is not None and (not isinstance(value, str) or not value.strip() or "*" in value):
+            raise Unauthorized(f"invalid service {name} target")
+    return (
+        enterprise_id.strip() if isinstance(enterprise_id, str) and enterprise_id.strip() else None,
+        tenant_id.strip() if isinstance(tenant_id, str) and tenant_id.strip() else None,
+    )
+
+
+def _verify_signed(request: Request, verifier: ServiceIdentityVerifier) -> ServicePrincipal:
     settings = getattr(request.app.state, "settings", None)
-    expected = getattr(settings, "service_token", None) if settings else None
+    if settings is None:
+        raise Unauthorized("service identity settings are unavailable")
+    bearer = _extract_bearer(request)
+    if not bearer:
+        raise Unauthorized("signed service identity is required")
+    body = _request_body(request)
+    path = request_target(request.url.path, request.url.query)
+    body_enterprise_id, body_tenant_id = _json_target(body, request)
+    required_scope = required_service_scope(request.url.path)
+    target_binding, reject_enterprise_scope = service_target_binding_policy(request.url.path)
+    required_capability = service_required_capability(request.url.path)
+    principal = verifier.verify(
+        bearer,
+        path=path,
+        body=body,
+        required_scope=required_scope,
+        required_enterprise_id=body_enterprise_id,
+        required_tenant_id=body_tenant_id,
+        require_enterprise_scope=body_enterprise_id is not None,
+        reject_enterprise_scope=reject_enterprise_scope,
+        target_binding=target_binding,
+        required_capability=required_capability,
+        expected_origin=getattr(settings, "service_identity_origin", None),
+        expected_idempotency_key=request.headers.get("Idempotency-Key"),
+        audience=getattr(settings, "service_identity_audience", None) or getattr(settings, "service_name", None),
+    )
+    # Body/query target IDs are checked against the verified principal.  This
+    # is intentionally a 403: the assertion is authentic but not authorized
+    # for the requested enterprise/tenant.
+    if body_tenant_id and principal.tenant_id != body_tenant_id:
+        raise Forbidden("service tenant scope does not match target")
+    if body_enterprise_id and principal.enterprise_id != body_enterprise_id:
+        raise Forbidden("service enterprise scope does not match target")
+    if required_scope is not None and required_scope not in principal.scopes:
+        raise Forbidden("service identity scope is not authorized")
 
-    environment = getattr(settings, "aiteam_env", None)
-    # A production app must never treat the known development placeholder as a
-    # valid/fail-open service identity, even when launched outside ctl.sh.
-    if environment == "production" and _is_dev_mode(expected):
-        raise Unauthorized("SERVICE_TOKEN production secret is not configured")
-    if _is_dev_mode(expected) and environment not in {"dev", "development"}:
-        raise Unauthorized("SERVICE_TOKEN development placeholder is not allowed for this environment")
-    # dev profile：唯一允许的占位值在此处生效；任意 dev-* token 按生产严格校验。
-    is_dev = _is_dev_mode(expected) and environment in {"dev", "development"}
+    request.state.service_principal = principal
+    request.state.service_tenant_id = principal.tenant_id
+    request.state.service_enterprise_id = principal.enterprise_id
+    request.state.service_scopes = principal.scopes
+    return principal
 
+
+def _legacy_verify(request: Request, settings: Any, *, environment: str) -> None:
+    """Compatibility verifier for explicit dev/test paths only."""
+
+    if environment == "production":
+        raise Unauthorized("signed service identity is required in production")
+    expected = getattr(settings, "service_token", None)
     if not expected:
-        # 未配置 SERVICE_TOKEN → fail-closed（AITEAM-331 B2）。
-        raise Unauthorized(
-            "SERVICE_TOKEN is not configured. Service-to-service authentication is required."
-        )
-
-    if is_dev:
-        # 占位值模式：fail-open，仅日志提醒（仅允许占位值；dev-* 前缀不走这条）。
-        logger.warning(
-            "SERVICE_TOKEN 使用 dev 占位值（dev-service-token-placeholder），服务间调用无真实校验。"
-            "生产环境必须替换为强密钥（见 deploy/docker/SERVICE_TOKEN.md）"
-        )
-        # dev 模式下仍然校验 token 是否匹配（允许测试 token 校验逻辑）。
+        raise Unauthorized("SERVICE_TOKEN is not configured. Service-to-service authentication is required.")
+    is_dev_placeholder = expected == _DEV_TOKEN_PLACEHOLDER
+    if is_dev_placeholder and environment not in {"dev", "development"}:
+        raise Unauthorized("SERVICE_TOKEN development placeholder is not allowed for this environment")
+    if is_dev_placeholder and environment in {"dev", "development"}:
+        # Preserve the historical explicit dev placeholder behavior, but do not
+        # let a forgeable identity label turn into an authentication factor.
+        if request.headers.get("X-Service-Identity") and not _extract_service_token(request):
+            raise Unauthorized("signed service identity or service token is required")
         provided = _extract_service_token(request)
         if provided and provided != expected:
             raise Unauthorized("invalid service token")
+        logger.warning(
+            "SERVICE_TOKEN 使用 dev 占位值；服务间调用未进行真实签名校验。"
+            "生产环境必须配置短期 signed service identity。"
+        )
         return
-
-    # 生产模式：严格校验（任意 dev-* 前缀 token 同样严格，不做 fail-open）。
     provided = _extract_service_token(request)
     if not provided or provided != expected:
         raise Unauthorized("invalid service token")
+
+
+def verify_service_token(request: Request) -> ServicePrincipal | None:
+    """FastAPI dependency for the service trust boundary.
+
+    Signed assertions are always preferred when a verifier is configured.  A
+    token/header failure never falls through to the legacy shared token.  The
+    latter exists only for explicit development/test compatibility and is
+    unconditionally disabled in production.
+    """
+
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise Unauthorized("service identity settings are unavailable")
+    environment = _environment(settings)
+    mode = _service_mode(settings)
+    if mode not in {"auto", "signed", "legacy"}:
+        raise Unauthorized("invalid service authentication mode")
+
+    verifier = _service_identity_verifier(request, settings)
+    bearer = _extract_bearer(request)
+    has_signed_configuration = verifier is not None
+    if mode == "legacy" and environment != "production":
+        _legacy_verify(request, settings, environment=environment)
+        return
+    if mode == "signed" or environment == "production" or has_signed_configuration:
+        if verifier is None:
+            raise Unauthorized("signed service identity trust is not configured")
+        return _verify_signed(request, verifier)
+
+    # A JWT-shaped Authorization value is never interpreted as a legacy shared
+    # token in compatibility mode; this prevents a user token from crossing the
+    # service boundary by accident.
+    if bearer and bearer.count(".") == 2 and not request.headers.get("X-Service-Token"):
+        raise Unauthorized("signed service identity trust is not configured")
+    if mode == "legacy" or mode == "auto":
+        _legacy_verify(request, settings, environment=environment)
+        return
+    raise Unauthorized("signed service identity is required")
+
+
+# Descriptive alias for callers migrating off the historical name.
+verify_service_identity = verify_service_token
+
+
+__all__ = [
+    "ServiceIdentitySigner",
+    "ServiceIdentityVerifier",
+    "TrustedServiceKey",
+    "required_service_scope",
+    "service_required_capability",
+    "service_target_binding_policy",
+    "verify_service_identity",
+    "verify_service_token",
+]

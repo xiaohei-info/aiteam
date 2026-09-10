@@ -134,6 +134,52 @@ class TenantAuthRepository:
             )
 
 
+    def sync_owner_bootstrap_in_session(
+        self,
+        session,
+        ctx: TenantContext,
+        *,
+        phone: str,
+        secret: str,
+        must_reset: bool = True,
+    ) -> tuple[str, bool]:
+        """Create/replace an owner identity in a caller-owned RLS transaction.
+
+        F02 uses this seam with the idempotency receipt in one transaction.  It
+        intentionally mirrors ``sync_owner_bootstrap_result`` without opening a
+        second connection, so a committed receipt always describes the exact
+        credential mutation that committed with it.
+        """
+        row = session.execute(
+            "SELECT ai.user_id, u.status FROM auth_identity ai "
+            "JOIN app_user u ON u.id = ai.user_id "
+            "WHERE ai.tenant_id = %s AND ai.provider = %s AND ai.external_id = %s",
+            (ctx.tenant_id, AuthProvider.PHONE.value, phone),
+        ).fetchone()
+        if row is None:
+            user_id = session.execute(
+                "INSERT INTO app_user (tenant_id, display_name, roles) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (ctx.tenant_id, "owner", ["owner"]),
+            ).fetchone()[0]
+            session.execute(
+                "INSERT INTO auth_identity "
+                "(tenant_id, user_id, provider, external_id, secret, must_reset, password_changed_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now())",
+                (ctx.tenant_id, str(user_id), AuthProvider.PHONE.value, phone, secret, must_reset),
+            )
+            return str(user_id), False
+        if row[1] != "active":
+            from .active_principal import PrincipalInactive
+
+            raise PrincipalInactive("account is not active")
+        session.execute(
+            "UPDATE auth_identity SET secret = %s, must_reset = %s, password_changed_at = now() "
+            "WHERE tenant_id = %s AND provider = %s AND external_id = %s",
+            (secret, must_reset, ctx.tenant_id, AuthProvider.PHONE.value, phone),
+        )
+        return str(row[0]), True
+
     def update_secret(
         self, ctx: TenantContext, *, provider: AuthProvider, external_id: str, secret: str, must_reset: bool
     ) -> None:
