@@ -82,7 +82,7 @@ test("work HTTP observes actual active→success with stable polling, safe summa
     assert.equal(final.id, active.id);
     assert.equal(final.outcome, "succeeded");
     assert(final.ended_at >= final.started_at);
-    const assistant = fixture.host.readHistorySources("c1", caller)[0]!.entries.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const assistant = fixture.host.readHistorySources("c1", caller)[0]!.entries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant");
     const actualTokens = assistant.reduce((sum, entry) => { const usage = (entry as any).message.usage; return sum + usage.input + usage.output + usage.cacheRead + usage.cacheWrite; }, 0);
     assert(actualTokens > 0);
     assert.equal(final.usage.token_total, actualTokens, "faux provider calculates its own counters; use persisted Pi evidence");
@@ -503,4 +503,44 @@ test("work APIs expose concrete OpenAPI schemas, cursor directions, nullable pro
     assert(schema.properties.started_at.anyOf.some((item: any) => item.type === "null"));
     assert.equal(doc.components.schemas.UsageStatistics.properties.known_cost_total.pattern, "^\\d+\\.\\d{12}$");
   } finally { await http.close(); await fixture.close(); }
+});
+
+test("group tool cycles, peer deliveries and repeat prompts share work IDs across SSE, HTTP history and cold reads", async () => {
+  const fixture = await createFixture();
+  seed(fixture, true);
+  await fixture.host.initializeConversationParticipants("c1", caller);
+  const events: import("../pi/session-host.js").PiEventEnvelope[] = [];
+  const unsubscribe = await fixture.host.subscribe("c1", (event) => { events.push(event); });
+  const { http, request } = await serve(fixture);
+  try {
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("mention_employee", { employee_id: "e2", task: "peer task" }), { stopReason: "toolUse" }),
+      response("peer reply"), response("final JD"), response("new JD"),
+    ]);
+    await fixture.host.prompt("c1", "write JD", undefined, caller);
+    await fixture.host.prompt("c1", "write another JD", undefined, caller);
+    const records = fixture.store.workRecords.forConversation("c1", owner);
+    assert.equal(records.length, 3);
+    const history = (await request("/conversations/c1/entries")).data.entries;
+    for (const record of records) {
+      const outputs = history.filter((entry: any) => entry.work_id === record.id);
+      assert(outputs.length > 0);
+      assert(outputs.every((entry: any) => entry.source_employee_id === record.employee_id && entry.message?.role !== "user"));
+      assert(events.some((event) => event.work_id === record.id && event.event.type === "agent_settled"));
+      assert(events.filter((event) => event.work_id === record.id).every((event) => event.source_employee_id === record.employee_id));
+    }
+    const coordinatorWork = records.filter((record) => record.employee_id === "e1").sort((a, b) => a.created_seq - b.created_seq)[0]!;
+    assert(history.filter((entry: any) => entry.work_id === coordinatorWork.id && entry.message?.role === "assistant").length >= 2);
+    assert(history.filter((entry: any) => entry.message?.role === "user").every((entry: any) => entry.work_id === undefined));
+    const page = (await request("/conversations/c1/entries?limit=100")).data.entries;
+    assert.deepEqual(page.map((entry: any) => [entry.entry_ref, entry.work_id]), history.map((entry: any) => [entry.entry_ref, entry.work_id]));
+    const cold = fixture.createHost();
+    try {
+      assert.deepEqual(cold.readEntries("c1", caller).map(({ entry }) => [entry.entry_ref, entry.work_id]), history.map((entry: any) => [entry.entry_ref, entry.work_id]));
+    } finally { await cold.dispose(); }
+    await request("/conversations/c1/entries", { other: true, status: 404 });
+    const schema = (await request("/openapi.json")).components.schemas;
+    assert(schema.ConversationEntry.properties.work_id);
+    assert(schema.PiSseEventData.properties.work_id);
+  } finally { unsubscribe(); await http.close(); await fixture.close(); }
 });

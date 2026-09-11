@@ -142,3 +142,10 @@ test("Pi SSE serializer bounds structured todo arguments and keeps thinking cont
   assert(delta.includes("[内容已隐藏]"));
   assert.notEqual(delta, "[内容已隐藏]");
 });
+
+test("execution work ID survives live and persisted serialization without trusting runtime metadata", () => {
+  const live = serializePiEvent({ type: "agent_settled", work_id: "runtime-forged" } as never, { work_id: "5af79698-7047-4c5e-8c3f-4f9bdba806a9", source_employee_id: "e1" });
+  assert.equal(live?.work_id, "5af79698-7047-4c5e-8c3f-4f9bdba806a9");
+  assert.equal(serializePiEvent({ type: "agent_settled", work_id: "runtime-forged" } as never)?.work_id, undefined);
+  assert.equal(serializePiEntry({ id: "entry", type: "message", work_id: "5af79698-7047-4c5e-8c3f-4f9bdba806a9", message: { role: "assistant", content: "done" } })?.work_id, "5af79698-7047-4c5e-8c3f-4f9bdba806a9");
+});

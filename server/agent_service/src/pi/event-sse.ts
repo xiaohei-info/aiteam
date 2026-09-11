@@ -28,6 +28,7 @@ const MAX_JSON_DEPTH = 4;
 type ToolKind = "memory" | "rag" | "todo";
 
 export interface PiEventMetadata {
+  work_id?: string;
   conversation_id?: string;
   source_ref?: string;
   tool_call_id?: string;
@@ -54,7 +55,7 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   }
   const message = serializeMessage(raw.message);
   if (message) result.message = message;
-  for (const key of ["entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
+  for (const key of ["work_id", "entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
     const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
     if (value) result[key] = value;
   }
@@ -77,7 +78,7 @@ function boundEntry(value: Record<string, unknown>): Record<string, unknown> {
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return { id: value.id, type: value.type }; }
   if (Buffer.byteLength(serialized, "utf8") <= MAX_EVENT_BYTES) return value;
-  return { id: value.id, type: value.type, ...(value.entry_ref ? { entry_ref: value.entry_ref } : {}), ...(value.participant_employee_id ? { participant_employee_id: value.participant_employee_id } : {}), ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
+  return { id: value.id, type: value.type, ...(value.work_id ? { work_id: value.work_id } : {}), ...(value.entry_ref ? { entry_ref: value.entry_ref } : {}), ...(value.participant_employee_id ? { participant_employee_id: value.participant_employee_id } : {}), ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */
@@ -273,7 +274,7 @@ function boundedValue(value: unknown, key = "", depth = 0, seen = new WeakSet<ob
 
 function serializeMetadata(extra: PiEventMetadata): Record<string, unknown> {
   const result: Record<string, unknown> = {};
-  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name"] as const) {
+  for (const key of ["work_id", "conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name"] as const) {
     const value = extra[key];
     const clean = key === "source_employee_display_name" ? boundedIdentifier(value, MAX_SOURCE_NAME_CHARS) : boundedIdentifier(value, MAX_IDENTIFIER_CHARS);
     if (clean) result[key] = clean;
@@ -327,7 +328,7 @@ function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
 
 function minimalEvent(value: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = { type: value.type };
-  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "source_role", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
+  for (const key of ["work_id", "conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "source_role", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
     if (value[key] !== undefined) result[key] = value[key];
   }
   return result;

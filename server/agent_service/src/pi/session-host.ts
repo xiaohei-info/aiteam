@@ -34,6 +34,7 @@ import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightSt
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
 
 export interface PiEventEnvelope {
+  work_id?: string;
   id: string;
   event: AgentSessionEvent;
   conversation_id?: string;
@@ -150,6 +151,7 @@ interface SessionRecord {
   listeners: Set<Subscriber>;
   eventSequence: number;
   runtimeProviderId?: string;
+  activeWorkId?: string;
   activeSourceRef?: string;
   activeToolCallId?: string;
   activeSourceRole?: "human" | "child" | "participant" | "coordinator";
@@ -921,6 +923,7 @@ export class SessionHost {
     const owner = authorization?.caller.tenantId ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const workId = owner && this.options.store.getOwnedConversation(record.conversationId, owner.tenantId, owner.memberId)
       ? this.options.store.workRecords.start({ ...owner, employeeId, conversationId: record.conversationId, startedAt, startOrdinal: entriesBefore }) : undefined;
+    record.activeWorkId = workId;
     record.prompting = true;
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;
@@ -989,6 +992,7 @@ export class SessionHost {
         record.prompting = false;
         record.aborting = false;
         record.activeToolCallId = undefined;
+        record.activeWorkId = undefined;
         record.activeSourceRef = undefined;
         record.activeSourceRole = undefined;
         record.activeSource = undefined;
@@ -1252,12 +1256,13 @@ export class SessionHost {
               source_role: record.activeSourceRole ?? (record.role === "coordinator" ? "coordinator" as const : "participant" as const),
             }
       : { conversation_id: record.conversationId };
-    if (!serializePiEvent(event, metadata)) return;
+    const executionMetadata = { ...metadata, ...(!isUserMessage && record.activeWorkId ? { work_id: record.activeWorkId } : {}) };
+    if (!serializePiEvent(event, executionMetadata)) return;
     const entryId = this.entryIdentity(event);
     const envelope: PiEventEnvelope = {
       id: entryId && record.employeeId ? `${record.employeeId}:${entryId}` : entryId ?? `${record.conversationId}:${++record.eventSequence}`,
       event,
-      ...metadata,
+      ...executionMetadata,
     };
     for (const subscriber of this.listeners.get(record.conversationId) ?? []) {
       if (subscriber.replaying) subscriber.queued.push(envelope);
