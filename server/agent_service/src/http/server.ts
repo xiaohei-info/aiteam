@@ -24,6 +24,7 @@ import { employeeDisplay } from "../services/employee-display.js";
 import { CONVERSATION_READ_DOCS, CONVERSATION_READ_SCHEMAS, EmployeeDisplayProperties, HistoryQuery, MessageSearchQuery } from "./conversation-read-schemas.js";
 import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQuery, UsageStatisticsQuery } from "./work-record-schemas.js";
 import { WorkRecordReadService } from "../services/work-records.js";
+import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
@@ -805,11 +806,13 @@ export class AgentHttpServer {
   private readonly fetchImpl: typeof fetch;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly conversationReads: ConversationReadService;
+  private readonly groupCreation: GroupCreationService;
   private readonly workRecords: WorkRecordReadService;
   private readonly usageStatistics: UsageStatisticsService;
 
   constructor(private readonly options: AgentHttpServerOptions) {
     this.conversationReads = new ConversationReadService(options.store, options.host);
+    this.groupCreation = new GroupCreationService(options.store, options.host);
     this.workRecords = new WorkRecordReadService(options.store, options.host);
     this.usageStatistics = new UsageStatisticsService(options.store);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -1299,6 +1302,22 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: result.items.map((item) => this.conversationReads.metadata(item.id, caller)), page: { next_cursor: result.nextCursor, has_more: result.hasMore } });
   }
 
+  private groupParticipantSeeds(employeeIds: readonly string[], caller: AuthenticatedCaller): GroupParticipantSeed[] {
+    const memberId = caller.userId ?? caller.callerId;
+    const snapshots = this.options.store.listSnapshots(caller.tenantId, memberId);
+    return [...new Set(employeeIds)].map((employeeId) => {
+      this.requireAuthorizedEmployee(employeeId, caller);
+      const snapshot = snapshots.find((item) => item.employee_id === employeeId);
+      if (!snapshot) throw new HttpProblem(403, "employee_not_authorized", "Employee is not authorized locally");
+      return { id: employeeId, version: snapshot.version };
+    });
+  }
+
+  private async createResolvedGroup(response: ServerResponse, caller: AuthenticatedCaller, input: ResolvedGroupConversation): Promise<void> {
+    await this.groupCreation.create(input, caller);
+    this.writeJson(response, 201, { data: this.conversationReads.metadata(input.id, caller) });
+  }
+
   private async createCustomGroup(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     if (!Check({ GroupOrchestration, ConversationPermissionMode: PermissionMode }, CustomGroupCreateRequest, body)) throw new HttpProblem(422, "invalid_group_configuration", "Custom group fields do not match the documented schema");
@@ -1306,28 +1325,21 @@ export class AgentHttpServer {
     const orchestration = validateCustomGroup(input);
     const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" ? body.id : randomUUID();
-    const existing = this.options.store.getConversationMetadata(id);
-    if (existing) {
-      if (existing.tenant_id === caller.tenantId && existing.member_id === memberId) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
-      throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    }
-    const snapshots = this.options.store.listSnapshots(caller.tenantId, memberId);
-    const members = input.member_employee_ids.map(employeeId => {
-      this.requireAuthorizedEmployee(employeeId, caller);
-      return { id: employeeId, version: snapshots.find(snapshot => snapshot.employee_id === employeeId)!.version };
+    this.groupCreation.assertAvailable(id, caller.tenantId!, memberId);
+    await this.createResolvedGroup(response, caller, {
+      id,
+      title: input.title.trim(),
+      labels: [],
+      description: input.description?.trim() || null,
+      orchestration,
+      coordinatorEmployeeId: input.coordinator_employee_id,
+      solutionRef: null,
+      schedule: null,
+      permissionMode: parsePermissionMode(body.permission_mode),
+      tenantId: caller.tenantId!,
+      memberId,
+      participants: this.groupParticipantSeeds(input.member_employee_ids, caller),
     });
-    this.options.store.createCustomGroup({
-      id, kind: "group", title: input.title.trim(), description: input.description?.trim() || null,
-      orchestration, coordinatorEmployeeId: input.coordinator_employee_id,
-      permissionMode: parsePermissionMode(body.permission_mode), tenantId: caller.tenantId, memberId,
-    }, members);
-    try {
-      await this.options.host.initializeConversationParticipants(id, caller);
-    } catch (error) {
-      await this.options.host.delete(id, caller.tenantId!, memberId);
-      throw error;
-    }
-    this.writeJson(response, 201, { data: this.conversationReads.metadata(id, caller) });
   }
 
   private async createConversation(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -1342,30 +1354,49 @@ export class AgentHttpServer {
     const permissionMode = parsePermissionMode(body.permission_mode);
     const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
+    let schedule = null;
+    if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
+
     const existing = this.options.store.getConversationMetadata(id);
-    if (existing) {
+    if (kind !== "group" && existing) {
       if (existing.tenant_id === caller.tenantId && existing.member_id === memberId) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
       throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     }
     if (kind === "group") {
+      this.groupCreation.assertAvailable(id, caller.tenantId!, memberId);
       if (entryEmployeeId) throw new HttpProblem(422, "invalid_group_employee", "Group conversations use coordinator_employee_id");
       const solution = solutionRef ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === solutionRef) : undefined;
       if (solutionRef && !solution) throw new HttpProblem(403, "solution_not_authorized", "Solution is not authorized locally");
       const solutionRoster = solution && Array.isArray(solution.expert_employee_ids)
-        ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+        ? [...new Set(solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string"))]
         : [];
+      const availableRoster = this.options.store.listLoadedExperts(caller.tenantId, memberId)
+        .filter((expert) => !expert.revoked)
+        .map((expert) => expert.employee_id);
       const solutionCoordinator = solution && typeof solution.coordinator_employee_id === "string" ? solution.coordinator_employee_id : undefined;
       if (solutionCoordinator && coordinatorEmployeeId && coordinatorEmployeeId !== solutionCoordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator does not match the authorized solution");
-      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
+      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? availableRoster[0] ?? null;
       if (!coordinatorEmployeeId) throw new HttpProblem(403, "coordinator_not_authorized", "No authorized employee is available as coordinator");
-      if (solutionRoster.length > 0 && !solutionRoster.includes(coordinatorEmployeeId)) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator is not in the authorized solution roster");
-      this.requireAuthorizedEmployee(coordinatorEmployeeId, caller);
-    } else {
-      if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
-      if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
+      if (solution ? !solutionRoster.includes(coordinatorEmployeeId) : !availableRoster.includes(coordinatorEmployeeId)) {
+        throw new HttpProblem(403, "coordinator_not_authorized", solution ? "Coordinator is not in the authorized solution roster" : "Coordinator is not in the authorized local roster");
+      }
+      await this.createResolvedGroup(response, caller, {
+        id,
+        title,
+        labels,
+        coordinatorEmployeeId,
+        solutionRef,
+        schedule,
+        permissionMode,
+        tenantId: caller.tenantId!,
+        memberId,
+        participants: this.groupParticipantSeeds(solution ? solutionRoster : availableRoster, caller),
+      });
+      return;
     }
-    let schedule = null;
-    if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
+
+    if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
+    if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
     this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
       entryEmployeeId, coordinatorEmployeeId, solutionRef, permissionMode,
@@ -2024,6 +2055,7 @@ export class AgentHttpServer {
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
     else if (error instanceof InvalidEventCursorError || error instanceof InvalidReadCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
+    else if (error instanceof GroupCreationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof GroupConfigurationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };

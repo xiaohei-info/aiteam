@@ -521,23 +521,24 @@ export class SessionHost {
       if (metadata.entry_employee_id) this.ensureRecord(conversationId, metadata.entry_employee_id);
       return;
     }
-    if (metadata.orchestration) {
-      const participants = this.options.store.listConversationParticipants(conversationId);
-      if (!participants.length || participants.filter(p => p.role === "coordinator").length !== 1
-        || !participants.some(p => p.employee_id === metadata.coordinator_employee_id && p.role === "coordinator")) {
-        throw new SessionAuthorizationError("Custom group participant index is incomplete");
-      }
-      if (metadata.orchestration.mode === "custom") validateMemberReferences(metadata.orchestration.prompt, participants.map(p => p.employee_id));
-      for (const participant of participants) this.requireParticipantSnapshot(caller, participant.employee_id);
-      for (const participant of participants) this.ensureRecord(conversationId, participant.employee_id);
-      return;
-    }
     const memberId = caller.userId ?? caller.callerId;
     const solution = metadata.solution_instance_id
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
       : undefined;
     if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
     if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
+    const participants = this.options.store.listConversationParticipants(conversationId);
+    const persistedCoordinator = participants.find((participant) => participant.employee_id === metadata.coordinator_employee_id && participant.role === "coordinator");
+    if (persistedCoordinator) {
+      if (participants.filter((participant) => participant.role === "coordinator").length !== 1) {
+        throw new SessionAuthorizationError("Group participant index is incomplete");
+      }
+      if (metadata.orchestration?.mode === "custom") validateMemberReferences(metadata.orchestration.prompt, participants.map((participant) => participant.employee_id));
+      for (const participant of participants) this.requireParticipantSnapshot(caller, participant.employee_id);
+      for (const participant of participants) this.ensureRecord(conversationId, participant.employee_id);
+      return;
+    }
+    if (metadata.orchestration) throw new SessionAuthorizationError("Custom group participant index is missing");
     const roster = solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
@@ -671,7 +672,7 @@ export class SessionHost {
     if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
     const persisted = this.options.store.listConversationParticipants(metadata.id);
     if (metadata.orchestration && !persisted.length) throw new SessionAuthorizationError("Custom group participant index is missing");
-    const roster = metadata.orchestration ? persisted.map(member => member.employee_id) : solution && Array.isArray(solution.expert_employee_ids)
+    const roster = persisted.length > 0 ? persisted.map((member) => member.employee_id) : solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
     if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
@@ -913,10 +914,11 @@ export class SessionHost {
         : undefined;
       if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
       if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
-      const allowedIds = new Set(solution && Array.isArray(solution.expert_employee_ids)
+      if (metadata.orchestration && participants.length === 0) throw new SessionAuthorizationError("Custom group participant index is missing");
+      const allowedIds = metadata.kind === "group" && participantIds.size > 0 ? participantIds : new Set(solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
         : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
-      if (!allowedIds.has(employeeId) || ((metadata.solution_instance_id || metadata.orchestration) && !participantIds.has(employeeId))) throw new SessionAuthorizationError("Employee is not in the authorized local roster or solution roster");
+      if (!allowedIds.has(employeeId)) throw new SessionAuthorizationError("Employee is not in the authorized local roster or solution roster");
     } else if (metadata.entry_employee_id !== employeeId) {
       throw new SessionAuthorizationError("Employee is not the private conversation participant");
     }
@@ -1051,8 +1053,8 @@ export class SessionHost {
       : undefined;
     const participantById = new Map(rows.map((participant) => [participant.employee_id, participant]));
     const orderedIds = uniqueStrings(
-      !metadata?.orchestration && Array.isArray(solution?.expert_employee_ids) ? solution.expert_employee_ids : [],
       rows.map((participant) => participant.employee_id),
+      Array.isArray(solution?.expert_employee_ids) ? solution.expert_employee_ids : [],
     );
     const memberLines = orderedIds.map((employeeId) => {
       const participant = participantById.get(employeeId);

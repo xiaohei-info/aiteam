@@ -174,7 +174,7 @@ Manager 应用方案：
 6. 创建 `solution_instance` 与 solution grant；
 7. Agent sync 当前成员可见的 solution projection 和 employee snapshots。
 
-Agent 创建方案群聊时只提交 `solution_instance_id`。Agent 根据本地授权 projection 固定 coordinator 与 participant roster，并创建一组 Pi Session 文件；浏览器不得提交 coordinator、roster、knowledge 或 tool policy。
+Agent 创建方案群聊时只提交 `solution_instance_id`；Agent 根据本地授权 projection 固定 coordinator 与 participant roster，并创建一组 Pi Session 文件。自定义群聊是平级入口，允许用户在本地已授权员工中选择固定 roster、coordinator 和群行为配置。两种入口都先解析为统一的 group creation input，再由同一创建服务事务写入 Conversation/participant index 并初始化固定 Pi Session；自定义入口不改变授权、snapshot、tool policy 或 Manager-owned solution 的边界。
 
 ### 7.8 审批、幂等与取消
 

@@ -8,6 +8,8 @@
 
 现有 `POST /api/agent/conversations` 保留原创建行为，不接受 `description`、`member_employee_ids`、`orchestration` 三个新字段。已有自由群与方案群继续使用原执行逻辑。
 
+方案群和自定义群是两个平级创建入口：方案入口解析 `solution_instance_id`，自定义入口解析客户端提交的成员与编排配置；两者都归一为固定 coordinator、participant roster 和群行为配置，再进入同一个群创建服务。事务写入、participant Session 初始化、失败清理、prompt/delivery/SSE/entries 链路不按入口分叉。
+
 创建仅保存配置并初始化固定成员 Session，不调用模型。用户发送任务后，沿用现有 Pi Session、`mention_employee`、工具权限和工作记录执行链。
 
 ## 请求
@@ -105,7 +107,7 @@
 
 ## 实现与验证
 
-主要文件：`src/http/custom-group-schemas.ts`、`src/http/server.ts`、`src/groups/orchestration.ts`、`src/storage/sqlite.ts`、`src/pi/session-host.ts`、`src/tools/delegate.ts`、`src/main.ts`。
+主要文件：`src/http/custom-group-schemas.ts`、`src/http/server.ts`、`src/groups/orchestration.ts`、`src/services/group-creation.ts`、`src/storage/sqlite.ts`、`src/pi/session-host.ts`、`src/tools/delegate.ts`、`src/main.ts`。
 
 SQLite 新增 `description` 和 `orchestration_json` 两列，仅升级当前 Agent 本地库，不迁移冻结 MVP 数据。旧群的编排字段为空，维持既有行为。
 

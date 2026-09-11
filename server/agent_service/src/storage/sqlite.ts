@@ -549,7 +549,7 @@ export class AgentSqliteStore {
     return this.getConversationMetadata(input.id)!;
   }
 
-  createCustomGroup(input: Parameters<AgentSqliteStore["createConversation"]>[0], members: readonly { id: string; version: string }[]): ConversationMetadata {
+  createGroupConversation(input: Parameters<AgentSqliteStore["createConversation"]>[0], members: readonly { id: string; version: string }[]): ConversationMetadata {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const result = this.createConversation(input);
