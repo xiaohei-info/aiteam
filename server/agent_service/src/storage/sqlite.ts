@@ -1,3 +1,4 @@
+import { parseOrchestration, type GroupOrchestration } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { usdDecimal, usdUnits, type UsageSummary } from "../usage.js";
@@ -37,6 +38,8 @@ export interface ConversationRecord {
   sessionFile: string;
   workspace: string;
   title?: string | null;
+  description?: string | null;
+  orchestration?: GroupOrchestration | null;
   kind?: string;
   labels?: string[];
   state?: ConversationState;
@@ -55,6 +58,8 @@ export interface ConversationRecord {
 export interface ConversationMetadata {
   id: string;
   title: string | null;
+  description?: string | null;
+  orchestration?: GroupOrchestration | null;
   kind: string;
   labels: string[];
   state: ConversationState;
@@ -216,6 +221,8 @@ interface ConversationRow {
   session_file: string;
   workspace: string;
   title: string | null;
+  description: string | null;
+  orchestration_json: string | null;
   kind: string;
   labels_json: string;
   state: ConversationState;
@@ -399,6 +406,8 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN tenant_id TEXT",
       "ALTER TABLE conversation ADD COLUMN member_id TEXT",
       "ALTER TABLE conversation ADD COLUMN schedule_json TEXT",
+      "ALTER TABLE conversation ADD COLUMN description TEXT",
+      "ALTER TABLE conversation ADD COLUMN orchestration_json TEXT",
       "ALTER TABLE conversation ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'read-only'",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
@@ -453,13 +462,13 @@ export class AgentSqliteStore {
   }
 
   listScheduledConversations(): ConversationRecord[] {
-    const rows = this.db.prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
+    const rows = this.db.prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
     return rows.map((row) => this.toConversation(row));
   }
 
   getConversation(id: string): ConversationRecord | undefined {
     const row = this.db
-      .prepare("SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
+      .prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
       .get(id) as ConversationRow | undefined;
     return row ? this.toConversation(row) : undefined;
   }
@@ -479,7 +488,7 @@ export class AgentSqliteStore {
       if (!Number.isFinite(Date.parse(boundary[0])) || !boundary[1]) throw new InvalidReadCursorError();
     }
     const rows = this.db.prepare(`
-      SELECT id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
+      SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id,
              coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at
       FROM conversation
       WHERE (? IS NULL OR (updated_at, id) < (?, ?))
@@ -496,13 +505,15 @@ export class AgentSqliteStore {
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO conversation (
-        id, session_file, workspace, title, kind, labels_json, state, entry_employee_id,
+        id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id,
         coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, permission_mode, last_read_entry_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         session_file = excluded.session_file,
         workspace = excluded.workspace,
         title = excluded.title,
+        description = excluded.description,
+        orchestration_json = excluded.orchestration_json,
         kind = excluded.kind,
         labels_json = excluded.labels_json,
         state = excluded.state,
@@ -516,7 +527,8 @@ export class AgentSqliteStore {
         last_read_entry_id = excluded.last_read_entry_id,
         updated_at = excluded.updated_at
     `).run(
-      record.id, record.sessionFile, record.workspace, record.title ?? null, record.kind ?? "chat",
+      record.id, record.sessionFile, record.workspace, record.title ?? null, record.description ?? null,
+      record.orchestration ? JSON.stringify(record.orchestration) : null, record.kind ?? "chat",
       JSON.stringify(record.labels ?? []), record.state ?? "active", record.entryEmployeeId ?? null,
       record.coordinatorEmployeeId ?? null, record.solutionRef ?? null,
       record.tenantId ?? null, record.memberId ?? null,
@@ -535,6 +547,20 @@ export class AgentSqliteStore {
       updatedAt: now,
     });
     return this.getConversationMetadata(input.id)!;
+  }
+
+  createCustomGroup(input: Parameters<AgentSqliteStore["createConversation"]>[0], members: readonly { id: string; version: string }[]): ConversationMetadata {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.createConversation(input);
+      for (const member of members) this.upsertConversationParticipant({
+        conversation_id: input.id, employee_id: member.id,
+        role: member.id === input.coordinatorEmployeeId ? "coordinator" : "member",
+        session_file: "", workspace: "", pi_session_id: null, employee_version: member.version,
+      });
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   updateConversation(id: string, patch: Partial<Omit<ConversationRecord, "id" | "sessionFile" | "workspace">>): ConversationMetadata | undefined {
@@ -1045,6 +1071,8 @@ export class AgentSqliteStore {
       sessionFile: row.session_file,
       workspace: row.workspace,
       title: row.title,
+      description: row.description ?? null,
+      orchestration: row.orchestration_json ? parseOrchestration(JSON.parse(row.orchestration_json)) : null,
       kind: row.kind,
       labels: this.parseLabels(row.labels_json),
       state: row.state,
@@ -1066,6 +1094,8 @@ export class AgentSqliteStore {
     return {
       id: record.id,
       title: record.title ?? null,
+      description: record.description ?? null,
+      orchestration: record.orchestration ?? null,
       kind: record.kind ?? "chat",
       labels: record.labels ?? [],
       state: record.state ?? "active",

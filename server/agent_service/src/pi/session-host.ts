@@ -1,3 +1,4 @@
+import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
@@ -100,6 +101,7 @@ export interface SessionAuthorization {
   runtimeScope?: string;
   groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
   groupContext?: string;
+  groupOrchestrationMode?: "auto" | "custom";
 }
 
 export interface SessionHostOptions {
@@ -519,6 +521,17 @@ export class SessionHost {
       if (metadata.entry_employee_id) this.ensureRecord(conversationId, metadata.entry_employee_id);
       return;
     }
+    if (metadata.orchestration) {
+      const participants = this.options.store.listConversationParticipants(conversationId);
+      if (!participants.length || participants.filter(p => p.role === "coordinator").length !== 1
+        || !participants.some(p => p.employee_id === metadata.coordinator_employee_id && p.role === "coordinator")) {
+        throw new SessionAuthorizationError("Custom group participant index is incomplete");
+      }
+      if (metadata.orchestration.mode === "custom") validateMemberReferences(metadata.orchestration.prompt, participants.map(p => p.employee_id));
+      for (const participant of participants) this.requireParticipantSnapshot(caller, participant.employee_id);
+      for (const participant of participants) this.ensureRecord(conversationId, participant.employee_id);
+      return;
+    }
     const memberId = caller.userId ?? caller.callerId;
     const solution = metadata.solution_instance_id
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
@@ -642,7 +655,7 @@ export class SessionHost {
     }
   }
 
-  private resolveTargetEmployeeIds(metadata: { kind: string; entry_employee_id: string | null; coordinator_employee_id: string | null; solution_instance_id: string | null; tenant_id?: string | null; member_id?: string | null }, caller: AuthenticatedCaller | undefined, mentions: string[]): string[] {
+  private resolveTargetEmployeeIds(metadata: { id: string; orchestration?: import("../groups/orchestration.js").GroupOrchestration | null; kind: string; entry_employee_id: string | null; coordinator_employee_id: string | null; solution_instance_id: string | null; tenant_id?: string | null; member_id?: string | null }, caller: AuthenticatedCaller | undefined, mentions: string[]): string[] {
     const coordinator = metadata.coordinator_employee_id ?? metadata.entry_employee_id;
     if (!caller && !coordinator) return ["__conversation__"];
     if (metadata.kind !== "group" && !metadata.coordinator_employee_id) {
@@ -656,7 +669,9 @@ export class SessionHost {
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === metadata.solution_instance_id)
       : undefined;
     if (solution && typeof solution.status === "string" && solution.status !== "applied") throw new SessionAuthorizationError("Solution is not active");
-    const roster = solution && Array.isArray(solution.expert_employee_ids)
+    const persisted = this.options.store.listConversationParticipants(metadata.id);
+    if (metadata.orchestration && !persisted.length) throw new SessionAuthorizationError("Custom group participant index is missing");
+    const roster = metadata.orchestration ? persisted.map(member => member.employee_id) : solution && Array.isArray(solution.expert_employee_ids)
       ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
       : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id);
     if (metadata.solution_instance_id && !solution) throw new SessionAuthorizationError("Solution is no longer authorized locally");
@@ -726,8 +741,8 @@ export class SessionHost {
       ...(allowed.has(TODO_UPDATE_TOOL_NAME) ? [createTodoUpdateTool()] : []),
       ...codingTools,
       ...(allowDelegation && record ? [
-        ...(allowed.has("mention_employee") ? [createMentionEmployeeTool({ delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
-        ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
+        ...(allowed.has("mention_employee") ? [createMentionEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
+        ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
       ] : []),
     ];
     return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -766,6 +781,7 @@ export class SessionHost {
     let rosterEmployeeIds: ReadonlySet<string> | undefined;
     if (metadata?.kind === "group" || metadata?.coordinator_employee_id) {
       rosterEmployeeIds = new Set(this.options.store.listConversationParticipants(record.conversationId).map((item) => item.employee_id));
+      if (rosterEmployeeIds.size === 0 && metadata.orchestration) throw new SessionAuthorizationError("Custom group participant index is missing");
       if (rosterEmployeeIds.size === 0) rosterEmployeeIds = new Set(experts.filter((item) => !item.revoked).map((item) => item.employee_id));
       if (!rosterEmployeeIds.has(employeeId)) throw new SessionAuthorizationError("Employee is not in the authorized group roster");
     }
@@ -900,14 +916,17 @@ export class SessionHost {
       const allowedIds = new Set(solution && Array.isArray(solution.expert_employee_ids)
         ? solution.expert_employee_ids.filter((id): id is string => typeof id === "string")
         : this.options.store.listLoadedExperts(caller.tenantId, memberId).filter((expert) => !expert.revoked).map((expert) => expert.employee_id));
-      if (!allowedIds.has(employeeId) || (metadata.solution_instance_id && !participantIds.has(employeeId))) throw new SessionAuthorizationError("Employee is not in the authorized local roster or solution roster");
+      if (!allowedIds.has(employeeId) || ((metadata.solution_instance_id || metadata.orchestration) && !participantIds.has(employeeId))) throw new SessionAuthorizationError("Employee is not in the authorized local roster or solution roster");
     } else if (metadata.entry_employee_id !== employeeId) {
       throw new SessionAuthorizationError("Employee is not the private conversation participant");
     }
     const record = this.ensureRecord(command.conversationId, employeeId);
     const authorization = this.resolveAuthorization(record, caller);
     authorization!.groupMessageSource = command.source;
-    if (metadata.kind === "group") authorization!.groupContext = this.buildGroupContext(command.conversationId, employeeId);
+    if (metadata.kind === "group") {
+      authorization!.groupContext = this.buildGroupContext(command.conversationId, employeeId);
+      authorization!.groupOrchestrationMode = metadata.orchestration?.mode;
+    }
     if (command.source.type === "employee" && command.source.id === employeeId) throw new SessionAuthorizationError("An employee cannot mention itself");
     return this.promptParticipant(record, command, authorization);
   }
@@ -1032,7 +1051,7 @@ export class SessionHost {
       : undefined;
     const participantById = new Map(rows.map((participant) => [participant.employee_id, participant]));
     const orderedIds = uniqueStrings(
-      Array.isArray(solution?.expert_employee_ids) ? solution.expert_employee_ids : [],
+      !metadata?.orchestration && Array.isArray(solution?.expert_employee_ids) ? solution.expert_employee_ids : [],
       rows.map((participant) => participant.employee_id),
     );
     const memberLines = orderedIds.map((employeeId) => {
@@ -1058,7 +1077,7 @@ export class SessionHost {
       }
       const knowledge = uniqueStrings(snapshot?.knowledge_refs, expert?.knowledge_refs);
       const connectors = uniqueStrings(snapshot?.connector_refs, expert?.connector_refs);
-      const lines = [`- ${displayName} (@${handle}) · ${role}`];
+      const lines = [`- ${displayName} (@${handle}) · ${role}${metadata?.orchestration ? ` · ID: ${employeeId}` : ""}`];
       if (intro) lines.push(`  介绍：${intro}`);
       if (tools.length) lines.push(`  工具能力：${tools.join("、")}`);
       if (skills.length) lines.push(`  技能能力：${skills.join("、")}`);
@@ -1087,6 +1106,10 @@ export class SessionHost {
       ].filter(Boolean).join("\n"));
     }
     if (memberLines.length) sections.push(`群聊成员信息（仅作协作参考，实际权限以当前员工快照为准）：\n${memberLines.join("\n")}`);
+    const requiredContext = metadata?.orchestration
+      ? orchestrationContext(metadata.orchestration, metadata.description ?? null, targetEmployeeId === metadata.coordinator_employee_id) + "\n\n" + sections.join("\n\n") : null;
+    if (requiredContext && requiredContext.length > 64_000) throw new Error("Group configuration exceeds execution context budget");
+    const optionalSections: string[] = [];
     for (const participant of rows) {
       if (participant.employee_id === targetEmployeeId) continue;
       const record = this.ensureRecord(conversationId, participant.employee_id);
@@ -1103,9 +1126,11 @@ export class SessionHost {
           return normalized ? `${entry.message.role === "user" ? "用户" : "Agent"}: ${normalized.slice(0, 600)}` : "";
         })
         .filter(Boolean);
-      if (messages.length > 0) sections.push(`参与者 ${participant.employee_id} 的近期消息：\n${messages.join("\n")}`);
+      if (messages.length > 0) optionalSections.push(`参与者 ${participant.employee_id} 的近期消息：\n${messages.join("\n")}`);
     }
-    return boundGroupContext(sections.join("\n\n"));
+    return requiredContext !== null
+      ? requiredContext + "\n\n" + optionalSections.join("\n\n").slice(0, Math.max(0, 64_000 - requiredContext.length - 2))
+      : boundGroupContext([...sections, ...optionalSections].join("\n\n"));
   }
 
   private recordEntrySources(record: SessionRecord, command: GroupMessageCommand, entriesBefore: number, observedMessage?: unknown): void {
