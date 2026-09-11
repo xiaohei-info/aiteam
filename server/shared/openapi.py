@@ -763,7 +763,7 @@ _OPERATION_PROJECTION_COMPONENTS = {
         "properties": {
             "org_id": {"type": "string", "description": "企业 ID。"},
             "enterprise_name": {"type": "string", "description": "企业名称。"},
-            "cost_total": {"type": "string", "description": "总成本；decimal string。"},
+            "cost_total": {"type": ["string", "null"], "description": "已知价格摘要成本；未知价格时为 null。"},
             "token_total": {"type": "integer", "minimum": 0, "description": "token 总数。"},
             "pricing_status": {"type": "string", "enum": ["known", "partial"], "description": "价格完整性。"},
             "unknown_pricing_tokens": {"type": "integer", "minimum": 0, "description": "未知价格 token 数。"},
@@ -786,7 +786,7 @@ _OPERATION_PROJECTION_COMPONENTS = {
         "properties": {
             "enterprise_id": {"type": "string", "description": "企业 ID。"},
             "token_total": {"type": "integer", "minimum": 0, "description": "token 总数。"},
-            "cost_total": {"type": "string", "description": "模型成本；decimal string。"},
+            "cost_total": {"type": ["string", "null"], "description": "已知价格摘要成本；未知价格时为 null。"},
             "run_count": {"type": "integer", "minimum": 0, "description": "运行次数。"},
             "pricing_status": {"type": "string", "enum": ["known", "partial"], "description": "价格完整性。"},
             "unknown_pricing_tokens": {"type": "integer", "minimum": 0, "description": "未知价格 token 数。"},
@@ -826,7 +826,7 @@ _SUMMARY_COMPONENTS = {
             "window_end": {"type": "string", "format": "date-time", "description": "聚合窗口终点。"},
             "run_count": {"type": "integer", "minimum": 0, "default": 0, "description": "运行次数。"},
             "token_total": {"type": "integer", "minimum": 0, "default": 0, "description": "token 总数。"},
-            "cost_total": {"type": "string", "description": "USD 总费用；使用 decimal string。"},
+            "cost_total": {"type": ["string", "null"], "description": "USD 总费用；pricing_status=unknown 时为 null，不把未知价格当作免费。"},
             "currency": {"type": "string", "enum": ["USD"], "default": "USD", "description": "费用币种。"},
             "pricing_version": {"type": ["integer", "null"], "minimum": 1, "description": "计价版本。"},
             "pricing_status": {"type": "string", "enum": ["known", "unknown"], "default": "unknown", "description": "价格是否已知。"},

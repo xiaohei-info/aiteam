@@ -5,6 +5,8 @@ get_solution_repository / get_catalog_repository 双路径，get_manager_gateway
 get_provisioning_service, get_rollup_service。需要清 lru_cache 保证隔离。
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 import operation_service.catalog_dependencies as cat_deps
@@ -182,6 +184,17 @@ def test_get_manager_gateway_passes_service_token(monkeypatch):
     monkeypatch.setenv("SERVICE_TOKEN", "test-service-token")
     gw = get_manager_gateway()
     assert gw._client._service_token == "test-service-token"
+
+
+def test_get_provisioning_service_production_provider_failure_is_not_silenced(monkeypatch):
+    monkeypatch.setattr(deps, "load_settings", lambda _tier: SimpleNamespace(is_production=True))
+    monkeypatch.setattr(
+        deps,
+        "build_platform_provider_service",
+        lambda: (_ for _ in ()).throw(RuntimeError("Relay configuration is incomplete")),
+    )
+    with pytest.raises(RuntimeError, match="Relay configuration is incomplete"):
+        deps.get_provisioning_service()
 
 
 def test_get_provisioning_service(monkeypatch):

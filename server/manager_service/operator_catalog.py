@@ -17,6 +17,7 @@ Operator 持模板真相，Manager 不写、不改）。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any, Mapping
 from urllib.parse import quote
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
@@ -72,25 +73,33 @@ class OperatorCatalogPort(ABC):
 class OperatorCatalogClient(OperatorCatalogPort):
     """生产实现：经 shared.service_client 走 Operator 云侧端点（05 §5.3，#176）。
 
-    通过 ServiceClient 调用 Operation 的拉取端点，使用服务身份认证（X-Service-Token）。
+    通过 ServiceClient 调用 Operation 的拉取端点，使用短期 signed service identity。
     """
 
-    def __init__(self, base_url: str, *, service_identity: str | None = None, service_token: str | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        service_identity: str | None = None,
+        service_token: str | None = None,
+        service_audience: str | None = None,
+        client_kwargs: Mapping[str, Any] | None = None,
+    ):
         """构造 Operator 目录客户端。
 
         Args:
             base_url: Operator 服务地址（如 http://operator:8000）
             service_identity: 服务身份标识（审计用）
-            service_token: 服务间共享密钥（平面③，03 §9.1）
+            service_token: 仅 dev/test 兼容的共享密钥；production 不使用
         """
         from shared.service_client import ServiceClient
 
-        self._client = ServiceClient(
-            base_url=base_url,
-            service_identity=service_identity,
-            service_token=service_token,
-            timeout=10.0,
-        )
+        kwargs = dict(client_kwargs or {})
+        kwargs.setdefault("service_identity", service_identity)
+        kwargs.setdefault("service_token", service_token)
+        kwargs.setdefault("service_audience", service_audience)
+        kwargs.update(base_url=base_url, timeout=10.0)
+        self._client = ServiceClient(**kwargs)
 
     def pull_expert_template(
         self, *, template_id: str, version: str | None = None
@@ -139,11 +148,15 @@ class OperatorCatalogClient(OperatorCatalogPort):
         return self._get("/api/operation/skill-market/pull/skills").get("data", [])
 
     def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
-        """Pull the catalog scoped to one enterprise when a tenant is supplied."""
+        """Pull the catalog with an exact tenant-only service target binding."""
         path = "/api/operation/catalog/platform-providers"
         if tenant_id:
             path += f"?tenant_id={quote(tenant_id, safe='')}"
-        return self._get(path).get("data", {})
+        return self._get(
+            path,
+            service_purpose="catalog:read",
+            service_tenant_id=tenant_id,
+        ).get("data", {})
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         try:
@@ -157,9 +170,19 @@ class OperatorCatalogClient(OperatorCatalogPort):
         except Exception as exc:
             raise OperatorCatalogUnavailable("Operator provider access is unavailable") from exc
 
-    def _get(self, path: str) -> dict:
+    def _get(
+        self,
+        path: str,
+        *,
+        service_purpose: str | None = None,
+        service_tenant_id: str | None = None,
+    ) -> dict:
         try:
-            return self._client.get(path)
+            return self._client.get(
+                path,
+                service_purpose=service_purpose,
+                service_tenant_id=service_tenant_id,
+            )
         except AppError:
             raise
         except Exception as exc:

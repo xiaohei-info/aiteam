@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from shared.config import load_settings
+from shared.config import load_settings, service_client_kwargs
 from shared.service_client import ServiceClient
 
 from .catalog_gateway import CatalogManagerGateway, HttpCatalogManagerGateway
@@ -36,8 +36,7 @@ def get_catalog_gateway() -> CatalogManagerGateway:
     settings = load_settings("operation")
     client = ServiceClient(
         settings.manager_url or "http://manager.invalid",
-        service_identity=settings.service_name,
-        service_token=settings.service_token,
+        **service_client_kwargs(settings),
     )
     return HttpCatalogManagerGateway(client)
 

@@ -46,6 +46,7 @@ from .schemas import (
 )
 from .openapi_schemas import UsageRollupItemsOut, UsageUploadDetailedOut, UsageUploadOut
 from .rollup_reporter import RollupReporter, ServiceClientRollupClient
+from shared.config import service_client_kwargs
 from shared.service_client import ServiceClient
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
@@ -94,8 +95,9 @@ def _report_to_operator(request: Request, service: UsageAuditQuotaService, ctx: 
         logger.warning("usage rollup deferred: tenant has no enterprise mapping", extra={"tenant_id": ctx.tenant_id})
         return
     client = ServiceClient(
-        settings.operator_url, service_identity=settings.service_name,
-        service_token=settings.service_token, timeout=settings.service_client_timeout_ms / 1000,
+        settings.operator_url,
+        **service_client_kwargs(settings),
+        timeout=settings.service_client_timeout_ms / 1000,
     )
     try:
         RollupReporter(service).report(ctx, enterprise_id=row[0], client=ServiceClientRollupClient(client))

@@ -3,6 +3,8 @@
 验证真实 HTTP 客户端正确调用 Operation 端点、处理认证、解析响应、错误处理。
 """
 
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
 
@@ -71,6 +73,20 @@ def test_list_platform_catalog_sends_tenant_scope(client):
     result = catalog_client.list_platform_catalog(tenant_id="tenant/a")
     assert result["model_access_configured"] is True
     assert str(transport.requests[0].url).endswith("?tenant_id=tenant%2Fa")
+
+
+def test_list_platform_catalog_passes_tenant_target_to_service_client():
+    catalog_client = OperatorCatalogClient.__new__(OperatorCatalogClient)
+    service_client = MagicMock()
+    service_client.get.return_value = {"data": {"providers": [], "models": []}}
+    catalog_client._client = service_client
+
+    assert catalog_client.list_platform_catalog(tenant_id="tenant/a") == {"providers": [], "models": []}
+    service_client.get.assert_called_once_with(
+        "/api/operation/catalog/platform-providers?tenant_id=tenant%2Fa",
+        service_purpose="catalog:read",
+        service_tenant_id="tenant/a",
+    )
 
 
 # ---- pull_expert_template ----

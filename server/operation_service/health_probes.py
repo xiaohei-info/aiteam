@@ -6,9 +6,9 @@ AdminService 通过协议注入避免对 HTTP 传输产生硬依赖；测试可�
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
-from shared.config import load_settings
+from shared.config import load_settings, service_client_kwargs
 from shared.service_client import ServiceClient
 
 
@@ -22,17 +22,27 @@ class ServiceHealthProbe(Protocol):
 class HttpServiceHealthProbe:
     """经 ServiceClient 的真实 HTTP 健康探测。"""
 
-    def __init__(self, base_url: str, *, service_identity: str | None, service_token: str | None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        service_identity: str | None,
+        service_token: str | None,
+        service_audience: str | None = None,
+        client_kwargs: Mapping[str, Any] | None = None,
+    ) -> None:
         self._base_url = base_url
         self._service_identity = service_identity
         self._service_token = service_token
+        self._service_audience = service_audience
+        self._client_kwargs = dict(client_kwargs or {})
 
     def check(self) -> str:
-        client = ServiceClient(
-            self._base_url,
-            service_identity=self._service_identity,
-            service_token=self._service_token,
-        )
+        kwargs = dict(self._client_kwargs)
+        kwargs.setdefault("service_identity", self._service_identity)
+        kwargs.setdefault("service_token", self._service_token)
+        kwargs.setdefault("service_audience", self._service_audience)
+        client = ServiceClient(self._base_url, **kwargs)
         try:
             data = client.get("/healthz")
             return "up" if data.get("status") == "ok" else "degraded"
@@ -54,16 +64,20 @@ def _identity_and_token() -> tuple[str | None, str | None]:
 
 
 def build_manager_health_probe() -> HttpServiceHealthProbe | None:
-    url = _manager_url()
-    if not url:
+    settings = load_settings("operation")
+    if not settings.manager_url:
         return None
-    identity, token = _identity_and_token()
-    return HttpServiceHealthProbe(url, service_identity=identity, service_token=token)
+    return HttpServiceHealthProbe(
+        settings.manager_url,
+        client_kwargs=service_client_kwargs(settings),
+    )
 
 
 def build_agent_health_probe() -> HttpServiceHealthProbe | None:
-    url = _agent_url()
-    if not url:
+    settings = load_settings("operation")
+    if not settings.agent_url:
         return None
-    identity, token = _identity_and_token()
-    return HttpServiceHealthProbe(url, service_identity=identity, service_token=token)
+    return HttpServiceHealthProbe(
+        settings.agent_url,
+        client_kwargs=service_client_kwargs(settings),
+    )

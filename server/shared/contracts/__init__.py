@@ -15,6 +15,7 @@
 """
 
 from .auth import AuthIdentity, TokenClaims, UserPrincipal
+from .service_identity import ServiceIdentityClaims, ServicePrincipal
 from .crosstier import (
     AuthorizedConfigPullRequest,
     AuthorizedConfigPullResponse,
@@ -56,6 +57,8 @@ __all__ = [
     "AuthIdentity",
     "TokenClaims",
     "UserPrincipal",
+    "ServiceIdentityClaims",
+    "ServicePrincipal",
     "AuthorizedConfigPullRequest",
     "AuthorizedConfigPullResponse",
     "CatalogReleaseNotify",

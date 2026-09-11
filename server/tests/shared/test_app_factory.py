@@ -4,6 +4,7 @@
 mount_frontend 挂载静态资源 + SPA 回退（用真实临时 dist 目录，测试后清理）。
 """
 
+import logging
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from shared.app_factory import create_app, mount_frontend
 from shared.config import Settings
+from shared.observability import RequestMetrics, _ContextFormatter, get_propagation_headers
 
 
 # 与 mount_frontend 内部计算对齐：server/../web/<tier>/dist
@@ -49,7 +51,7 @@ def test_production_readiness_requires_app_rw_role(monkeypatch):
         _empty_router(),
     )
     conn = MagicMock()
-    conn.execute.return_value.fetchone.return_value = ("admin", True, True)
+    conn.execute.return_value.fetchone.return_value = ("admin", "admin", True, True)
     with patch("psycopg.connect") as connect:
         connect.return_value.__enter__.return_value = conn
         response = TestClient(app).get("/readyz")
@@ -121,7 +123,7 @@ def test_healthz_and_readyz_follow_current_app_state_settings():
         assert restored.status_code == 200
         assert restored.json()["status"] == "ready"
 
-    assert connect.call_count == 3
+    assert connect.call_count == 6
 
 
 def test_readyz_without_local_database_is_not_ready():
@@ -159,6 +161,282 @@ def test_readyz_missing_schema_is_not_ready():
         response = TestClient(app).get("/readyz")
     assert response.status_code == 503
     assert response.json()["code"] == "service_unavailable"
+
+
+def test_readyz_ignores_unreachable_upstream_when_local_database_is_ready():
+    app = create_app(
+        _settings().model_copy(update={
+            "db_url": "postgresql://app_rw@readyz.test/operation",
+            "admin_db_url": "postgresql://admin@readyz.test/operation",
+            "manager_url": "http://offline-manager.test",
+            "operator_url": "http://offline-operator.test",
+        }),
+        _empty_router(),
+    )
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.return_value = ("enterprise_account",)
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        response = TestClient(app).get("/readyz")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    connect.assert_called_once()
+
+
+def test_metrics_are_privacy_safe_and_use_low_cardinality_route_labels(caplog):
+    caplog.set_level(logging.INFO)
+    app = create_app(_settings().model_copy(update={"log_level": "INFO"}), _empty_router())
+    secret = "conversation-secret-value"
+    client = TestClient(app)
+
+    response = client.get(
+        f"/api/operation/conversations/{secret}",
+        params={"query": secret},
+        headers={
+            "X-Request-ID": "req_" + "a" * 32,
+            "traceparent": "00-" + "b" * 32 + "-" + "c" * 16 + "-01",
+            "X-Trace-ID": "synthetic-secret",
+        },
+    )
+    assert response.status_code == 404
+
+    metrics = client.get("/metrics")
+    assert metrics.status_code == 200
+    assert metrics.headers["content-type"].startswith("text/plain; version=0.0.4")
+    assert "aiteam_http_requests_total" in metrics.text
+    assert 'route="/api/*"' in metrics.text
+    assert secret not in metrics.text
+    assert "query" not in metrics.text
+    request_logs = [record for record in caplog.records if record.name == "shared.observability"]
+    assert any(record.request_id == "req_" + "a" * 32 and record.trace_id == "b" * 32 for record in request_logs)
+    assert "synthetic-secret" not in metrics.text
+    assert "synthetic-secret" not in caplog.text
+    assert secret not in caplog.text
+
+
+def test_request_context_headers_and_structured_diagnostics(caplog):
+    caplog.set_level(logging.INFO)
+    app = create_app(_settings().model_copy(update={"log_level": "INFO"}), _empty_router())
+    response = TestClient(app).get(
+        "/healthz",
+        headers={
+            "X-Request-ID": "req_" + "d" * 32,
+            "traceparent": "00-" + "e" * 32 + "-" + "f" * 16 + "-01",
+            "X-Trace-ID": "arbitrary-legacy-value",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "req_" + "d" * 32
+    assert response.headers["X-Trace-ID"] == "e" * 32
+    assert response.headers["traceparent"].startswith("00-" + "e" * 32 + "-")
+    assert "arbitrary-legacy-value" not in response.text
+    diagnostic = next(record for record in caplog.records if record.name == "shared.observability")
+    assert diagnostic.request_id == "req_" + "d" * 32
+    assert diagnostic.trace_id == "e" * 32
+    assert diagnostic.service == "test-operation"
+    assert diagnostic.http_method == "GET"
+    assert diagnostic.http_route == "/healthz"
+    assert diagnostic.status_code == 200
+    assert diagnostic.getMessage() == "request completed"
+
+
+def test_manager_readyz_fails_when_admin_database_is_unavailable():
+    app = create_app(
+        _settings(tier="manager").model_copy(update={
+            "db_url": "postgresql://app_rw@business.test/manager",
+            "admin_db_url": "postgresql://admin@admin.test/manager",
+        }),
+        _empty_router(prefix="/api/manager"),
+    )
+    business_conn = MagicMock()
+    business_conn.execute.return_value.fetchone.return_value = ("tenant_registry",)
+    business_context = MagicMock()
+    business_context.__enter__.return_value = business_conn
+
+    def connect(dsn, **kwargs):
+        if dsn.startswith("postgresql://admin@"):
+            raise OSError("admin password must not reach the response")
+        return business_context
+
+    with patch("psycopg.connect", side_effect=connect) as connect_mock:
+        response = TestClient(app).get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
+    assert "admin password" not in response.text
+    assert [call.args[0] for call in connect_mock.call_args_list] == [
+        "postgresql://app_rw@business.test/manager",
+        "postgresql://admin@admin.test/manager",
+    ]
+
+
+def test_production_readiness_requires_direct_app_rw_session_identity():
+    app = create_app(
+        _settings(tier="manager", docs=False).model_copy(update={
+            "aiteam_env": "production",
+            "db_url": "postgresql://app_rw@readyz.test/manager",
+            "admin_db_url": "postgresql://admin@readyz.test/manager",
+        }),
+        _empty_router(prefix="/api/manager"),
+    )
+    conn = MagicMock()
+    role_cursor = MagicMock()
+    role_cursor.fetchone.return_value = ("app_rw", "postgres", False, False)
+    schema_cursor = MagicMock()
+    schema_cursor.fetchone.return_value = ("tenant_registry",)
+    conn.execute.side_effect = [role_cursor, schema_cursor]
+    with patch("psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = conn
+        response = TestClient(app).get("/readyz")
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
+    assert "app_rw" in response.json()["detail"]
+
+
+def test_metrics_bucket_arbitrary_http_methods():
+    metrics = RequestMetrics()
+    for method in ("GET", "X-CUSTOM-1", "X-CUSTOM-2", "trace-secret-method"):
+        metrics.record(
+            service_name="test-operation",
+            method=method,
+            route="/api/*",
+            status_code=200,
+            duration_seconds=0.001,
+        )
+    body = metrics.render()
+    assert 'method="GET"' in body
+    request_counter_lines = [line for line in body.splitlines() if line.startswith("aiteam_http_requests_total{")]
+    assert len([line for line in request_counter_lines if 'method="OTHER"' in line]) == 1
+    assert "X-CUSTOM-1" not in body
+    assert "trace-secret-method" not in body
+
+
+def test_malformed_trace_context_is_replaced_with_safe_generated_context(caplog):
+    caplog.set_level(logging.INFO)
+    app = create_app(_settings().model_copy(update={"log_level": "INFO"}), _empty_router())
+    response = TestClient(app).get(
+        "/healthz",
+        headers={
+            "X-Request-ID": "caller-request-secret",
+            "traceparent": "malformed-trace-secret",
+            "X-Trace-ID": "caller-trace-secret",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] != "caller-request-secret"
+    assert response.headers["X-Trace-ID"] != "caller-trace-secret"
+    assert response.headers["traceparent"] != "malformed-trace-secret"
+    assert len(response.headers["X-Trace-ID"]) == 32
+    assert response.headers["traceparent"].startswith("00-")
+    assert "caller-request-secret" not in caplog.text
+    assert "caller-trace-secret" not in caplog.text
+    assert "malformed-trace-secret" not in caplog.text
+
+
+@pytest.mark.parametrize("compatibility_value", ["0" * 32, "trace_" + "1" * 32])
+def test_zero_or_legacy_trace_ids_are_replaced(compatibility_value):
+    app = create_app(_settings(), _empty_router())
+    response = TestClient(app).get(
+        "/healthz",
+        headers={"X-Trace-ID": compatibility_value},
+    )
+    assert response.status_code == 200
+    assert response.headers["X-Trace-ID"] != compatibility_value
+    assert response.headers["traceparent"].split("-")[1] == response.headers["X-Trace-ID"]
+    assert response.headers["X-Trace-ID"] != "0" * 32
+
+
+def test_safe_trace_headers_are_available_for_downstream_propagation():
+    router = APIRouter(prefix="/api/operation")
+
+    @router.get("/propagation")
+    def propagation():
+        return get_propagation_headers()
+
+    app = create_app(_settings(), router)
+    trace_id = "1" * 32
+    response = TestClient(app).get(
+        "/api/operation/propagation",
+        headers={
+            "X-Request-ID": "req_" + "2" * 32,
+            "traceparent": f"00-{trace_id}-{'3' * 16}-01",
+        },
+    )
+    assert response.status_code == 200
+    headers = response.json()
+    assert headers["X-Request-ID"] == "req_" + "2" * 32
+    assert headers["X-Trace-ID"] == trace_id
+    assert headers["traceparent"].startswith(f"00-{trace_id}-")
+    assert len(headers["traceparent"].split("-")[2]) == 16
+
+
+def test_formatter_redacts_relative_queries_bodies_and_credentials():
+    record = logging.LogRecord(
+        "test.logger",
+        logging.WARNING,
+        __file__,
+        1,
+        "/chat?access_token=query-secret body={\n"
+        "  \"prompt\": \"body-secret\",\n"
+        "  \"items\": [\"list-secret\", {\"nested\": \"nested-secret\"}]\n"
+        "} list=[\n  \"list-body-secret\"\n] "
+        "Authorization: Bearer auth-secret bEaReR standalone-bearer-secret "
+        "password=password-secret token=token-secret",
+        (),
+        None,
+    )
+    formatted = _ContextFormatter().format(record)
+    for secret in (
+        "query-secret",
+        "body-secret",
+        "list-secret",
+        "nested-secret",
+        "list-body-secret",
+        "auth-secret",
+        "standalone-bearer-secret",
+        "password-secret",
+        "token-secret",
+    ):
+        assert secret not in formatted
+    assert "<redacted>" in formatted or "<payload redacted>" in formatted
+
+    exception_record = logging.LogRecord(
+        "test.logger",
+        logging.WARNING,
+        __file__,
+        1,
+        "failed %s",
+        (ValueError("interpolated-base-exception-secret"),),
+        None,
+    )
+    exception_formatted = _ContextFormatter().format(exception_record)
+    assert "interpolated-base-exception-secret" not in exception_formatted
+    assert "<exception redacted>" in exception_formatted
+
+    direct_exception_record = logging.LogRecord(
+        "test.logger",
+        logging.WARNING,
+        __file__,
+        1,
+        ValueError("direct-log-record-secret"),
+        (),
+        None,
+    )
+    direct_exception_formatted = _ContextFormatter().format(direct_exception_record)
+    assert "direct-log-record-secret" not in direct_exception_formatted
+    assert "<exception redacted>" in direct_exception_formatted
+
+    plain_body_record = logging.LogRecord(
+        "test.logger",
+        logging.WARNING,
+        __file__,
+        1,
+        "payload=plain first line\nplain-body-secret second line",
+        (),
+        None,
+    )
+    plain_body_formatted = _ContextFormatter().format(plain_body_record)
+    assert "plain-body-secret" not in plain_body_formatted
 
 
 def test_docs_enabled():
@@ -226,13 +504,31 @@ def test_mount_frontend_does_not_fallback_for_unknown_api_paths(_dist_dir):
     mount_frontend(app, "operation")
     client = TestClient(app)
 
-    response = client.get("/api/operation/catalog")
+    secret_path = "credential-marker-do-not-echo"
+    response = client.get(f"/api/operation/catalog/{secret_path}")
 
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/problem+json")
     assert "text/html" not in response.headers["content-type"]
     assert response.json()["code"] == "not_found"
+    assert response.json()["detail"] == "route not found"
+    assert response.json()["instance"] == "/__not_found__"
+    assert secret_path not in response.text
     assert "SPA" not in response.text
+
+
+def test_mount_frontend_reserves_api_and_metrics_namespaces(_dist_dir):
+    app = create_app(_settings(), _empty_router())
+    mount_frontend(app, "operation")
+    client = TestClient(app)
+
+    for path in ("/api", "/api/credential-marker", "/metrics/credential-marker"):
+        response = client.get(path)
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/problem+json")
+        assert response.json()["detail"] == "route not found"
+        assert response.json()["instance"] == "/__not_found__"
+        assert "credential-marker" not in response.text
 
 
 def test_mount_frontend_no_dist_skips():
