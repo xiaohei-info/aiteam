@@ -284,7 +284,6 @@ const PiSseAssistantMessageEvent = Type.Object({
   toolCall: Type.Optional(Type.Ref("PiSseToolCall")),
 }, { $id: "PiSseAssistantMessageEvent", additionalProperties: true, description: "message_update.assistantMessageEvent 的脱敏结构。", "x-dynamic-json": true });
 const PiSseEventData = Type.Object({
-  work_id: Type.Optional(Type.String({ maxLength: 256, description: "员工本次执行的工作记录 ID，与历史条目共享；不是事件游标。" })),
   type: Type.String({ enum: [
     "agent_start", "agent_end", "agent_settled", "message_update", "message_end",
     "tool_execution_start", "tool_execution_update", "tool_execution_end",
@@ -1720,7 +1719,6 @@ export class AgentHttpServer {
       if (!response.writableEnded) {
         const event = serializePiEvent(envelope.event, {
           conversation_id: envelope.conversation_id ?? conversationId,
-          ...(envelope.work_id ? { work_id: envelope.work_id } : {}),
           ...(envelope.source_ref ? { source_ref: envelope.source_ref } : {}),
           ...(envelope.tool_call_id ? { tool_call_id: envelope.tool_call_id } : {}),
           ...(envelope.source_employee_id ? { source_employee_id: envelope.source_employee_id } : {}),

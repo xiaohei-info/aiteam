@@ -28,7 +28,6 @@ const MAX_JSON_DEPTH = 4;
 type ToolKind = "memory" | "rag" | "todo";
 
 export interface PiEventMetadata {
-  work_id?: string;
   conversation_id?: string;
   source_ref?: string;
   tool_call_id?: string;
@@ -274,7 +273,7 @@ function boundedValue(value: unknown, key = "", depth = 0, seen = new WeakSet<ob
 
 function serializeMetadata(extra: PiEventMetadata): Record<string, unknown> {
   const result: Record<string, unknown> = {};
-  for (const key of ["work_id", "conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name"] as const) {
+  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name"] as const) {
     const value = extra[key];
     const clean = key === "source_employee_display_name" ? boundedIdentifier(value, MAX_SOURCE_NAME_CHARS) : boundedIdentifier(value, MAX_IDENTIFIER_CHARS);
     if (clean) result[key] = clean;
@@ -328,7 +327,7 @@ function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
 
 function minimalEvent(value: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = { type: value.type };
-  for (const key of ["work_id", "conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "source_role", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
+  for (const key of ["conversation_id", "source_ref", "tool_call_id", "source_employee_id", "source_employee_display_name", "source_role", "tool_kind", "toolName", "toolCallId", "isError"] as const) {
     if (value[key] !== undefined) result[key] = value[key];
   }
   return result;

@@ -143,9 +143,13 @@ test("Pi SSE serializer bounds structured todo arguments and keeps thinking cont
   assert.notEqual(delta, "[内容已隐藏]");
 });
 
-test("execution work ID survives live and persisted serialization without trusting runtime metadata", () => {
-  const live = serializePiEvent({ type: "agent_settled", work_id: "runtime-forged" } as never, { work_id: "5af79698-7047-4c5e-8c3f-4f9bdba806a9", source_employee_id: "e1" });
-  assert.equal(live?.work_id, "5af79698-7047-4c5e-8c3f-4f9bdba806a9");
+test("execution work ID rides persisted entries, survives bounding, and is never taken from runtime events", () => {
+  const id = "5af79698-7047-4c5e-8c3f-4f9bdba806a9";
+  const entry = serializePiEntry({ id: "entry", type: "message", work_id: id, message: { role: "assistant", content: "done" } });
+  assert.equal(entry?.work_id, id);
+  // The same field is live SSE metadata; runtime-supplied values never pass through.
   assert.equal(serializePiEvent({ type: "agent_settled", work_id: "runtime-forged" } as never)?.work_id, undefined);
-  assert.equal(serializePiEntry({ id: "entry", type: "message", work_id: "5af79698-7047-4c5e-8c3f-4f9bdba806a9", message: { role: "assistant", content: "done" } })?.work_id, "5af79698-7047-4c5e-8c3f-4f9bdba806a9");
+  // Oversized entries collapse to the minimal shape, which must still carry the grouping key.
+  const bounded = serializePiEntry({ id: "entry", type: "message", work_id: id, message: { role: "assistant", content: "x".repeat(100_000) } });
+  assert.equal(bounded?.work_id, id);
 });

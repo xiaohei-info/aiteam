@@ -526,8 +526,7 @@ test("group tool cycles, peer deliveries and repeat prompts share work IDs acros
       const outputs = history.filter((entry: any) => entry.work_id === record.id);
       assert(outputs.length > 0);
       assert(outputs.every((entry: any) => entry.source_employee_id === record.employee_id && entry.message?.role !== "user"));
-      assert(events.some((event) => event.work_id === record.id && event.event.type === "agent_settled"));
-      assert(events.filter((event) => event.work_id === record.id).every((event) => event.source_employee_id === record.employee_id));
+      assert(events.some((event) => event.event.type === "agent_settled" && event.source_employee_id === record.employee_id));
     }
     const coordinatorWork = records.filter((record) => record.employee_id === "e1").sort((a, b) => a.created_seq - b.created_seq)[0]!;
     assert(history.filter((entry: any) => entry.work_id === coordinatorWork.id && entry.message?.role === "assistant").length >= 2);
@@ -541,6 +540,7 @@ test("group tool cycles, peer deliveries and repeat prompts share work IDs acros
     await request("/conversations/c1/entries", { other: true, status: 404 });
     const schema = (await request("/openapi.json")).components.schemas;
     assert(schema.ConversationEntry.properties.work_id);
-    assert(schema.PiSseEventData.properties.work_id);
+    // work_id is a history-entry field only; the SSE wire shape stays Pi-native.
+    assert.equal(schema.PiSseEventData.properties.work_id, undefined);
   } finally { unsubscribe(); await http.close(); await fixture.close(); }
 });
