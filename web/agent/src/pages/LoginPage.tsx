@@ -21,6 +21,7 @@ export function LoginPage(): React.ReactNode {
 
   const [mode, setMode] = useState<"login" | "reset">("login");
   const [account, setAccount] = useState("");
+  const [enterprise, setEnterprise] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -32,7 +33,7 @@ export function LoginPage(): React.ReactNode {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await client.login({ account, password });
+      const result = await client.login({ account, password, enterprise });
       if (!result) {
         setError(i18n.t("error.unknown"));
         return;
@@ -66,6 +67,7 @@ export function LoginPage(): React.ReactNode {
     try {
       const result = await client.resetPassword({
         account,
+        enterprise,
         password,
         new_password: newPassword.trim(),
       });
@@ -96,7 +98,7 @@ export function LoginPage(): React.ReactNode {
           <form aria-label="用户端首次登录密码重置" onSubmit={handleReset}>
             <VStack gap={4}>
               <Heading level={1}>{i18n.t("agent.login.reset_heading")}</Heading>
-              <Text type="supporting">{account}</Text>
+              <Text type="supporting">{enterprise.trim() ? `${account} / ${enterprise.trim()}` : account}</Text>
               <FormLayout>
                 <TextInput
                   label={i18n.t("agent.login.new_password")}
@@ -144,6 +146,14 @@ export function LoginPage(): React.ReactNode {
                 value={account}
                 onChange={setAccount}
                 {...({ autoComplete: "username", required: true } as Record<string, string | boolean>)}
+                width="100%"
+              />
+              <TextInput
+                label="企业代码/名称（同账号多企业时填写）"
+                type="text"
+                value={enterprise}
+                onChange={setEnterprise}
+                {...({ autoComplete: "organization" } as Record<string, string | boolean>)}
                 width="100%"
               />
               <TextInput

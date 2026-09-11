@@ -42,11 +42,15 @@ export interface ResetOutput {
   must_reset: boolean;
 }
 
+function writeKey(prefix: string): string {
+  return `${prefix}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+}
+
 export function useEnterpriseApi(client: ApiClient) {
   async function provision(input: ProvisionInput): Promise<ProvisionOutput> {
     const data = await client.post<ProvisionOutput>(
       "/api/operation/enterprises",
-      { body: input },
+      { body: input, idempotencyKey: writeKey("enterprise-provision") },
     );
     if (!data) throw new Error("provision 返回空");
     return data;
@@ -57,7 +61,7 @@ export function useEnterpriseApi(client: ApiClient) {
   ): Promise<ResetOutput> {
     const data = await client.post<ResetOutput>(
       `/api/operation/enterprises/${enterpriseId}/owner-bootstrap/reset`,
-      {},
+      { idempotencyKey: writeKey("owner-bootstrap-reset") },
     );
     if (!data) throw new Error("reset 返回空");
     return data;

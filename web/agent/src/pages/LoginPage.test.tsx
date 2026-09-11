@@ -17,15 +17,11 @@ import { AppRoutes } from "../app/routes";
 function mockFetch(): ReturnType<typeof vi.fn> {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
-    if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
-      return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
     if (path.endsWith("/api/agent/login")) {
       const body = JSON.parse(String(init?.body ?? "{}"));
-      expect(body).toMatchObject({ tenant_id: "t-1" });
+      // 登录不再预解析租户：enterprise 由同源 Agent 解析。
+      expect(body).toMatchObject({ account: "alice", enterprise: "acme" });
+      expect(body).not.toHaveProperty("tenant_id");
       const claims = {
         user_id: body.account,
         tenant_id: "t-1",
@@ -46,12 +42,6 @@ function mockFetch(): ReturnType<typeof vi.fn> {
 function mockFetchForbidden(): ReturnType<typeof vi.fn> {
   return vi.fn(async (url: string | URL, _init?: RequestInit) => {
     const path = typeof url === "string" ? url : url.toString();
-    if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
-      return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
     if (path.endsWith("/api/agent/login")) {
       return new Response(
         JSON.stringify({
@@ -73,7 +63,7 @@ function mockFetchForbidden(): ReturnType<typeof vi.fn> {
 const originalFetch = globalThis.fetch;
 
 describe("LoginPage", () => {
-  it("渲染标题与两个字段（account/password），不再出现企业提示字段", () => {
+  it("渲染登录字段，支持同账号多企业时填写企业", () => {
     globalThis.fetch = mockFetch() as unknown as typeof fetch;
     try {
       render(
@@ -86,8 +76,8 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { level: 1, name: "登录" })).toBeInTheDocument();
       expect(screen.getByRole("form", { name: "用户端登录" })).toBeInTheDocument();
       expect(screen.getByLabelText("账号（手机号 / 用户名）")).toBeInTheDocument();
+      expect(screen.getByLabelText("企业代码/名称（同账号多企业时填写）")).toBeInTheDocument();
       expect(screen.getByLabelText("密码")).toBeInTheDocument();
-      expect(screen.queryByLabelText("企业提示（tenant_id）")).not.toBeInTheDocument();
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -107,6 +97,7 @@ describe("LoginPage", () => {
       fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), {
         target: { value: "alice" },
       });
+      fireEvent.change(screen.getByLabelText("企业代码/名称（同账号多企业时填写）"), { target: { value: "acme" } });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "pw" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
@@ -148,23 +139,21 @@ describe("LoginPage", () => {
     }
   });
 
-  it("重置提交发送 tenant_id 与 old_password", async () => {
+  it("重置提交发送 enterprise 与 old_password，不再预解析租户", async () => {
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = String(url);
-      if (path.endsWith("/api/auth/resolve-tenant-by-account")) {
-        return new Response(JSON.stringify({ data: { tenant_id: "t-1" } }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
       if (path.endsWith("/api/agent/login")) {
         return new Response(JSON.stringify({ code: "agent_must_reset", status: 403, detail: "首次登录，请设置新密码" }), { status: 403, headers: { "Content-Type": "application/problem+json" } });
       }
       expect(path).toContain("/api/agent/reset-password");
-      expect(JSON.parse(String(init?.body))).toEqual({ account: "alice", tenant_id: "t-1", old_password: "bootstrap", new_password: "fresh-password" });
+      expect(JSON.parse(String(init?.body))).toEqual({ account: "alice", enterprise: "acme", old_password: "bootstrap", new_password: "fresh-password" });
       return new Response(JSON.stringify({ data: { token: "tok-reset", claims: { user_id: "alice", tenant_id: "t-1", roles: [], exp: 9999999999 } } }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
     try {
       render(<MemoryRouter initialEntries={["/login"]}><AppProvider><AppRoutes /></AppProvider></MemoryRouter>);
       fireEvent.change(screen.getByLabelText("账号（手机号 / 用户名）"), { target: { value: "alice" } });
+      fireEvent.change(screen.getByLabelText("企业代码/名称（同账号多企业时填写）"), { target: { value: "acme" } });
       fireEvent.change(screen.getByLabelText("密码"), { target: { value: "bootstrap" } });
       fireEvent.click(screen.getByRole("button", { name: "登录" }));
       await waitFor(() => expect(screen.getByText("首次登录，请设置新密码")).toBeInTheDocument());
