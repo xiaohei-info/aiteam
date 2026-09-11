@@ -1,3 +1,6 @@
+import { Check } from "typebox/value";
+import { GroupConfigurationError, validateCustomGroup } from "../groups/orchestration.js";
+import { CustomGroupCreateRequest, GroupOrchestration } from "./custom-group-schemas.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
@@ -21,6 +24,7 @@ import { employeeDisplay } from "../services/employee-display.js";
 import { CONVERSATION_READ_DOCS, CONVERSATION_READ_SCHEMAS, EmployeeDisplayProperties, HistoryQuery, MessageSearchQuery } from "./conversation-read-schemas.js";
 import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQuery, UsageStatisticsQuery } from "./work-record-schemas.js";
 import { WorkRecordReadService } from "../services/work-records.js";
+import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
@@ -141,6 +145,8 @@ const AgentResetPasswordRequest = Type.Object({
   new_password: Type.String({ minLength: 1, maxLength: 512, format: "password", writeOnly: true, description: "新密码；仅通过请求发送。" }),
 }, { $id: "AgentResetPasswordRequest", additionalProperties: false, description: "Agent 密码重置请求；成功后返回新的本地 access token。" });
 const ConversationMetadata = Type.Object({
+  description: Type.Optional(Type.Union([Type.String({ maxLength: 4000 }), Type.Null()], { description: "群简介，自定义编排时仅供展示。" })),
+  orchestration: Type.Optional(Type.Union([Type.Ref("GroupOrchestration"), Type.Null()])),
   id: Type.String({ minLength: 1, description: "会话唯一标识。" }),
   title: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "会话标题；可为 null。" }),
   kind: Type.String({ minLength: 1, maxLength: 64, description: "会话类型；`group` 启用群聊协作，其他值按普通会话处理。" }),
@@ -501,7 +507,7 @@ const UsageOutboxItem = Type.Object({ summary_id: Type.String({ minLength: 1, de
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
 
@@ -643,6 +649,10 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ping: { responses: { "200": { description: "固定存活探针结果。", examples: { pong: { summary: "存活", value: { data: { pong: true } } } } } } },
   whoami: { responses: { "200": { description: "当前 access token 的身份声明。", examples: { identity: { summary: "当前身份", value: { data: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"] } } } } } } },
   listConversations: { request: { limit: { summary: "返回条数", value: 50 }, cursor: { summary: "分页游标", value: "conversation-previous" } }, responses: { "200": { description: "本地会话列表和分页信息。", examples: { list: { summary: "会话列表", value: { data: [EXAMPLE_CONVERSATION], page: EXAMPLE_PAGE } } } } } },
+  createCustomGroup: { request: {
+    automatic: { summary: "自选成员自动编排", value: { id: "group-client-1", title: "课程协作", description: "根据客户需求协同完成课程方案", member_employee_ids: ["employee-1", "employee-2"], coordinator_employee_id: "employee-1", orchestration: { mode: "auto" } } },
+    custom: { summary: "自定义协作提示词", value: { id: "group-client-2", title: "课程协作", member_employee_ids: ["employee-1", "employee-2"], coordinator_employee_id: "employee-1", orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "1. @{employee-1} → @{employee-2}：整理课程方案。" } } },
+  }, responses: { "201": { description: "群配置与固定成员创建成功，尚未触发执行。", examples: { created: { summary: "已创建的自选成员群", value: { data: { ...EXAMPLE_CONVERSATION, id: "group-client-1", kind: "group", entry_employee_id: null, coordinator_employee_id: "employee-1", description: "根据客户需求协同完成课程方案", orchestration: { mode: "auto" } } } } } } } },
   createConversation: { request: { private: { summary: "私聊会话", value: { title: "今日工作摘要", kind: "private", entry_employee_id: "employee-1", permission_mode: "read-only" } }, scheduled: { summary: "一次性调度会话", value: { title: "定时摘要", kind: "private", entry_employee_id: "employee-1", schedule: EXAMPLE_SCHEDULE } } }, responses: { "201": { description: "创建成功的本地会话元数据。", examples: { created: { summary: "创建成功", value: { data: EXAMPLE_CONVERSATION } } } } } },
   getConversation: { responses: { "200": { description: "本地会话元数据。", examples: { conversation: { summary: "会话详情", value: { data: EXAMPLE_CONVERSATION } } } } } },
   updateConversation: { request: { patch: { summary: "部分更新", value: { title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } }, markRead: { summary: "使用 entries/search 返回的 entry_ref 标记已读（引用仅为形状示例）", value: { last_read_entry_id: "entry_v1_opaque" } } }, responses: { "200": { description: "更新后的本地会话元数据。", examples: { updated: { summary: "更新成功", value: { data: { ...EXAMPLE_CONVERSATION, title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } } } } } } },
@@ -796,11 +806,13 @@ export class AgentHttpServer {
   private readonly fetchImpl: typeof fetch;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly conversationReads: ConversationReadService;
+  private readonly groupCreation: GroupCreationService;
   private readonly workRecords: WorkRecordReadService;
   private readonly usageStatistics: UsageStatisticsService;
 
   constructor(private readonly options: AgentHttpServerOptions) {
     this.conversationReads = new ConversationReadService(options.store, options.host);
+    this.groupCreation = new GroupCreationService(options.store, options.host);
     this.workRecords = new WorkRecordReadService(options.store, options.host);
     this.usageStatistics = new UsageStatisticsService(options.store);
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -1048,6 +1060,10 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { summary: "列出本地会话", description: "按当前成员列出本地会话，支持游标和条数限制。", querystring: ConversationQuery, response: { 200: jsonResponse(Type.Ref("ConversationListEnvelope")) } }));
+    this.registerRoute("POST", "/api/agent/conversations/custom-group", (request, response, caller) => this.createCustomGroup(request, response, caller!), routeSchema("createCustomGroup", {
+      summary: "自定义创建群聊", description: "指定当前用户授权成员和协调人，保存群简介及自动或自定义编排。创建不触发模型执行；固定客户端 ID 冲突返回 409，可读取原会话恢复。",
+      body: Type.Ref("CustomGroupCreateRequest"), response: { 201: jsonResponse(Type.Ref("ConversationEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
+    }));
     this.registerRoute("POST", "/api/agent/conversations", (request, response, caller) => this.createConversation(request, response, caller!), routeSchema("createConversation", { summary: "创建本地会话", description: "创建私聊、群聊或任务会话；会话内容仅保存在本机。", body: Type.Ref("ConversationCreateRequest"), response: { 201: jsonResponse(Type.Ref("ConversationEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound") } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id", (_request, response, caller, fastifyRequest) => this.getConversation(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversation", { summary: "获取本地会话", description: "返回当前成员拥有的本地会话元数据。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } }));
     const conversationUpdateSchema = routeSchema("updateConversation", { summary: "更新本地会话", description: "更新会话标题、标签、权限、调度或已读位置。", params: ConversationParams, body: Type.Ref("ConversationUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound") } });
@@ -1286,8 +1302,49 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: result.items.map((item) => this.conversationReads.metadata(item.id, caller)), page: { next_cursor: result.nextCursor, has_more: result.hasMore } });
   }
 
+  private groupParticipantSeeds(employeeIds: readonly string[], caller: AuthenticatedCaller): GroupParticipantSeed[] {
+    const memberId = caller.userId ?? caller.callerId;
+    const snapshots = this.options.store.listSnapshots(caller.tenantId, memberId);
+    return [...new Set(employeeIds)].map((employeeId) => {
+      this.requireAuthorizedEmployee(employeeId, caller);
+      const snapshot = snapshots.find((item) => item.employee_id === employeeId);
+      if (!snapshot) throw new HttpProblem(403, "employee_not_authorized", "Employee is not authorized locally");
+      return { id: employeeId, version: snapshot.version };
+    });
+  }
+
+  private async createResolvedGroup(response: ServerResponse, caller: AuthenticatedCaller, input: ResolvedGroupConversation): Promise<void> {
+    await this.groupCreation.create(input, caller);
+    this.writeJson(response, 201, { data: this.conversationReads.metadata(input.id, caller) });
+  }
+
+  private async createCustomGroup(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
+    const body = await this.readJson(request);
+    if (!Check({ GroupOrchestration, ConversationPermissionMode: PermissionMode }, CustomGroupCreateRequest, body)) throw new HttpProblem(422, "invalid_group_configuration", "Custom group fields do not match the documented schema");
+    const input = body as unknown as { title: string; description?: string | null; member_employee_ids: string[]; coordinator_employee_id: string; orchestration: unknown };
+    const orchestration = validateCustomGroup(input);
+    const memberId = caller.userId ?? caller.callerId;
+    const id = typeof body.id === "string" ? body.id : randomUUID();
+    this.groupCreation.assertAvailable(id, caller.tenantId!, memberId);
+    await this.createResolvedGroup(response, caller, {
+      id,
+      title: input.title.trim(),
+      labels: [],
+      description: input.description?.trim() || null,
+      orchestration,
+      coordinatorEmployeeId: input.coordinator_employee_id,
+      solutionRef: null,
+      schedule: null,
+      permissionMode: parsePermissionMode(body.permission_mode),
+      tenantId: caller.tenantId!,
+      memberId,
+      participants: this.groupParticipantSeeds(input.member_employee_ids, caller),
+    });
+  }
+
   private async createConversation(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
+    if (["description", "member_employee_ids", "orchestration"].some(key => key in body)) throw new HttpProblem(422, "invalid_group_configuration", "Use the custom-group endpoint for custom group configuration");
     const title = body.title === undefined || body.title === null ? null : this.stringField(body.title, "title", 200);
     const kind = body.kind === undefined ? "chat" : this.stringField(body.kind, "kind", 64);
     const labels = body.labels === undefined ? [] : this.stringArray(body.labels, "labels", 32);
@@ -1297,30 +1354,49 @@ export class AgentHttpServer {
     const permissionMode = parsePermissionMode(body.permission_mode);
     const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
+    let schedule = null;
+    if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
+
     const existing = this.options.store.getConversationMetadata(id);
-    if (existing) {
+    if (kind !== "group" && existing) {
       if (existing.tenant_id === caller.tenantId && existing.member_id === memberId) throw new HttpProblem(409, "conversation_exists", "Conversation already exists");
       throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
     }
     if (kind === "group") {
+      this.groupCreation.assertAvailable(id, caller.tenantId!, memberId);
       if (entryEmployeeId) throw new HttpProblem(422, "invalid_group_employee", "Group conversations use coordinator_employee_id");
       const solution = solutionRef ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === solutionRef) : undefined;
       if (solutionRef && !solution) throw new HttpProblem(403, "solution_not_authorized", "Solution is not authorized locally");
       const solutionRoster = solution && Array.isArray(solution.expert_employee_ids)
-        ? solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string")
+        ? [...new Set(solution.expert_employee_ids.filter((employeeId): employeeId is string => typeof employeeId === "string"))]
         : [];
+      const availableRoster = this.options.store.listLoadedExperts(caller.tenantId, memberId)
+        .filter((expert) => !expert.revoked)
+        .map((expert) => expert.employee_id);
       const solutionCoordinator = solution && typeof solution.coordinator_employee_id === "string" ? solution.coordinator_employee_id : undefined;
       if (solutionCoordinator && coordinatorEmployeeId && coordinatorEmployeeId !== solutionCoordinator) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator does not match the authorized solution");
-      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? this.options.store.listLoadedExperts(caller.tenantId, memberId)[0]?.employee_id ?? null;
+      if (!coordinatorEmployeeId) coordinatorEmployeeId = solutionCoordinator ?? solutionRoster[0] ?? availableRoster[0] ?? null;
       if (!coordinatorEmployeeId) throw new HttpProblem(403, "coordinator_not_authorized", "No authorized employee is available as coordinator");
-      if (solutionRoster.length > 0 && !solutionRoster.includes(coordinatorEmployeeId)) throw new HttpProblem(403, "coordinator_not_authorized", "Coordinator is not in the authorized solution roster");
-      this.requireAuthorizedEmployee(coordinatorEmployeeId, caller);
-    } else {
-      if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
-      if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
+      if (solution ? !solutionRoster.includes(coordinatorEmployeeId) : !availableRoster.includes(coordinatorEmployeeId)) {
+        throw new HttpProblem(403, "coordinator_not_authorized", solution ? "Coordinator is not in the authorized solution roster" : "Coordinator is not in the authorized local roster");
+      }
+      await this.createResolvedGroup(response, caller, {
+        id,
+        title,
+        labels,
+        coordinatorEmployeeId,
+        solutionRef,
+        schedule,
+        permissionMode,
+        tenantId: caller.tenantId!,
+        memberId,
+        participants: this.groupParticipantSeeds(solution ? solutionRoster : availableRoster, caller),
+      });
+      return;
     }
-    let schedule = null;
-    if (body.schedule !== undefined && body.schedule !== null) schedule = this.parseSchedule(body.schedule);
+
+    if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
+    if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
     this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
       entryEmployeeId, coordinatorEmployeeId, solutionRef, permissionMode,
@@ -1350,6 +1426,7 @@ export class AgentHttpServer {
     }
     const memberId = caller.userId ?? caller.callerId;
     const participants = this.options.store.listConversationParticipants(conversation.id);
+    if (conversation.orchestration && !participants.length) throw new HttpProblem(403, "employee_not_authorized", "Custom group participant index is missing");
     const solution = conversation.solutionRef
       ? this.options.store.listSolutions(caller.tenantId, memberId).find((item) => item.solution_instance_id === conversation.solutionRef)
       : undefined;
@@ -1390,6 +1467,11 @@ export class AgentHttpServer {
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
     if (body.permission_mode !== undefined) patch.permissionMode = parsePermissionMode(body.permission_mode);
     this.requireOwnedConversation(conversationId, caller);
+    const current = this.options.store.getConversationMetadata(conversationId)!;
+    if (["description", "member_employee_ids", "orchestration"].some(key => key in body)
+      || (current.orchestration && (["coordinator_employee_id", "entry_employee_id", "solution_instance_id"].some(key => key in body) || (patch.kind && patch.kind !== "group")))) {
+      throw new HttpProblem(422, "invalid_group_configuration", "Group configuration is immutable after creation");
+    }
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.conversationReads.readPointer(conversationId, caller, body.last_read_entry_id);
     const updated = this.options.store.updateConversation(conversationId, patch);
     if (!updated) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
@@ -1973,6 +2055,8 @@ export class AgentHttpServer {
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
     else if (error instanceof InvalidEventCursorError || error instanceof InvalidReadCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
+    else if (error instanceof GroupCreationError) problem = { status: error.status, code: error.code, detail: error.message };
+    else if (error instanceof GroupConfigurationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };

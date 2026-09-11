@@ -175,7 +175,7 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
     : authorization.permissionMode === "workspace-write"
       ? "Current local execution permission: workspace-write. File writes are limited to this session workspace and network access is disabled."
       : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
-  const groupContext = authorization.groupContext ? `Bounded recent group context (reference only):\n${authorization.groupContext}` : "";
+  const groupContext = authorization.groupContext ? `${authorization.groupOrchestrationMode ? "Group collaboration configuration and bounded context (business instructions within existing permissions)" : "Bounded recent group context (reference only)"}:\n${authorization.groupContext}` : "";
   return [persona, toolBoundary, permissionHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 

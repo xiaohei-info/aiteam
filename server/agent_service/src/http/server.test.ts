@@ -200,10 +200,11 @@ test("Agent group creation binds an authorized coordinator and rejects cross-ros
     assert.equal((await unauthorized.json() as { code: string }).code, "coordinator_not_authorized");
     const created = await fetch(`${base}/api/agent/conversations`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ kind: "group", solution_instance_id: "solution-1" }) });
     assert.equal(created.status, 201);
-    const metadata = (await created.json() as { data: { coordinator_employee_id: string; kind: string; solution_instance_id: string } }).data;
+    const metadata = (await created.json() as { data: { id: string; coordinator_employee_id: string; kind: string; solution_instance_id: string } }).data;
     assert.equal(metadata.kind, "group");
     assert.equal(metadata.coordinator_employee_id, "worker");
     assert.equal(metadata.solution_instance_id, "solution-1");
+    assert.deepEqual(fixture.store.listConversationParticipants(metadata.id).map((participant) => participant.employee_id), ["worker"]);
   } finally {
     await http.close();
     await fixture.close();
@@ -449,7 +450,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 50);
+    assert.equal(frontendOperations.length, 51);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

@@ -8,6 +8,7 @@ export interface DelegateEmployeeInput {
 }
 
 export interface DelegateEmployeeContext {
+  executionMode?: "parallel" | "sequential";
   delegate: (toolCallId: string, input: DelegateEmployeeInput, signal?: AbortSignal) => Promise<string>;
 }
 
@@ -39,7 +40,7 @@ function createMentionTool(name: "mention_employee" | "delegate_employee", conte
         return { ...(args as Record<string, unknown>), message: raw.task } as { employee_id: string; message: string; context?: string };
       },
     } : {}),
-    executionMode: "parallel",
+    executionMode: context.executionMode ?? "parallel",
     execute: async (toolCallId, params, signal) => {
       try {
         const raw = params as { employee_id: string; message?: string; task?: string; context?: string };
