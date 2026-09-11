@@ -54,7 +54,7 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   }
   const message = serializeMessage(raw.message);
   if (message) result.message = message;
-  for (const key of ["entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
+  for (const key of ["work_id", "entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
     const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
     if (value) result[key] = value;
   }
@@ -77,7 +77,7 @@ function boundEntry(value: Record<string, unknown>): Record<string, unknown> {
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return { id: value.id, type: value.type }; }
   if (Buffer.byteLength(serialized, "utf8") <= MAX_EVENT_BYTES) return value;
-  return { id: value.id, type: value.type, ...(value.entry_ref ? { entry_ref: value.entry_ref } : {}), ...(value.participant_employee_id ? { participant_employee_id: value.participant_employee_id } : {}), ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
+  return { id: value.id, type: value.type, ...(value.work_id ? { work_id: value.work_id } : {}), ...(value.entry_ref ? { entry_ref: value.entry_ref } : {}), ...(value.participant_employee_id ? { participant_employee_id: value.participant_employee_id } : {}), ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
 }
 
 /** Classify only the Agent-owned tools that have a dedicated UI contract. */

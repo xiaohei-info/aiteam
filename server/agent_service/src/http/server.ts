@@ -243,6 +243,7 @@ const ConversationMessage = Type.Object({
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
 }, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
+  work_id: Type.Optional(Type.String({ maxLength: 256, description: "员工本次执行的工作记录 ID；可用于聚合 assistant/toolResult，缺省时不推断执行归属。" })),
   id: Type.String({ description: "原 Pi 条目 ID；跨 participant 可能重复，保留用于旧客户端兼容。" }),
   entry_ref: Type.Optional(Type.String({ description: "conversation/participant/Pi ID 的稳定唯一定位引用；客户端优先用于 key、去重、已读与搜索定位，不是 SSE 或分页 ID。" })),
   participant_employee_id: Type.Optional(Type.String({ description: "条目所属 Session 员工，不等于发送者；旧无员工 Session 可缺省。" })),
