@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+from inspect import getsource
+from pathlib import Path
 
 from operation_service import platform_provider_repository as repository_module
 from operation_service.platform_provider_repository import PlatformProviderRepository
@@ -88,6 +90,47 @@ def test_update_model_metadata_fills_empty_capabilities(monkeypatch):
     assert "COALESCE(capabilities, '{}'::jsonb) = '{}'::jsonb" in sql
     assert params[:2] == ("MiniMax M3", '{"reasoning": true}')
     assert repo.update_model_metadata("p1", "minimax-m3", display_name=None, capabilities={}) is None
+
+
+def test_relay_lifecycle_migration_is_replay_safe_and_uses_app_rw_grants():
+    migration = (Path(__file__).parents[2] / "operation_service/migrations/0015_relay_token_lifecycle.sql").read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS policy_revision" in migration
+    assert "ADD COLUMN IF NOT EXISTS encrypted_bootstrap_password" in migration
+    assert "CREATE TABLE IF NOT EXISTS platform_provider_relay_token" in migration
+    assert "CREATE TABLE IF NOT EXISTS platform_provider_relay_token_operation" in migration
+    assert "ON CONFLICT (tenant_id, provider_id, newapi_token_id) DO NOTHING" in migration
+    assert "REVOKE DELETE ON platform_provider_relay_token FROM app_rw" in migration
+    assert "REVOKE DELETE ON platform_provider_relay_token_operation FROM app_rw" in migration
+    assert "GRANT SELECT, INSERT, UPDATE ON platform_provider_relay_token TO app_rw" in migration
+    assert "GRANT SELECT, INSERT, UPDATE ON platform_provider_relay_token_operation TO app_rw" in migration
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON platform_provider_relay_token" not in migration
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON platform_provider_relay_token_operation" not in migration
+    assert "lease_until" in migration and "attempt_count" in migration and "claim_owner" in migration
+    assert "bootstrap" in migration
+    assert "expected_access_version" in migration and "expected_access_token_id" in migration
+    assert "quota_before" in migration and "quota_delta" in migration
+    assert "create_attempt_state" in migration and "user_create_state" in migration
+    assert "status='running' AND lease_until IS NULL" in migration
+    assert "operation_id=%s::uuid{owner_clause}" in getsource(PlatformProviderRepository.mark_relay_token_operation_succeeded)
+    for method in (
+        PlatformProviderRepository.mark_relay_token_operation_succeeded,
+        PlatformProviderRepository.mark_relay_token_operation_failed,
+        PlatformProviderRepository.bind_relay_token_operation,
+        PlatformProviderRepository.update_relay_token_create_state,
+        PlatformProviderRepository.update_relay_user_create_state,
+        PlatformProviderRepository.update_relay_bootstrap_progress,
+        PlatformProviderRepository.heartbeat_relay_token_operation,
+    ):
+        assert "lease_until IS NOT NULL AND lease_until > now()" in getsource(method)
+    assert "prepare_unidentified_relay_token_revocation" in getsource(PlatformProviderRepository)
+    assert "gen_random_uuid()::text" in getsource(PlatformProviderRepository.claim_relay_token_operations)
+    assert "DROP CONSTRAINT IF EXISTS platform_provider_relay_token_operation_operation_type_check" in migration
+    assert "platform_provider_relay_token_operation_bootstrap_state_check" in migration
+    assert "pg_advisory_xact_lock" in getsource(PlatformProviderRepository.relay_access_lock)
+    assert "FOR UPDATE SKIP LOCKED" in getsource(PlatformProviderRepository.claim_relay_token_operations)
+    # No lifecycle receipt is allowed to persist an opaque token value.
+    assert "encrypted_token" not in migration.split("CREATE TABLE IF NOT EXISTS platform_provider_relay_token", 1)[1]
 
 
 def test_internal_provider_upsert_reconciles_discovered_models(monkeypatch):
