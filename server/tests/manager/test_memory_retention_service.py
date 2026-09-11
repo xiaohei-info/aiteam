@@ -174,13 +174,19 @@ def test_due_inventory_requires_and_filters_bound_tenant():
     connection = MagicMock()
     connection.__enter__.return_value = connection
     connection.__exit__.return_value = None
-    connection.execute.return_value.fetchall.return_value = [("tenant-a",)]
+
+    def execute(_sql, params):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [(params[0],)] if len(params) == 2 else [("tenant-a",)]
+        return cursor
+
+    connection.execute.side_effect = execute
     with patch("psycopg.connect", return_value=connection):
-        assert repo.tenant_ids_due() == []
+        assert repo.tenant_ids_due() == ["tenant-a"]
         assert repo.tenant_ids_due("tenant-a") == ["tenant-a"]
-        assert repo.tenant_ids_due("tenant-b") == ["tenant-a"]
+        assert repo.tenant_ids_due("tenant-b") == ["tenant-b"]
     calls = connection.execute.call_args_list
-    assert [call.args[1] for call in calls] == [("tenant-a",), ("tenant-b",)]
+    assert [call.args[1] for call in calls] == [(32,), ("tenant-a", 32), ("tenant-b", 32)]
 
 
 def test_due_inventory_without_admin_dsn_never_enumerates():
@@ -191,13 +197,77 @@ def test_due_inventory_without_admin_dsn_never_enumerates():
     connect.assert_not_called()
 
 
-def test_maintenance_without_explicit_tenant_is_noop(service):
+def test_maintenance_without_explicit_tenant_inventories_due_tenants(service):
     f = service
+    f.repo.tenant_ids_due.return_value = []
     f.svc.maintain_once()
     f.svc.maintain_once("")
     f.svc.maintain_once(None)
-    f.repo.tenant_ids_due.assert_not_called()
+    assert f.repo.tenant_ids_due.call_count == 3
     f.repo.claim.assert_not_called()
+
+
+def test_memory_inventory_failure_preserves_instance_cursor(service):
+    f = service
+    f.repo.tenant_ids_due.side_effect = [RuntimeError("fixture inventory"), ["tenant-a"]]
+    with pytest.raises(RuntimeError, match="fixture inventory"):
+        f.svc.maintain_once()
+    assert f.svc._tenant_cursor is None
+    f.repo.claim.return_value = None
+    f.svc.maintain_once()
+    assert f.svc._tenant_cursor == "tenant-a"
+
+
+def test_memory_worker_rotates_bounded_inventory_and_isolates_tenant_failure(service):
+    f = service
+    tenant_ids = [f"tenant-{index:02d}" for index in range(40)]
+    inventory_calls = []
+    claimed = []
+
+    def inventory(*, after_tenant_id=None):
+        inventory_calls.append(after_tenant_id)
+        start = 0 if after_tenant_id is None else tenant_ids.index(after_tenant_id) + 1
+        return tenant_ids[start:start + 32]
+
+    def claim(ctx, *, owner):
+        claimed.append(ctx.tenant_id)
+        if ctx.tenant_id == tenant_ids[0]:
+            raise RuntimeError("fixture claim failure")
+        return {"document_id": "fixture"}
+
+    def maintain(ctx, _job, _owner):
+        if ctx.tenant_id == tenant_ids[1]:
+            raise RuntimeError("fixture tenant failure")
+
+    f.repo.tenant_ids_due.side_effect = inventory
+    f.repo.claim.side_effect = claim
+    f.svc._maintain_job = maintain
+
+    f.svc.maintain_once()
+    assert claimed == tenant_ids[:16]
+    f.svc.maintain_once()
+    f.svc.maintain_once()
+    assert claimed[:40] == tenant_ids
+    assert inventory_calls == [None, tenant_ids[15], tenant_ids[31]]
+    # The next tick wraps the bounded inventory; the persistent failures do
+    # not stop later tenants in the wrapped pass.
+    f.svc.maintain_once()
+    assert claimed[40:56] == tenant_ids[:16]
+    assert inventory_calls == [None, tenant_ids[15], tenant_ids[31], tenant_ids[39], None]
+
+
+def test_maintenance_honors_global_time_budget(service, monkeypatch):
+    f = service
+    f.repo.tenant_ids_due.return_value = ["tenant-a", "tenant-b"]
+    f.repo.claim.return_value = {"document_id": "fixture"}
+    f.svc._maintain_job = Mock()
+    ticks = iter((0.0, 0.0, 0.0, 21.0))
+    monkeypatch.setattr("manager_service.memory_retention_service.time.monotonic", lambda: next(ticks))
+
+    f.svc.maintain_once()
+
+    assert f.repo.claim.call_count == 1
+    f.svc._maintain_job.assert_called_once()
 
 
 def test_maintenance_total_claim_budget_is_bounded_across_tenants(service):

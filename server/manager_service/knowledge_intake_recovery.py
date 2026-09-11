@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 class KnowledgeIntakeRecovery:
     def __init__(self, intake):
         self.intake = intake
+        # The cursor only rotates the bounded admin inventory between sweeps;
+        # claims and tenant data remain governed by the per-job lease/RLS path.
+        self._tenant_cursor: str | None = None
 
     def process(self, ctx: TenantContext, *, job_id: str | None = None) -> bool:
         service = self.intake
@@ -111,6 +114,83 @@ class KnowledgeIntakeRecovery:
             count += 1
         return count
 
+    @staticmethod
+    def due_tenant_ids(
+        admin_dsn: str,
+        *,
+        limit: int = 32,
+        after_tenant_id: str | None = None,
+    ) -> list[str]:
+        """Inventory a bounded set of tenants with due intake rows.
+
+        The admin connection is used only for this metadata inventory.  Actual
+        claims still run through ``TenantContext`` and the business router/RLS
+        boundary.  ``after_tenant_id`` lets a long-lived worker rotate through
+        more tenants than one bounded inventory without fetching an unbounded
+        registry.
+        """
+        import psycopg
+
+        clauses = [
+            "next_attempt_at <= now()",
+            "(lease_until IS NULL OR lease_until <= now())",
+            "(status NOT IN ('done','failed') OR submission_state='submitted')",
+        ]
+        params: list[object] = []
+        if after_tenant_id is not None:
+            clauses.append("tenant_id > %s::uuid")
+            params.append(after_tenant_id)
+        params.append(max(1, min(limit, 64)))
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            rows = conn.execute(
+                "SELECT tenant_id FROM knowledge_ingestion_job WHERE "
+                + " AND ".join(clauses)
+                + " GROUP BY tenant_id ORDER BY tenant_id LIMIT %s",
+                tuple(params),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def maintain_all(self, admin_dsn: str, *, limit: int = 8) -> int:
+        """Claim at most eight jobs, rotating one claim per tenant per pass.
+
+        A tenant-local exception is isolated so a broken tenant cannot consume
+        the sweep.  The cursor advances even when a tenant has no claim or
+        fails, preserving fairness across subsequent bounded inventories.
+        """
+        budget = min(8, max(0, limit))
+        if not budget:
+            return 0
+        tenant_ids = (
+            self.due_tenant_ids(admin_dsn)
+            if self._tenant_cursor is None
+            else self.due_tenant_ids(admin_dsn, after_tenant_id=self._tenant_cursor)
+        )
+        if not tenant_ids and self._tenant_cursor is not None:
+            # Wrap only between passes; each returned tenant is still visited
+            # once in this pass, so the global budget remains bounded.
+            tenant_ids = self.due_tenant_ids(admin_dsn)
+        total = 0
+        attempts = 0
+        for tenant_id in tenant_ids:
+            if attempts >= budget:
+                break
+            self._tenant_cursor = tenant_id
+            attempts += 1
+            try:
+                total += self.maintain_once(
+                    TenantContext(tenant_id=tenant_id, user_id="knowledge-recovery"),
+                    limit=1,
+                )
+            except Exception:
+                # Do not let one tenant's DB/upstream failure stop the rest of
+                # this bounded sweep.  Cancellation/ shutdown use BaseException
+                # and therefore remain visible to the lifespan caller.
+                log.warning(
+                    "knowledge ingestion tenant sweep failed",
+                    extra={"tenant_id": tenant_id, "code": "tenant_recovery_failed"},
+                )
+        return total
+
 
 def install_knowledge_intake_lifespan(app):
     original = app.router.lifespan_context
@@ -119,12 +199,18 @@ def install_knowledge_intake_lifespan(app):
     async def lifespan(instance):
         async with original(instance):
             stop = asyncio.Event()
+            worker = None
 
             def sweep():
-                # Stage A: do not enumerate tenants or guess registry first-row.
-                # Stage E claims due jobs per tenant_id. Request-path recovery
-                # still runs under the caller's TenantContext.
-                return
+                nonlocal worker
+                settings = getattr(instance.state, "settings", None)
+                service = getattr(instance.state, "_knowledge_intake_service", None)
+                admin_dsn = getattr(settings, "admin_db_url", None)
+                if service is None or not admin_dsn:
+                    return 0
+                if worker is None or worker.intake is not service:
+                    worker = KnowledgeIntakeRecovery(service)
+                return worker.maintain_all(admin_dsn)
 
             async def poll():
                 while not stop.is_set():

@@ -1,9 +1,10 @@
 """S05 bounded fake-HTTP protocol and in-memory repository contract regressions."""
+import asyncio
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -30,6 +31,136 @@ def test_recovery_claims_under_request_tenant_context():
     ctx = TenantContext(tenant_id="tenant-a", user_id="recovery", roles=[])
     assert recovery.process(ctx) is False
     repo.claim.assert_called_once()
+
+
+def test_recovery_worker_rotates_bounded_inventory_and_isolates_tenant_failure():
+    recovery = KnowledgeIntakeRecovery(SimpleNamespace())
+    tenant_ids = [f"tenant-{index:02d}" for index in range(40)]
+    inventory_calls = []
+    processed = []
+
+    def inventory(_admin_dsn, *, after_tenant_id=None, limit=32):
+        inventory_calls.append(after_tenant_id)
+        start = 0 if after_tenant_id is None else tenant_ids.index(after_tenant_id) + 1
+        return tenant_ids[start:start + limit]
+
+    def maintain(ctx, *, limit):
+        assert limit == 1
+        processed.append(ctx.tenant_id)
+        if ctx.tenant_id in {tenant_ids[0], tenant_ids[10]}:
+            raise RuntimeError("fixture tenant failure")
+        return 1
+
+    recovery.due_tenant_ids = Mock(side_effect=inventory)
+    recovery.maintain_once = maintain
+
+    # A failed tenant consumes its bounded pass slot; later tenants still run.
+    assert recovery.maintain_all("admin-fixture", limit=8) == 7
+    assert processed == tenant_ids[:8]
+    # The cursor reaches tenants beyond the first 32-row inventory instead of
+    # repeatedly starving them on every sweep, even with persistent due rows.
+    assert recovery.maintain_all("admin-fixture", limit=8) == 7
+    assert recovery.maintain_all("admin-fixture", limit=8) == 8
+    assert recovery.maintain_all("admin-fixture", limit=8) == 8
+    assert recovery.maintain_all("admin-fixture", limit=8) == 8
+    assert processed == tenant_ids
+    # Once the cursor reaches the end, the bounded inventory wraps.  The
+    # failing first tenant does not prevent the rest of that pass.
+    assert recovery.maintain_all("admin-fixture", limit=8) == 7
+    assert processed[-8:] == tenant_ids[:8]
+    assert inventory_calls == [
+        None, tenant_ids[7], tenant_ids[15], tenant_ids[23], tenant_ids[31],
+        tenant_ids[39], None,
+    ]
+
+
+def test_recovery_cursor_survives_disappearing_tenant_and_reaches_new_due_tenant():
+    recovery = KnowledgeIntakeRecovery(SimpleNamespace())
+    live = [f"tenant-{index:02d}" for index in range(8)]
+    processed = []
+
+    def inventory(_admin_dsn, *, after_tenant_id=None, limit=32):
+        ordered = sorted(live)
+        if after_tenant_id is not None:
+            ordered = [tenant for tenant in ordered if tenant > after_tenant_id]
+        return ordered[:limit]
+
+    recovery.due_tenant_ids = inventory
+    recovery.maintain_once = lambda ctx, *, limit: processed.append(ctx.tenant_id) or 1
+    assert recovery.maintain_all("admin-fixture", limit=8) == 8
+    live.remove("tenant-07")
+    live.append("tenant-08")
+    assert recovery.maintain_all("admin-fixture", limit=8) == 1
+    assert processed == [f"tenant-{index:02d}" for index in range(9)]
+
+
+def test_recovery_inventory_failure_does_not_advance_instance_cursor():
+    recovery = KnowledgeIntakeRecovery(SimpleNamespace())
+    recovery.due_tenant_ids = Mock(side_effect=[RuntimeError("fixture inventory"), ["tenant-a"]])
+    with pytest.raises(RuntimeError, match="fixture inventory"):
+        recovery.maintain_all("admin-fixture")
+    assert recovery._tenant_cursor is None
+    recovery.maintain_once = lambda ctx, *, limit: 1
+    assert recovery.maintain_all("admin-fixture") == 1
+
+
+def test_recovery_worker_does_not_swallow_cancellation():
+    recovery = KnowledgeIntakeRecovery(SimpleNamespace())
+    recovery.due_tenant_ids = lambda _admin_dsn: ["tenant-a"]
+
+    def cancelled(_ctx, *, limit):
+        raise asyncio.CancelledError()
+
+    recovery.maintain_once = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        recovery.maintain_all("admin-fixture")
+
+
+def test_recovery_restart_reset_uses_current_due_rows_without_starvation():
+    due = [f"tenant-{index:02d}" for index in range(24)]
+    processed = []
+
+    def inventory(_admin_dsn, *, after_tenant_id=None, limit=32):
+        ordered = sorted(due)
+        if after_tenant_id is not None:
+            ordered = [tenant for tenant in ordered if tenant > after_tenant_id]
+        return ordered[:limit]
+
+    def maintain(ctx, *, limit):
+        processed.append(ctx.tenant_id)
+        due.remove(ctx.tenant_id)
+        return 1
+
+    first = KnowledgeIntakeRecovery(SimpleNamespace())
+    first.due_tenant_ids = inventory
+    first.maintain_once = maintain
+    assert first.maintain_all("admin-fixture") == 8
+
+    # A restarted worker has a fresh instance-local cursor, but the durable
+    # claim/backoff state means already-attempted rows are no longer in the
+    # current due inventory.
+    restarted = KnowledgeIntakeRecovery(SimpleNamespace())
+    restarted.due_tenant_ids = inventory
+    restarted.maintain_once = maintain
+    assert restarted.maintain_all("admin-fixture") == 8
+    assert processed == [f"tenant-{index:02d}" for index in range(16)]
+
+
+def test_due_inventory_is_bounded_and_cursor_scoped_to_admin_metadata():
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.__exit__.return_value = None
+    connection.execute.return_value.fetchall.return_value = [("tenant-a",)]
+    with patch("psycopg.connect", return_value=connection):
+        assert KnowledgeIntakeRecovery.due_tenant_ids("admin-fixture", limit=999) == ["tenant-a"]
+        assert KnowledgeIntakeRecovery.due_tenant_ids(
+            "admin-fixture", after_tenant_id="tenant-a", limit=999,
+        ) == ["tenant-a"]
+
+    first, second = connection.execute.call_args_list
+    assert first.args[1] == (64,)
+    assert second.args[1] == ("tenant-a", 64)
+    assert "tenant_id > %s::uuid" in second.args[0]
 
 
 def test_submission_uses_only_supported_text_fields_without_workspace_pin():
@@ -96,6 +227,35 @@ def test_track_response_is_bounded_during_read():
     with pytest.raises(RagIngestionUnavailable):
         adapter.reconcile_ingestion(workspace="enterprise", file_source="source/job", track_id="insert_fixture")
     adapter.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_lifespan_starts_and_restarts_bounded_worker(monkeypatch):
+    from fastapi import FastAPI
+    from manager_service.knowledge_intake_recovery import install_knowledge_intake_lifespan
+
+    app = FastAPI()
+    service = SimpleNamespace()
+    app.state.settings = SimpleNamespace(admin_db_url="admin-fixture")
+    app.state._knowledge_intake_service = service
+    loop = asyncio.get_running_loop()
+    events = [asyncio.Event(), asyncio.Event()]
+    workers = []
+
+    def maintain(self, admin_dsn):
+        assert admin_dsn == "admin-fixture"
+        workers.append(self)
+        loop.call_soon_threadsafe(events[min(len(workers) - 1, len(events) - 1)].set)
+
+    monkeypatch.setattr(KnowledgeIntakeRecovery, "maintain_all", maintain)
+    install_knowledge_intake_lifespan(app)
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(events[0].wait(), timeout=2)
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(events[1].wait(), timeout=2)
+
+    assert workers[0].intake is service and workers[-1].intake is service
+    assert workers[0] is not workers[-1]
 
 
 def test_inmemory_fake_atomic_create_and_claim_match_pg_contract(tmp_path, monkeypatch):

@@ -67,6 +67,9 @@ class MemoryRetentionService:
         self.backend = backend
         self._now = now
         self._verified_until = 0.0
+        # Rotates only the bounded admin inventory between worker sweeps;
+        # claims and all business reads/writes remain TenantContext/RLS scoped.
+        self._tenant_cursor: str | None = None
 
     def require_ready(self, policy):
         if not is_retention_guarded(policy):
@@ -154,22 +157,63 @@ class MemoryRetentionService:
             raise Forbidden("Cannot edit or reactivate an expired or unproven memory")
 
     def maintain_once(self, tenant_id: str | None = None):
-        """Run bounded cleanup for one explicit tenant. Stage A lifespan passes none."""
-        if not tenant_id:
-            return
+        """Run one bounded cleanup tick with per-tenant failure isolation.
+
+        Worker mode visits each inventory tenant once before starting another
+        pass, then rotates the bounded inventory cursor for the next tick.  An
+        explicit tenant remains a targeted maintenance call and keeps the
+        existing 16-job budget.
+        """
+        tenant_id = tenant_id or None
         owner = uuid.uuid4().hex
         budget = 16
         until = time.monotonic() + 20
-        for tenant in self.repository.tenant_ids_due(tenant_id):
-            if tenant != tenant_id:
+        if tenant_id is not None:
+            tenants = self.repository.tenant_ids_due(tenant_id)
+        else:
+            tenants = (
+                self.repository.tenant_ids_due()
+                if self._tenant_cursor is None
+                else self.repository.tenant_ids_due(after_tenant_id=self._tenant_cursor)
+            )
+            if not tenants and self._tenant_cursor is not None:
+                # Wrap between passes only; each inventory tenant is still
+                # attempted at most once in this tick.
+                tenants = self.repository.tenant_ids_due()
+
+        for tenant in tenants:
+            if budget <= 0 or time.monotonic() >= until:
+                break
+            if tenant_id is not None and tenant != tenant_id:
                 continue
+            if tenant_id is None:
+                self._tenant_cursor = tenant
             ctx = TenantContext(tenant_id=tenant, user_id="memory-retention")
-            while budget and time.monotonic() < until:
-                job = self.repository.claim(ctx, owner=owner)
-                if not job:
+            claims_for_tenant = budget if tenant_id is not None else 1
+            for _ in range(claims_for_tenant):
+                if not budget or time.monotonic() >= until:
                     break
-                budget -= 1
-                self._maintain_job(ctx, job, owner)
+                try:
+                    # Worker mode reserves its one bounded slot before the
+                    # claim call, so a claim that fails after acquiring a DB
+                    # lease cannot let this tick exceed its global budget.
+                    if tenant_id is None:
+                        budget -= 1
+                    job = self.repository.claim(ctx, owner=owner)
+                    if not job:
+                        break
+                    if tenant_id is not None:
+                        budget -= 1
+                    self._maintain_job(ctx, job, owner)
+                except Exception:
+                    # Keep one tenant's repository/backend failure from
+                    # starving later tenants.  Cancellation is not an
+                    # Exception in the async lifespan and is not swallowed.
+                    log.warning(
+                        "memory retention tenant sweep failed",
+                        extra={"tenant_id": tenant, "code": "memory_retention_tenant_failed"},
+                    )
+                    break
 
     def _maintain_job(self, ctx, job, owner):
         state, cleaned, error = job["operation_state"], job["cleanup_state"], None
