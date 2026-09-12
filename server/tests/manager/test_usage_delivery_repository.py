@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
@@ -11,6 +12,9 @@ from manager_service.usage_audit_quota_repository import UsageAuditQuotaReposito
 from manager_service.usage_delivery_repository import (
     MAX_DELIVERY_ATTEMPTS,
     UsageOperatorDeliveryRepository,
+    _payload_dict,
+    _row_to_delivery,
+    _to_uuid,
     operator_summary_payload,
 )
 from shared.contracts.tenancy import TenantContext
@@ -147,3 +151,59 @@ def test_history_repository_retains_unknown_legacy_attribution():
     assert rows[0]["employee_id"] is None
     assert rows[0]["member_display_name"] == "未知成员"
     assert rows[0]["employee_display_name"] == "未知员工"
+
+
+def test_delivery_helpers_normalize_uuid_and_payload_shapes():
+    value = uuid4()
+    assert _to_uuid(None) is None
+    assert _to_uuid("") is None
+    assert _to_uuid(value) == value
+    assert _to_uuid(str(value)) == value
+    assert _payload_dict({"summary_id": "s"}) == {"summary_id": "s"}
+    assert _payload_dict('{"summary_id":"s"}') == {"summary_id": "s"}
+    assert _payload_dict("not-json") == {}
+    row = _row_to_delivery(delivery_row())
+    assert row.delivery_id == "55555555-5555-5555-5555-555555555555"
+    assert row.member_id == MEMBER and row.employee_id == EMPLOYEE
+
+
+def test_delivery_repository_enqueue_assign_get_list_and_pending_count():
+    payload = {
+        "summary_id": "summary-1", "employee_id": EMPLOYEE, "member_id": MEMBER,
+        "window_start": WS, "window_end": WE, "run_count": 2, "token_total": 33,
+        "cost_total": Decimal("0.125"), "pricing_version": 1, "pricing_status": "known",
+        "currency": "USD", "error_count": 0, "duration_seconds_total": 3,
+    }
+    router = FakeRouter().queue(FakeCursor(fetchone=delivery_row()))
+    repo = UsageOperatorDeliveryRepository(router)
+    assert repo.enqueue(CTX, summary_payload=payload, enterprise_id="66666666-6666-6666-6666-666666666666").summary_id == "summary-1"
+
+    rows = [("55555555-5555-5555-5555-555555555555", TENANT, None, "summary-1", "old", payload, "pending", 0, WS, None, None, None, WS, WS, None, MEMBER, EMPLOYEE)]
+    router = FakeRouter().queue_many(FakeCursor(fetchall=rows), FakeCursor(rowcount=1))
+    repo = UsageOperatorDeliveryRepository(router)
+    assert repo.assign_enterprise_id(CTX, enterprise_id="66666666-6666-6666-6666-666666666666") == 1
+    assert len(router.executed) == 2
+
+    router = FakeRouter().queue(FakeCursor(fetchone=delivery_row()))
+    assert UsageOperatorDeliveryRepository(router).get(CTX, delivery_id=delivery_row()[0]).summary_id == "summary-1"
+    router = FakeRouter().queue(FakeCursor(fetchall=[delivery_row()]))
+    assert len(UsageOperatorDeliveryRepository(router).list(CTX, statuses=("pending",), limit=999)) == 1
+
+    router = FakeRouter().queue(FakeCursor(fetchone=(3,)))
+    assert UsageOperatorDeliveryRepository(router).pending_count(CTX) == 3
+
+
+def test_delivery_repository_marks_sent_and_failed_with_claim_fences():
+    router = FakeRouter().queue(FakeCursor(fetchone=(delivery_row()[0],)))
+    assert UsageOperatorDeliveryRepository(router).mark_sent(
+        CTX, delivery_id=delivery_row()[0], claim_token="claim",
+    ) is True
+    router = FakeRouter().queue(FakeCursor(fetchone=None))
+    assert UsageOperatorDeliveryRepository(router).mark_sent(
+        CTX, delivery_id=delivery_row()[0], claim_token="stale",
+    ) is False
+    router = FakeRouter().queue(FakeCursor(fetchone=(delivery_row()[0],)))
+    assert UsageOperatorDeliveryRepository(router).mark_failed(
+        CTX, delivery_id=delivery_row()[0], claim_token="claim", error="  operator\nsecret  ", attempts=2,
+    ) is True
+    assert router.executed[-1][1][0] == "operator secret"

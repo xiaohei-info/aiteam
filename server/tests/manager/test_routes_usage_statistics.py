@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -56,6 +57,23 @@ def test_usage_upload_rejects_mismatched_top_level_tenant():
         )
     assert response.status_code == 403
     fake.ingest_upload.assert_not_called()
+
+
+def test_usage_upload_forwards_enterprise_mapping_and_keeps_report_hint_best_effort():
+    fake = MagicMock()
+    fake.ingest_upload.return_value = {"usage_ingested": 1, "audits_ingested": 0}
+    with patch("manager_service.routes_usage_audit_quota._service", return_value=fake), \
+         patch("manager_service.routes_usage_audit_quota._lookup_enterprise_id", return_value="enterprise-1"), \
+         patch("manager_service.routes_usage_audit_quota._report_to_operator", side_effect=RuntimeError("operator offline")):
+        response = _client().post(
+            "/api/manager/usage/upload",
+            json={"usage": [{"summary_id": "summary-1"}], "audits": []},
+            headers=_headers(),
+        )
+    assert response.status_code == 200
+    fake.ingest_upload.assert_called_once()
+    assert fake.ingest_upload.call_args.kwargs["enterprise_id"] == "enterprise-1"
+    assert response.json()["data"]["usage_ingested"] == 1
 
 
 def _stats():
@@ -120,3 +138,67 @@ def test_new_usage_routes_are_documented_with_window_and_error_contracts():
             "employee_id", "member_id", "window_start", "window_end",
         }
         assert "422" in operation["responses"]
+
+
+def test_operator_delivery_route_validates_status_and_serializes_receipts():
+    row = SimpleNamespace(
+        delivery_id="delivery-1", summary_id="summary-1", enterprise_id="enterprise-1",
+        member_id="member-1", employee_id="employee-1", idempotency_key="usage-key",
+        status="sent", attempts=1, next_attempt_at=None, last_error=None, claimed_at=None,
+        created_at=datetime(2026, 9, 5, 8, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 9, 5, 8, tzinfo=timezone.utc), sent_at=datetime(2026, 9, 5, 8, tzinfo=timezone.utc),
+    )
+    repo = MagicMock()
+    repo.list.return_value = [row]
+    with patch("manager_service.routes_usage_audit_quota.UsageOperatorDeliveryRepository", return_value=repo):
+        client = _client()
+        response = client.get("/api/manager/usage/operator-deliveries?status=sent", headers=_headers())
+        invalid = client.get("/api/manager/usage/operator-deliveries?status=broken", headers=_headers())
+    assert response.status_code == 200
+    assert response.json()["data"][0]["delivery_id"] == "delivery-1"
+    repo.list.assert_called_once()
+    assert invalid.status_code == 422
+
+
+def test_usage_enterprise_lookup_handles_success_missing_config_and_failure(monkeypatch):
+    from manager_service import routes_usage_audit_quota as module
+
+    class Cursor:
+        def fetchone(self):
+            return ("enterprise-1",)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, sql, params):
+            return Cursor()
+
+    monkeypatch.setattr("psycopg.connect", lambda *args, **kwargs: Connection())
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(
+        admin_db_url="postgresql://admin", operator_url="https://operator",
+    ))))
+    assert module._lookup_enterprise_id(request, TENANT) == "enterprise-1"
+    request.app.state.settings = SimpleNamespace(admin_db_url=None, operator_url="https://operator")
+    assert module._lookup_enterprise_id(request, TENANT) is None
+    request.app.state.settings = SimpleNamespace(admin_db_url="postgresql://admin", operator_url="https://operator")
+    monkeypatch.setattr("psycopg.connect", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db unavailable")))
+    assert module._lookup_enterprise_id(request, TENANT) is None
+
+
+def test_usage_delivery_service_is_cached_and_report_is_best_effort():
+    from manager_service import routes_usage_audit_quota as module
+
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        settings=SimpleNamespace(db_url="postgresql://db", admin_db_url="postgresql://admin", operator_url="https://operator"),
+    )))
+    delivery = MagicMock()
+    with patch.object(module, "build_usage_operator_delivery_service", return_value=delivery) as build:
+        assert module._operator_delivery_service(request) is delivery
+        assert module._operator_delivery_service(request) is delivery
+    build.assert_called_once()
+    module._report_to_operator(request, MagicMock(), SimpleNamespace(tenant_id=TENANT))
+    delivery.deliver_due.assert_called_once()

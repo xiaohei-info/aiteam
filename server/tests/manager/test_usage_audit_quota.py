@@ -492,6 +492,105 @@ def test_quota_evaluate_default_is_soft():
     assert body2.enforcement == "soft"
 
 
+def test_ingest_uses_atomic_delivery_repository_when_available():
+    class AtomicRepo(_FakeRepo):
+        def __init__(self):
+            super().__init__()
+            self.atomic_calls = []
+
+        def upsert_usage_with_delivery(self, ctx, *, payload, enterprise_id=None):
+            self.atomic_calls.append((ctx.tenant_id, enterprise_id, payload))
+            return self.upsert_usage(ctx, payload=payload)
+
+    repo = AtomicRepo()
+    result = UsageAuditQuotaService(repo).ingest_upload(
+        _ctx("t-a"), _upload("t-a", usage=[_usage_item()], audits=[]), enterprise_id="enterprise-a",
+    )
+    assert result == {"usage_ingested": 1, "audits_ingested": 0}
+    assert repo.atomic_calls[0][1] == "enterprise-a"
+
+
+def test_usage_service_validates_upload_shapes_and_identity_seams():
+    svc = UsageAuditQuotaService(_FakeRepo())
+    ctx = _ctx("t-a")
+    with pytest.raises(Forbidden):
+        svc.ingest_upload(ctx, {"tenant_id": "t-b", "usage": [], "audits": []})
+    with pytest.raises(ValidationProblem):
+        svc.ingest_upload(ctx, {"usage": {"bad": 1}, "audits": []})
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({"summary_id": "s", "window_start": datetime(2026, 1, 1, tzinfo=timezone.utc), "window_end": datetime(2026, 1, 2, tzinfo=timezone.utc), "unexpected": True}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({"window_start": datetime(2026, 1, 1, tzinfo=timezone.utc), "window_end": datetime(2026, 1, 2, tzinfo=timezone.utc)}, ctx=ctx)
+    with pytest.raises(Forbidden):
+        svc._usage_payload({**_usage_item(), "tenant_id": "t-b"}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({**_usage_item(), "currency": "EUR"}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({**_usage_item(), "pricing_status": "other"}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({**_usage_item(), "pricing_version": 0}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._usage_payload({**_usage_item(), "run_count": True}, ctx=ctx)
+    with pytest.raises(Forbidden):
+        svc._audit_payload({"summary_id": "s", "actor": "a", "action": "x", "occurred_at": datetime.now(timezone.utc), "tenant_id": "t-b"}, ctx=ctx)
+    with pytest.raises(ValidationProblem):
+        svc._audit_payload({"summary_id": "s"}, ctx=ctx)
+
+
+def test_current_summary_employee_grant_validation_fails_closed():
+    item = {**_usage_item(), "schema_version": "1", "employee_id": "33333333-3333-3333-3333-333333333333", "member_id": "u"}
+    class NoAuthRepo:
+        pass
+    with pytest.raises(Forbidden, match="authorization is not configured"):
+        UsageAuditQuotaService(NoAuthRepo())._usage_payload(item, ctx=_ctx("t-a"))
+
+    class EmployeeRepo:
+        def employee_exists(self, ctx, *, employee_id):
+            return False
+        def employee_granted_to_member(self, ctx, *, employee_id, member_id):
+            return False
+    with pytest.raises(Forbidden, match="not in the authenticated tenant"):
+        UsageAuditQuotaService(EmployeeRepo())._usage_payload(item, ctx=_ctx("t-a"))
+
+    class MemberRepo:
+        def employee_exists(self, ctx, *, employee_id):
+            uuid.UUID(employee_id)
+            return True
+        def employee_granted_to_member(self, ctx, *, employee_id, member_id):
+            return False
+    with pytest.raises(Forbidden, match="not granted"):
+        UsageAuditQuotaService(MemberRepo())._usage_payload(item, ctx=_ctx("t-a", roles=["member"]))
+    with pytest.raises(ValidationProblem, match="must be UUIDs"):
+        UsageAuditQuotaService(MemberRepo())._usage_payload(
+            {**item, "employee_id": "not-a-uuid"}, ctx=_ctx("t-a", roles=["member"]),
+        )
+
+
+def test_usage_service_forwards_member_and_actor_filters_and_quota_update_not_found():
+    class FilterRepo(_FakeRepo):
+        def list_usage(self, ctx, member_id=None):
+            self.member = member_id
+            return []
+        def list_audits(self, ctx, actor=None):
+            self.actor = actor
+            return []
+        def aggregate_usage(self, ctx, *, window_start, window_end, member_id=None):
+            self.aggregate_member = member_id
+            return {"rollup_count": 0, "run_count": 0, "token_total": 0, "cost_total": None, "unknown_pricing_tokens": 0, "unknown_pricing_runs": 0, "error_count": 0, "duration_seconds_total": 0}
+
+    repo = FilterRepo()
+    svc = UsageAuditQuotaService(repo)
+    member_uuid = "11111111-1111-1111-1111-111111111111"
+    assert svc.list_usage(_ctx("t-a"), member_id=member_uuid) == []
+    assert svc.list_audits(_ctx("t-a"), actor="actor-1") == []
+    result = svc.aggregate_usage(_ctx("t-a"), window_start=datetime(2026, 1, 1, tzinfo=timezone.utc), window_end=datetime(2026, 2, 1, tzinfo=timezone.utc), member_id=member_uuid)
+    assert result.rollup_count == 0
+    assert repo.member == member_uuid and repo.actor == "actor-1" and repo.aggregate_member == member_uuid
+
+    with pytest.raises(NotFound):
+        svc.update_quota(_ctx("t-a"), _quota_body(), policy_id="missing")
+
+
 # ---- 路由：受保护端点 401 / DB 未配置 503 / 路由全注册 ----
 
 

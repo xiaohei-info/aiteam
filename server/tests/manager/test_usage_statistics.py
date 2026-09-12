@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ import pytest
 
 from manager_service.usage_analytics_service import (
     UsageAnalyticsService,
+    parse_utc_datetime,
     validate_aligned_window,
 )
 from manager_service.usage_delivery_repository import (
@@ -171,6 +174,49 @@ def test_statistics_requires_paired_utc_hour_aligned_window(start, end):
 def test_statistics_rejects_naive_window():
     with pytest.raises(ValidationProblem):
         validate_aligned_window(datetime(2026, 9, 5, 8), datetime(2026, 9, 5, 9, tzinfo=timezone.utc))
+
+
+def test_analytics_rejects_invalid_timestamps_filters_and_costs():
+    with pytest.raises(ValidationProblem):
+        parse_utc_datetime("not-a-timestamp", field="window_start")
+    with pytest.raises(ValidationProblem):
+        parse_utc_datetime(42, field="window_start")  # type: ignore[arg-type]
+    with pytest.raises(ValidationProblem):
+        UsageAnalyticsService(_AnalyticsRepo()).statistics(CTX, employee_id=" ")
+    with pytest.raises(ValidationProblem):
+        UsageAnalyticsService(_AnalyticsRepo()).statistics(CTX, member_id="x" * 257)
+
+    class InvalidCostRepo(_AnalyticsRepo):
+        def aggregate_usage_statistics(self, ctx, **filters):
+            result = super().aggregate_usage_statistics(ctx, **filters)
+            result.update(summary_count=1, unknown_summary_count=0, known_cost_total="NaN")
+            return result
+
+    with pytest.raises(ValidationProblem):
+        UsageAnalyticsService(InvalidCostRepo()).statistics(CTX)
+
+
+def test_analytics_known_and_unknown_branches_preserve_execution_fallback():
+    class Repo:
+        def aggregate_usage_statistics(self, ctx, **filters):
+            return {
+                "summary_count": 1, "unknown_summary_count": 0, "known_cost_total": Decimal("0"),
+                "execution_count": None, "prompt_count": 3, "run_count": 2,
+            }
+
+        def list_usage_history(self, ctx, **filters):
+            return [{
+                "rollup_id": "r1", "summary_id": "s1", "window_start": WS, "window_end": WE,
+                "pricing_status": "known", "cost_total": None, "run_count": 1,
+            }]
+
+    stats = UsageAnalyticsService(Repo()).statistics(CTX)
+    assert stats.pricing_status == "known"
+    assert stats.cost_total == Decimal("0")
+    assert stats.execution_count == 3
+    history = UsageAnalyticsService(Repo()).work_history(CTX)
+    assert history[0].pricing_status == "unknown"
+    assert history[0].cost_total is None
 
 
 def test_billing_overview_uses_nullable_unknown_spending_and_utc_trend_sql():
@@ -408,6 +454,98 @@ def test_delivery_worker_uses_signed_contract_shape_and_bounded_failure_backoff(
     assert key == "usage-stable"
     assert retry_delay_seconds(1) == DELIVERY_BACKOFF_BASE_SECONDS
     assert retry_delay_seconds(100) == DELIVERY_BACKOFF_MAX_SECONDS
+
+
+def test_delivery_worker_sends_successfully_and_handles_mapping_or_claim_failures():
+    class SuccessClient:
+        def __init__(self):
+            self.payloads = []
+            self.closed = False
+
+        def upload(self, payload, *, idempotency_key):
+            self.payloads.append((payload, idempotency_key))
+
+        def close(self):
+            self.closed = True
+
+    client = SuccessClient()
+    repo = _DeliveryRepo(_delivery_row())
+    service = UsageOperatorDeliveryService(repo, client, enterprise_resolver=lambda _: "resolved-enterprise")
+    assert service.deliver_due(CTX) == {"claimed": 1, "sent": 1, "failed": 0, "deferred": 0}
+    assert repo.assigned == ["resolved-enterprise"]
+    assert repo.sent[0]["claim_token"] == "claim-1"
+    service.close()
+    assert client.closed
+
+    class MappingFailureRepo(_DeliveryRepo):
+        def assign_enterprise_id(self, ctx, *, enterprise_id):
+            raise RuntimeError("mapping write unavailable")
+
+    deferred = UsageOperatorDeliveryService(
+        MappingFailureRepo(_delivery_row()), SuccessClient(), enterprise_resolver=lambda _: "resolved-enterprise",
+    )
+    assert deferred.deliver_due(CTX) == {"claimed": 0, "sent": 0, "failed": 0, "deferred": 1}
+
+    class ClaimFailureRepo(_DeliveryRepo):
+        def claim_due(self, ctx, *, limit):
+            raise RuntimeError("claim unavailable")
+
+    skipped = UsageOperatorDeliveryService(ClaimFailureRepo(_delivery_row()), SuccessClient())
+    assert skipped.deliver_due(CTX) == {"claimed": 0, "sent": 0, "failed": 0, "deferred": 1}
+
+    resolver_failed = UsageOperatorDeliveryService(
+        _DeliveryRepo(_delivery_row()), SuccessClient(), enterprise_resolver=lambda _: (_ for _ in ()).throw(RuntimeError("mapping unavailable")),
+    )
+    assert resolver_failed.deliver_due(CTX)["sent"] == 1
+
+
+def test_delivery_payload_rejects_wrong_tenant_or_missing_enterprise():
+    row = _delivery_row()
+    with pytest.raises(ValueError, match="tenant attribution"):
+        UsageOperatorDeliveryService._operator_payload(
+            replace(row, payload={**row.payload, "tenant_id": "other-tenant"}),
+        )
+    with pytest.raises(ValueError, match="enterprise mapping"):
+        UsageOperatorDeliveryService._operator_payload(replace(row, enterprise_id=None))
+
+
+@pytest.mark.asyncio
+async def test_usage_delivery_lifespan_runs_one_bounded_tenant_sweep_and_closes(monkeypatch):
+    from fastapi import FastAPI
+    from manager_service import usage_delivery_service as delivery_module
+
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(
+        db_url="postgresql://app", admin_db_url="postgresql://admin", operator_url="https://operator",
+    )
+    called = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    class Service:
+        def __init__(self):
+            self.contexts = []
+            self.closed = False
+
+        def deliver_due(self, ctx, *, limit):
+            self.contexts.append((ctx, limit))
+            loop.call_soon_threadsafe(called.set)
+
+        def close(self):
+            self.closed = True
+
+    service = Service()
+    monkeypatch.setattr(delivery_module, "build_usage_operator_delivery_service", lambda settings: service)
+    monkeypatch.setattr(delivery_module, "_list_manager_tenants", lambda admin, after=None: ["tenant-1"])
+    monkeypatch.setattr(delivery_module, "DELIVERY_POLL_SECONDS", 0.01)
+    delivery_module.install_usage_delivery_lifespan(app)
+
+    async def exercise():
+        async with app.router.lifespan_context(app):
+            await asyncio.wait_for(called.wait(), timeout=2)
+
+    await exercise()
+    assert service.contexts[0][0].tenant_id == "tenant-1"
+    assert service.closed
 
 
 def test_shared_operator_summary_contract_accepts_unknown_nullable_cost():
