@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import socket
+import threading
 from datetime import UTC, datetime, timedelta
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -43,6 +44,7 @@ RELAY_TOKEN_LIFETIME = timedelta(days=90)
 RELAY_TOKEN_RENEWAL_WINDOW = timedelta(hours=24)
 RELAY_TOKEN_RETRY_BASE = timedelta(seconds=5)
 RELAY_TOKEN_RETRY_MAX = timedelta(hours=1)
+RELAY_TOKEN_HEARTBEAT_INTERVAL_SECONDS = 60
 RELAY_TOKEN_RECOVERY_INTERVAL_SECONDS = 30
 RELAY_TOKEN_RECOVERY_BATCH_LIMIT = 20
 RELAY_TENANT_INITIAL_QUOTA = 1_000_000_000
@@ -61,7 +63,10 @@ class PlatformProviderService:
         clock: Callable[[], datetime] | None = None,
         token_lifetime: timedelta = RELAY_TOKEN_LIFETIME,
         renewal_window: timedelta = RELAY_TOKEN_RENEWAL_WINDOW,
+        heartbeat_interval: float = RELAY_TOKEN_HEARTBEAT_INTERVAL_SECONDS,
     ):
+        if heartbeat_interval <= 0:
+            raise ValueError("heartbeat interval must be positive")
         self._repo = repo
         self._newapi = newapi
         self._crypto = crypto
@@ -70,6 +75,7 @@ class PlatformProviderService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._token_lifetime = token_lifetime
         self._renewal_window = renewal_window
+        self._heartbeat_interval = heartbeat_interval
         # Fallback only for lightweight in-memory test doubles.  Production
         # repositories expose the durable operation methods below; this map is
         # intentionally not used as a credential store.
@@ -2050,7 +2056,7 @@ class PlatformProviderService:
         return None
 
     def _call_upstream(self, operation: Any, callback: Callable[[], Any]) -> Any:
-        """Run one bounded upstream action with owner-checked lease refresh."""
+        """Run one upstream action while retaining the claim lease."""
         if (
             isinstance(operation, dict)
             and self._operation_status(operation) == "running"
@@ -2063,9 +2069,40 @@ class PlatformProviderService:
         requires_lease = self._operation_id(operation) and self._operation_status(operation) == "running"
         if requires_lease and self.heartbeat_relay_token_operation(operation) is None:
             raise NewApiError("relay lifecycle operation lease is no longer owned")
+
+        heartbeat_stop = threading.Event()
+        heartbeat_lost = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
+
+        def heartbeat_loop() -> None:
+            while not heartbeat_stop.wait(self._heartbeat_interval):
+                try:
+                    if self.heartbeat_relay_token_operation(operation) is None:
+                        heartbeat_lost.set()
+                        return
+                except Exception:
+                    # A failed refresh leaves ownership unknown.  Fail closed
+                    # after the callback rather than allowing stale publication.
+                    heartbeat_lost.set()
+                    return
+
+        def stop_heartbeat() -> None:
+            if heartbeat_thread is None:
+                return
+            heartbeat_stop.set()
+            heartbeat_thread.join()
+
+        if requires_lease:
+            heartbeat_thread = threading.Thread(
+                target=heartbeat_loop,
+                name="relay-claim-heartbeat",
+                daemon=True,
+            )
+            heartbeat_thread.start()
         try:
             result = callback()
-        except Exception:
+        except BaseException:
+            stop_heartbeat()
             # A failed action is still an uncertain outcome; best-effort lease
             # refresh keeps the receipt recoverable by this owner until the
             # caller records its bounded backoff.
@@ -2074,6 +2111,15 @@ class PlatformProviderService:
             except Exception:
                 pass
             raise
+        stop_heartbeat()
+        if requires_lease and heartbeat_lost.is_set():
+            observed_token_id = None
+            if isinstance(result, tuple) and result and isinstance(result[0], int):
+                observed_token_id = result[0]
+            raise NewApiError(
+                "relay lifecycle operation lease expired during upstream work",
+                token_id=observed_token_id,
+            )
         if requires_lease and self.heartbeat_relay_token_operation(operation) is None:
             observed_token_id = None
             if isinstance(result, tuple) and result and isinstance(result[0], int):

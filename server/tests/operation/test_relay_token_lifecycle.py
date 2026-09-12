@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -353,11 +354,12 @@ class QuotaAlreadyAppliedNewAPI(BootstrapRecoveryNewAPI):
         raise AssertionError("quota must be reconciled, not added twice")
 
 
-def _service(repo, newapi, *, refs, now=NOW):
+def _service(repo, newapi, *, refs, now=NOW, heartbeat_interval=60):
     return PlatformProviderService(
         repo, newapi, FakeCrypto(), "http://relay/v1",
         enterprise_repository=FakeEnterprise(refs), clock=lambda: now,
         renewal_window=timedelta(hours=24),
+        heartbeat_interval=heartbeat_interval,
     )
 
 
@@ -1427,6 +1429,70 @@ def test_service_claim_heartbeat_and_upstream_lease_edges():
     with pytest.raises(NewApiError, match="lease expired") as lease_error:
         service._call_upstream(lease_lost, lambda: (88, "token"))
     assert lease_error.value.token_id == 88
+
+
+def test_claim_heartbeat_runs_during_a_long_upstream_callback_and_stops_cleanly():
+    service = _service(object(), object(), refs=None, heartbeat_interval=0.01)
+    operation = {
+        "operation_id": "long-callback",
+        "status": "running",
+        "claim_owner": "owner",
+    }
+    heartbeat_seen = threading.Event()
+    heartbeat_calls = 0
+
+    def heartbeat(_operation):
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls >= 2:
+            heartbeat_seen.set()
+        return object()
+
+    service.heartbeat_relay_token_operation = heartbeat
+
+    def callback():
+        assert heartbeat_seen.wait(1)
+        assert heartbeat_calls >= 2
+        return "result"
+
+    assert service._call_upstream(operation, callback) == "result"
+    # One preflight, at least one in-flight refresh, and one final refresh;
+    # stop_heartbeat joins the worker before the final refresh is made.
+    assert heartbeat_calls >= 3
+    assert not any(
+        thread.is_alive() and thread.name == "relay-claim-heartbeat"
+        for thread in threading.enumerate()
+    )
+
+
+def test_lost_in_flight_heartbeat_blocks_success_and_preserves_token_id():
+    service = _service(object(), object(), refs=None, heartbeat_interval=0.01)
+    operation = {
+        "operation_id": "lost-callback",
+        "status": "running",
+        "claim_owner": "owner",
+    }
+    heartbeat_lost = threading.Event()
+    heartbeat_calls = 0
+
+    def heartbeat(_operation):
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls >= 2:
+            heartbeat_lost.set()
+            return None
+        return object()
+
+    service.heartbeat_relay_token_operation = heartbeat
+
+    def callback():
+        assert heartbeat_lost.wait(1)
+        return 88, "token"
+
+    with pytest.raises(NewApiError, match="lease expired") as exc_info:
+        service._call_upstream(operation, callback)
+    assert exc_info.value.token_id == 88
+    assert heartbeat_calls == 2
 
 
 def test_service_recovery_handles_update_delete_and_invalid_receipts():
