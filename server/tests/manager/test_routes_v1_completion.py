@@ -123,6 +123,36 @@ def test_billing_recharge_rejects_legacy_wechat_value():
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
 
+
+def test_billing_usage_overview_and_records_forward_scope_filters():
+    from manager_service.routes_billing import build_billing_router
+
+    svc = MagicMock()
+    svc.get_usage_overview.return_value = {
+        "period": "all", "total_tokens": 3, "total_cost": None,
+        "unknown_pricing_tokens": 3, "unknown_pricing_runs": 1,
+        "trend": [], "ranking": [],
+    }
+    svc.list_usage_records.return_value = [{
+        "record_id": "r1", "employee_name": "员工", "token_total": 3,
+    }]
+    with patch("manager_service.routes_billing._service", return_value=svc):
+        c = _build_app("postgresql://x", build_billing_router)
+        overview = c.get(
+            "/api/manager/billing/usage/overview?period=all&employee_id=e1&member_id=m1",
+            headers=_hdr(),
+        )
+        records = c.get(
+            "/api/manager/billing/usage/records?period=all&employee_id=e1&member_id=m1",
+            headers=_hdr(),
+        )
+    assert overview.status_code == 200
+    assert overview.json()["data"]["pricing_status"] == "unknown"
+    assert records.status_code == 200
+    assert records.json()["data"][0]["record_id"] == "r1"
+    svc.get_usage_overview.assert_called_once()
+    svc.list_usage_records.assert_called_once()
+
 # ---- llm routes ----
 
 def test_llm_provider_list_ok():

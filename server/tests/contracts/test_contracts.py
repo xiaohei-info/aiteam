@@ -102,8 +102,62 @@ def test_usage_summary_uses_decimal_not_float():
         window_start="2026-06-19T00:00:00Z",
         window_end="2026-06-19T01:00:00Z",
         cost_total="1.23",
+        pricing_status="known",
     )
     assert isinstance(s.cost_total, Decimal)
+    assert s.model_dump(mode="json")["cost_total"] == "1.23"
+    assert s.model_json_schema()["properties"]["cost_total"]["anyOf"] == [
+        {"type": "string"}, {"type": "null"},
+    ]
+    with pytest.raises(ValidationError):
+        C.UsageSummary(
+            summary_id="float-cost",
+            tenant_id="t1",
+            window_start="2026-06-19T00:00:00Z",
+            window_end="2026-06-19T01:00:00Z",
+            cost_total=0.1,
+            pricing_status="known",
+        )
+
+
+def test_usage_summary_unknown_pricing_is_nullable_and_serializes_as_null():
+    """未知计价不把数字零序列化成已知的免费成本。"""
+    from decimal import Decimal
+
+    unknown = C.UsageSummary(
+        summary_id="unknown",
+        tenant_id="t1",
+        window_start="2026-06-19T00:00:00Z",
+        window_end="2026-06-19T01:00:00Z",
+    )
+    assert unknown.cost_total is None
+    assert unknown.model_dump(mode="json")["cost_total"] is None
+
+    # Accept a legacy zero at the boundary, but normalize it away before it
+    # can cross tiers as a false known/free value.
+    legacy_unknown = C.UsageSummary(
+        summary_id="legacy-unknown",
+        tenant_id="t1",
+        window_start="2026-06-19T00:00:00Z",
+        window_end="2026-06-19T01:00:00Z",
+        cost_total=Decimal("0"),
+        pricing_status="unknown",
+    )
+    assert legacy_unknown.cost_total is None
+    assert legacy_unknown.model_dump(mode="json")["cost_total"] is None
+
+    from shared.contracts.crosstier import EnterpriseRollupUpload
+    upload = EnterpriseRollupUpload(enterprise_id="ent-1", tenant_id="t1", summaries=[unknown])
+    assert upload.model_dump(mode="json")["summaries"][0]["cost_total"] is None
+
+    with pytest.raises(ValidationError):
+        C.UsageSummary(
+            summary_id="missing-known-cost",
+            tenant_id="t1",
+            window_start="2026-06-19T00:00:00Z",
+            window_end="2026-06-19T01:00:00Z",
+            pricing_status="known",
+        )
 
 
 def test_platform_pricing_is_decimal_versioned_and_secret_free():

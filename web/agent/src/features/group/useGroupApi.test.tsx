@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentApiClient } from "../../lib/api-client";
-import { listLoadedExperts, listSolutionInstances, createGroupConversation } from "./useGroupApi";
+import { listConversationParticipants, listLoadedExperts, listSolutionInstances, createGroupConversation } from "./useGroupApi";
 import { parseMentions } from "./mention";
 import { footerHandles } from "../chat/MessageComposer";
 
@@ -10,6 +10,13 @@ describe("useGroupApi read-only projections", () => {
     const client = { listGet: vi.fn(async () => ({ items: data, page: { next_cursor: null, has_more: false } })) } as unknown as AgentApiClient;
     await expect(listLoadedExperts(client)).resolves.toEqual(data);
     expect(client.listGet).toHaveBeenCalledWith("/api/agent/grants/experts");
+  });
+
+  it("reads the fixed owner-scoped participant roster without falling back to grants", async () => {
+    const participants = [{ employee_id: "e1", display_name: "Coordinator", handle: "coord", role_title: null, department_ids: [], role: "coordinator" as const, available: false }];
+    const client = { get: vi.fn(async () => ({ conversation_id: "c1", participants, employee_count: 1 })) } as unknown as AgentApiClient;
+    await expect(listConversationParticipants(client, "c1")).resolves.toEqual(participants);
+    expect(client.get).toHaveBeenCalledWith("/api/agent/conversations/c1/participants");
   });
 
   it("reads authorized solutions without exposing planner fields", async () => {

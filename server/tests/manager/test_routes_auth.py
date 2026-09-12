@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,9 +97,10 @@ def test_unbound_manager_is_ready_without_process_tenant():
         ready = client.get("/readyz")
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
-    connect.assert_called_once_with(
-        "postgresql://fake/fake", autocommit=True, connect_timeout=5,
-    )
+    assert connect.call_args_list == [
+        call("postgresql://fake/fake", autocommit=True, connect_timeout=5),
+        call("postgresql://admin/admin", autocommit=True, connect_timeout=5),
+    ]
 
 
 def test_resolve_tenant_ignores_host_headers():

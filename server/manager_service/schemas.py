@@ -637,16 +637,23 @@ class UsageRollupOut(BaseModel):
     rollup_id: str
     summary_id: str
     employee_id: str | None = None
+    member_id: str | None = Field(default=None, description="上报 Agent 的成员 ID；旧摘要缺失时为 null，不从当前请求推断。")
     window_start: datetime
     window_end: datetime
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Decimal("0")
+    cost_total: Decimal | None = Field(default=None, description="未知定价时为 null，不把未知费用表示为 0。")
     pricing_version: int | None = None
     pricing_status: Literal["known", "unknown"] = "unknown"
     currency: Literal["USD"] = "USD"
     error_count: int = 0
     duration_seconds_total: int = 0
+    prompt_count: int = Field(default=0, ge=0, description="Agent 摘要中的 prompt 执行计数。")
+    settled_count: int = Field(default=0, ge=0, description="Agent 摘要明确记录的成功计数。")
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_tokens: int = Field(default=0, ge=0)
+    duration_ms_total: int = Field(default=0, ge=0)
 
 
 class UsageAggregateOut(BaseModel):
@@ -657,7 +664,8 @@ class UsageAggregateOut(BaseModel):
     rollup_count: int
     run_count: int
     token_total: int
-    cost_total: Decimal
+    cost_total: Decimal | None
+    known_cost_total: Decimal | None = Field(default=None, description="已知价格摘要费用；未知定价不表示为零。")
     unknown_pricing_tokens: int = 0
     unknown_pricing_runs: int = 0
     error_count: int

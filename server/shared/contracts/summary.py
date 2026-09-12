@@ -13,7 +13,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _cost_total_json_schema(schema: dict[str, object]) -> None:
+    """Document the wire contract as decimal text or explicit null."""
+    schema.pop("type", None)
+    schema.pop("minimum", None)
+    schema["anyOf"] = [{"type": "string"}, {"type": "null"}]
 
 
 class UsageSummary(BaseModel):
@@ -28,12 +35,39 @@ class UsageSummary(BaseModel):
     window_end: datetime
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"), description="USD 总费用（至少 6 位小数）")
+    cost_total: Decimal | None = Field(
+        default=None,
+        ge=0,
+        description="USD 总费用；pricing_status=unknown 时必须为 null，避免把未知价格当作免费。",
+        json_schema_extra=_cost_total_json_schema,
+    )
     currency: Literal["USD"] = "USD"
     pricing_version: int | None = Field(default=None, ge=1)
     pricing_status: Literal["known", "unknown"] = "unknown"
     error_count: int = 0
     duration_seconds_total: int = 0
+
+    @field_validator("cost_total", mode="before")
+    @classmethod
+    def _reject_float_cost(cls, value):
+        """Require decimal strings/Decimal values at this cross-tier boundary.
+
+        Integer zero remains accepted for old payloads and is normalized to null
+        below when its pricing status is unknown. Floats are rejected because
+        their binary representation cannot be recovered after JSON decoding.
+        """
+        if isinstance(value, (bool, float)):
+            raise ValueError("cost_total must be a decimal string or Decimal")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_pricing_cost(self):
+        """Keep unknown pricing explicit and never serialize it as numeric zero."""
+        if self.pricing_status == "unknown":
+            self.cost_total = None
+        elif self.cost_total is None:
+            raise ValueError("known pricing requires cost_total")
+        return self
 
 
 class AuditSummaryEvent(BaseModel):

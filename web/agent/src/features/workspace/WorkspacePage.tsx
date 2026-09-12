@@ -15,6 +15,8 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 import { listConversations, type Conversation } from "./useWorkspaceApi";
+import { MessageSearch } from "./MessageSearch";
+import { WorkInsights } from "./WorkInsights";
 
 const RECENT_CONVERSATION_LIMIT = 8;
 
@@ -141,6 +143,10 @@ export function WorkspacePage() {
         </Card>
       </HStack>
 
+      <MessageSearch client={client} />
+
+      <WorkInsights client={client} />
+
       <Card padding={4} data-testid="workspace-recent">
         <VStack gap={3}>
           <HStack justify="between" align="center">
@@ -165,9 +171,12 @@ export function WorkspacePage() {
                         <DigitalEmployeeAvatar name={employee?.display_name ?? title} seed={employee?.employee_id ?? conversation.id} src={employee?.avatar_url} size={42} />
                         <VStack gap={0}>
                           <Text weight="semibold">{title}</Text>
-                          <Text type="supporting">{conversationType(conversation)} · {formatConversationTime(conversation.updated_at)}</Text>
+                          <Text type="supporting">{conversationType(conversation)} · {formatConversationTime(conversation.updated_at)}{conversation.last_preview ? ` · ${conversation.last_preview}` : ""}</Text>
                         </VStack>
-                        <Badge label={conversation.state} variant={isActiveConversation(conversation) ? "info" : "neutral"} />
+                        <VStack gap={1} align="end">
+                          <Badge label={conversation.state} variant={isActiveConversation(conversation) ? "info" : "neutral"} />
+                          {conversation.unread_count && conversation.unread_count > 0 ? <Badge label={`未读 ${conversation.unread_count}`} variant="warning" /> : null}
+                        </VStack>
                       </HStack>
                     </Link>
                   </VStack>

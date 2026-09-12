@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { Credential, CredentialInfo, CredentialStore, Model, Api } from "@earendil-works/pi-ai";
+import { encodeScope } from "../runtime-lease-cache.js";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
@@ -33,6 +35,23 @@ export interface RuntimePricingSnapshot {
   effective_from: string;
 }
 
+export function runtimeProviderId(input: {
+  managerOrigin: string;
+  tenantId: string;
+  memberId: string;
+  employeeId: string;
+  version: number | string;
+  providerRef?: string;
+  model?: string;
+  scope?: string;
+}): string {
+  const identity = encodeScope([
+    input.managerOrigin, input.tenantId, input.memberId, input.employeeId,
+    String(input.version), input.providerRef ?? "", input.model ?? "", input.scope ?? "",
+  ]);
+  return `aiteam:${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
+}
+
 export interface RuntimeModelCapabilities {
   context_window?: number;
   max_tokens?: number;
@@ -49,12 +68,21 @@ export interface RuntimeProviderConfig {
   provider_ref: string;
   pricing: RuntimePricingSnapshot;
   version: number;
+  /** Short-lived Manager grant metadata; never persisted to local projections. */
+  issued_at?: string;
+  expires_at?: string;
+  snapshot_version?: string;
+  policy_revision?: number;
   model_capabilities?: RuntimeModelCapabilities;
 }
 
 /** Register one Manager-authorized provider in memory and bind its runtime key. */
 export async function registerRuntimeProvider(runtime: ModelRuntime, config: RuntimeProviderConfig, providerId: string): Promise<Model<any>> {
   if (!config.base_url || !config.api_key || !config.model || !config.provider_ref) throw new Error("Manager runtime provider config is incomplete");
+  if (config.expires_at !== undefined) {
+    const expiresAt = typeof config.expires_at === "string" ? Date.parse(config.expires_at) : Number.NaN;
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error("Manager runtime provider config is expired");
+  }
   try {
     runtime.registerProvider(providerId, {
       name: config.provider_ref,

@@ -1,6 +1,8 @@
 /** Conversation view backed by persisted Pi entries and the live Pi SSE stream. */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DigitalEmployeeAvatar, type PiEntry, type PiEvent } from "@aiteam/shared";
+import { ApiError } from "@aiteam/shared/api-client";
+import { Banner } from "@astryxdesign/core/Banner";
 import { Card } from "@astryxdesign/core/Card";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import {
@@ -10,7 +12,8 @@ import {
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import type { AgentApiClient } from "../../lib/api-client";
-import { getConversationRuntimeState, getEntries, subscribePiEvents } from "./useChatApi";
+import { getConversationRuntimeState, getEntries, listApprovals, parsePiSseReconciliation, subscribePiEvents, type ApprovalRecord, type PiSseReceipt, type PiSseReconciliation } from "./useChatApi";
+import { ApprovalCard, approvalErrorMessage } from "./ApprovalCard";
 
 const MAX_TYPE_LENGTH = 80;
 const MAX_STATUS_LENGTH = 80;
@@ -24,6 +27,7 @@ const MAX_CITATIONS = 6;
 const MAX_UNKNOWN_JSON_LENGTH = 1_200;
 const MAX_OBJECT_KEYS = 16;
 const MAX_ARRAY_ITEMS = 12;
+export const MAX_LIVE_EVENTS = 256;
 const MAX_JSON_DEPTH = 3;
 const MAX_RESULT_PARSE_LENGTH = 12_000;
 const NON_CONVERSATION_ENTRY_TYPES = new Set(["model_change", "thinking_level_change", "session_info", "label"]);
@@ -101,6 +105,8 @@ export interface TimelineCardModel {
 export interface TimelineEventItem {
   id: string;
   event: PiEvent;
+  /** Raw SSE event name, retained for diagnostics and reconciliation routing. */
+  eventName?: string;
 }
 
 export type TimelineItem =
@@ -116,64 +122,194 @@ export interface TimelineExpertSource {
 export interface TimelineViewProps {
   client: AgentApiClient;
   conversationId: string;
+  /** Optional search定位 entry_ref; the Agent returns a page beginning at this entry. */
+  initialEntryRef?: string | null;
   refreshSignal?: number;
   onPromptingChange?: (prompting: boolean) => void;
+  /** Reconciliation may update the durable conversation state without a write. */
+  onConversationStateChange?: (state: string) => void;
+  /** Called after the local history has established a safe last_read_entry_id. */
+  onReadEntry?: (entryRef: string) => void;
   /** Current local employee projections used to decorate source messages. */
   sourceExperts?: TimelineExpertSource[];
 }
 
-export function TimelineView({ client, conversationId, refreshSignal = 0, onPromptingChange, sourceExperts = [] }: TimelineViewProps) {
+export function TimelineView({
+  client,
+  conversationId,
+  initialEntryRef = null,
+  refreshSignal = 0,
+  onPromptingChange,
+  onConversationStateChange,
+  onReadEntry,
+  sourceExperts = [],
+}: TimelineViewProps) {
   const [entries, setEntries] = useState<PiEntry[]>([]);
   const [events, setEvents] = useState<TimelineEventItem[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [receipts, setReceipts] = useState<PiSseReceipt[]>([]);
+  const [reconciledState, setReconciledState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const readEntryRef = useRef<string | null>(null);
+  const snapshotVersion = useRef(0);
 
   useEffect(() => {
     let alive = true;
+    let initialSnapshotLoaded = false;
+    snapshotVersion.current = 0;
+    readEntryRef.current = null;
     setEntries([]);
     setEvents([]);
+    setApprovals([]);
+    setApprovalError(null);
+    setReceipts([]);
+    setReconciledState(null);
     setLoading(true);
     setLoadError(null);
     setStreamError(null);
+
+    const mergeEntries = (next: PiEntry[], replace = false) => {
+      if (!alive) return;
+      const normalized = uniqueEntries(Array.isArray(next) ? next : []);
+      setEntries((current) => {
+        if (replace && snapshotVersion.current === 0 && current.length === 0) return normalized;
+        return mergePiEntries(current, normalized);
+      });
+      const entryRef = readableEntryRef(normalized);
+      if (entryRef && entryRef !== readEntryRef.current) {
+        readEntryRef.current = entryRef;
+        onReadEntry?.(entryRef);
+      }
+      setLoading(false);
+    };
+
+    const loadApprovals = async () => {
+      // Older test doubles and pre-S12 local builds do not publish this route;
+      // the real contract always exposes owner-scoped approval data.
+      let loader: typeof listApprovals | undefined;
+      try {
+        loader = listApprovals;
+      } catch {
+        return;
+      }
+      if (typeof loader !== "function") return;
+      try {
+        const next = await loader(client, conversationId);
+        if (!alive) return;
+        setApprovals(next);
+        setApprovalError(null);
+      } catch (cause) {
+        if (!alive) return;
+        // A pre-approval Agent returns its ordinary route 404; keep the legacy
+        // history view quiet. Contracted approval_not_found remains owner-safe.
+        if (cause instanceof ApiError && cause.status === 404 && cause.code !== "approval_not_found") return;
+        // Approval hydration is additive; a history view must remain usable when
+        // an owner-safe approval read races a rollout or auth change.
+        setApprovalError(approvalErrorMessage(cause));
+      }
+    };
+
+    const loadSnapshot = (replace = false) => {
+      const version = ++snapshotVersion.current;
+      void (initialEntryRef
+        ? getEntries(client, conversationId, initialEntryRef)
+        : getEntries(client, conversationId))
+        .then((next) => {
+          if (!alive) return;
+          // Reconciliation is authoritative for the fenced read, while an older
+          // in-flight response is merged rather than allowed to erase it.
+          mergeEntries(next, replace && !initialSnapshotLoaded);
+          initialSnapshotLoaded = true;
+          setLoadError(null);
+        })
+        .catch((cause: unknown) => {
+          if (!alive) return;
+          setLoadError(errorMessage(cause, "加载会话失败"));
+          setLoading(false);
+        });
+      void getConversationRuntimeState(client, conversationId)
+        .then((state) => {
+          if (!alive || version < snapshotVersion.current) return;
+          if (state) {
+            onPromptingChange?.(Boolean(state.prompting));
+            setReconciledState(state.state);
+            onConversationStateChange?.(state.state);
+          }
+        })
+        .catch(() => undefined);
+    };
+
+    const applyReconciliation = (reconciliation: PiSseReconciliation) => {
+      if (!alive || reconciliation.conversation_id !== conversationId) return;
+      snapshotVersion.current += 1;
+      mergeEntries(reconciliation.entries);
+      setReceipts((current) => mergeReceipts(current, reconciliation.receipts));
+      setReconciledState(reconciliation.state);
+      onConversationStateChange?.(reconciliation.state);
+      onPromptingChange?.(reconciliation.prompting);
+      setStreamError(null);
+      void loadApprovals();
+    };
 
     const subscription = subscribePiEvents(
       client,
       conversationId,
       (next) => {
         if (!alive) return;
-        const type = normalizeType(firstString(asRecord(next.event), "type") ?? "");
+        const eventType = normalizeType(firstString(asRecord(next.event), "type") ?? "");
+        const isReconciliation = next.eventName === "reconciliation" || eventType === "reconciliation";
+        const reconciliation = next.reconciliation
+          ?? (isReconciliation ? parseReconciliationSafely(next.event) : null);
+        if (isReconciliation) {
+          if (!reconciliation) setStreamError("事件流对账消息无效");
+          else applyReconciliation(reconciliation);
+          return;
+        }
+        const type = eventType;
         if (type === "agent_start") onPromptingChange?.(true);
-        else if (type === "agent_end" || type === "agent_settled") onPromptingChange?.(false);
+        else if (type === "agent_end" || type === "agent_settled") {
+          onPromptingChange?.(false);
+          // Durable entries/runtime/receipts close the gap when the terminal event
+          // races a response or arrives just before a reconnect.
+          loadSnapshot(false);
+        }
+        if (type === "approval_required") void loadApprovals();
         setEvents((current) => upsertEvent(current, next));
         setStreamError(null);
       },
       (cause) => {
         if (alive) setStreamError(errorMessage(cause, "事件流连接失败"));
       },
+      undefined,
+      {
+        onOpen: (info) => {
+          if (!alive) return;
+          setStreamError(null);
+          if (info?.reconnect) {
+            // Reconnects have a live SSE listener before this fenced owner-scoped
+            // re-read starts, so events arriving during reconciliation stay in the
+            // same bounded live buffer.
+            loadSnapshot(false);
+            void loadApprovals();
+          }
+        },
+      },
     );
 
-    void getConversationRuntimeState(client, conversationId)
-      .then((state) => { if (alive) onPromptingChange?.(Boolean(state?.prompting)); })
-      .catch(() => undefined);
-
-    void getEntries(client, conversationId)
-      .then((next) => {
-        if (!alive) return;
-        setEntries(uniqueEntries(Array.isArray(next) ? next : []));
-        setLoading(false);
-      })
-      .catch((cause: unknown) => {
-        if (!alive) return;
-        setLoadError(errorMessage(cause, "加载会话失败"));
-        setLoading(false);
-      });
+    // Initial reads are independent of SSE availability. A blocked/unavailable
+    // stream must not hide durable entries, runtime state, or pending approvals;
+    // only reconnects use the live-fence reload above.
+    loadSnapshot(true);
+    void loadApprovals();
 
     return () => {
       alive = false;
       subscription.close();
     };
-  }, [client, conversationId, onPromptingChange]);
+  }, [client, conversationId, initialEntryRef, onConversationStateChange, onPromptingChange, onReadEntry]);
 
   useEffect(() => {
     if (refreshSignal === 0) return;
@@ -181,8 +317,14 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     void getEntries(client, conversationId)
       .then((next) => {
         if (!alive) return;
-        setEntries(uniqueEntries(Array.isArray(next) ? next : []));
+        const normalized = uniqueEntries(Array.isArray(next) ? next : []);
+        setEntries((current) => mergePiEntries(current, normalized));
         setLoadError(null);
+        const entryRef = readableEntryRef(normalized);
+        if (entryRef && entryRef !== readEntryRef.current) {
+          readEntryRef.current = entryRef;
+          onReadEntry?.(entryRef);
+        }
       })
       .catch((cause: unknown) => {
         if (alive) setLoadError(errorMessage(cause, "加载会话失败"));
@@ -190,7 +332,26 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     return () => {
       alive = false;
     };
-  }, [client, conversationId, refreshSignal]);
+  }, [client, conversationId, onReadEntry, refreshSignal]);
+
+  const handleApprovalUpdated = useCallback((updated: ApprovalRecord) => {
+    setApprovals((current) => upsertApproval(current, updated));
+  }, []);
+  const refreshApprovals = useCallback(async () => {
+    let loader: typeof listApprovals | undefined;
+    try {
+      loader = listApprovals;
+    } catch {
+      return;
+    }
+    if (typeof loader !== "function") return;
+    try {
+      const next = await loader(client, conversationId);
+      setApprovals(next);
+    } catch {
+      // The decision component already reports the owner-safe error.
+    }
+  }, [client, conversationId]);
 
   const expertById = useMemo(
     () => new Map(sourceExperts.map((expert) => [expert.employee_id, expert])),
@@ -205,7 +366,7 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
     const itemKey = item.kind === "entry" ? `entry-${historyEntryIdentity(item.entry)}` : `event-${item.item.id || index}`;
     return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
   }));
-  const hasContent = visibleTimeline.length > 0;
+  const hasContent = visibleTimeline.length > 0 || approvals.length > 0 || receipts.length > 0;
   const visibleError = loadError ?? streamError;
 
   return (
@@ -213,6 +374,7 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
       ref={(node) => node?.setAttribute("aria-label", "对话事件流")}
       aria-label="对话事件流"
       data-testid="conversation-events"
+      data-reconciliation-state={reconciledState ?? undefined}
       emptyState={<EmptyState title={loading ? "加载中…" : visibleError ?? "暂无事件"} isCompact />}
     >
       {loading && !hasContent ? <span data-timeline-status="loading" role="status">加载中…</span> : null}
@@ -223,6 +385,20 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
           实时事件流离线：{streamError}
         </span>
       ) : null}
+      {approvalError ? <span data-testid="approval-list-error" role="alert">{approvalError}</span> : null}
+      {reconciledState ? <span data-testid="conversation-reconciliation-state" data-reconciliation-state={reconciledState} aria-hidden="true" /> : null}
+      {approvals.map((approval) => (
+        <ApprovalCard
+          key={`approval-${approval.id}`}
+          client={client}
+          approval={approval}
+          onUpdated={handleApprovalUpdated}
+          onRefresh={refreshApprovals}
+        />
+      ))}
+      {receipts.map((receipt) => (
+        <ReconciliationReceipt key={`receipt-${receipt.idempotency_key}`} receipt={receipt} />
+      ))}
       {visibleTimeline.map(({ model, key }) => {
         const source = model.sender === "assistant"
           ? resolveMessageSource(model, expertById)
@@ -241,6 +417,67 @@ export function TimelineView({ client, conversationId, refreshSignal = 0, onProm
       })}
       {!loading && !hasContent && loadError && !streamError ? <span role="alert">{loadError}</span> : null}
     </ChatMessageList>
+  );
+}
+
+function readableEntryRef(entries: PiEntry[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    const reference = typeof entry.entry_ref === "string" && entry.entry_ref ? entry.entry_ref : null;
+    if (!reference) continue;
+    const message = asRecord(entry.message);
+    const role = lower(firstString(message, "role"));
+    if (role === "user" || role === "assistant") return reference;
+  }
+  return null;
+}
+
+function mergePiEntries(current: PiEntry[], next: PiEntry[]): PiEntry[] {
+  const merged = [...current];
+  const positions = new Map<string, number>();
+  for (const [index, item] of merged.entries()) positions.set(historyEntryIdentity(item), index);
+  for (const item of next) {
+    const identity = historyEntryIdentity(item);
+    const existing = positions.get(identity);
+    if (existing === undefined) {
+      positions.set(identity, merged.length);
+      merged.push(item);
+    } else {
+      merged[existing] = item;
+    }
+  }
+  return uniqueEntries(merged);
+}
+
+export function mergeReconciliationEntries(current: PiEntry[], reconciliation: PiSseReconciliation): PiEntry[] {
+  return mergePiEntries(current, reconciliation.entries.slice(0, 64));
+}
+
+function mergeReceipts(current: PiSseReceipt[], next: PiSseReceipt[]): PiSseReceipt[] {
+  const merged = new Map(current.map((receipt) => [receipt.idempotency_key, receipt] as const));
+  for (const receipt of next.slice(0, 64)) merged.set(receipt.idempotency_key, receipt);
+  return [...merged.values()].slice(-64);
+}
+
+function upsertApproval(current: ApprovalRecord[], next: ApprovalRecord): ApprovalRecord[] {
+  const index = current.findIndex((approval) => approval.id === next.id);
+  if (index < 0) return [...current, next];
+  const updated = current.slice();
+  updated[index] = next;
+  return updated;
+}
+
+function ReconciliationReceipt({ receipt }: { receipt: PiSseReceipt }): ReactNode {
+  const status = receipt.state === "completed" ? "已完成" : receipt.state === "accepted" ? "已接收" : "结果未知";
+  const warning = receipt.state === "unknown";
+  const failure = receipt.failure_detail || receipt.failure_code;
+  return (
+    <Banner
+      data-testid={`reconciliation-receipt-${receipt.idempotency_key}`}
+      status={warning ? "warning" : "info"}
+      title={`提示收据：${status}`}
+      description={failure ? safeDisplayText(failure, MAX_DETAIL_LENGTH) : undefined}
+    />
   );
 }
 
@@ -599,7 +836,7 @@ export function upsertEvent(current: TimelineEventItem[], next: TimelineEventIte
       if (!isAgentLifecycleType(currentType) || eventScope(current[index]!) !== nextScope) continue;
       const updated = current.slice();
       updated[index] = { ...next, id: current[index]!.id };
-      return updated;
+      return trimLiveEvents(updated);
     }
   }
   const boundary = lastRunBoundary(current, nextScope);
@@ -613,17 +850,21 @@ export function upsertEvent(current: TimelineEventItem[], next: TimelineEventIte
       if (streamingEventKey(current[index]!) !== streamKey) continue;
       const updated = current.slice();
       updated[index] = mergeStreamingEvent(current[index]!, next);
-      return updated;
+      return trimLiveEvents(updated);
     }
   }
 
   const id = typeof next?.id === "string" ? next.id : "";
-  if (!id) return [...current, next];
+  if (!id) return trimLiveEvents([...current, next]);
   const index = current.findIndex((item) => item.id === id);
-  if (index < 0) return [...current, next];
+  if (index < 0) return trimLiveEvents([...current, next]);
   const updated = current.slice();
   updated[index] = next;
-  return updated;
+  return trimLiveEvents(updated);
+}
+
+function trimLiveEvents(events: TimelineEventItem[]): TimelineEventItem[] {
+  return events.length > MAX_LIVE_EVENTS ? events.slice(-MAX_LIVE_EVENTS) : events;
 }
 
 function isAgentLifecycleType(type: string): boolean {
@@ -1465,4 +1706,12 @@ function lower(value: string | null): string {
 
 function errorMessage(cause: unknown, fallback: string): string {
   return cause instanceof Error && cause.message ? cause.message : fallback;
+}
+
+function parseReconciliationSafely(value: unknown): PiSseReconciliation | null {
+  try {
+    return typeof parsePiSseReconciliation === "function" ? parsePiSseReconciliation(value) : null;
+  } catch {
+    return null;
+  }
 }

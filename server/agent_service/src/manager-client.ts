@@ -70,6 +70,8 @@ export interface ManagerOwnerResetInput {
 }
 
 export interface ManagerClient {
+  /** Stable Manager origin used to partition process-memory runtime material. */
+  managerOrigin?: string;
   resolveTenantByAccount?(account: string, enterprise?: string | null): Promise<unknown>;
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
@@ -94,7 +96,11 @@ export class ManagerAuthError extends Error {
 
 /** Thin Agent→Manager seam. It never turns transport failure into authorization. */
 export class HttpManagerClient implements ManagerClient {
-  constructor(private readonly baseUrl: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  readonly managerOrigin: string;
+
+  constructor(private readonly baseUrl: string, private readonly fetchImpl: typeof fetch = fetch) {
+    this.managerOrigin = new URL(baseUrl).origin;
+  }
 
   async resolveTenantByAccount(account: string, enterprise?: string | null): Promise<unknown> {
     return this.authRequest("/api/auth/resolve-tenant-by-account", { account, ...(enterprise ? { enterprise } : {}) });
@@ -111,6 +117,7 @@ export class HttpManagerClient implements ManagerClient {
   private async authRequest(path: string, body: unknown): Promise<unknown> {
     const response = await this.fetchImpl(new URL(path, this.baseUrl).toString(), {
       method: "POST",
+      signal: AbortSignal.timeout(10_000),
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -219,6 +226,7 @@ export class HttpManagerClient implements ManagerClient {
     try {
       response = await this.fetchImpl(url.toString(), {
         method: requestMethod,
+        signal: AbortSignal.timeout(10_000),
         headers: {
           Accept: "application/json",
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -233,9 +241,9 @@ export class HttpManagerClient implements ManagerClient {
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
       const detail = await readManagerProblemDetail(response);
-      throw new ManagerUnavailableError(
-        `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`,
-      );
+      const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
+      if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
+      throw new ManagerUnavailableError(message);
     }
     return response;
   }
@@ -271,6 +279,21 @@ export class ManagerAuthorizationError extends ManagerUnavailableError {
     super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied");
     this.name = "ManagerAuthorizationError";
   }
+}
+
+/** A revoked, disabled, or policy-denied runtime grant must never use an old cache entry. */
+export class ManagerPolicyDeniedError extends ManagerUnavailableError {
+  constructor(readonly status: 404 | 409, message = "Manager runtime policy denied the request") {
+    super(message);
+    this.name = "ManagerPolicyDeniedError";
+  }
+}
+
+export function isManagerAccessDenial(error: unknown): boolean {
+  if (error instanceof ManagerAuthorizationError || error instanceof ManagerPolicyDeniedError) return true;
+  const status = (error as { status?: unknown } | undefined)?.status;
+  if (status === 401 || status === 403 || status === 404) return true;
+  return /\b(?:401|403|404)\b/u.test(error instanceof Error ? error.message : String(error));
 }
 
 export function normalizeAuthorizedConfig(value: unknown, tenantId?: string, memberId?: string): AuthorizedConfig {
@@ -493,7 +516,7 @@ export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderC
   const raw = value as Record<string, unknown>;
   // Legacy Manager responses may still contain release fields. They are
   // compatibility input only and are never retained in Agent state.
-  const allowed = new Set(["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities"]);
+  const allowed = new Set(["base_url", "api_protocol", "api_key", "model", "provider_ref", "provider_version", "model_version", "pricing", "version", "model_capabilities", "issued_at", "expires_at", "snapshot_version", "policy_revision"]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid runtime provider config");
   if (["base_url", "api_key", "model", "provider_ref"].some((key) => typeof raw[key] !== "string" || raw[key] === "")) throw new ManagerUnavailableError("Manager returned an incomplete runtime provider config");
   let relayUrl: URL;
@@ -505,6 +528,13 @@ export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderC
   }
   if (raw.api_protocol !== "openai-completions" && raw.api_protocol !== "openai-responses" && raw.api_protocol !== "anthropic-messages") throw new ManagerUnavailableError("Manager returned an invalid runtime provider protocol");
   if (typeof raw.version !== "number" || !Number.isInteger(raw.version) || raw.version < 1) throw new ManagerUnavailableError("Manager returned an invalid runtime access version");
+  for (const key of ["issued_at", "expires_at"] as const) {
+    if (raw[key] !== undefined && (typeof raw[key] !== "string" || !Number.isFinite(Date.parse(raw[key] as string)))) throw new ManagerUnavailableError("Manager returned invalid runtime lease expiry");
+  }
+  if (raw.issued_at !== undefined && raw.expires_at !== undefined && Date.parse(raw.expires_at as string) <= Date.parse(raw.issued_at as string)) throw new ManagerUnavailableError("Manager returned invalid runtime lease expiry");
+  if (raw.expires_at !== undefined && Date.parse(raw.expires_at as string) <= Date.now()) throw new ManagerUnavailableError("Manager returned an expired runtime lease");
+  if (raw.snapshot_version !== undefined && (typeof raw.snapshot_version !== "string" || raw.snapshot_version.length === 0 || raw.snapshot_version.length > 256)) throw new ManagerUnavailableError("Manager returned invalid runtime snapshot version");
+  if (raw.policy_revision !== undefined && (typeof raw.policy_revision !== "number" || !Number.isSafeInteger(raw.policy_revision) || raw.policy_revision < 1)) throw new ManagerUnavailableError("Manager returned invalid runtime policy revision");
   const capabilities = normalizeRuntimeModelCapabilities(raw.model_capabilities);
   const normalized = { ...raw };
   delete normalized.provider_version;

@@ -21,7 +21,7 @@ from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
 from .routes_admin import build_admin_router
-from .platform_provider_service import newapi_urls
+from .platform_provider_service import install_relay_token_lifecycle_lifespan, newapi_urls
 
 # 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
 # 从该表加载/落库——故迁移必须先于 build_operation_auth_service 执行（fail-fast；/readyz 绿
@@ -88,3 +88,8 @@ app.include_router(skill_market_router)
 app.include_router(build_admin_router(_verifier))
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
 mount_frontend(app, settings.tier)
+# Operation has no separate maintenance process yet; run bounded Relay receipt
+# recovery only when the durable Operation database is configured.  NewAPI
+# outages never make /readyz fail and are handled by receipt backoff.
+if settings.db_url and settings.admin_db_url:
+    install_relay_token_lifecycle_lifespan(app)

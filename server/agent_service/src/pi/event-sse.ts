@@ -109,6 +109,13 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     if (message) result.message = message;
   } else if (raw.type === "agent_end") {
     if (Array.isArray(raw.messages)) result.message_count = Math.min(raw.messages.length, MAX_ARRAY_ITEMS);
+    copyBoolean(result, raw, "failed");
+    copyIdentifier(result, raw, "error_code");
+    copyText(result, raw, "error_message");
+  } else if (raw.type === "agent_settled") {
+    copyBoolean(result, raw, "failed");
+    copyIdentifier(result, raw, "error_code");
+    copyText(result, raw, "error_message");
   } else if (raw.type === "auto_retry_start") {
     copyInteger(result, raw, "attempt");
     copyInteger(result, raw, "maxAttempts");
@@ -127,6 +134,14 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     copyText(result, raw, "errorMessage");
   } else if (raw.type === "approval_required") {
     copyIdentifier(result, raw, "toolCallId");
+    copyIdentifier(result, raw, "approvalId");
+    copyIdentifier(result, raw, "approval_id");
+    copyIdentifier(result, raw, "approvalBatchId");
+    copyIdentifier(result, raw, "argsHash");
+    copyInteger(result, raw, "decisionRevision");
+    copyText(result, raw, "expiresAt");
+    copyText(result, raw, "summary");
+    copyText(result, raw, "riskLevel");
     copyToolName(result, raw);
     const kind = classifyToolKind(raw.toolName);
     if (kind) result.tool_kind = kind;

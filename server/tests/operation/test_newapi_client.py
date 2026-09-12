@@ -433,6 +433,79 @@ def test_newapi_client_uses_server_management_identity_and_normalizes_models():
     assert seen["headers"]["new-api-user"] == "1"
 
 
+def test_newapi_client_reads_full_key_from_verified_token_detail():
+    paths = []
+
+    def handler(request: httpx.Request):
+        paths.append((request.method, request.url.path))
+        if request.url.path == "/api/token/7":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 7, "status": 1, "expired_time": -1,
+                "model_limits_enabled": True, "model_limits": "m1", "key": "relay-key",
+            }})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "relay"}]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10) == (7, "sk-relay-key")
+    assert ("GET", "/api/token/7") in paths
+    assert not any(path.endswith("/key") for _, path in paths)
+
+
+def test_newapi_client_rejects_masked_verified_token_key():
+    def handler(request: httpx.Request):
+        if request.url.path == "/api/token/7":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 7, "status": 1, "expired_time": -1,
+                "model_limits_enabled": True, "model_limits": "m1", "key": "sk-********",
+            }})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "relay"}]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    with pytest.raises(NewApiError, match="full relay token key"):
+        client.create_relay_token(dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10)
+
+
+def test_newapi_existing_name_requires_complete_detail_metadata():
+    def handler(request: httpx.Request):
+        if request.url.path == "/api/token/7":
+            return httpx.Response(200, json={"success": True, "data": {"id": 7, "key": "full-key"}})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "relay"}]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    with pytest.raises(NewApiError, match="invalid status"):
+        client.create_relay_token(
+            dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10,
+        )
+
+
+def test_newapi_post_create_metadata_mismatch_carries_exact_id():
+    def handler(request: httpx.Request):
+        if request.method == "POST":
+            return httpx.Response(200, json={"success": True})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{
+            "id": 8, "name": "relay", "status": 2, "expired_time": -1,
+            "model_limits_enabled": True, "model_limits": "m1",
+        }]}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    with pytest.raises(NewApiError, match="not enabled") as exc_info:
+        client.create_relay_token(
+            dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10,
+        )
+    assert exc_info.value.token_id == 8
+
+
+def test_newapi_client_reads_recorded_token_beyond_first_page():
+    def handler(request: httpx.Request):
+        if request.url.params["p"] == "1":
+            items = [{"id": i, "name": f"token-{i}"} for i in range(100)]
+            return httpx.Response(200, json={"success": True, "data": {"items": items, "total": 101}})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 900, "name": "recorded"}], "total": 101}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.get_relay_token(dashboard_token="dashboard", user_id=2, token_id=900)["name"] == "recorded"
+
+
 def test_newapi_client_rejects_missing_configured_models():
     client = NewApiAdminClient(
         "http://newapi.test", "admin-pat", "1",
@@ -447,14 +520,64 @@ def test_newapi_relay_token_reuses_existing_deterministic_name_without_posting_a
 
     def handler(request: httpx.Request):
         calls.append((request.method, request.url.path))
-        if request.method == "GET":
-            return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "aiteam-tenant-v1"}]}})
-        assert request.method == "POST" and request.url.path == "/api/token/7/key"
-        return httpx.Response(200, json={"success": True, "data": {"key": "relay-key"}})
+        if request.method == "GET" and request.url.path == "/api/token/7":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 7, "status": 1, "expired_time": -1,
+                "model_limits_enabled": True, "model_limits": "m1", "key": "relay-key",
+            }})
+        assert request.method == "GET" and request.url.path == "/api/token/"
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "aiteam-tenant-v1"}]}})
 
     client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
     assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="aiteam-tenant-v1", model_ids=["m1"], remain_quota=10) == (7, "sk-relay-key")
     assert ("POST", "/api/token/") not in calls
+
+
+def test_newapi_reconcile_relay_token_never_posts_after_an_unknown_create():
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request):
+        calls.append((request.method, request.url.path))
+        if request.method == "GET" and request.url.path == "/api/token/":
+            return httpx.Response(200, json={"success": True, "data": {"items": [{
+                "id": 7,
+                "name": "relay",
+                "status": 1,
+                "expired_time": -1,
+                "model_limits_enabled": True,
+                "model_limits": "m1",
+            }]}})
+        if request.method == "GET" and request.url.path == "/api/token/7":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 7,
+                "status": 1,
+                "expired_time": -1,
+                "model_limits_enabled": True,
+                "model_limits": "m1",
+                "key": "relay-key",
+            }})
+        raise AssertionError((request.method, request.url.path))
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.reconcile_relay_token(
+        dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], expired_time=-1,
+    ) == (7, "sk-relay-key")
+    assert ("POST", "/api/token/") not in calls
+
+
+def test_newapi_find_user_reconciles_all_bounded_search_pages():
+    pages: list[str] = []
+
+    def handler(request: httpx.Request):
+        pages.append(request.url.params["p"])
+        if request.url.params["p"] == "1":
+            items = [{"id": index, "username": f"other-{index}"} for index in range(20)]
+            return httpx.Response(200, json={"success": True, "data": {"items": items, "total": 21}})
+        return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 11, "username": "target"}], "total": 21}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.find_user("target") == {"id": 11, "username": "target"}
+    assert pages == ["1", "2"]
 
 
 def test_newapi_relay_token_polls_after_create_without_retrying_post():
@@ -466,11 +589,19 @@ def test_newapi_relay_token_polls_after_create_without_retrying_post():
         calls.append((request.method, request.url.path))
         if request.method == "POST" and request.url.path == "/api/token/":
             return httpx.Response(200, json={"success": True})
-        if request.method == "GET":
+        if request.method == "GET" and request.url.path == "/api/token/":
             list_count += 1
-            items = [] if list_count < 3 else [{"id": 8, "name": "aiteam-tenant-v1"}]
+            items = [] if list_count < 3 else [{
+                "id": 8, "name": "aiteam-tenant-v1", "status": 1,
+                "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1",
+            }]
             return httpx.Response(200, json={"success": True, "data": {"items": items}})
-        return httpx.Response(200, json={"success": True, "data": {"key": "created-key"}})
+        if request.method == "GET" and request.url.path == "/api/token/8":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 8, "status": 1, "expired_time": -1,
+                "model_limits_enabled": True, "model_limits": "m1", "key": "created-key",
+            }})
+        raise AssertionError((request.method, request.url.path))
 
     client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
     assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="aiteam-tenant-v1", model_ids=["m1"], remain_quota=10) == (8, "sk-created-key")
@@ -527,3 +658,161 @@ def test_newapi_client_rejects_oversized_responses():
     )
     with pytest.raises(NewApiError, match="2 MiB"):
         client.pricing()
+
+
+def test_newapi_lifecycle_update_preserves_upstream_quota_and_never_sends_key():
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append(request)
+        if request.method == "GET" and request.url.path == "/api/token/9":
+            return httpx.Response(200, json={"success": True, "data": {
+                "id": 9, "name": "relay", "status": 1, "remain_quota": 321,
+                "used_quota": 654, "expired_time": 100, "unlimited_quota": False,
+                "model_limits_enabled": True, "model_limits": "m1", "allow_ips": "",
+                "group": "default", "cross_group_retry": False,
+            }})
+        if request.method == "GET":
+            return httpx.Response(200, json={"success": True, "data": {"items": [{
+                "id": 9, "name": "relay", "status": 1, "remain_quota": 321,
+                "used_quota": 654, "expired_time": 100, "model_limits_enabled": True,
+                "model_limits": "m1", "allow_ips": "", "group": "default",
+            }]}})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    client.update_relay_token(dashboard_token="dashboard", user_id=2, token_id=9, model_ids=["m2"], expired_time=200)
+
+    payload = json.loads(requests[-1].content)
+    assert requests[-1].method == "PUT"
+    assert requests[-1].url.path == "/api/token/"
+    assert payload["remain_quota"] == 321
+    assert payload["model_limits"] == "m2"
+    assert "key" not in payload
+    assert "dashboard" not in requests[-1].content.decode()
+
+
+def test_newapi_create_never_reuses_unrestricted_deterministic_token():
+    client = NewApiAdminClient(
+        "http://newapi.test", "admin", "1",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=(
+            {"success": True, "data": {"id": 9, "status": 1, "expired_time": 200,
+                                      "model_limits_enabled": False, "model_limits": "", "key": "relay"}}
+            if request.url.path == "/api/token/9"
+            else {"success": True, "data": {"items": [{"id": 9, "name": "relay", "status": 1,
+                                                         "expired_time": 200, "model_limits_enabled": False,
+                                                         "model_limits": ""}]}}
+        ))),
+    )
+    with pytest.raises(NewApiError, match="unrestricted model scope"):
+        client.create_relay_token(
+            dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10,
+            expired_time=200,
+        )
+
+
+def test_newapi_lifecycle_revoke_disable_and_delete_use_proven_routes():
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 9, "name": "relay", "status": 1}]}})
+        return httpx.Response(200, json={"success": True, "data": {}})
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    assert client.revoke_relay_token(dashboard_token="dashboard", user_id=2, token_id=9) is True
+    assert client.delete_relay_token(dashboard_token="dashboard", user_id=2, token_id=9) is True
+
+    assert requests[1].method == "PUT"
+    assert requests[1].url.path == "/api/token/"
+    assert requests[1].url.params["status_only"] == "true"
+    assert json.loads(requests[1].content) == {"id": 9, "status": 2}
+    assert requests[3].method == "DELETE"
+    assert requests[3].url.path == "/api/token/9"
+
+
+def test_newapi_client_rejects_invalid_search_quota_and_token_shapes(monkeypatch):
+    client = NewApiAdminClient("http://newapi.test", "admin", "1")
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {"success": True, "data": {"items": ["bad"]}})
+    with pytest.raises(NewApiError, match="invalid user search"):
+        client.find_user("target")
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {"success": True, "data": {"items": [], "total": "bad"}})
+    with pytest.raises(NewApiError, match="invalid user search total"):
+        client.find_user("target")
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {"success": True, "data": {"quota": -1}})
+    with pytest.raises(NewApiError, match="invalid tenant quota"):
+        client.get_user_quota(dashboard_token="dashboard", user_id=1)
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {"success": True, "data": {"items": ["bad"]}})
+    with pytest.raises(NewApiError, match="invalid token list"):
+        client.list_relay_tokens(dashboard_token="dashboard", user_id=1)
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: {"success": True, "data": {"items": [], "total": "bad"}})
+    with pytest.raises(NewApiError, match="invalid token list total"):
+        client.list_relay_tokens(dashboard_token="dashboard", user_id=1)
+
+
+def test_newapi_client_rejects_invalid_login_token_detail_and_keys(monkeypatch):
+    client = NewApiAdminClient("http://newapi.test", "admin", "1")
+    for response in ({"success": True, "data": {}}, {"success": True, "data": {"user": {"id": 1}, "access_token": ""}}):
+        client._request = lambda *_args, response=response, **_kwargs: response
+        with pytest.raises(NewApiError, match="invalid session"):
+            client.login("u", "p")
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 8}}
+    with pytest.raises(NewApiError, match="mismatched relay token id"):
+        client.get_relay_token_detail(dashboard_token="dashboard", user_id=1, token_id=7)
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 7, "status": 1, "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1", "key": "*masked"}}
+    with pytest.raises(NewApiError, match="full relay token key"):
+        client.get_relay_token_key(dashboard_token="dashboard", user_id=1, token_id=7)
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 7, "status": 1, "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1", "key": "full"}}
+    assert client.get_relay_token_key(dashboard_token="dashboard", user_id=1, token_id=7) == "sk-full"
+
+
+def test_newapi_client_reconciles_missing_disabled_and_delete_states(monkeypatch):
+    client = NewApiAdminClient("http://newapi.test", "admin", "1")
+    monkeypatch.setattr(client, "get_relay_token", lambda **_kwargs: None)
+    assert client.revoke_relay_token(dashboard_token="d", user_id=1, token_id=9) is False
+    assert client.delete_relay_token(dashboard_token="d", user_id=1, token_id=9) is False
+    monkeypatch.setattr(client, "get_relay_token", lambda **_kwargs: {"id": 9, "status": 2})
+    assert client.revoke_relay_token(dashboard_token="d", user_id=1, token_id=9) is False
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: (_ for _ in ()).throw(NewApiError("HTTP 404")))
+    with pytest.raises(NewApiError, match="HTTP 404"):
+        client.delete_relay_token(dashboard_token="d", user_id=1, token_id=9)
+    assert client.delete_relay_token(dashboard_token="d", user_id=1, token_id=9, missing_ok=True) is False
+
+
+def test_newapi_client_static_metadata_helpers_cover_all_formats():
+    client = NewApiAdminClient("http://newapi.test", "admin", "1")
+    assert client._model_limits("m1,m2") == "m1,m2"
+    assert client._model_limits(["m1", "", 2]) == "m1,2"
+    assert client._model_limits({"m1": True, "m2": False}) == "m1"
+    assert client._model_limits(None) == ""
+    assert client._token_id({"id": "7"}) == 7
+    assert client._token_id({"id": "bad"}) is None
+    assert client._matching_token([], "x") is None
+    with pytest.raises(NewApiError, match="ambiguous"):
+        client._matching_token([{"id": 2, "name": "x"}, {"id": 1, "name": "x"}], "x")
+    assert client._has_complete_token_metadata({"status": 1, "expired_time": -1, "model_limits_enabled": True, "model_limits": "m"})
+    assert not client._has_complete_token_metadata({"status": 1})
+    with pytest.raises(NewApiError, match="invalid status"):
+        client._validate_token_metadata({}, model_ids=["m"], expired_time=-1)
+    with pytest.raises(NewApiError, match="no model scope"):
+        client._validate_token_metadata({"status": 1, "model_limits_enabled": True, "model_limits": None, "expired_time": -1}, model_ids=["m"], expired_time=-1)
+    with pytest.raises(NewApiError, match="scope does not match"):
+        client._validate_token_metadata({"status": 1, "model_limits_enabled": True, "model_limits": "m2", "expired_time": -1}, model_ids=["m"], expired_time=-1)
+    with pytest.raises(NewApiError, match="expiry"):
+        client._validate_token_metadata({"status": 1, "model_limits_enabled": True, "model_limits": "m", "expired_time": -1}, model_ids=["m"], expired_time=100)
+
+
+def test_newapi_lifecycle_transport_failure_is_unknown_not_replayed():
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(request.method)
+        raise httpx.ReadTimeout("simulated")
+
+    client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
+    with pytest.raises(NewApiError, match="outcome is unknown"):
+        client.delete_relay_token(dashboard_token="dashboard", user_id=2, token_id=9)
+    # Reconciliation fails before DELETE, so the uncertain operation is never
+    # blindly replayed.
+    assert calls == ["GET"]

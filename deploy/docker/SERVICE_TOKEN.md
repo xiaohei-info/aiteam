@@ -1,193 +1,116 @@
-# SERVICE_TOKEN 配置指南
+# Service identity / SERVICE_TOKEN 配置指南
 
 ## 概述
 
-`SERVICE_TOKEN` 是跨端服务间调用的共享密钥（平面③ 代码层守卫，CLAUDE.md §3 / 03 §9.1），用于以下场景：
+生产 Operator↔Manager 服务调用使用每请求短期 RS256 service assertion（`Authorization: Bearer <assertion>`）。断言绑定 issuer/subject、deployment、audience、purpose/scope、企业/tenant target、请求 path/body 和 `jti`，由接收端的本地 trust manifest 验证。
 
-- **Operator → Manager**：运营端调用企业端开通 tenant、bootstrap 负责人凭据
-- **Agent → Manager**：用户端使用当前用户 bearer token 主动 pull 配置、上报治理摘要；不注入 SERVICE_TOKEN
+`SERVICE_TOKEN` 只保留为明确的 dev/test 兼容输入：production 永不接受 `X-Service-Token`，也不会把可伪造的 `X-Service-Identity` 当作身份。Agent 不注入 `SERVICE_TOKEN`。
 
 ## 安全模式
 
-### Dev 模式（显式占位值）
+### Dev / test 兼容模式
 
-适用于**本地开发**环境，便于快速迭代。
-
-**判定条件**：仅当 `AITEAM_ENV=dev` 或 `AITEAM_ENV=development` 且明确使用 `dev-service-token-placeholder`。
-未配置 token、使用其它 `dev-*` 值或 production 使用占位值都不会进入此模式。
-
-**行为**：
-- 未携带 token 的请求会被**放行**（仅日志警告）
-- 携带错误 token 的请求会被**拒绝**（便于测试 token 校验逻辑）
-- `AITEAM_ENV=test`、缺失环境标记或 production 使用占位值都 fail-closed；test 必须配置并携带真实 `SERVICE_TOKEN`
+- `AITEAM_ENV=dev|development` 可以明确使用 `SERVICE_TOKEN=dev-service-token-placeholder`（开发占位值仅按既有兼容规则降级）。
+- `AITEAM_ENV=test` 可以使用测试专用 shared token；占位值仍 fail-closed。
+- 设置 `SERVICE_AUTH_MODE=signed` 可在 dev/test 强制使用隔离测试 key 的 signed assertion；不会自动回退 shared token。
 
 ### 生产模式（fail-closed）
 
-适用于**生产部署**环境，严格校验服务身份。
+生产必须由 `scripts/ctl.sh start --env prod` 验证并向每个控制面注入独立的 `*_SERVICE_IDENTITY_*` signer/trust 配置：
 
-**判定条件**：
-- `SERVICE_TOKEN` 配置了非 dev 占位值的强密钥；或 production 使用了 dev 占位值（该配置直接拒绝）
+- `SERVICE_AUTH_MODE=signed`
+- signer：`SERVICE_IDENTITY_PRIVATE_KEY`、`SERVICE_IDENTITY_KEY_ID`、`SERVICE_IDENTITY_ISSUER`、`SERVICE_IDENTITY_AUDIENCE`、`SERVICE_IDENTITY_ORIGIN`、`SERVICE_IDENTITY_DEPLOYMENT_ID`
+- receiver trust manifest：每个 key 的 public key、issuer、subject、deployment、active/next status、validity/revocation、audiences、HTTPS origins、scopes 和 exact target bindings；fresh F01 additionally requires non-wildcard `provisioning_capabilities=["provision-enterprise"]`
+- `SERVICE_IDENTITY_SINGLE_INSTANCE=true`，直到部署方提供有界共享 replay store；当前实现不会把进程内 replay cache 宣称为多实例安全
+- peer URL 必须是显式 HTTPS URL；redirect/userinfo/query/fragment 不得进入服务目标
 
-**行为**：
-- 所有服务间调用必须携带正确的 `X-Service-Token` 或 `Authorization: Bearer <token>`
-- 未配置或 token 不匹配时返回 `401 Unauthorized`
-- **生产模式未配置 SERVICE_TOKEN 时 fail-closed**：拒绝所有服务间调用
+缺失、格式错误、过期/撤销 key、未登记 origin/target、错误 audience/scope 或 legacy header 均 fail-closed（401/403）。
 
 ## 配置步骤
 
-### 1. 生成强密钥
+### 1. 生成并登记非对称密钥
 
-使用 OpenSSL 生成 256 位（32 字节）随机密钥：
-
-```bash
-openssl rand -hex 32
-```
-
-输出示例（不要把真实输出提交到仓库）：
-```
-<generated-secret>
-```
+由部署方/KMS 为每个 Operation、Manager deployment 生成独立 RSA private key，并登记对应 public key、`kid`、issuer、subject、deployment ID、validity/status/revocation、audience、HTTPS origin、scopes 和 exact target bindings。private key 只通过受控 secret injection 进入签发端；不要把 key、企业映射或 trust manifest 的真实内容提交到仓库。
 
 ### 2. 配置环境变量
 
-#### Docker Compose 部署
-
-不要把密钥硬编码进 `deploy/docker/docker-compose.yml`。将生成值放入宿主机 mode-600 `.env.prod`/secret store；Compose 仅通过 `${SERVICE_TOKEN:-dev-service-token-placeholder}` 插值，`AITEAM_ENV=test` 也必须显式提供非占位 token，`ctl.sh` 会在 production start 前拒绝缺失、占位或过短值，并只注入 Operation/Manager。Agent 不接收 `SERVICE_TOKEN`。
-
-**重要**：Operation 与 Manager 必须使用**相同的 SERVICE_TOKEN**；Agent 不属于该服务间控制面。
-
-#### 环境变量部署
-
-直接在宿主环境中设置：
+`.env.prod`/secret store 至少需要按端提供以下形状（`scripts/ctl.sh` 支持 `MANAGER_` / `OPERATION_` 前缀并注入为本端通用变量）：
 
 ```bash
-export SERVICE_TOKEN="<generated-secret>"
+MANAGER_SERVICE_AUTH_MODE=signed
+MANAGER_SERVICE_IDENTITY_PRIVATE_KEY=<escaped PEM, secret store only>
+MANAGER_SERVICE_IDENTITY_KEY_ID=<registered kid>
+MANAGER_SERVICE_IDENTITY_ISSUER=https://manager.example.com/service-issuer
+MANAGER_SERVICE_IDENTITY_AUDIENCE=aiteam-manager-service
+MANAGER_SERVICE_IDENTITY_PEER_AUDIENCE=aiteam-operation-service
+MANAGER_SERVICE_IDENTITY_ORIGIN=https://manager.example.com
+MANAGER_SERVICE_IDENTITY_DEPLOYMENT_ID=<registered deployment id>
+MANAGER_SERVICE_IDENTITY_TRUST_JSON=<manifest for accepted Operation keys>
+MANAGER_SERVICE_IDENTITY_SINGLE_INSTANCE=true
+
+OPERATION_SERVICE_AUTH_MODE=signed
+OPERATION_SERVICE_IDENTITY_PRIVATE_KEY=<escaped PEM, secret store only>
+OPERATION_SERVICE_IDENTITY_KEY_ID=<registered kid>
+OPERATION_SERVICE_IDENTITY_ISSUER=https://operation.example.com/service-issuer
+OPERATION_SERVICE_IDENTITY_AUDIENCE=aiteam-operation-service
+OPERATION_SERVICE_IDENTITY_PEER_AUDIENCE=aiteam-manager-service
+OPERATION_SERVICE_IDENTITY_ORIGIN=https://operation.example.com
+OPERATION_SERVICE_IDENTITY_DEPLOYMENT_ID=<registered deployment id>
+OPERATION_SERVICE_IDENTITY_TRUST_JSON=<manifest for accepted Manager keys>
+OPERATION_SERVICE_IDENTITY_SINGLE_INSTANCE=true
+
+MANAGER_URL=https://manager.example.com
+OPERATOR_URL=https://operation.example.com
 ```
 
-#### Kubernetes 部署
-
-使用 Secret 管理：
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: aiteam-service-token
-type: Opaque
-stringData:
-  SERVICE_TOKEN: <generated-secret>
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aiteam-operation
-spec:
-  template:
-    spec:
-      containers:
-      - name: operation
-        env:
-        - name: SERVICE_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: aiteam-service-token
-              key: SERVICE_TOKEN
-```
+`SERVICE_TOKEN` 不再是生产凭据；若保留，只能作为 dev/test 兼容输入。Agent 不接收它。生产控制面使用单实例 replay gate；扩容前必须先批准并实现有界共享 replay 机制。
 
 ### 3. 密钥轮换
 
-生产环境应定期轮换 SERVICE_TOKEN（建议至少每 90 天）：
-
-1. 生成新密钥
-2. 更新 Operation 与 Manager 的 `.env.prod`/secret store 配置（Agent 不接收该 token）
-3. 重启服务（可使用滚动更新策略）
-4. 验证跨端调用正常
-5. 销毁旧密钥
+1. 通过受控管理渠道预装 next public key/status/validity/trust binding。
+2. 切换签发端 `kid`，保持短暂重叠窗口并验证 audience/origin/scope/target。
+3. 撤销旧 key、清理旧 trust registration，并确认旧 assertion 被拒绝。
+4. 任何企业↔tenant↔Manager deployment mapping 变更都必须显式登记；不能由业务请求自动学习。
 
 ## 验证
 
 ### 本地验证
 
-启动服务后，检查日志：
-
-**Dev 模式**（使用占位值）：
-```
-WARNING: SERVICE_TOKEN 使用 dev 占位值（dev-service-token-placeholder），服务间调用无真实校验。
-生产环境必须替换为强密钥（见 deploy/docker/SERVICE_TOKEN.md）
-```
-
-**生产模式**（使用强密钥）：
-无警告日志，服务间调用需携带正确 token。
+- Dev/test compatibility may emit the explicit shared-token warning.
+- Production startup must pass the signed identity checks in `scripts/ctl.sh`; missing/malformed signer or trust manifest stops before writers start.
+- Inspect only non-secret status/health logs. Do not print assertions, private keys, trust JSON, bootstrap secrets, or full request headers.
 
 ### 跨端调用测试
 
-#### 正确 token（应成功）
-
-```bash
-curl -X POST http://localhost:8002/api/manager/internal/test \
-  -H "X-Service-Token: <your-strong-token>" \
-  -H "Content-Type: application/json"
-```
-
-#### 错误 token（应返回 401）
-
-```bash
-curl -X POST http://localhost:8002/api/manager/internal/test \
-  -H "X-Service-Token: wrong-token" \
-  -H "Content-Type: application/json"
-```
-
-#### 无 token（生产模式应返回 401）
-
-```bash
-curl -X POST http://localhost:8002/api/manager/internal/test \
-  -H "Content-Type: application/json"
-```
+Production requests are generated by `shared/service_client`; do not hand-copy a bearer assertion. The receiver must reject a shared header, a forgeable identity label, wrong audience/scope/target/origin, expired/revoked key, path/body mismatch, replayed `jti`, and any redirect response. Use the isolated generated-key contract tests for deterministic coverage; real production keys/mappings belong in the deployment trust-registration channel.
 
 ## 安全最佳实践
 
-1. **密钥强度**：使用至少 256 位随机密钥（`openssl rand -hex 32`）
-2. **密钥隔离**：不同部署环境（dev/staging/prod）使用不同密钥
-3. **传输安全**：生产环境必须配合 TLS/HTTPS 使用（防止中间人攻击）
-4. **密钥存储**：
-   - 不要将生产密钥提交到版本控制系统
-   - 使用 Secret 管理工具（Kubernetes Secret / AWS Secrets Manager / HashiCorp Vault）
-   - 限制密钥访问权限（最小权限原则）
-5. **密钥轮换**：定期更换密钥（建议至少每 90 天）
-6. **审计日志**：监控服务间调用失败（可能是密钥泄露或攻击迹象）
-7. **多层防护**：SERVICE_TOKEN 是代码层守卫，完整 mTLS 是部署层工程（09 §14.3）
+1. **非对称密钥隔离**：每个 Operation/Manager deployment 使用独立 RSA key；private key 仅在签发端受控加载。
+2. **trust 隔离**：按 `kid` 登记 issuer/subject/deployment/status/validity/revocation、audience、HTTPS origin、scope 和 exact enterprise/tenant target bindings。
+3. **传输安全**：生产 peer URL 和 assertion origin 必须 HTTPS；client 不跟随 redirect，也不接受 userinfo/query/fragment 目标。
+4. **密钥存储**：不要将生产 key、trust manifest 或企业映射提交到版本控制；使用 Secret/KMS 并限制读取权限。
+5. **密钥轮换**：预装 next public key，短重叠后撤销旧 key；验证 `kid`/origin/scope/target 后再发布。
+6. **审计日志**：监控服务间拒绝，但不记录 assertion、private key、trust JSON 或请求正文。
+7. **replay 拓扑**：单实例 gate 必须显式启用；多实例前先批准有界共享 replay store，不把本地 cache 当成分布式方案。
 
 ## 故障排查
 
-### 服务间调用返回 401
+### 服务间调用返回 401/403
 
-**原因 1：token 不匹配**
-- 检查 Operation 与 Manager 的 `SERVICE_TOKEN` 环境变量是否一致；Agent 不应存在该变量
-- 验证配置文件中没有多余空格或换行
+- Check the selected tier's `SERVICE_AUTH_MODE=signed`, complete private-key fields, exact HTTPS peer/origin, and `SERVICE_IDENTITY_SINGLE_INSTANCE=true`.
+- Validate the receiver trust manifest has the matching `kid`, issuer, subject, deployment, active validity window, non-revoked status, audience, origin, route scope, and exact target binding.
+- A 401 indicates missing/invalid/expired/revoked authentication; a 403 indicates an authenticated assertion is outside its route scope or target. Do not re-enable `SERVICE_TOKEN` in production.
+- Never copy an assertion between requests: the path/body/idempotency binding and `jti` are intentionally per-request.
 
-**原因 2：生产模式未配置**
-- 确认 `SERVICE_TOKEN` 已配置且不是 dev 占位值
-- 查看服务启动日志是否有 "SERVICE_TOKEN not configured" 错误
+### Dev/test shared-token compatibility
 
-**原因 3：header 未携带**
-- 检查调用端是否使用 `ServiceClient` 或手动添加 `X-Service-Token` header
-- 验证中间件/代理未删除该 header
+- The development placeholder is only allowed in `dev`/`development`; test must use a test-only value.
+- Set `SERVICE_AUTH_MODE=signed` to exercise isolated service keys without any legacy fallback.
 
-### 日志中持续出现 dev 模式警告
+## Future deployment work
 
-- 确认已替换 `dev-service-token-placeholder` 为强密钥
-- 确认密钥不以 `dev-` 开头
-- 重启服务使新配置生效
-
-## 后续演进
-
-当前 SERVICE_TOKEN 是**过渡方案**（代码层共享密钥守卫）。完整服务间鉴权应采用：
-
-- **mTLS（双向 TLS）**：部署层工程，基于 CA/证书体系（09 §14.3）
-- **服务网格（Service Mesh）**：如 Istio / Linkerd，提供自动化 mTLS + 细粒度访问控制
-- **零信任架构**：基于服务身份的动态授权（SPIFFE/SPIRE）
-
-SERVICE_TOKEN 在演进到 mTLS 后可保留作为应用层二次校验。
+The current production launch gate deliberately chooses a documented single-instance replay topology. A horizontally scaled deployment needs a separately approved bounded shared replay mechanism and corresponding deployment validation before scaling. TLS/mTLS certificate issuance, service discovery, and enterprise↔tenant↔Manager registration remain deployment-owned inputs.
 
 ## 参考文档
 

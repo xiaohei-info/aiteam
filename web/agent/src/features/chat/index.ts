@@ -2,6 +2,7 @@ export { ChatPage } from "./ChatPage";
 export { ConversationList } from "./ConversationList";
 export { ConversationPermissionControl } from "./ConversationPermissionControl";
 export { ConversationStateControl } from "./ConversationStateControl";
+export { ApprovalCard } from "./ApprovalCard";
 export { ScheduleControl } from "./ScheduleControl";
 export { TimelineView } from "./TimelineView";
 export { MessageComposer } from "./MessageComposer";
@@ -11,6 +12,7 @@ export {
   listConversations,
   createConversation,
   submitPrompt,
+  getConversation,
   getEntries,
   subscribePiEvents,
   abortPrompt,
@@ -18,7 +20,26 @@ export {
   isSupportedAudioMime,
   transcribeAudio,
   updateConversation,
+  markConversationRead,
+  getConversationParticipants,
+  searchMessages,
+  listApprovals,
+  decideApproval,
+  parsePiSseReconciliation,
+  readSse,
   setConversationState,
+  type ApprovalRecord,
+  type ApprovalDecision,
+  type ApprovalRiskLevel,
+  type ApprovalStatus,
+  type ConversationParticipant,
+  type ConversationParticipants,
+  type MessageSearchHit,
+  type MessageSearchInput,
+  type PiSseReceipt,
+  type PiSseReconciliation,
+  type PiSseEventMessage,
+  type PiEventSubscriptionOptions,
   type Conversation,
   type ConversationPermissionMode,
   type PromptInput,

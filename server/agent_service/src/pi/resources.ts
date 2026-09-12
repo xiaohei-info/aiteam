@@ -19,6 +19,7 @@ import { skillRefsForSnapshot, skillResourcePaths, skillSigningVerificationForSn
 import type { FrozenSnapshot } from "../storage/sqlite.js";
 import { HINDSIGHT_CLIENT_PROTOCOL, normalizeHindsightRuntimeConfig, type HindsightRuntimeConfig } from "../manager-client.js";
 import type { SessionAuthorization } from "./session-host.js";
+import { ApprovalService } from "../approval-service.js";
 import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
 
 const HINDSIGHT_TOOLS = new Set(["hindsight_recall", "hindsight_retain"]);
@@ -76,6 +77,10 @@ export function createControlledResourceLoader(
   agentDir = join(homedir(), ".aiteam", "agent"),
   managerUrl = process.env.AITEAM_MANAGER_URL,
   hindsightRuntimeConfig?: HindsightRuntimeConfig,
+  approvalService?: ApprovalService,
+  conversationId?: string,
+  sessionId?: string,
+  onAccessDenied?: (error: unknown) => void,
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -103,7 +108,9 @@ export function createControlledResourceLoader(
     materializeHindsightConfig(configDir, stateDir, memoryPolicy, baseUrl, leaseConfig, leaseEnvName, queueScope);
   }
   const lifecycle = memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName
-    ? createHindsightFactory(configDir, memoryPolicy, leaseEnvName, leaseConfig.token)
+    ? createHindsightFactory(configDir, memoryPolicy, leaseEnvName, leaseConfig.token, {
+      authorization, approvalService, conversationId, sessionId, onAccessDenied,
+    })
     : undefined;
   const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
   const loader = new DefaultResourceLoader({
@@ -218,7 +225,19 @@ function withHindsightLeaseEnvironment<T>(envName: string | undefined, token: st
   }
 }
 
-function createHindsightFactory(configDir: string, policy: MemoryPolicy, leaseEnvName?: string, leaseToken?: string) {
+function createHindsightFactory(
+  configDir: string,
+  policy: MemoryPolicy,
+  leaseEnvName?: string,
+  leaseToken?: string,
+  contextOptions: {
+    authorization?: SessionAuthorization;
+    approvalService?: ApprovalService;
+    conversationId?: string;
+    sessionId?: string;
+    onAccessDenied?: (error: unknown) => void;
+  } = {},
+) {
   const lifecycle = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => createMemoryLifecycle(configDir)));
   const deps = {
     ...lifecycle.deps,
@@ -244,7 +263,33 @@ function createHindsightFactory(configDir: string, policy: MemoryPolicy, leaseEn
             target.registerTool({
               ...tool,
               parameters: properties ? { ...parameters, properties } : tool.parameters,
-              execute: async (id, params, signal, onUpdate, ctx) => tool.execute(id, { ...(params as Record<string, unknown>), bank: undefined }, signal, onUpdate, ctx),
+              execute: async (id, params, signal, onUpdate, ctx) => {
+                const invoke = () => tool.execute(id, { ...(params as Record<string, unknown>), bank: undefined }, signal, onUpdate, ctx);
+                try {
+                  if (tool.name !== "hindsight_retain" || !contextOptions.approvalService || !contextOptions.authorization || !contextOptions.conversationId || !contextOptions.sessionId) return await invoke();
+                  const caller = contextOptions.authorization.caller;
+                  return await contextOptions.approvalService.execute({
+                    tenantId: caller.tenantId ?? "",
+                    memberId: caller.userId ?? caller.callerId,
+                    conversationId: contextOptions.conversationId,
+                    participantEmployeeId: contextOptions.authorization.employeeId,
+                    sessionId: contextOptions.sessionId,
+                    snapshotVersion: contextOptions.authorization.snapshot.snapshot_version,
+                    permissionRevision: `${contextOptions.authorization.snapshot.version}:memory`,
+                    toolCallId: id,
+                    promptReceiptRef: contextOptions.conversationId,
+                    toolName: tool.name,
+                    args: params,
+                    riskLevel: "external",
+                    permissionMode: contextOptions.authorization.permissionMode ?? "read-only",
+                    expiresAt: authorizationExpiry(contextOptions.authorization),
+                    signal,
+                  }, invoke);
+                } catch (error) {
+                  contextOptions.onAccessDenied?.(error);
+                  throw error;
+                }
+              },
             } as ToolDefinition);
           };
         }
@@ -273,13 +318,22 @@ function createHindsightFactory(configDir: string, policy: MemoryPolicy, leaseEn
           runtime: current, config: deps.getConfig(), projectBankId: deps.getProjectBankId(), activity, memoryCount,
         }),
       });
-      const result = await recall.recall({ messages }, runtime);
+      let result;
+      try {
+        result = await recall.recall({ messages }, runtime);
+      } catch (error) {
+        contextOptions.onAccessDenied?.(error);
+        throw error;
+      }
       for (const message of result?.messages ?? []) {
         if (!messages.includes(message)) injectedMessages.add(message);
       }
       return result ?? { messages };
     });
-    if (policy.autoRetain) pi.on("agent_end", async (event, ctx) => { await lifecycle.retain(event, ctx); });
+    if (policy.autoRetain) pi.on("agent_end", async (event, ctx) => {
+      try { await lifecycle.retain(event, ctx); }
+      catch (error) { contextOptions.onAccessDenied?.(error); throw error; }
+    });
     pi.on("session_shutdown", async (_event, ctx) => shutdown(ctx));
   };
   const shutdown = async (ctx?: ExtensionContext) => {
@@ -289,6 +343,14 @@ function createHindsightFactory(configDir: string, policy: MemoryPolicy, leaseEn
     return shutdownPromise;
   };
   return { factory, shutdown: () => shutdown() };
+}
+
+function authorizationExpiry(authorization: SessionAuthorization): number | undefined {
+  const jwt = typeof authorization.caller.claims?.exp === "number" && Number.isFinite(authorization.caller.claims.exp)
+    ? authorization.caller.claims.exp * 1_000
+    : undefined;
+  const values = [jwt, authorization.runtimeExpiresAt, authorization.hindsightExpiresAt].filter((value): value is number => value !== undefined && Number.isFinite(value));
+  return values.length > 0 ? Math.min(...values) : undefined;
 }
 
 function materializeHindsightConfig(

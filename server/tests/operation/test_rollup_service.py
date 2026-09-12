@@ -22,6 +22,7 @@ def _summary(summary_id: str, tenant: str, **kw) -> UsageSummary:
         run_count=1,
         token_total=100,
         cost_total=Decimal("1.50"),
+        pricing_status="known",
         error_count=0,
         duration_seconds_total=10,
     )
@@ -67,6 +68,40 @@ def test_summary_id_idempotent_dedup():
     assert row.summary_count == 1
 
 
+def test_summary_idempotency_is_scoped_to_enterprise():
+    """不同企业可以合法使用相同 summary_id，且各自只计一次。"""
+    svc = _service()
+    first = _summary("same-id", "t-a", token_total=100, cost_total=Decimal("1.00"))
+    second = _summary("same-id", "t-b", token_total=200, cost_total=Decimal("2.00"))
+    svc.ingest(_upload("ent-a", "t-a", [first]))
+    svc.ingest(_upload("ent-b", "t-b", [second]))
+    svc.ingest(_upload("ent-a", "t-a", [first]))
+    svc.ingest(_upload("ent-b", "t-b", [second]))
+
+    rows = {row.enterprise_id: row for row in svc.cross_enterprise_board().enterprises}
+    assert rows["ent-a"].token_total == 100
+    assert rows["ent-a"].summary_count == 1
+    assert rows["ent-b"].token_total == 200
+    assert rows["ent-b"].summary_count == 1
+
+
+def test_unknown_cost_is_not_included_in_operator_totals():
+    svc = _service()
+    svc.ingest(_upload("ent-a", "t-a", [
+        _summary("known", "t-a", cost_total=Decimal("1.25")),
+        _summary("unknown", "t-a", cost_total=None, pricing_status="unknown"),
+    ]))
+
+    row = svc.enterprise_rollup("ent-a")
+    assert row.cost_total == Decimal("1.25")
+    assert row.unknown_pricing_tokens == 100
+    assert row.unknown_pricing_runs == 1
+
+    unknown_only = _service()
+    unknown_only.ingest(_upload("ent-b", "t-b", [_summary("unknown", "t-b", cost_total=None, pricing_status="unknown")]))
+    assert unknown_only.enterprise_rollup("ent-b").cost_total is None
+
+
 def test_cross_enterprise_rollup_sums_all_tenants():
     """跨企业 rollup：平台合计是各企业之和，且不下钻租户内部明细。"""
     svc = _service()
@@ -108,7 +143,7 @@ def test_empty_board_is_zeroed():
     board = _service().cross_enterprise_board()
     assert board.enterprise_count == 0
     assert board.run_count == 0
-    assert board.cost_total == Decimal("0")
+    assert board.cost_total is None
     assert board.enterprises == []
 
 
@@ -127,7 +162,7 @@ def test_get_unknown_enterprise_returns_zeroed_rollup():
     assert row.tenant_id == ""
     assert row.run_count == 0
     assert row.token_total == 0
-    assert row.cost_total == Decimal("0")
+    assert row.cost_total is None
     assert row.error_count == 0
     assert row.duration_seconds_total == 0
     assert row.summary_count == 0

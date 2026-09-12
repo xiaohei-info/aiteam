@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import uuid
@@ -127,17 +128,17 @@ def recovery_pg(migrated_db, admin_url, two_tenants, tmp_path):
         client.close()
         # This test's upstream is an in-memory HTTP double. Its unfinished rows
         # must not be offered to a later test's different upstream/track dictionary.
-        # Delete only this generated fixture tenant's knowledge metadata via RLS.
-        with router.session(ctx) as s:
-            s.execute("DELETE FROM knowledge_ingestion_job")
-            s.execute("DELETE FROM knowledge_document_operation")
-            s.execute("DELETE FROM knowledge_document")
+        # Delete only these generated fixture tenants' knowledge metadata via RLS.
+        for cleanup_ctx in (ctx, other):
+            with router.session(cleanup_ctx) as s:
+                s.execute("DELETE FROM knowledge_ingestion_job")
+                s.execute("DELETE FROM knowledge_document_operation")
+                s.execute("DELETE FROM knowledge_document")
 
 
-def test_upload_without_background_delivery_stays_uploaded_on_stage_a_lifespan(recovery_pg, monkeypatch):
-    # Stage A lifespan must not enumerate tenants or recover unbound jobs.
-    # Request-created uploaded rows stay durable; explicit TenantContext
-    # maintain_once remains the only recovery path until Stage E workers.
+def test_upload_without_background_delivery_is_recovered_by_tenant_claim_worker(recovery_pg, monkeypatch):
+    # Stage E inventories due rows by tenant and claims only the matching
+    # TenantContext; it never guesses from registry order.
     f = recovery_pg
     tasks = []
     monkeypatch.setattr(BackgroundTasks, "add_task", lambda _self, *args, **kwargs: tasks.append((args, kwargs)))
@@ -156,18 +157,41 @@ def test_upload_without_background_delivery_stays_uploaded_on_stage_a_lifespan(r
     monkeypatch.setattr(f.app.state._knowledge_intake_service._binding_repo, "publish_ready", publish)
     install_knowledge_intake_lifespan(f.app)
     with TestClient(f.app):
-        assert not completed.wait(1)
-        assert f.upstream.posts == 0
+        assert completed.wait(2)
+        assert f.upstream.posts == 1
         persisted = f.service._doc_repo.get(f.ctx, document_id=doc["id"])
-        assert persisted is not None and persisted.status == "uploaded"
-    assert not completed.is_set() and f.upstream.posts == 0
-    assert f.service._doc_repo.get(f.ctx, document_id=doc["id"]).status == "uploaded"
-    assert f.service._job_repo.get(f.other, ingestion_id=job.id) is None
-    assert KnowledgeIntakeRecovery(f.app.state._knowledge_intake_service).maintain_once(f.ctx) == 1
+        assert persisted is not None and persisted.status in {"indexing", "ready"}
     assert completed.is_set() and f.upstream.posts == 1
+    assert f.service._job_repo.get(f.other, ingestion_id=job.id) is None
     result = f.client.get(f"{f.path}/{doc['id']}/ingestion", headers=f.headers)
     assert result.status_code == 200 and result.json()["data"]["status"] == "done"
     assert result.json()["data"]["attempts"] == 1
+
+
+def test_worker_uses_each_due_tenant_context_and_persisted_workspace(recovery_pg):
+    f = recovery_pg
+    KnowledgeSpaceRepository(f.router).create(f.other, knowledge_space_id=SPACE, display_name="Other fixture")
+    f.upstream.workspace = {
+        ManagerRagService.derive_workspace(f.ctx.tenant_id, SPACE),
+        ManagerRagService.derive_workspace(f.other.tenant_id, SPACE),
+    }
+    doc_a, _job_a = f.prepare()
+    doc_b, _job_b = f.service.prepare_upload(
+        f.other,
+        knowledge_space_id=SPACE,
+        display_name="other fixture",
+        file_name="other.txt",
+        file_type="text/plain",
+        content=b"Other tenant knowledge",
+    )
+
+    recovery = KnowledgeIntakeRecovery(f.service)
+    assert recovery.maintain_all(f.admin, limit=8) == 2
+    assert f.upstream.posts == 2
+    assert f.service.get_document(f.ctx, knowledge_space_id=SPACE, document_id=doc_a.id).status == "ready"
+    assert f.service.get_document(f.other, knowledge_space_id=SPACE, document_id=doc_b.id).status == "ready"
+    assert f.service._doc_repo.get(f.other, document_id=doc_a.id) is None
+    assert f.service._doc_repo.get(f.ctx, document_id=doc_b.id) is None
 
 
 @pytest.mark.parametrize("crash_at", ["before_fence", "after_fence", "post_before_receipt", "after_track"])
@@ -332,7 +356,7 @@ def test_parse_failure_before_fence_is_retryable_and_migration_replay_keeps_trac
     f.upstream.state = "processing"
     KnowledgeIntakeRecovery(f.service).process(f.ctx, job_id=job2.id)
     before = f.service._job_repo.get(f.ctx, ingestion_id=job2.id)
-    apply_migrations(f.admin, app_rw_password="apprwpass")
+    apply_migrations(f.admin, app_rw_password=os.environ["APP_RW_PASSWORD"])
     after = f.service._job_repo.get(f.ctx, ingestion_id=job2.id)
     assert (after.track_id, after.file_source, after.submission_state) == (before.track_id, before.file_source, "submitted")
     assert f.upstream.posts == 1

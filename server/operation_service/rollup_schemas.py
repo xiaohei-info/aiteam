@@ -27,7 +27,10 @@ class EnterpriseUsageRollup(BaseModel):
     tenant_id: str
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"))
+    cost_total: Decimal | None = Field(
+        default=None,
+        description="已知价格摘要的 USD 成本；无已知价格时为 null，不将未知价格视为零。",
+    )
     unknown_pricing_tokens: int = 0
     unknown_pricing_runs: int = 0
     error_count: int = 0
@@ -48,7 +51,10 @@ class CrossEnterpriseBoard(BaseModel):
     enterprise_count: int = 0
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"))
+    cost_total: Decimal | None = Field(
+        default=None,
+        description="已知价格摘要的 USD 成本；无已知价格时为 null，不将未知价格视为零。",
+    )
     unknown_pricing_tokens: int = 0
     unknown_pricing_runs: int = 0
     error_count: int = 0
@@ -85,7 +91,10 @@ class TimeBucket(BaseModel):
     period_label: str = Field(description="时间桶标签（日/周/月）")
     run_count: int = 0
     token_total: int = 0
-    cost_total: Decimal = Field(default=Decimal("0"))
+    cost_total: Decimal | None = Field(
+        default=None,
+        description="已知价格摘要的 USD 成本；无已知价格时为 null，不将未知价格视为零。",
+    )
     error_count: int = 0
     duration_seconds_total: int = 0
     summary_count: int = 0
@@ -101,10 +110,10 @@ class EnterpriseRankRow(BaseModel):
     tenant_id: str
     run_count: int
     token_total: int
-    cost_total: Decimal
+    cost_total: Decimal | None
     error_count: int
     duration_seconds_total: int
-    metric_value: int | Decimal = Field(description="排序指标本期值（与 metric 对应）")
+    metric_value: int | Decimal | None = Field(description="排序指标本期值（与 metric 对应）；无已知成本时为 null。")
 
 
 class EnterpriseTrend(BaseModel):
@@ -114,8 +123,8 @@ class EnterpriseTrend(BaseModel):
 
     enterprise_id: str
     tenant_id: str
-    current: int | Decimal
-    previous: int | Decimal
+    current: int | Decimal | None
+    previous: int | Decimal | None
     growth_pct: float | None = Field(description="增长率(%)；上期 0 时为 None")
 
 

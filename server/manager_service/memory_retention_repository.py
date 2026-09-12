@@ -51,18 +51,42 @@ class MemoryRetentionRepository:
             return _row(s.execute("SELECT " + SELECT + " FROM memory_acceptance WHERE bank_id=%s AND document_id=%s",
                                   (bank_id, document_id)).fetchone())
 
-    def tenant_ids_due(self, tenant_id: str | None = None):
-        """Return due tenants for an explicit tenant_id. Stage A does not inventory all tenants."""
-        if not tenant_id or self._admin_dsn is None:
+    def tenant_ids_due(
+        self,
+        tenant_id: str | None = None,
+        *,
+        after_tenant_id: str | None = None,
+        limit: int = 32,
+    ):
+        """Inventory bounded due tenants through the admin boundary.
+
+        A supplied tenant remains an exact maintenance scope.  Worker mode
+        rotates after ``after_tenant_id`` so a bounded inventory can eventually
+        visit tenants beyond its first page; claims still use TenantContext/RLS.
+        """
+        if self._admin_dsn is None:
             return []
         import psycopg
-        with psycopg.connect(self._admin_dsn) as c:
+
+        clauses = [
+            "next_attempt<=now()",
+            "cleanup_state<>'cleaned'",
+            "(claim_until IS NULL OR claim_until<=now())",
+        ]
+        params: list[object] = []
+        if tenant_id:
+            clauses.insert(0, "tenant_id=%s")
+            params.append(tenant_id)
+        elif after_tenant_id is not None:
+            clauses.insert(0, "tenant_id > %s::uuid")
+            params.append(after_tenant_id)
+        params.append(max(1, min(limit, 64)))
+        with psycopg.connect(self._admin_dsn, autocommit=True) as c:
             rows = c.execute(
-                "SELECT tenant_id FROM memory_acceptance WHERE tenant_id=%s "
-                "AND next_attempt<=now() AND cleanup_state<>'cleaned' "
-                "AND (claim_until IS NULL OR claim_until<=now()) "
-                "GROUP BY tenant_id ORDER BY MIN(next_attempt) LIMIT 1",
-                (tenant_id,),
+                "SELECT tenant_id FROM memory_acceptance WHERE "
+                + " AND ".join(clauses)
+                + " GROUP BY tenant_id ORDER BY tenant_id LIMIT %s",
+                tuple(params),
             ).fetchall()
         return [str(row[0]) for row in rows]
 

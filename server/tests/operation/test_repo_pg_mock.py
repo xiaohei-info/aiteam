@@ -60,12 +60,25 @@ class _FakeCursor:
         return False
 
 
+class _FakeTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class _FakeConn:
     def __init__(self, cursor):
         self._cursor = cursor
+        self.transaction_count = 0
 
     def cursor(self):
         return self._cursor
+
+    def transaction(self):
+        self.transaction_count += 1
+        return _FakeTransaction()
 
     def commit(self):
         pass
@@ -125,6 +138,15 @@ def test_operation_migrations_use_cluster_advisory_lock(monkeypatch, tmp_path):
     assert "pg_advisory_lock" in sql_text
     assert "pg_advisory_unlock" in sql_text
     assert "ALTER ROLE" in sql_text
+
+
+def test_usage_rollup_migration_scopes_idempotency_and_allows_unknown_cost():
+    from pathlib import Path
+
+    migration = Path(__file__).parents[2] / "operation_service" / "migrations" / "0016_usage_rollup_contract.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "ALTER COLUMN cost_total DROP NOT NULL" in sql
+    assert "PRIMARY KEY (enterprise_id, summary_id)" in sql
 
 
 # 一行企业账号 SELECT（_fetch_state / list_enterprises / top_consumers 共用列序）
@@ -400,7 +422,7 @@ class TestPgRollupRepository:
             summary_id=sid, tenant_id="t1",
             window_start=_dt(2026, 1, 1), window_end=_dt(2026, 1, 2),
             run_count=3, token_total=300, cost_total=Decimal("4.5"),
-            error_count=1, duration_seconds_total=10,
+            pricing_status="known", error_count=1, duration_seconds_total=10,
         )
 
     def test_apply_summary_executes_upsert_and_recompute(self, repo):
@@ -410,6 +432,20 @@ class TestPgRollupRepository:
         joined = "\n".join(s for s, _ in self.cursor.calls)
         assert "operation_rollup_seen" in joined
         assert "cross_enterprise_usage_rollup" in joined
+
+    def test_apply_summary_uses_enterprise_scoped_idempotency_and_null_unknown_cost(self, repo):
+        _noop(self.cursor)
+        _noop(self.cursor)
+        unknown = UsageSummary(
+            summary_id="same-id", tenant_id="t1", window_start=_dt(), window_end=_dt(2026, 1, 2),
+            run_count=1, token_total=2, cost_total=None, pricing_status="unknown",
+        )
+        repo.apply_summary("ent-1", "t1", unknown)
+        sql, params = self.cursor.calls[0]
+        assert "ON CONFLICT (enterprise_id, summary_id)" in sql
+        assert "ON CONFLICT (summary_id)" not in sql
+        assert params[0:3] == ("ent-1", "same-id", "t1")
+        assert params[6] is None
 
     def test_get_found(self, repo):
         row = (3, 300, Decimal("4.5"), 0, 0, 1, 10, 1, _dt(), _dt(), "t1")
@@ -458,7 +494,8 @@ class TestPgRollupRepository:
         from operation_service.rollup_repository import PgRollupRepository
         s = PgRollupRepository._to_summary("t1", ("s1", _dt(), _dt(), None, None, None, None, None, None, "unknown", "USD"))
         assert s.run_count == 0
-        assert s.cost_total == Decimal("0")
+        assert s.cost_total is None
+        assert s.model_dump(mode="json")["cost_total"] is None
 
     def test_inherits_base(self):
         from operation_service.rollup_repository import (
@@ -659,14 +696,48 @@ class TestPgEnterpriseModelAccess:
         with pytest.raises(NotFound, match="enterprise not found"):
             repo.get_by_tenant_id("missing")
 
-    def test_update_allowed_model_refs_updates_and_reads_account(self, repo):
+    def test_update_allowed_model_refs_updates_and_reads_account_under_policy_lock(self, repo):
+        from operation_service.repository import relay_policy_lock_key
+
         self.cursor.rowcount = 1
         _set_one(self.cursor, self._row([]))
 
         account = repo.update_allowed_model_refs("ent-1", [])
 
         assert account.allowed_model_refs == []
-        assert "allowed_model_refs = %s" in self.cursor.calls[0][0]
+        lock_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "pg_advisory_xact_lock" in sql
+        )
+        update_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "allowed_model_refs = %s" in sql
+        )
+        assert lock_index < update_index
+        assert self.cursor.calls[lock_index][1] == (relay_policy_lock_key("tenant-1"),)
+        assert self.conn.transaction_count == 1
+
+    def test_create_acquires_policy_lock_for_initial_model_access(self, repo):
+        from operation_service.repository import EnterpriseAccount, relay_policy_lock_key
+
+        account = EnterpriseAccount(
+            enterprise_id="ent-1", tenant_id="tenant-1", enterprise_name="Acme",
+            enterprise_code=None, owner_phone="1", owner_bootstrap_hash="hash",
+            allowed_model_refs=[],
+        )
+
+        assert repo.create(account) == account
+        lock_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "pg_advisory_xact_lock" in sql
+        )
+        insert_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "INSERT INTO enterprise_account" in sql
+        )
+        assert lock_index < insert_index
+        assert self.cursor.calls[lock_index][1] == (relay_policy_lock_key("tenant-1"),)
+        assert self.conn.transaction_count == 1
 
     def test_update_allowed_model_refs_not_found(self, repo):
         self.cursor.rowcount = 0

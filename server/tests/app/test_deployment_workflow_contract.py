@@ -18,6 +18,41 @@ def test_production_run_launcher_requires_loopback_host():
     assert "production control-plane services must bind to loopback" in script
 
 
+def test_production_control_plane_requires_signed_service_identity_inputs():
+    script = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
+    assert "validate_service_identity_production_env" in script
+    assert 'service auth must set SERVICE_AUTH_MODE=signed' in script
+    assert "SERVICE_IDENTITY_TRUST_JSON" in script
+    assert "SERVICE_IDENTITY_PEER_AUDIENCE" in script
+    assert "validate_service_identity_two_sided" in script
+    assert "_service_identity_production_env_value" in script
+    assert "Generic SERVICE_* values remain a dev/test compatibility path" in script
+    assert "Production service principals are deployment-specific" in script
+    assert "SERVICE_IDENTITY_SINGLE_INSTANCE=true" in script
+    assert "must use distinct registered signers" in script
+    assert '[[ ${#SERVICE_TOKEN} -ge 32 ]]' not in script
+    assert 'export SERVICE_IDENTITY_PRIVATE_KEY=' in script
+    assert 'export SERVICE_IDENTITY_TRUST_JSON=' in script
+    assert 'set(capabilities) != {"provision-enterprise"}' in script
+    assert "Fresh F01 provisioning is the sole pre-binding exception" in script
+    validator = script.split("validate_service_identity_production_env()", 1)[1].split(
+        "validate_service_identity_two_sided()", 1
+    )[0]
+    assert 'mode="$(_service_identity_production_env_value' in validator
+    assert 'mode="$(_service_identity_env_value' not in validator
+    two_sided = script.split("validate_service_identity_two_sided()", 1)[1].split(
+        "validate_control_plane_production_env()", 1
+    )[0]
+    assert 'manager_private="$(_service_identity_production_env_value' in two_sided
+    assert "public_key(os.environ[\"MANAGER_PRIVATE_KEY_CHECK\"])" in two_sided
+
+
+def test_production_service_identity_launcher_enforces_rsa_minimum():
+    script = (ROOT / "scripts/ctl.sh").read_text(encoding="utf-8")
+    assert "private.key_size < 2048" in script
+    assert "public.key_size < 2048" in script
+
+
 def test_compose_production_requires_ctl_guard():
     compose = (ROOT / "deploy/docker/docker-compose.yml").read_text(encoding="utf-8")
     assert "aiteam-compose-guard" in compose

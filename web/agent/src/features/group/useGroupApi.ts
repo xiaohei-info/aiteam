@@ -1,5 +1,5 @@
 import type { AgentApiClient } from "../../lib/api-client";
-import { createConversation, type Conversation } from "../chat/useChatApi";
+import { createConversation, getConversationParticipants, type Conversation, type ConversationParticipant } from "../chat/useChatApi";
 
 export interface SolutionProjection {
   solution_instance_id: string;
@@ -38,12 +38,25 @@ export interface LoadedExpertProjection {
 }
 
 export interface GroupExpert {
-  handle: string;
+  handle: string | null;
   employee_id?: string;
   display_name?: string;
   avatar_url?: string | null;
   system_prompt?: string | null;
   model?: string | null;
+  role?: "coordinator" | "participant";
+  role_title?: string | null;
+  available?: boolean;
+}
+
+export type { ConversationParticipant };
+
+export async function listConversationParticipants(
+  client: AgentApiClient,
+  conversationId: string,
+): Promise<ConversationParticipant[]> {
+  const result = await getConversationParticipants(client, conversationId);
+  return result?.participants ?? [];
 }
 
 export async function listLoadedExperts(client: AgentApiClient): Promise<LoadedExpertProjection[]> {

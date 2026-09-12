@@ -34,6 +34,7 @@ interface NavigationItem {
   key: string;
   conversation: Conversation;
   count: number;
+  unreadCount: number;
 }
 
 function conversationGroupKey(conversation: Conversation, mode: "employee" | "group"): string {
@@ -88,13 +89,21 @@ export function ConversationList({
 
   const navigationItems = useMemo<NavigationItem[]>(() => {
     const groupMode = groupByEmployee ? "employee" : groupByGroup ? "group" : null;
-    if (!groupMode) return items.map((conversation) => ({ key: conversation.id, conversation, count: 1 }));
+    if (!groupMode) return items.map((conversation) => ({
+      key: conversation.id,
+      conversation,
+      count: 1,
+      unreadCount: typeof conversation.unread_count === "number" && conversation.unread_count > 0 ? conversation.unread_count : 0,
+    }));
     const grouped = new Map<string, NavigationItem>();
     for (const conversation of items) {
       const key = conversationGroupKey(conversation, groupMode);
       const current = grouped.get(key);
-      if (current) current.count += 1;
-      else grouped.set(key, { key, conversation, count: 1 });
+      const unreadCount = typeof conversation.unread_count === "number" && conversation.unread_count > 0 ? conversation.unread_count : 0;
+      if (current) {
+        current.count += 1;
+        current.unreadCount += unreadCount;
+      } else grouped.set(key, { key, conversation, count: 1, unreadCount });
     }
     return [...grouped.values()];
   }, [groupByEmployee, groupByGroup, items]);
@@ -128,22 +137,32 @@ export function ConversationList({
         {!loading && !error && navigationItems.length === 0 ? <EmptyState title={`暂无${headerLabel}`} isCompact /> : null}
         {navigationItems.length > 0 ? (
           <List aria-label={`${headerLabel}列表`} density="balanced">
-            {navigationItems.map(({ key, conversation, count }) => {
+            {navigationItems.map(({ key, conversation, count, unreadCount }) => {
               const selected = groupByEmployee || groupByGroup
                 ? key === selectedGroupKey
                 : conversation.id === selectedId;
               const title = conversation.title ?? conversation.id;
               const grouped = groupByEmployee || groupByGroup;
               const avatarSeed = conversation.entry_employee_id ?? conversation.coordinator_employee_id ?? key;
+              const preview = conversation.last_preview?.trim() || null;
+              const unread = unreadCount;
               return (
                 <ListItem
                   key={key}
                   label={title}
-                  description={groupByEmployee ? "数字员工" : "群聊"}
+                  description={preview
+                    ? `${groupByEmployee ? "数字员工" : "群聊"} · ${preview}`
+                    : groupByEmployee ? "数字员工" : "群聊"}
                   startContent={<DigitalEmployeeAvatar name={title} seed={avatarSeed} size={32} />}
-                  endContent={grouped
-                    ? (count > 1 ? <Badge label={`${count} 个对话`} variant="neutral" /> : undefined)
-                    : <Badge label={conversation.state} variant={selected ? "info" : "neutral"} />}
+                  endContent={
+                    <HStack gap={1} align="center">
+                      {preview ? <Text type="supporting" data-testid={`conversation-preview-${conversation.id}`}>{preview}</Text> : null}
+                      {unread > 0 ? <Badge label={`未读 ${unread}`} variant="warning" /> : null}
+                      {grouped
+                        ? (count > 1 ? <Badge label={`${count} 个对话`} variant="neutral" /> : undefined)
+                        : <Badge label={conversation.state} variant={selected ? "info" : "neutral"} />}
+                    </HStack>
+                  }
                   isSelected={selected}
                   // Astryx ListItem currently emits aria-selected on a plain <li>,
                   // which violates ARIA. Keep its visual selected state but expose

@@ -71,6 +71,7 @@ def _usage(summary_id: str, **overrides) -> dict:
         "run_count": 5,
         "token_total": 10000,
         "cost_total": "1.50",
+        "pricing_status": "known",
         "error_count": 1,
         "duration_seconds_total": 600,
     }

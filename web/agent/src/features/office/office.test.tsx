@@ -237,7 +237,7 @@ describe("OfficePage", () => {
 
     renderPage();
     await flushReact();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     currentScene = {
       ...scene,
@@ -248,7 +248,7 @@ describe("OfficePage", () => {
       vi.advanceTimersByTime(OFFICE_POLL_INTERVAL_MS - 1);
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     await act(async () => {
       vi.advanceTimersByTime(1);
@@ -257,7 +257,7 @@ describe("OfficePage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(screen.getByTestId("office-metric-working")).toHaveTextContent("0");
     expect(screen.getAllByText("就绪").length).toBeGreaterThan(1);
   });
@@ -267,7 +267,7 @@ describe("OfficePage", () => {
     const fetchMock = mockOfficeApi();
     renderPage();
     await flushReact();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     await act(async () => {
@@ -280,7 +280,7 @@ describe("OfficePage", () => {
       vi.advanceTimersByTime(OFFICE_POLL_INTERVAL_MS * 2);
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
     await act(async () => {
@@ -290,7 +290,7 @@ describe("OfficePage", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(6);
     expect(screen.getByTestId("office-poll-state")).toHaveTextContent("实时");
   });
 

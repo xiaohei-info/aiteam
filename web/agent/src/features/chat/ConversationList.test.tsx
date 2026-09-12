@@ -59,7 +59,11 @@ describe("ConversationList", () => {
   it("shows one friend per employee and selects the newest conversation", async () => {
     const onSelect = vi.fn();
     mockedList.mockResolvedValue({
-      items: [makeConv("new", "private", "emp-1"), makeConv("old", "private", "emp-1"), makeConv("other", "private", "emp-2")],
+      items: [
+        { ...makeConv("new", "private", "emp-1"), last_preview: "最新本地回复", unread_count: 2 },
+        makeConv("old", "private", "emp-1"),
+        makeConv("other", "private", "emp-2"),
+      ],
       nextCursor: null,
       hasMore: false,
     });
@@ -77,6 +81,8 @@ describe("ConversationList", () => {
     expect(await screen.findByText("员工new")).toBeInTheDocument();
     expect(screen.queryByText("员工old")).not.toBeInTheDocument();
     expect(screen.getByText("2 个对话")).toBeInTheDocument();
+    expect(screen.getByText("最新本地回复")).toBeInTheDocument();
+    expect(screen.getByText("未读 2")).toBeInTheDocument();
     expect(screen.getByTestId("conversation-other")).toBeInTheDocument();
 
     await act(async () => fireEvent.click(screen.getByTestId("conversation-new")));

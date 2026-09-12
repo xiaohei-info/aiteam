@@ -263,20 +263,235 @@ validate_postgres_production_env() {
   done
 }
 
+_service_identity_env_value() {
+  local tier="$1" name="$2" upper specific
+  upper="$(printf '%s' "${tier}" | tr '[:lower:]' '[:upper:]')"
+  specific="${upper}_${name}"
+  if [[ -n "${!specific:-}" ]]; then
+    printf '%s' "${!specific}"
+  else
+    # Generic SERVICE_* values remain a dev/test compatibility path.  The
+    # production validator below deliberately uses the strict helper instead.
+    printf '%s' "${!name:-}"
+  fi
+}
+
+_service_identity_production_env_value() {
+  local tier="$1" name="$2" upper specific
+  upper="$(printf '%s' "${tier}" | tr '[:lower:]' '[:upper:]')"
+  specific="${upper}_${name}"
+  # Production service principals are deployment-specific.  Never inherit a
+  # generic SERVICE_* value while validating a selected control-plane tier.
+  printf '%s' "${!specific:-}"
+}
+
+validate_service_identity_production_env() {
+  local tier="$1"
+  local mode private_key key_id issuer audience peer_audience origin deployment trust single target_url
+  mode="$(_service_identity_production_env_value "${tier}" SERVICE_AUTH_MODE)"
+  private_key="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_PRIVATE_KEY)"
+  key_id="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_KEY_ID)"
+  issuer="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_ISSUER)"
+  audience="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_AUDIENCE)"
+  peer_audience="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_PEER_AUDIENCE)"
+  origin="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_ORIGIN)"
+  deployment="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_DEPLOYMENT_ID)"
+  trust="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_TRUST_JSON)"
+  single="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_SINGLE_INSTANCE)"
+  [[ "${mode}" == "signed" ]] || { echo "[ctl] ERROR: ${tier} production service auth must set SERVICE_AUTH_MODE=signed" >&2; exit 1; }
+  [[ -n "${private_key}" && -n "${key_id}" && -n "${issuer}" && -n "${audience}" && -n "${peer_audience}" && -n "${origin}" && -n "${deployment}" && -n "${trust}" ]] || {
+    echo "[ctl] ERROR: ${tier} production requires signed service identity key, issuer, audience, origin, deployment ID, and trust manifest" >&2
+    exit 1
+  }
+  [[ "${single}" == "true" ]] || {
+    echo "[ctl] ERROR: ${tier} production service identity replay protection requires SERVICE_IDENTITY_SINGLE_INSTANCE=true; configure an approved shared replay mechanism before scaling" >&2
+    exit 1
+  }
+  if [[ "${tier}" == "operation" ]]; then
+    target_url="${MANAGER_URL:-}"
+  else
+    target_url="${OPERATOR_URL:-}"
+  fi
+  [[ -n "${target_url}" ]] || { echo "[ctl] ERROR: ${tier} production requires an explicit HTTPS ${tier} peer URL" >&2; exit 1; }
+  if ! SERVICE_IDENTITY_PRIVATE_KEY_CHECK="${private_key}" SERVICE_IDENTITY_KEY_ID_CHECK="${key_id}" SERVICE_IDENTITY_ISSUER_CHECK="${issuer}" SERVICE_IDENTITY_AUDIENCE_CHECK="${audience}" SERVICE_IDENTITY_PEER_AUDIENCE_CHECK="${peer_audience}" SERVICE_IDENTITY_ORIGIN_CHECK="${origin}" SERVICE_IDENTITY_DEPLOYMENT_CHECK="${deployment}" SERVICE_IDENTITY_TRUST_CHECK="${trust}" SERVICE_IDENTITY_PEER_URL_CHECK="${target_url}" "${VENV_PYTHON}" - <<'PY'
+import json
+import os
+import time
+from urllib.parse import urlsplit
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+
+def https_origin(raw):
+    parsed = urlsplit(raw.strip())
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        raise ValueError
+    return f"https://{parsed.hostname.lower()}" + (f":{parsed.port}" if parsed.port not in {None, 443} else "")
+
+try:
+    private = serialization.load_pem_private_key(os.environ["SERVICE_IDENTITY_PRIVATE_KEY_CHECK"].replace("\\n", "\n").encode(), password=None)
+    if not isinstance(private, rsa.RSAPrivateKey) or private.key_size < 2048:
+        raise ValueError
+    for key in ("SERVICE_IDENTITY_KEY_ID_CHECK", "SERVICE_IDENTITY_ISSUER_CHECK", "SERVICE_IDENTITY_AUDIENCE_CHECK", "SERVICE_IDENTITY_PEER_AUDIENCE_CHECK", "SERVICE_IDENTITY_DEPLOYMENT_CHECK"):
+        if not os.environ[key].strip():
+            raise ValueError
+    registered_origin = https_origin(os.environ["SERVICE_IDENTITY_ORIGIN_CHECK"])
+    peer = urlsplit(os.environ["SERVICE_IDENTITY_PEER_URL_CHECK"].strip())
+    if https_origin(os.environ["SERVICE_IDENTITY_PEER_URL_CHECK"]) != f"https://{peer.hostname.lower()}" + (f":{peer.port}" if peer.port not in {None, 443} else ""):
+        raise ValueError
+    manifest = json.loads(os.environ["SERVICE_IDENTITY_TRUST_CHECK"])
+    if not isinstance(manifest, dict) or not manifest:
+        raise ValueError
+    has_live_key = False
+    now = int(time.time())
+    for kid, entry in manifest.items():
+        if not isinstance(kid, str) or not kid.strip() or not isinstance(entry, dict):
+            raise ValueError
+        required = ("public_key", "issuer", "subject", "deployment_id", "status", "not_before", "expires_at", "audiences", "origins", "scopes")
+        if any(name not in entry for name in required):
+            raise ValueError
+        if entry["status"] not in {"active", "next", "revoked", "disabled"} or not isinstance(entry["not_before"], int) or not isinstance(entry["expires_at"], int) or entry["expires_at"] <= entry["not_before"]:
+            raise ValueError
+        if entry["status"] in {"active", "next"} and entry["not_before"] <= now + 30 and entry["expires_at"] > now and not (isinstance(entry.get("revoked_at"), int) and entry["revoked_at"] <= now):
+            has_live_key = True
+        if "revoked_at" in entry and entry["revoked_at"] is not None and not isinstance(entry["revoked_at"], int):
+            raise ValueError
+        if any(not isinstance(entry.get(name), str) or not entry[name].strip() for name in ("issuer", "subject", "deployment_id")):
+            raise ValueError
+        public = serialization.load_pem_public_key(str(entry["public_key"]).replace("\\n", "\n").encode())
+        if not isinstance(public, rsa.RSAPublicKey) or public.key_size < 2048:
+            raise ValueError
+        audiences = entry["audiences"]
+        scopes = entry["scopes"]
+        origins = entry["origins"]
+        bindings = entry.get("target_bindings", [])
+        capabilities = entry.get("provisioning_capabilities", entry.get("capabilities", []))
+        if not all(isinstance(items, list) and items and all(isinstance(item, str) and item.strip() for item in items) for items in (audiences, scopes, origins)):
+            raise ValueError
+        if not isinstance(capabilities, list) or any(not isinstance(item, str) or not item.strip() or "*" in item for item in capabilities):
+            raise ValueError
+        # Fresh F01 provisioning is the sole pre-binding exception: its exact
+        # signed enterprise/tenant target is authorized by the registered,
+        # non-wildcard provision-enterprise capability before the first static
+        # target tuple exists. Every other capability-bearing key needs a
+        # non-empty exact target_bindings list.
+        if not bindings and set(capabilities) != {"provision-enterprise"}:
+            raise ValueError
+        if not isinstance(bindings, list):
+            raise ValueError
+        canonical_origins = {https_origin(item) for item in origins}
+        if registered_origin not in canonical_origins:
+            raise ValueError
+        for binding in bindings:
+            if not isinstance(binding, dict) or not isinstance(binding.get("origin"), str) or not binding["origin"].strip() or not (binding.get("enterprise_id") or binding.get("tenant_id")):
+                raise ValueError
+            for name in ("enterprise_id", "tenant_id"):
+                if name in binding and binding[name] is not None and (not isinstance(binding[name], str) or not binding[name].strip() or binding[name] == "*"):
+                    raise ValueError
+            if https_origin(binding["origin"]) not in canonical_origins:
+                raise ValueError
+    if not has_live_key:
+        raise ValueError
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    echo "[ctl] ERROR: invalid ${tier} signed service identity/trust manifest (RSA/status/validity/origin/binding metadata required)" >&2
+    exit 1
+  fi
+}
+
+validate_service_identity_two_sided() {
+  [[ "${SERVER}" == "all" ]] || return 0
+  local manager_audience operation_audience manager_peer operation_peer manager_origin operation_origin manager_url operation_url
+  local manager_private operation_private manager_key_id operation_key_id manager_issuer operation_issuer manager_deployment operation_deployment
+  manager_audience="$(_service_identity_production_env_value manager SERVICE_IDENTITY_AUDIENCE)"
+  operation_audience="$(_service_identity_production_env_value operation SERVICE_IDENTITY_AUDIENCE)"
+  manager_peer="$(_service_identity_production_env_value manager SERVICE_IDENTITY_PEER_AUDIENCE)"
+  operation_peer="$(_service_identity_production_env_value operation SERVICE_IDENTITY_PEER_AUDIENCE)"
+  manager_origin="$(_service_identity_production_env_value manager SERVICE_IDENTITY_ORIGIN)"
+  operation_origin="$(_service_identity_production_env_value operation SERVICE_IDENTITY_ORIGIN)"
+  manager_private="$(_service_identity_production_env_value manager SERVICE_IDENTITY_PRIVATE_KEY)"
+  operation_private="$(_service_identity_production_env_value operation SERVICE_IDENTITY_PRIVATE_KEY)"
+  manager_key_id="$(_service_identity_production_env_value manager SERVICE_IDENTITY_KEY_ID)"
+  operation_key_id="$(_service_identity_production_env_value operation SERVICE_IDENTITY_KEY_ID)"
+  manager_issuer="$(_service_identity_production_env_value manager SERVICE_IDENTITY_ISSUER)"
+  operation_issuer="$(_service_identity_production_env_value operation SERVICE_IDENTITY_ISSUER)"
+  manager_deployment="$(_service_identity_production_env_value manager SERVICE_IDENTITY_DEPLOYMENT_ID)"
+  operation_deployment="$(_service_identity_production_env_value operation SERVICE_IDENTITY_DEPLOYMENT_ID)"
+  manager_url="${MANAGER_URL:-}"
+  operation_url="${OPERATOR_URL:-}"
+  if ! MANAGER_AUDIENCE_CHECK="${manager_audience}" OPERATION_AUDIENCE_CHECK="${operation_audience}" MANAGER_PEER_CHECK="${manager_peer}" OPERATION_PEER_CHECK="${operation_peer}" MANAGER_ORIGIN_CHECK="${manager_origin}" OPERATION_ORIGIN_CHECK="${operation_origin}" MANAGER_URL_CHECK="${manager_url}" OPERATION_URL_CHECK="${operation_url}" MANAGER_PRIVATE_KEY_CHECK="${manager_private}" OPERATION_PRIVATE_KEY_CHECK="${operation_private}" MANAGER_KEY_ID_CHECK="${manager_key_id}" OPERATION_KEY_ID_CHECK="${operation_key_id}" MANAGER_ISSUER_CHECK="${manager_issuer}" OPERATION_ISSUER_CHECK="${operation_issuer}" MANAGER_DEPLOYMENT_CHECK="${manager_deployment}" OPERATION_DEPLOYMENT_CHECK="${operation_deployment}" "${VENV_PYTHON}" - <<'PY'
+import os
+from urllib.parse import urlsplit
+from cryptography.hazmat.primitives import serialization
+
+
+def origin(raw):
+    parsed = urlsplit(raw.strip())
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        raise ValueError
+    return f"https://{parsed.hostname.lower()}" + (f":{parsed.port}" if parsed.port not in {None, 443} else "")
+
+
+def public_key(raw):
+    private = serialization.load_pem_private_key(raw.replace("\\n", "\n").encode(), password=None)
+    return private.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+try:
+    if not os.environ["MANAGER_PEER_CHECK"] or not os.environ["OPERATION_PEER_CHECK"]:
+        raise ValueError
+    if os.environ["MANAGER_PEER_CHECK"] != os.environ["OPERATION_AUDIENCE_CHECK"]:
+        raise ValueError
+    if os.environ["OPERATION_PEER_CHECK"] != os.environ["MANAGER_AUDIENCE_CHECK"]:
+        raise ValueError
+    if origin(os.environ["MANAGER_URL_CHECK"]) != origin(os.environ["MANAGER_ORIGIN_CHECK"]):
+        raise ValueError
+    if origin(os.environ["OPERATION_URL_CHECK"]) != origin(os.environ["OPERATION_ORIGIN_CHECK"]):
+        raise ValueError
+    same_registered_identity = (
+        os.environ["MANAGER_KEY_ID_CHECK"],
+        os.environ["MANAGER_ISSUER_CHECK"],
+        os.environ["MANAGER_DEPLOYMENT_CHECK"],
+    ) == (
+        os.environ["OPERATION_KEY_ID_CHECK"],
+        os.environ["OPERATION_ISSUER_CHECK"],
+        os.environ["OPERATION_DEPLOYMENT_CHECK"],
+    )
+    if same_registered_identity or public_key(os.environ["MANAGER_PRIVATE_KEY_CHECK"]) == public_key(os.environ["OPERATION_PRIVATE_KEY_CHECK"]):
+        raise ValueError
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    echo "[ctl] ERROR: Manager/Operation signed service identities must use distinct registered signers" >&2
+    exit 1
+  fi
+}
+
 validate_control_plane_production_env() {
   [[ "${ENV_CONFIG}" == "prod" && "${SERVER}" =~ ^(all|manager|operation)$ ]] || return 0
   if [[ "${DEPLOY_MODE}" == "docker" ]]; then
     echo "[ctl] ERROR: production control-plane Docker Compose is unsupported; use the local/systemd deployment or a separately TLS-wrapped topology" >&2
     exit 1
   fi
-  for name in POSTGRES_PASSWORD POSTGRES_SUPER_PASSWORD APP_RW_PASSWORD SERVICE_TOKEN; do
+  for name in POSTGRES_PASSWORD POSTGRES_SUPER_PASSWORD APP_RW_PASSWORD; do
     value="${!name:-}"
     [[ -n "${value}" && ${#value} -ge 24 ]] && ! is_placeholder_secret "${value}" || {
       echo "[ctl] ERROR: ${name} must be a non-placeholder production secret of at least 24 characters" >&2
       exit 1
     }
   done
-  [[ ${#SERVICE_TOKEN} -ge 32 ]] || { echo "[ctl] ERROR: SERVICE_TOKEN must be at least 32 characters in production" >&2; exit 1; }
+  if [[ "${SERVER}" =~ ^(all|manager)$ ]]; then
+    validate_service_identity_production_env manager
+  fi
+  if [[ "${SERVER}" =~ ^(all|operation)$ ]]; then
+    validate_service_identity_production_env operation
+  fi
+  validate_service_identity_two_sided
   local expose_docs="${EXPOSE_PUBLIC_DOCS:-true}"
   expose_docs="$(printf '%s' "${expose_docs}" | tr '[:upper:]' '[:lower:]')"
   [[ "${expose_docs}" == "false" || "${expose_docs}" == "0" ]] || {
@@ -809,7 +1024,7 @@ scrub_agent_environment() {
     upper="$(printf '%s' "${name}" | tr '[:lower:]' '[:upper:]')"
     case "${upper}" in
       AITEAM_MANAGER_URL|AITEAM_RAG_MCP_URL|AITEAM_AGENT_JWKS_PATH|AITEAM_CONFIG_FILE) continue ;;
-      AITEAM_CONSOLE_CREDENTIALS_FILE|MANAGER_CREDENTIAL_KEY|OPERATOR_URL|AITEAM_OPERATOR_URL|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_CLOUD_KEYFILE_JSON|AWS_SHARED_CREDENTIALS_FILE|AWS_PROFILE|AZURE_CONFIG_DIR|CLOUDSDK_CONFIG|BOTO_CONFIG|KUBECONFIG|DOCKER_AUTH_CONFIG|GIT_ASKPASS|SSH_AUTH_SOCK|NPM_CONFIG_USERCONFIG|DB_URL|ADMIN_DB_URL|DATABASE_URI|DATABASE_DSN|DATABASE_CONNECTION_STRING|TEST_DATABASE_URL|DSN|SQL_DSN|CONNECTION_STRING|DB_URI|DB_DSN|DB_CONNECTION_STRING|REDIS_URL|REDIS_URI|REDIS_DSN|REDIS_CONNECTION_STRING|MYSQL_URL|MYSQL_URI|MYSQL_DSN|MYSQL_CONNECTION_STRING|MONGO_URL|MONGO_URI|MONGO_DSN|MONGO_CONNECTION_STRING|POSTGRES_URL|POSTGRES_URI|POSTGRES_DSN|POSTGRES_CONNECTION_STRING|REDIS_CONN_STRING|PROVIDER_URL|PROVIDER_URI|PROVIDER_API_KEY|PROVIDER_TOKEN|PROVIDER_SECRET|NEWAPI_BASE_URL|NEWAPI_API_KEY|NEWAPI_TOKEN|OPERATION_URL|OPERATION_API_KEY|MANAGER_BASE_URL|MANAGER_API_KEY|MODEL_PRICING_URL|API_KEY|PASSWORD|PASSWD|DB_PASSWORD|DATABASE_PASSWORD|REDIS_PASSWORD|MYSQL_PASSWORD|MONGO_PASSWORD|NEWAPI_PASSWORD|SERVICE_PASSWORD|PROVIDER_PASSWORD|HINDSIGHT_PASSWORD|LIGHTRAG_PASSWORD|OAUTH_GOOGLE_CLIENT_SECRET|OAUTH_GITHUB_CLIENT_SECRET|LOGIN_AUDIT_PEPPER|SESSION_SECRET|CRYPTO_SECRET|APP_RW_PASSWORD|POSTGRES_PASSWORD|POSTGRES_SUPER_PASSWORD|SERVICE_TOKEN|SERVICE_SECRET|SERVICE_API_KEY|SERVICE_APIKEY|OPERATION_SYSTEM_USERNAME|OPERATION_SYSTEM_PASSWORD|OPERATION_SIGNING_PRIVATE_KEY|OPERATION_PROVIDER_CREDENTIAL_KEY|NEWAPI_ADMIN_USERNAME|NEWAPI_ADMIN_PASSWORD|NEWAPI_ADMIN_USER_ID|NEWAPI_ADMIN_TOKEN|NEWAPI_DB_PASSWORD|NEWAPI_REDIS_PASSWORD|NEWAPI_SESSION_SECRET|NEWAPI_CRYPTO_SECRET|LIGHTRAG_INSTANCES|LIGHTRAG_AUTH_ACCOUNTS|LIGHTRAG_TOKEN_SECRET|LIGHTRAG_API_KEY|LIGHTRAG_URL|LIGHTRAG_WORKSPACE|LIGHTRAG_DB_HOST|LIGHTRAG_DB_PORT|LIGHTRAG_DB_NAME|LIGHTRAG_DB_USER|LIGHTRAG_DB_PASSWORD|LIGHTRAG_DB_ADMIN_USER|LIGHTRAG_DB_ADMIN_PASSWORD|AITEAM_HINDSIGHT_URL|HINDSIGHT_URL|HINDSIGHT_BASE_URL|HINDSIGHT_FACADE_URL|HINDSIGHT_RECALL_PATH|HINDSIGHT_RETAIN_PATH|HINDSIGHT_DELETE_PATH|HINDSIGHT_UPDATE_PATH|HINDSIGHT_LIST_PATH|HINDSIGHT_STATS_PATH|HINDSIGHT_LEASE_TTL_SECONDS|HINDSIGHT_SERVICE_TOKEN|HINDSIGHT_API_TOKEN|HINDSIGHT_API_KEY|HINDSIGHT_API_KEY_REF|HINDSIGHT_CP_ACCESS_KEY|AUTH_ACCOUNTS|TOKEN_SECRET|AITEAM_SKILL_SIGNING_PRIVATE_KEY|AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY|AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY)
+      AITEAM_CONSOLE_CREDENTIALS_FILE|MANAGER_CREDENTIAL_KEY|OPERATOR_URL|AITEAM_OPERATOR_URL|SERVICE_AUTH_MODE|SERVICE_IDENTITY_PRIVATE_KEY|SERVICE_IDENTITY_PUBLIC_KEYS|SERVICE_IDENTITY_TRUST_JSON|SERVICE_IDENTITY_KEY_ID|SERVICE_IDENTITY_ISSUER|SERVICE_IDENTITY_AUDIENCE|SERVICE_IDENTITY_PEER_AUDIENCE|SERVICE_IDENTITY_ORIGIN|SERVICE_IDENTITY_DEPLOYMENT_ID|SERVICE_IDENTITY_TTL_SECONDS|SERVICE_IDENTITY_CLOCK_SKEW_SECONDS|SERVICE_IDENTITY_ALLOWED_ORIGINS|SERVICE_IDENTITY_ALLOWED_ENTERPRISES|SERVICE_IDENTITY_ALLOWED_TENANTS|SERVICE_IDENTITY_ALLOWED_SCOPES|SERVICE_IDENTITY_SINGLE_INSTANCE|*_SERVICE_AUTH_MODE|*_SERVICE_IDENTITY_PRIVATE_KEY|*_SERVICE_IDENTITY_PUBLIC_KEYS|*_SERVICE_IDENTITY_TRUST_JSON|*_SERVICE_IDENTITY_KEY_ID|*_SERVICE_IDENTITY_ISSUER|*_SERVICE_IDENTITY_AUDIENCE|*_SERVICE_IDENTITY_ORIGIN|*_SERVICE_IDENTITY_DEPLOYMENT_ID|*_SERVICE_IDENTITY_TTL_SECONDS|*_SERVICE_IDENTITY_CLOCK_SKEW_SECONDS|*_SERVICE_IDENTITY_ALLOWED_ORIGINS|*_SERVICE_IDENTITY_ALLOWED_ENTERPRISES|*_SERVICE_IDENTITY_ALLOWED_TENANTS|*_SERVICE_IDENTITY_ALLOWED_SCOPES|*_SERVICE_IDENTITY_SINGLE_INSTANCE|GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_CLOUD_KEYFILE_JSON|AWS_SHARED_CREDENTIALS_FILE|AWS_PROFILE|AZURE_CONFIG_DIR|CLOUDSDK_CONFIG|BOTO_CONFIG|KUBECONFIG|DOCKER_AUTH_CONFIG|GIT_ASKPASS|SSH_AUTH_SOCK|NPM_CONFIG_USERCONFIG|DB_URL|ADMIN_DB_URL|DATABASE_URI|DATABASE_DSN|DATABASE_CONNECTION_STRING|TEST_DATABASE_URL|DSN|SQL_DSN|CONNECTION_STRING|DB_URI|DB_DSN|DB_CONNECTION_STRING|REDIS_URL|REDIS_URI|REDIS_DSN|REDIS_CONNECTION_STRING|MYSQL_URL|MYSQL_URI|MYSQL_DSN|MYSQL_CONNECTION_STRING|MONGO_URL|MONGO_URI|MONGO_DSN|MONGO_CONNECTION_STRING|POSTGRES_URL|POSTGRES_URI|POSTGRES_DSN|POSTGRES_CONNECTION_STRING|REDIS_CONN_STRING|PROVIDER_URL|PROVIDER_URI|PROVIDER_API_KEY|PROVIDER_TOKEN|PROVIDER_SECRET|NEWAPI_BASE_URL|NEWAPI_API_KEY|NEWAPI_TOKEN|OPERATION_URL|OPERATION_API_KEY|MANAGER_BASE_URL|MANAGER_API_KEY|MODEL_PRICING_URL|API_KEY|PASSWORD|PASSWD|DB_PASSWORD|DATABASE_PASSWORD|REDIS_PASSWORD|MYSQL_PASSWORD|MONGO_PASSWORD|NEWAPI_PASSWORD|SERVICE_PASSWORD|PROVIDER_PASSWORD|HINDSIGHT_PASSWORD|LIGHTRAG_PASSWORD|OAUTH_GOOGLE_CLIENT_SECRET|OAUTH_GITHUB_CLIENT_SECRET|LOGIN_AUDIT_PEPPER|SESSION_SECRET|CRYPTO_SECRET|APP_RW_PASSWORD|POSTGRES_PASSWORD|POSTGRES_SUPER_PASSWORD|SERVICE_TOKEN|SERVICE_SECRET|SERVICE_API_KEY|SERVICE_APIKEY|OPERATION_SYSTEM_USERNAME|OPERATION_SYSTEM_PASSWORD|OPERATION_SIGNING_PRIVATE_KEY|OPERATION_PROVIDER_CREDENTIAL_KEY|NEWAPI_ADMIN_USERNAME|NEWAPI_ADMIN_PASSWORD|NEWAPI_ADMIN_USER_ID|NEWAPI_ADMIN_TOKEN|NEWAPI_DB_PASSWORD|NEWAPI_REDIS_PASSWORD|NEWAPI_SESSION_SECRET|NEWAPI_CRYPTO_SECRET|LIGHTRAG_INSTANCES|LIGHTRAG_AUTH_ACCOUNTS|LIGHTRAG_TOKEN_SECRET|LIGHTRAG_API_KEY|LIGHTRAG_URL|LIGHTRAG_WORKSPACE|LIGHTRAG_DB_HOST|LIGHTRAG_DB_PORT|LIGHTRAG_DB_NAME|LIGHTRAG_DB_USER|LIGHTRAG_DB_PASSWORD|LIGHTRAG_DB_ADMIN_USER|LIGHTRAG_DB_ADMIN_PASSWORD|AITEAM_HINDSIGHT_URL|HINDSIGHT_URL|HINDSIGHT_BASE_URL|HINDSIGHT_FACADE_URL|HINDSIGHT_RECALL_PATH|HINDSIGHT_RETAIN_PATH|HINDSIGHT_DELETE_PATH|HINDSIGHT_UPDATE_PATH|HINDSIGHT_LIST_PATH|HINDSIGHT_STATS_PATH|HINDSIGHT_LEASE_TTL_SECONDS|HINDSIGHT_SERVICE_TOKEN|HINDSIGHT_API_TOKEN|HINDSIGHT_API_KEY|HINDSIGHT_API_KEY_REF|HINDSIGHT_CP_ACCESS_KEY|AUTH_ACCOUNTS|TOKEN_SECRET|AITEAM_SKILL_SIGNING_PRIVATE_KEY|AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY|AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY)
         unset "${name}"
         ;;
       *_TOKEN|*_SECRET|*_SECRET_KEY|*_ENCRYPTION_KEY|*_MASTER_KEY|*_PASSWORD|*_PASSWD|*_PEPPER|*_API_KEY|*_APIKEY|*_PRIVATE_KEY|*_ACCESS_KEY|*_ACCESS_KEY_ID|*_SECRET_ACCESS_KEY|*_SESSION_TOKEN|*_CREDENTIAL|*_CREDENTIALS|*_CREDENTIAL_PATH|*_CREDENTIALS_FILE|*_CREDENTIAL_FILE|*_KEY_FILE|*_KEYFILE|*_KEY_PATH|*_PATH|*_URL|*_URI|*_DSN|*_CONNECTION_STRING)
@@ -1017,7 +1232,24 @@ start_service_local() {
         export LIGHTRAG_PIPELINE_TIMEOUT_MS="${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}"
         export LIGHTRAG_POLL_INTERVAL_MS="${LIGHTRAG_POLL_INTERVAL_MS:-250}"
         export LIGHTRAG_QUERY_MODE="${LIGHTRAG_QUERY_MODE:-naive}"
-        export SERVICE_TOKEN="${SERVICE_TOKEN}"
+        export SERVICE_TOKEN="${SERVICE_TOKEN:-}"
+        export SERVICE_AUTH_MODE="$(_service_identity_env_value manager SERVICE_AUTH_MODE)"
+        export SERVICE_IDENTITY_PRIVATE_KEY="$(_service_identity_env_value manager SERVICE_IDENTITY_PRIVATE_KEY)"
+        export SERVICE_IDENTITY_PUBLIC_KEYS="$(_service_identity_env_value manager SERVICE_IDENTITY_PUBLIC_KEYS)"
+        export SERVICE_IDENTITY_TRUST_JSON="$(_service_identity_env_value manager SERVICE_IDENTITY_TRUST_JSON)"
+        export SERVICE_IDENTITY_KEY_ID="$(_service_identity_env_value manager SERVICE_IDENTITY_KEY_ID)"
+        export SERVICE_IDENTITY_ISSUER="$(_service_identity_env_value manager SERVICE_IDENTITY_ISSUER)"
+        export SERVICE_IDENTITY_AUDIENCE="$(_service_identity_env_value manager SERVICE_IDENTITY_AUDIENCE)"
+        export SERVICE_IDENTITY_PEER_AUDIENCE="$(_service_identity_env_value manager SERVICE_IDENTITY_PEER_AUDIENCE)"
+        export SERVICE_IDENTITY_ORIGIN="$(_service_identity_env_value manager SERVICE_IDENTITY_ORIGIN)"
+        export SERVICE_IDENTITY_DEPLOYMENT_ID="$(_service_identity_env_value manager SERVICE_IDENTITY_DEPLOYMENT_ID)"
+        export SERVICE_IDENTITY_TTL_SECONDS="$(_service_identity_env_value manager SERVICE_IDENTITY_TTL_SECONDS)"
+        export SERVICE_IDENTITY_CLOCK_SKEW_SECONDS="$(_service_identity_env_value manager SERVICE_IDENTITY_CLOCK_SKEW_SECONDS)"
+        export SERVICE_IDENTITY_ALLOWED_ORIGINS="$(_service_identity_env_value manager SERVICE_IDENTITY_ALLOWED_ORIGINS)"
+        export SERVICE_IDENTITY_ALLOWED_ENTERPRISES="$(_service_identity_env_value manager SERVICE_IDENTITY_ALLOWED_ENTERPRISES)"
+        export SERVICE_IDENTITY_ALLOWED_TENANTS="$(_service_identity_env_value manager SERVICE_IDENTITY_ALLOWED_TENANTS)"
+        export SERVICE_IDENTITY_ALLOWED_SCOPES="$(_service_identity_env_value manager SERVICE_IDENTITY_ALLOWED_SCOPES)"
+        export SERVICE_IDENTITY_SINGLE_INSTANCE="$(_service_identity_env_value manager SERVICE_IDENTITY_SINGLE_INSTANCE)"
         export SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}"
         export AITEAM_SKILL_SIGNING_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_PRIVATE_KEY:-}"
         export AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY="${AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY:-}"
@@ -1044,6 +1276,7 @@ start_service_local() {
           -u HINDSIGHT_CP_ACCESS_KEY -u HINDSIGHT_BASE_URL -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF -u AITEAM_HINDSIGHT_URL \
           -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u LIGHTRAG_WORKSPACE -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE -u AUTH_ACCOUNTS -u TOKEN_SECRET \
           -u OPERATION_SYSTEM_USERNAME -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \
+          -u OPERATION_SERVICE_AUTH_MODE -u OPERATION_SERVICE_IDENTITY_PRIVATE_KEY -u OPERATION_SERVICE_IDENTITY_PUBLIC_KEYS -u OPERATION_SERVICE_IDENTITY_TRUST_JSON -u OPERATION_SERVICE_IDENTITY_KEY_ID -u OPERATION_SERVICE_IDENTITY_ISSUER -u OPERATION_SERVICE_IDENTITY_AUDIENCE -u OPERATION_SERVICE_IDENTITY_ORIGIN -u OPERATION_SERVICE_IDENTITY_DEPLOYMENT_ID -u OPERATION_SERVICE_IDENTITY_TTL_SECONDS -u OPERATION_SERVICE_IDENTITY_CLOCK_SKEW_SECONDS -u OPERATION_SERVICE_IDENTITY_ALLOWED_ORIGINS -u OPERATION_SERVICE_IDENTITY_ALLOWED_ENTERPRISES -u OPERATION_SERVICE_IDENTITY_ALLOWED_TENANTS -u OPERATION_SERVICE_IDENTITY_ALLOWED_SCOPES -u OPERATION_SERVICE_IDENTITY_SINGLE_INSTANCE \
           "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=manager \
             --host="${MANAGER_HOST:-127.0.0.1}" --port="${MANAGER_PORT}"
       ) >> "${LOG_FILE}" 2>&1 &
@@ -1080,7 +1313,24 @@ start_service_local() {
         export OPERATION_SYSTEM_PASSWORD="${OPERATION_SYSTEM_PASSWORD:-}"
         export OPERATION_SIGNING_PRIVATE_KEY="${OPERATION_SIGNING_PRIVATE_KEY:-}"
         export OPERATION_SIGNING_KEY_ID="${OPERATION_SIGNING_KEY_ID:-}"
-        export SERVICE_TOKEN="${SERVICE_TOKEN}"
+        export SERVICE_TOKEN="${SERVICE_TOKEN:-}"
+        export SERVICE_AUTH_MODE="$(_service_identity_env_value operation SERVICE_AUTH_MODE)"
+        export SERVICE_IDENTITY_PRIVATE_KEY="$(_service_identity_env_value operation SERVICE_IDENTITY_PRIVATE_KEY)"
+        export SERVICE_IDENTITY_PUBLIC_KEYS="$(_service_identity_env_value operation SERVICE_IDENTITY_PUBLIC_KEYS)"
+        export SERVICE_IDENTITY_TRUST_JSON="$(_service_identity_env_value operation SERVICE_IDENTITY_TRUST_JSON)"
+        export SERVICE_IDENTITY_KEY_ID="$(_service_identity_env_value operation SERVICE_IDENTITY_KEY_ID)"
+        export SERVICE_IDENTITY_ISSUER="$(_service_identity_env_value operation SERVICE_IDENTITY_ISSUER)"
+        export SERVICE_IDENTITY_AUDIENCE="$(_service_identity_env_value operation SERVICE_IDENTITY_AUDIENCE)"
+        export SERVICE_IDENTITY_PEER_AUDIENCE="$(_service_identity_env_value operation SERVICE_IDENTITY_PEER_AUDIENCE)"
+        export SERVICE_IDENTITY_ORIGIN="$(_service_identity_env_value operation SERVICE_IDENTITY_ORIGIN)"
+        export SERVICE_IDENTITY_DEPLOYMENT_ID="$(_service_identity_env_value operation SERVICE_IDENTITY_DEPLOYMENT_ID)"
+        export SERVICE_IDENTITY_TTL_SECONDS="$(_service_identity_env_value operation SERVICE_IDENTITY_TTL_SECONDS)"
+        export SERVICE_IDENTITY_CLOCK_SKEW_SECONDS="$(_service_identity_env_value operation SERVICE_IDENTITY_CLOCK_SKEW_SECONDS)"
+        export SERVICE_IDENTITY_ALLOWED_ORIGINS="$(_service_identity_env_value operation SERVICE_IDENTITY_ALLOWED_ORIGINS)"
+        export SERVICE_IDENTITY_ALLOWED_ENTERPRISES="$(_service_identity_env_value operation SERVICE_IDENTITY_ALLOWED_ENTERPRISES)"
+        export SERVICE_IDENTITY_ALLOWED_TENANTS="$(_service_identity_env_value operation SERVICE_IDENTITY_ALLOWED_TENANTS)"
+        export SERVICE_IDENTITY_ALLOWED_SCOPES="$(_service_identity_env_value operation SERVICE_IDENTITY_ALLOWED_SCOPES)"
+        export SERVICE_IDENTITY_SINGLE_INSTANCE="$(_service_identity_env_value operation SERVICE_IDENTITY_SINGLE_INSTANCE)"
         export SERVICE_CLIENT_TIMEOUT_MS="${SERVICE_CLIENT_TIMEOUT_MS:-30000}"
         export AITEAM_SKILL_SIGNING_PRIVATE_KEY=""
         export AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY=""
@@ -1098,6 +1348,7 @@ start_service_local() {
           -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
           -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD \
           -u MANAGER_CREDENTIAL_KEY \
+          -u MANAGER_SERVICE_AUTH_MODE -u MANAGER_SERVICE_IDENTITY_PRIVATE_KEY -u MANAGER_SERVICE_IDENTITY_PUBLIC_KEYS -u MANAGER_SERVICE_IDENTITY_TRUST_JSON -u MANAGER_SERVICE_IDENTITY_KEY_ID -u MANAGER_SERVICE_IDENTITY_ISSUER -u MANAGER_SERVICE_IDENTITY_AUDIENCE -u MANAGER_SERVICE_IDENTITY_ORIGIN -u MANAGER_SERVICE_IDENTITY_DEPLOYMENT_ID -u MANAGER_SERVICE_IDENTITY_TTL_SECONDS -u MANAGER_SERVICE_IDENTITY_CLOCK_SKEW_SECONDS -u MANAGER_SERVICE_IDENTITY_ALLOWED_ORIGINS -u MANAGER_SERVICE_IDENTITY_ALLOWED_ENTERPRISES -u MANAGER_SERVICE_IDENTITY_ALLOWED_TENANTS -u MANAGER_SERVICE_IDENTITY_ALLOWED_SCOPES -u MANAGER_SERVICE_IDENTITY_SINGLE_INSTANCE \
           -u HINDSIGHT_URL -u HINDSIGHT_BASE_URL -u HINDSIGHT_FACADE_URL -u HINDSIGHT_LEASE_TTL_SECONDS -u HINDSIGHT_SERVICE_TOKEN -u HINDSIGHT_RECALL_PATH -u HINDSIGHT_RETAIN_PATH -u HINDSIGHT_DELETE_PATH -u HINDSIGHT_UPDATE_PATH -u HINDSIGHT_LIST_PATH -u HINDSIGHT_STATS_PATH -u HINDSIGHT_CP_ACCESS_KEY -u HINDSIGHT_API_TOKEN -u HINDSIGHT_API_KEY -u HINDSIGHT_API_KEY_REF -u AITEAM_HINDSIGHT_URL \
           -u LIGHTRAG_URL -u LIGHTRAG_API_KEY -u LIGHTRAG_INSTANCES -u LIGHTRAG_TIMEOUT_MS -u LIGHTRAG_PIPELINE_TIMEOUT_MS -u LIGHTRAG_POLL_INTERVAL_MS -u LIGHTRAG_QUERY_MODE -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u LIGHTRAG_DB_HOST -u LIGHTRAG_DB_PORT -u LIGHTRAG_DB_NAME -u LIGHTRAG_DB_USER -u LIGHTRAG_DB_PASSWORD -u LIGHTRAG_DB_ADMIN_USER -u LIGHTRAG_DB_ADMIN_PASSWORD -u LIGHTRAG_IMAGE -u LIGHTRAG_PG_IMAGE -u LIGHTRAG_WORKSPACE -u AUTH_ACCOUNTS -u TOKEN_SECRET \
           "${VENV_PYTHON}" "${REPO_ROOT}/server/run.py" --tier=operation \
@@ -1134,7 +1385,7 @@ start_service_local() {
       scrub_agent_environment
       nohup setsid env \
         -u AITEAM_CONSOLE_CREDENTIALS_FILE \
-        -u DB_URL -u ADMIN_DB_URL -u DATABASE_URL -u DATABASE_URI -u DATABASE_DSN -u DATABASE_CONNECTION_STRING -u TEST_DATABASE_URL -u DSN -u SQL_DSN -u CONNECTION_STRING -u DB_URI -u DB_DSN -u DB_CONNECTION_STRING -u REDIS_URL -u REDIS_URI -u REDIS_DSN -u REDIS_CONNECTION_STRING -u MYSQL_URL -u MYSQL_URI -u MYSQL_DSN -u MYSQL_CONNECTION_STRING -u MONGO_URL -u MONGO_URI -u MONGO_DSN -u MONGO_CONNECTION_STRING -u POSTGRES_URL -u POSTGRES_URI -u POSTGRES_DSN -u POSTGRES_CONNECTION_STRING -u REDIS_CONN_STRING -u PROVIDER_URL -u PROVIDER_URI -u PROVIDER_API_KEY -u PROVIDER_TOKEN -u PROVIDER_SECRET -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u OPERATION_URL -u OPERATION_API_KEY -u MANAGER_BASE_URL -u MANAGER_API_KEY -u OAUTH_GOOGLE_CLIENT_SECRET -u OAUTH_GITHUB_CLIENT_SECRET -u LOGIN_AUDIT_PEPPER -u API_KEY -u PASSWORD -u PASSWD -u DB_PASSWORD -u DATABASE_PASSWORD -u REDIS_PASSWORD -u MYSQL_PASSWORD -u MONGO_PASSWORD -u NEWAPI_PASSWORD -u SERVICE_PASSWORD -u PROVIDER_PASSWORD -u HINDSIGHT_PASSWORD -u LIGHTRAG_PASSWORD -u SESSION_SECRET -u CRYPTO_SECRET -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u POSTGRES_SUPER_PASSWORD -u SERVICE_TOKEN -u SERVICE_SECRET -u SERVICE_API_KEY -u SERVICE_APIKEY -u MANAGER_CREDENTIAL_KEY \
+        -u DB_URL -u ADMIN_DB_URL -u DATABASE_URL -u DATABASE_URI -u DATABASE_DSN -u DATABASE_CONNECTION_STRING -u TEST_DATABASE_URL -u DSN -u SQL_DSN -u CONNECTION_STRING -u DB_URI -u DB_DSN -u DB_CONNECTION_STRING -u REDIS_URL -u REDIS_URI -u REDIS_DSN -u REDIS_CONNECTION_STRING -u MYSQL_URL -u MYSQL_URI -u MYSQL_DSN -u MYSQL_CONNECTION_STRING -u MONGO_URL -u MONGO_URI -u MONGO_DSN -u MONGO_CONNECTION_STRING -u POSTGRES_URL -u POSTGRES_URI -u POSTGRES_DSN -u POSTGRES_CONNECTION_STRING -u REDIS_CONN_STRING -u PROVIDER_URL -u PROVIDER_URI -u PROVIDER_API_KEY -u PROVIDER_TOKEN -u PROVIDER_SECRET -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u OPERATION_URL -u OPERATION_API_KEY -u MANAGER_BASE_URL -u MANAGER_API_KEY -u OAUTH_GOOGLE_CLIENT_SECRET -u OAUTH_GITHUB_CLIENT_SECRET -u LOGIN_AUDIT_PEPPER -u API_KEY -u PASSWORD -u PASSWD -u DB_PASSWORD -u DATABASE_PASSWORD -u REDIS_PASSWORD -u MYSQL_PASSWORD -u MONGO_PASSWORD -u NEWAPI_PASSWORD -u SERVICE_PASSWORD -u PROVIDER_PASSWORD -u HINDSIGHT_PASSWORD -u LIGHTRAG_PASSWORD -u SESSION_SECRET -u CRYPTO_SECRET -u APP_RW_PASSWORD -u POSTGRES_PASSWORD -u POSTGRES_SUPER_PASSWORD -u SERVICE_TOKEN -u SERVICE_SECRET -u SERVICE_API_KEY -u SERVICE_APIKEY -u SERVICE_AUTH_MODE -u SERVICE_IDENTITY_PRIVATE_KEY -u SERVICE_IDENTITY_PUBLIC_KEYS -u SERVICE_IDENTITY_TRUST_JSON -u SERVICE_IDENTITY_KEY_ID -u SERVICE_IDENTITY_ISSUER -u SERVICE_IDENTITY_AUDIENCE -u SERVICE_IDENTITY_PEER_AUDIENCE -u SERVICE_IDENTITY_ORIGIN -u SERVICE_IDENTITY_DEPLOYMENT_ID -u SERVICE_IDENTITY_TTL_SECONDS -u SERVICE_IDENTITY_CLOCK_SKEW_SECONDS -u SERVICE_IDENTITY_ALLOWED_ORIGINS -u SERVICE_IDENTITY_ALLOWED_ENTERPRISES -u SERVICE_IDENTITY_ALLOWED_TENANTS -u SERVICE_IDENTITY_ALLOWED_SCOPES -u SERVICE_IDENTITY_SINGLE_INSTANCE -u MANAGER_CREDENTIAL_KEY \
         -u NEWAPI_URL -u NEWAPI_BASE_URL -u NEWAPI_API_KEY -u NEWAPI_TOKEN -u NEWAPI_ADMIN_BASE_URL -u NEWAPI_PUBLIC_BASE_URL -u MODEL_PRICING_URL -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u AZURE_OPENAI_API_KEY -u GOOGLE_API_KEY -u GEMINI_API_KEY -u GROQ_API_KEY -u MISTRAL_API_KEY -u COHERE_API_KEY -u DEEPSEEK_API_KEY -u XAI_API_KEY -u PERPLEXITY_API_KEY -u TOGETHER_API_KEY -u OPENROUTER_API_KEY -u FIREWORKS_API_KEY -u HF_TOKEN -u GITHUB_TOKEN -u GH_TOKEN -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN -u NEWAPI_ADMIN_TOKEN -u NEWAPI_ADMIN_USER_ID -u NEWAPI_ADMIN_USERNAME -u NEWAPI_ADMIN_PASSWORD -u NEWAPI_DB_PASSWORD -u NEWAPI_REDIS_PASSWORD -u NEWAPI_SESSION_SECRET -u NEWAPI_CRYPTO_SECRET \
         -u HINDSIGHT_CP_ACCESS_KEY -u LIGHTRAG_AUTH_ACCOUNTS -u LIGHTRAG_ADMIN_USERNAME -u LIGHTRAG_ADMIN_PASSWORD -u LIGHTRAG_TOKEN_SECRET -u LIGHTRAG_JWT_ALGORITHM -u AUTH_ACCOUNTS -u TOKEN_SECRET \
         -u OPERATION_SYSTEM_USERNAME -u OPERATION_SYSTEM_PASSWORD -u OPERATION_SIGNING_PRIVATE_KEY -u OPERATION_PROVIDER_CREDENTIAL_KEY \

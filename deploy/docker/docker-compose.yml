@@ -256,7 +256,9 @@ services:
       OPERATION_PROVIDER_CREDENTIAL_KEY: ${OPERATION_PROVIDER_CREDENTIAL_KEY:-}
       OPERATION_SYSTEM_USERNAME: ${OPERATION_SYSTEM_USERNAME:-}
       OPERATION_SYSTEM_PASSWORD: ${OPERATION_SYSTEM_PASSWORD:-}
-      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
+      # Dev/test compatibility only. Production Compose is rejected by the
+      # guard; production local/systemd launch injects signed identity config
+      # and never uses SERVICE_TOKEN for service authentication.
       SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token-placeholder}
       SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
       LOG_LEVEL: INFO
@@ -323,7 +325,9 @@ services:
       LIGHTRAG_PIPELINE_TIMEOUT_MS: ${LIGHTRAG_PIPELINE_TIMEOUT_MS:-300000}
       LIGHTRAG_POLL_INTERVAL_MS: ${LIGHTRAG_POLL_INTERVAL_MS:-250}
       LIGHTRAG_QUERY_MODE: ${LIGHTRAG_QUERY_MODE:-naive}
-      # 服务间认证共享密钥（平面③，03 §9.1）。dev 用占位值；生产应替换为 openssl rand -hex 32 生成的强密钥。
+      # Dev/test compatibility only. Production Compose is rejected by the
+      # guard; production local/systemd launch injects signed identity config
+      # and never uses SERVICE_TOKEN for service authentication.
       SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token-placeholder}
       SERVICE_CLIENT_TIMEOUT_MS: ${SERVICE_CLIENT_TIMEOUT_MS:-30000}
       AITEAM_ENV: ${AITEAM_ENV:?AITEAM_ENV must be explicitly set}

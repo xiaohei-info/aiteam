@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
-from shared.config import load_settings
+from shared.config import load_settings, service_client_kwargs
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
@@ -36,6 +36,7 @@ from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_billing import build_billing_router
+from .usage_delivery_service import install_usage_delivery_lifespan
 from .routes_memory_items import build_memory_items_router
 from .routes_hindsight import build_hindsight_router
 from .hindsight_client import HindsightSettings
@@ -57,7 +58,11 @@ from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .knowledge_intake_repository import build_knowledge_intake_repositories
 from .knowledge_access_policy import KnowledgeAccessPolicy
-from .knowledge_intake_service import ensure_storage_root, manager_storage_root
+from .knowledge_intake_service import (
+    build_knowledge_intake_service,
+    ensure_storage_root,
+    manager_storage_root,
+)
 from .knowledge_space_repository import KnowledgeSpaceRepository
 from .member_service import GrantService, MemberDeptService
 from .rag import PgManagerRagService
@@ -88,8 +93,7 @@ def _build_operator_catalog():
     # 生产/测试注入路线统一使用真实 HTTP 客户端。FakeOperatorCatalogClient 仅在测试中显式注入。
     return OperatorCatalogClient(
         base_url=operator_url,
-        service_identity=settings.service_name,
-        service_token=settings.service_token,
+        client_kwargs=service_client_kwargs(settings),
     )
 
 
@@ -279,6 +283,15 @@ if settings.db_url:
         settings.db_url,
         instance_registry=_rag_settings.instance_registry if _rag_settings is not None else None,
     )
+    # Share the route's singleton with the lifespan recovery worker.  The
+    # service resolves each job's TenantContext and persisted workspace mapping
+    # at processing time; no process-level tenant/workspace is cached here.
+    app.state._knowledge_intake_service = build_knowledge_intake_service(
+        _rag_router,
+        storage_root=ensure_storage_root(manager_storage_root(settings)),
+        rag_service=_rag_service,
+        ingestion_client=_rag_ingestion,
+    )
     _rag_access = RagAccessService(
         snapshot_service=_rag_snapshot,
         member_repository=_rag_member_repo,
@@ -319,3 +332,8 @@ if settings.db_url and settings.admin_db_url:
     install_memory_retention_lifespan(app)
     from .knowledge_intake_recovery import install_knowledge_intake_lifespan
     install_knowledge_intake_lifespan(app)
+
+# Manager -> Operator usage delivery is an aggregate-only, restart-resumable
+# outbox.  The installer is a no-op unless both service databases, a signed
+# Operator URL/token, and tenant mapping are configured.
+install_usage_delivery_lifespan(app)

@@ -13,11 +13,12 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore } from "../storage/sqlite.js";
+import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type IdempotencyReceipt } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
-import { serializePiEvent } from "../pi/event-sse.js";
+import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
+import { materializeAttachments } from "../pi/attachment-tool.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
 import { employeeDisplay } from "../services/employee-display.js";
@@ -28,7 +29,9 @@ import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, ty
 import { UsageStatisticsService } from "../services/usage-statistics.js";
 import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
+import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
+import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord } from "../storage/sqlite.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
 import { ALLOWED_FILE_MIMES, AUDIO_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
@@ -37,6 +40,13 @@ const MAX_BODY_BYTES = 256 * 1024;
 const MAX_LOCAL_FILE_NAME = 255;
 const MAX_PROMPT_IMAGES = 8;
 const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_PROMPT_JSON_BYTES = Math.ceil(MAX_PROMPT_IMAGE_BYTES / 3) * 4 + 512 * 1024;
+const MAX_PENDING_EVENTS = 512;
+const MAX_PENDING_TERMINAL_EVENTS = 64;
+const TERMINAL_EVENT_TYPES = new Set([
+  "agent_end", "agent_settled", "approval_required", "message_end", "tool_execution_end",
+  "auto_retry_end", "compaction_end",
+]);
 const MAX_BASE64_FILE_CHARS = Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4;
 const MAX_UPLOAD_JSON_BYTES = MAX_BASE64_FILE_CHARS + 64 * 1024;
 const MAX_AUDIO_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -53,6 +63,8 @@ type AgentRouteHandler = (request: IncomingMessage, response: ServerResponse, ca
 const ConversationParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }) }, { additionalProperties: false });
 const ConversationFileParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), attachment_id: Type.String({ minLength: 1, description: "附件 ID。" }) }, { additionalProperties: false });
 const ConversationArtifactParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), artifact_id: Type.String({ minLength: 1, description: "产物 ID。" }) }, { additionalProperties: false });
+const ConversationApprovalParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), approval_id: Type.String({ minLength: 1, description: "审批记录 ID。" }) }, { additionalProperties: false });
+const ConversationReceiptParams = Type.Object({ conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }), idempotency_key: Type.String({ minLength: 1, maxLength: 256, description: "提示幂等键。" }) }, { additionalProperties: false });
 const ExpertParams = Type.Object({ employee_id: Type.String({ minLength: 1, description: "授权员工/专家 ID。" }) }, { additionalProperties: false });
 const KnowledgeBaseParams = Type.Object({
   knowledge_base_id: Type.String({ minLength: 1, description: "已移除接口中的旧知识库 ID。" }),
@@ -158,6 +170,9 @@ const ConversationMetadata = Type.Object({
   tenant_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "企业租户 ID。" })),
   member_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "本地成员 ID。" })),
   schedule: Type.Union([Type.Ref("ConversationSchedule"), Type.Null()], { description: "定时执行配置。" }),
+  schedule_generation: Type.Optional(Type.Integer({ minimum: 0, description: "Agent 服务端管理的不可复用调度状态 generation。" })),
+  schedule_block_reason: Type.Optional(Type.String({ maxLength: 96, description: "调度被阻塞的安全原因；不会包含凭据。" })),
+  schedule_retry_at: Type.Optional(Type.String({ format: "date-time", description: "待重试的本地调度 occurrence。" })),
   permission_mode: PermissionMode,
   last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的 entry_ref；旧存储可能是 raw Pi ID，歧义/失效时按未读处理。" }),
   last_preview: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "最新可见 user/assistant 的脱敏短文本；排除 thinking/tool/internal，图片为占位符，无消息为 null。" }),
@@ -320,7 +335,33 @@ const PiSseEventData = Type.Object({
   reason: Type.Optional(Type.String({ enum: ["manual", "threshold", "overflow", "stop", "length", "toolUse", "deferred", "aborted", "error"], description: "压缩、消息结束或错误原因。" })),
   aborted: Type.Optional(Type.Boolean({ description: "上下文压缩是否中止。" })),
   willRetry: Type.Optional(Type.Boolean({ description: "上下文压缩后是否重试。" })),
+  failed: Type.Optional(Type.Boolean({ description: "提示是否以失败终态结束。" })),
+  error_code: Type.Optional(Type.String({ description: "安全的本地失败分类。" })),
+  error_message: Type.Optional(Type.String({ description: "有界且脱敏的失败摘要。" })),
+  approvalId: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
+  approval_id: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
+  approvalBatchId: Type.Optional(Type.String({ description: "危险工具批次 ID。" })),
+  argsHash: Type.Optional(Type.String({ description: "规范化参数哈希。" })),
+  summary: Type.Optional(Type.String({ description: "脱敏审批摘要。" })),
+  riskLevel: Type.Optional(Type.String({ description: "工具风险类别。" })),
+  expiresAt: Type.Optional(Type.String({ format: "date-time", description: "审批截止时间。" })),
+  decisionRevision: Type.Optional(Type.Integer({ minimum: 0, description: "审批 CAS revision。" })),
 }, { $id: "PiSseEventData", additionalProperties: true, description: "text/event-stream 中每个 data 行对应的脱敏 JSON。SSE 每条 data 只会包含与其 type 相关的字段。", "x-dynamic-json": true });
+const PiSseReconciliation = Type.Object({
+  schema_version: Type.Literal("1", { description: "reconciliation payload 版本。" }),
+  type: Type.Literal("reconciliation", { description: "耐久 entries/receipt/state 对账负载。" }),
+  conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }),
+  state: Type.Ref("ConversationState"),
+  prompting: Type.Boolean({ description: "对账时本地 runtime 是否仍在执行。" }),
+  entries: Type.Array(Type.Ref("BoundedJsonValue"), { maxItems: 64, description: "最近的有界脱敏持久条目；正文事实源仍是本地 Pi JSONL。" }),
+  receipt_settlement_pending: Type.Optional(Type.Boolean({ description: "receipt settlement fence timed out; entries are intentionally omitted when true。" })),
+  overflowed: Type.Optional(Type.Boolean({ description: "bounded transient buffer overflowed and a second durable read was forced。" })),
+  terminal_overflowed: Type.Optional(Type.Boolean({ description: "terminal events used the reserved queue overflow path; all incoming terminal events remain delivered and durable reconciliation is authoritative。" })),
+  receipts: Type.Array(Type.Object({
+    idempotency_key: Type.String({ minLength: 1 }), state: Type.String(), last_entry_id: Type.Union([Type.String(), Type.Null()]),
+    failure_code: Type.Union([Type.String(), Type.Null()]), failure_detail: Type.Union([Type.String(), Type.Null()]),
+  }, { additionalProperties: false }), { maxItems: 64, description: "owner-scoped prompt receipts。" }),
+}, { $id: "PiSseReconciliation", additionalProperties: false, description: "SSE connected-fence 后的有界本地 entries/receipt/state 对账负载。" });
 const AbortEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), aborted: Type.Boolean({ description: "是否发现并终止活动执行；没有运行时为 false。" }) }, { additionalProperties: false }) }, { $id: "AbortEnvelope", description: "终止提示执行的结果。" });
 const AuthClaims = Type.Object({
   user_id: Type.String({ minLength: 1, description: "成员账号 ID。" }),
@@ -505,9 +546,22 @@ const MarketplaceTemplateListEnvelope = Type.Object({ data: Type.Array(Type.Ref(
 const UsageSummary = Type.Object({ schema_version: Type.Literal("1", { description: "摘要 schema 版本。" }), summary_id: Type.String({ minLength: 1, description: "摘要幂等 ID。" }), tenant_id: Type.String({ minLength: 1, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, description: "成员 ID。" }), employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), window_start: Type.String({ format: "date-time", description: "统计窗口起点（ISO 8601 UTC）。" }), window_end: Type.String({ format: "date-time", description: "统计窗口终点（ISO 8601 UTC）。" }), prompt_count: Type.Integer({ minimum: 0, description: "提示次数。" }), settled_count: Type.Integer({ minimum: 0, description: "已结算次数。" }), error_count: Type.Integer({ minimum: 0, description: "错误次数。" }), input_tokens: Type.Integer({ minimum: 0, description: "输入 token 数。" }), output_tokens: Type.Integer({ minimum: 0, description: "输出 token 数。" }), cache_tokens: Type.Integer({ minimum: 0, description: "缓存 token 数。" }), cost_minor: Type.Integer({ minimum: 0, description: "最小货币单位成本（USD cents）。" }), currency: Type.Literal("USD", { description: "成本币种；固定为 USD。" }), duration_ms_total: Type.Integer({ minimum: 0, description: "总耗时（毫秒）。" }), pricing_version: Type.Union([Type.Integer({ minimum: 1, description: "计价版本。" }), Type.Null()], { description: "计价版本；未知价格时为 null。" }), pricing_status: Type.Union([Type.Literal("known", { description: "价格已知。" }), Type.Literal("unknown", { description: "价格未知。" })], { description: "价格是否可用。" }), run_count: Type.Integer({ minimum: 0, description: "兼容聚合字段：运行次数。" }), token_total: Type.Integer({ minimum: 0, description: "兼容聚合字段：总 token 数。" }), cost_total: Type.Number({ minimum: 0, description: "兼容聚合字段：总成本（USD）。" }), duration_seconds_total: Type.Integer({ minimum: 0, description: "兼容聚合字段：总耗时（秒）。" }) }, { $id: "UsageSummary", additionalProperties: false, description: "脱敏用量摘要；不包含会话正文、工具明细或原始事件。" });
 const UsageOutboxItem = Type.Object({ summary_id: Type.String({ minLength: 1, description: "摘要幂等 ID。" }), tenant_id: Type.String({ minLength: 1, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, description: "成员 ID。" }), kind: Type.String({ minLength: 1, description: "摘要类型；当前用量摘要为 usage。" }), status: Type.Union([Type.Literal("pending"), Type.Literal("sending"), Type.Literal("sent"), Type.Literal("failed")], { description: "outbox 状态。" }), attempts: Type.Integer({ minimum: 0, description: "已尝试上报次数。" }), last_error: Type.Union([Type.String(), Type.Null()], { description: "最近一次错误；无错误时为 null。" }), created_at: Type.String({ format: "date-time", description: "入队时间（ISO 8601 UTC）。" }), payload: Type.Optional(Type.Ref("UsageSummary")) }, { $id: "UsageOutboxItem", additionalProperties: false, description: "本地用量上报 outbox 项；payload 仅为脱敏聚合摘要。" });
 const UsageOutboxListEnvelope = Type.Object({ data: Type.Array(Type.Ref("UsageOutboxItem")), page: Type.Ref("Page") }, { $id: "UsageOutboxListEnvelope" });
+const ApprovalRecordSchema = Type.Object({
+  id: Type.String({ minLength: 1 }), approval_batch_id: Type.String({ minLength: 1 }), conversation_id: Type.String({ minLength: 1 }),
+  participant_employee_id: Type.Union([Type.String(), Type.Null()]), session_id: Type.String({ minLength: 1 }),
+  snapshot_version: Type.String({ minLength: 1 }), permission_revision: Type.String({ minLength: 1 }), tool_call_id: Type.String({ minLength: 1 }),
+  tool_name: Type.String({ minLength: 1 }), canonical_args_hmac: Type.String({ minLength: 1 }), redacted_summary: Type.String({ maxLength: 1_000 }),
+  risk_level: Type.Union([Type.Literal("bash"), Type.Literal("write"), Type.Literal("edit"), Type.Literal("external"), Type.Literal("unknown")]),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("approved"), Type.Literal("executing"), Type.Literal("succeeded"), Type.Literal("rejected"), Type.Literal("invalidated"), Type.Literal("expired"), Type.Literal("uncertain")]),
+  approved_by: Type.Union([Type.String(), Type.Null()]), approved_at: Type.Union([Type.String(), Type.Null()]), expires_at: Type.String(),
+  decision_revision: Type.Integer({ minimum: 0 }), consumed: Type.Boolean(), created_at: Type.String(), updated_at: Type.String(),
+}, { $id: "ApprovalRecord", additionalProperties: false });
+const ApprovalListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ApprovalRecord")) }, { $id: "ApprovalListEnvelope" });
+const ApprovalEnvelope = Type.Object({ data: Type.Ref("ApprovalRecord") }, { $id: "ApprovalEnvelope" });
+const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal("approve"), Type.Literal("deny")]), expected_revision: Type.Optional(Type.Integer({ minimum: 0 })) }, { $id: "ApprovalDecisionRequest", additionalProperties: false });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
-const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
 
@@ -785,6 +839,7 @@ export interface AgentHttpServerOptions {
   /** Exact browser origins allowed to call this local sidecar. Empty means no CORS. */
   allowedOrigins?: readonly string[];
   usageFlush?: UsageFlushService;
+  executionAuthorization?: ExecutionAuthorizationRegistry;
   skillCache?: SkillCache;
   /** Injected for deterministic upstream transcription tests. */
   fetch?: typeof fetch;
@@ -818,7 +873,7 @@ export class AgentHttpServer {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins ?? []);
     this.app = Fastify({
-      bodyLimit: MAX_UPLOAD_JSON_BYTES,
+      bodyLimit: Math.max(MAX_UPLOAD_JSON_BYTES, MAX_PROMPT_JSON_BYTES),
       requestIdHeader: "x-request-id",
       genReqId: () => randomUUID(),
       logger: false,
@@ -1055,6 +1110,17 @@ export class AgentHttpServer {
     this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { summary: "解析员工账号所属企业", description: "在登录前根据员工账号解析唯一企业租户。", body: Type.Ref("ResolveTenantRequest"), response: { 200: jsonResponse(Type.Ref("TenantResolutionEnvelope"), "租户解析成功；仅返回 tenant_id。"), 400: problemResponse("BadRequest"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict") } }), false);
     this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { summary: "Agent 登录", description: "使用 Manager 返回的企业租户、账号和密码建立本地会话。", body: Type.Ref("AgentLoginRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
     this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { summary: "重置负责人密码", description: "使用当前凭据向 Manager 请求重置密码。", body: Type.Ref("AgentResetPasswordRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
+    this.registerRoute("POST", "/api/agent/logout", async (_request, response, caller) => {
+      const memberId = caller!.userId ?? caller!.callerId;
+      const host = this.options.host as SessionHost & {
+        abortOwner?: (tenantId: string, memberId: string) => Promise<boolean>;
+        clearRuntimeMaterials?: (tenantId: string, memberId: string) => void;
+      };
+      await host.abortOwner?.(caller!.tenantId!, memberId);
+      this.options.executionAuthorization?.invalidate(caller!.tenantId!, memberId);
+      host.clearRuntimeMaterials?.(caller!.tenantId!, memberId);
+      this.writeJson(response, 200, { data: { signed_out: true } });
+    }, routeSchema("logout", { summary: "注销本地执行身份", description: "清理当前进程的短期执行身份和运行材料；不会上传会话内容。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }));
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
@@ -1081,7 +1147,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/events", (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
-      return this.events(request, response, conversationId, new URL(request.url ?? "/", "http://localhost").searchParams.get("after"));
+      return this.events(request, response, conversationId, new URL(request.url ?? "/", "http://localhost").searchParams.get("after"), caller!);
     }, routeSchema("subscribeConversationEvents", {
       summary: "订阅会话事件流",
       description: PI_EVENT_STREAM_DESCRIPTION,
@@ -1101,6 +1167,7 @@ export class AgentHttpServer {
               schema: Type.String({ description: "SSE 事件流文本；每个 data 行的 JSON 结构见 <a href='#/components/schemas/PiSseEventData' target='_self'>PiSseEventData</a>。" }),
               examples: PI_EVENT_STREAM_EXAMPLES,
               "x-event-data-schema": { $ref: "#/components/schemas/PiSseEventData" },
+              "x-reconciliation-data-schema": { $ref: "#/components/schemas/PiSseReconciliation" },
             },
           },
         },
@@ -1122,6 +1189,37 @@ export class AgentHttpServer {
       const aborted = await this.options.host.abort(conversationId);
       this.writeJson(response, 200, { data: { conversation_id: conversationId, aborted } });
     }, routeSchema("abortConversation", { summary: "终止会话执行", description: "请求终止当前会话中正在运行的 Pi 提示。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("AbortEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/approvals", (_request, response, caller, fastifyRequest) => {
+      const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
+      this.requireOwnedConversation(conversationId, caller!);
+      this.writeJson(response, 200, { data: this.approvals().list(conversationId, caller!.tenantId!, caller!.userId ?? caller!.callerId).map(approvalPublic) });
+    }, routeSchema("listConversationApprovals", { summary: "列出会话审批记录", description: "读取当前成员会话的本地审批记录；仅返回参数哈希和脱敏预览。", params: ConversationParams, hide: true, response: { 200: jsonResponse(Type.Ref("ApprovalListEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/approvals/:approval_id/decision", async (request, response, caller, fastifyRequest) => {
+      const values = fastifyRequest?.params as { conversation_id: string; approval_id: string };
+      this.requireOwnedConversation(values.conversation_id, caller!);
+      const body = await this.readJson(request);
+      if (body.decision !== "approve" && body.decision !== "deny") throw new HttpProblem(422, "invalid_approval_decision", "decision must be approve or deny");
+      const expectedRevision = body.expected_revision === undefined ? undefined : Number(body.expected_revision);
+      if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || expectedRevision < 0)) throw new HttpProblem(422, "invalid_approval_revision", "expected_revision must be a non-negative integer");
+      const idempotencyKey = this.header(request, "idempotency-key");
+      if (!idempotencyKey) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required for approval decisions");
+      try {
+        const approval = this.approvals().decide({ id: values.approval_id, tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId, conversationId: values.conversation_id, decision: body.decision, expectedRevision, approvedBy: caller!.userId ?? caller!.callerId, idempotencyKey });
+        this.writeJson(response, 200, { data: approvalPublic(approval) });
+      } catch (error) {
+        if (error instanceof ApprovalNotFoundError) throw new HttpProblem(404, "approval_not_found", error.message);
+        if (error instanceof ApprovalExpiredError) throw new HttpProblem(409, "approval_expired", error.message);
+        if (error instanceof ApprovalRevisionConflictError || error instanceof ApprovalDecisionConflictError) throw new HttpProblem(409, "approval_conflict", error.message);
+        throw error;
+      }
+    }, routeSchema("decideConversationApproval", { summary: "决定会话审批", description: "以 CAS revision 批准或拒绝一个本地工具动作；决定只消费一次。", params: ConversationApprovalParams, headers: Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true }), body: Type.Ref("ApprovalDecisionRequest"), response: { 200: jsonResponse(Type.Ref("ApprovalEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict") }, hide: true }));
+    this.registerRoute("GET", "/api/agent/conversations/:conversation_id/receipts/:idempotency_key", (_request, response, caller, fastifyRequest) => {
+      const values = fastifyRequest?.params as { conversation_id: string; idempotency_key: string };
+      this.requireOwnedConversation(values.conversation_id, caller!);
+      const receipt = this.options.store.getPromptReceipt(values.conversation_id, caller!.callerId, values.idempotency_key);
+      if (!receipt) throw new HttpProblem(404, "receipt_not_found", "Prompt receipt not found");
+      this.writeJson(response, 200, { data: { conversation_id: receipt.conversationId, caller_id: receipt.callerId, idempotency_key: receipt.key, state: receipt.state, last_entry_id: receipt.lastEntryId ?? null, failure_code: receipt.failureCode ?? null, failure_detail: receipt.failureDetail ?? null } });
+    }, routeSchema("getPromptReceipt", { summary: "读取提示幂等收据", description: "读取 202 后的本地执行终态；unknown 仅表示结果不确定，不会自动重放。", params: ConversationReceiptParams, response: { 200: jsonResponse(Type.Object({ data: Type.Object({ conversation_id: Type.String(), caller_id: Type.String(), idempotency_key: Type.String(), state: Type.String(), last_entry_id: Type.Union([Type.String(), Type.Null()]), failure_code: Type.Union([Type.String(), Type.Null()]), failure_detail: Type.Union([Type.String(), Type.Null()]) }, { additionalProperties: false }) })), 404: problemResponse("NotFound") }, hide: true }));
 
     const fileCollection = (kind: LocalFileKind, operationId: string, params: unknown) => {
       const route = (fastifyRequest?: FastifyRequest) => ({ conversationId: String((fastifyRequest?.params as { conversation_id?: string })?.conversation_id ?? ""), kind });
@@ -1186,6 +1284,13 @@ export class AgentHttpServer {
           if (authenticated) {
             try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
             if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+            const memberId = caller.userId ?? caller.callerId;
+            const previous = this.options.executionAuthorization?.get(caller.tenantId, memberId);
+            if (previous && previous.caller.accessToken !== caller.accessToken) {
+              const host = this.options.host as SessionHost & { clearRuntimeMaterials?: (tenantId: string, memberId: string) => void };
+              host.clearRuntimeMaterials?.(caller.tenantId, memberId);
+            }
+            this.options.executionAuthorization?.register(caller);
           }
           await handler(raw, reply.raw, caller, request);
         } catch (error) {
@@ -1534,6 +1639,7 @@ export class AgentHttpServer {
   private listKnowledgeReadModel(response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge read endpoints were removed; use the Pi knowledge tools"); }
   private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
+  private approvals() { return (this.options.host as SessionHost).approvalService; }
 
   private async flushUsage(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.usageFlush) throw new HttpProblem(503, "manager_unavailable", "Manager usage upload is not configured");
@@ -1724,7 +1830,11 @@ export class AgentHttpServer {
     if (!key || key.length > 256) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required and must be <= 256 characters");
     const conversation = this.options.store.getOwnedConversation(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
     if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    const payload = await this.readJson(request);
+    const payload = await this.readJson(request, MAX_PROMPT_JSON_BYTES);
+    const encodedPayloadSize = Buffer.byteLength(JSON.stringify(payload), "utf8");
+    if (encodedPayloadSize > MAX_BODY_BYTES && payload.images === undefined && payload.attachment_ids === undefined) {
+      throw new HttpProblem(413, "request_too_large", "Request body is too large");
+    }
     const text = payload.text;
     if (typeof text !== "string" || text.trim().length === 0 || text.length > 200_000) {
       throw new HttpProblem(422, "invalid_prompt", "text must be a non-empty string <= 200000 characters");
@@ -1747,6 +1857,20 @@ export class AgentHttpServer {
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
 
     try {
+      let materializedAttachments: ReturnType<typeof materializeAttachments> = [];
+      if (attachmentIds.length > 0) {
+        const invalidKind = attachmentIds.find((id) => this.options.store.getOwnedLocalFile(id, conversationId, caller.tenantId!, caller.userId ?? caller.callerId)?.kind === "artifact");
+        if (invalidKind) throw new HttpProblem(422, "invalid_attachment", "Only conversation attachments can be referenced by a prompt");
+        try {
+          const textualIds = attachmentIds.filter((id) => {
+            const metadata = this.options.store.getOwnedLocalFile(id, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+            return metadata ? !IMAGE_MIMES.has(metadata.mime_type) : false;
+          });
+          materializedAttachments = materializeAttachments(this.options.store, { conversationId, tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId }, textualIds);
+        } catch (error) {
+          throw new HttpProblem(422, "attachment_not_supported", error instanceof Error ? error.message : "Attachment cannot be used as model input");
+        }
+      }
       const loadedImages: ImageContent[] = [];
       let decodedImageBytes = images.reduce((total, image) => total + Buffer.byteLength(image.data, "base64"), 0);
       for (const attachmentId of attachmentIds) {
@@ -1764,12 +1888,15 @@ export class AgentHttpServer {
       if (loadedImages.length + images.length > MAX_PROMPT_IMAGES) throw new HttpProblem(422, "invalid_images", "A prompt may contain at most 8 images");
       if (decodedImageBytes > MAX_PROMPT_IMAGE_BYTES) throw new HttpProblem(413, "prompt_images_too_large", "Decoded prompt images exceed 20 MiB");
       const promptImages = [...images, ...loadedImages];
-      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, text, promptImages, mentions, attachmentIds);
+      const attachmentText = materializedAttachments.length > 0
+        ? `\n\n[本地附件材料，仅来自当前会话已绑定文件]\n${materializedAttachments.map((item) => `--- ${item.filename} ---\n${item.extracted.text}`).join("\n")}`
+        : "";
+      const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, `${text}${attachmentText}`, promptImages, mentions, attachmentIds);
       this.promptWorkers.add(worker);
       void worker.finally(() => this.promptWorkers.delete(worker));
       this.writeReceipt(response, conversationId, key, "accepted");
     } catch (error) {
-      this.options.store.markUnknown(conversationId, callerId, key, receipt.ownerInstance);
+      this.options.store.markUnknown(conversationId, callerId, key, receipt.ownerInstance, undefined, promptFailure(error));
       throw error;
     }
     return;
@@ -1780,49 +1907,162 @@ export class AgentHttpServer {
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
       const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key });
+      if (!lastEntryId) {
+        this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" });
+        return;
+      }
       this.options.store.markLocalFilesReferenced(attachmentIds, conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
       this.options.store.markCompleted(conversationId, callerId, key, lastEntryId, ownerInstance);
     } catch (error) {
-      this.options.store.markUnknown(conversationId, callerId, key, ownerInstance);
-      this.options.logger?.error(error);
+      const failure = promptFailure(error);
+      this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, failure);
+      this.options.logger?.error({ code: failure.code, detail: failure.detail });
     } finally {
       clearInterval(heartbeat);
     }
   }
 
-  private async events(request: IncomingMessage, response: ServerResponse, conversationId: string, after: string | null): Promise<void> {
+  private async events(request: IncomingMessage, response: ServerResponse, conversationId: string, after: string | null, caller: AuthenticatedCaller): Promise<void> {
     const requested = after ?? this.header(request, "last-event-id");
     let closed = false;
-    let started = false;
+    let connected = false;
+    let reconciling = true;
+    let overflowed = false;
+    let terminalOverflowed = false;
+    let connectedFenceWritten = false;
     const pending: PiEventEnvelope[] = [];
+    const pendingTerminals: PiEventEnvelope[] = [];
+    const writeConnectedFence = () => {
+      if (connectedFenceWritten || closed || response.writableEnded) return;
+      connectedFenceWritten = true;
+      response.write(": connected\n\n");
+    };
+    const writeNow = (envelope: PiEventEnvelope) => {
+      if (closed || response.writableEnded) return;
+      const event = serializePiEvent(envelope.event, {
+        conversation_id: envelope.conversation_id ?? conversationId,
+        ...(envelope.source_ref ? { source_ref: envelope.source_ref } : {}),
+        ...(envelope.tool_call_id ? { tool_call_id: envelope.tool_call_id } : {}),
+        ...(envelope.source_employee_id ? { source_employee_id: envelope.source_employee_id } : {}),
+        ...(envelope.source_employee_display_name ? { source_employee_display_name: envelope.source_employee_display_name } : {}),
+        ...(envelope.source_role ? { source_role: envelope.source_role } : {}),
+      });
+      if (!event) return;
+      response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    const eventType = (envelope: PiEventEnvelope): string => {
+      const type = (envelope.event as unknown as { type?: unknown }).type;
+      return typeof type === "string" ? type : "";
+    };
+    const isTransient = (envelope: PiEventEnvelope): boolean => ["message_update", "tool_execution_update"].includes(eventType(envelope));
+    const isTerminal = (envelope: PiEventEnvelope): boolean => TERMINAL_EVENT_TYPES.has(eventType(envelope));
     const write = (envelope: PiEventEnvelope) => {
       if (closed) return;
-      if (!started) return pending.push(envelope), undefined;
-      if (!response.writableEnded) {
-        const event = serializePiEvent(envelope.event, {
-          conversation_id: envelope.conversation_id ?? conversationId,
-          ...(envelope.source_ref ? { source_ref: envelope.source_ref } : {}),
-          ...(envelope.tool_call_id ? { tool_call_id: envelope.tool_call_id } : {}),
-          ...(envelope.source_employee_id ? { source_employee_id: envelope.source_employee_id } : {}),
-          ...(envelope.source_employee_display_name ? { source_employee_display_name: envelope.source_employee_display_name } : {}),
-          ...(envelope.source_role ? { source_role: envelope.source_role } : {}),
-        });
-        if (!event) return;
-        response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
+      if (!connected || reconciling) {
+        if (isTerminal(envelope)) {
+          if (pendingTerminals.length < MAX_PENDING_TERMINAL_EVENTS) {
+            // Terminal signals have their own bounded queue; transient eviction
+            // must never consume their reserved capacity.
+            pendingTerminals.push(envelope);
+          } else {
+            // Headers are written before subscribe below, so an exhausted
+            // terminal queue can safely flush its reserved slot immediately.
+            // Flush first to preserve event order, then stream this event; the
+            // bounded queue never evicts or drops a terminal signal.
+            overflowed = true;
+            terminalOverflowed = true;
+            writeConnectedFence();
+            for (const queued of pendingTerminals.splice(0)) writeNow(queued);
+            writeNow(envelope);
+          }
+        } else if (pending.length < MAX_PENDING_EVENTS) pending.push(envelope);
+        else {
+          const transientIndex = pending.findIndex(isTransient);
+          overflowed = true;
+          if (transientIndex >= 0) pending.splice(transientIndex, 1, envelope);
+        }
+        return;
       }
+      writeNow(envelope);
     };
-    const unsubscribe = await this.options.host.subscribe(conversationId, write, requested ?? undefined);
+    if (requested && (requested.length > 256 || !/^[A-Za-z0-9:_-]+$/u.test(requested))) throw new InvalidEventCursorError();
+    // Write the SSE headers before subscribing. This lets the reserved
+    // terminal path stream directly when a pathological terminal-only burst
+    // fills its bounded queue, while subscribe still installs its listener
+    // before delivering live events.
     response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
-    response.write(": connected\n\n");
-    started = true;
-    for (const envelope of pending) write(envelope);
+    let unsubscribe: (() => void) | undefined;
     const close = () => {
       if (closed) return;
       closed = true;
-      unsubscribe();
+      unsubscribe?.();
     };
     request.once("close", close);
     response.once("close", close);
+    unsubscribe = await this.options.host.subscribe(conversationId, write, requested ?? undefined);
+    if (closed) {
+      unsubscribe();
+      return;
+    }
+    const reconcile = async () => {
+      connected = true;
+      // The listener is installed before the connected fence. Durable entries,
+      // receipt settlement, and runtime state are read only after that fence;
+      // events during this window stay bounded in memory and are drained after
+      // the reconciliation payload.
+      const entries = this.options.host as SessionHost & { entries?: (id: string, owner: AuthenticatedCaller) => Promise<unknown[]> };
+      const readPass = async () => {
+        const receiptSettled = await this.waitForReceiptSettlement(conversationId, caller);
+        // Read durable entries after the receipt settlement fence. If the fence
+        // times out, reconciliationPayload omits those entries rather than
+        // pairing a terminal entry with an accepted receipt.
+        const durableEntries = typeof entries.entries === "function"
+          ? await entries.entries(conversationId, caller).catch(() => [])
+          : [];
+        const receipts = this.options.store.listPromptReceipts(conversationId, caller.callerId);
+        const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId ?? "", caller.userId ?? caller.callerId);
+        const prompting = this.options.host.isPrompting(conversationId);
+        return { durableEntries, receipts, metadata, prompting, receiptSettled };
+      };
+      let snapshot = await readPass();
+      const overflowDuringFirstPass = overflowed;
+      if (overflowDuringFirstPass && !closed) {
+        // A full buffer may have dropped transient events. Force a second read
+        // of durable entries/receipts/state so terminal settlement remains
+        // visible without replaying execution.
+        snapshot = await readPass();
+      }
+      if (closed) return;
+      response.write(`event: reconciliation\ndata: ${JSON.stringify(reconciliationPayload(conversationId, snapshot.metadata?.state ?? "active", snapshot.prompting, snapshot.durableEntries, snapshot.receipts, !snapshot.receiptSettled, overflowDuringFirstPass || overflowed, terminalOverflowed))}\n\n`);
+      reconciling = false;
+      if (overflowed) {
+        // Transient deltas may be dropped; durable entries/receipt/state are the
+        // recovery source. Preserve non-transient events here; terminal events
+        // have their own queue and are drained independently below.
+        const retained = pending.filter((envelope) => !isTransient(envelope));
+        pending.splice(0, pending.length, ...retained);
+        overflowed = false;
+      }
+      for (const envelope of pending.splice(0)) writeNow(envelope);
+      for (const envelope of pendingTerminals.splice(0)) writeNow(envelope);
+    };
+    if (connectedFenceWritten) void reconcile();
+    else {
+      connectedFenceWritten = true;
+      response.write(": connected\n\n", () => { void reconcile(); });
+    }
+  }
+
+  private async waitForReceiptSettlement(conversationId: string, caller: AuthenticatedCaller, timeoutMs = 5_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const accepted = this.options.store.listPromptReceipts(conversationId, caller.callerId).some((receipt) => receipt.state === "accepted");
+      if (!accepted) return true;
+      if (Date.now() >= deadline) return false;
+      // A host prompt may have just ended while its HTTP worker is committing
+      // the receipt. Yield to that settlement without changing any durable state.
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
   }
 
   private listLocalFiles(response: ServerResponse, route: { conversationId: string; kind?: LocalFileKind }, caller: AuthenticatedCaller): void {
@@ -2063,6 +2303,86 @@ export class AgentHttpServer {
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }
+}
+
+function reconciliationPayload(
+  conversationId: string,
+  state: string,
+  prompting: boolean,
+  durableEntries: readonly unknown[],
+  receipts: readonly IdempotencyReceipt[],
+  receiptSettlementPending = false,
+  overflowed = false,
+  terminalOverflowed = false,
+): Record<string, unknown> {
+  const safeEntries = receiptSettlementPending || receipts.some((receipt) => receipt.state === "accepted")
+    ? []
+    : durableEntries.slice(-64).flatMap((entry) => {
+    const serialized = serializePiEntry(entry);
+    return serialized ? [serialized] : [];
+  });
+  const safeReceipts = receipts.slice(-64).map((receipt) => ({
+    idempotency_key: receipt.key,
+    state: receipt.state,
+    last_entry_id: receipt.lastEntryId ?? null,
+    failure_code: receipt.failureCode ?? null,
+    failure_detail: receipt.failureDetail ? safeReconciliationText(receipt.failureDetail, 300) : null,
+  }));
+  const payload: Record<string, unknown> = {
+    schema_version: "1",
+    type: "reconciliation",
+    conversation_id: conversationId,
+    state,
+    prompting,
+    entries: safeEntries,
+    ...(receiptSettlementPending ? { receipt_settlement_pending: true } : {}),
+    ...(overflowed ? { overflowed: true } : {}),
+    ...(terminalOverflowed ? { terminal_overflowed: true } : {}),
+    receipts: safeReceipts,
+  };
+  const serialized = JSON.stringify(payload);
+  if (Buffer.byteLength(serialized, "utf8") <= 64 * 1024) return payload;
+  payload.entries = safeEntries.slice(-16);
+  if (Buffer.byteLength(JSON.stringify(payload), "utf8") <= 64 * 1024) return payload;
+  payload.entries = [];
+  return payload;
+}
+
+function safeReconciliationText(value: string, max: number): string {
+  return value.replace(/(?:bearer\s+|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/giu, "[内容已隐藏]")
+    .replace(/(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/giu, "[路径已隐藏]")
+    .slice(0, max);
+}
+
+function promptFailure(error: unknown): { code: string; detail: string } {
+  const candidate = error as { status?: unknown; code?: unknown; name?: unknown };
+  const code = candidate.status === 401 || candidate.status === 403
+    ? "authorization_denied"
+    : candidate.status === 404
+      ? "runtime_revoked"
+      : candidate.name === "PreExecutionAuthorizationError"
+        ? "authorization_denied"
+        : candidate.name === "ApprovalDeniedError"
+          ? "approval_denied"
+        : candidate.name === "ApprovalExpiredError"
+          ? "approval_expired"
+          : candidate.name === "ApprovalCancelledError"
+            ? "approval_cancelled"
+            : typeof candidate.code === "string" && /^[a-z0-9_.-]{1,64}$/u.test(candidate.code) ? candidate.code : "execution_failed";
+  const raw = error instanceof Error ? error.message : "Prompt execution failed";
+  return { code, detail: raw.replace(/(?:bearer\s+|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/giu, "[内容已隐藏]").replace(/(?:\/[A-Za-z0-9._-]+){2,}/gu, "[路径已隐藏]").slice(0, 300) };
+}
+
+function approvalPublic(record: ApprovalRecord): Record<string, unknown> {
+  return {
+    id: record.id, approval_batch_id: record.approval_batch_id, conversation_id: record.conversation_id,
+    participant_employee_id: record.participant_employee_id, session_id: record.session_id,
+    snapshot_version: record.snapshot_version, permission_revision: record.permission_revision,
+    tool_call_id: record.tool_call_id, tool_name: record.tool_name, canonical_args_hmac: record.canonical_args_hmac,
+    redacted_summary: record.redacted_summary, risk_level: record.risk_level, status: record.status,
+    approved_by: record.approved_by, approved_at: record.approved_at, expires_at: record.expires_at,
+    decision_revision: record.decision_revision, consumed: record.consumed, created_at: record.created_at, updated_at: record.updated_at,
+  };
 }
 
 function projectOrgTree(value: unknown, visibleEmployees: ReadonlySet<string>): Record<string, unknown> {

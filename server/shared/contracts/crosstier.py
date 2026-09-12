@@ -194,7 +194,11 @@ class SnapshotPullResponse(BaseModel):
 
 
 class EnterpriseRollupUpload(BaseModel):
-    """Manager → Operator enterprise-level sanitized usage batch (F13)."""
+    """Manager → Operator sanitized usage batch (F13).
+
+    Nested ``UsageSummary.cost_total`` is nullable: unknown pricing is carried
+    as ``null`` with ``pricing_status='unknown'``, never as a numeric zero.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
