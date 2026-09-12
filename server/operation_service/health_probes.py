@@ -26,8 +26,8 @@ class HttpServiceHealthProbe:
         self,
         base_url: str,
         *,
-        service_identity: str | None,
-        service_token: str | None,
+        service_identity: str | None = None,
+        service_token: str | None = None,
         service_audience: str | None = None,
         client_kwargs: Mapping[str, Any] | None = None,
     ) -> None:

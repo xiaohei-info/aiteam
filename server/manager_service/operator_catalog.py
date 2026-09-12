@@ -164,6 +164,8 @@ class OperatorCatalogClient(OperatorCatalogPort):
                 "/api/operation/provider-access/resolve",
                 json={"tenant_id": tenant_id, "provider_id": provider_id, "model_ids": model_ids},
                 idempotency_key=f"provider-access:{tenant_id}:{provider_id}",
+                service_purpose="relay:resolve",
+                service_tenant_id=tenant_id,
             ).get("data", {})
         except AppError:
             raise

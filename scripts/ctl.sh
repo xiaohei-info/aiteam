@@ -270,23 +270,34 @@ _service_identity_env_value() {
   if [[ -n "${!specific:-}" ]]; then
     printf '%s' "${!specific}"
   else
+    # Generic SERVICE_* values remain a dev/test compatibility path.  The
+    # production validator below deliberately uses the strict helper instead.
     printf '%s' "${!name:-}"
   fi
+}
+
+_service_identity_production_env_value() {
+  local tier="$1" name="$2" upper specific
+  upper="$(printf '%s' "${tier}" | tr '[:lower:]' '[:upper:]')"
+  specific="${upper}_${name}"
+  # Production service principals are deployment-specific.  Never inherit a
+  # generic SERVICE_* value while validating a selected control-plane tier.
+  printf '%s' "${!specific:-}"
 }
 
 validate_service_identity_production_env() {
   local tier="$1"
   local mode private_key key_id issuer audience peer_audience origin deployment trust single target_url
-  mode="$(_service_identity_env_value "${tier}" SERVICE_AUTH_MODE)"
-  private_key="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_PRIVATE_KEY)"
-  key_id="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_KEY_ID)"
-  issuer="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_ISSUER)"
-  audience="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_AUDIENCE)"
-  peer_audience="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_PEER_AUDIENCE)"
-  origin="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_ORIGIN)"
-  deployment="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_DEPLOYMENT_ID)"
-  trust="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_TRUST_JSON)"
-  single="$(_service_identity_env_value "${tier}" SERVICE_IDENTITY_SINGLE_INSTANCE)"
+  mode="$(_service_identity_production_env_value "${tier}" SERVICE_AUTH_MODE)"
+  private_key="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_PRIVATE_KEY)"
+  key_id="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_KEY_ID)"
+  issuer="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_ISSUER)"
+  audience="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_AUDIENCE)"
+  peer_audience="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_PEER_AUDIENCE)"
+  origin="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_ORIGIN)"
+  deployment="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_DEPLOYMENT_ID)"
+  trust="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_TRUST_JSON)"
+  single="$(_service_identity_production_env_value "${tier}" SERVICE_IDENTITY_SINGLE_INSTANCE)"
   [[ "${mode}" == "signed" ]] || { echo "[ctl] ERROR: ${tier} production service auth must set SERVICE_AUTH_MODE=signed" >&2; exit 1; }
   [[ -n "${private_key}" && -n "${key_id}" && -n "${issuer}" && -n "${audience}" && -n "${peer_audience}" && -n "${origin}" && -n "${deployment}" && -n "${trust}" ]] || {
     echo "[ctl] ERROR: ${tier} production requires signed service identity key, issuer, audience, origin, deployment ID, and trust manifest" >&2
@@ -359,7 +370,12 @@ try:
             raise ValueError
         if not isinstance(capabilities, list) or any(not isinstance(item, str) or not item.strip() or "*" in item for item in capabilities):
             raise ValueError
-        if not bindings and not capabilities:
+        # Fresh F01 provisioning is the sole pre-binding exception: its exact
+        # signed enterprise/tenant target is authorized by the registered,
+        # non-wildcard provision-enterprise capability before the first static
+        # target tuple exists. Every other capability-bearing key needs a
+        # non-empty exact target_bindings list.
+        if not bindings and set(capabilities) != {"provision-enterprise"}:
             raise ValueError
         if not isinstance(bindings, list):
             raise ValueError
@@ -388,23 +404,42 @@ PY
 validate_service_identity_two_sided() {
   [[ "${SERVER}" == "all" ]] || return 0
   local manager_audience operation_audience manager_peer operation_peer manager_origin operation_origin manager_url operation_url
-  manager_audience="$(_service_identity_env_value manager SERVICE_IDENTITY_AUDIENCE)"
-  operation_audience="$(_service_identity_env_value operation SERVICE_IDENTITY_AUDIENCE)"
-  manager_peer="$(_service_identity_env_value manager SERVICE_IDENTITY_PEER_AUDIENCE)"
-  operation_peer="$(_service_identity_env_value operation SERVICE_IDENTITY_PEER_AUDIENCE)"
-  manager_origin="$(_service_identity_env_value manager SERVICE_IDENTITY_ORIGIN)"
-  operation_origin="$(_service_identity_env_value operation SERVICE_IDENTITY_ORIGIN)"
+  local manager_private operation_private manager_key_id operation_key_id manager_issuer operation_issuer manager_deployment operation_deployment
+  manager_audience="$(_service_identity_production_env_value manager SERVICE_IDENTITY_AUDIENCE)"
+  operation_audience="$(_service_identity_production_env_value operation SERVICE_IDENTITY_AUDIENCE)"
+  manager_peer="$(_service_identity_production_env_value manager SERVICE_IDENTITY_PEER_AUDIENCE)"
+  operation_peer="$(_service_identity_production_env_value operation SERVICE_IDENTITY_PEER_AUDIENCE)"
+  manager_origin="$(_service_identity_production_env_value manager SERVICE_IDENTITY_ORIGIN)"
+  operation_origin="$(_service_identity_production_env_value operation SERVICE_IDENTITY_ORIGIN)"
+  manager_private="$(_service_identity_production_env_value manager SERVICE_IDENTITY_PRIVATE_KEY)"
+  operation_private="$(_service_identity_production_env_value operation SERVICE_IDENTITY_PRIVATE_KEY)"
+  manager_key_id="$(_service_identity_production_env_value manager SERVICE_IDENTITY_KEY_ID)"
+  operation_key_id="$(_service_identity_production_env_value operation SERVICE_IDENTITY_KEY_ID)"
+  manager_issuer="$(_service_identity_production_env_value manager SERVICE_IDENTITY_ISSUER)"
+  operation_issuer="$(_service_identity_production_env_value operation SERVICE_IDENTITY_ISSUER)"
+  manager_deployment="$(_service_identity_production_env_value manager SERVICE_IDENTITY_DEPLOYMENT_ID)"
+  operation_deployment="$(_service_identity_production_env_value operation SERVICE_IDENTITY_DEPLOYMENT_ID)"
   manager_url="${MANAGER_URL:-}"
   operation_url="${OPERATOR_URL:-}"
-  if ! MANAGER_AUDIENCE_CHECK="${manager_audience}" OPERATION_AUDIENCE_CHECK="${operation_audience}" MANAGER_PEER_CHECK="${manager_peer}" OPERATION_PEER_CHECK="${operation_peer}" MANAGER_ORIGIN_CHECK="${manager_origin}" OPERATION_ORIGIN_CHECK="${operation_origin}" MANAGER_URL_CHECK="${manager_url}" OPERATION_URL_CHECK="${operation_url}" "${VENV_PYTHON}" - <<'PY'
+  if ! MANAGER_AUDIENCE_CHECK="${manager_audience}" OPERATION_AUDIENCE_CHECK="${operation_audience}" MANAGER_PEER_CHECK="${manager_peer}" OPERATION_PEER_CHECK="${operation_peer}" MANAGER_ORIGIN_CHECK="${manager_origin}" OPERATION_ORIGIN_CHECK="${operation_origin}" MANAGER_URL_CHECK="${manager_url}" OPERATION_URL_CHECK="${operation_url}" MANAGER_PRIVATE_KEY_CHECK="${manager_private}" OPERATION_PRIVATE_KEY_CHECK="${operation_private}" MANAGER_KEY_ID_CHECK="${manager_key_id}" OPERATION_KEY_ID_CHECK="${operation_key_id}" MANAGER_ISSUER_CHECK="${manager_issuer}" OPERATION_ISSUER_CHECK="${operation_issuer}" MANAGER_DEPLOYMENT_CHECK="${manager_deployment}" OPERATION_DEPLOYMENT_CHECK="${operation_deployment}" "${VENV_PYTHON}" - <<'PY'
 import os
 from urllib.parse import urlsplit
+from cryptography.hazmat.primitives import serialization
+
 
 def origin(raw):
     parsed = urlsplit(raw.strip())
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
         raise ValueError
     return f"https://{parsed.hostname.lower()}" + (f":{parsed.port}" if parsed.port not in {None, 443} else "")
+
+
+def public_key(raw):
+    private = serialization.load_pem_private_key(raw.replace("\\n", "\n").encode(), password=None)
+    return private.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
 
 try:
     if not os.environ["MANAGER_PEER_CHECK"] or not os.environ["OPERATION_PEER_CHECK"]:
@@ -417,11 +452,22 @@ try:
         raise ValueError
     if origin(os.environ["OPERATION_URL_CHECK"]) != origin(os.environ["OPERATION_ORIGIN_CHECK"]):
         raise ValueError
+    same_registered_identity = (
+        os.environ["MANAGER_KEY_ID_CHECK"],
+        os.environ["MANAGER_ISSUER_CHECK"],
+        os.environ["MANAGER_DEPLOYMENT_CHECK"],
+    ) == (
+        os.environ["OPERATION_KEY_ID_CHECK"],
+        os.environ["OPERATION_ISSUER_CHECK"],
+        os.environ["OPERATION_DEPLOYMENT_CHECK"],
+    )
+    if same_registered_identity or public_key(os.environ["MANAGER_PRIVATE_KEY_CHECK"]) == public_key(os.environ["OPERATION_PRIVATE_KEY_CHECK"]):
+        raise ValueError
 except Exception:
     raise SystemExit(1)
 PY
   then
-    echo "[ctl] ERROR: Manager/Operation signed service audience or origin registrations are not two-sided consistent" >&2
+    echo "[ctl] ERROR: Manager/Operation signed service identities must use distinct registered signers" >&2
     exit 1
   fi
 }

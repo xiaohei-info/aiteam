@@ -89,6 +89,26 @@ def test_list_platform_catalog_passes_tenant_target_to_service_client():
     )
 
 
+def test_resolve_tenant_access_passes_signed_scope_and_tenant_target():
+    catalog_client = OperatorCatalogClient.__new__(OperatorCatalogClient)
+    service_client = MagicMock()
+    service_client.post.return_value = {"data": {"access": {"allowed_model_ids": ["m1"]}}}
+    catalog_client._client = service_client
+
+    result = catalog_client.resolve_tenant_access(
+        tenant_id="tenant-1", provider_id="provider-1", model_ids=["m1"],
+    )
+
+    assert result["access"]["allowed_model_ids"] == ["m1"]
+    service_client.post.assert_called_once_with(
+        "/api/operation/provider-access/resolve",
+        json={"tenant_id": "tenant-1", "provider_id": "provider-1", "model_ids": ["m1"]},
+        idempotency_key="provider-access:tenant-1:provider-1",
+        service_purpose="relay:resolve",
+        service_tenant_id="tenant-1",
+    )
+
+
 # ---- pull_expert_template ----
 
 def test_pull_expert_template_success(client):
