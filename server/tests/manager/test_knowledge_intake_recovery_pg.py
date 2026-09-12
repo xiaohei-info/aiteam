@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import uuid
@@ -355,7 +356,7 @@ def test_parse_failure_before_fence_is_retryable_and_migration_replay_keeps_trac
     f.upstream.state = "processing"
     KnowledgeIntakeRecovery(f.service).process(f.ctx, job_id=job2.id)
     before = f.service._job_repo.get(f.ctx, ingestion_id=job2.id)
-    apply_migrations(f.admin, app_rw_password="apprwpass")
+    apply_migrations(f.admin, app_rw_password=os.environ["APP_RW_PASSWORD"])
     after = f.service._job_repo.get(f.ctx, ingestion_id=job2.id)
     assert (after.track_id, after.file_source, after.submission_state) == (before.track_id, before.file_source, "submitted")
     assert f.upstream.posts == 1
