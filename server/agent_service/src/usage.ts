@@ -16,7 +16,7 @@ export interface UsageSummary {
   input_tokens: number;
   output_tokens: number;
   cache_tokens: number;
-  cost_minor: number;
+  cost_minor: number | null;
   currency: "USD";
   duration_ms_total: number;
   pricing_version: number | null;
@@ -24,7 +24,7 @@ export interface UsageSummary {
   /** Manager's existing rollup aliases; these remain aggregate-only. */
   run_count: number;
   token_total: number;
-  cost_total: number;
+  cost_total: string | null;
   duration_seconds_total: number;
 }
 
@@ -60,10 +60,10 @@ export function aggregateUsage(capture: UsageCapture): UsageSummary {
   }
   const pricing = capture.pricing;
   const measured = measureWorkUsage(capture.entries, pricing);
-  const pricingKnown = measured?.pricing_status === "known";
-  const cost = measured?.cost_total === null || !measured ? 0 : Number(measured.cost_total);
+  const pricingKnown = measured?.pricing_status === "known" && measured.cost_total !== null;
+  const costTotal = pricingKnown ? measured.cost_total : null;
+  const costMinor = pricingKnown ? minorFromUsdUnits(usdUnits(costTotal)) : null;
   const cache = cacheRead + cacheWrite;
-  const costTotal = cost;
   const summaryId = createHash("sha256")
     .update(`${capture.tenantId}:${capture.memberId}:${capture.employeeId}:${windowStart}:${pricing?.pricing_version ?? "unknown"}${pricingKnown ? "" : ":unknown"}`)
     .digest("hex");
@@ -81,7 +81,7 @@ export function aggregateUsage(capture: UsageCapture): UsageSummary {
     input_tokens: input,
     output_tokens: output,
     cache_tokens: cache,
-    cost_minor: Math.round(cost * 100),
+    cost_minor: costMinor,
     currency: "USD",
     duration_ms_total: Math.max(0, capture.endedAt - capture.startedAt),
     pricing_version: pricing?.pricing_version ?? null,
@@ -122,7 +122,7 @@ export function measureWorkUsage(entries: readonly SessionEntry[], pricing?: Run
   const rates = pricing?.billing_mode === "request" ? [pricing.request_usd] :
     [pricing?.input_usd_per_million, pricing?.output_usd_per_million, pricing?.cache_read_usd_per_million, pricing?.cache_write_usd_per_million];
   const known = pricing?.pricing_status === "known" && pricing.currency === "USD" && ["request", "token"].includes(pricing.billing_mode) &&
-    rates.every((rate) => typeof rate === "string" && /^\d+(\.\d{1,6})?$/.test(rate) && Number.isFinite(Number(rate)));
+    rates.every((rate) => typeof rate === "string" && /^\d+(\.\d{1,6})?$/.test(rate));
   // Platform rate precision is six decimals; token pricing therefore needs twelve USD decimals.
   const units = known ? rates.map((rate) => {
     const [whole, fraction = ""] = rate!.split(".");
@@ -139,6 +139,17 @@ export function measureWorkUsage(entries: readonly SessionEntry[], pricing?: Run
 
 export function usdDecimal(units: bigint): string {
   return `${units / 1_000_000_000_000n}.${(units % 1_000_000_000_000n).toString().padStart(12, "0")}`;
+}
+
+/** Round exact USD units to cents only for the legacy integer wire field. */
+function minorFromUsdUnits(units: bigint | undefined): number | null {
+  if (units === undefined) return null;
+  const minor = (units + 5_000_000_000n) / 10_000_000_000n;
+  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  // The bound above makes this digit conversion exact; no floating-point cost is involved.
+  let result = 0;
+  for (const digit of minor.toString()) result = result * 10 + digit.charCodeAt(0) - 48;
+  return result;
 }
 
 /** Existing numeric summaries retain their recorded precision; new decimal aggregates stay exact. */

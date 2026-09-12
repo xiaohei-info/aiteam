@@ -53,6 +53,7 @@ def _upload_body(ent: str, tenant: str, summary_id: str, **kw) -> dict:
         "run_count": 2,
         "token_total": 100,
         "cost_total": "1.50",
+        "pricing_status": "known",
         "error_count": 0,
         "duration_seconds_total": 10,
     }
@@ -132,7 +133,7 @@ def test_enterprise_rollup_unknown_returns_zeroed_200(client):
     assert data["tenant_id"] == ""
     assert data["run_count"] == 0
     assert data["token_total"] == 0
-    assert data["cost_total"] == "0"
+    assert data["cost_total"] is None
     assert data["error_count"] == 0
     assert data["duration_seconds_total"] == 0
     assert data["summary_count"] == 0
@@ -183,6 +184,7 @@ def _report_body(ent: str, tenant: str, summary_id: str, day: str, **kw) -> dict
         "run_count": 2,
         "token_total": 100,
         "cost_total": "1.50",
+        "pricing_status": "known",
         "error_count": 0,
         "duration_seconds_total": 10,
     }

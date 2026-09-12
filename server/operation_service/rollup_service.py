@@ -66,19 +66,36 @@ def _period_label(dt: datetime, period: AggregationPeriod) -> str:
     return dt.strftime("%Y-%m")
 
 
-def _metric_value(s: UsageSummary, metric: RollupMetric) -> int | Decimal:
+def _known_cost(s: UsageSummary) -> Decimal | None:
+    """Return a cost only when the summary explicitly carries known pricing."""
+    return s.cost_total if s.pricing_status == "known" else None
+
+
+def _sum_known_cost(summaries: list[UsageSummary]) -> Decimal | None:
+    """Sum known costs, preserving null when no summary is billable."""
+    costs = [cost for summary in summaries if (cost := _known_cost(summary)) is not None]
+    return sum(costs, Decimal("0")) if costs else None
+
+
+def _sum_rollup_costs(rows: list[EnterpriseUsageRollup]) -> Decimal | None:
+    """Sum per-enterprise known-cost totals without turning all-unknown into zero."""
+    costs = [row.cost_total for row in rows if row.cost_total is not None]
+    return sum(costs, Decimal("0")) if costs else None
+
+
+def _metric_value(s: UsageSummary, metric: RollupMetric) -> int | Decimal | None:
     if metric == RollupMetric.RUN_COUNT:
         return s.run_count
     if metric == RollupMetric.TOKEN_TOTAL:
         return s.token_total
     if metric == RollupMetric.COST_TOTAL:
-        return s.cost_total
+        return _known_cost(s)
     if metric == RollupMetric.ERROR_COUNT:
         return s.error_count
     return s.duration_seconds_total
 
 
-def _metric_value_from_map(m: dict, metric: RollupMetric) -> int | Decimal:
+def _metric_value_from_map(m: dict, metric: RollupMetric) -> int | Decimal | None:
     if metric == RollupMetric.RUN_COUNT:
         return m["run_count"]
     if metric == RollupMetric.TOKEN_TOTAL:
@@ -90,8 +107,13 @@ def _metric_value_from_map(m: dict, metric: RollupMetric) -> int | Decimal:
     return m["duration_seconds_total"]
 
 
-def _zero_metric(metric: RollupMetric) -> int | Decimal:
-    return Decimal("0") if metric == RollupMetric.COST_TOTAL else 0
+def _zero_metric(metric: RollupMetric) -> int | Decimal | None:
+    return None if metric == RollupMetric.COST_TOTAL else 0
+
+
+def _metric_sort_key(values: dict, metric: RollupMetric) -> tuple[bool, int | Decimal]:
+    value = _metric_value_from_map(values, metric)
+    return value is not None, value if value is not None else Decimal("0")
 
 
 class RollupService:
@@ -106,7 +128,7 @@ class RollupService:
         self._admin = admin_repo
 
     def ingest(self, upload: EnterpriseRollupUpload) -> None:
-        """消费一次企业级上报：逐条按 summary_id 幂等累加到 cross_enterprise_usage_rollup。"""
+        """消费企业级上报：逐条按 (enterprise_id, summary_id) 幂等累加。"""
         for summary in upload.summaries:
             self._repo.apply_summary(upload.enterprise_id, upload.tenant_id, summary)
 
@@ -141,7 +163,7 @@ class RollupService:
             enterprise_count=len(views),
             run_count=sum(r.run_count for r in views),
             token_total=sum(r.token_total for r in views),
-            cost_total=sum((r.cost_total for r in views), Decimal("0")),
+            cost_total=_sum_rollup_costs(views),
             unknown_pricing_tokens=sum(r.unknown_pricing_tokens for r in views),
             unknown_pricing_runs=sum(r.unknown_pricing_runs for r in views),
             error_count=sum(r.error_count for r in views),
@@ -220,7 +242,7 @@ class RollupService:
                 period_label=label,
                 run_count=sum(s.run_count for s in items),
                 token_total=sum(s.token_total for s in items),
-                cost_total=sum((s.cost_total for s in items), Decimal("0")),
+                cost_total=_sum_known_cost(items),
                 error_count=sum(s.error_count for s in items),
                 duration_seconds_total=sum(s.duration_seconds_total for s in items),
                 summary_count=len(items),
@@ -233,7 +255,7 @@ class RollupService:
             period_label="total",
             run_count=sum(s.run_count for s in items),
             token_total=sum(s.token_total for s in items),
-            cost_total=sum((s.cost_total for s in items), Decimal("0")),
+            cost_total=_sum_known_cost(items),
             error_count=sum(s.error_count for s in items),
             duration_seconds_total=sum(s.duration_seconds_total for s in items),
             summary_count=len(items),
@@ -251,18 +273,20 @@ class RollupService:
                     "tenant_id": s.tenant_id,
                     "run_count": 0,
                     "token_total": 0,
-                    "cost_total": Decimal("0"),
+                    "cost_total": None,
                     "error_count": 0,
                     "duration_seconds_total": 0,
                 }
             a = agg[eid]
             a["run_count"] += s.run_count
             a["token_total"] += s.token_total
-            a["cost_total"] += s.cost_total
+            known_cost = _known_cost(s)
+            if known_cost is not None:
+                a["cost_total"] = (a["cost_total"] if a["cost_total"] is not None else Decimal("0")) + known_cost
             a["error_count"] += s.error_count
             a["duration_seconds_total"] += s.duration_seconds_total
 
-        rows = sorted(agg.values(), key=lambda a: _metric_value_from_map(a, metric), reverse=True)
+        rows = sorted(agg.values(), key=lambda values: _metric_sort_key(values, metric), reverse=True)
         return [
             EnterpriseRankRow(
                 rank=i + 1,
@@ -278,6 +302,25 @@ class RollupService:
             for i, a in enumerate(rows)
         ]
 
+    @staticmethod
+    def _accumulate_trend_value(
+        target: dict[str, tuple[str, int | Decimal | None]],
+        enterprise_id: str,
+        summary: UsageSummary,
+        metric: RollupMetric,
+    ) -> None:
+        """Accumulate a report metric while dropping unknown pricing costs."""
+        value = _metric_value(summary, metric)
+        if enterprise_id not in target:
+            target[enterprise_id] = (summary.tenant_id, value)
+            return
+        tenant_id, current = target[enterprise_id]
+        if value is None:
+            return
+        if current is None:
+            current = Decimal("0") if metric == RollupMetric.COST_TOTAL else 0
+        target[enterprise_id] = (tenant_id, current + value)
+
     def _enterprise_trends(
         self,
         cur_pairs: list[tuple[str, UsageSummary]],
@@ -285,21 +328,19 @@ class RollupService:
         metric: RollupMetric,
     ) -> list[EnterpriseTrend]:
         """本期 vs 上期趋势（等长前移窗口）。"""
-        cur: dict[str, tuple[str, int | Decimal]] = {}
+        cur: dict[str, tuple[str, int | Decimal | None]] = {}
         for eid, s in cur_pairs:
-            tid, val = cur.get(eid, (s.tenant_id, _zero_metric(metric)))
-            cur[eid] = (tid, val + _metric_value(s, metric))
+            self._accumulate_trend_value(cur, eid, s, metric)
 
-        prev: dict[str, tuple[str, int | Decimal]] = {}
+        prev: dict[str, tuple[str, int | Decimal | None]] = {}
         for eid, s in prev_pairs:
-            tid, val = prev.get(eid, (s.tenant_id, _zero_metric(metric)))
-            prev[eid] = (tid, val + _metric_value(s, metric))
+            self._accumulate_trend_value(prev, eid, s, metric)
 
         trends: list[EnterpriseTrend] = []
         for eid in cur:
             tid, cur_val = cur[eid]
             prev_val = prev[eid][1] if eid in prev else _zero_metric(metric)
-            if prev_val == 0:
+            if cur_val is None or prev_val is None or prev_val == 0:
                 growth = None
             else:
                 growth = float((cur_val - prev_val) / prev_val) * 100

@@ -23,6 +23,7 @@ def _summary(summary_id: str, tenant: str, window_start: datetime, window_end: d
         run_count=1,
         token_total=100,
         cost_total=Decimal("1.50"),
+        pricing_status="known",
         error_count=0,
         duration_seconds_total=10,
     )
@@ -130,6 +131,32 @@ def test_empty_repo_report_is_zeroed():
     assert rep.ranking == []
     assert rep.trends == []
     assert rep.window_start is None
+
+
+def test_cost_report_ignores_unknown_pricing_and_preserves_null_when_unpriced():
+    svc = RollupService(CrossEnterpriseRollupRepository())
+    svc.ingest(EnterpriseRollupUpload(enterprise_id="known", tenant_id="t-known", summaries=[
+        _summary("known-cost", "t-known", datetime(2026, 6, 1), datetime(2026, 6, 2), cost_total=Decimal("2.50")),
+    ]))
+    svc.ingest(EnterpriseRollupUpload(enterprise_id="unknown", tenant_id="t-unknown", summaries=[
+        _summary("unknown-cost", "t-unknown", datetime(2026, 6, 1), datetime(2026, 6, 2), cost_total=None, pricing_status="unknown"),
+    ]))
+
+    report = svc.report(period=AggregationPeriod.DAY, metric=RollupMetric.COST_TOTAL)
+    assert report.totals.cost_total == Decimal("2.50")
+    assert report.buckets[0].cost_total == Decimal("2.50")
+    assert [row.enterprise_id for row in report.ranking] == ["known", "unknown"]
+    assert report.ranking[0].metric_value == Decimal("2.50")
+    assert report.ranking[1].metric_value is None
+
+    unknown_report = RollupService(CrossEnterpriseRollupRepository())
+    unknown_report.ingest(EnterpriseRollupUpload(enterprise_id="unknown", tenant_id="t-unknown", summaries=[
+        _summary("unknown-only", "t-unknown", datetime(2026, 6, 1), datetime(2026, 6, 2), cost_total=None, pricing_status="unknown"),
+    ]))
+    empty_cost = unknown_report.report(period=AggregationPeriod.DAY, metric=RollupMetric.COST_TOTAL)
+    assert empty_cost.totals.cost_total is None
+    assert empty_cost.buckets[0].cost_total is None
+    assert empty_cost.ranking[0].metric_value is None
 
 
 def test_report_only_exposes_aggregated_fields():

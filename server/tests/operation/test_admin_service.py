@@ -219,6 +219,16 @@ def test_finance_overview_ranks_usage_cost_and_tracks_unknown_tokens(service, en
     assert overview["top5_consumers"][0]["cost_total"] == "0.000084"
     assert overview["top5_consumers"][0]["pricing_status"] == "partial"
 
+    unknown_eid = _provision(enterprise_repo, "UnknownUsageCo")
+    rollup_repo.apply_summary(unknown_eid, "tenant-1", UsageSummary(
+        summary_id="unknown-only", tenant_id="tenant-1", employee_id="emp-1",
+        window_start=start, window_end=start + timedelta(hours=1),
+        run_count=1, token_total=25, cost_total=None, pricing_status="unknown",
+    ))
+    unknown_row = next(row for row in service.get_finance_overview("month")["top5_consumers"] if row["org_id"] == unknown_eid)
+    assert unknown_row["cost_total"] is None
+    assert unknown_row["pricing_status"] == "partial"
+
 
 def test_finance_reports_has_details(service, enterprise_repo):
     eid = _provision(enterprise_repo, "FinCo2")

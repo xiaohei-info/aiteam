@@ -127,6 +127,15 @@ def test_operation_migrations_use_cluster_advisory_lock(monkeypatch, tmp_path):
     assert "ALTER ROLE" in sql_text
 
 
+def test_usage_rollup_migration_scopes_idempotency_and_allows_unknown_cost():
+    from pathlib import Path
+
+    migration = Path(__file__).parents[2] / "operation_service" / "migrations" / "0016_usage_rollup_contract.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "ALTER COLUMN cost_total DROP NOT NULL" in sql
+    assert "PRIMARY KEY (enterprise_id, summary_id)" in sql
+
+
 # 一行企业账号 SELECT（_fetch_state / list_enterprises / top_consumers 共用列序）
 _ACC_COLS = (
     "ent-1", "Test Corp", "13800000000", "active", Decimal("0"),
@@ -400,7 +409,7 @@ class TestPgRollupRepository:
             summary_id=sid, tenant_id="t1",
             window_start=_dt(2026, 1, 1), window_end=_dt(2026, 1, 2),
             run_count=3, token_total=300, cost_total=Decimal("4.5"),
-            error_count=1, duration_seconds_total=10,
+            pricing_status="known", error_count=1, duration_seconds_total=10,
         )
 
     def test_apply_summary_executes_upsert_and_recompute(self, repo):
@@ -410,6 +419,20 @@ class TestPgRollupRepository:
         joined = "\n".join(s for s, _ in self.cursor.calls)
         assert "operation_rollup_seen" in joined
         assert "cross_enterprise_usage_rollup" in joined
+
+    def test_apply_summary_uses_enterprise_scoped_idempotency_and_null_unknown_cost(self, repo):
+        _noop(self.cursor)
+        _noop(self.cursor)
+        unknown = UsageSummary(
+            summary_id="same-id", tenant_id="t1", window_start=_dt(), window_end=_dt(2026, 1, 2),
+            run_count=1, token_total=2, cost_total=None, pricing_status="unknown",
+        )
+        repo.apply_summary("ent-1", "t1", unknown)
+        sql, params = self.cursor.calls[0]
+        assert "ON CONFLICT (enterprise_id, summary_id)" in sql
+        assert "ON CONFLICT (summary_id)" not in sql
+        assert params[0:3] == ("ent-1", "same-id", "t1")
+        assert params[6] is None
 
     def test_get_found(self, repo):
         row = (3, 300, Decimal("4.5"), 0, 0, 1, 10, 1, _dt(), _dt(), "t1")
@@ -458,7 +481,8 @@ class TestPgRollupRepository:
         from operation_service.rollup_repository import PgRollupRepository
         s = PgRollupRepository._to_summary("t1", ("s1", _dt(), _dt(), None, None, None, None, None, None, "unknown", "USD"))
         assert s.run_count == 0
-        assert s.cost_total == Decimal("0")
+        assert s.cost_total is None
+        assert s.model_dump(mode="json")["cost_total"] is None
 
     def test_inherits_base(self):
         from operation_service.rollup_repository import (

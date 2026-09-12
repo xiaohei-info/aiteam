@@ -139,16 +139,20 @@ test("startup turns unconfirmed work unknown exactly once without guessing end t
 
 test("pricing uses precise snapshot USD rates, explicit unknowns, nullable missing counters and true terminal evidence", () => {
   assert.equal(measureWorkUsage(entries, pricing)?.cost_total, "0.000000000004");
-  assert.equal(aggregateUsage(capture).cost_total, 0.000000000004);
+  assert.equal(aggregateUsage(capture).cost_total, "0.000000000004");
+  assert.equal(aggregateUsage(capture).cost_minor, 0);
   assert.equal(measureWorkUsage(entries, { ...pricing, currency: "EUR" } as never)?.pricing_status, "unknown");
   assert.equal(measureWorkUsage(entries, { ...pricing, output_usd_per_million: null })?.cost_total, null);
   assert.equal(measureWorkUsage(entries, { ...pricing, output_usd_per_million: "NaN" })?.cost_total, null);
+  const unknown = aggregateUsage({ ...capture, pricing: { ...pricing, pricing_status: "unknown" } });
+  assert.equal(unknown.cost_total, null);
+  assert.equal(unknown.cost_minor, null);
   assert.equal(measureWorkUsage([], pricing), null);
   assert.equal(measureWorkUsage([{ ...entries[0], message: { role: "assistant", usage: { input: 10 } } } as never], pricing), null);
   assert.equal(aggregateUsage({ ...capture, entries: [] }).pricing_status, "unknown");
   const request = { ...pricing, billing_mode: "request" as const, request_usd: "0.000001" };
   assert.equal(measureWorkUsage(entries, request)?.cost_total, "0.000001000000");
-  assert.equal(aggregateUsage({ ...capture, entries: [], pricing: request }).cost_total, 0, "initialization failure does not invent a billed request");
+  assert.equal(aggregateUsage({ ...capture, entries: [], pricing: request }).cost_total, null, "initialization failure does not invent a billed request");
   assert.equal(workEntryTime({ timestamp: 0 } as never), 0, "an actual numeric Pi epoch is not a missing timestamp");
   assert.equal(workEntryTime({ timestamp: "bad-date" } as never), null);
   assert.equal(workEntryTime(undefined), null);
@@ -192,10 +196,10 @@ test("faux work remains explicitly unmetered and production usage notifications 
 
 test("hourly decimal accumulation preserves tiny costs beside large totals and legacy/sent rows survive restart without a second ledger", async () => {
   const fixture = await createFixture();
-  const base = { ...aggregateUsage(capture), summary_id: "precision", cost_total: 1000.5, cost_minor: 100050 };
+  const base = { ...aggregateUsage(capture), summary_id: "precision", cost_total: "1000.500000000000", cost_minor: 100050 };
   fixture.store.upsertUsageSummary(base);
   fixture.store.db.prepare("UPDATE usage_summary_outbox SET cost_total_decimal = NULL, status = 'sent' WHERE summary_id = ?").run(base.summary_id);
-  for (let index = 0; index < 100; index++) fixture.store.upsertUsageSummary({ ...base, cost_total: 0.000000000001, cost_minor: 0 });
+  for (let index = 0; index < 100; index++) fixture.store.upsertUsageSummary({ ...base, cost_total: "0.000000000001", cost_minor: 0 });
   const row = fixture.store.db.prepare("SELECT cost_total_decimal FROM usage_summary_outbox WHERE summary_id = ?").get(base.summary_id) as { cost_total_decimal: string };
   assert.equal(row.cost_total_decimal, "1000.500000000100");
   const service = new UsageStatisticsService(fixture.store);

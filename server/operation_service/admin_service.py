@@ -389,7 +389,7 @@ class AdminService:
             token_history = [{
                 "run_count": row.run_count,
                 "token_total": row.token_total,
-                "cost_total": str(row.cost_total),
+                "cost_total": str(row.cost_total) if row.cost_total is not None else None,
                 "error_count": row.error_count,
                 "window_start": row.window_start.isoformat() if row.window_start else None,
                 "window_end": row.window_end.isoformat() if row.window_end else None,
@@ -569,12 +569,13 @@ class AdminService:
                 continue
             row = usage.setdefault(enterprise_id, {
                 "enterprise_id": enterprise_id, "run_count": 0, "token_total": 0,
-                "cost_total": Decimal("0"), "unknown_pricing_tokens": 0,
+                "cost_total": None, "unknown_pricing_tokens": 0,
                 "unknown_pricing_runs": 0,
             })
             row["run_count"] += summary.run_count
             row["token_total"] += summary.token_total
-            row["cost_total"] += summary.cost_total
+            if summary.pricing_status == "known" and summary.cost_total is not None:
+                row["cost_total"] = (row["cost_total"] if row["cost_total"] is not None else Decimal("0")) + summary.cost_total
             if summary.pricing_status == "unknown":
                 row["unknown_pricing_tokens"] += summary.token_total
                 row["unknown_pricing_runs"] += summary.run_count
@@ -588,17 +589,28 @@ class AdminService:
         recharges = self._recharges_for_finance(period)
         total_recharged = sum((r.amount for r in recharges), Decimal("0"))
         total_tokens = sum(row["token_total"] for row in usage.values())
-        total_cost = sum((row["cost_total"] for row in usage.values()), Decimal("0"))
+        total_cost = sum(
+            (row["cost_total"] for row in usage.values() if row["cost_total"] is not None),
+            Decimal("0"),
+        )
         states = {s.enterprise_id: s for s in self._admin.list_enterprises()}
         top5 = []
-        for row in sorted(usage.values(), key=lambda item: (item["cost_total"], item["token_total"]), reverse=True)[:5]:
+        for row in sorted(
+            usage.values(),
+            key=lambda item: (
+                item["cost_total"] is not None,
+                item["cost_total"] if item["cost_total"] is not None else Decimal("0"),
+                item["token_total"],
+            ),
+            reverse=True,
+        )[:5]:
             state = states.get(row["enterprise_id"])
             top5.append({
                 "org_id": row["enterprise_id"],
                 "enterprise_name": state.enterprise_name if state else row["enterprise_id"],
-                "cost_total": str(row["cost_total"]),
+                "cost_total": str(row["cost_total"]) if row["cost_total"] is not None else None,
                 "token_total": row["token_total"],
-                "pricing_status": "partial" if row["unknown_pricing_tokens"] else "known",
+                "pricing_status": "partial" if (row["unknown_pricing_tokens"] or row["unknown_pricing_runs"]) else "known",
                 "unknown_pricing_tokens": row["unknown_pricing_tokens"],
             })
 
@@ -632,13 +644,16 @@ class AdminService:
         usage = self._usage_for_finance(period)
         consumption_details = [
             {"enterprise_id": row["enterprise_id"], "token_total": row["token_total"],
-             "cost_total": str(row["cost_total"]), "run_count": row["run_count"],
-             "pricing_status": "partial" if row["unknown_pricing_tokens"] else "known",
+             "cost_total": str(row["cost_total"]) if row["cost_total"] is not None else None, "run_count": row["run_count"],
+             "pricing_status": "partial" if (row["unknown_pricing_tokens"] or row["unknown_pricing_runs"]) else "known",
              "unknown_pricing_tokens": row["unknown_pricing_tokens"], "currency": "USD"}
             for row in usage.values()
         ]
         total_recharged = sum((r.amount for r in recharges), Decimal("0"))
-        total_cost = sum((row["cost_total"] for row in usage.values()), Decimal("0"))
+        total_cost = sum(
+            (row["cost_total"] for row in usage.values() if row["cost_total"] is not None),
+            Decimal("0"),
+        )
         profit_details = [{
             "total_revenue": str(total_recharged), "revenue_currency": "CNY",
             "total_cost": str(total_cost), "cost_currency": "USD",

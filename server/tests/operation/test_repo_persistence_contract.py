@@ -24,6 +24,8 @@ ADMIN_DB_URL = os.getenv("OPERATION_ADMIN_DB_URL") or os.getenv("OPER_TEST_ADMIN
 APP_DB_URL = os.getenv("OPERATION_DB_URL") or os.getenv("OPER_TEST_DB_URL")
 APP_RW_PASSWORD = os.getenv("OPER_TEST_APP_RW_PASSWORD") or os.getenv("APP_RW_PASSWORD", "test_password")
 _PERSIST_E = "30000000-0000-4000-8000-000000000001"
+_PERSIST_E2 = "30000000-0000-4000-8000-000000000002"
+_PERSIST_E3 = "30000000-0000-4000-8000-000000000003"
 _PERSIST_T = "40000000-0000-4000-8000-000000000001"
 
 pytestmark = pytest.mark.integration
@@ -99,11 +101,26 @@ class TestFreshRollupSurvives:
             summary_id="persist-s2", tenant_id=_PERSIST_T,
             window_start=datetime(2026, 2, 1, tzinfo=timezone.utc),
             window_end=datetime(2026, 2, 2, tzinfo=timezone.utc),
-            run_count=10, token_total=1000, cost_total=Decimal("1"),
+            run_count=10, token_total=1000, cost_total=Decimal("1"), pricing_status="known",
         )
         repo.apply_summary(_PERSIST_E, _PERSIST_T, s)
         repo.apply_summary(_PERSIST_E, _PERSIST_T, s)  # duplicate should be idempotent
         assert _fresh(APP_DB_URL, type(repo)).get(_PERSIST_E).summary_count == 2
+
+    def test_same_summary_id_is_scoped_to_enterprise(self, pg_setup):
+        repo = pg_setup["rollup"]
+        first = UsageSummary(
+            summary_id="persist-shared-id", tenant_id=_PERSIST_T,
+            window_start=datetime(2026, 3, 1, tzinfo=timezone.utc),
+            window_end=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            run_count=1, token_total=10, cost_total=Decimal("0.1"), pricing_status="known",
+        )
+        second = first.model_copy(update={"tenant_id": "40000000-0000-4000-8000-000000000002", "token_total": 20})
+        repo.apply_summary(_PERSIST_E2, _PERSIST_T, first)
+        repo.apply_summary(_PERSIST_E3, second.tenant_id, second)
+        fresh = _fresh(APP_DB_URL, type(repo))
+        assert fresh.get(_PERSIST_E2).token_total == 10
+        assert fresh.get(_PERSIST_E3).token_total == 20
 
 
 class TestFreshCatalogSurvives:
