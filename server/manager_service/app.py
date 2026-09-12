@@ -36,6 +36,7 @@ from .routes_snapshot import build_snapshot_router
 from .routes_tenant import router as tenant_router
 from .routes_usage_audit_quota import build_usage_audit_quota_router
 from .routes_billing import build_billing_router
+from .usage_delivery_service import install_usage_delivery_lifespan
 from .routes_memory_items import build_memory_items_router
 from .routes_hindsight import build_hindsight_router
 from .hindsight_client import HindsightSettings
@@ -331,3 +332,8 @@ if settings.db_url and settings.admin_db_url:
     install_memory_retention_lifespan(app)
     from .knowledge_intake_recovery import install_knowledge_intake_lifespan
     install_knowledge_intake_lifespan(app)
+
+# Manager -> Operator usage delivery is an aggregate-only, restart-resumable
+# outbox.  The installer is a no-op unless both service databases, a signed
+# Operator URL/token, and tenant mapping are configured.
+install_usage_delivery_lifespan(app)

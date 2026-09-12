@@ -14,7 +14,7 @@ integration（真 PG RLS）落 test_usage_audit_quota_isolation.py。
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -29,19 +29,13 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inme
 # 无 DB 非集成测试用固定 RSA key 的 inmem verifier/signer（与 app 真实 DynamicRS256 同源逻辑）。
 _INMEM_VERIFIER, _INMEM_SIGNER = make_inmem_verifier_and_signer()
 
-from manager_service.usage_audit_quota_repository import (
+from manager_service.usage_audit_quota_repository import (  # noqa: E402
     AuditSummaryRow,
     QuotaPolicyRow,
     UsageRollupRow,
 )
-from manager_service.usage_audit_quota_service import UsageAuditQuotaService
-from manager_service.schemas import (
-    AuditSummaryOut,
-    QuotaEnforcementActionOut,
-    QuotaPolicyIn,
-    QuotaPolicyOut,
-    UsageRollupOut,
-)
+from manager_service.usage_audit_quota_service import UsageAuditQuotaService  # noqa: E402
+from manager_service.schemas import QuotaPolicyIn  # noqa: E402
 
 
 # ---- 内存伪 repository：按 tenant_id 分桶，模拟 RLS 跨租户不可见（D22）----
@@ -183,6 +177,9 @@ def _usage_item(summary_id="s1", **overrides) -> dict:
         "run_count": 5,
         "token_total": 10000,
         "cost_total": Decimal("1.5"),
+        "pricing_status": "known",
+        "pricing_version": 1,
+        "currency": "USD",
         "error_count": 1,
         "duration_seconds_total": 600,
     }

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from uuid import UUID, uuid4
-
-import pytest
+from uuid import uuid4
 
 from manager_service.usage_audit_quota_repository import (
     AuditSummaryRow,
@@ -80,6 +78,17 @@ def test_aggregate_usage_returns_dict():
     assert agg == {"rollup_count": 2, "run_count": 8, "token_total": 2000,
                    "cost_total": Decimal("3.0"), "unknown_pricing_tokens": 500,
                    "unknown_pricing_runs": 1, "error_count": 0, "duration_seconds_total": 1200}
+
+
+def test_aggregate_usage_reports_exact_pricing_rollup_counts():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=(2, 8, 2000, Decimal("3.0"), 500, 1, 1, 1, 0, 1200)))
+    agg = UsageAuditQuotaRepository(router).aggregate_usage(
+        ctx(), window_start=datetime(2026, 1, 1), window_end=datetime(2026, 2, 1)
+    )
+    assert agg["known_pricing_rollups"] == 1
+    assert agg["unknown_pricing_rollups"] == 1
+    assert agg["cost_total"] == Decimal("3.0")
 
 
 def test_upsert_audit_returns_row():

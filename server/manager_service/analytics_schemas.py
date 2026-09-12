@@ -124,3 +124,13 @@ class MemoryAnalyticsOut(BaseModel):
     refreshed_at: datetime
     employees: list[MemoryEmployeeAnalyticsOut] = Field(default_factory=list)
     unavailable_employee_count: int = Field(default=0, ge=0)
+
+
+# Usage/work projections are kept in their own module to avoid coupling the
+# knowledge/memory read models to usage persistence, while remaining available
+# from the Manager analytics namespace for callers that use this aggregate seam.
+from .usage_analytics_schemas import (  # noqa: E402,F401
+    UsageOperatorDeliveryOut,
+    UsageStatisticsOut,
+    UsageWorkHistoryOut,
+)

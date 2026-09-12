@@ -1,13 +1,15 @@
 """闭环 C：Manager 企业级 usage rollup -> Operator 跨企业看板上报（M8->O3，04 §6.5 / D13）。
 
-把本租户已聚合的脱敏 usage rollup 卷成企业级 EnterpriseRollupUpload，经窄通道上报 Operator；
+把本租户已聚合的脱敏 usage rollup 卷成企业级摘要，经窄通道上报 Operator；
 Operator 落 cross_enterprise_usage_rollup 并跨企业再聚合（board/detail）。Manager 只推聚合数字，
 不下钻成员/会话/token 明细（D13 红线）；Operator 只接收聚合结果。
+未知 pricing 的费用保持 null，不把未知费用伪装成零。
 
 - 协议接口 OperatorRollupClient.upload(payload, *, idempotency_key)：抛异常即视为失败。
 - 默认 UnconfiguredRollupClient 安全拒绝（不静默成功/不静默丢），生产注入 ServiceClientRollupClient。
 - 幂等键由 enterprise_id + 已聚合 summary_id 集合确定性派生（重发同批得同 key）。
-- 红线：payload 只承载 UsageSummary（脱敏聚合单元，含 tenant_id），绝不包含会话内容。
+- 红线：payload 只承载 Manager 的 aggregate-only nullable summary（含 tenant_id），绝不包含会话内容。
+- Unknown pricing is intentionally nullable until the shared Operator contract is updated by integration.
 """
 from __future__ import annotations
 
@@ -15,14 +17,16 @@ import hashlib
 from decimal import Decimal
 from typing import Protocol
 
-from shared.contracts.crosstier import EnterpriseRollupUpload
-from shared.contracts.summary import UsageSummary
 from shared.contracts.tenancy import TenantContext
 from shared.errors import AppError
 from shared.service_client import ServiceClient
 
 from .schemas import UsageRollupOut
 from .usage_audit_quota_service import UsageAuditQuotaService
+from .usage_delivery_repository import (
+    NullableEnterpriseRollupUpload,
+    NullableUsageSummaryPayload,
+)
 
 _ROLLUP_PATH = "/api/operation/rollups"
 
@@ -49,13 +53,18 @@ class ServiceClientRollupClient:
     def upload(self, payload, *, idempotency_key: str) -> None:
         self._client.post(_ROLLUP_PATH, json=payload.model_dump(mode="json"), idempotency_key=idempotency_key)
 
+    def close(self) -> None:
+        self._client.close()
 
-def _to_usage_summary(row: UsageRollupOut, tenant_id: str) -> UsageSummary:
-    """UsageRollupOut（本端聚合行）-> 契约 UsageSummary（Operator 消费的脱敏聚合单元）。
 
-    只搬聚合数字 + summary_id/窗口/employee_id（标识符）；无会话内容字段（D13）。
+def _to_usage_summary(row: UsageRollupOut, tenant_id: str) -> NullableUsageSummaryPayload:
+    """UsageRollupOut -> Manager's nullable aggregate serializer.
+
+    Only aggregate numbers and identifiers cross the boundary.  Unknown pricing
+    remains a null cost; the existing shared non-null UsageSummary contract is a
+    parent integration seam and is not silently used to manufacture zero.
     """
-    return UsageSummary(
+    return NullableUsageSummaryPayload(
         summary_id=row.summary_id,
         tenant_id=tenant_id,
         employee_id=row.employee_id,
@@ -63,7 +72,7 @@ def _to_usage_summary(row: UsageRollupOut, tenant_id: str) -> UsageSummary:
         window_end=row.window_end,
         run_count=row.run_count,
         token_total=row.token_total,
-        cost_total=row.cost_total,
+        cost_total=None if row.pricing_status == "unknown" else row.cost_total,
         currency=row.currency,
         pricing_version=row.pricing_version,
         pricing_status=row.pricing_status,
@@ -72,7 +81,7 @@ def _to_usage_summary(row: UsageRollupOut, tenant_id: str) -> UsageSummary:
     )
 
 
-def _batch_idempotency_key(enterprise_id: str, summaries: list[UsageSummary]) -> str:
+def _batch_idempotency_key(enterprise_id: str, summaries: list[NullableUsageSummaryPayload]) -> str:
     """确定性批次幂等键：同一组 summary_id 重发得到同一 key（05 §5.1）。"""
     joined = "|".join(sorted(s.summary_id for s in summaries))
     digest = hashlib.sha256(f"{enterprise_id}|{joined}".encode("utf-8")).hexdigest()[:24]
@@ -96,7 +105,7 @@ class RollupReporter:
         enterprise_id: str,
         client: OperatorRollupClient,
     ) -> dict:
-        """收集本租户 usage rollup -> 卷成 EnterpriseRollupUpload -> 上报 Operator。
+        """收集本租户 usage rollup -> 卷成企业摘要 -> 上报 Operator。
 
         返回 {summaries, run_count, token_total, cost_total} 供观测。无聚合数据时不上报（返回空）。
         """
@@ -104,7 +113,7 @@ class RollupReporter:
         summaries = [_to_usage_summary(r, ctx.tenant_id) for r in rows]
         if not summaries:
             return {"summaries": 0, "run_count": 0, "token_total": 0, "cost_total": "0"}
-        payload = EnterpriseRollupUpload(
+        payload = NullableEnterpriseRollupUpload(
             enterprise_id=enterprise_id,
             tenant_id=ctx.tenant_id,
             summaries=summaries,
@@ -115,5 +124,9 @@ class RollupReporter:
             "summaries": len(summaries),
             "run_count": sum(s.run_count for s in summaries),
             "token_total": sum(s.token_total for s in summaries),
-            "cost_total": str(sum((s.cost_total for s in summaries), Decimal("0"))),
+            "cost_total": (
+                str(sum((cost for cost in (s.cost_total for s in summaries) if cost is not None), Decimal("0")))
+                if any(s.cost_total is not None for s in summaries)
+                else None
+            ),
         }

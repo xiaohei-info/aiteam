@@ -164,6 +164,7 @@ def _usage_item(summary_id="s1", **kw):
         "window_start": datetime(2026, 1, 10, tzinfo=timezone.utc),
         "window_end": datetime(2026, 1, 11, tzinfo=timezone.utc),
         "run_count": 5, "token_total": 10000, "cost_total": Decimal("1.5"),
+        "pricing_status": "known", "pricing_version": 1, "currency": "USD",
         "error_count": 1, "duration_seconds_total": 600,
     }
     base.update(kw)

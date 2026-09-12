@@ -66,12 +66,28 @@ class BillingService:
             "created_at": row.created_at,
         }
 
-    def get_usage_overview(self, ctx: TenantContext, *, period: str) -> dict:
-        """按 tenant + period 聚合 usage overview（Token / USD API 成本 / 消耗最高员工 + 趋势 + 排名）。"""
-        return self._repo.get_usage_overview(ctx, period=period)
+    def get_usage_overview(
+        self,
+        ctx: TenantContext,
+        *,
+        period: str,
+        employee_id: str | None = None,
+        member_id: str | None = None,
+    ) -> dict:
+        """按 tenant + period 聚合 usage overview（兼容旧字段并支持归属过滤）。"""
+        return self._repo.get_usage_overview(
+            ctx, period=period, employee_id=employee_id, member_id=member_id,
+        )
 
     def list_usage_records(
-        self, ctx: TenantContext, *, period: str, employee_id: str | None = None,
+        self,
+        ctx: TenantContext,
+        *,
+        period: str,
+        employee_id: str | None = None,
+        member_id: str | None = None,
     ) -> list[dict]:
-        """按 tenant + period 列 usage 明细（员工维度用量记录），可选按 employee_id 过滤。"""
-        return self._repo.list_usage_records(ctx, period=period, employee_id=employee_id)
+        """列 Manager 保留的脱敏小时 usage 明细，可按成员/员工过滤。"""
+        return self._repo.list_usage_records(
+            ctx, period=period, employee_id=employee_id, member_id=member_id,
+        )
