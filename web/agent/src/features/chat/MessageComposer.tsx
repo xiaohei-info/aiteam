@@ -55,7 +55,14 @@ const SKILL_OPTIONS = [
 
 const TOAST_TTL_MS = 2500;
 
-type MentionItem = { id: string; label: string; auxiliaryData: LoadedExpertProjection };
+export interface MentionRosterExpert {
+  employee_id: string;
+  handle: string;
+  display_name: string;
+  avatar_url?: string | null;
+}
+
+type MentionItem = { id: string; label: string; auxiliaryData: MentionRosterExpert };
 
 export type PendingSubmission = {
   key: string;
@@ -82,7 +89,7 @@ export interface MessageComposerProps {
   onSent: () => void;
   refreshSignal?: number;
   /** Group conversations pass their authorized solution roster; private chat keeps the local roster lookup. */
-  mentionRoster?: LoadedExpertProjection[];
+  mentionRoster?: MentionRosterExpert[];
   /** The owning conversation enables the shared permission control beside Send. */
   conversation?: Conversation;
   onConversationChanged?: (conversation: Conversation) => void;
@@ -96,7 +103,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
   const sending = submitting || isPrompting;
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<File[]>([]);
-  const [roster, setRoster] = useState<LoadedExpertProjection[]>([]);
+  const [roster, setRoster] = useState<MentionRosterExpert[]>([]);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [skillOpen, setSkillOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -180,7 +187,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
       character: "@",
       searchSource: createStaticSource(mentionItems),
       renderItem: (item) => <span>{item.label}</span>,
-      onSelect: (item) => mentionToken(item.auxiliaryData as LoadedExpertProjection),
+      onSelect: (item) => mentionToken((item as MentionItem).auxiliaryData),
       emptySearchResultsText: "没有匹配的群成员",
       loadingText: "加载群成员…",
       menuLabel: "可 @ 的群成员",
@@ -216,7 +223,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
     setContent(input.getValue());
   }
 
-  function insertMention(expert: LoadedExpertProjection) {
+  function insertMention(expert: MentionRosterExpert) {
     const input = composerInputRef.current;
     if (!input) return;
     input.focus();
@@ -536,7 +543,7 @@ export function MessageComposer({ conversationId, isPrompting, onPromptingChange
 }
 
 /** 把 roster 投影成 @提及 handle 集合；delegation 只接受 Agent 投影的 stable handle。 */
-export function footerHandles(roster: LoadedExpertProjection[]): string[] {
+export function footerHandles(roster: Array<Pick<MentionRosterExpert, "handle">>): string[] {
   const seen = new Set<string>();
   for (const p of roster) {
     if (p.handle) seen.add(p.handle);
@@ -544,12 +551,12 @@ export function footerHandles(roster: LoadedExpertProjection[]): string[] {
   return [...seen];
 }
 
-function mentionDisplayName(expert: LoadedExpertProjection | undefined): string {
+function mentionDisplayName(expert: MentionRosterExpert | undefined): string {
   const name = expert?.display_name;
   return typeof name === "string" && name.trim() ? name.trim() : expert?.handle ?? "群成员";
 }
 
-function mentionToken(expert: LoadedExpertProjection): ChatComposerToken {
+function mentionToken(expert: MentionRosterExpert): ChatComposerToken {
   const displayName = mentionDisplayName(expert);
   return {
     value: `@${displayName}`,

@@ -9,12 +9,14 @@ const originalFetch = globalThis.fetch;
 
 const mocks = vi.hoisted(() => ({
   createGroupConversation: vi.fn(),
+  listConversationParticipants: vi.fn(),
   listLoadedExperts: vi.fn(),
   listSolutionInstances: vi.fn(),
 }));
 
 vi.mock("./useGroupApi", () => ({
   createGroupConversation: mocks.createGroupConversation,
+  listConversationParticipants: mocks.listConversationParticipants,
   listLoadedExperts: mocks.listLoadedExperts,
   listSolutionInstances: mocks.listSolutionInstances,
 }));
@@ -65,6 +67,9 @@ describe("GroupPage conversation creation", () => {
       { employee_id: "e1", tenant_id: "t1", version: "v1", handle: "coordinator", display_name: "协调员", revoked: false },
     ]);
     mocks.listSolutionInstances.mockResolvedValue([]);
+    mocks.listConversationParticipants.mockResolvedValue([
+      { employee_id: "e1", display_name: "协调员", handle: "coordinator", role_title: null, department_ids: [], role: "coordinator", available: true },
+    ]);
     mocks.createGroupConversation.mockImplementation(async () => {
       conversations = [created, existing];
       return created;

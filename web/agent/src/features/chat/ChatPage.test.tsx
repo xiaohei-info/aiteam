@@ -22,6 +22,11 @@ function ConversationLocation() {
   return <output data-testid="conversation-location">{params.get("conversation_id") ?? ""}</output>;
 }
 
+function SearchLocation() {
+  const [params] = useSearchParams();
+  return <output data-testid="entry-location">{params.get("entry_ref") ?? ""}</output>;
+}
+
 function conversation(id: string, employeeId: string, title: string, updatedAt: string): Conversation {
   return {
     id,
@@ -95,6 +100,40 @@ describe("ChatPage employee navigation", () => {
     expect(screen.getByText("3 个对话")).toBeInTheDocument();
     expect(screen.getByTestId("conversation-location")).toHaveTextContent("c3");
   }, 15000);
+
+  it("clears a stale search entry_ref when switching conversations", async () => {
+    login();
+    const first = conversation("first", "e1", "首个会话", "2026-08-24T12:00:00Z");
+    const second = conversation("second", "e2", "另一个会话", "2026-08-24T11:00:00Z");
+    const entriesRequests: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/events")) return new Response(new ReadableStream({ start(controller) { controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
+      if (url.includes("/entries")) {
+        entriesRequests.push(url);
+        return new Response(JSON.stringify({ data: { conversation_id: url.includes("/first/") ? "first" : "second", entries: [] } }), { headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/approvals")) return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+      if (url.endsWith("/state")) return new Response(JSON.stringify({ data: { conversation_id: "first", state: "active", prompting: false } }), { headers: { "content-type": "application/json" } });
+      if (url.includes("/grants/experts")) return new Response(JSON.stringify({ data: [], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ data: [first, second], page: { next_cursor: null, has_more: false } }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    render(
+      <MemoryRouter initialEntries={["/chat?conversation_id=first&entry_ref=entry-first"]}>
+        <ConversationLocation />
+        <SearchLocation />
+        <AppProvider><ChatPage /></AppProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "首个会话" })).toBeInTheDocument();
+    expect(screen.getByTestId("entry-location")).toHaveTextContent("entry-first");
+    fireEvent.click(await screen.findByTestId("conversation-second"));
+    await waitFor(() => expect(screen.getByTestId("conversation-location")).toHaveTextContent("second"));
+    expect(screen.getByTestId("entry-location")).toHaveTextContent(/^$/);
+    expect(entriesRequests.some((url) => url.includes("/conversations/second/entries") && !url.includes("entry_ref="))).toBe(true);
+  });
 
   it("opens the conversation requested by a workspace deep link", async () => {
     login();

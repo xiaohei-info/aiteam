@@ -9,6 +9,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useApp } from "../../lib/app-context";
+import { WorkInsights } from "../workspace/WorkInsights";
 import { getFeed, getScene } from "./useOfficeApi";
 import { ScheduledJobs } from "./ScheduledJobs";
 import type { OfficeEmployee, OfficeFeed, OfficeScene } from "./types";
@@ -611,6 +612,7 @@ export function OfficePage(): ReactNode {
               <FeedPanel feed={feed} feedLoaded={feedLoaded} loading={loading} error={feedError} />
             </aside>
           </div>
+          <WorkInsights client={client} />
           <span className={"office-data-caption"} aria-live="polite">
             {summary.map((item) => `${item.label} ${item.value}`).join(" · ")}
           </span>

@@ -46,8 +46,10 @@ describe("Agent routes", () => {
 
     expect(await screen.findByRole("region", { name: "本地工作台" })).toBeInTheDocument();
     expect(screen.getByText("暂无会话")).toBeInTheDocument();
-    expect(requests).toHaveLength(2);
+    expect(requests).toHaveLength(4);
     expect(requests.some((url) => url.includes("/api/agent/conversations"))).toBe(true);
     expect(requests.some((url) => url.includes("/api/agent/grants/experts"))).toBe(true);
+    expect(requests.some((url) => url.includes("/api/agent/work-records"))).toBe(true);
+    expect(requests.some((url) => url.includes("/api/agent/usage/statistics"))).toBe(true);
   });
 });

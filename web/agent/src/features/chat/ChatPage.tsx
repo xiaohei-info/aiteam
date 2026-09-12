@@ -25,7 +25,7 @@ import { MessageComposer } from "./MessageComposer";
 import { FilesPanel } from "./FilesPanel";
 import { RosterPicker } from "./RosterPicker";
 import type { Conversation } from "./useChatApi";
-import { createConversation } from "./useChatApi";
+import { createConversation, markConversationRead } from "./useChatApi";
 import { listLoadedExperts, type LoadedExpertProjection } from "../group/useGroupApi";
 
 const isPrivateConversation = (conversation: Conversation) => conversation.kind !== "group" && conversation.entry_employee_id !== null;
@@ -39,6 +39,7 @@ export function ChatPage(): React.ReactNode {
   const toMessage = useApiError();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedConversationId = searchParams.get("conversation_id");
+  const requestedEntryRef = searchParams.get("entry_ref");
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [prompting, setPrompting] = useState(false);
   const [sentSignal, setSentSignal] = useState(0);
@@ -66,15 +67,42 @@ export function ChatPage(): React.ReactNode {
     setSelected(conversation);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
+      const previousConversationId = next.get("conversation_id");
       next.set("conversation_id", conversation.id);
+      // Search links retain entry_ref only while opening that same conversation;
+      // switching conversations must not send the old locator to the new owner scope.
+      if (previousConversationId !== conversation.id) next.delete("entry_ref");
       return next;
     }, { replace: true });
   }, [setSearchParams]);
-  const handleStateChanged = useCallback((conversation: Conversation) => setSelected(conversation), []);
-  const handleScheduleChanged = useCallback((conversation: Conversation) => {
+  const handleConversationChanged = useCallback((conversation: Conversation) => {
     setSelected(conversation);
-    setSentSignal((signal) => signal + 1);
+    setConversations((current) => current.map((item) => item.id === conversation.id ? conversation : item));
   }, []);
+  const handleStateChanged = handleConversationChanged;
+  const handleScheduleChanged = useCallback((conversation: Conversation) => {
+    handleConversationChanged(conversation);
+    setSentSignal((signal) => signal + 1);
+  }, [handleConversationChanged]);
+  const handleReadEntry = useCallback(async (entryRef: string) => {
+    const conversationId = selected?.id;
+    if (!conversationId) return;
+    try {
+      const updated = await markConversationRead(client, conversationId, entryRef);
+      if (updated) {
+        handleConversationChanged(updated);
+        setSentSignal((signal) => signal + 1);
+      }
+    } catch {
+      // The local timeline remains readable if this owner-scoped metadata write races a selection change.
+    }
+  }, [client, handleConversationChanged, selected?.id]);
+  const handleReconciledState = useCallback((state: string) => {
+    const conversationId = selected?.id;
+    if (!conversationId) return;
+    setSelected((current) => current?.id === conversationId ? { ...current, state } : current);
+    setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, state } : item));
+  }, [selected?.id]);
   const handleSent = useCallback(() => setSentSignal((signal) => signal + 1), []);
   useEffect(() => {
     if (!requestedConversationId || selected?.id === requestedConversationId) return;
@@ -187,7 +215,16 @@ export function ChatPage(): React.ReactNode {
                 composer={<MessageComposer conversationId={selected.id} conversation={selected} onConversationChanged={handleStateChanged} isPrompting={prompting} onPromptingChange={setPrompting} onSent={handleSent} refreshSignal={sentSignal} />}
                 emptyState={<Text>选择一个会话开始对话</Text>}
               >
-                <TimelineView client={client} conversationId={selected.id} refreshSignal={sentSignal} onPromptingChange={setPrompting} sourceExperts={experts} />
+                <TimelineView
+                  client={client}
+                  conversationId={selected.id}
+                  initialEntryRef={requestedConversationId === selected.id ? requestedEntryRef : null}
+                  refreshSignal={sentSignal}
+                  onPromptingChange={setPrompting}
+                  onConversationStateChange={handleReconciledState}
+                  onReadEntry={handleReadEntry}
+                  sourceExperts={experts}
+                />
               </ChatLayout>
               </VStack>
               <FilesPanel client={client} conversationId={selected.id} refreshSignal={sentSignal} isPrompting={prompting} />

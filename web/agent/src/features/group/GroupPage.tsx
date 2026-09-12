@@ -10,8 +10,8 @@
  * 展示态不入持久化主状态（D6）：selected / roster / lastTriggered / lastIgnored /
  * dispatchSignal 均为本组件局部运行态，不写入 store、不落库。
  *
- * roster 说明：真实来源是 pull 装载的 employee 快照（GET /api/agent/grants/experts），
- * 本卡直接取用。
+ * roster 说明：真实来源是当前会话固定 participant Session 索引
+ *（GET /api/agent/conversations/{conversation_id}/participants）；授权全集仅用于头像/模型装饰，不能补成员。
  *
  * roster 点击 -> 输入框追加：用 window CustomEvent（"group:append-mention"）解耦，
  * MessageComposer 统一监听并负责真正的 prompt 提交。
@@ -38,13 +38,14 @@ import { Text } from "@astryxdesign/core/Text";
 import { Toolbar } from "@astryxdesign/core/Toolbar";
 import { VStack } from "@astryxdesign/core/VStack";
 import { ConversationList } from "../chat/ConversationList";
-import { MessageComposer } from "../chat/MessageComposer";
+import { MessageComposer, type MentionRosterExpert } from "../chat/MessageComposer";
 import { TimelineView } from "../chat/TimelineView";
 import { FilesPanel } from "../chat/FilesPanel";
-import type { Conversation } from "../chat/useChatApi";
+import { markConversationRead, type Conversation, type ConversationParticipant } from "../chat/useChatApi";
 import { GroupExpertRoster } from "./GroupExpertRoster";
 import {
   createGroupConversation,
+  listConversationParticipants,
   listLoadedExperts,
   listSolutionInstances,
   type GroupExpert,
@@ -64,16 +65,24 @@ const formatConversationTime = (value: string) => {
 const isGroupConversation = (conversation: Conversation) => conversation.kind === "group" || (conversation.kind === undefined && conversation.entry_employee_id == null);
 
 function toGroupExpert(p: {
-  handle: string;
+  handle: string | null;
   display_name: string;
   employee_id?: string | null;
   avatar_url?: string | null;
+  role?: "coordinator" | "participant";
+  role_title?: string | null;
+  available?: boolean;
+  model?: string | null;
 }): GroupExpert {
   return {
     handle: p.handle,
     display_name: p.display_name,
     ...(p.employee_id ? { employee_id: p.employee_id } : {}),
     ...(p.avatar_url ? { avatar_url: p.avatar_url } : {}),
+    ...(p.role ? { role: p.role } : {}),
+    ...(p.role_title !== undefined ? { role_title: p.role_title } : {}),
+    ...(p.available !== undefined ? { available: p.available } : {}),
+    ...(p.model !== undefined ? { model: p.model } : {}),
   };
 }
 
@@ -81,13 +90,16 @@ export function GroupPage() {
   const { client } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedConversationId = searchParams.get("conversation_id");
+  const requestedEntryRef = searchParams.get("entry_ref");
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [prompting, setPrompting] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  // 已装载专家原始投影列表；方案群聊只允许在本地授权 roster 内提及。
+  // 本地授权专家投影只用于装饰真实 participant rows 和新建入口，不作为当前群成员估算。
   const [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
+  const [participants, setParticipants] = useState<ConversationParticipant[] | null>(null);
   const [rosterError, setRosterError] = useState<string | null>(null);
+  const [participantError, setParticipantError] = useState<string | null>(null);
   // A submitted prompt increments this signal so the conversation list and local Pi entries refresh.
   const [dispatchSignal, setDispatchSignal] = useState(0);
   // "从解决方案创建群聊" 固定编排入口：列表+弹窗状态
@@ -121,31 +133,106 @@ export function GroupPage() {
     setSelected(conv);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
+      const previousConversationId = next.get("conversation_id");
       next.set("conversation_id", conv.id);
+      // Search links retain entry_ref only while opening that same conversation;
+      // switching conversations must not send the old locator to the new owner scope.
+      if (previousConversationId !== conv.id) next.delete("entry_ref");
       return next;
     }, { replace: true });
   }, [setSearchParams]);
+  const handleConversationChanged = useCallback((conversation: Conversation) => {
+    setSelected(conversation);
+    setConversations((current) => current.map((item) => item.id === conversation.id ? conversation : item));
+  }, []);
+  const handleReadEntry = useCallback(async (entryRef: string) => {
+    const conversationId = selected?.id;
+    if (!conversationId) return;
+    try {
+      const updated = await markConversationRead(client, conversationId, entryRef);
+      if (updated) {
+        handleConversationChanged(updated);
+        setDispatchSignal((signal) => signal + 1);
+      }
+    } catch {
+      // The local history remains readable if the owner-scoped read marker races a selection change.
+    }
+  }, [client, handleConversationChanged, selected?.id]);
+  const handleReconciledState = useCallback((state: string) => {
+    const conversationId = selected?.id;
+    if (!conversationId) return;
+    setSelected((current) => current?.id === conversationId ? { ...current, state } : current);
+    setConversations((current) => current.map((item) => item.id === conversationId ? { ...item, state } : item));
+  }, [selected?.id]);
 
-  // Filter only when the read-only solution projection explicitly supplies member IDs;
-  // otherwise keep the full locally authorized roster instead of inventing a scope.
   useEffect(() => {
     if (!requestedConversationId || selected?.id === requestedConversationId) return;
     const target = conversations.find((conversation) => conversation.id === requestedConversationId);
     if (target) handleSelect(target);
   }, [conversations, handleSelect, requestedConversationId, selected?.id]);
 
-  const participantExperts = useMemo(() => {
-    const solutionId = selected?.solution_instance_id;
-    const solution = solutionId ? solutions?.find((item) => item.solution_instance_id === solutionId) : undefined;
-    const authorized = experts.filter((expert) => !expert.revoked);
-    if (!solution || !Array.isArray(solution.expert_employee_ids)) return authorized;
-    const allowed = new Set(solution.expert_employee_ids);
-    return authorized.filter((expert) => allowed.has(expert.employee_id));
-  }, [experts, selected?.solution_instance_id, solutions]);
+  // A group roster is the fixed participant-session projection, not the current
+  // grants list. An empty response is a real empty group; it is never filled from
+  // authorized experts or a solution manifest.
+  useEffect(() => {
+    if (!selected) {
+      setParticipants(null);
+      setParticipantError(null);
+      return;
+    }
+    let cancelled = false;
+    setParticipants(null);
+    setParticipantError(null);
+    let loader: typeof listConversationParticipants | undefined;
+    try {
+      loader = listConversationParticipants;
+    } catch {
+      loader = undefined;
+    }
+    if (typeof loader !== "function") {
+      setParticipants([]);
+      return () => { cancelled = true; };
+    }
+    loader(client, selected.id)
+      .then((items) => {
+        if (!cancelled) setParticipants(items);
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setParticipants([]);
+          setParticipantError(cause instanceof Error ? cause.message : "本会话成员加载失败");
+        }
+      });
+    return () => { cancelled = true; };
+  }, [client, selected?.id]);
 
-  const rosterForSelected = useMemo(
-    () => participantExperts.map(toGroupExpert),
-    [participantExperts],
+  const expertById = useMemo(
+    () => new Map(experts.map((expert) => [expert.employee_id, expert] as const)),
+    [experts],
+  );
+  const rosterForSelected = useMemo<GroupExpert[]>(() => (participants ?? []).map((participant) => {
+    const loaded = expertById.get(participant.employee_id);
+    return toGroupExpert({
+      handle: participant.handle,
+      display_name: participant.display_name,
+      employee_id: participant.employee_id,
+      avatar_url: loaded?.avatar_url,
+      role: participant.role,
+      role_title: participant.role_title,
+      available: participant.available,
+      model: loaded?.model_policy?.model ?? null,
+    });
+  }), [expertById, participants]);
+  const mentionRoster = useMemo<MentionRosterExpert[]>(
+    () => rosterForSelected
+      .filter((expert): expert is GroupExpert & { handle: string; employee_id: string; display_name: string } => Boolean(expert.handle && expert.employee_id && expert.display_name && expert.available !== false))
+      .map((expert) => ({
+        employee_id: expert.employee_id,
+        handle: expert.handle,
+        display_name: expert.display_name,
+        avatar_url: expert.avatar_url,
+      })),
+    [rosterForSelected],
   );
 
   const handleDispatched = useCallback(() => {
@@ -287,6 +374,7 @@ export function GroupPage() {
             <HStack gap={2} align="center" wrap="wrap">
               <Heading level={1}>群聊协作</Heading>
               {rosterError && <Text type="supporting" role="alert">{rosterError}</Text>}
+              {participantError && <Text type="supporting" role="alert">{participantError}</Text>}
             </HStack>
           }
           endContent={
@@ -333,15 +421,24 @@ export function GroupPage() {
             </HStack>
             <Toolbar
               label="群聊专家 roster"
-              startContent={<GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />}
+              startContent={participants === null
+                ? <Text type="supporting" role="status">加载本会话成员…</Text>
+                : <GroupExpertRoster experts={rosterForSelected} onPickHandle={handlePickHandle} />}
               endContent={<Text type="supporting" as="div" aria-live="polite">不 @ 时由协调专家响应，@ 谁由谁响应</Text>}
             />
             <TimelineView
               client={client}
               conversationId={selected.id}
+              initialEntryRef={requestedConversationId === selected.id ? requestedEntryRef : null}
               refreshSignal={dispatchSignal}
               onPromptingChange={setPrompting}
-              sourceExperts={participantExperts}
+              onConversationStateChange={handleReconciledState}
+              onReadEntry={handleReadEntry}
+              sourceExperts={rosterForSelected.map((expert) => ({
+                employee_id: expert.employee_id ?? expert.handle ?? "group-participant",
+                display_name: expert.display_name ?? expert.handle ?? "群成员",
+                avatar_url: expert.avatar_url,
+              }))}
             />
             <MessageComposer
               conversationId={selected.id}
@@ -351,7 +448,7 @@ export function GroupPage() {
               onPromptingChange={setPrompting}
               onSent={handleDispatched}
               refreshSignal={dispatchSignal}
-              mentionRoster={participantExperts}
+              mentionRoster={mentionRoster}
             />
           </VStack>
           <FilesPanel client={client} conversationId={selected.id} refreshSignal={dispatchSignal} isPrompting={prompting} />
