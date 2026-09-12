@@ -171,4 +171,13 @@ describe("Agent workspace read consumers", () => {
     expect(screen.getByText("用量统计暂不可用")).toBeInTheDocument();
     expect(screen.queryByText("执行次数0")).not.toBeInTheDocument();
   });
+
+  it("shows a search error without retaining stale results", async () => {
+    const api = client({ listGet: vi.fn().mockRejectedValue(new Error("search unavailable")) });
+    render(<MemoryRouter><MessageSearch client={api} /></MemoryRouter>);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索词" }), { target: { value: "本地" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    expect(await screen.findByTestId("message-search-error")).toHaveTextContent("search unavailable");
+    expect(screen.queryByTestId("message-search-results")).not.toBeInTheDocument();
+  });
 });
