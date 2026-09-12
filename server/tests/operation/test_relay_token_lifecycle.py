@@ -1143,6 +1143,127 @@ def test_service_pricing_publication_and_catalog_boundaries():
     assert service._allowed_model_refs("tenant-1") == []
 
 
+def test_service_catalog_discovery_and_publish_guards():
+    class CatalogRepo:
+        def __init__(self):
+            self.provider = PROVIDER
+            self.models = list(MODELS)
+            self.rates = {"m1": None, "m2": None, "m3": None}
+
+        def get_provider(self, _provider_id):
+            return self.provider
+
+        def get_model(self, _provider_id, _model_id):
+            return MODELS[0]
+
+        def list_models(self, _provider_id, **_kwargs):
+            return self.models
+
+        def list_providers(self, **_kwargs):
+            return [self.provider]
+
+        def current_rate(self, _provider_id, model_id):
+            return self.rates.get(model_id)
+
+        def upsert_discovered_models(self, _provider_id, _model_ids):
+            return [MODELS[0]]
+
+        def set_model_status(self, _provider_id, _model_id, _status):
+            return None
+
+        def publish_priced_models(self, _provider_id):
+            return []
+
+        def ensure_internal_provider(self, **_kwargs):
+            return self.provider
+
+    class Discovery:
+        def __init__(self, result=None, error=None):
+            self.result = result
+            self.error = error
+
+        def get_channel_models(self, _channel_id):
+            if self.error:
+                raise self.error
+            return self.result
+
+    repo = CatalogRepo()
+    service = PlatformProviderService(repo, Discovery(["m1"]), FakeCrypto(), "http://relay/v1")
+    assert service.sync_models("p1")[0].model_id == "m1"
+    with pytest.raises(Conflict, match="channel"):
+        service._sync_models(replace(PROVIDER, newapi_channel_id=None))
+    with pytest.raises(Conflict, match="discovery failed"):
+        PlatformProviderService(repo, Discovery(error=NewApiError("gateway")), FakeCrypto(), "http://relay/v1").sync_models("p1")
+    with pytest.raises(Conflict, match="discovered no models"):
+        PlatformProviderService(repo, Discovery([]), FakeCrypto(), "http://relay/v1").sync_models("p1")
+
+    with pytest.raises(Conflict, match="known active price"):
+        service.publish_model("p1", "m1")
+    repo.rates["m1"] = RateRow(
+        "r1", "p1", "m1", 1, "known", "token", Decimal("1"), Decimal("1"),
+        None, None, None, "USD", "manual", None, NOW, None, True,
+    )
+    with pytest.raises(NotFound, match="platform model"):
+        service.publish_model("p1", "m1")
+    repo.provider = replace(PROVIDER, status="draft")
+    with pytest.raises(Conflict, match="not published"):
+        service.validate_model_ref(
+            PlatformModelRef(provider_id="p1", provider_version=1, model_id="m1", model_version=1),
+            require_published=True,
+        )
+    with pytest.raises(Conflict, match="large-model"):
+        service.publish_priced_models("p1")
+
+
+def test_service_access_expiry_and_issue_expiry_guards():
+    access = _access()
+    service = _service(LifecycleRepo(access), ExistingUserNewAPI(), refs=None)
+    assert service._access_is_effective(access, NOW)
+    assert not service._access_is_effective(replace(access, status="revoked"), NOW)
+    assert not service._access_is_effective(replace(access, newapi_token_id=None), NOW)
+    assert not service._access_is_effective(replace(access, expires_at=None), NOW)
+    naive = replace(access, expires_at=(NOW + timedelta(days=1)).replace(tzinfo=None))
+    assert service._access_is_effective(naive, NOW)
+    assert service._access_needs_renewal(replace(access, expires_at=NOW + timedelta(hours=1)), NOW)
+    assert service._access_needs_renewal(replace(access, status="revoked"), NOW)
+
+    operation = {"operation_id": "issue-expiry", "status": "running", "create_attempt_state": "not_started"}
+    with pytest.raises(NewApiError, match="invalid expiry"):
+        service._issue_relay_token(
+            operation, dashboard_token="management", user_id=11, name="relay", model_ids=["m1"], expired_time=-10**20,
+        )
+    with pytest.raises(NewApiError, match="expired before upstream"):
+        service._issue_relay_token(
+            operation, dashboard_token="management", user_id=11, name="relay", model_ids=["m1"], expired_time=int((NOW - timedelta(seconds=1)).timestamp()),
+        )
+
+
+def test_service_bootstrap_rejects_upstream_identity_and_quota_inconsistency():
+    class MismatchLogin(FreshNewAPI):
+        def login(self, _username, _password):
+            return "dashboard", 12
+
+    repo = LifecycleRepo(None)
+    service = _service(repo, MismatchLogin(), refs=[{"provider_id": "p1", "model_id": "m1"}])
+    with pytest.raises(NewApiError, match="identity mismatch"):
+        service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1", existing=None,
+            allowed_model_ids=["m1"], policy_revision="policy",
+        )
+
+    class NegativeQuota(FreshNewAPI):
+        def get_user_quota(self, *, dashboard_token, user_id):
+            return -1
+
+    repo = LifecycleRepo(None)
+    service = _service(repo, NegativeQuota(), refs=[{"provider_id": "p1", "model_id": "m1"}])
+    with pytest.raises(NewApiError, match="quota is invalid"):
+        service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1", existing=None,
+            allowed_model_ids=["m1"], policy_revision="policy",
+        )
+
+
 def test_service_public_price_sync_counts_unmatched_manual_and_known():
     model_a = replace(MODELS[0], model_id="m1")
     model_b = replace(MODELS[1], model_id="m2")
