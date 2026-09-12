@@ -1533,6 +1533,319 @@ def test_lost_in_flight_heartbeat_blocks_success_and_preserves_token_id():
     assert heartbeat_calls == 2
 
 
+def test_resolution_policy_commit_failure_keeps_cleanup_best_effort():
+    repo = LifecycleRepo(_access(models=("m1",), expires_at=NOW + timedelta(hours=1)))
+    newapi = ExistingUserNewAPI()
+    service = _service(repo, newapi, refs=None)
+    original_assert = service._assert_policy_for_commit
+    assertions = 0
+
+    def assert_policy(**kwargs):
+        nonlocal assertions
+        assertions += 1
+        if assertions == 2:
+            raise NewApiError("policy changed after access commit")
+        return original_assert(**kwargs)
+
+    service._assert_policy_for_commit = assert_policy
+    original_revoke = service._revoke_existing_access
+    failed_cleanup = False
+
+    def revoke(existing, **kwargs):
+        nonlocal failed_cleanup
+        if existing.newapi_token_id != 7 and not failed_cleanup:
+            failed_cleanup = True
+            raise NewApiError("replacement cleanup unavailable")
+        return original_revoke(existing, **kwargs)
+
+    service._revoke_existing_access = revoke
+    with pytest.raises(Conflict, match="policy changed before access commit"):
+        service.resolve_tenant_access(
+            tenant_id="tenant-1", provider_id="p1", model_ids=["m1"],
+        )
+
+    assert assertions == 2
+    assert failed_cleanup is True
+    assert newapi.calls == [("create", "aiteam-tenant-1-newapi-v2", ["m1"]), ("revoke", 7)]
+
+
+def test_provision_rejects_missing_identity_and_untracked_existing_user():
+    missing_identity = replace(_access(), newapi_user_id=None)
+    service = _service(LifecycleRepo(missing_identity), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(NewApiError, match="identity is unavailable"):
+        service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1",
+            existing=missing_identity, allowed_model_ids=["m1"],
+            policy_revision="policy",
+        )
+
+    service = _service(LifecycleRepo(None), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(NewApiError, match="exists without"):
+        service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1",
+            existing=None, allowed_model_ids=["m1"], policy_revision="policy",
+        )
+
+
+def test_bootstrap_unexpected_failure_marks_receipt_failed():
+    class UnexpectedBootstrapFailure(FreshNewAPI):
+        def create_user(self, **_kwargs):
+            raise RuntimeError("bootstrap transport failed")
+
+    repo = LifecycleRepo(None)
+    service = _service(repo, UnexpectedBootstrapFailure(), refs=[{"provider_id": "p1", "model_id": "m1"}])
+    with pytest.raises(NewApiError, match="bootstrap outcome is unknown"):
+        service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1",
+            existing=None, allowed_model_ids=["m1"], policy_revision="policy",
+        )
+
+    bootstrap = next(item for item in repo.operations.values() if item["operation_type"] == "bootstrap")
+    assert bootstrap["status"] == "failed"
+
+
+def test_existing_claim_returns_current_access_or_reports_live_claim():
+    class RunningOperationRepo(LifecycleRepo):
+        def ensure_relay_token_operation(self, **kwargs):
+            if kwargs["operation_key"] in self.operations:
+                return self.operations[kwargs["operation_key"]]
+            return super().ensure_relay_token_operation(**kwargs)
+
+    access = _access(models=("m1",), expires_at=NOW + timedelta(days=2))
+    repo = RunningOperationRepo(access)
+    service = _service(repo, ExistingUserNewAPI(), refs=None)
+    operation = service._ensure_operation(
+        tenant_id="tenant-1", provider_id="p1", newapi_user_id=11,
+        newapi_token_id=None, token_name="aiteam-tenant-1-newapi-v2",
+        operation_type="issue", operation_key="relay:issue:tenant-1:p1:aiteam-tenant-1-newapi-v2",
+        desired_model_ids=["m1"], desired_expires_at=NOW + timedelta(days=1),
+        policy_revision="policy", expected_access_version=access.version,
+        expected_access_token_id=access.newapi_token_id,
+    )
+    operation["status"] = "running"
+    current, previous, old_operation = service._provision_relay_access(
+        provider=PROVIDER, tenant_id="tenant-1", provider_id="p1", existing=access,
+        allowed_model_ids=["m1"], policy_revision="policy",
+    )
+    assert current is access and previous is access and old_operation is None
+
+    expired_repo = RunningOperationRepo(replace(access, expires_at=NOW - timedelta(seconds=1)))
+    expired_service = _service(expired_repo, ExistingUserNewAPI(), refs=None)
+    pending = expired_service._ensure_operation(
+        tenant_id="tenant-1", provider_id="p1", newapi_user_id=11,
+        newapi_token_id=None, token_name="aiteam-tenant-1-newapi-v2",
+        operation_type="issue", operation_key="relay:issue:tenant-1:p1:aiteam-tenant-1-newapi-v2",
+        desired_model_ids=["m1"], desired_expires_at=NOW + timedelta(days=1),
+        policy_revision="policy", expected_access_version=access.version,
+        expected_access_token_id=access.newapi_token_id,
+    )
+    pending["status"] = "running"
+    with pytest.raises(NewApiError, match="already in progress"):
+        expired_service._provision_relay_access(
+            provider=PROVIDER, tenant_id="tenant-1", provider_id="p1", existing=expired_repo.access,
+            allowed_model_ids=["m1"], policy_revision="policy",
+        )
+
+
+def test_issue_reconciliation_and_receipt_state_fail_closed():
+    operation = {
+        "operation_id": "issue-no-reconcile", "status": "running",
+        "claim_owner": "owner", "create_attempt_state": "unknown",
+    }
+    service = _service(object(), object(), refs=None)
+    with pytest.raises(NewApiError, match="cannot be reconciled"):
+        service._issue_relay_token(
+            operation, dashboard_token="management", user_id=11, name="relay",
+            model_ids=["m1"], expired_time=-1,
+        )
+
+    class StaleStateRepo:
+        def update_relay_token_create_state(self, _operation_id, *, create_attempt_state, claim_owner):
+            return None
+
+    class ReconciledToken:
+        def reconcile_relay_token(self, **_kwargs):
+            return 88, "relay-key"
+
+    stale_service = _service(StaleStateRepo(), ReconciledToken(), refs=None)
+    stale_operation = {
+        "operation_id": "issue-stale-state", "status": "running",
+        "claim_owner": "owner", "create_attempt_state": "unknown",
+    }
+    with pytest.raises(NewApiError, match="stale") as error:
+        stale_service._issue_relay_token(
+            stale_operation, dashboard_token="management", user_id=11, name="relay",
+            model_ids=["m1"], expired_time=-1,
+        )
+    assert error.value.token_id == 88
+
+
+def test_superseded_issue_cleanup_handles_adoption_claim_and_upstream_failures():
+    issue = {
+        "operation_id": "issue", "tenant_id": "tenant-1", "provider_id": "p1",
+        "newapi_user_id": 11, "token_name": "relay-v2", "desired_model_ids": ["m1"],
+        "desired_expires_at": NOW + timedelta(days=1), "policy_revision": "policy",
+    }
+
+    class LiveCleanupRepo(LifecycleRepo):
+        def cancel_relay_token_revoke_on_adoption(self, **_kwargs):
+            raise RuntimeError("live cleanup")
+
+    with pytest.raises(NewApiError, match="cleanup is still live"):
+        _service(LiveCleanupRepo(_access()), ExistingUserNewAPI(), refs=None)._reconcile_superseded_issue_token(
+            issue, _access(), tenant_id="tenant-1", provider_id="p1", token_id=7,
+        )
+
+    class ClaimNoneRepo(LifecycleRepo):
+        def claim_relay_token_operation(self, *_args, **_kwargs):
+            return None
+
+    claim_repo = ClaimNoneRepo(_access())
+    claim_service = _service(claim_repo, ExistingUserNewAPI(), refs=None)
+    claim_service._reconcile_superseded_issue_token(
+        issue, _access(), tenant_id="tenant-1", provider_id="p1", token_id=88,
+    )
+    assert claim_repo.operations
+
+    class RevokeFailure(FakeNewAPI):
+        def revoke_relay_token(self, **_kwargs):
+            raise RuntimeError("revoke failed")
+
+    failed_repo = LifecycleRepo(_access())
+    failed_service = _service(failed_repo, RevokeFailure(), refs=None)
+    failed_service._reconcile_superseded_issue_token(
+        issue, _access(), tenant_id="tenant-1", provider_id="p1", token_id=88,
+    )
+    revoke = next(item for item in failed_repo.operations.values() if item["operation_type"] == "revoke")
+    assert revoke["status"] == "failed"
+
+
+def test_failed_issue_reconciliation_protects_current_access_on_policy_read_failure():
+    repo = LifecycleRepo(_access(models=("m1",), token_id=99))
+    repo.provider = replace(PROVIDER, status="disabled")
+    newapi = ExistingUserNewAPI()
+    service = _service(repo, newapi, refs=None)
+    service._reconcile_failed_issue(
+        {"operation_id": "issue", "status": "running"},
+        tenant_id="tenant-1", provider_id="p1", management_token="management-key", user_id=11,
+        token_name="relay-v2", username="attenant", allowed_model_ids=["m1"],
+        expires_at=NOW + timedelta(days=1), policy_revision="policy",
+        error=NewApiError("post-create failed", token_id=88),
+    )
+    assert ("revoke", 99) not in newapi.calls
+    assert ("revoke", 88) in newapi.calls
+
+
+def test_failed_issue_reconciliation_swallows_stale_revoke_and_staging_failures():
+    class FailingRevokeService(PlatformProviderService):
+        def _revoke_existing_access(self, *_args, **_kwargs):
+            raise NewApiError("stale access cleanup failed")
+
+    policy = FakeEnterprise([{"provider_id": "p1", "model_id": "m2"}])
+    repo = LifecycleRepo(_access(models=("m1",), token_id=99))
+    service = FailingRevokeService(
+        repo, ExistingUserNewAPI(), FakeCrypto(), "http://relay/v1",
+        enterprise_repository=policy, clock=lambda: NOW,
+    )
+    service._reconcile_failed_issue(
+        {"operation_id": "issue", "status": "running"},
+        tenant_id="tenant-1", provider_id="p1", management_token="management-key", user_id=11,
+        token_name="relay-v2", username="attenant", allowed_model_ids=["m1"],
+        expires_at=NOW + timedelta(days=1), policy_revision="policy",
+        error=NewApiError("post-create failed", token_id=88),
+    )
+
+    class StageFailureRepo(LifecycleRepo):
+        def stage_relay_access(self, **_kwargs):
+            raise RuntimeError("stage failed")
+
+    stage_service = _service(StageFailureRepo(None), ExistingUserNewAPI(), refs=None)
+    stage_service._reconcile_failed_issue(
+        {"operation_id": "issue", "status": "running"},
+        tenant_id="tenant-1", provider_id="p1", management_token="management-key", user_id=11,
+        token_name="relay-v2", username="attenant", allowed_model_ids=["m1"],
+        expires_at=NOW + timedelta(days=1), policy_revision="policy",
+        error=NewApiError("post-create failed", token_id=88),
+    )
+
+
+def test_service_claim_owner_and_heartbeat_exceptions_fail_closed():
+    class MismatchRepo:
+        def claim_relay_token_operation(self, _operation_id, *, force=False, claim_owner=None):
+            return {"operation_id": "claim", "status": "running", "claim_owner": "different"}
+
+    service = _service(MismatchRepo(), object(), refs=None, heartbeat_interval=0.01)
+    with pytest.raises(NewApiError, match="claim owner mismatch"):
+        service._claim_operation({"operation_id": "claim", "status": "pending"})
+
+    no_owner = {"operation_id": "heartbeat", "status": "running"}
+    assert service.heartbeat_relay_token_operation(no_owner) is None
+
+    operation = {"operation_id": "heartbeat-error", "status": "running", "claim_owner": "owner"}
+    heartbeat_seen = threading.Event()
+    calls = 0
+
+    def heartbeat(_operation):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            heartbeat_seen.set()
+            raise RuntimeError("database unavailable")
+        return object()
+
+    service.heartbeat_relay_token_operation = heartbeat
+
+    def callback():
+        assert heartbeat_seen.wait(1)
+        return 88, "token"
+
+    with pytest.raises(NewApiError, match="lease expired") as error:
+        service._call_upstream(operation, callback)
+    assert error.value.token_id == 88
+
+    def failing_callback():
+        raise ValueError("upstream failed")
+
+    with pytest.raises(ValueError, match="upstream failed"):
+        service._call_upstream(operation, failing_callback)
+
+
+def test_service_runtime_and_receipt_helpers_fail_closed():
+    missing_service = _service(LifecycleRepo(None), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(NotFound, match="access not found"):
+        missing_service.access_metadata("tenant-1", "missing")
+
+    service = _service(LifecycleRepo(_access()), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(Conflict, match="revoked"):
+        service._runtime_access(PROVIDER, replace(_access(), status="revoked"))
+    with pytest.raises(Conflict, match="expired"):
+        service._runtime_access(PROVIDER, replace(_access(), expires_at=NOW - timedelta(seconds=1)))
+
+    class BadCrypto(FakeCrypto):
+        def decrypt(self, _value):
+            raise ValueError("bad ciphertext")
+
+    bad_service = PlatformProviderService(
+        LifecycleRepo(_access()), ExistingUserNewAPI(), BadCrypto(), "http://relay/v1",
+        clock=lambda: NOW,
+    )
+    with pytest.raises(Conflict, match="unavailable"):
+        bad_service._runtime_access(PROVIDER, _access())
+    with pytest.raises(NewApiError, match="management credential"):
+        bad_service._decrypt_management_token(_access())
+
+
+def test_service_recovery_helpers_accept_legacy_shapes_and_validate_fields():
+    service = _service(object(), object(), refs=None)
+    assert service._operation_status(None) == "pending"
+    assert service._operation_status(type("Operation", (), {"status": "failed"})()) == "failed"
+    operation = {"operation_id": "dict", "status": "pending"}
+    claimed = service._ensure_claim_owner(operation)
+    assert claimed["status"] == "running" and claimed["claim_owner"].startswith("operation-")
+    with pytest.raises(NewApiError, match="claim owner is unavailable"):
+        service._ensure_claim_owner(type("Operation", (), {})())
+
+
 def test_service_recovery_handles_update_delete_and_invalid_receipts():
     access = _access()
     class UpdateNewAPI(ExistingUserNewAPI):
