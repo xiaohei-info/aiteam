@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
 from operation_service.newapi_client import NewApiError
-from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow
+from operation_service.platform_provider_repository import AccessRow, ModelRow, ProviderRow, RateRow
+from operation_service.public_pricing_client import PublicModelPrice
 from operation_service.platform_provider_service import (
     PlatformProviderService,
     _relay_token_name,
     install_relay_token_lifecycle_lifespan,
 )
+from shared.contracts.platform_provider import PlatformModelRef
 from shared.errors import Conflict, NotFound
 
 
@@ -1071,3 +1074,285 @@ def test_failed_revoke_is_recorded_and_recovery_retries_without_reissuing():
     assert recovered == {"processed": 1, "succeeded": 1, "failed": 0}
     assert sum(call[0] == "create" for call in newapi.calls) == 1
     assert failed[0]["status"] == "succeeded"
+
+
+def test_service_pricing_publication_and_catalog_boundaries():
+    now = NOW
+    provider = PROVIDER
+    model = MODELS[0]
+    rate = RateRow(
+        "rate-1", "p1", "m1", 1, "known", "token", Decimal("1"), Decimal("2"),
+        None, None, None, "USD", "manual", None, now, None, True,
+    )
+    state = {"provider": provider, "status_result": model, "published": [model]}
+
+    class Repo:
+        def get_provider(self, _provider_id):
+            return state["provider"]
+
+        def get_model(self, _provider_id, _model_id):
+            return model
+
+        def current_rate(self, _provider_id, _model_id):
+            return rate
+
+        def create_rate(self, *_args, **_kwargs):
+            return rate
+
+        def set_model_status(self, *_args, **_kwargs):
+            return state["status_result"]
+
+        def publish_priced_models(self, _provider_id):
+            return state["published"]
+
+        def list_models(self, _provider_id, **_kwargs):
+            return [model]
+
+        def list_providers(self, **_kwargs):
+            return [provider]
+
+        def ensure_internal_provider(self, **_kwargs):
+            return provider
+
+    service = PlatformProviderService(Repo(), None, FakeCrypto(), "https://relay/v1")
+    assert service.set_rate(
+        "p1", "m1", source="manual", effective_from=now,
+        input_usd_per_million=Decimal("1"), output_usd_per_million=Decimal("2"),
+    ).rate_id == rate.rate_id
+    with pytest.raises(Conflict, match="requires input and output"):
+        service.set_rate("p1", "m1", input_usd_per_million=None, output_usd_per_million=Decimal("1"))
+    assert service.publish_model("p1", "m1").model_id == "m1"
+    state["status_result"] = None
+    with pytest.raises(NotFound, match="platform model"):
+        service.publish_model("p1", "m1")
+    state["provider"] = replace(provider, status="draft")
+    with pytest.raises(Conflict, match="publish the large-model"):
+        service.publish_priced_models("p1")
+    state["provider"] = provider
+    assert service.publish_priced_models("p1") == {"published": 1}
+    ref = PlatformModelRef(provider_id="p1", provider_version=1, model_id="m1", model_version=1)
+    assert service.validate_model_ref(ref, require_published=True) == ref
+
+    class MissingEnterprise:
+        def get_by_tenant_id(self, _tenant_id):
+            raise NotFound("missing")
+
+    service = PlatformProviderService(
+        Repo(), None, FakeCrypto(), "https://relay/v1", enterprise_repository=MissingEnterprise(),
+    )
+    assert service._allowed_model_refs("tenant-1") == []
+
+
+def test_service_public_price_sync_counts_unmatched_manual_and_known():
+    model_a = replace(MODELS[0], model_id="m1")
+    model_b = replace(MODELS[1], model_id="m2")
+    model_c = replace(MODELS[2], model_id="m3")
+    manual = RateRow(
+        "r1", "p1", "m2", 1, "known", "token", Decimal("1"), Decimal("2"), None, None, None,
+        "USD", "manual", None, NOW, None, True,
+    )
+    known = RateRow(
+        "r2", "p1", "m3", 1, "known", "token", Decimal("3"), Decimal("4"), None, None, None,
+        "USD", "public_reference", "v1", NOW, None, False,
+    )
+
+    class Repo:
+        def get_provider(self, _provider_id):
+            return PROVIDER
+
+        def list_models(self, _provider_id, **_kwargs):
+            return [model_a, model_b, model_c]
+
+        def current_rate(self, _provider_id, model_id):
+            return {"m1": None, "m2": manual, "m3": known}[model_id]
+
+    class Pricing:
+        def fetch(self):
+            return {
+                "m1": PublicModelPrice(Decimal("8"), Decimal("8")),
+                "m2": PublicModelPrice(Decimal("9"), Decimal("9")),
+                "m3": PublicModelPrice(Decimal("3"), Decimal("4"), source_version="v1"),
+            }
+
+    service = PlatformProviderService(Repo(), None, FakeCrypto(), "https://relay/v1", Pricing())
+    updates = []
+    service.set_rate = lambda *_args, **values: updates.append(values)
+    result = service.sync_public_prices("p1", force=True)
+    assert result == {
+        "source": "models.dev", "updated": 1, "skipped_known": 1,
+        "skipped_manual": 1, "unmatched": 0,
+    }
+    assert updates[0]["source"] == "public_reference"
+
+
+def test_service_resolution_reuses_effective_access_and_rejects_input_edges():
+    repo = LifecycleRepo(_access(models=("m1", "m2")))
+    newapi = ExistingUserNewAPI()
+    service = _service(repo, newapi, refs=None)
+    result = service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["m1"])
+    assert result["relay_token"] == "relay-key"
+    assert newapi.calls == []
+
+    empty_repo = LifecycleRepo(None)
+    empty_service = _service(empty_repo, ExistingUserNewAPI(), refs=None)
+    with pytest.raises(Conflict, match="no allowed models"):
+        empty_service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=[])
+    with pytest.raises(Conflict, match="only include published"):
+        empty_service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["not-published"])
+
+    requested_empty_repo = LifecycleRepo(_access(models=("m1",)))
+    requested_empty_service = _service(requested_empty_repo, ExistingUserNewAPI(), refs=None)
+    with pytest.raises(Conflict, match="at least one model"):
+        requested_empty_service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=[])
+
+
+def test_service_disabled_provider_and_policy_failure_fence_existing_access():
+    repo = LifecycleRepo(_access(models=("m1",)))
+    repo.provider = replace(PROVIDER, status="disabled")
+    newapi = ExistingUserNewAPI()
+    service = _service(repo, newapi, refs=None)
+    with pytest.raises(Conflict, match="not published"):
+        service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["m1"])
+    assert newapi.calls == [("revoke", 7)]
+
+    failed_repo = LifecycleRepo(_access(models=("m1",)))
+    failed_repo.provider = replace(PROVIDER, status="disabled")
+    failed_newapi = FakeNewAPI(revoke_errors=1)
+    failed_service = _service(failed_repo, failed_newapi, refs=None)
+    with pytest.raises(Conflict, match="revocation failed"):
+        failed_service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["m1"])
+
+    class FlippingEnterprise:
+        def __init__(self):
+            self.calls = 0
+
+        def get_by_tenant_id(self, _tenant_id):
+            self.calls += 1
+            refs = [{"provider_id": "p1", "model_id": "m1"}] if self.calls == 1 else [{"provider_id": "p1", "model_id": "m2"}]
+            return type("Account", (), {"allowed_model_refs": refs})()
+
+    policy_repo = LifecycleRepo(_access(models=("m1", "m2")))
+    policy_repo.tokens[7] = {"status": "active"}
+    policy_service = PlatformProviderService(
+        policy_repo, ExistingUserNewAPI(), FakeCrypto(), "http://relay/v1",
+        enterprise_repository=FlippingEnterprise(), clock=lambda: NOW,
+        renewal_window=timedelta(hours=24),
+    )
+    with pytest.raises(Conflict, match="policy changed"):
+        policy_service.resolve_tenant_access(tenant_id="tenant-1", provider_id="p1", model_ids=["m1"])
+
+
+def test_service_adapter_fallbacks_revoke_delete_and_runtime_guards():
+    access = _access()
+    calls = []
+
+    class UpdateOnly:
+        def update_relay_token(self, **kwargs):
+            calls.append(("update", kwargs))
+            return {"success": True}
+
+    service = _service(LifecycleRepo(access), UpdateOnly(), refs=None)
+    assert service._revoke_upstream(access, 7) is True
+    assert calls[0][1]["status"] == 2
+
+    class DeleteOnly:
+        def delete_token(self, **kwargs):
+            calls.append(("delete", kwargs))
+            return True
+
+    calls.clear()
+    service = _service(LifecycleRepo(access), DeleteOnly(), refs=None)
+    assert service._revoke_upstream(access, 7) is True
+    assert calls[0][0] == "delete"
+    assert service._delete_upstream(access, 7) is True
+
+    class Unsupported:
+        pass
+
+    service = _service(LifecycleRepo(access), Unsupported(), refs=None)
+    with pytest.raises(NewApiError, match="unsupported"):
+        service._revoke_upstream(access, 7)
+    with pytest.raises(NewApiError, match="unsupported"):
+        service._delete_upstream(access, 7)
+    with pytest.raises(NewApiError, match="identity"):
+        service._revoke_upstream(replace(access, newapi_user_id=None), 7)
+
+
+def test_service_claim_heartbeat_and_upstream_lease_edges():
+    service = _service(object(), object(), refs=None)
+    pending = {"operation_id": "pending", "status": "pending", "attempt_count": 0}
+    assert service._claim_operation(pending) is pending
+    assert service._claim_operation({"operation_id": "done", "status": "succeeded"}) is None
+    assert service.heartbeat_relay_token_operation({"status": "pending"}) is None
+    expired = {
+        "operation_id": "expired", "status": "running", "claim_owner": "owner",
+        "lease_until": NOW - timedelta(seconds=1),
+    }
+    assert service.heartbeat_relay_token_operation(expired) is None
+
+    lease_lost = {"operation_id": "lease", "status": "running", "claim_owner": "owner"}
+    service.heartbeat_relay_token_operation = lambda _operation: None
+    with pytest.raises(NewApiError, match="lease is no longer owned"):
+        service._call_upstream(lease_lost, lambda: True)
+
+    heartbeat_calls = 0
+
+    def heartbeat_after_callback(_operation):
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        return object() if heartbeat_calls == 1 else None
+
+    service.heartbeat_relay_token_operation = heartbeat_after_callback
+    with pytest.raises(NewApiError, match="lease expired") as lease_error:
+        service._call_upstream(lease_lost, lambda: (88, "token"))
+    assert lease_error.value.token_id == 88
+
+
+def test_service_recovery_handles_update_delete_and_invalid_receipts():
+    access = _access()
+    class UpdateNewAPI(ExistingUserNewAPI):
+        def __init__(self):
+            super().__init__()
+            self.updated = []
+
+        def update_relay_token(self, **kwargs):
+            self.updated.append(kwargs)
+            return {"success": True}
+
+    update_api = UpdateNewAPI()
+    update_repo = LifecycleRepo(access)
+    update_service = _service(update_repo, update_api, refs=None)
+    update_service._recover_operation({
+        "operation_id": "update", "status": "running", "claim_owner": "owner",
+        "tenant_id": "tenant-1", "provider_id": "p1", "operation_type": "update",
+        "newapi_user_id": 11, "newapi_token_id": 7, "token_name": "relay-v1",
+        "desired_model_ids": ["m1"], "desired_expires_at": NOW + timedelta(days=1),
+        "policy_revision": "policy",
+    })
+    assert update_api.updated[0]["token_id"] == 7
+
+    class DeleteNewAPI(ExistingUserNewAPI):
+        def delete_relay_token(self, **kwargs):
+            self.calls.append(("delete", kwargs["token_id"]))
+            return True
+
+    delete_api = DeleteNewAPI()
+    delete_repo = LifecycleRepo(replace(access, status="revoked"))
+    delete_service = _service(delete_repo, delete_api, refs=None)
+    delete_service._recover_operation({
+        "operation_id": "delete", "status": "running", "claim_owner": "owner",
+        "tenant_id": "tenant-1", "provider_id": "p1", "operation_type": "delete",
+        "newapi_user_id": 11, "newapi_token_id": 7, "token_name": "relay-v1",
+        "desired_model_ids": [], "desired_expires_at": NOW, "policy_revision": "policy",
+    })
+    assert delete_api.calls == [("delete", 7)]
+
+    invalid_service = _service(LifecycleRepo(access), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(NewApiError, match="invalid scope"):
+        invalid_service._recover_operation({"operation_type": "revoke"})
+    missing_service = _service(LifecycleRepo(None), ExistingUserNewAPI(), refs=None)
+    with pytest.raises(NewApiError, match="unavailable"):
+        missing_service._recover_operation({
+            "tenant_id": "tenant-1", "provider_id": "p1", "operation_type": "update",
+            "newapi_token_id": 7,
+        })
