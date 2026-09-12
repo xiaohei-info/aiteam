@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import threading
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,6 +131,13 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
 
 _APP_ROLE = "app_rw"
 _MIGRATION_LOCK = threading.Lock()
+
+
+def relay_policy_lock_key(tenant_id: str) -> str:
+    """Return the shared advisory-lock key for one tenant's model policy."""
+    return f"relay-policy:{tenant_id}"
+
+
 # Keep cluster-wide app_rw role creation/alteration serialized with Manager's
 # migration runner when both control-plane services start together.
 _MIGRATION_ADVISORY_LOCK = 0x415445414D
@@ -145,31 +153,46 @@ class PgEnterpriseRepository(EnterpriseRepository):
     def __init__(self, dsn: str):
         self._dsn = dsn
 
+    @contextmanager
+    def relay_policy_lock(self, tenant_id: str):
+        """Hold the tenant policy lock for the complete caller transaction."""
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (relay_policy_lock_key(tenant_id),),
+                    )
+                yield
+
     def create(self, account: EnterpriseAccount) -> EnterpriseAccount:
         import psycopg
         from psycopg.errors import UniqueViolation
 
         try:
-            with psycopg.connect(self._dsn, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO enterprise_account
-                            (enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                             owner_phone, owner_bootstrap_hash, allowed_model_refs)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            account.enterprise_id,
-                            account.tenant_id,
-                            account.enterprise_name,
-                            account.enterprise_code,
-                            account.owner_phone,
-                            account.owner_bootstrap_hash,
-                            json.dumps(account.allowed_model_refs) if account.allowed_model_refs is not None else None,
-                        ),
-                    )
-            return account
+            with self.relay_policy_lock(account.tenant_id):
+                with psycopg.connect(self._dsn, autocommit=True) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO enterprise_account
+                                (enterprise_id, tenant_id, enterprise_name, enterprise_code,
+                                 owner_phone, owner_bootstrap_hash, allowed_model_refs)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                account.enterprise_id,
+                                account.tenant_id,
+                                account.enterprise_name,
+                                account.enterprise_code,
+                                account.owner_phone,
+                                account.owner_bootstrap_hash,
+                                json.dumps(account.allowed_model_refs) if account.allowed_model_refs is not None else None,
+                            ),
+                        )
+                return account
         except UniqueViolation as e:
             # 区分是 enterprise_id 还是 enterprise_code 冲突。
             if "enterprise_account_pkey" in str(e) or "enterprise_id" in str(e):
@@ -239,19 +262,25 @@ class PgEnterpriseRepository(EnterpriseRepository):
     ) -> EnterpriseAccount:
         import psycopg
 
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE enterprise_account
-                    SET allowed_model_refs = %s, updated_at = now()
-                    WHERE enterprise_id = %s
-                    """,
-                    (json.dumps(allowed_model_refs) if allowed_model_refs is not None else None, enterprise_id),
-                )
-                if cur.rowcount == 0:
-                    raise NotFound(f"enterprise not found: {enterprise_id}")
-        return self.get(enterprise_id)
+        # The tenant id is immutable after creation, so resolving it before
+        # taking the lock is safe.  The update and returned read stay inside
+        # the tenant lock; Relay resolution takes this lock before its
+        # narrower tenant/provider access lock.
+        account = self.get(enterprise_id)
+        with self.relay_policy_lock(account.tenant_id):
+            with psycopg.connect(self._dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE enterprise_account
+                        SET allowed_model_refs = %s, updated_at = now()
+                        WHERE enterprise_id = %s
+                        """,
+                        (json.dumps(allowed_model_refs) if allowed_model_refs is not None else None, enterprise_id),
+                    )
+                    if cur.rowcount == 0:
+                        raise NotFound(f"enterprise not found: {enterprise_id}")
+            return self.get(enterprise_id)
 
     def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
         import psycopg

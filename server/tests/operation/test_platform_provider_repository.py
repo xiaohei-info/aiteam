@@ -128,9 +128,29 @@ def test_relay_lifecycle_migration_is_replay_safe_and_uses_app_rw_grants():
     assert "DROP CONSTRAINT IF EXISTS platform_provider_relay_token_operation_operation_type_check" in migration
     assert "platform_provider_relay_token_operation_bootstrap_state_check" in migration
     assert "pg_advisory_xact_lock" in getsource(PlatformProviderRepository.relay_access_lock)
+    assert "pg_advisory_xact_lock" in getsource(PlatformProviderRepository.relay_policy_lock)
+    assert "relay_policy_lock_key" in getsource(PlatformProviderRepository.relay_policy_lock)
     assert "FOR UPDATE SKIP LOCKED" in getsource(PlatformProviderRepository.claim_relay_token_operations)
     # No lifecycle receipt is allowed to persist an opaque token value.
     assert "encrypted_token" not in migration.split("CREATE TABLE IF NOT EXISTS platform_provider_relay_token", 1)[1]
+
+
+def test_relay_policy_lock_uses_the_shared_tenant_key_and_transaction(monkeypatch):
+    from operation_service.repository import relay_policy_lock_key
+
+    conn = _Connection()
+    monkeypatch.setattr(repository_module.psycopg, "connect", lambda *_args, **_kwargs: conn)
+    repo = PlatformProviderRepository("postgresql://test")
+
+    with repo.relay_policy_lock("tenant-1"):
+        pass
+
+    assert conn.executed == [
+        (
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (relay_policy_lock_key("tenant-1"),),
+        ),
+    ]
 
 
 def test_internal_provider_upsert_reconciles_discovered_models(monkeypatch):

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from operation_service.platform_provider_repository import PlatformProviderRepository
-from operation_service.repository import apply_migrations
+from operation_service.repository import EnterpriseAccount, PgEnterpriseRepository, apply_migrations
 
 
 ADMIN_DB_URL = os.getenv("OPERATION_ADMIN_DB_URL") or os.getenv("OPER_TEST_ADMIN_DB_URL")
@@ -67,6 +69,87 @@ def lifecycle_pg():
                 "DELETE FROM platform_provider WHERE provider_id=%s::uuid",
                 (provider.provider_id,),
             )
+
+
+def test_policy_update_waits_for_the_same_tenant_lock(lifecycle_pg):
+    """A policy writer cannot pass a resolver's tenant-wide lock."""
+    repo, _provider = lifecycle_pg
+    enterprise = PgEnterpriseRepository(APP_DB_URL)
+    enterprise_id = str(uuid.uuid4())
+    tenant_id = str(uuid.uuid4())
+    enterprise.create(
+        EnterpriseAccount(
+            enterprise_id=enterprise_id,
+            tenant_id=tenant_id,
+            enterprise_name="Relay policy lock test",
+            enterprise_code=None,
+            owner_phone="13800000000",
+            owner_bootstrap_hash="hash",
+            allowed_model_refs=None,
+        ),
+    )
+
+    release = threading.Event()
+    held = threading.Event()
+    finished = threading.Event()
+    errors: list[BaseException] = []
+    import psycopg
+
+    def hold_policy_lock() -> None:
+        try:
+            with repo.relay_policy_lock(tenant_id):
+                held.set()
+                release.wait(5)
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+            held.set()
+
+    def update_policy() -> None:
+        try:
+            enterprise.update_allowed_model_refs(
+                enterprise_id,
+                [{"provider_id": str(_provider.provider_id), "model_id": "relay-test-model"}],
+            )
+        except BaseException as exc:  # pragma: no cover - assertion below reports it
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    holder = threading.Thread(target=hold_policy_lock, name="relay-policy-lock-holder")
+    writer = threading.Thread(target=update_policy, name="relay-policy-writer")
+    holder.start()
+    writer_started = False
+    try:
+        assert held.wait(5)
+        writer.start()
+        writer_started = True
+
+        waiting = False
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not finished.is_set():
+            with psycopg.connect(APP_DB_URL, autocommit=True) as conn:
+                waiting = bool(conn.execute(
+                    "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted",
+                ).fetchone()[0])
+            if waiting:
+                break
+            time.sleep(0.02)
+        assert waiting, "policy writer did not wait on the shared advisory lock"
+    finally:
+        release.set()
+        holder.join(timeout=5)
+        if writer_started:
+            writer.join(timeout=5)
+        with psycopg.connect(ADMIN_DB_URL, autocommit=True) as conn:
+            conn.execute(
+                "DELETE FROM enterprise_account WHERE enterprise_id=%s::uuid",
+                (enterprise_id,),
+            )
+
+    assert not holder.is_alive()
+    assert not writer.is_alive()
+    assert not errors
+    assert finished.is_set()
 
 
 def test_lifecycle_rows_survive_migration_replay_and_app_rw_claim_cas(lifecycle_pg):

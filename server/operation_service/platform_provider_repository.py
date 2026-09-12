@@ -11,6 +11,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from .repository import relay_policy_lock_key
+
 
 @dataclass(frozen=True)
 class ProviderRow:
@@ -154,6 +156,20 @@ class PlatformProviderRepository:
 
     def _connect(self):
         return psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row)
+
+    @contextmanager
+    def relay_policy_lock(self, tenant_id: str):
+        """Hold the shared tenant policy lock for a complete resolver."""
+        # Policy writers in PgEnterpriseRepository use the same key.  The
+        # tenant-wide lock is acquired before relay_access_lock below; policy
+        # writes acquire only this lock, so no reverse lock order exists.
+        with self._connect() as conn:
+            with conn.transaction():
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (relay_policy_lock_key(tenant_id),),
+                )
+                yield
 
     @contextmanager
     def relay_access_lock(self, tenant_id: str, provider_id: str):

@@ -60,12 +60,25 @@ class _FakeCursor:
         return False
 
 
+class _FakeTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 class _FakeConn:
     def __init__(self, cursor):
         self._cursor = cursor
+        self.transaction_count = 0
 
     def cursor(self):
         return self._cursor
+
+    def transaction(self):
+        self.transaction_count += 1
+        return _FakeTransaction()
 
     def commit(self):
         pass
@@ -683,14 +696,48 @@ class TestPgEnterpriseModelAccess:
         with pytest.raises(NotFound, match="enterprise not found"):
             repo.get_by_tenant_id("missing")
 
-    def test_update_allowed_model_refs_updates_and_reads_account(self, repo):
+    def test_update_allowed_model_refs_updates_and_reads_account_under_policy_lock(self, repo):
+        from operation_service.repository import relay_policy_lock_key
+
         self.cursor.rowcount = 1
         _set_one(self.cursor, self._row([]))
 
         account = repo.update_allowed_model_refs("ent-1", [])
 
         assert account.allowed_model_refs == []
-        assert "allowed_model_refs = %s" in self.cursor.calls[0][0]
+        lock_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "pg_advisory_xact_lock" in sql
+        )
+        update_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "allowed_model_refs = %s" in sql
+        )
+        assert lock_index < update_index
+        assert self.cursor.calls[lock_index][1] == (relay_policy_lock_key("tenant-1"),)
+        assert self.conn.transaction_count == 1
+
+    def test_create_acquires_policy_lock_for_initial_model_access(self, repo):
+        from operation_service.repository import EnterpriseAccount, relay_policy_lock_key
+
+        account = EnterpriseAccount(
+            enterprise_id="ent-1", tenant_id="tenant-1", enterprise_name="Acme",
+            enterprise_code=None, owner_phone="1", owner_bootstrap_hash="hash",
+            allowed_model_refs=[],
+        )
+
+        assert repo.create(account) == account
+        lock_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "pg_advisory_xact_lock" in sql
+        )
+        insert_index = next(
+            index for index, (sql, _params) in enumerate(self.cursor.calls)
+            if "INSERT INTO enterprise_account" in sql
+        )
+        assert lock_index < insert_index
+        assert self.cursor.calls[lock_index][1] == (relay_policy_lock_key("tenant-1"),)
+        assert self.conn.transaction_count == 1
 
     def test_update_allowed_model_refs_not_found(self, repo):
         self.cursor.rowcount = 0

@@ -317,16 +317,27 @@ class PlatformProviderService:
             raise Conflict(f"platform model {ref.model_id!r} does not support thinking")
 
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
-        """Resolve access under the repository's durable tenant/provider fence."""
-        lock = getattr(self._repo, "relay_access_lock", None)
-        if callable(lock):
-            with lock(tenant_id, provider_id):
-                return self._resolve_tenant_access(
-                    tenant_id=tenant_id, provider_id=provider_id, model_ids=model_ids,
-                )
-        return self._resolve_tenant_access(
-            tenant_id=tenant_id, provider_id=provider_id, model_ids=model_ids,
-        )
+        """Resolve access under the shared policy and access fences."""
+        access_lock = getattr(self._repo, "relay_access_lock", None)
+        policy_lock = getattr(self._repo, "relay_policy_lock", None)
+
+        def resolve_under_access_lock() -> dict:
+            if callable(access_lock):
+                with access_lock(tenant_id, provider_id):
+                    return self._resolve_tenant_access(
+                        tenant_id=tenant_id, provider_id=provider_id, model_ids=model_ids,
+                    )
+            return self._resolve_tenant_access(
+                tenant_id=tenant_id, provider_id=provider_id, model_ids=model_ids,
+            )
+
+        # Always acquire the tenant-wide policy lock before the narrower
+        # tenant/provider access lock. Policy writers acquire only the former,
+        # which gives one order across providers without a reverse-lock cycle.
+        if callable(policy_lock):
+            with policy_lock(tenant_id):
+                return resolve_under_access_lock()
+        return resolve_under_access_lock()
 
     def _resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         """Resolve a current tenant token, fencing stale grants first.

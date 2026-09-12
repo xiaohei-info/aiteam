@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -505,6 +506,43 @@ def test_relay_lifecycle_lifespan_runs_bounded_recovery_and_stops_cleanly():
         assert limits == [20]
 
     asyncio.run(run())
+
+
+def test_resolve_tenant_access_acquires_policy_lock_before_access_lock():
+    events = []
+
+    class OrderedRepo(LifecycleRepo):
+        @contextmanager
+        def relay_policy_lock(self, tenant_id):
+            events.append(("policy", "enter", tenant_id))
+            yield
+            events.append(("policy", "exit", tenant_id))
+
+        @contextmanager
+        def relay_access_lock(self, tenant_id, provider_id):
+            events.append(("access", "enter", tenant_id, provider_id))
+            yield
+            events.append(("access", "exit", tenant_id, provider_id))
+
+    repo = OrderedRepo(_access(models=("m1",)))
+    enterprise = FakeEnterprise([{"provider_id": "p1", "model_id": "m1"}])
+    service = PlatformProviderService(
+        repo, ExistingUserNewAPI(), FakeCrypto(), "http://relay/v1",
+        enterprise_repository=enterprise, clock=lambda: NOW,
+        renewal_window=timedelta(hours=24),
+    )
+
+    result = service.resolve_tenant_access(
+        tenant_id="tenant-1", provider_id="p1", model_ids=["m1"],
+    )
+
+    assert result["relay_token"] == "relay-key"
+    assert events == [
+        ("policy", "enter", "tenant-1"),
+        ("access", "enter", "tenant-1", "p1"),
+        ("access", "exit", "tenant-1", "p1"),
+        ("policy", "exit", "tenant-1"),
+    ]
 
 
 def test_initial_issue_stages_management_credential_for_restart_recovery():
