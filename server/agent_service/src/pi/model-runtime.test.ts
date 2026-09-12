@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { normalizeRuntimeProviderConfig } from "../manager-client.js";
-import { registerRuntimeProvider, type RuntimeProviderConfig } from "./model-runtime.js";
+import { registerRuntimeProvider, runtimeProviderId, type RuntimeProviderConfig } from "./model-runtime.js";
 
 const pricing = {
   pricing_version: 1, pricing_status: "known", billing_mode: "token",
@@ -67,6 +67,17 @@ test("runtime provider registration removes partial state when model lookup fail
     registerRuntimeProvider(runtime, runtimeConfig(), "aiteam:failed-model"),
   );
   assert.equal(runtime.getProvider("aiteam:failed-model"), undefined);
+});
+
+test("runtime provider IDs hash collision-safe owner/origin identity and preserve session scope", () => {
+  const first = runtimeProviderId({ managerOrigin: "https://manager.test", tenantId: "tenant:a", memberId: "member", employeeId: "employee", version: 1, scope: "conversation-1" });
+  const second = runtimeProviderId({ managerOrigin: "https://manager.test", tenantId: "tenant", memberId: "a:member", employeeId: "employee", version: 1, scope: "conversation-1" });
+  const otherOrigin = runtimeProviderId({ managerOrigin: "https://other-manager.test", tenantId: "tenant:a", memberId: "member", employeeId: "employee", version: 1, scope: "conversation-1" });
+  const otherSession = runtimeProviderId({ managerOrigin: "https://manager.test", tenantId: "tenant:a", memberId: "member", employeeId: "employee", version: 1, scope: "conversation-2" });
+  assert.notEqual(first, second);
+  assert.notEqual(first, otherOrigin);
+  assert.notEqual(first, otherSession);
+  assert.match(first, /^aiteam:[0-9a-f]{32}$/u);
 });
 
 test("runtime config rejects unknown fields and protocols", () => {

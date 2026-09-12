@@ -19,7 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
-import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
+import { isManagerAccessDenial, ManagerUnavailableError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
@@ -30,9 +30,13 @@ import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
-import { registerRuntimeProvider, type RuntimePricingSnapshot } from "./model-runtime.js";
+import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
+import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
+import type { ApprovalRecord } from "../storage/sqlite.js";
+import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
+import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -99,6 +103,8 @@ export interface SessionAuthorization {
   managerClient?: ManagerClient;
   runtimeProviderId?: string;
   runtimeScope?: string;
+  runtimeExpiresAt?: number;
+  hindsightExpiresAt?: number;
   groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
   groupContext?: string;
   groupOrchestrationMode?: "auto" | "custom";
@@ -112,12 +118,26 @@ export interface SessionHostOptions {
   modelRuntime: ModelRuntime;
   model?: Model<any>;
   useFauxModel?: boolean;
-  resourceLoaderFactory: (conversationId: string, authorization?: SessionAuthorization, workspace?: string, agentDir?: string, hindsightRuntimeConfig?: HindsightRuntimeConfig) => ResourceLoader;
+  resourceLoaderFactory: (
+    conversationId: string,
+    authorization?: SessionAuthorization,
+    workspace?: string,
+    agentDir?: string,
+    hindsightRuntimeConfig?: HindsightRuntimeConfig,
+    approvalService?: ApprovalService,
+    approvalConversationId?: string,
+    sessionId?: string,
+    onAccessDenied?: (error: unknown) => void,
+  ) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
   usageRecorder?: (capture: UsageCapture, caller: AuthenticatedCaller) => void | Promise<void>;
+  approvalService?: ApprovalService;
+  runtimeLeaseCache?: RuntimeLeaseCache<RuntimeProviderConfig>;
+  hindsightLeaseCache?: RuntimeLeaseCache<HindsightRuntimeConfig>;
+  executionAuthorization?: ExecutionAuthorizationRegistry;
 }
 
 interface Subscriber {
@@ -156,6 +176,8 @@ interface SessionRecord {
   activeToolCallId?: string;
   activeSourceRole?: "human" | "child" | "participant" | "coordinator";
   activeSource?: GroupMessageSource;
+  activePromptReceipt?: string;
+  activeSnapshotVersion?: string;
   hindsightWorkspaces: Set<string>;
   contextOperation?: Promise<void>;
   disposing?: Promise<void>;
@@ -179,6 +201,13 @@ export class ConversationBusyError extends Error {
   }
 }
 
+export class PreExecutionAuthorizationError extends Error {
+  constructor(message = "Prompt authorization failed before execution") {
+    super(message);
+    this.name = "PreExecutionAuthorizationError";
+  }
+}
+
 export class SessionAuthorizationError extends Error {
   constructor(message = "Conversation employee is not authorized locally") {
     super(message);
@@ -190,8 +219,15 @@ export class SessionHost {
   private readonly records = new Map<string, SessionRecord>();
   private readonly listeners = new Map<string, Set<Subscriber>>();
   private readonly delivery: GroupMessageDeliveryService;
+  readonly approvalService: ApprovalService;
+  private readonly runtimeLeaseCache: RuntimeLeaseCache<RuntimeProviderConfig>;
+  private readonly hindsightLeaseCache: RuntimeLeaseCache<HindsightRuntimeConfig>;
 
   constructor(private readonly options: SessionHostOptions) {
+    this.runtimeLeaseCache = options.runtimeLeaseCache ?? new RuntimeLeaseCache<RuntimeProviderConfig>();
+    this.hindsightLeaseCache = options.hindsightLeaseCache ?? new RuntimeLeaseCache<HindsightRuntimeConfig>();
+    this.approvalService = options.approvalService ?? new ApprovalService(options.store);
+    this.approvalService.setOnRequired((approval) => this.publishApprovalRequired(approval));
     this.delivery = new GroupMessageDeliveryService((command, employeeId) => this.deliverToParticipant(command, employeeId));
     mkdirSync(options.cwdRoot, { recursive: true, mode: 0o700 });
     mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
@@ -249,6 +285,7 @@ export class SessionHost {
   }
 
   async abort(conversationId: string): Promise<boolean> {
+    this.approvalService.cancelConversation(conversationId);
     const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
     if (records.length === 0) return false;
     await Promise.all(records.map(async (record) => {
@@ -259,8 +296,35 @@ export class SessionHost {
     return true;
   }
 
+  async abortOwner(tenantId: string, memberId: string): Promise<boolean> {
+    this.approvalService.cancelOwner(tenantId, memberId);
+    const conversationIds = new Set(
+      [...this.records.values()]
+        .filter((record) => this.options.store.getOwnedConversation(record.conversationId, tenantId, memberId))
+        .map((record) => record.conversationId),
+    );
+    let aborted = false;
+    for (const conversationId of conversationIds) aborted = await this.abort(conversationId) || aborted;
+    return aborted;
+  }
+
   isPrompting(conversationId: string): boolean {
     return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
+  }
+
+  /** Clear process-memory runtime material on local sign-out or identity switch. */
+  clearRuntimeMaterials(tenantId: string, memberId: string): void {
+    this.runtimeLeaseCache.clearOwner(encodeScope(["runtime", tenantId, memberId]));
+    this.hindsightLeaseCache.clearOwner(encodeScope(["hindsight", tenantId, memberId]));
+    this.options.executionAuthorization?.invalidate(tenantId, memberId);
+  }
+
+  private invalidateExecutionMaterial(authorization: SessionAuthorization | undefined, error: unknown): void {
+    if (!authorization || !isManagerAccessDenial(error)) return;
+    const tenantId = authorization.caller.tenantId;
+    const memberId = authorization.caller.userId ?? authorization.caller.callerId;
+    if (!tenantId) return;
+    this.clearRuntimeMaterials(tenantId, memberId);
   }
 
   /**
@@ -392,6 +456,7 @@ export class SessionHost {
   async delete(conversationId: string, tenantId: string, memberId: string): Promise<boolean> {
     const indexed = this.options.store.getOwnedConversation(conversationId, tenantId, memberId);
     if (!indexed) return false;
+    this.approvalService.cancelConversation(conversationId, tenantId, memberId);
     const participants = this.options.store.listConversationParticipants(conversationId);
     const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
     for (const record of records) {
@@ -416,6 +481,7 @@ export class SessionHost {
   }
 
   async abortAll(): Promise<void> {
+    this.approvalService.clear();
     await Promise.all([...this.records.values()].map(async (record) => {
       if (!record.prompting && !record.promptPromise && !record.sessionReady) return;
       record.aborting = true;
@@ -563,6 +629,9 @@ export class SessionHost {
   }
 
   async dispose(): Promise<void> {
+    this.approvalService.clear();
+    this.runtimeLeaseCache.clearAll();
+    this.hindsightLeaseCache.clearAll();
     for (const record of this.records.values()) {
       record.aborting = true;
       const session = record.session ?? await record.sessionReady?.catch(() => undefined);
@@ -645,7 +714,7 @@ export class SessionHost {
   }
 
   private recordKey(conversationId: string, employeeId?: string): string {
-    return `${conversationId}:${employeeId ?? "__conversation__"}`;
+    return encodeScope([conversationId, employeeId ?? "__conversation__"]);
   }
 
   private requireParticipantSnapshot(caller: AuthenticatedCaller, employeeId: string): void {
@@ -687,7 +756,11 @@ export class SessionHost {
   private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean; skipSandbox?: boolean } = {}): Promise<AgentSession> {
     if (record.session) return record.session;
     const hindsightRuntimeConfig = options.skipHindsight ? undefined : await this.resolveHindsightRuntimeConfig(authorization);
-    const resourceLoader = this.options.resourceLoaderFactory(record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig);
+    const resourceLoader = this.options.resourceLoaderFactory(
+      record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig,
+      this.approvalService, record.conversationId, record.sessionManager.getSessionId(),
+      (error) => this.invalidateExecutionMaterial(authorization, error),
+    );
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
     if (!options.skipSandbox && authorization && this.hasCodingTools(authorization.snapshot)) {
@@ -746,7 +819,35 @@ export class SessionHost {
         ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
       ] : []),
     ];
-    return tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
+    const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
+    if (!record) return selected;
+    return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
+  }
+
+  private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
+    const risk = approvalRiskForTool(tool.name);
+    if (!risk) return tool;
+    const execute = tool.execute.bind(tool);
+    return {
+      ...tool,
+      execute: async (toolCallId, params, signal, onUpdate, context) => this.approvalService.execute({
+        tenantId: authorization.caller.tenantId ?? "",
+        memberId: authorization.caller.userId ?? authorization.caller.callerId,
+        conversationId: record.conversationId,
+        ...(record.employeeId ? { participantEmployeeId: record.employeeId } : {}),
+        sessionId: record.sessionManager.getSessionId(),
+        snapshotVersion: authorization.snapshot.snapshot_version,
+        permissionRevision: `${authorization.snapshot.version}:${record.permissionMode}`,
+        toolCallId,
+        promptReceiptRef: record.activePromptReceipt,
+        toolName: tool.name,
+        args: params,
+        riskLevel: risk,
+        permissionMode: record.permissionMode,
+        expiresAt: authorizationExpiry(authorization),
+        signal,
+      }, () => execute(toolCallId, params, signal, onUpdate, context)) as ReturnType<ToolDefinition["execute"]>,
+    } as ToolDefinition;
   }
 
   private allowedTools(snapshot: FrozenSnapshot): Set<string> {
@@ -923,7 +1024,13 @@ export class SessionHost {
       throw new SessionAuthorizationError("Employee is not the private conversation participant");
     }
     const record = this.ensureRecord(command.conversationId, employeeId);
-    const authorization = this.resolveAuthorization(record, caller);
+    let authorization: SessionAuthorization | undefined;
+    try {
+      authorization = this.resolveAuthorization(record, caller);
+    } catch (error) {
+      if (error instanceof SessionAuthorizationError) throw new PreExecutionAuthorizationError(error.message);
+      throw error;
+    }
     authorization!.groupMessageSource = command.source;
     if (metadata.kind === "group") {
       authorization!.groupContext = this.buildGroupContext(command.conversationId, employeeId);
@@ -945,6 +1052,8 @@ export class SessionHost {
     record.prompting = true;
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;
+    record.activePromptReceipt = command.idempotencyKey ?? command.logicalMessageId;
+    record.activeSnapshotVersion = authorization?.snapshot.snapshot_version;
     record.activeSourceRef = command.toolCallId ? `${record.conversationId}:${command.toolCallId}` : undefined;
     record.activeSource = command.source;
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
@@ -975,16 +1084,33 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
-      failed = false;
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
+      // Keep the public prompt promise compatible with Pi's resolved-error
+      // behavior; callers use the absent entry ID to avoid marking a receipt
+      // completed when no successful terminal entry was proven.
+      if (record.aborting || stopReason === "aborted" || stopReason === "error") return { employeeId, text };
+      failed = false;
       return { employeeId, entryId, text };
     } catch (error) {
+      this.invalidateExecutionMaterial(authorization, error);
       this.recordEntrySources(record, command, entriesBefore);
       // Session initialization can fail before Pi emits any lifecycle event
       // (for example when Manager runtime-config returns 404). Publish the
-      // existing terminal event so the local composer cannot remain "running".
-      if (!record.session) this.publish(record, { type: "agent_settled" });
-      throw error;
+      // existing terminal event with a bounded failure summary so an accepted
+      // HTTP prompt cannot leave the local composer permanently running.
+      const terminalError = !record.session && isPreExecutionAuthorizationFailure(error)
+        ? new PreExecutionAuthorizationError(error instanceof Error ? error.message : undefined)
+        : error;
+      if (!settled) {
+        const message = terminalError instanceof Error ? terminalError.message : "Prompt execution failed";
+        this.publish(record, {
+          type: "agent_settled",
+          failed: true,
+          error_code: errorCode(terminalError),
+          error_message: message.slice(0, 240),
+        } as never);
+      }
+      throw terminalError;
     } finally {
       unsubscribeSource?.();
       try {
@@ -1010,6 +1136,8 @@ export class SessionHost {
         record.prompting = false;
         record.aborting = false;
         record.activeToolCallId = undefined;
+        record.activePromptReceipt = undefined;
+        record.activeSnapshotVersion = undefined;
         record.activeSourceRef = undefined;
         record.activeSourceRole = undefined;
         record.activeSource = undefined;
@@ -1185,8 +1313,30 @@ export class SessionHost {
   private async resolveHindsightRuntimeConfig(authorization?: SessionAuthorization): Promise<HindsightRuntimeConfig | undefined> {
     if (!authorization || !isMemoryPolicyEnabled(authorization.snapshot)) return undefined;
     if (authorization.managerClient?.pullHindsightRuntimeConfig) {
-      const config = await authorization.managerClient.pullHindsightRuntimeConfig(authorization.caller, authorization.employeeId);
-      if (!config) throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
+      const key = materialKey("hindsight", authorization);
+      const load = () => authorization.managerClient!.pullHindsightRuntimeConfig!(authorization.caller, authorization.employeeId);
+      let config: HindsightRuntimeConfig;
+      try {
+        config = await this.hindsightLeaseCache.getOrLoad(
+          key,
+          load,
+          (value, loadedAt) => ({
+          now: loadedAt,
+          userJwtExpiresAt: jwtExpiry(authorization.caller),
+            upstreamExpiresAt: expiryMillis(value.expires_at),
+          }),
+          { forceRefresh: true, allowReuseOnFailure: true, isDenial: isManagerAccessDenial, isRetryableFailure: isDegradableManagerFailure },
+        );
+      } catch (error) {
+        this.invalidateExecutionMaterial(authorization, error);
+        throw error;
+      }
+      if (!config || expiryMillis(config.expires_at) === undefined || expiryMillis(config.expires_at)! <= Date.now()) {
+        this.hindsightLeaseCache.clear(key);
+        this.clearRuntimeMaterials(authorization.caller.tenantId ?? "", authorization.caller.userId ?? authorization.caller.callerId);
+        throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
+      }
+      authorization.hindsightExpiresAt = expiryMillis(config.expires_at);
       return config;
     }
     // Managerless fixtures/development sessions cannot obtain the default
@@ -1211,17 +1361,55 @@ export class SessionHost {
       return { model: this.options.model };
     }
     const memberId = authorization.caller.userId ?? authorization.caller.callerId;
-    const config = await authorization.managerClient.pullRuntimeConfig(authorization.caller, authorization.employeeId);
+    const key = materialKey("runtime", authorization);
+    let config: RuntimeProviderConfig;
+    try {
+      config = await this.runtimeLeaseCache.getOrLoad(
+        key,
+        () => authorization.managerClient!.pullRuntimeConfig!(authorization.caller, authorization.employeeId),
+        (value, loadedAt) => ({
+          now: loadedAt,
+          userJwtExpiresAt: jwtExpiry(authorization.caller),
+          upstreamExpiresAt: expiryMillis(value.expires_at),
+        }),
+        { forceRefresh: true, allowReuseOnFailure: true, isDenial: isManagerAccessDenial, isRetryableFailure: isDegradableManagerFailure },
+      );
+    } catch (error) {
+      this.invalidateExecutionMaterial(authorization, error);
+      throw error;
+    }
+    const runtimeExpiry = expiryMillis(config.expires_at);
+    if (config.expires_at !== undefined && (runtimeExpiry === undefined || runtimeExpiry <= Date.now())) {
+      this.runtimeLeaseCache.clear(key);
+      this.clearRuntimeMaterials(authorization.caller.tenantId ?? "", authorization.caller.userId ?? authorization.caller.callerId);
+      throw new SessionAuthorizationError("Manager runtime lease is unavailable or expired");
+    }
+    authorization.runtimeExpiresAt = runtimeExpiry;
     const policy = authorization.snapshot.model_policy;
     const expectedModel = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).model === "string" ? (policy as Record<string, unknown>).model : undefined;
     const expectedProvider = policy && typeof policy === "object" && typeof (policy as Record<string, unknown>).provider_ref === "string" ? (policy as Record<string, unknown>).provider_ref : undefined;
     const expectedPricing = policy && typeof policy === "object" ? (policy as Record<string, unknown>).pricing : undefined;
     const expectedPricingVersion = expectedPricing && typeof expectedPricing === "object" ? (expectedPricing as Record<string, unknown>).pricing_version : undefined;
+    const expectedPolicyRevision = policy && typeof policy === "object" ? (policy as Record<string, unknown>).policy_revision : undefined;
     // Provider/model release versions are Operator-internal. The Agent binds
     // to stable identities and keeps only the frozen pricing snapshot for
     // usage accounting.
-    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider || config.pricing.pricing_version !== expectedPricingVersion) throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
-    const providerId = `aiteam:${createHash("sha256").update(`${authorization.caller.tenantId}:${memberId}:${authorization.employeeId}:${config.version}:${authorization.runtimeScope ?? "session"}`).digest("hex").slice(0, 32)}`;
+    if (!expectedModel || !expectedProvider || config.model !== expectedModel || config.provider_ref !== expectedProvider || config.pricing.pricing_version !== expectedPricingVersion
+      || (config.snapshot_version !== undefined && config.snapshot_version !== authorization.snapshot.snapshot_version)
+      || (expectedPolicyRevision !== undefined && config.policy_revision !== undefined && config.policy_revision !== expectedPolicyRevision)) {
+      this.runtimeLeaseCache.clear(materialKey("runtime", authorization));
+      throw new SessionAuthorizationError("Manager runtime config does not match the employee snapshot");
+    }
+    const providerId = runtimeProviderId({
+      managerOrigin: authorization.managerClient?.managerOrigin ?? "manager-origin-unknown",
+      tenantId: authorization.caller.tenantId ?? "",
+      memberId,
+      employeeId: authorization.employeeId,
+      version: config.version,
+      providerRef: config.provider_ref,
+      model: config.model,
+      scope: authorization.runtimeScope ?? "session",
+    });
     const model = await registerRuntimeProvider(this.options.modelRuntime, config, providerId);
     authorization.runtimeProviderId = providerId;
     return { model, providerId };
@@ -1250,6 +1438,25 @@ export class SessionHost {
       if (text) return text.slice(0, MAX_DELEGATE_RESULT_CHARS);
     }
     return "Employee completed without a textual result.";
+  }
+
+  private publishApprovalRequired(approval: ApprovalRecord): void {
+    const record = this.records.get(this.recordKey(approval.conversation_id, approval.participant_employee_id ?? undefined));
+    if (!record) return;
+    this.publish(record, {
+      type: "approval_required",
+      approvalId: approval.id,
+      approval_id: approval.id,
+      approvalBatchId: approval.approval_batch_id,
+      toolCallId: approval.tool_call_id,
+      toolName: approval.tool_name,
+      riskLevel: approval.risk_level,
+      argsHash: approval.canonical_args_hmac,
+      summary: approval.redacted_summary,
+      expiresAt: approval.expires_at,
+      decisionRevision: approval.decision_revision,
+      args: { summary: approval.redacted_summary },
+    } as never);
   }
 
   private publish(record: SessionRecord, event: AgentSessionEvent): void {
@@ -1393,6 +1600,50 @@ function groupContextReference(value: unknown): string | undefined {
   const id = groupContextField(record.skill_id ?? record.skill_ref ?? record.id);
   const version = groupContextField(record.version);
   return id ? `${id}${version ? `@${version}` : ""}` : undefined;
+}
+
+function isDegradableManagerFailure(error: unknown): boolean {
+  if (error instanceof ManagerUnavailableError) return /(?:Manager request failed|Manager returned HTTP 5\d\d)/u.test(error.message);
+  if (error instanceof TypeError) return true;
+  const name = (error as { name?: unknown } | undefined)?.name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  return /(?:fetch failed|network|timeout|temporarily unavailable)/iu.test(error instanceof Error ? error.message : String(error));
+}
+
+function jwtExpiry(caller: AuthenticatedCaller): number | undefined {
+  return typeof caller.claims?.exp === "number" && Number.isFinite(caller.claims.exp) ? caller.claims.exp * 1_000 : undefined;
+}
+
+function authorizationExpiry(authorization: SessionAuthorization): number | undefined {
+  const values = [jwtExpiry(authorization.caller), authorization.runtimeExpiresAt, authorization.hindsightExpiresAt].filter((value): value is number => value !== undefined && Number.isFinite(value));
+  return values.length > 0 ? Math.min(...values) : undefined;
+}
+
+function materialKey(kind: "runtime" | "hindsight", authorization: SessionAuthorization): string {
+  const policy = authorization.snapshot.model_policy;
+  const modelValue = policy && typeof policy === "object" ? (policy as Record<string, unknown>).model : undefined;
+  const providerValue = policy && typeof policy === "object" ? (policy as Record<string, unknown>).provider_ref : undefined;
+  const model = typeof modelValue === "string" ? modelValue : "";
+  const provider = typeof providerValue === "string" ? providerValue : "";
+  const managerOrigin = authorization.managerClient?.managerOrigin ?? "manager-origin-unknown";
+  return encodeScope([kind, authorization.caller.tenantId ?? "", authorization.caller.userId ?? authorization.caller.callerId, managerOrigin, authorization.employeeId, authorization.snapshot.snapshot_version, model, provider]);
+}
+
+function isPreExecutionAuthorizationFailure(error: unknown): boolean {
+  if (error instanceof SessionAuthorizationError || error instanceof PreExecutionAuthorizationError) return true;
+  const candidate = error as { status?: unknown; code?: unknown; name?: unknown };
+  return candidate.status === 401 || candidate.status === 403 || candidate.status === 404 || candidate.name === "ManagerAuthorizationError" || candidate.name === "ManagerPolicyDeniedError";
+}
+
+function errorCode(error: unknown): string {
+  const candidate = error as { status?: unknown; code?: unknown; name?: unknown };
+  if (candidate.status === 401 || candidate.status === 403) return "authorization_denied";
+  if (candidate.status === 404) return "runtime_revoked";
+  if (candidate.name === "PreExecutionAuthorizationError") return "authorization_denied";
+  if (candidate.name === "ApprovalDeniedError") return "approval_denied";
+  if (candidate.name === "ApprovalExpiredError") return "approval_expired";
+  if (candidate.name === "ApprovalCancelledError") return "approval_cancelled";
+  return typeof candidate.code === "string" && /^[a-z0-9_.-]{1,64}$/u.test(candidate.code) ? candidate.code : "execution_failed";
 }
 
 function boundGroupContext(value: string): string {

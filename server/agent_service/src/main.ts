@@ -13,6 +13,7 @@ import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } from "./skills.js";
 import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
+import { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
 
 loadAgentConfig();
 scrubAgentEnvironment();
@@ -43,7 +44,8 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
-const usageFlush = new UsageFlushService(store, managerClient);
+const executionAuthorization = new ExecutionAuthorizationRegistry();
+const usageFlush = new UsageFlushService(store, managerClient, { authorization: executionAuthorization });
 const sessionHost = new SessionHost({
   cwdRoot,
   agentDir,
@@ -53,25 +55,40 @@ const sessionHost = new SessionHost({
   model: configured.model,
   useFauxModel,
   managerClient,
+  executionAuthorization,
   sandbox,
   // Faux responses are test artifacts, never billable usage.
   usageRecorder: useFauxModel ? undefined : (_capture, caller) => {
     void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
   },
-  resourceLoaderFactory: (_conversationId, authorization?: SessionAuthorization, workspace?: string, _agentDir?: string, hindsightRuntimeConfig?) => createControlledResourceLoader(snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl, hindsightRuntimeConfig),
+  resourceLoaderFactory: (
+    conversationId,
+    authorization?: SessionAuthorization,
+    workspace?: string,
+    _agentDir?: string,
+    hindsightRuntimeConfig?,
+    approvalService?,
+    approvalConversationId?,
+    sessionId?,
+    onAccessDenied?,
+  ) => createControlledResourceLoader(
+    snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl,
+    hindsightRuntimeConfig, approvalService, approvalConversationId ?? conversationId, sessionId, onAccessDenied,
+  ),
 });
 
 const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
   : createJwtAuthenticator(loadJwtOptions());
 
-const schedule = new ScheduleService(store, sessionHost);
+const schedule = new ScheduleService(store, sessionHost, { authorization: executionAuthorization });
 const http = new AgentHttpServer({
   logger: console,
   host: sessionHost,
   allowedOrigins: parseAllowedOrigins(process.env.AITEAM_AGENT_ALLOWED_ORIGINS),
   store,
-  authenticate,
+  authenticate: (request) => authenticate(request),
+  executionAuthorization,
   managerClient,
   usageFlush,
   skillCache,
@@ -91,13 +108,14 @@ const boundPort = (() => {
 })();
 if (portFile) writePortFile(portFile, hostAddress, boundPort);
 schedule.start();
+usageFlush.start();
 console.log(`AI Team Node Agent listening on http://${hostAddress}:${boundPort}`);
 console.log(`AI_TEAM_AGENT_READY ${JSON.stringify({ host: hostAddress, port: boundPort, pid: process.pid })}`);
 
 const shutdown = async () => {
   await schedule.stop();
   await http.close().catch(() => undefined);
-  await usageFlush.close();
+  await usageFlush.stop();
   await sessionHost.dispose();
   store.close();
   if (portFile) removePortFile(portFile);
@@ -110,6 +128,8 @@ function authenticateDevelopment(request: import("node:http").IncomingMessage) {
   if (!header?.startsWith("Bearer ")) throw new HttpProblem(401, "unauthenticated", "Development bearer token is required");
   const token = header.slice("Bearer ".length);
   if (token === "local-development") {
+    // This fixed development bearer is intentionally not forwarded to Manager;
+    // background schedules require a real accessToken and remain disabled.
     return {
       callerId: "local-development",
       userId: process.env.AITEAM_AGENT_DEV_MEMBER ?? "local-development",
