@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PiEntry } from "@aiteam/shared/contracts";
+import { ApiError } from "@aiteam/shared/api-client";
 import type { AgentApiClient } from "../../lib/api-client";
 import type { ApprovalRecord, PiSseReconciliation } from "./useChatApi";
 
@@ -77,6 +78,67 @@ describe("Timeline reconciliation consumer", () => {
     expect(mocks.getEntries).toHaveBeenCalledWith(client, "conversation-1");
     expect(mocks.getConversationRuntimeState).toHaveBeenCalledWith(client, "conversation-1");
     expect(mocks.listApprovals).toHaveBeenCalledWith(client, "conversation-1");
+  });
+
+  it("loads a search entry page and marks the newest readable entry", async () => {
+    const durable: PiEntry = {
+      id: "entry-search",
+      entry_ref: "entry-ref-search",
+      type: "message",
+      message: { role: "assistant", content: "搜索命中的回复" },
+    };
+    mocks.getEntries.mockResolvedValue([durable]);
+    const onReadEntry = vi.fn();
+    render(
+      <TimelineView
+        client={client}
+        conversationId="conversation-1"
+        initialEntryRef="entry-ref-search"
+        onReadEntry={onReadEntry}
+      />,
+    );
+
+    expect(await screen.findByText("搜索命中的回复")).toBeInTheDocument();
+    expect(mocks.getEntries).toHaveBeenCalledWith(client, "conversation-1", "entry-ref-search");
+    await waitFor(() => expect(onReadEntry).toHaveBeenCalledWith("entry-ref-search"));
+  });
+
+  it("keeps history usable when a pre-approval route returns an ordinary 404", async () => {
+    mocks.listApprovals.mockRejectedValue(new ApiError("legacy route", 404, "not_found"));
+    render(<TimelineView client={client} conversationId="conversation-1" />);
+
+    await waitFor(() => expect(screen.getByText("暂无事件")).toBeInTheDocument());
+    expect(screen.queryByTestId("approval-list-error")).not.toBeInTheDocument();
+  });
+
+  it("shows an owner-safe approval error for a contracted approval_not_found response", async () => {
+    mocks.listApprovals.mockRejectedValue(new ApiError("hidden approval", 404, "approval_not_found"));
+    render(<TimelineView client={client} conversationId="conversation-1" />);
+
+    expect(await screen.findByTestId("approval-list-error")).toHaveTextContent("审批已不存在或当前账号无权查看");
+    expect(screen.queryByText("hidden approval")).not.toBeInTheDocument();
+  });
+
+  it("reloads durable entries after a terminal event and rejects invalid reconciliation payloads", async () => {
+    const durable: PiEntry = {
+      id: "entry-after-terminal",
+      type: "message",
+      message: { role: "assistant", content: "终态持久回复" },
+    };
+    mocks.getEntries.mockResolvedValueOnce([]).mockResolvedValueOnce([durable]);
+    render(<TimelineView client={client} conversationId="conversation-1" />);
+    await screen.findByTestId("approval-card-approval-1");
+
+    await act(async () => {
+      onEvent?.({ id: "terminal", event: { type: "agent_settled" } });
+    });
+    expect(await screen.findByText("终态持久回复")).toBeInTheDocument();
+    expect(mocks.getEntries).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      onEvent?.({ id: "bad-reconciliation", event: { type: "reconciliation" }, eventName: "reconciliation" });
+    });
+    expect(screen.getByText("实时事件流离线：事件流对账消息无效")).toBeInTheDocument();
   });
 
   it("hydrates approvals after opening and merges bounded entries/receipts/state", async () => {

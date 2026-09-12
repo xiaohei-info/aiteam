@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import type { AgentApiClient } from "../../lib/api-client";
 import { MessageSearch } from "./MessageSearch";
 import { WORK_HISTORY_POLL_INTERVAL_MS, WorkInsights } from "./WorkInsights";
-import { getUsageStatistics, listWorkRecordChanges, listWorkRecords } from "./useWorkspaceApi";
+import { getUsageStatistics, listConversations, listWorkRecordChanges, listWorkRecords } from "./useWorkspaceApi";
 
 function client(overrides: Partial<AgentApiClient> = {}): AgentApiClient {
   return {
@@ -85,6 +85,50 @@ describe("Agent workspace read consumers", () => {
     expect(api.listGet).toHaveBeenNthCalledWith(2, "/api/agent/work-records/changes", { query: { after: "changes-1", limit: 100 } });
   });
 
+  it("validates conversation, work-history, change, and usage response boundaries", async () => {
+    const pagedConversations = client({
+      listGet: vi.fn()
+        .mockResolvedValueOnce({ items: [record("conversation-1")], page: { next_cursor: "conversation-2", has_more: true } })
+        .mockResolvedValueOnce({ items: [record("conversation-2")], page: { next_cursor: null, has_more: false } }),
+    });
+    await expect(listConversations(pagedConversations)).resolves.toHaveLength(2);
+    expect(pagedConversations.listGet).toHaveBeenNthCalledWith(2, "/api/agent/conversations", { query: { limit: 100, cursor: "conversation-2" } });
+
+    const repeatedCursor = client({
+      listGet: vi.fn().mockResolvedValue({ items: [], page: { next_cursor: "same", has_more: true } }),
+    });
+    await expect(listConversations(repeatedCursor)).rejects.toThrow("conversation list: repeated cursor");
+
+    for (const result of [
+      { items: null, page: { next_cursor: null, has_more: false } },
+      { items: [], page: null },
+      { items: [], page: { next_cursor: null, has_more: "no" } },
+    ]) {
+      const api = client({ listGet: vi.fn().mockResolvedValue(result) });
+      await expect(listWorkRecords(api)).rejects.toThrow("work history: invalid response");
+    }
+    const missingAfter = client({ listGet: vi.fn().mockResolvedValue({ items: [], page: { next_cursor: null, has_more: false } }) });
+    await expect(listWorkRecords(missingAfter)).resolves.toMatchObject({ after: "" });
+
+    for (const result of [
+      { items: null, page: { next_cursor: "cursor", has_more: true } },
+      { items: [], page: null },
+      { items: [], page: { next_cursor: "cursor", has_more: "yes" } },
+      { items: [], page: { next_cursor: null, has_more: false } },
+    ]) {
+      const api = client({ listGet: vi.fn().mockResolvedValue(result) });
+      await expect(listWorkRecordChanges(api)).rejects.toThrow("work history changes: invalid response");
+    }
+
+    const nullUsage = client({ get: vi.fn().mockResolvedValue(null) });
+    await expect(getUsageStatistics(nullUsage)).resolves.toBeNull();
+    const queriedUsage = client({ get: vi.fn().mockResolvedValue({ ...usage, pricing_status: "partial" }) });
+    await expect(getUsageStatistics(queriedUsage, { employee_id: "employee-1" })).resolves.toMatchObject({ pricing_status: "partial" });
+    expect(queriedUsage.get).toHaveBeenCalledWith("/api/agent/usage/statistics", { query: { employee_id: "employee-1" } });
+    const invalidUsage = client({ get: vi.fn().mockResolvedValue({ ...usage, currency: "EUR" }) });
+    await expect(getUsageStatistics(invalidUsage)).rejects.toThrow("usage statistics: invalid response");
+  });
+
   it("renders real usage unknowns and searches local messages with cursor pagination", async () => {
     const api = client({
       get: vi.fn().mockResolvedValue(usage),
@@ -144,6 +188,57 @@ describe("Agent workspace read consumers", () => {
     expect(api.listGet).toHaveBeenLastCalledWith("/api/agent/work-records/changes", { query: { after: "change-1", limit: 100 } });
   });
 
+  it("applies upsert/delete waterline changes and renders known cost variants", async () => {
+    vi.useFakeTimers();
+    const replacement = {
+      ...record("work-1"),
+      employee_display_name: "",
+      conversation_title: null,
+      outcome: "active" as const,
+      occurred_at: null,
+      task_summary: null,
+      result_summary: null,
+    };
+    const api = client({
+      listGet: vi.fn()
+        .mockResolvedValueOnce({ items: [record("work-1"), record("work-2")], page: { next_cursor: null, has_more: false }, meta: { after: "change-1" } })
+        .mockResolvedValueOnce({ items: [
+          { operation: "upsert", record_id: "work-1", record: replacement },
+          { operation: "delete", record_id: "work-2" },
+        ], page: { next_cursor: "change-2", has_more: false } }),
+      get: vi.fn().mockResolvedValue({
+        ...usage,
+        cost_total: "1.250000",
+        pricing_status: "partial",
+        unpriced_execution_count: 0,
+        excluded_summary_count: 2,
+        duration_ms_total: 1_500,
+      }),
+    });
+    render(<WorkInsights client={api} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getAllByTestId("work-history-record")).toHaveLength(2);
+    expect(screen.getAllByTestId("work-history-record")[0]).toHaveTextContent("已完成");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WORK_HISTORY_POLL_INTERVAL_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getAllByTestId("work-history-record")).toHaveLength(1);
+    expect(screen.getByTestId("work-history-record")).toHaveTextContent("进行中");
+    expect(screen.getByTestId("work-history-record")).toHaveTextContent("时间未知");
+    expect(screen.getByTestId("usage-statistics-summary")).toHaveTextContent("USD 1.250000");
+    expect(screen.getByTestId("usage-statistics-summary")).toHaveTextContent("部分计价");
+    expect(screen.getByTestId("usage-statistics-summary")).toHaveTextContent("排除摘要2");
+    expect(api.listGet).toHaveBeenLastCalledWith("/api/agent/work-records/changes", { query: { after: "change-1", limit: 100 } });
+  });
+
   it("resolves a search hit's existing conversation kind before routing to a group", async () => {
     const api = client({
       listGet: vi.fn().mockResolvedValue({
@@ -159,6 +254,58 @@ describe("Agent workspace read consumers", () => {
     fireEvent.click(hit);
     await waitFor(() => expect(screen.getByTestId("workspace-location")).toHaveTextContent("/group?conversation_id=group-1&entry_ref=entry-group"));
     expect(api.get).toHaveBeenCalledWith("/api/agent/conversations/group-1");
+  });
+
+  it("keeps search navigation owner-safe for modifiers, metadata failures, and pagination errors", async () => {
+    const hit = {
+      conversation_id: "group-1",
+      kind: "group",
+      conversation_title: "协作群",
+      entry_ref: "entry-group",
+      id: "pi-1",
+      participant_employee_id: "employee-1",
+      timestamp: "not-a-date",
+      role: "assistant" as const,
+      snippet: "群聊结果",
+    };
+    const api = client({
+      listGet: vi.fn()
+        .mockResolvedValueOnce({ items: [hit], page: { next_cursor: "older", has_more: true } })
+        .mockRejectedValueOnce(new Error("older results unavailable")),
+      get: vi.fn().mockRejectedValue(new Error("conversation metadata unavailable")),
+    });
+    render(<MemoryRouter><LocationProbe /><MessageSearch client={api} /></MemoryRouter>);
+
+    const form = screen.getByRole("button", { name: "搜索" }).closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.submit(form!);
+    expect(api.listGet).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索词" }), { target: { value: "群聊" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    const result = await screen.findByTestId("message-search-hit-entry-group");
+    const originalHref = result.getAttribute("href");
+    result.setAttribute("href", "#");
+    fireEvent.click(result, { button: 1 });
+    expect(api.get).not.toHaveBeenCalled();
+    if (originalHref) result.setAttribute("href", originalHref);
+    fireEvent.click(result);
+    await waitFor(() => expect(screen.getByTestId("workspace-location")).toHaveTextContent("/group?conversation_id=group-1&entry_ref=entry-group"));
+    expect(api.get).toHaveBeenCalledWith("/api/agent/conversations/group-1");
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更早结果" }));
+    expect(await screen.findByTestId("message-search-error")).toHaveTextContent("older results unavailable");
+  });
+
+  it("shows an explicit empty state when local message search has no matches", async () => {
+    const api = client({
+      listGet: vi.fn().mockResolvedValue({ items: [], page: { next_cursor: null, has_more: false } }),
+    });
+    render(<MemoryRouter><MessageSearch client={api} /></MemoryRouter>);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索词" }), { target: { value: "不存在" } });
+    fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+    expect(await screen.findByText("没有找到匹配消息")).toBeInTheDocument();
+    expect(screen.queryByTestId("message-search-results")).not.toBeInTheDocument();
   });
 
   it("does not invent work records when the local read is unavailable", async () => {
