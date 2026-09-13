@@ -230,6 +230,13 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
         known_versions={created.employee_id: f"{created.version}:avatar-0"},
     ))
     assert no_avatar.experts == []
+    # Agents predating avatar_sync_version only send the employee config
+    # version; an employee without a Manager avatar must still be a no-op.
+    legacy_no_avatar = no_avatar_service.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1",
+        known_versions={created.employee_id: str(created.version)},
+    ))
+    assert legacy_no_avatar.experts == []
 
 
 def test_role_title_change_reaches_only_authorized_member_delta():

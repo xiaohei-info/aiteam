@@ -118,7 +118,18 @@ class AuthorizedConfigService:
             # Keep employee.version as the config version. The additive sync
             # version lets an avatar-only change trigger one bounded projection
             # delta without changing snapshot/config CAS semantics.
-            changed = avatar_sync_version != known_ver if self._avatars is not None else str(cfg.version) != known_ver
+            if self._avatars is None:
+                changed = str(cfg.version) != known_ver
+            else:
+                # Keep old Agents (which only persisted employee.version)
+                # compatible when no tenant avatar exists. Once an avatar is
+                # present, the additive sync version is required so an
+                # avatar-only change cannot be mistaken for an unchanged
+                # employee config.
+                accepted_versions = {avatar_sync_version}
+                if avatar_version == 0:
+                    accepted_versions.add(str(cfg.version))
+                changed = known_ver not in accepted_versions
             if changed:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
