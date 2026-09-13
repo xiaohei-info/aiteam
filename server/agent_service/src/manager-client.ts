@@ -70,6 +70,7 @@ export interface ManagerOwnerResetInput {
 }
 
 export interface ManagerClient {
+  updateEmployeeAvatar?(caller: AuthenticatedCaller, employeeId: string, payload: { filename: string; mime_type: string; data: string }): Promise<{ employee_id: string; avatar_url: string; version: number; updated_at: string }>;
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
   resolveTenantByAccount?(account: string, enterprise?: string | null): Promise<unknown>;
@@ -133,6 +134,11 @@ export class HttpManagerClient implements ManagerClient {
       known_versions: knownVersions,
     });
     return normalizeAuthorizedConfig(this.unwrap(response), caller.tenantId, caller.userId ?? caller.callerId);
+  }
+
+  async updateEmployeeAvatar(caller: AuthenticatedCaller, employeeId: string, payload: { filename: string; mime_type: string; data: string }) {
+    const response = await this.request(`/api/manager/employees/${encodeURIComponent(employeeId)}/avatar`, caller, payload);
+    return this.unwrap(response) as { employee_id: string; avatar_url: string; version: number; updated_at: string };
   }
 
   async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
