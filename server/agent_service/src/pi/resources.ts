@@ -41,6 +41,8 @@ export interface ControlledResourceLoader extends ResourceLoader {
   shutdown(): Promise<void>;
 }
 
+export type MemoryStatusActivity = "retaining" | "retained" | "retain-queued" | "retain-failed";
+
 export function hindsightStateDir(agentDir: string, workspace: string): string {
   return join(agentDir, "hindsight", createHash("sha256").update(resolve(workspace)).digest("hex").slice(0, 32));
 }
@@ -81,6 +83,7 @@ export function createControlledResourceLoader(
   conversationId?: string,
   sessionId?: string,
   onAccessDenied?: (error: unknown) => void,
+  onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -109,7 +112,7 @@ export function createControlledResourceLoader(
   }
   const lifecycle = memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName
     ? createHindsightFactory(configDir, memoryPolicy, leaseEnvName, leaseConfig.token, {
-      authorization, approvalService, conversationId, sessionId, onAccessDenied,
+      authorization, approvalService, conversationId, sessionId, onAccessDenied, onMemoryStatus,
     })
     : undefined;
   const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
@@ -236,6 +239,7 @@ function createHindsightFactory(
     conversationId?: string;
     sessionId?: string;
     onAccessDenied?: (error: unknown) => void;
+    onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void;
   } = {},
 ) {
   const lifecycle = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => createMemoryLifecycle(configDir)));
@@ -331,8 +335,15 @@ function createHindsightFactory(
       return result ?? { messages };
     });
     if (policy.autoRetain) pi.on("agent_end", async (event, ctx) => {
-      try { await lifecycle.retain(event, ctx); }
-      catch (error) { contextOptions.onAccessDenied?.(error); throw error; }
+      try {
+        contextOptions.onMemoryStatus?.("retaining");
+        const result = await lifecycle.retain(event, ctx);
+        contextOptions.onMemoryStatus?.(result.remaining > 0 ? "retain-queued" : "retained", result.remaining);
+      } catch (error) {
+        contextOptions.onMemoryStatus?.("retain-failed");
+        contextOptions.onAccessDenied?.(error);
+        throw error;
+      }
     });
     pi.on("session_shutdown", async (_event, ctx) => shutdown(ctx));
   };
