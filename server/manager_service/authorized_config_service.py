@@ -111,17 +111,24 @@ class AuthorizedConfigService:
         authorized_configs = [cfg for cfg in all_configs if cfg.employee_id in authorized_employee_ids]
         experts: list[dict] = []
         for cfg in authorized_configs:
+            avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
+            avatar_version = avatar.version if avatar else 0
+            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
             known_ver = req.known_versions.get(cfg.employee_id)
-            if known_ver != str(cfg.version):
+            # Keep employee.version as the config version. The additive sync
+            # version lets an avatar-only change trigger one bounded projection
+            # delta without changing snapshot/config CAS semantics.
+            changed = avatar_sync_version != known_ver if self._avatars is not None else str(cfg.version) != known_ver
+            if changed:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
                 )
-                avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
                 experts.append({**cfg.model_dump(mode="json"), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
                                 "knowledge_policy": policy.projection.model_dump(mode="json"),
                                 "avatar_url": avatar.avatar_url if avatar else None,
-                                "avatar_version": avatar.version if avatar else 0})
+                                "avatar_version": avatar_version,
+                                "avatar_sync_version": avatar_sync_version})
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:

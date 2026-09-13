@@ -9,7 +9,7 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response as FastAPIResponse, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
@@ -142,6 +142,7 @@ def build_employee_router(verifier) -> APIRouter:
         summary="更新员工头像",
         operation_id="manager_employee_avatar_update",
         status_code=status.HTTP_200_OK,
+        response_model=Envelope[EmployeeAvatarOut],
     )
     async def update_employee_avatar(
         employee_id: str,
@@ -181,19 +182,29 @@ def build_employee_router(verifier) -> APIRouter:
         description="读取当前租户员工头像对象。",
         summary="读取员工头像对象",
         operation_id="manager_employee_avatar_content",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {
+                    "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
+                    "image/png": {"schema": {"type": "string", "format": "binary"}},
+                    "image/webp": {"schema": {"type": "string", "format": "binary"}},
+                },
+            },
+        },
     )
     async def get_employee_avatar_content(
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> FastAPIResponse:
+    ) -> Response:
         ctx = tenant_context_from(claims)
         result = _avatar_service(request).content(ctx, employee_id)
         if result is None:
             from shared.errors import NotFound
             raise NotFound("employee avatar not found")
         content, mime_type = result
-        return FastAPIResponse(content=content, media_type=mime_type, headers={"Cache-Control": "private, max-age=300"})
+        return Response(content=content, media_type=mime_type, headers={"Cache-Control": "private, max-age=300"})
 
     @router.put(
         "/{employee_id}", description="完整替换 employee 配置；role_title 省略或 null 清空岗位，department_ids 省略或 [] 清空全部部门。实际配置变化时 version 自增，授权增量 pull 可感知；需 owner/enterprise_admin。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",

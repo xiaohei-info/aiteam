@@ -128,11 +128,13 @@ class SnapshotService:
             ctx, employee_id=employee_id, tools=config.tools, version=current_version,
         )
         avatar = self._avatars.get(ctx, employee_id) if self._avatars is not None else None
+        avatar_version = avatar.version if avatar else 0
         return _to_snapshot(
             config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
             avatar_url=avatar.avatar_url if avatar else None,
-            avatar_version=avatar.version if avatar else 0,
+            avatar_version=avatar_version,
+            avatar_sync_version=f"{current_version}:avatar-{avatar_version}",
         )
 
     def _resolve_pricing(self, config: EmployeeConfigOut, *, tenant_id: str) -> PricingSnapshot | None:
@@ -232,6 +234,7 @@ def _to_snapshot(
     pricing: PricingSnapshot | None = None,
     avatar_url: str | None = None,
     avatar_version: int = 0,
+    avatar_sync_version: str | None = None,
 ) -> EmployeeExecutionSnapshot:
     """EmployeeConfigOut（中立配置真相）→ EmployeeExecutionSnapshot（只读执行投影）。
 
@@ -260,6 +263,7 @@ def _to_snapshot(
         department_ids=list(config.department_ids),
         avatar_url=avatar_url,
         avatar_version=avatar_version,
+        avatar_sync_version=avatar_sync_version,
     )
 
 

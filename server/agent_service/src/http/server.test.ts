@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { AgentHttpServer } from "./server.js";
@@ -68,6 +70,151 @@ test("Agent HTTP local files enforce conversation ownership and support lifecycl
     const missing = await fetch(`${base}/api/agent/conversations/c1/attachments/${uploaded.data.id}`, { method: "DELETE", headers: { Authorization: "Bearer test" } });
     assert.equal(missing.status, 200);
     assert.equal((await missing.json() as { data: { deleted: boolean } }).data.deleted, true);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("Agent employee avatar stays local, preserves tenant scope, and survives Manager sync", async () => {
+  const fixture = await createFixture();
+  const employeeId = "employee-avatar";
+  const now = new Date().toISOString();
+  const managerAvatar = "/api/manager/employees/employee-avatar/avatar/content";
+  fixture.store.replaceProjections([
+    {
+      employee_id: employeeId,
+      tenant_id: "tenant-1",
+      member_id: "member-1",
+      version: "1",
+      handle: "avatar",
+      display_name: "Avatar Employee",
+      revoked: false,
+      synced_at: now,
+      avatar_url: managerAvatar,
+      avatar_source: "manager",
+      avatar_version: 3,
+      avatar_sync_version: "1:avatar-3",
+    },
+  ], [], [{
+    employee_id: employeeId,
+    tenant_id: "tenant-1",
+    member_id: "member-1",
+    version: "1",
+    snapshot_version: "snapshot-1",
+    display_name: "Avatar Employee",
+    avatar_url: managerAvatar,
+    avatar_source: "manager",
+    avatar_version: 3,
+    avatar_sync_version: "1:avatar-3",
+  }]);
+  let managerCalls = 0;
+  let tenantId = "tenant-1";
+  let memberId = "member-1";
+  const managerClient = {
+    updateEmployeeAvatar: async () => {
+      managerCalls += 1;
+      throw new Error("Agent avatar must not call Manager");
+    },
+  } as any;
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient,
+    authenticate: () => ({ callerId: memberId, userId: memberId, tenantId, roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const data = pngBytes(16);
+  try {
+    const updated = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "avatar.png", mime_type: "image/png", data: data.toString("base64") }),
+    });
+    assert.equal(updated.status, 200, await updated.clone().text());
+    const result = (await updated.json() as { data: { employee_id: string; avatar_url: string; version: number } }).data;
+    assert.equal(result.employee_id, employeeId);
+    assert.equal(result.avatar_url, `/api/agent/employees/${employeeId}/avatar/content`);
+    assert.equal(result.version, 1);
+    assert.equal(managerCalls, 0);
+    const projection = fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!;
+    assert.equal(projection.avatar_source, "local");
+    assert.equal(projection.avatar_url, result.avatar_url);
+    assert.equal(projection.manager_avatar_url, managerAvatar);
+    assert.equal(projection.manager_avatar_version, 3);
+    assert.equal("local_avatar_path" in projection, false);
+    const snapshot = fixture.store.listSnapshots("tenant-1", "member-1")[0]!;
+    assert.equal(snapshot.avatar_source, "local");
+    assert.equal(snapshot.avatar_url, result.avatar_url);
+
+    const content = await fetch(`${base}${result.avatar_url}`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(content.status, 200);
+    assert.equal(content.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await content.arrayBuffer()), data);
+
+    const storedBeforeReplacement = fixture.store.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, "tenant-1", "member-1") as { projection_json: string };
+    const previousPath = (JSON.parse(storedBeforeReplacement.projection_json) as Record<string, unknown>).local_avatar_path as string;
+    const replacementData = pngBytes(24);
+    const replacement = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "replacement.png", mime_type: "image/png", data: replacementData.toString("base64") }),
+    });
+    assert.equal(replacement.status, 200, await replacement.clone().text());
+    assert.equal((await replacement.json() as { data: { version: number } }).data.version, 2);
+    const storedAfterReplacement = fixture.store.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, "tenant-1", "member-1") as { projection_json: string };
+    const nextPath = (JSON.parse(storedAfterReplacement.projection_json) as Record<string, unknown>).local_avatar_path as string;
+    assert.notEqual(nextPath, previousPath);
+    assert.equal(existsSync(join(fixture.store.avatarRoot, previousPath)), false);
+    assert.deepEqual(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data, replacementData);
+
+    fixture.store.replaceProjections([{
+      ...projection,
+      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=4",
+      avatar_version: 4,
+      avatar_sync_version: "1:avatar-4",
+    }], [], [{
+      ...snapshot,
+      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=4",
+      avatar_version: 4,
+      avatar_sync_version: "1:avatar-4",
+    }]);
+    const merged = fixture.store.listLoadedExperts("tenant-1", "member-1")[0]!;
+    assert.equal(merged.avatar_source, "local");
+    assert.equal(merged.avatar_url, result.avatar_url);
+    assert.equal(merged.manager_avatar_version, 4);
+    assert.equal(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data.equals(replacementData), true);
+
+    // A first snapshot pull can arrive after a local edit (for example after
+    // upgrading an older Agent DB). It must inherit the employee projection's
+    // local override rather than replacing it with the Manager fallback.
+    fixture.store.db.prepare("DELETE FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").run(employeeId, "tenant-1", "member-1");
+    fixture.store.replaceProjections([], [], [{
+      ...snapshot,
+      avatar_url: "/api/manager/employees/employee-avatar/avatar/content?v=5",
+      avatar_version: 5,
+      avatar_sync_version: "1:avatar-5",
+    }]);
+    const recreatedSnapshot = fixture.store.listSnapshots("tenant-1", "member-1")[0]!;
+    assert.equal(recreatedSnapshot.avatar_source, "local");
+    assert.equal(recreatedSnapshot.avatar_url, result.avatar_url);
+    assert.equal(fixture.store.readEmployeeAvatar("tenant-1", "member-1", employeeId)?.data.equals(replacementData), true);
+
+    tenantId = "tenant-2";
+    const crossTenant = await fetch(`${base}/api/agent/employees/${employeeId}/avatar`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "avatar.png", mime_type: "image/png", data: data.toString("base64") }),
+    });
+    assert.equal(crossTenant.status, 403);
+    assert.equal((await crossTenant.json() as { code: string }).code, "employee_not_authorized");
+    tenantId = "tenant-1";
+    memberId = "other-member";
+    const crossMember = await fetch(`${base}/api/agent/employees/${employeeId}/avatar/content`, { headers: { Authorization: "Bearer test" } });
+    assert.equal(crossMember.status, 403);
   } finally {
     await http.close();
     await fixture.close();
@@ -389,6 +536,18 @@ test("Agent OpenAPI documents local attachment, artifact, and SSE event contract
     assert.deepEqual(prompt.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/PromptRequest" });
     assert.equal(prompt.parameters.find((parameter: any) => parameter.name === "Idempotency-Key").required, true);
 
+    const avatarUpdate = document.paths["/api/agent/employees/{employee_id}/avatar"].post;
+    assert.deepEqual(avatarUpdate.requestBody.content["application/json"].schema, { $ref: "#/components/schemas/EmployeeAvatarRequest" });
+    assert.deepEqual(avatarUpdate.responses["200"].content["application/json"].schema, {
+      type: "object",
+      required: ["data"],
+      properties: { data: { $ref: "#/components/schemas/EmployeeAvatarResponse" } },
+    });
+    assert.deepEqual(document.components.schemas.EmployeeAvatarRequest.required, ["filename", "mime_type", "data"]);
+    const avatarContent = document.paths["/api/agent/employees/{employee_id}/avatar/content"].get;
+    assert.deepEqual(Object.keys(avatarContent.responses["200"].content).sort(), ["image/jpeg", "image/png", "image/webp"]);
+    assert.equal(avatarContent.responses["200"].content["image/png"].schema.format, "binary");
+
     const eventOperation = document.paths["/api/agent/conversations/{conversation_id}/events"].get;
     assert.equal(eventOperation.description, "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。");
     const eventStream = eventOperation.responses["200"].content["text/event-stream"];
@@ -450,7 +609,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 52);
+    assert.equal(frontendOperations.length, 53);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

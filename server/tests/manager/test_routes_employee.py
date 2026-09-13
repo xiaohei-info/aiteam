@@ -76,6 +76,20 @@ def test_create_no_db_503():
     assert resp.json()["code"] == "manager_db_unconfigured"
 
 
+def test_avatar_content_returns_binary_response():
+    employee_id = "11111111-1111-1111-1111-111111111111"
+    client = _client("postgresql://fake/fake")
+    fake = MagicMock()
+    fake.content.return_value = (b"\\x89PNG\\r\\n\\x1a\\n", "image/png")
+    with patch("manager_service.routes_employee._avatar_service", return_value=fake):
+        response = client.get(f"/api/manager/employees/{employee_id}/avatar/content", headers=_auth_header())
+    assert response.status_code == 200, response.text
+    assert response.content == b"\\x89PNG\\r\\n\\x1a\\n"
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=300"
+    fake.content.assert_called_once()
+
+
 def test_create_extra_field_422():
     client = _client("postgresql://fake/fake")
     resp = client.post(

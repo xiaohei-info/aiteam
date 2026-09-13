@@ -188,6 +188,50 @@ def test_stale_version_returns_delta():
     assert any(e["employee_id"] == created.employee_id for e in resp.experts)
 
 
+def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change():
+    config_svc, grant_svc, member_svc, _ = _services()
+    ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
+    created = config_svc.create(ctx, _body(), employee_slug="exp-avatar")
+    grant_svc.set_grant("t-a", created.employee_id, member_ids=["admin-1"])
+    avatar = SimpleNamespace(
+        avatar_url="/api/manager/employees/avatar/content",
+        version=4,
+    )
+    avatar_repository = SimpleNamespace(get=lambda _ctx, _employee_id: avatar)
+    svc = AuthorizedConfigService(
+        config_service=config_svc,
+        grant_service=grant_svc,
+        member_service=member_svc,
+        avatar_repository=avatar_repository,
+    )
+
+    first = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1",
+        known_versions={created.employee_id: f"{created.version}:avatar-3"},
+    ))
+    assert first.experts[0]["version"] == created.version
+    assert first.experts[0]["avatar_version"] == 4
+    assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4"
+
+    same = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1",
+        known_versions={created.employee_id: f"{created.version}:avatar-4"},
+    ))
+    assert same.experts == []
+
+    no_avatar_service = AuthorizedConfigService(
+        config_service=config_svc,
+        grant_service=grant_svc,
+        member_service=member_svc,
+        avatar_repository=SimpleNamespace(get=lambda _ctx, _employee_id: None),
+    )
+    no_avatar = no_avatar_service.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1",
+        known_versions={created.employee_id: f"{created.version}:avatar-0"},
+    ))
+    assert no_avatar.experts == []
+
+
 def test_role_title_change_reaches_only_authorized_member_delta():
     config, grants, members, service = _services()
     owner = _ctx("t-a", roles=["owner"])
