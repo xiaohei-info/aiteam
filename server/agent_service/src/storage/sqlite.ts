@@ -5,8 +5,9 @@ import { usdDecimal, usdUnits, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 
 function createSha256(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
@@ -152,6 +153,77 @@ export interface LoadedExpertProjection {
   department_ids?: string[];
   model_policy?: Record<string, unknown> | null;
   [key: string]: unknown;
+}
+
+export interface LocalEmployeeAvatarUpdate {
+  state: "updated" | "not_found";
+  avatar_url?: string;
+  version?: number;
+  updated_at?: string;
+}
+
+const LOCAL_AVATAR_PATH_FIELD = "local_avatar_path";
+const LOCAL_AVATAR_MIME_FIELD = "local_avatar_mime_type";
+const LOCAL_AVATAR_VERSION_FIELD = "local_avatar_version";
+const LOCAL_AVATAR_URL_FIELD = "local_avatar_url";
+const AVATAR_SOURCE_FIELD = "avatar_source";
+
+function avatarSyncVersion(value: Record<string, unknown>): string {
+  if (typeof value.avatar_sync_version === "string" && value.avatar_sync_version.length > 0) return value.avatar_sync_version;
+  return typeof value.version === "string" && value.version.length > 0 ? `${value.version}:avatar-${Number.isInteger(value.avatar_version) ? value.avatar_version : 0}` : "";
+}
+
+function mergeAvatarProjection(existingJson: string | undefined, incoming: Record<string, unknown>): Record<string, unknown> {
+  let existing: Record<string, unknown> = {};
+  if (existingJson) {
+    try {
+      const parsed = JSON.parse(existingJson) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed as Record<string, unknown>;
+    } catch { /* malformed legacy projection is replaced by the verified pull */ }
+  }
+  const managerAvatarUrl = Object.prototype.hasOwnProperty.call(incoming, "avatar_url")
+    ? (typeof incoming.avatar_url === "string" || incoming.avatar_url === null ? incoming.avatar_url : null)
+    : (typeof existing.manager_avatar_url === "string" || existing.manager_avatar_url === null ? existing.manager_avatar_url : null);
+  const managerAvatarVersion = Number.isInteger(incoming.avatar_version)
+    ? incoming.avatar_version
+    : Number.isInteger(existing.manager_avatar_version) ? existing.manager_avatar_version : 0;
+  const managerSyncVersion = avatarSyncVersion(incoming) || avatarSyncVersion(existing);
+  const localPath = typeof existing[LOCAL_AVATAR_PATH_FIELD] === "string" ? existing[LOCAL_AVATAR_PATH_FIELD] : undefined;
+  const localUrl = typeof existing[LOCAL_AVATAR_URL_FIELD] === "string" ? existing[LOCAL_AVATAR_URL_FIELD] : undefined;
+  const hasLocalOverride = Boolean(localPath && localUrl && existing[AVATAR_SOURCE_FIELD] === "local");
+  const merged: Record<string, unknown> = {
+    ...incoming,
+    manager_avatar_url: managerAvatarUrl,
+    manager_avatar_version: managerAvatarVersion,
+    avatar_sync_version: managerSyncVersion,
+  };
+  // These fields are Agent-owned metadata. Never accept them from a Manager
+  // projection, otherwise a remote payload could manufacture a local file
+  // reference or claim a local override without a corresponding local write.
+  delete merged[LOCAL_AVATAR_PATH_FIELD];
+  delete merged[LOCAL_AVATAR_MIME_FIELD];
+  delete merged[LOCAL_AVATAR_VERSION_FIELD];
+  delete merged[LOCAL_AVATAR_URL_FIELD];
+  if (hasLocalOverride) {
+    merged.avatar_url = localUrl;
+    merged[AVATAR_SOURCE_FIELD] = "local";
+    merged[LOCAL_AVATAR_PATH_FIELD] = localPath;
+    merged[LOCAL_AVATAR_URL_FIELD] = localUrl;
+    merged[LOCAL_AVATAR_MIME_FIELD] = existing[LOCAL_AVATAR_MIME_FIELD];
+    merged[LOCAL_AVATAR_VERSION_FIELD] = existing[LOCAL_AVATAR_VERSION_FIELD];
+  } else {
+    merged[AVATAR_SOURCE_FIELD] = managerAvatarUrl ? "manager" : "template";
+  }
+  return merged;
+}
+
+function publicAvatarProjection<T extends Record<string, unknown>>(value: T): T {
+  const result = { ...value };
+  delete result[LOCAL_AVATAR_PATH_FIELD];
+  delete result[LOCAL_AVATAR_MIME_FIELD];
+  delete result[LOCAL_AVATAR_VERSION_FIELD];
+  delete result[LOCAL_AVATAR_URL_FIELD];
+  return result;
 }
 
 export interface LoadedSolutionProjection {
@@ -319,14 +391,18 @@ const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 export class AgentSqliteStore {
   readonly db: DatabaseSync;
   readonly attachmentRoot: string;
+  readonly avatarRoot: string;
   readonly workRecords: WorkRecordRepository;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.attachmentRoot = join(dirname(path), "attachments");
+    this.avatarRoot = join(dirname(path), "avatars");
     mkdirSync(this.attachmentRoot, { recursive: true, mode: 0o700 });
+    mkdirSync(this.avatarRoot, { recursive: true, mode: 0o700 });
     chmodSync(this.attachmentRoot, 0o700);
+    chmodSync(this.avatarRoot, 0o700);
     this.db = new DatabaseSync(path);
     this.db.function("add_usage_cost", (left, right) => {
       const a = usdUnits(left), b = usdUnits(right);
@@ -552,6 +628,7 @@ export class AgentSqliteStore {
     this.db.prepare("UPDATE approval_record SET status = 'uncertain', consumed = 1, updated_at = ? WHERE status IN ('pending', 'approved', 'executing')").run(new Date().toISOString());
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.cleanupAttachmentRoot();
+    this.cleanupAvatarRoot();
   }
 
   private migrateOwnershipTables(): void {
@@ -947,6 +1024,45 @@ export class AgentSqliteStore {
     }
   }
 
+  private managedAvatarPath(pathValue: string): string | undefined {
+    const root = realpathSync(this.avatarRoot);
+    const candidate = resolve(this.avatarRoot, pathValue);
+    let resolved: string;
+    try { resolved = realpathSync(candidate); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    const pathFromRoot = relative(root, resolved);
+    if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot) || !statSync(resolved).isFile()) throw new Error("Local avatar path escaped managed root");
+    return resolved;
+  }
+
+  private cleanupAvatarRoot(): void {
+    const referenced = new Set<string>();
+    const rows = [
+      ...this.db.prepare("SELECT projection_json FROM loaded_employee_projection").all() as { projection_json: string }[],
+      ...this.db.prepare("SELECT projection_json FROM frozen_snapshot").all() as { projection_json: string }[],
+    ];
+    for (const row of rows) {
+      try {
+        const projection = JSON.parse(row.projection_json) as Record<string, unknown>;
+        const pathValue = projection[LOCAL_AVATAR_PATH_FIELD];
+        if (typeof pathValue !== "string") continue;
+        const resolved = this.managedAvatarPath(pathValue);
+        if (resolved) referenced.add(resolved);
+      } catch { /* invalid local metadata is not allowed to escape cleanup */ }
+    }
+    for (const entry of readdirSync(this.avatarRoot, { withFileTypes: true })) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const candidate = join(this.avatarRoot, entry.name);
+      let resolved: string | undefined;
+      try { resolved = this.managedAvatarPath(entry.name); } catch { /* remove only untrusted root entries below */ }
+      if (resolved && referenced.has(resolved) && !entry.name.startsWith(".")) continue;
+      rmSync(candidate, { force: true });
+    }
+  }
+
   private publicLocalFile(row: LocalFileRow): LocalFileRecord {
     const { storage_path: _storagePath, ...record } = row;
     return record;
@@ -975,13 +1091,102 @@ export class AgentSqliteStore {
         AND (? IS NULL OR member_id = '' OR member_id = ?)
       ORDER BY employee_id`).all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string; revoked: number }[];
     return rows.map((row) => {
-      const projection = JSON.parse(row.projection_json) as LoadedExpertProjection;
+      const projection = publicAvatarProjection(JSON.parse(row.projection_json) as LoadedExpertProjection);
       return { ...projection, tenant_id: row.tenant_id, ...(row.member_id ? { member_id: row.member_id } : {}), revoked: row.revoked === 1 || projection.revoked === true };
     });
   }
 
+  knownProjectionVersions(tenantId: string, memberId: string): Record<string, string> {
+    const versions: Record<string, string> = {};
+    for (const expert of this.listLoadedExperts(tenantId, memberId)) {
+      const syncVersion = typeof expert.avatar_sync_version === "string" && expert.avatar_sync_version.length > 0
+        ? expert.avatar_sync_version
+        : expert.version;
+      versions[expert.employee_id] = syncVersion;
+    }
+    const solutions = this.db.prepare("SELECT solution_instance_id, version FROM loaded_solution_projection WHERE tenant_id = ? AND (member_id = '' OR member_id = ?)").all(tenantId, memberId) as { solution_instance_id: string; version: string }[];
+    for (const solution of solutions) versions[solution.solution_instance_id] = solution.version;
+    return versions;
+  }
+
+  updateEmployeeAvatar(tenantId: string, memberId: string, employeeId: string, data: Buffer, mimeType: string): LocalEmployeeAvatarUpdate {
+    if (!IMAGE_MIMES.has(mimeType) || !hasImageSignature(mimeType, data) || data.byteLength === 0 || data.byteLength > MAX_LOCAL_FILE_BYTES) return { state: "not_found" };
+    const lookup = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+    if (!lookup) return { state: "not_found" };
+    const previous = JSON.parse(lookup.projection_json) as Record<string, unknown>;
+    const previousPath = typeof previous[LOCAL_AVATAR_PATH_FIELD] === "string" ? previous[LOCAL_AVATAR_PATH_FIELD] : undefined;
+    const avatarId = randomUUID();
+    const relativePath = `${avatarId}.img`;
+    const finalPath = join(this.avatarRoot, relativePath);
+    const temporaryPath = join(this.avatarRoot, `.${avatarId}.tmp`);
+    let fd: number | undefined;
+    try {
+      fd = openSync(temporaryPath, "wx", 0o600);
+      let offset = 0;
+      while (offset < data.byteLength) offset += writeSync(fd, data, offset, data.byteLength - offset);
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = undefined;
+      chmodSync(temporaryPath, 0o600);
+      renameSync(temporaryPath, finalPath);
+    } catch (error) {
+      if (fd !== undefined) { try { closeSync(fd); } catch { /* already closed */ } }
+      rmSync(temporaryPath, { force: true });
+      throw error;
+    }
+
+    const avatarUrl = `/api/agent/employees/${encodeURIComponent(employeeId)}/avatar/content`;
+    const now = new Date().toISOString();
+    let localVersion = 0;
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      const currentRow = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (!currentRow) { this.db.exec("ROLLBACK"); rmSync(finalPath, { force: true }); return { state: "not_found" }; }
+      const current = JSON.parse(currentRow.projection_json) as Record<string, unknown>;
+      localVersion = Number.isInteger(current[LOCAL_AVATAR_VERSION_FIELD]) ? Number(current[LOCAL_AVATAR_VERSION_FIELD]) + 1 : 1;
+      const next = {
+        ...current,
+        avatar_url: avatarUrl,
+        avatar_source: "local",
+        local_avatar_url: avatarUrl,
+        local_avatar_path: relativePath,
+        local_avatar_mime_type: mimeType,
+        local_avatar_version: localVersion,
+      };
+      this.db.prepare("UPDATE loaded_employee_projection SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").run(JSON.stringify(next), now, employeeId, tenantId, memberId);
+      const snapshot = this.db.prepare("SELECT projection_json FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (snapshot) {
+        const snapshotProjection = JSON.parse(snapshot.projection_json) as Record<string, unknown>;
+        this.db.prepare("UPDATE frozen_snapshot SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").run(JSON.stringify({ ...snapshotProjection, avatar_url: avatarUrl, avatar_source: "local", local_avatar_url: avatarUrl, local_avatar_path: relativePath, local_avatar_mime_type: mimeType, local_avatar_version: localVersion }), now, employeeId, tenantId, memberId);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
+      rmSync(finalPath, { force: true });
+      throw error;
+    }
+    if (previousPath && previousPath !== relativePath) {
+      try { const oldPath = this.managedAvatarPath(previousPath); if (oldPath) rmSync(oldPath, { force: true }); } catch { /* startup cleanup retries unreferenced files */ }
+    }
+    return { state: "updated", avatar_url: avatarUrl, version: localVersion, updated_at: now };
+  }
+
+  readEmployeeAvatar(tenantId: string, memberId: string, employeeId: string): { data: Buffer; mimeType: string } | undefined {
+    const row = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+    if (!row) return undefined;
+    const projection = JSON.parse(row.projection_json) as Record<string, unknown>;
+    const pathValue = projection[LOCAL_AVATAR_PATH_FIELD];
+    const mimeType = projection[LOCAL_AVATAR_MIME_FIELD];
+    if (typeof pathValue !== "string" || typeof mimeType !== "string" || !IMAGE_MIMES.has(mimeType)) return undefined;
+    const path = this.managedAvatarPath(pathValue);
+    if (!path) return undefined;
+    const data = readFileSync(path);
+    if (!hasImageSignature(mimeType, data)) return undefined;
+    return { data, mimeType };
+  }
+
   listSnapshots(tenantId?: string, memberId?: string): FrozenSnapshot[] {
-    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM frozen_snapshot WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as FrozenSnapshot, ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
+    return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM frozen_snapshot WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...publicAvatarProjection(JSON.parse(row.projection_json) as FrozenSnapshot), ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
   }
 
   listSolutions(tenantId?: string, memberId?: string): LoadedSolutionProjection[] {
@@ -1012,8 +1217,14 @@ export class AgentSqliteStore {
         removeLegacySnapshot.run(employeeId, owner.tenantId);
       }
     }
+    const existingExpert = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ?");
     const upsertExpert = this.db.prepare("INSERT INTO loaded_employee_projection (employee_id, tenant_id, member_id, version, projection_json, revoked, synced_at) VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, revoked=0, synced_at=excluded.synced_at");
-    for (const expert of experts) upsertExpert.run(expert.employee_id, expert.tenant_id, expert.member_id ?? "", expert.version, JSON.stringify({ ...expert, tenant_id: expert.tenant_id, ...(expert.member_id ? { member_id: expert.member_id } : {}), synced_at: expert.synced_at ?? now, revoked: false }), now);
+    for (const expert of experts) {
+      const memberId = expert.member_id ?? "";
+      const previous = existingExpert.get(expert.employee_id, expert.tenant_id, memberId) as { projection_json: string } | undefined;
+      const projection = mergeAvatarProjection(previous?.projection_json, { ...expert, tenant_id: expert.tenant_id, ...(expert.member_id ? { member_id: expert.member_id } : {}), synced_at: expert.synced_at ?? now, revoked: false });
+      upsertExpert.run(expert.employee_id, expert.tenant_id, memberId, expert.version, JSON.stringify(projection), now);
+    }
     const revoke = owner
       ? this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND (member_id = ? OR member_id = '')")
       : this.db.prepare("UPDATE loaded_employee_projection SET revoked = 1, synced_at = ? WHERE employee_id = ?");
@@ -1025,8 +1236,19 @@ export class AgentSqliteStore {
       : this.db.prepare("DELETE FROM loaded_solution_projection WHERE solution_instance_id = ?");
     const upsertSolution = this.db.prepare("INSERT INTO loaded_solution_projection (solution_instance_id, tenant_id, member_id, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(solution_instance_id, tenant_id, member_id) DO UPDATE SET version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
     for (const solution of solutions) upsertSolution.run(solution.solution_instance_id, solution.tenant_id ?? "", solution.member_id ?? "", solution.version, JSON.stringify({ ...solution, ...(solution.tenant_id ? { tenant_id: solution.tenant_id } : {}), ...(solution.member_id ? { member_id: solution.member_id } : {}) }), now);
+    const existingSnapshot = this.db.prepare("SELECT projection_json FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?");
     const upsertSnapshot = this.db.prepare("INSERT INTO frozen_snapshot (employee_id, tenant_id, member_id, snapshot_version, version, projection_json, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(employee_id, tenant_id, member_id) DO UPDATE SET snapshot_version=excluded.snapshot_version, version=excluded.version, projection_json=excluded.projection_json, synced_at=excluded.synced_at");
-    for (const snapshot of snapshots) upsertSnapshot.run(snapshot.employee_id, snapshot.tenant_id ?? "", snapshot.member_id ?? "", snapshot.snapshot_version, snapshot.version, JSON.stringify({ ...snapshot, ...(snapshot.tenant_id ? { tenant_id: snapshot.tenant_id } : {}), ...(snapshot.member_id ? { member_id: snapshot.member_id } : {}) }), now);
+    for (const snapshot of snapshots) {
+      const tenantId = snapshot.tenant_id ?? "";
+      const memberId = snapshot.member_id ?? "";
+      const previous = existingSnapshot.get(snapshot.employee_id, tenantId, memberId) as { projection_json: string } | undefined;
+      // A legacy/partially populated local DB can have a local avatar on the
+      // employee projection before its frozen snapshot is first materialized.
+      // Carry that Agent-owned override into the new snapshot as well.
+      const previousExpert = existingExpert.get(snapshot.employee_id, tenantId, memberId) as { projection_json: string } | undefined;
+      const projection = mergeAvatarProjection(previous?.projection_json ?? previousExpert?.projection_json, { ...snapshot, ...(snapshot.tenant_id ? { tenant_id: snapshot.tenant_id } : {}), ...(snapshot.member_id ? { member_id: snapshot.member_id } : {}) });
+      upsertSnapshot.run(snapshot.employee_id, tenantId, memberId, snapshot.snapshot_version, snapshot.version, JSON.stringify(projection), now);
+    }
     // Revocation wins over an accidentally repeated stale snapshot/solution in the same pull.
     for (const id of revokedIds) {
       if (owner) {

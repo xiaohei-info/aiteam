@@ -81,6 +81,9 @@ class EmployeeExecutionSnapshot(BaseModel):
     connector_refs: list[str] = Field(default_factory=list, description="连接器引用列表")
     memory_policy: dict[str, Any] | None = Field(default=None, description="记忆策略（04 §6.6，mem0）。")
     department_ids: list[str] = Field(default_factory=list, description="所属部门 id 列表；空列表表示未设置。")
+    avatar_url: str | None = Field(default=None, description="Manager tenant 头像 URL；未配置时为 null。")
+    avatar_version: int = Field(default=0, ge=0, description="Manager tenant 头像元数据版本。")
+    avatar_sync_version: str | None = Field(default=None, description="头像增量同步版本；不改变 employee 配置 version。")
     skill_signing_keys: list[SkillSigningKeyMetadata] = Field(
         default_factory=list,
         description="仅用于 Agent 离线验签的公开 key metadata；字段出现即优先于本地环境/缓存（包括显式空列表）；不含 private key/JWT/HMAC secret",

@@ -22,6 +22,10 @@ from shared.db import PgTenantRouter
 from .active_principal import require_admin
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
+from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
+from .employee_avatar_repository import EmployeeAvatarRepository
+from .employee_avatar_service import EmployeeAvatarService
+from .knowledge_intake_service import ensure_storage_root, manager_storage_root
 
 
 class _ManagerNotConfigured(AppError):
@@ -70,6 +74,22 @@ def _service(request: Request) -> EmployeeConfigService:
     return cache
 
 
+def _avatar_service(request: Request) -> EmployeeAvatarService:
+    dsn = request.app.state.settings.db_url
+    if not dsn:
+        raise _ManagerNotConfigured("Manager 业务 DB 未配置（设置 DB_URL）")
+    cache = getattr(request.app.state, "_employee_avatar_service", None)
+    if cache is None:
+        root = ensure_storage_root(manager_storage_root(request.app.state.settings))
+        cache = EmployeeAvatarService(
+            EmployeeAvatarRepository(PgTenantRouter(dsn)),
+            root,
+            str(request.base_url).rstrip("/"),
+        )
+        request.app.state._employee_avatar_service = cache
+    return cache
+
+
 def build_employee_router(verifier) -> APIRouter:
     """构造 employee 配置路由；verifier 由 app 持有并闭包注入受保护端点。"""
     router = APIRouter(prefix="/api/manager/employees", tags=["manager", "employee-config"])
@@ -115,6 +135,76 @@ def build_employee_router(verifier) -> APIRouter:
         require_admin(tenant_context_from(claims))
         svc = _service(request)
         return Envelope[EmployeeConfigOut](data=svc.get(tenant_context_from(claims), employee_id=employee_id))
+
+    @router.post(
+        "/{employee_id}/avatar",
+        description="上传员工头像。仅 owner/enterprise_admin 可操作；头像仅保存元数据和私有对象存储引用。",
+        summary="更新员工头像",
+        operation_id="manager_employee_avatar_update",
+        status_code=status.HTTP_200_OK,
+        response_model=Envelope[EmployeeAvatarOut],
+    )
+    async def update_employee_avatar(
+        employee_id: str,
+        body: EmployeeAvatarIn,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[EmployeeAvatarOut]:
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        result = _avatar_service(request).update(
+            ctx,
+            employee_id=employee_id,
+            filename=body.filename,
+            mime_type=body.mime_type,
+            data=body.data,
+        )
+        # Audit metadata only; raw image data never enters the audit log.
+        try:
+            from .audit_repository import AuditRepository
+            AuditRepository(PgTenantRouter(request.app.state.settings.db_url)).create_event(
+                ctx,
+                event_type="employee_avatar_updated",
+                actor_id=ctx.user_id,
+                target_type="employee",
+                target_id=employee_id,
+                detail={"version": result["version"], "mime_type": body.mime_type, "byte_size": result.get("byte_size")},
+            )
+        except Exception:
+            # The avatar write is already durable; audit failures are surfaced by
+            # the service logs in deployments that install an audit sink.
+            pass
+        public_result = {key: result[key] for key in ("employee_id", "avatar_url", "version", "updated_at")}
+        return Envelope[EmployeeAvatarOut](data=EmployeeAvatarOut(**public_result))
+
+    @router.get(
+        "/{employee_id}/avatar/content",
+        description="读取当前租户员工头像对象。",
+        summary="读取员工头像对象",
+        operation_id="manager_employee_avatar_content",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {
+                    "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
+                    "image/png": {"schema": {"type": "string", "format": "binary"}},
+                    "image/webp": {"schema": {"type": "string", "format": "binary"}},
+                },
+            },
+        },
+    )
+    async def get_employee_avatar_content(
+        employee_id: str,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        ctx = tenant_context_from(claims)
+        result = _avatar_service(request).content(ctx, employee_id)
+        if result is None:
+            from shared.errors import NotFound
+            raise NotFound("employee avatar not found")
+        content, mime_type = result
+        return Response(content=content, media_type=mime_type, headers={"Cache-Control": "private, max-age=300"})
 
     @router.put(
         "/{employee_id}", description="完整替换 employee 配置；role_title 省略或 null 清空岗位，department_ids 省略或 [] 清空全部部门。实际配置变化时 version 自增，授权增量 pull 可感知；需 owner/enterprise_admin。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",

@@ -22,6 +22,7 @@ from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
 from .skill_signing import SkillPackageSigner
+from .employee_avatar_repository import EmployeeAvatarRepository
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -69,6 +70,7 @@ class AuthorizedConfigService:
         capability_catalog: CapabilityCatalogService | None = None,
         skill_signer: SkillPackageSigner | None = None,
         knowledge_policy: KnowledgeAccessPolicy | None = None,
+        avatar_repository: EmployeeAvatarRepository | None = None,
     ):
         self._config = config_service
         self._knowledge_policy = knowledge_policy or KnowledgeAccessPolicy()
@@ -77,6 +79,7 @@ class AuthorizedConfigService:
         self._recruit_repo = recruit_repository
         self._capability = capability_catalog
         self._skill_signer = skill_signer if skill_signer is not None else SkillPackageSigner.from_env()
+        self._avatars = avatar_repository
 
     def pull(
         self, ctx: TenantContext, req: AuthorizedConfigPullRequest
@@ -108,14 +111,35 @@ class AuthorizedConfigService:
         authorized_configs = [cfg for cfg in all_configs if cfg.employee_id in authorized_employee_ids]
         experts: list[dict] = []
         for cfg in authorized_configs:
+            avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
+            avatar_version = avatar.version if avatar else 0
+            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
             known_ver = req.known_versions.get(cfg.employee_id)
-            if known_ver != str(cfg.version):
+            # Keep employee.version as the config version. The additive sync
+            # version lets an avatar-only change trigger one bounded projection
+            # delta without changing snapshot/config CAS semantics.
+            if self._avatars is None:
+                changed = str(cfg.version) != known_ver
+            else:
+                # Keep old Agents (which only persisted employee.version)
+                # compatible when no tenant avatar exists. Once an avatar is
+                # present, the additive sync version is required so an
+                # avatar-only change cannot be mistaken for an unchanged
+                # employee config.
+                accepted_versions = {avatar_sync_version}
+                if avatar_version == 0:
+                    accepted_versions.add(str(cfg.version))
+                changed = known_ver not in accepted_versions
+            if changed:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
                 )
                 experts.append({**cfg.model_dump(mode="json"), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
-                                "knowledge_policy": policy.projection.model_dump(mode="json")})
+                                "knowledge_policy": policy.projection.model_dump(mode="json"),
+                                "avatar_url": avatar.avatar_url if avatar else None,
+                                "avatar_version": avatar_version,
+                                "avatar_sync_version": avatar_sync_version})
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:
