@@ -138,7 +138,14 @@ export class HttpManagerClient implements ManagerClient {
 
   async updateEmployeeAvatar(caller: AuthenticatedCaller, employeeId: string, payload: { filename: string; mime_type: string; data: string }) {
     const response = await this.request(`/api/manager/employees/${encodeURIComponent(employeeId)}/avatar`, caller, payload);
-    return this.unwrap(response) as { employee_id: string; avatar_url: string; version: number; updated_at: string };
+    const value = this.unwrap(response);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid employee avatar response");
+    const body = value as Record<string, unknown>;
+    const version = body.version;
+    if (typeof body.employee_id !== "string" || typeof body.avatar_url !== "string" || typeof version !== "number" || !Number.isInteger(version) || version < 1 || typeof body.updated_at !== "string") {
+      throw new ManagerUnavailableError("Manager returned an invalid employee avatar response");
+    }
+    return { employee_id: body.employee_id, avatar_url: body.avatar_url, version, updated_at: body.updated_at };
   }
 
   async pullRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig> {
