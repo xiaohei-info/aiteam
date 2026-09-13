@@ -32,6 +32,7 @@ from .active_principal import require_active
 from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .schemas import EmployeeConfigOut
+from .employee_avatar_repository import EmployeeAvatarRepository
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ class SnapshotService:
         audit_recorder: AuditRecorder | None = None,
         knowledge_binding: KnowledgeBindingReader | None = None,
         platform_catalog: PlatformCatalogReader | None = None,
+        avatar_repository: EmployeeAvatarRepository | None = None,
     ):
         self._config = config_service
         self._grants = grant_service
@@ -88,6 +90,7 @@ class SnapshotService:
         self._audit = audit_recorder
         self._knowledge_binding = knowledge_binding
         self._platform_catalog = platform_catalog
+        self._avatars = avatar_repository
 
     def _ensure_runnable(self, ctx: TenantContext, *, employee_id: str) -> None:
         """Reject non-active employees before an execution backend is contacted."""
@@ -124,9 +127,12 @@ class SnapshotService:
         policy = KnowledgeAccessPolicy(self._knowledge_binding).resolve(
             ctx, employee_id=employee_id, tools=config.tools, version=current_version,
         )
+        avatar = self._avatars.get(ctx, employee_id) if self._avatars is not None else None
         return _to_snapshot(
             config, version=current_version, knowledge_refs=list(policy.refs), knowledge_policy=policy,
             pricing=self._resolve_pricing(config, tenant_id=ctx.tenant_id),
+            avatar_url=avatar.avatar_url if avatar else None,
+            avatar_version=avatar.version if avatar else 0,
         )
 
     def _resolve_pricing(self, config: EmployeeConfigOut, *, tenant_id: str) -> PricingSnapshot | None:
@@ -223,7 +229,9 @@ class SnapshotService:
 
 def _to_snapshot(
     config: EmployeeConfigOut, *, version: str, knowledge_refs: list[str], knowledge_policy: KnowledgeAccess,
-    pricing: PricingSnapshot | None = None
+    pricing: PricingSnapshot | None = None,
+    avatar_url: str | None = None,
+    avatar_version: int = 0,
 ) -> EmployeeExecutionSnapshot:
     """EmployeeConfigOut（中立配置真相）→ EmployeeExecutionSnapshot（只读执行投影）。
 
@@ -250,6 +258,8 @@ def _to_snapshot(
             "explicit_auto_retain": False, "retention_days": None,
         },
         department_ids=list(config.department_ids),
+        avatar_url=avatar_url,
+        avatar_version=avatar_version,
     )
 
 
@@ -280,6 +290,7 @@ def build_snapshot_service(
     audit_recorder: AuditRecorder | None = None,
     knowledge_binding: KnowledgeBindingReader | None = None,
     platform_catalog: PlatformCatalogReader | None = None,
+    avatar_repository: EmployeeAvatarRepository | None = None,
 ) -> SnapshotService:
     return SnapshotService(
         config_service=config_service,
@@ -288,4 +299,5 @@ def build_snapshot_service(
         audit_recorder=audit_recorder,
         knowledge_binding=knowledge_binding,
         platform_catalog=platform_catalog,
+        avatar_repository=avatar_repository,
     )

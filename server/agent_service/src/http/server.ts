@@ -15,7 +15,7 @@ import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type IdempotencyReceipt } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
+import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
@@ -201,6 +201,12 @@ const ConversationUpdateRequest = Type.Object({
 }, { $id: "ConversationUpdateRequest", additionalProperties: false, description: "更新本地会话请求；未提供字段保持不变。" });
 const ConversationStateUpdateRequest = Type.Object({ state: Type.Ref("ConversationState") }, { $id: "ConversationStateUpdateRequest", additionalProperties: false, description: "更新会话状态请求。" });
 const GrantSyncRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；必须与当前 access token 一致。" }), member_id: Type.String({ minLength: 1, maxLength: 200, description: "当前成员 ID；必须与当前 access token 一致。" }), known_versions: Type.Optional(Type.Record(Type.String({ minLength: 1, description: "投影键（通常为 employee/solution ID）。" }), Type.String({ minLength: 1, description: "本地已知版本。" }), { maxProperties: 256, description: "投影键到本地版本的映射；省略表示从头获取。" })) }, { $id: "GrantSyncRequest", additionalProperties: false, description: "授权配置增量同步请求；服务端只接受与当前身份匹配的 tenant_id/member_id。" });
+const EmployeeAvatarRequest = Type.Object({
+  filename: Type.String({ minLength: 1, maxLength: 255, description: "原始文件名，仅用于元数据。" }),
+  mime_type: Type.Union([Type.Literal("image/jpeg"), Type.Literal("image/png"), Type.Literal("image/webp")], { description: "头像 MIME 类型。" }),
+  data: Type.String({ minLength: 1, maxLength: 7_000_000, description: "头像内容的 base64 编码。" }),
+}, { $id: "EmployeeAvatarRequest", additionalProperties: false, description: "员工头像上传请求。" });
+const EmployeeAvatarResponse = Type.Object({ employee_id: Type.String(), avatar_url: Type.String(), version: Type.Integer({ minimum: 1 }), updated_at: Type.String({ format: "date-time" }) }, { $id: "EmployeeAvatarResponse", additionalProperties: false });
 const UsageFlushRequest = Type.Object({ limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 50, description: "本次最多处理的摘要数量；缺省为 50，最大 100。" })) }, { $id: "UsageFlushRequest", additionalProperties: false, description: "用量摘要刷新请求。" });
 const ConversationEnvelope = Type.Object({ data: Type.Ref("ConversationMetadata") }, { $id: "ConversationEnvelope", description: "单个会话元数据响应。" });
 const ConversationListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ConversationMetadata"), { description: "按 updated_at 降序、id 降序排列的本地会话。" }), page: Type.Ref("Page") }, { $id: "ConversationListEnvelope", description: "会话列表响应；page.next_cursor 为下一页 cursor，末页为 null。" });
@@ -1122,6 +1128,7 @@ export class AgentHttpServer {
       this.writeJson(response, 200, { data: { signed_out: true } });
     }, routeSchema("logout", { summary: "注销本地执行身份", description: "清理当前进程的短期执行身份和运行材料；不会上传会话内容。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }));
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("POST", "/api/agent/employees/:employee_id/avatar", (request, response, caller, fastifyRequest) => this.updateEmployeeAvatar(request, response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("updateEmployeeAvatar", { summary: "更新员工头像", description: "将头像上传到 Manager，并原子更新本地员工投影和快照；不触发全量同步。", params: ExpertParams, body: Type.Ref("EmployeeAvatarRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("EmployeeAvatarResponse") })), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 415: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回本地验签后的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
@@ -1617,6 +1624,35 @@ export class AgentHttpServer {
   }
 
   private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ ...expert, ...employeeDisplay(expert) })), page: { next_cursor: null, has_more: false } }); }
+
+  private async updateEmployeeAvatar(request: IncomingMessage, response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
+    this.requireAuthorizedEmployee(employeeId, caller);
+    if (!this.options.managerClient?.updateEmployeeAvatar) throw new HttpProblem(503, "manager_unavailable", "Manager avatar service is unavailable");
+    const body = await this.readJson(request, MAX_UPLOAD_JSON_BYTES);
+    const filename = this.stringField(body.filename, "filename", MAX_LOCAL_FILE_NAME);
+    if (filename.includes("/") || filename.includes("\\") || /[\x00-\x1f\x7f]/u.test(filename)) throw new HttpProblem(400, "invalid_avatar", "filename must be a safe basename");
+    const mimeType = body.mime_type;
+    if (typeof mimeType !== "string" || !IMAGE_MIMES.has(mimeType) || !["image/jpeg", "image/png", "image/webp"].includes(mimeType)) throw new HttpProblem(415, "unsupported_avatar_type", "Only JPEG, PNG and WebP avatars are supported");
+    const encoded = this.stringField(body.data, "data", Math.ceil(5 * 1024 * 1024 / 3) * 4 + 16);
+    const data = decodeBase64(encoded);
+    if (!data) throw new HttpProblem(400, "invalid_avatar", "data must be valid base64");
+    if (data.byteLength > 5 * 1024 * 1024) throw new HttpProblem(413, "avatar_too_large", "Avatar exceeds 5 MB");
+    if (!hasImageSignature(mimeType, data)) throw new HttpProblem(400, "invalid_avatar", "Image MIME type does not match its content");
+    let result: { employee_id: string; avatar_url: string; version: number; updated_at: string };
+    try {
+      result = await this.options.managerClient.updateEmployeeAvatar(caller, employeeId, { filename, mime_type: mimeType, data: encoded });
+    } catch (error) {
+      if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthorized" : "employee_not_authorized", error.message);
+      if (error instanceof ManagerPolicyDeniedError) throw new HttpProblem(error.status, error.status === 404 ? "employee_not_found" : "avatar_version_conflict", error.message);
+      if (error instanceof ManagerUnavailableError) throw new HttpProblem(502, "manager_unavailable", "Manager avatar service is unavailable");
+      throw error;
+    }
+    if (result.employee_id !== employeeId) throw new HttpProblem(502, "manager_unavailable", "Manager returned an avatar for a different employee");
+    const state = this.options.store.updateEmployeeAvatar(caller.tenantId!, caller.userId ?? caller.callerId, employeeId, result.avatar_url, result.version);
+    if (state === "not_found") throw new HttpProblem(404, "employee_not_found", "Employee is not authorized locally");
+    if (state === "conflict") throw new HttpProblem(409, "avatar_version_conflict", "Local avatar is newer than Manager avatar");
+    this.writeJson(response, 200, { data: result });
+  }
   private listSolutions(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSolutions(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private async listMarketplaceTemplates(response: ServerResponse, caller: AuthenticatedCaller, templateId?: string): Promise<void> {
     if (!this.options.managerClient?.listMarketplaceTemplates) throw new HttpProblem(503, "manager_unavailable", "Marketplace catalog is unavailable");

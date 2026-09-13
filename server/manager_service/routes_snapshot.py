@@ -25,6 +25,7 @@ from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
 from .member_service import GrantService, MemberDeptService
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import SnapshotService, build_snapshot_service
+from .employee_avatar_repository import EmployeeAvatarRepository
 
 
 class _ManagerNotConfigured(AppError):
@@ -53,6 +54,7 @@ def _service(request: Request) -> SnapshotService:
             audit_recorder=build_enterprise_audit_repository(router),
             knowledge_binding=EmployeeKnowledgeBindingRepository(router),
             platform_catalog=getattr(request.app.state, "_operator_catalog", None),
+            avatar_repository=EmployeeAvatarRepository(router),
         )
         request.app.state._snapshot_service = cache
     return cache

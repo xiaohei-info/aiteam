@@ -26,6 +26,7 @@ from .capability_catalog_service import build_capability_catalog_service
 from .employee_config_service import build_employee_config_service
 from .routes_member import _services, _token_claims
 from .schemas import MemberGrantCreate, MemberGrantOut, MemberGrantUpdate, validate_uuid_string_list
+from .employee_avatar_repository import EmployeeAvatarRepository
 
 router = APIRouter(prefix="/api/manager", tags=["grant"])
 
@@ -61,6 +62,7 @@ def _authorized_config_service(request: Request) -> AuthorizedConfigService:
             recruit_repository=RecruitRepository(router_pg),
             capability_catalog=capability_catalog,
             knowledge_policy=KnowledgeAccessPolicy(EmployeeKnowledgeBindingRepository(router_pg)),
+            avatar_repository=EmployeeAvatarRepository(router_pg),
         )
         request.app.state._authorized_config_service = cache
     return cache

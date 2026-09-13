@@ -22,6 +22,7 @@ from .employee_config_service import EmployeeConfigService
 from .member_service import GrantService, MemberDeptService
 from .recruit_repository import RecruitRepository
 from .skill_signing import SkillPackageSigner
+from .employee_avatar_repository import EmployeeAvatarRepository
 
 _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.OWNER.value,
@@ -69,6 +70,7 @@ class AuthorizedConfigService:
         capability_catalog: CapabilityCatalogService | None = None,
         skill_signer: SkillPackageSigner | None = None,
         knowledge_policy: KnowledgeAccessPolicy | None = None,
+        avatar_repository: EmployeeAvatarRepository | None = None,
     ):
         self._config = config_service
         self._knowledge_policy = knowledge_policy or KnowledgeAccessPolicy()
@@ -77,6 +79,7 @@ class AuthorizedConfigService:
         self._recruit_repo = recruit_repository
         self._capability = capability_catalog
         self._skill_signer = skill_signer if skill_signer is not None else SkillPackageSigner.from_env()
+        self._avatars = avatar_repository
 
     def pull(
         self, ctx: TenantContext, req: AuthorizedConfigPullRequest
@@ -113,9 +116,12 @@ class AuthorizedConfigService:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),
                 )
+                avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
                 experts.append({**cfg.model_dump(mode="json"), "tools": list(policy.tools),
                                 "knowledge_refs": list(policy.refs),
-                                "knowledge_policy": policy.projection.model_dump(mode="json")})
+                                "knowledge_policy": policy.projection.model_dump(mode="json"),
+                                "avatar_url": avatar.avatar_url if avatar else None,
+                                "avatar_version": avatar.version if avatar else 0})
 
         solutions: list[dict] = []
         for sol_instance in all_solution_instances:

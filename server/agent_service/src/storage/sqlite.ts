@@ -980,6 +980,27 @@ export class AgentSqliteStore {
     });
   }
 
+  updateEmployeeAvatar(tenantId: string, memberId: string, employeeId: string, avatarUrl: string, avatarVersion: number): "updated" | "not_found" | "conflict" {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT projection_json FROM loaded_employee_projection WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (!row) { this.db.exec("ROLLBACK"); return "not_found"; }
+      const projection = JSON.parse(row.projection_json) as LoadedExpertProjection;
+      const currentVersion = Number(projection.avatar_version ?? 0);
+      if (!Number.isInteger(avatarVersion) || avatarVersion < currentVersion) { this.db.exec("ROLLBACK"); return "conflict"; }
+      const next = { ...projection, avatar_url: avatarUrl, avatar_version: avatarVersion };
+      const now = new Date().toISOString();
+      this.db.prepare("UPDATE loaded_employee_projection SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ? AND revoked = 0").run(JSON.stringify(next), now, employeeId, tenantId, memberId);
+      const snapshot = this.db.prepare("SELECT projection_json FROM frozen_snapshot WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").get(employeeId, tenantId, memberId) as { projection_json: string } | undefined;
+      if (snapshot) {
+        const snapshotProjection = JSON.parse(snapshot.projection_json) as Record<string, unknown>;
+        this.db.prepare("UPDATE frozen_snapshot SET projection_json = ?, synced_at = ? WHERE employee_id = ? AND tenant_id = ? AND member_id = ?").run(JSON.stringify({ ...snapshotProjection, avatar_url: avatarUrl, avatar_version: avatarVersion }), now, employeeId, tenantId, memberId);
+      }
+      this.db.exec("COMMIT");
+      return "updated";
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
   listSnapshots(tenantId?: string, memberId?: string): FrozenSnapshot[] {
     return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM frozen_snapshot WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...JSON.parse(row.projection_json) as FrozenSnapshot, ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
   }

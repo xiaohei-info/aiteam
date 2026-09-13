@@ -21,3 +21,5 @@ PyPDF2>=3.0,<4
 
 # Custom SKILL.md frontmatter validation (safe, bounded; Pi SDK unchanged).
 PyYAML==6.0.3
+# Avatar decode and WebP normalization (Manager employee avatar uploads).
+Pillow>=10.0,<12
