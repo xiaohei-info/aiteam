@@ -683,6 +683,7 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
   "resolveTenantByAccount", "login", "resetPassword", "transcribeAudio", "getConversationContext",
   "updateConversationContext", "setConversationThinkingLevel", "promptConversation", "syncGrants",
   "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree",
+  "updateEmployeeAvatar",
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
@@ -706,6 +707,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   login: { request: { credentials: { summary: "登录凭据", value: { tenant_id: "tenant-1", account: "13800000000", password: "••••••••" } } }, responses: { "200": { description: "返回本地短期 access token 和身份声明。", examples: { loggedIn: { summary: "登录成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"], exp: 1790000000 } } } } } } } },
   resetPassword: { request: { reset: { summary: "密码重置", value: { tenant_id: "tenant-1", account: "13800000000", old_password: "••••••••", new_password: "••••••••" } } }, responses: { "200": { description: "返回重置后新的本地 access token。", examples: { reset: { summary: "重置成功", value: { data: { token: "eyJ...redacted", claims: { user_id: "member-1", tenant_id: "tenant-1", roles: ["owner"], exp: 1790000000 } } } } } } } },
   transcribeAudio: { request: { audio: { summary: "录音文件", value: { filename: "recording.webm", mime_type: "audio/webm", data: "YXVkaW8=" } } }, responses: { "200": { description: "返回 ASR 文本和可选时长。", examples: { transcript: { summary: "转写成功", value: { data: { text: "你好，世界", duration: 1.2 } } } } } } },
+  updateEmployeeAvatar: { request: { avatar: { summary: "头像文件", value: { filename: "avatar.png", mime_type: "image/png", data: "iVBORw0KGgo=" } } }, responses: { "200": { description: "头像更新后的 URL 和版本。", examples: { updated: { summary: "更新成功", value: { data: { employee_id: "employee-1", avatar_url: "https://cdn.example.com/avatars/employee-1.webp", version: 2, updated_at: "2026-09-13T10:00:00.000Z" } } } } } } },
   ping: { responses: { "200": { description: "固定存活探针结果。", examples: { pong: { summary: "存活", value: { data: { pong: true } } } } } } },
   whoami: { responses: { "200": { description: "当前 access token 的身份声明。", examples: { identity: { summary: "当前身份", value: { data: { user_id: "member-1", tenant_id: "tenant-1", roles: ["member"] } } } } } } },
   listConversations: { request: { limit: { summary: "返回条数", value: 50 }, cursor: { summary: "分页游标", value: "conversation-previous" } }, responses: { "200": { description: "本地会话列表和分页信息。", examples: { list: { summary: "会话列表", value: { data: [EXAMPLE_CONVERSATION], page: EXAMPLE_PAGE } } } } } },
