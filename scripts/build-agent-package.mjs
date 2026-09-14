@@ -149,6 +149,14 @@ async function main() {
   assertNoControlPlaneFiles(packageRoot);
 
   const files = collectFiles(packageRoot).filter((entry) => entry.path !== "manifest.json");
+  let sourceRevision = process.env.GITHUB_SHA?.trim() || "";
+  if (!sourceRevision) {
+    try {
+      sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, env: childEnvironment(), encoding: "utf8" }).trim();
+    } catch {
+      sourceRevision = "";
+    }
+  }
   const manifest = {
     schema_version: 1,
     product: "aiteam-agent",
@@ -157,6 +165,12 @@ async function main() {
     node_version: runtime.version,
     configured: config.configured,
     config_source: config.source,
+    ...(sourceRevision ? { source_revision: sourceRevision } : {}),
+    capabilities: {
+      reconciliation: 2,
+      active_run_snapshots: true,
+      facts_state: true,
+    },
     files,
   };
   writeFileSync(join(packageRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

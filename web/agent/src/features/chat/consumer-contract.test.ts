@@ -76,13 +76,15 @@ describe("Agent Web consumer contract", () => {
     vi.useFakeTimers();
     const entry: PiEntry = { id: "entry-1", type: "message", message: { role: "assistant", content: "done" } };
     const reconciliation = {
-      schema_version: "1",
+      schema_version: "2",
       type: "reconciliation",
       conversation_id: "conversation-1",
       state: "active",
-      prompting: false,
+      prompting: true,
       entries: [entry],
       receipts: [{ idempotency_key: "prompt-1", state: "completed", last_entry_id: "entry-1", failure_code: null, failure_detail: null }],
+      active_runs: [],
+      facts: { status: "synced", pending_count: 0, last_error_code: null, updated_at: null },
     } as const;
     const streams = [
       `id: 42\nevent: pi\ndata: {"type":"agent_start"}\n\n`,
@@ -113,6 +115,7 @@ describe("Agent Web consumer contract", () => {
     }));
     const reconnectInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
     expect(new Headers(reconnectInit.headers).get("Last-Event-ID")).toBe("42");
+    expect(new Headers(reconnectInit.headers).get("X-Aiteam-Reconciliation-Version")).toBe("2");
     subscription.close();
   });
 
@@ -129,6 +132,59 @@ describe("Agent Web consumer contract", () => {
     expect(valid).toMatchObject({ entries: [{ id: "entry-1" }], receipts: [{ state: "unknown" }] });
     expect(parsePiSseReconciliation({ ...valid, receipts: [{ ...valid!.receipts[0], state: "bad" }] })).toBeNull();
     expect(parsePiSseReconciliation({ ...valid, entries: Array.from({ length: 65 }, (_, index) => ({ id: String(index), type: "message" })) })).toBeNull();
+  });
+
+  it("accepts bounded reconciliation v2 active-run and facts snapshots", () => {
+    const parsed = parsePiSseReconciliation({
+      schema_version: "2",
+      type: "reconciliation",
+      conversation_id: "conversation-1",
+      state: "active",
+      prompting: true,
+      entries: [],
+      receipts: [],
+      active_runs: [{
+        work_id: "work-1",
+        source_employee_id: "employee-1",
+        source_employee_display_name: "Helper",
+        source_role: "participant",
+        status: "thinking",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "继续处理" }] },
+      }],
+      facts: { status: "queued", pending_count: 2, last_error_code: null, updated_at: "2026-09-01T09:00:00Z" },
+    });
+    expect(parsed).toMatchObject({
+      schema_version: "2",
+      active_runs: [{ status: "thinking", message: { role: "assistant" } }],
+      facts: { status: "queued", pending_count: 2 },
+    });
+    expect(parsePiSseReconciliation({
+      ...parsed,
+      active_runs: Array.from({ length: 17 }, () => ({ status: "thinking" })),
+    })).toBeNull();
+    expect(parsePiSseReconciliation({
+      ...parsed,
+      facts: { status: "queued", pending_count: -1 },
+    })).toBeNull();
+  });
+
+  it("keeps optional v2 fields strict and preserves the v1 fallback shape", () => {
+    const minimal = parsePiSseReconciliation({
+      schema_version: "2",
+      type: "reconciliation",
+      conversation_id: "conversation-1",
+      state: "active",
+      prompting: true,
+      entries: [],
+      receipts: [],
+      active_runs: [{}],
+      facts: { status: "idle" },
+    });
+    expect(minimal).toMatchObject({ active_runs: [{}], facts: { status: "idle" } });
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [null] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [{ source_role: "unknown" }] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [{ message: null }] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, facts: { status: "queued", last_error_code: 1 } })).toBeNull();
   });
 
   it("preserves SSE multiline data and wires existing local search and participant reads", async () => {

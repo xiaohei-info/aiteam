@@ -163,4 +163,41 @@ describe("Timeline reconciliation consumer", () => {
     expect(screen.getByTestId("conversation-reconciliation-state")).toHaveAttribute("data-reconciliation-state", "paused");
     await waitFor(() => expect(mocks.listApprovals.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
+
+  it("hydrates and clears v2 active-run and facts snapshots", async () => {
+    const reconciliation: PiSseReconciliation = {
+      schema_version: "2",
+      type: "reconciliation",
+      conversation_id: "conversation-1",
+      state: "active",
+      prompting: true,
+      entries: [],
+      receipts: [],
+      active_runs: [{
+        work_id: "work-1",
+        source_employee_id: "employee-1",
+        source_employee_display_name: "研究助手",
+        source_role: "participant",
+        status: "thinking",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "正在分析" }] },
+      }],
+      facts: { status: "queued", pending_count: 2, last_error_code: null, updated_at: null },
+    };
+    render(<TimelineView client={client} conversationId="conversation-1" />);
+
+    await act(async () => {
+      onEvent?.({ id: "v2", event: { type: "reconciliation" }, eventName: "reconciliation", reconciliation });
+    });
+    expect(screen.getByTestId("reconciliation-active-run")).toHaveTextContent("研究助手");
+    expect(screen.getByTestId("reconciliation-active-run")).toHaveTextContent("正在思考");
+    expect(screen.getByTestId("reconciliation-active-run")).toHaveTextContent("正在分析");
+    expect(screen.getByTestId("reconciliation-facts")).toHaveTextContent("排队中");
+    expect(screen.getByTestId("reconciliation-facts")).toHaveTextContent("待处理 2 项");
+
+    await act(async () => {
+      onEvent?.({ id: "terminal", event: { type: "agent_settled", source_employee_id: "employee-1" } as never });
+    });
+    expect(screen.queryByTestId("reconciliation-active-run")).toBeNull();
+    expect(screen.getByTestId("reconciliation-facts")).toBeInTheDocument();
+  });
 });
