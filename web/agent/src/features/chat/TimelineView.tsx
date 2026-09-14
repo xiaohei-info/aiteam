@@ -529,26 +529,28 @@ function ReconciliationRuntime({ activeRuns, facts }: { activeRuns: PiSseActiveR
   );
 }
 
+const ACTIVE_RUN_STATUS_LABELS: Record<string, string> = {
+  thinking: "正在思考",
+  text: "正在回复",
+  tool: "正在执行工具",
+  waiting: "等待中",
+  error: "执行异常",
+};
+
+const FACTS_STATUS_LABELS: Record<string, string> = {
+  flushing: "生成中",
+  queued: "排队中",
+  synced: "已同步",
+  failed: "失败",
+  idle: "空闲",
+};
+
 function activeRunStatusLabel(status: PiSseActiveRun["status"]): string {
-  switch (status) {
-    case "thinking": return "正在思考";
-    case "text": return "正在回复";
-    case "tool": return "正在执行工具";
-    case "waiting": return "等待中";
-    case "error": return "执行异常";
-    default: return "正在执行";
-  }
+  return ACTIVE_RUN_STATUS_LABELS[status ?? ""] ?? "正在执行";
 }
 
 function factsStatusLabel(status: string): string {
-  switch (normalizeType(status)) {
-    case "flushing": return "生成中";
-    case "queued": return "排队中";
-    case "synced": return "已同步";
-    case "failed": return "失败";
-    case "idle": return "空闲";
-    default: return safeDisplayText(status, MAX_STATUS_LENGTH);
-  }
+  return FACTS_STATUS_LABELS[normalizeType(status)] ?? safeDisplayText(status, MAX_STATUS_LENGTH);
 }
 
 type ResolvedMessageSource = {

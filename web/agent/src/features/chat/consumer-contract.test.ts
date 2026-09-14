@@ -168,6 +168,25 @@ describe("Agent Web consumer contract", () => {
     })).toBeNull();
   });
 
+  it("keeps optional v2 fields strict and preserves the v1 fallback shape", () => {
+    const minimal = parsePiSseReconciliation({
+      schema_version: "2",
+      type: "reconciliation",
+      conversation_id: "conversation-1",
+      state: "active",
+      prompting: true,
+      entries: [],
+      receipts: [],
+      active_runs: [{}],
+      facts: { status: "idle" },
+    });
+    expect(minimal).toMatchObject({ active_runs: [{}], facts: { status: "idle" } });
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [null] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [{ source_role: "unknown" }] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, active_runs: [{ message: null }] })).toBeNull();
+    expect(parsePiSseReconciliation({ ...minimal, facts: { status: "queued", last_error_code: 1 } })).toBeNull();
+  });
+
   it("preserves SSE multiline data and wires existing local search and participant reads", async () => {
     const stream = new ReadableStream({
       start(controller) {
