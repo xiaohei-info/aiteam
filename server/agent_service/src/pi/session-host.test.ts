@@ -698,11 +698,19 @@ test("SessionHost aborts an active Pi prompt", async () => {
     slow.setResponses([fauxAssistantMessage("slow ".repeat(200))]);
 
     const pending = slowHost.prompt("conversation-2", "start");
+    let activeRuns: Array<Record<string, unknown>> = [];
+    for (let attempt = 0; attempt < 20 && activeRuns.length === 0; attempt += 1) {
+      activeRuns = slowHost.activeRuns("conversation-2");
+      if (activeRuns.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(activeRuns.length, 1);
+    assert(["thinking", "text", "tool"].includes(String(activeRuns[0]?.status)));
     await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(await slowHost.abort("conversation-2"), true);
     await pending;
     assert(events.includes("agent_end"));
     assert.equal(slowHost.isPrompting("conversation-2"), false);
+    assert.deepEqual(slowHost.activeRuns("conversation-2"), []);
     await slowHost.dispose();
   } finally {
     await fixture.close();

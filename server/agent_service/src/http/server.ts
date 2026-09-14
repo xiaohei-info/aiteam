@@ -43,6 +43,7 @@ const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_JSON_BYTES = Math.ceil(MAX_PROMPT_IMAGE_BYTES / 3) * 4 + 512 * 1024;
 const MAX_PENDING_EVENTS = 512;
 const MAX_PENDING_TERMINAL_EVENTS = 64;
+const RECONCILIATION_V2_HEADER = "x-aiteam-reconciliation-version";
 const TERMINAL_EVENT_TYPES = new Set([
   "agent_end", "agent_settled", "approval_required", "message_end", "tool_execution_end",
   "auto_retry_end", "compaction_end",
@@ -584,7 +585,7 @@ const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].m
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
 const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
-const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
+const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
 const PI_EVENT_STREAM_EXAMPLES = {
   thinking: {
@@ -704,7 +705,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
-  "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1",
+  "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1", "X-Aiteam-Reconciliation-Version": "2",
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...CONVERSATION_READ_DOCS,
@@ -927,7 +928,7 @@ export class AgentHttpServer {
         // CORS headers on the raw response so they survive that boundary.
         reply.raw.setHeader("Access-Control-Allow-Origin", origin);
         reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
-        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID");
+        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Aiteam-Reconciliation-Version");
         reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID");
         reply.raw.setHeader("Access-Control-Max-Age", "600");
@@ -1179,7 +1180,10 @@ export class AgentHttpServer {
       description: PI_EVENT_STREAM_DESCRIPTION,
       params: ConversationParams,
       querystring: Type.Object({ after: Type.Optional(Type.String({ minLength: 1, description: "客户端上次收到的事件 ID；历史正文请通过 /entries 获取，且优先于 Last-Event-ID。" })) }, { additionalProperties: false, description: "SSE 断点续读参数。" }),
-      headers: Type.Object({ "Last-Event-ID": Type.Optional(Type.String({ minLength: 1, description: "SSE 断线重连游标；未提供 after 查询参数时使用。" })) }, { additionalProperties: true, description: "SSE 断线重连游标。" }),
+      headers: Type.Object({
+        "Last-Event-ID": Type.Optional(Type.String({ minLength: 1, description: "SSE 断线重连游标；未提供 after 查询参数时使用。" })),
+        "X-Aiteam-Reconciliation-Version": Type.Optional(Type.Literal("2", { description: "请求包含 reconciliation v2 运行中快照；不提供时保持 v1 兼容响应。" })),
+      }, { additionalProperties: true, description: "SSE 断线重连游标和可选对账能力。" }),
       response: {
         200: {
           description: "Pi SSE 事件流。每条事件使用 `event: pi`，并在 `data` 行携带一个 JSON 对象。",
@@ -1983,6 +1987,7 @@ export class AgentHttpServer {
 
   private async events(request: IncomingMessage, response: ServerResponse, conversationId: string, after: string | null, caller: AuthenticatedCaller): Promise<void> {
     const requested = after ?? this.header(request, "last-event-id");
+    const supportsReconciliationV2 = this.header(request, RECONCILIATION_V2_HEADER) === "2";
     let closed = false;
     let connected = false;
     let reconciling = true;
@@ -2085,8 +2090,8 @@ export class AgentHttpServer {
         const receipts = this.options.store.listPromptReceipts(conversationId, caller.callerId);
         const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId ?? "", caller.userId ?? caller.callerId);
         const prompting = this.options.host.isPrompting(conversationId);
-        const activeRuns = typeof entries.activeRuns === "function" ? entries.activeRuns(conversationId) : [];
-        const facts = typeof entries.factsState === "function" ? entries.factsState(conversationId) : undefined;
+        const activeRuns = supportsReconciliationV2 && typeof entries.activeRuns === "function" ? entries.activeRuns(conversationId) : [];
+        const facts = supportsReconciliationV2 && typeof entries.factsState === "function" ? entries.factsState(conversationId) : undefined;
         return { durableEntries, receipts, metadata, prompting, receiptSettled, activeRuns, facts };
       };
       let snapshot = await readPass();

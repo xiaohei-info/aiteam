@@ -414,14 +414,35 @@ export interface PiSseReceipt {
   failure_detail: string | null;
 }
 
+export type PiSseActiveRunStatus = "thinking" | "tool" | "text" | "waiting" | "error";
+export type PiSseSourceRole = "human" | "child" | "participant" | "coordinator";
+
+export interface PiSseActiveRun {
+  work_id?: string;
+  source_employee_id?: string;
+  source_employee_display_name?: string;
+  source_role?: PiSseSourceRole;
+  status?: PiSseActiveRunStatus;
+  message?: Record<string, unknown>;
+}
+
+export interface PiSseFactsState {
+  status: string;
+  pending_count?: number;
+  last_error_code?: string | null;
+  updated_at?: string | null;
+}
+
 export interface PiSseReconciliation {
-  schema_version: "1";
+  schema_version: "1" | "2";
   type: "reconciliation";
   conversation_id: string;
   state: string;
   prompting: boolean;
   entries: PiEntry[];
   receipts: PiSseReceipt[];
+  active_runs?: PiSseActiveRun[];
+  facts?: PiSseFactsState;
 }
 
 export interface PiSseEventMessage {
@@ -446,6 +467,10 @@ export const SSE_RECONNECT_BASE_DELAY_MS = 250;
 export const SSE_RECONNECT_MAX_DELAY_MS = 5_000;
 export const MAX_RECONCILIATION_ENTRIES = 64;
 export const MAX_RECONCILIATION_RECEIPTS = 64;
+export const MAX_RECONCILIATION_ACTIVE_RUNS = 16;
+const MAX_RECONCILIATION_FIELD_LENGTH = 256;
+const ACTIVE_RUN_STATUSES = new Set<PiSseActiveRunStatus>(["thinking", "tool", "text", "waiting", "error"]);
+const SOURCE_ROLES = new Set<PiSseSourceRole>(["human", "child", "participant", "coordinator"]);
 
 /**
  * Subscribe to the owner-checked Pi stream and reconnect until explicitly closed.
@@ -490,7 +515,10 @@ export function subscribePiEvents(
         `/api/agent/conversations/${encodeURIComponent(conversationId)}/events`,
         {
           query: cursor ? { after: cursor } : undefined,
-          headers: cursor ? { "Last-Event-ID": cursor } : undefined,
+          headers: {
+            "X-Aiteam-Reconciliation-Version": "2",
+            ...(cursor ? { "Last-Event-ID": cursor } : {}),
+          },
           signal: controller.signal,
         },
       );
@@ -674,7 +702,8 @@ function asEventRecord(value: unknown): Record<string, unknown> | null {
 
 export function parsePiSseReconciliation(value: unknown): PiSseReconciliation | null {
   const record = asEventRecord(value);
-  if (!record || record.schema_version !== "1" || record.type !== "reconciliation"
+  const schemaVersion = record?.schema_version === "1" || record?.schema_version === "2" ? record.schema_version : null;
+  if (!record || !schemaVersion || record.type !== "reconciliation"
     || typeof record.conversation_id !== "string" || typeof record.state !== "string"
     || typeof record.prompting !== "boolean" || !Array.isArray(record.entries) || !Array.isArray(record.receipts)) {
     return null;
@@ -695,15 +724,80 @@ export function parsePiSseReconciliation(value: unknown): PiSseReconciliation | 
     return item as unknown as PiSseReceipt;
   });
   if (entries.some((entry) => entry === null) || receipts.some((receipt) => receipt === null)) return null;
+  const activeRuns = record.active_runs === undefined ? undefined : parseActiveRuns(record.active_runs);
+  if (activeRuns === null) return null;
+  const facts = record.facts === undefined ? undefined : parseFactsState(record.facts);
+  if (record.facts !== undefined && facts === null) return null;
   return {
-    schema_version: "1",
+    schema_version: schemaVersion,
     type: "reconciliation",
     conversation_id: record.conversation_id,
     state: record.state,
     prompting: record.prompting,
     entries: entries as PiEntry[],
     receipts: receipts as PiSseReceipt[],
+    ...(activeRuns === undefined ? {} : { active_runs: activeRuns }),
+    ...(facts === undefined ? {} : { facts: facts! }),
   };
+}
+
+function parseActiveRuns(value: unknown): PiSseActiveRun[] | null {
+  if (!Array.isArray(value) || value.length > MAX_RECONCILIATION_ACTIVE_RUNS) return null;
+  const parsed = value.map((candidate) => {
+    const item = asEventRecord(candidate);
+    if (!item) return null;
+    const workId = optionalBoundedString(item, "work_id");
+    const employeeId = optionalBoundedString(item, "source_employee_id");
+    const displayName = optionalBoundedString(item, "source_employee_display_name");
+    const role = optionalEnum(item, "source_role", SOURCE_ROLES);
+    const status = optionalEnum(item, "status", ACTIVE_RUN_STATUSES);
+    if (workId === null || employeeId === null || displayName === null || role === null || status === null) return null;
+    let message: Record<string, unknown> | undefined;
+    if (Object.prototype.hasOwnProperty.call(item, "message")) {
+      message = asEventRecord(item.message) ?? undefined;
+      if (!message) return null;
+    }
+    return {
+      ...(workId === undefined ? {} : { work_id: workId }),
+      ...(employeeId === undefined ? {} : { source_employee_id: employeeId }),
+      ...(displayName === undefined ? {} : { source_employee_display_name: displayName }),
+      ...(role === undefined ? {} : { source_role: role }),
+      ...(status === undefined ? {} : { status }),
+      ...(message === undefined ? {} : { message }),
+    };
+  });
+  return parsed.some((item) => item === null) ? null : parsed as PiSseActiveRun[];
+}
+
+function parseFactsState(value: unknown): PiSseFactsState | null {
+  const item = asEventRecord(value);
+  if (!item || typeof item.status !== "string" || item.status.trim() === "" || item.status.length > MAX_RECONCILIATION_FIELD_LENGTH) return null;
+  const pendingCount = item.pending_count;
+  if (pendingCount !== undefined && (typeof pendingCount !== "number" || !Number.isInteger(pendingCount) || pendingCount < 0)) return null;
+  const lastErrorCode = item.last_error_code;
+  const updatedAt = item.updated_at;
+  if (lastErrorCode !== undefined && lastErrorCode !== null
+    && (typeof lastErrorCode !== "string" || lastErrorCode.length > MAX_RECONCILIATION_FIELD_LENGTH)) return null;
+  if (updatedAt !== undefined && updatedAt !== null
+    && (typeof updatedAt !== "string" || updatedAt.length > MAX_RECONCILIATION_FIELD_LENGTH)) return null;
+  return {
+    status: item.status,
+    ...(pendingCount === undefined ? {} : { pending_count: pendingCount }),
+    ...(lastErrorCode === undefined ? {} : { last_error_code: lastErrorCode as string | null }),
+    ...(updatedAt === undefined ? {} : { updated_at: updatedAt as string | null }),
+  };
+}
+
+function optionalBoundedString(record: Record<string, unknown>, key: string): string | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return undefined;
+  const value = record[key];
+  return typeof value === "string" && value.trim() !== "" && value.length <= MAX_RECONCILIATION_FIELD_LENGTH ? value : null;
+}
+
+function optionalEnum<T extends string>(record: Record<string, unknown>, key: string, allowed: Set<T>): T | null | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) return undefined;
+  const value = record[key];
+  return typeof value === "string" && allowed.has(value as T) ? value as T : null;
 }
 
 function isConversationParticipant(value: unknown): value is ConversationParticipant {

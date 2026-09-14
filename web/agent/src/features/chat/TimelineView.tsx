@@ -12,7 +12,7 @@ import {
 } from "@astryxdesign/core/Chat";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import type { AgentApiClient } from "../../lib/api-client";
-import { getConversationRuntimeState, getEntries, listApprovals, parsePiSseReconciliation, subscribePiEvents, type ApprovalRecord, type PiSseReceipt, type PiSseReconciliation } from "./useChatApi";
+import { getConversationRuntimeState, getEntries, listApprovals, parsePiSseReconciliation, subscribePiEvents, type ApprovalRecord, type PiSseActiveRun, type PiSseFactsState, type PiSseReceipt, type PiSseReconciliation } from "./useChatApi";
 import { ApprovalCard, approvalErrorMessage } from "./ApprovalCard";
 
 const MAX_TYPE_LENGTH = 80;
@@ -149,6 +149,8 @@ export function TimelineView({
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [receipts, setReceipts] = useState<PiSseReceipt[]>([]);
+  const [activeRuns, setActiveRuns] = useState<PiSseActiveRun[]>([]);
+  const [facts, setFacts] = useState<PiSseFactsState | null>(null);
   const [reconciledState, setReconciledState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -166,6 +168,8 @@ export function TimelineView({
     setApprovals([]);
     setApprovalError(null);
     setReceipts([]);
+    setActiveRuns([]);
+    setFacts(null);
     setReconciledState(null);
     setLoading(true);
     setLoadError(null);
@@ -247,6 +251,8 @@ export function TimelineView({
       snapshotVersion.current += 1;
       mergeEntries(reconciliation.entries);
       setReceipts((current) => mergeReceipts(current, reconciliation.receipts));
+      setActiveRuns(reconciliation.active_runs ?? []);
+      setFacts(reconciliation.facts ?? null);
       setReconciledState(reconciliation.state);
       onConversationStateChange?.(reconciliation.state);
       onPromptingChange?.(reconciliation.prompting);
@@ -271,10 +277,14 @@ export function TimelineView({
         const type = eventType;
         if (type === "agent_start") onPromptingChange?.(true);
         else if (type === "agent_end" || type === "agent_settled") {
+          setActiveRuns((current) => clearActiveRunsForTerminal(current, next.event));
           onPromptingChange?.(false);
           // Durable entries/runtime/receipts close the gap when the terminal event
           // races a response or arrives just before a reconnect.
           loadSnapshot(false);
+        } else {
+          const sourceEmployeeId = firstString(asRecord(next.event), "source_employee_id", "sourceEmployeeId");
+          if (sourceEmployeeId) setActiveRuns((current) => removeActiveRunsForSource(current, sourceEmployeeId));
         }
         if (type === "approval_required") void loadApprovals();
         setEvents((current) => upsertEvent(current, next));
@@ -366,7 +376,7 @@ export function TimelineView({
     const itemKey = item.kind === "entry" ? `entry-${historyEntryIdentity(item.entry)}` : `event-${item.item.id || index}`;
     return models.map((model, modelIndex) => ({ model, key: `${itemKey}-${modelIndex}` }));
   }));
-  const hasContent = visibleTimeline.length > 0 || approvals.length > 0 || receipts.length > 0;
+  const hasContent = visibleTimeline.length > 0 || approvals.length > 0 || receipts.length > 0 || activeRuns.length > 0 || facts !== null;
   const visibleError = loadError ?? streamError;
 
   return (
@@ -387,6 +397,7 @@ export function TimelineView({
       ) : null}
       {approvalError ? <span data-testid="approval-list-error" role="alert">{approvalError}</span> : null}
       {reconciledState ? <span data-testid="conversation-reconciliation-state" data-reconciliation-state={reconciledState} aria-hidden="true" /> : null}
+      <ReconciliationRuntime activeRuns={activeRuns} facts={facts} />
       {approvals.map((approval) => (
         <ApprovalCard
           key={`approval-${approval.id}`}
@@ -459,6 +470,16 @@ function mergeReceipts(current: PiSseReceipt[], next: PiSseReceipt[]): PiSseRece
   return [...merged.values()].slice(-64);
 }
 
+function clearActiveRunsForTerminal(current: PiSseActiveRun[], event: PiEvent): PiSseActiveRun[] {
+  const sourceEmployeeId = firstString(asRecord(event), "source_employee_id", "sourceEmployeeId");
+  if (!sourceEmployeeId) return [];
+  return removeActiveRunsForSource(current, sourceEmployeeId);
+}
+
+function removeActiveRunsForSource(current: PiSseActiveRun[], sourceEmployeeId: string): PiSseActiveRun[] {
+  return current.filter((run) => run.source_employee_id !== sourceEmployeeId);
+}
+
 function upsertApproval(current: ApprovalRecord[], next: ApprovalRecord): ApprovalRecord[] {
   const index = current.findIndex((approval) => approval.id === next.id);
   if (index < 0) return [...current, next];
@@ -479,6 +500,55 @@ function ReconciliationReceipt({ receipt }: { receipt: PiSseReceipt }): ReactNod
       description={failure ? safeDisplayText(failure, MAX_DETAIL_LENGTH) : undefined}
     />
   );
+}
+
+function ReconciliationRuntime({ activeRuns, facts }: { activeRuns: PiSseActiveRun[]; facts: PiSseFactsState | null }): ReactNode {
+  if (activeRuns.length === 0 && facts === null) return null;
+  return (
+    <Card data-testid="reconciliation-runtime" padding={0} role="status" aria-live="polite">
+      <div data-reconciliation-runtime-content="true">
+        {activeRuns.map((run, index) => {
+          const name = run.source_employee_display_name?.trim() || "数字员工";
+          const status = activeRunStatusLabel(run.status);
+          const summary = run.message ? textFrom(run.message) : null;
+          return (
+            <div key={run.work_id || `${run.source_employee_id || "run"}-${index}`} data-testid="reconciliation-active-run" data-status={run.status || "unknown"}>
+              <strong>{name}</strong>
+              <span>{status}</span>
+              {summary ? <span>{boundedText(safeDisplayText(summary, MAX_PREVIEW_LENGTH), MAX_PREVIEW_LENGTH)}</span> : null}
+            </div>
+          );
+        })}
+        {facts ? <div data-testid="reconciliation-facts" data-status={facts.status}>
+          <strong>事实状态</strong>
+          <span>{factsStatusLabel(facts.status)}</span>
+          {facts.pending_count !== undefined && facts.pending_count > 0 ? <span>待处理 {facts.pending_count} 项</span> : null}
+        </div> : null}
+      </div>
+    </Card>
+  );
+}
+
+function activeRunStatusLabel(status: PiSseActiveRun["status"]): string {
+  switch (status) {
+    case "thinking": return "正在思考";
+    case "text": return "正在回复";
+    case "tool": return "正在执行工具";
+    case "waiting": return "等待中";
+    case "error": return "执行异常";
+    default: return "正在执行";
+  }
+}
+
+function factsStatusLabel(status: string): string {
+  switch (normalizeType(status)) {
+    case "flushing": return "生成中";
+    case "queued": return "排队中";
+    case "synced": return "已同步";
+    case "failed": return "失败";
+    case "idle": return "空闲";
+    default: return safeDisplayText(status, MAX_STATUS_LENGTH);
+  }
 }
 
 type ResolvedMessageSource = {

@@ -76,6 +76,31 @@ body,
   font-size: 0.875rem;
 }
 
+[data-testid="reconciliation-runtime"] {
+  width: 100%;
+  border-inline-start: 0.25rem solid var(--color-icon-blue);
+  background-color: var(--color-background-blue);
+}
+
+[data-reconciliation-runtime-content="true"] {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+[data-reconciliation-runtime-content="true"] > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+[data-reconciliation-runtime-content="true"] strong {
+  color: var(--color-text);
+}
+
 [data-timeline-message="true"] {
   margin: 0;
   white-space: pre-wrap;
