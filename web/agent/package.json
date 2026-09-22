@@ -16,6 +16,7 @@
     "@aiteam/shared": "workspace:*",
     "@astryxdesign/core": "0.1.4",
     "@astryxdesign/theme-stone": "0.1.4",
+    "@js-temporal/polyfill": "0.5.1",
     "@stylexjs/stylex": "0.18.3",
     "react": "19.2.7",
     "react-dom": "19.2.7",

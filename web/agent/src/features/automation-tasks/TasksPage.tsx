@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@astryxdesign/core/Button";
@@ -17,19 +18,25 @@ const categories = { all: "全部分类", report: "报告", monitor: "监控", r
 const statuses: Record<string, string> = { active: "启用中", paused: "已暂停", completed: "已完成", running: "执行中", succeeded: "成功", error: "失败", aborted: "已取消", unknown: "结果待核实", blocked: "已阻塞", queued: "待执行", skipped: "已跳过" };
 const at = (value: string | null) => value ? new Date(value).toLocaleString("zh-CN") : "—";
 const errorText = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
-const localDate = (iso: string) => { const date = new Date(iso); return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
+const localDate = (iso: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone) => Temporal.Instant.from(iso).toZonedDateTimeISO(timezone).toPlainDateTime().toString({ smallestUnit: "minute" });
+function scheduledInstant(local: string, timezone: string): string {
+  const date = Temporal.PlainDateTime.from(local);
+  const zoned = date.toZonedDateTime(timezone, { disambiguation: "earlier" });
+  if (!zoned.toPlainDateTime().equals(date)) throw new Error("该时区不存在这个当地时间，请调整执行时间。");
+  return zoned.toInstant().toString();
+}
 interface Draft { name: string; prompt: string; category: string; employee_id: string; connector_ids: string[]; mode: TaskSchedule["mode"]; timezone: string; time: string; weekday: number; day: number; interval: number; start: string }
 const emptyDraft = (): Draft => ({ name: "", prompt: "", category: "other", employee_id: "", connector_ids: [], mode: "daily", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, time: "09:00", weekday: 1, day: 1, interval: 60, start: localDate(new Date(Date.now() + 3_600_000).toISOString()) });
 function draftFor(task: AutomationTask): Draft {
   const rule = task.schedule;
   return { ...emptyDraft(), name: task.name, prompt: task.prompt ?? "", category: task.category, employee_id: task.employee_id ?? "", connector_ids: task.connector_ids, ...(rule ? { mode: rule.mode, timezone: rule.timezone } : {}),
     ...(rule && "time" in rule ? { time: rule.time } : {}), ...(rule?.mode === "weekly" ? { weekday: rule.weekday } : {}), ...(rule?.mode === "monthly" ? { day: rule.day_of_month } : {}),
-    ...(rule?.mode === "interval" ? { interval: rule.interval_seconds / 60, start: localDate(rule.starts_at) } : {}), ...(rule?.mode === "once" ? { start: localDate(rule.run_at) } : {}) };
+    ...(rule?.mode === "interval" ? { interval: rule.interval_seconds / 60, start: localDate(rule.starts_at, rule.timezone) } : {}), ...(rule?.mode === "once" ? { start: localDate(rule.run_at, rule.timezone) } : {}) };
 }
 export function draftSchedule(draft: Draft): TaskSchedule {
   const common = { timezone: draft.timezone };
-  if (draft.mode === "once") return { ...common, mode: "once", run_at: new Date(draft.start).toISOString() };
-  if (draft.mode === "interval") return { ...common, mode: "interval", starts_at: new Date(draft.start).toISOString(), interval_seconds: draft.interval * 60 };
+  if (draft.mode === "once") return { ...common, mode: "once", run_at: scheduledInstant(draft.start, draft.timezone) };
+  if (draft.mode === "interval") return { ...common, mode: "interval", starts_at: scheduledInstant(draft.start, draft.timezone), interval_seconds: draft.interval * 60 };
   const time = draft.time.length === 5 ? `${draft.time}:00` : draft.time;
   if (draft.mode === "weekly") return { ...common, mode: "weekly", time, weekday: draft.weekday };
   if (draft.mode === "monthly") return { ...common, mode: "monthly", time, day_of_month: draft.day, invalid_date_policy: "skip" };
@@ -41,6 +48,7 @@ export function TasksPage() {
   const [tasks, setTasks] = useState<AutomationTask[]>([]), [experts, setExperts] = useState<LoadedExpertProjection[]>([]);
   const [selected, setSelected] = useState<AutomationTask | null>(null), [editing, setEditing] = useState(false), [draft, setDraft] = useState(emptyDraft);
   const [connectors, setConnectors] = useState<Connector[]>([]), [runs, setRuns] = useState<TaskRun[]>([]), [runCursor, setRunCursor] = useState<string | null>(null);
+  const [employeeFilter, setEmployeeFilter] = useState("");
   const [category, setCategory] = useState("all"), [status, setStatus] = useState("all"), [q, setQ] = useState("");
   const [cursor, setCursor] = useState<string | null>(null), [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -50,12 +58,12 @@ export function TasksPage() {
     const current = ++generation.current;
     setLoading(true);
     try {
-      const result = await client.listGet<AutomationTask>(base, { query: { category, status, q, cursor: after } });
+      const result = await client.listGet<AutomationTask>(base, { query: { category, status, q, employee_id: employeeFilter || undefined, cursor: after } });
       if (current !== generation.current) return;
       setTasks(previous => after ? [...previous, ...result.items] : result.items); setCursor(result.page.next_cursor); setError(null);
     } catch (e) { if (current === generation.current) setError(errorText(e)); }
     finally { if (current === generation.current) setLoading(false); }
-  }, [client, category, status, q]);
+  }, [client, category, status, q, employeeFilter]);
   useEffect(() => { const timeout = setTimeout(() => void load(), 200); return () => clearTimeout(timeout); }, [load]);
   useEffect(() => { void listLoadedExperts(client).then(setExperts).catch(e => setError(errorText(e))); }, [client]);
   useEffect(() => {
@@ -115,10 +123,10 @@ export function TasksPage() {
   }
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(previous => ({ ...previous, [key]: value }));
   return <VStack gap={4}>
-    <HStack gap={3} wrap="wrap"><Heading level={1}>自动化任务</Heading><Button onClick={() => { setSelected(null); setDraft(emptyDraft()); setEditing(true); setError(null); }} label="新建任务" /><Button variant="secondary" onClick={() => void load()} isDisabled={loading} label="刷新" /></HStack>
+    <HStack gap={3} wrap="wrap"><Heading level={1}>自动化任务</Heading><Button isDisabled={busy} onClick={() => { setSelected(null); setDraft(emptyDraft()); setEditing(true); setError(null); }} label="新建任务" /><Button variant="secondary" onClick={() => void load()} isDisabled={loading} label="刷新" /></HStack>
     <Text type="supporting">任务在本机运行，需要 Agent 保持运行且登录有效。同一任务复用会话上下文；外部操作可能需要审批。</Text>
     {error && <Banner status="error" title={error} />}
-    <div className={"automation-filters"}><label>搜索<input type="search" value={q} maxLength={120} onChange={e => setQ(e.target.value)} placeholder="任务、指令或员工" /></label><label>分类<select value={category} onChange={e => setCategory(e.target.value)}>{Object.entries(categories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>状态<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">全部状态</option>{["active", "paused", "completed"].map(s => <option key={s} value={s}>{statuses[s]}</option>)}</select></label></div>
+    <div className={"automation-filters"}><label>搜索<input type="search" value={q} maxLength={120} onChange={e => setQ(e.target.value)} placeholder="任务、指令或员工" /></label><label>分类<select value={category} onChange={e => setCategory(e.target.value)}>{Object.entries(categories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>状态<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">全部状态</option>{["active", "paused", "completed"].map(s => <option key={s} value={s}>{statuses[s]}</option>)}</select></label><label>筛选员工<select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)}><option value="">全部员工</option>{experts.map(e => <option key={e.employee_id} value={e.employee_id}>{e.display_name}</option>)}</select></label></div>
     <div className={"automation-layout"}><section aria-label="任务列表" aria-busy={loading} className={"automation-list"}>
       {!tasks.length && <Text>{loading ? "正在加载…" : "暂无任务，创建一个定时工作安排。"}</Text>}
       {tasks.map(task => <Card key={task.task_id}><VStack gap={2}><Button variant="secondary" onClick={() => void open(task)} isDisabled={busy} label={task.name} /><Text>{task.employee?.display_name ?? (task.target_kind === "group" ? "群聊" : "员工不可用")} · {statuses[task.status]}</Text><Text type="supporting">{scheduleLabel(task.schedule)}</Text><Text>{task.prompt_summary}</Text><Text type="supporting">下次：{at(task.next_run_at)}</Text>{task.last_run && <Text>上次结果：{statuses[task.last_run.status] ?? task.last_run.status}</Text>}</VStack></Card>)}
@@ -137,13 +145,13 @@ export function TasksPage() {
         {["daily", "weekly", "monthly"].includes(draft.mode) && <label>当地执行时间<input type="time" required step="1" value={draft.time} onChange={e => set("time", e.target.value)} /></label>}
         {draft.mode === "weekly" && <label>星期<select value={draft.weekday} onChange={e => set("weekday", Number(e.target.value))}>{Array.from("一二三四五六日").map((day, i) => <option key={day} value={i + 1}>周{day}</option>)}</select></label>}
         {draft.mode === "monthly" && <label>每月日期<input type="number" required min={1} max={31} value={draft.day} onChange={e => set("day", Number(e.target.value))} /><small>没有该日期的月份跳过。</small></label>}
-        {["interval", "once"].includes(draft.mode) && <label>{draft.mode === "once" ? "执行时间" : "起始时间"}（按当前电脑时区输入）<input type="datetime-local" required value={draft.start} onChange={e => set("start", e.target.value)} /></label>}
+        {["interval", "once"].includes(draft.mode) && <label>{draft.mode === "once" ? "执行时间" : "起始时间"}（按所选时区输入）<input type="datetime-local" required value={draft.start} onChange={e => set("start", e.target.value)} /></label>}
         {draft.mode === "interval" && <label>间隔分钟<input type="number" min={5} required value={draft.interval} onChange={e => set("interval", Number(e.target.value))} /></label>}
         <HStack gap={2}><Button type="submit" isDisabled={busy} label={busy ? "保存中…" : "保存任务"} /><Button variant="secondary" onClick={() => setEditing(false)} isDisabled={busy} label="取消" /></HStack>
       </form></Card> : selected ? <Card><VStack gap={3}>
         <Heading level={2}>{selected.name}</Heading><Text>{selected.prompt}</Text><Text>{scheduleLabel(selected.schedule)}</Text><Text>状态：{statuses[selected.status]} · 下次：{at(selected.next_run_at)}</Text>
         {selected.block_reason && <Banner status="warning" title={selected.block_reason === "authorization_required" ? "需要有效登录才能执行" : selected.block_reason === "configuration_required" ? "请重新配置执行计划" : "当前执行条件未满足，请查看运行记录"} />}
-        <HStack gap={2} wrap="wrap"><Button onClick={() => { setDraft(draftFor(selected)); setEditing(true); }} label="编辑" /><Button variant="secondary" isDisabled={busy || selected.status === "completed" || !selected.schedule} onClick={() => void action(selected.status === "active" ? "pause" : "enable")} label={selected.status === "active" ? "暂停" : "启用"} /><Button variant="secondary" isDisabled={busy} onClick={() => setDeleting(true)} label="删除任务" />{selected.conversation_id && <Link to={`/${selected.target_kind === "group" ? "group" : "chat"}?conversation_id=${encodeURIComponent(selected.conversation_id)}`}>打开会话与审批</Link>}</HStack>
+        <HStack gap={2} wrap="wrap"><Button isDisabled={busy} onClick={() => { setDraft(draftFor(selected)); setEditing(true); }} label="编辑" /><Button variant="secondary" isDisabled={busy || selected.status === "completed" || !selected.schedule} onClick={() => void action(selected.status === "active" ? "pause" : "enable")} label={selected.status === "active" ? "暂停" : "启用"} /><Button variant="secondary" isDisabled={busy} onClick={() => setDeleting(true)} label="删除任务" />{selected.conversation_id && <Link to={`/${selected.target_kind === "group" ? "group" : "chat"}?conversation_id=${encodeURIComponent(selected.conversation_id)}`}>打开会话与审批</Link>}</HStack>
         {deleting && <div role="alert"><p>停止后续调度并删除任务？已有会话和执行记录会保留。</p><Button isDisabled={busy} onClick={() => void action("delete")} label="确认删除" /><Button variant="secondary" onClick={() => setDeleting(false)} label="取消" /></div>}
         <HStack gap={2}><Heading level={3}>运行记录</Heading><Button variant="secondary" onClick={() => void open(selected)} isDisabled={busy} label="刷新记录" /></HStack>
         {!runs.length && <Text type="supporting">暂无关联的运行记录。旧会话中未建立调度关联的历史仍可在会话内查看。</Text>}

@@ -114,13 +114,15 @@ export class AutomationTaskService {
     if (!key || !/^[\x21-\x7e]{1,128}$/.test(key)) fail("idempotency_key_required", "Idempotency-Key is required (1–128 printable characters)");
     const owner = ownerOf(caller), name = text(body.name, "task_name", 120), prompt = text(body.prompt, "prompt", 20_000);
     const category = this.category(body.category), employeeId = text(body.employee_id, "employee_id", 256), connectorIds = this.connectorIds(body.connector_ids ?? []);
-    this.employee(employeeId, caller);
-    validateConnectorSelection(this.store, owner, employeeId, connectorIds);
     const fingerprint = createHash("sha256").update(JSON.stringify({ name, prompt, category, employeeId, connectorIds, schedule: taskSchedule(body.schedule, prompt, "fingerprint") })).digest("hex");
     const db = this.store.db;
     const existing = db.prepare("SELECT * FROM automation_creation WHERE tenant_id = ? AND member_id = ? AND key = ?").get(owner.tenantId, owner.memberId, key!) as { task_id: string; conversation_id: string; fingerprint: string; completed: number; response_json: string | null } | undefined;
     if (existing && existing.fingerprint !== fingerprint) throw new AutomationError(409, "idempotency_key_reused", "Idempotency key was used with a different request");
     if (existing?.completed && existing.response_json) return JSON.parse(existing.response_json) as ReturnType<AutomationTaskService["get"]>;
+    this.employee(employeeId, caller);
+    validateConnectorSelection(this.store, owner, employeeId, connectorIds);
+    const configured = taskSchedule(body.schedule, prompt, "pending");
+    if (!existing && configured.one_shot && Date.parse(configured.at!) <= Date.now()) fail("task_schedule_invalid", "A new one-shot task must be scheduled in the future");
     const id = existing?.task_id ?? randomUUID(), conversationId = existing?.conversation_id ?? randomUUID();
     if (this.creating.has(id)) throw new AutomationError(409, "task_creation_pending", "Task creation is in progress; retry with the same key");
     this.creating.add(id);

@@ -120,3 +120,15 @@ test("calendar tick dedupes an occurrence and pause prevents future calendar lau
     assert.equal(await scheduler.tick(at + 86_400_000), 0); assert.equal(launched, 1);
   } finally { await f.finish(); }
 });
+test("past one-shot creation fails without orphan rows; completed creation replay survives grant revocation", async () => {
+  const f = await start();
+  try {
+    assert.equal((await f.call("automation-tasks", "POST", { ...input(), schedule: { mode: "once", timezone: "UTC", run_at: "2020-01-01T00:00:00Z" } }, { "Idempotency-Key": "past" })).status, 422);
+    assert.equal(f.store.automation.list({ tenantId: "tenant-1", memberId: "member-1" }).length, 0);
+    const created = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "replay-grant" });
+    f.store.replaceProjections([], [], [], ["e1"], { tenantId: "tenant-1", memberId: "member-1" });
+    const replay = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "replay-grant" });
+    assert.equal(replay.status, 201); assert.deepEqual(replay.data, created.data);
+    assert.equal((await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "new-grant" })).status, 403);
+  } finally { await f.finish(); }
+});

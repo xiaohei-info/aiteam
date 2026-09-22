@@ -53,7 +53,17 @@ test.describe("agent api-contract", () => {
       expect(methods).toEqual(["get"]);
       expect(openapi.paths[path].get).toMatchObject({ security: [{ bearerAuth: [] }] });
     }
-    expect(paths.filter((path) => path !== "/api/agent/messages/search")
+    const automationPaths = [
+      "/api/agent/automation-tasks",
+      "/api/agent/automation-tasks/{task_id}",
+      "/api/agent/automation-tasks/{task_id}/actions/enable",
+      "/api/agent/automation-tasks/{task_id}/actions/pause",
+      "/api/agent/automation-tasks/{task_id}/runs",
+    ];
+    expect(paths).toEqual(expect.arrayContaining(automationPaths));
+    // Automation configuration and derived run reads are not the removed runtime Task/Run APIs.
+    expect(Object.keys(openapi.paths[automationPaths[4]])).toEqual(["get"]);
+    expect(paths.filter((path) => path !== "/api/agent/messages/search" && !automationPaths.includes(path))
       .some((path) => /messages|runs|tasks|loops|timeline|group-dispatch|terminal-execute/.test(path))).toBe(false);
   });
 });
