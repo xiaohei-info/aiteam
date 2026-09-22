@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 /** Local conversation schedule configuration; execution state stays in the Pi event stream. */
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError } from "@aiteam/shared/api-client";
@@ -202,6 +203,7 @@ export function ScheduleControl({ client, conversation, onScheduleChanged }: Sch
     }
   }
 
+  if (savedSchedule?.calendar) return <Card><VStack gap={2}><Text>此会话使用日历调度，请在自动化任务页面管理，避免覆盖现有日历规则。</Text><Link to={`/tasks?conversation_id=${encodeURIComponent(conversation.id)}`}>管理自动化任务</Link></VStack></Card>;
   const current = savedSchedule ? currentScheduleText(savedSchedule) : null;
   const promptTooLong = draft.promptTemplate.length > MAX_PROMPT_LENGTH;
 

@@ -1,8 +1,9 @@
+import { calendarOccurrence, validateCalendar, type CalendarRule } from "./schedule-calendar.js";
 import { createHash } from "node:crypto";
 import { encodeScope } from "./runtime-lease-cache.js";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { PreExecutionAuthorizationError, type SessionHost } from "./pi/session-host.js";
-import { IdempotencyUnknownError, ScheduleRevisionConflictError, type AgentSqliteStore, type ConversationRecord } from "./storage/sqlite.js";
+import { IdempotencyConflictError, IdempotencyUnknownError, ScheduleRevisionConflictError, type AgentSqliteStore, type ConversationRecord } from "./storage/sqlite.js";
 import type { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
 
 export interface ConversationSchedule {
@@ -12,12 +13,13 @@ export interface ConversationSchedule {
   at?: string;
   interval_seconds?: number;
   one_shot: boolean;
+  calendar?: CalendarRule;
   overlap: "skip";
   misfire: "skip";
   prompt_template: string;
 }
 
-const ALLOWED = new Set(["schedule_id", "revision", "enabled", "at", "interval_seconds", "one_shot", "overlap", "misfire", "prompt_template"]);
+const ALLOWED = new Set(["schedule_id", "revision", "enabled", "at", "interval_seconds", "one_shot", "overlap", "misfire", "prompt_template", "calendar"]);
 
 export function validateSchedule(value: unknown): ConversationSchedule {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("schedule must be an object");
@@ -30,12 +32,14 @@ export function validateSchedule(value: unknown): ConversationSchedule {
   if (typeof enabled !== "boolean") throw new Error("enabled must be boolean");
   const oneShot = raw.one_shot === true;
   if (raw.one_shot !== undefined && typeof raw.one_shot !== "boolean") throw new Error("one_shot must be boolean");
+  const calendar = raw.calendar === undefined ? undefined : validateCalendar(raw.calendar);
+  if (calendar && (raw.at !== undefined || raw.interval_seconds !== undefined || oneShot)) throw new Error("calendar cannot be combined with at, interval or one_shot");
   const at = raw.at;
   if (at !== undefined && (typeof at !== "string" || !Number.isFinite(Date.parse(at)))) throw new Error("at must be an ISO timestamp");
   const interval = raw.interval_seconds;
   if (interval !== undefined && (!Number.isInteger(interval) || (interval as number) < 1)) throw new Error("interval_seconds must be a positive integer");
   if (oneShot && at === undefined) throw new Error("one_shot schedules require at");
-  if (at === undefined && interval === undefined) throw new Error("schedule requires at or interval_seconds");
+  if (!calendar && at === undefined && interval === undefined) throw new Error("schedule requires at or interval_seconds");
   if (at !== undefined && interval === undefined && !oneShot) throw new Error("repeating schedules require interval_seconds");
   if (at !== undefined && interval !== undefined && oneShot) throw new Error("one_shot cannot be combined with interval_seconds");
   if (raw.overlap !== undefined && raw.overlap !== "skip") throw new Error("overlap must be skip");
@@ -48,6 +52,7 @@ export function validateSchedule(value: unknown): ConversationSchedule {
     ...(at === undefined ? {} : { at: new Date(at as string).toISOString() }),
     ...(interval === undefined ? {} : { interval_seconds: interval as number }),
     one_shot: oneShot,
+    ...(calendar ? { calendar } : {}),
     overlap: "skip",
     misfire: "skip",
     prompt_template: raw.prompt_template,
@@ -109,10 +114,12 @@ export class ScheduleService {
       const occurrence = retrying
         ? (retry?.revision === parsed.revision && retry.scheduleId === parsed.schedule_id && retry.scheduleGeneration === scheduleGeneration ? retry.occurrence : persistedRetry!)
         : this.occurrenceBetween(parsed, previous, now);
-      if (occurrence === undefined || this.host.isPrompting(conversation.id)) continue;
+      if (occurrence === undefined) continue;
+      if (this.host.isPrompting(conversation.id)) { this.observe(conversation, parsed, occurrence, "overlap_skip"); continue; }
       if (this.options.authorization && !this.options.authorization.resolve(conversation.tenantId, conversation.memberId, { requireAccessToken: true })) {
         // Keep the watermark behind the occurrence. A later authenticated
         // request can retry this exact one-shot without consuming it early.
+        this.observe(conversation, parsed, occurrence, "authorization_required");
         authorizationBlocked = true;
         continue;
       }
@@ -126,6 +133,12 @@ export class ScheduleService {
     return launched;
   }
 
+  private observe(conversation: ConversationRecord, schedule: ConversationSchedule, occurrence: number, reason: string): void {
+    const at = new Date(occurrence).toISOString();
+    const id = createHash("sha256").update(encodeScope([schedule.schedule_id, at, conversation.id])).digest("hex");
+    this.store.automation.occurrence({ id, conversationId: conversation.id, tenantId: conversation.tenantId!, memberId: conversation.memberId!, scheduleId: schedule.schedule_id, at, revision: schedule.revision, reason });
+  }
+
   private async launch(conversation: ConversationRecord, schedule: ConversationSchedule, occurrence: number): Promise<boolean> {
     const occurrenceUtc = new Date(occurrence).toISOString();
     const key = createHash("sha256").update(encodeScope([schedule.schedule_id, occurrenceUtc, conversation.id])).digest("hex");
@@ -137,9 +150,9 @@ export class ScheduleService {
     const fingerprint = createHash("sha256").update(JSON.stringify({ text: schedule.prompt_template, schedule_id: schedule.schedule_id, occurrence: occurrenceUtc })).digest("hex");
     let receipt;
     try {
-      receipt = this.store.reservePrompt({ conversationId: conversation.id, callerId: caller.callerId, key, fingerprint, oneShot: schedule.one_shot, scheduleId: schedule.schedule_id, scheduleRevision: schedule.revision, scheduleGeneration: conversation.scheduleGeneration, clearScheduleRetry: true });
+      receipt = this.store.reservePrompt({ conversationId: conversation.id, callerId: caller.callerId, key, fingerprint, oneShot: schedule.one_shot, scheduleId: schedule.schedule_id, scheduleRevision: schedule.revision, scheduleGeneration: conversation.scheduleGeneration, clearScheduleRetry: true, occurrenceAt: occurrenceUtc });
     } catch (error) {
-      if (error instanceof IdempotencyUnknownError || error instanceof ScheduleRevisionConflictError) {
+      if (error instanceof IdempotencyUnknownError || error instanceof IdempotencyConflictError || error instanceof ScheduleRevisionConflictError) {
         this.retryableOccurrences.delete(conversation.id);
         return false;
       }
@@ -149,12 +162,15 @@ export class ScheduleService {
       this.retryableOccurrences.delete(conversation.id);
       return false;
     }
-    void this.host.prompt(conversation.id, schedule.prompt_template, undefined, caller).then(
+    const heartbeat = setInterval(() => this.store.renewLease(conversation.id, caller.callerId, key, receipt.ownerInstance), 10_000);
+    heartbeat.unref();
+    void this.host.prompt(conversation.id, schedule.prompt_template, undefined, caller, undefined, { logicalMessageId: key, idempotencyKey: key }).then(
       (lastEntryId) => lastEntryId
         ? this.store.markCompleted(conversation.id, caller.callerId, key, lastEntryId, receipt.ownerInstance)
         : this.store.markUnknown(conversation.id, caller.callerId, key, receipt.ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" }),
       (error) => {
         if (isPreExecutionAuthorizationFailure(error) && receipt.scheduleGeneration !== undefined && this.store.releasePreExecutionPrompt(conversation.id, caller.callerId, key, receipt.ownerInstance, schedule.one_shot, { scheduleId: schedule.schedule_id, occurrenceAt: occurrenceUtc, revision: schedule.revision, scheduleGeneration: receipt.scheduleGeneration, blockReason: "authorization_required" })) {
+          this.observe(conversation, schedule, occurrence, "authorization_required");
           const currentRecord = this.store.getConversation(conversation.id);
           if (currentRecord?.schedule?.schedule_id === schedule.schedule_id && currentRecord.schedule?.revision === schedule.revision && currentRecord.scheduleGeneration !== undefined) {
             this.retryableOccurrences.set(conversation.id, { scheduleId: schedule.schedule_id, occurrence, revision: schedule.revision, scheduleGeneration: currentRecord.scheduleGeneration });
@@ -163,11 +179,15 @@ export class ScheduleService {
         }
         this.store.markUnknown(conversation.id, caller.callerId, key, receipt.ownerInstance, undefined, { code: "execution_failed", detail: safeScheduleFailure(error) });
       },
-    );
+    ).finally(() => clearInterval(heartbeat));
     return true;
   }
 
   private occurrenceBetween(schedule: ConversationSchedule, previous: number, now: number): number | undefined {
+    if (schedule.calendar) {
+      const occurrence = calendarOccurrence(schedule.calendar, now, -1);
+      return occurrence !== undefined && occurrence > previous ? occurrence : undefined;
+    }
     const anchor = schedule.at ? Date.parse(schedule.at) : 0;
     if (schedule.one_shot) return anchor > previous && anchor <= now ? anchor : undefined;
     const interval = (schedule.interval_seconds ?? 0) * 1000;
@@ -194,4 +214,17 @@ function isPreExecutionAuthorizationFailure(error: unknown): boolean {
   // downstream 401/403 from an existing Session may represent an unknown
   // side-effect result and must never replay a one-shot.
   return error instanceof PreExecutionAuthorizationError;
+}
+
+export function nextScheduleAt(schedule: ConversationSchedule, now = Date.now()): string | null {
+  if (!schedule.enabled) return null;
+  if (schedule.calendar) {
+    const next = calendarOccurrence(schedule.calendar, now, 1);
+    return next === undefined ? null : new Date(next).toISOString();
+  }
+  const anchor = schedule.at ? Date.parse(schedule.at) : 0;
+  if (schedule.one_shot) return anchor > now ? new Date(anchor).toISOString() : null;
+  const step = schedule.interval_seconds! * 1000;
+  const next = anchor + Math.max(0, Math.floor((now - anchor) / step) + 1) * step;
+  return new Date(next).toISOString();
 }

@@ -1,3 +1,4 @@
+import { TasksPage } from "../features/automation-tasks/TasksPage";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { PageShell } from "../components/PageShell";
 import { RequireAuth } from "../components/RequireAuth";
@@ -15,6 +16,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/tasks" element={<RequireAuth><PageShell><TasksPage /></PageShell></RequireAuth>} />
       <Route path="/workspace" element={<RequireAuth><PageShell><WorkspacePage /></PageShell></RequireAuth>} />
       <Route path="/chat" element={<RequireAuth><PageShell><ChatPage /></PageShell></RequireAuth>} />
       <Route path="/group" element={<RequireAuth><PageShell><GroupPage /></PageShell></RequireAuth>} />

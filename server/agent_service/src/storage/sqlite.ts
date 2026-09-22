@@ -1,3 +1,4 @@
+import { AutomationTaskRepository } from "./automation-tasks.js";
 import { parseOrchestration, type GroupOrchestration } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -389,6 +390,7 @@ const MAX_LOCAL_FILE_BYTES_PER_CONVERSATION = 50 * 1024 * 1024;
 const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export class AgentSqliteStore {
+  readonly automation: AutomationTaskRepository;
   readonly db: DatabaseSync;
   readonly attachmentRoot: string;
   readonly avatarRoot: string;
@@ -626,6 +628,7 @@ export class AgentSqliteStore {
     // consumed.  Keep the record for diagnosis, but make it permanently
     // non-executable; a new prompt must create a new approval.
     this.db.prepare("UPDATE approval_record SET status = 'uncertain', consumed = 1, updated_at = ? WHERE status IN ('pending', 'approved', 'executing')").run(new Date().toISOString());
+    this.automation = new AutomationTaskRepository(this.db);
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
@@ -794,6 +797,7 @@ export class AgentSqliteStore {
     if (!current) return undefined;
     const now = new Date().toISOString();
     const scheduleMutation = Object.prototype.hasOwnProperty.call(patch, "schedule");
+    if (scheduleMutation) this.automation.guardSchedule(id);
     this.saveConversation({ ...current, ...patch, id, updatedAt: now }, { scheduleMutation });
     if (scheduleMutation) this.clearScheduleRetry(id);
     return this.getConversationMetadata(id);
@@ -808,6 +812,7 @@ export class AgentSqliteStore {
         this.workRecords.deleteConversation(id, { tenantId: existing.tenantId, memberId: existing.memberId });
         this.deleteConversationLocalFiles(id, existing.tenantId, existing.memberId);
       }
+      this.automation.conversationDeleted(id);
       this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
@@ -1501,6 +1506,7 @@ export class AgentSqliteStore {
     scheduleRevision?: number;
     scheduleGeneration?: number;
     clearScheduleRetry?: boolean;
+    occurrenceAt?: string;
   }): IdempotencyReceipt {
     const leaseMs = input.leaseMs ?? DEFAULT_LEASE_MS;
     const now = new Date();
@@ -1551,7 +1557,7 @@ export class AgentSqliteStore {
           leaseExpiresAt,
           now.toISOString(),
         );
-      if (input.oneShot && input.scheduleId !== undefined && input.scheduleRevision !== undefined) {
+      if (input.scheduleId !== undefined && input.scheduleRevision !== undefined) {
         const currentSchedule = this.db.prepare("SELECT json_extract(schedule_json, '$.schedule_id') AS schedule_id, json_extract(schedule_json, '$.revision') AS revision, json_extract(schedule_json, '$.enabled') AS enabled, schedule_generation FROM conversation WHERE id = ?").get(input.conversationId) as { schedule_id?: unknown; revision?: unknown; enabled?: unknown; schedule_generation?: unknown } | undefined;
         if (currentSchedule?.schedule_id !== input.scheduleId || currentSchedule?.revision !== input.scheduleRevision || currentSchedule.enabled !== 1 || (input.scheduleGeneration !== undefined && currentSchedule.schedule_generation !== input.scheduleGeneration)) throw new ScheduleRevisionConflictError();
       }
@@ -1559,6 +1565,10 @@ export class AgentSqliteStore {
       if (input.oneShot && input.scheduleId !== undefined && input.scheduleRevision !== undefined) {
         const changed = this.db.prepare("SELECT json_extract(schedule_json, '$.enabled') AS enabled, schedule_generation FROM conversation WHERE id = ? AND json_extract(schedule_json, '$.schedule_id') = ? AND json_extract(schedule_json, '$.revision') = ?").get(input.conversationId, input.scheduleId, input.scheduleRevision) as { enabled?: unknown; schedule_generation?: unknown } | undefined;
         if (changed?.enabled !== 0 || (input.scheduleGeneration !== undefined && changed.schedule_generation !== input.scheduleGeneration + 1)) throw new ScheduleRevisionConflictError();
+      }
+      if (input.occurrenceAt && input.scheduleId) {
+        const owner = this.getConversation(input.conversationId)!;
+        this.automation.occurrence({ id: input.key, conversationId: owner.id, tenantId: owner.tenantId!, memberId: owner.memberId!, scheduleId: input.scheduleId, at: input.occurrenceAt, revision: input.scheduleRevision!, callerId: input.callerId });
       }
       if (input.clearScheduleRetry) this.db.prepare("DELETE FROM schedule_retry WHERE conversation_id = ?").run(input.conversationId);
       this.db.exec("COMMIT");

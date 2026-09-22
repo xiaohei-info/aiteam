@@ -26,6 +26,7 @@ export interface WorkRecordRow {
   first_entry_at: number | null;
   last_entry_at: number | null;
   usage_json: string | null;
+  prompt_receipt: string | null;
 }
 export interface WorkChangeRow {
   seq: number;
@@ -36,6 +37,7 @@ export interface WorkChangeRow {
   deleted: number;
 }
 export interface WorkStart extends WorkOwner {
+  promptReceipt?: string;
   conversationId: string;
   employeeId: string;
   startedAt: number;
@@ -82,6 +84,7 @@ export class WorkRecordRepository {
       );
       CREATE INDEX IF NOT EXISTS work_change_owner ON work_record_change(tenant_id, member_id, seq);
     `);
+    if (!(db.prepare("PRAGMA table_info(work_record)").all() as { name: string }[]).some(row => row.name === "prompt_receipt")) db.exec("ALTER TABLE work_record ADD COLUMN prompt_receipt TEXT");
     this.transaction(() => {
       const active = db.prepare("SELECT * FROM work_record WHERE outcome = 'active'").all() as unknown as WorkRecordRow[];
       for (const row of active) {
@@ -99,6 +102,7 @@ export class WorkRecordRepository {
         (id, tenant_id, member_id, employee_id, conversation_id, provenance, outcome, occurred_at, started_at, updated_at, start_ordinal)
         VALUES (?, ?, ?, ?, ?, 'live', 'active', ?, ?, ?, ?)`)
         .run(id, input.tenantId, input.memberId, input.employeeId, input.conversationId, input.startedAt, input.startedAt, input.startedAt, input.startOrdinal);
+      if (input.promptReceipt) this.db.prepare("UPDATE work_record SET prompt_receipt = ? WHERE id = ?").run(input.promptReceipt, id);
       this.change(this.get(id, input)!, false);
       return id;
     });

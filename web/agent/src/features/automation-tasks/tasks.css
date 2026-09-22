@@ -1,0 +1,11 @@
+.automation-layout { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.5fr); gap: 24px; align-items: start; }
+.automation-list, .automation-form { display: grid; gap: 16px; }
+.automation-filters { display: flex; flex-wrap: wrap; gap: 16px; }
+.automation-filters label, .automation-form label { display: grid; gap: 6px; font-size: 14px; }
+.automation-filters input, .automation-filters select, .automation-form input, .automation-form textarea, .automation-form select { font: inherit; color: inherit; background: transparent; border: 1px solid #8886; border-radius: 8px; padding: 9px 12px; max-width: 100%; box-sizing: border-box; }
+.automation-form input:focus-visible, .automation-form textarea:focus-visible, .automation-form select:focus-visible, .automation-filters input:focus-visible, .automation-filters select:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.automation-form fieldset { border: 1px solid #8886; border-radius: 8px; padding: 12px; }
+.automation-form .automation-checkbox { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.automation-run { border-top: 1px solid #8884; padding-top: 12px; overflow-wrap: anywhere; }
+.automation-detail { min-width: 0; }
+@media (max-width: 800px) { .automation-layout { grid-template-columns: 1fr; } }

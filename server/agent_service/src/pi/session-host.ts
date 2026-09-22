@@ -1,3 +1,4 @@
+import { connectorTools } from "../connectors.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
@@ -875,6 +876,9 @@ export class SessionHost {
         ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
       ] : []),
     ];
+    const connectors = record ? connectorTools(this.options.store, { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId }, authorization.employeeId, record.conversationId, authorization.snapshot) : [];
+    for (const tool of connectors) allowed.add(tool.name);
+    tools.push(...connectors);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
@@ -1104,7 +1108,7 @@ export class SessionHost {
     const entriesBefore = record.sessionManager.getEntries().length;
     const owner = authorization?.caller.tenantId ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const workId = owner && this.options.store.getOwnedConversation(record.conversationId, owner.tenantId, owner.memberId)
-      ? this.options.store.workRecords.start({ ...owner, employeeId, conversationId: record.conversationId, startedAt, startOrdinal: entriesBefore }) : undefined;
+      ? this.options.store.workRecords.start({ ...owner, employeeId, conversationId: record.conversationId, startedAt, startOrdinal: entriesBefore, promptReceipt: command.idempotencyKey }) : undefined;
     record.prompting = true;
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;

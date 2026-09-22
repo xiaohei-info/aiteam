@@ -10,6 +10,7 @@ describe("agent navigation", () => {
       "private-chat",
       "group-chat",
       "marketplace",
+      "tasks",
       "office",
       "settings",
       "org",

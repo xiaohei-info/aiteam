@@ -336,6 +336,9 @@ ln -s "${PNPM_MJS}" "${PNPM_SHIM_DIR}/pnpm"
 export PATH="${PNPM_SHIM_DIR}:${PATH}"
 hash -r 2>/dev/null || true
 [[ "$(pnpm --version)" == "${PNPM_VERSION}" ]] || fail "pnpm version mismatch after Corepack setup"
+# Agent is an independent package, outside web/pnpm-workspace.yaml. Sync its
+# lockfile before startup as well, while the pinned pnpm shim is still active.
+(cd server/agent_service && pnpm install --frozen-lockfile 2>&1 || fail "Agent pnpm install failed: check network / registry")
 (cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
 rm -rf "${PNPM_SHIM_DIR}"

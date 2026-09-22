@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 /** Conversation.schedule metadata cards; execution state remains in the Pi event stream. */
 
 import { EmptyState } from "@astryxdesign/core/EmptyState";
@@ -5,6 +6,8 @@ import type { ConversationSchedule } from "./types";
 
 function formatSchedule(schedule: Record<string, unknown> | null): string {
   if (!schedule) return "未配置";
+  if (schedule.enabled === false) return "已暂停";
+  if (schedule.calendar) return "日历调度";
   if (schedule.one_shot === true) return schedule.at ? `单次 · ${String(schedule.at)}` : "单次";
   if (typeof schedule.interval_seconds === "number") return `每 ${schedule.interval_seconds} 秒`;
   if (typeof schedule.at === "string" && schedule.at) return `从 ${schedule.at} 开始`;
@@ -25,6 +28,7 @@ function JobCard({ job }: JobCardProps) {
         <span>会话：{job.conversation_id}</span>
         <span>调度：{formatSchedule(job.schedule)}</span>
       </div>
+      <Link to={`/tasks?conversation_id=${encodeURIComponent(job.conversation_id)}`}>管理任务</Link>
     </article>
   );
 }

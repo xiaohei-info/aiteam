@@ -37,6 +37,14 @@ function changeScope(filter: WorkFilter): string {
 export class WorkRecordReadService {
   constructor(private readonly store: AgentSqliteStore, private readonly host: Pick<SessionHost, "readHistorySources">) {}
 
+  resultSummary(id: string, caller: AuthenticatedCaller): string | null {
+    const owner = { tenantId: caller.tenantId!, memberId: caller.userId ?? caller.callerId };
+    const row = this.store.workRecords.get(id, owner);
+    if (!row || !this.store.getOwnedConversation(row.conversation_id, owner.tenantId, owner.memberId)) return null;
+    const sources = new Map([[row.conversation_id, this.host.readHistorySources(row.conversation_id, caller)]]);
+    return this.view(row, sources).result_summary;
+  }
+
   history(caller: AuthenticatedCaller, query: URLSearchParams) {
     validateReadQuery(query, ["employee_id", "window_start", "window_end", "limit", "before"]);
     const filter = workReadFilter(caller, query);
