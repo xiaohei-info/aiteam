@@ -43,6 +43,7 @@ const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_JSON_BYTES = Math.ceil(MAX_PROMPT_IMAGE_BYTES / 3) * 4 + 512 * 1024;
 const MAX_PENDING_EVENTS = 512;
 const MAX_PENDING_TERMINAL_EVENTS = 64;
+const RECONCILIATION_V2_HEADER = "x-aiteam-reconciliation-version";
 const TERMINAL_EVENT_TYPES = new Set([
   "agent_end", "agent_settled", "approval_required", "message_end", "tool_execution_end",
   "auto_retry_end", "compaction_end",
@@ -356,7 +357,7 @@ const PiSseEventData = Type.Object({
   decisionRevision: Type.Optional(Type.Integer({ minimum: 0, description: "审批 CAS revision。" })),
 }, { $id: "PiSseEventData", additionalProperties: true, description: "text/event-stream 中每个 data 行对应的脱敏 JSON。SSE 每条 data 只会包含与其 type 相关的字段。", "x-dynamic-json": true });
 const PiSseReconciliation = Type.Object({
-  schema_version: Type.Literal("1", { description: "reconciliation payload 版本。" }),
+  schema_version: Type.Union([Type.Literal("1"), Type.Literal("2")], { description: "reconciliation payload 版本。" }),
   type: Type.Literal("reconciliation", { description: "耐久 entries/receipt/state 对账负载。" }),
   conversation_id: Type.String({ minLength: 1, description: "本地会话 ID。" }),
   state: Type.Ref("ConversationState"),
@@ -365,11 +366,25 @@ const PiSseReconciliation = Type.Object({
   receipt_settlement_pending: Type.Optional(Type.Boolean({ description: "receipt settlement fence timed out; entries are intentionally omitted when true。" })),
   overflowed: Type.Optional(Type.Boolean({ description: "bounded transient buffer overflowed and a second durable read was forced。" })),
   terminal_overflowed: Type.Optional(Type.Boolean({ description: "terminal events used the reserved queue overflow path; all incoming terminal events remain delivered and durable reconciliation is authoritative。" })),
+  active_runs: Type.Optional(Type.Array(Type.Object({
+    work_id: Type.Optional(Type.String({ minLength: 1 })),
+    source_employee_id: Type.Optional(Type.String({ minLength: 1 })),
+    source_employee_display_name: Type.Optional(Type.String({ minLength: 1 })),
+    source_role: Type.Optional(Type.Union([Type.Literal("human"), Type.Literal("child"), Type.Literal("participant"), Type.Literal("coordinator")])),
+    status: Type.Optional(Type.Union([Type.Literal("thinking"), Type.Literal("tool"), Type.Literal("text"), Type.Literal("waiting"), Type.Literal("error")])),
+    message: Type.Optional(Type.Ref("ConversationMessage")),
+  }, { additionalProperties: false }), { maxItems: 16, description: "仍在执行的有界消息快照；仅包含已脱敏的 thinking/text/toolCall 内容。" })),
+  facts: Type.Optional(Type.Object({
+    status: Type.String(),
+    pending_count: Type.Optional(Type.Integer({ minimum: 0 })),
+    last_error_code: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    updated_at: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  }, { additionalProperties: false, description: "事实生成队列状态元数据；不包含事实正文或凭据。" })),
   receipts: Type.Array(Type.Object({
     idempotency_key: Type.String({ minLength: 1 }), state: Type.String(), last_entry_id: Type.Union([Type.String(), Type.Null()]),
     failure_code: Type.Union([Type.String(), Type.Null()]), failure_detail: Type.Union([Type.String(), Type.Null()]),
   }, { additionalProperties: false }), { maxItems: 64, description: "owner-scoped prompt receipts。" }),
-}, { $id: "PiSseReconciliation", additionalProperties: false, description: "SSE connected-fence 后的有界本地 entries/receipt/state 对账负载。" });
+}, { $id: "PiSseReconciliation", additionalProperties: false, description: "SSE connected-fence 后的有界本地 entries/receipt/state/运行中消息对账负载。" });
 const AbortEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), aborted: Type.Boolean({ description: "是否发现并终止活动执行；没有运行时为 false。" }) }, { additionalProperties: false }) }, { $id: "AbortEnvelope", description: "终止提示执行的结果。" });
 const AuthClaims = Type.Object({
   user_id: Type.String({ minLength: 1, description: "成员账号 ID。" }),
@@ -572,7 +587,7 @@ const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].m
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
 const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
-const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)。";
+const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
 const PI_EVENT_STREAM_EXAMPLES = {
   thinking: {
@@ -692,7 +707,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
-  "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1",
+  "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1", "X-Aiteam-Reconciliation-Version": "2",
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...CONVERSATION_READ_DOCS,
@@ -915,7 +930,7 @@ export class AgentHttpServer {
         // CORS headers on the raw response so they survive that boundary.
         reply.raw.setHeader("Access-Control-Allow-Origin", origin);
         reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
-        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID");
+        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Aiteam-Reconciliation-Version");
         reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID");
         reply.raw.setHeader("Access-Control-Max-Age", "600");
@@ -1167,7 +1182,10 @@ export class AgentHttpServer {
       description: PI_EVENT_STREAM_DESCRIPTION,
       params: ConversationParams,
       querystring: Type.Object({ after: Type.Optional(Type.String({ minLength: 1, description: "客户端上次收到的事件 ID；历史正文请通过 /entries 获取，且优先于 Last-Event-ID。" })) }, { additionalProperties: false, description: "SSE 断点续读参数。" }),
-      headers: Type.Object({ "Last-Event-ID": Type.Optional(Type.String({ minLength: 1, description: "SSE 断线重连游标；未提供 after 查询参数时使用。" })) }, { additionalProperties: true, description: "SSE 断线重连游标。" }),
+      headers: Type.Object({
+        "Last-Event-ID": Type.Optional(Type.String({ minLength: 1, description: "SSE 断线重连游标；未提供 after 查询参数时使用。" })),
+        "X-Aiteam-Reconciliation-Version": Type.Optional(Type.Literal("2", { description: "请求包含 reconciliation v2 运行中快照；不提供时保持 v1 兼容响应。" })),
+      }, { additionalProperties: true, description: "SSE 断线重连游标和可选对账能力。" }),
       response: {
         200: {
           description: "Pi SSE 事件流。每条事件使用 `event: pi`，并在 `data` 行携带一个 JSON 对象。",
@@ -1987,6 +2005,7 @@ export class AgentHttpServer {
 
   private async events(request: IncomingMessage, response: ServerResponse, conversationId: string, after: string | null, caller: AuthenticatedCaller): Promise<void> {
     const requested = after ?? this.header(request, "last-event-id");
+    const supportsReconciliationV2 = this.header(request, RECONCILIATION_V2_HEADER) === "2";
     let closed = false;
     let connected = false;
     let reconciling = true;
@@ -2073,7 +2092,11 @@ export class AgentHttpServer {
       // receipt settlement, and runtime state are read only after that fence;
       // events during this window stay bounded in memory and are drained after
       // the reconciliation payload.
-      const entries = this.options.host as SessionHost & { entries?: (id: string, owner: AuthenticatedCaller) => Promise<unknown[]> };
+      const entries = this.options.host as SessionHost & {
+        entries?: (id: string, owner: AuthenticatedCaller) => Promise<unknown[]>;
+        activeRuns?: (id: string) => Array<Record<string, unknown>>;
+        factsState?: (id: string) => Record<string, unknown> | undefined;
+      };
       const readPass = async () => {
         const receiptSettled = await this.waitForReceiptSettlement(conversationId, caller);
         // Read durable entries after the receipt settlement fence. If the fence
@@ -2085,7 +2108,9 @@ export class AgentHttpServer {
         const receipts = this.options.store.listPromptReceipts(conversationId, caller.callerId);
         const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId ?? "", caller.userId ?? caller.callerId);
         const prompting = this.options.host.isPrompting(conversationId);
-        return { durableEntries, receipts, metadata, prompting, receiptSettled };
+        const activeRuns = supportsReconciliationV2 && typeof entries.activeRuns === "function" ? entries.activeRuns(conversationId) : [];
+        const facts = supportsReconciliationV2 && typeof entries.factsState === "function" ? entries.factsState(conversationId) : undefined;
+        return { durableEntries, receipts, metadata, prompting, receiptSettled, activeRuns, facts };
       };
       let snapshot = await readPass();
       const overflowDuringFirstPass = overflowed;
@@ -2096,7 +2121,7 @@ export class AgentHttpServer {
         snapshot = await readPass();
       }
       if (closed) return;
-      response.write(`event: reconciliation\ndata: ${JSON.stringify(reconciliationPayload(conversationId, snapshot.metadata?.state ?? "active", snapshot.prompting, snapshot.durableEntries, snapshot.receipts, !snapshot.receiptSettled, overflowDuringFirstPass || overflowed, terminalOverflowed))}\n\n`);
+      response.write(`event: reconciliation\ndata: ${JSON.stringify(reconciliationPayload(conversationId, snapshot.metadata?.state ?? "active", snapshot.prompting, snapshot.durableEntries, snapshot.receipts, snapshot.activeRuns, snapshot.facts, !snapshot.receiptSettled, overflowDuringFirstPass || overflowed, terminalOverflowed))}\n\n`);
       reconciling = false;
       if (overflowed) {
         // Transient deltas may be dropped; durable entries/receipt/state are the
@@ -2374,6 +2399,8 @@ function reconciliationPayload(
   prompting: boolean,
   durableEntries: readonly unknown[],
   receipts: readonly IdempotencyReceipt[],
+  activeRuns: readonly Record<string, unknown>[] = [],
+  facts?: Record<string, unknown>,
   receiptSettlementPending = false,
   overflowed = false,
   terminalOverflowed = false,
@@ -2391,8 +2418,19 @@ function reconciliationPayload(
     failure_code: receipt.failureCode ?? null,
     failure_detail: receipt.failureDetail ? safeReconciliationText(receipt.failureDetail, 300) : null,
   }));
+  const safeActiveRuns: Record<string, unknown>[] = [];
+  for (const run of activeRuns.slice(0, 16)) {
+    const candidate = { ...run };
+    if (Buffer.byteLength(JSON.stringify([...safeActiveRuns, candidate]), "utf8") > 48 * 1024) {
+      // Keep the run identity/status even when a large bounded message would
+      // exceed the reconciliation envelope; the next live delta or durable
+      // entry remains the content source.
+      delete candidate.message;
+    }
+    if (Buffer.byteLength(JSON.stringify([...safeActiveRuns, candidate]), "utf8") <= 48 * 1024) safeActiveRuns.push(candidate);
+  }
   const payload: Record<string, unknown> = {
-    schema_version: "1",
+    schema_version: safeActiveRuns.length > 0 || facts ? "2" : "1",
     type: "reconciliation",
     conversation_id: conversationId,
     state,
@@ -2401,6 +2439,8 @@ function reconciliationPayload(
     ...(receiptSettlementPending ? { receipt_settlement_pending: true } : {}),
     ...(overflowed ? { overflowed: true } : {}),
     ...(terminalOverflowed ? { terminal_overflowed: true } : {}),
+    ...(safeActiveRuns.length > 0 ? { active_runs: safeActiveRuns } : {}),
+    ...(facts ? { facts } : {}),
     receipts: safeReceipts,
   };
   const serialized = JSON.stringify(payload);

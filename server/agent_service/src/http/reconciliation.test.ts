@@ -29,7 +29,7 @@ async function readReconciliation(response: Response): Promise<{ payload: Record
     if (chunk.done) break;
     text += decoder.decode(chunk.value, { stream: true });
   }
-  const dataLine = text.split("\n").find((line) => line.startsWith("data: {\"schema_version\":\"1\""));
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: {\"schema_version\":\""));
   assert(dataLine, text);
   return { payload: JSON.parse(dataLine.slice("data: ".length)) as Record<string, unknown>, text };
 }
@@ -64,6 +64,54 @@ test("SSE reconnect emits bounded durable entries, receipt, and runtime state re
     assert.deepEqual(receipts, [{ idempotency_key: "reconcile-terminal", state: "completed", last_entry_id: receipts[0]?.last_entry_id ?? null, failure_code: null, failure_detail: null }]);
     controller.abort();
   } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+test("SSE reconciliation includes bounded active-run and facts snapshots", async () => {
+  const fixture = await createFixture();
+  const host = {
+    subscribe: async () => () => undefined,
+    entries: async () => [],
+    isPrompting: () => true,
+    activeRuns: () => [{
+      work_id: "work-1",
+      source_employee_id: "employee-1",
+      source_employee_display_name: "Helper",
+      source_role: "participant",
+      status: "thinking",
+      message: { role: "assistant", content: [{ type: "thinking", thinking: "继续分析" }] },
+    }],
+    factsState: () => ({ status: "queued", pending_count: 2, last_error_code: null, updated_at: null }),
+    abortAll: async () => undefined,
+  };
+  const http = new AgentHttpServer({ host: host as never, store: fixture.store, authenticate: () => caller });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const legacyController = new AbortController();
+  const controller = new AbortController();
+  try {
+    const legacyStream = await fetch(`http://127.0.0.1:${address.port}/api/agent/conversations/c1/events`, { headers: { Authorization: "Bearer test" }, signal: legacyController.signal });
+    const legacy = await readReconciliation(legacyStream);
+    assert.equal(legacy.payload.schema_version, "1");
+    assert.equal(legacy.payload.active_runs, undefined);
+    assert.equal(legacy.payload.facts, undefined);
+    legacyController.abort();
+
+    const stream = await fetch(`http://127.0.0.1:${address.port}/api/agent/conversations/c1/events`, {
+      headers: { Authorization: "Bearer test", "X-Aiteam-Reconciliation-Version": "2" },
+      signal: controller.signal,
+    });
+    const { payload } = await readReconciliation(stream);
+    assert.equal(payload.schema_version, "2");
+    assert.deepEqual(payload.active_runs, host.activeRuns());
+    assert.deepEqual(payload.facts, host.factsState());
+    assert.equal(payload.prompting, true);
+  } finally {
+    legacyController.abort();
+    controller.abort();
     await http.close();
     await fixture.close();
   }

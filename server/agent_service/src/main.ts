@@ -71,9 +71,10 @@ const sessionHost = new SessionHost({
     approvalConversationId?,
     sessionId?,
     onAccessDenied?,
+    onMemoryStatus?,
   ) => createControlledResourceLoader(
     snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl,
-    hindsightRuntimeConfig, approvalService, approvalConversationId ?? conversationId, sessionId, onAccessDenied,
+    hindsightRuntimeConfig, approvalService, approvalConversationId ?? conversationId, sessionId, onAccessDenied, onMemoryStatus,
   ),
 });
 

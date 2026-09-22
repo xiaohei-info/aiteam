@@ -31,7 +31,7 @@ import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./w
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
-import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader } from "./resources.js";
+import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
@@ -128,6 +128,7 @@ export interface SessionHostOptions {
     approvalConversationId?: string,
     sessionId?: string,
     onAccessDenied?: (error: unknown) => void,
+    onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
   ) => ResourceLoader;
   managerClient?: ManagerClient;
   customTools?: ToolDefinition[];
@@ -176,6 +177,12 @@ interface SessionRecord {
   activeToolCallId?: string;
   activeSourceRole?: "human" | "child" | "participant" | "coordinator";
   activeSource?: GroupMessageSource;
+  activeWorkId?: string;
+  activeStatus?: "thinking" | "tool" | "text" | "waiting" | "error";
+  activeMessage?: Record<string, unknown>;
+  factStatus?: MemoryStatusActivity;
+  factPendingCount?: number;
+  factUpdatedAt?: string;
   activePromptReceipt?: string;
   activeSnapshotVersion?: string;
   hindsightWorkspaces: Set<string>;
@@ -310,6 +317,50 @@ export class SessionHost {
 
   isPrompting(conversationId: string): boolean {
     return [...this.records.values()].some((record) => record.conversationId === conversationId && record.prompting);
+  }
+
+  /**
+   * Return a bounded, already-redacted projection of runs that are still
+   * executing. The projection is intentionally process-local and transient;
+   * durable content remains the SessionManager JSONL source of truth.
+   */
+  activeRuns(conversationId: string): Array<Record<string, unknown>> {
+    return [...this.records.values()]
+      .filter((record) => record.conversationId === conversationId && record.prompting && record.activeStatus !== "waiting")
+      .map((record) => {
+        const indexed = this.options.store.getConversation(record.conversationId);
+        const expert = record.employeeId
+          ? this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId)
+          : undefined;
+        return {
+          ...(record.activeWorkId ? { work_id: record.activeWorkId } : {}),
+          ...(record.employeeId ? { source_employee_id: record.employeeId } : {}),
+          ...(record.employeeId ? { source_employee_display_name: expert?.display_name ?? record.employeeId } : {}),
+          ...(record.activeSourceRole ? { source_role: record.activeSourceRole } : {}),
+          ...(record.activeStatus ? { status: record.activeStatus } : {}),
+          ...(record.activeMessage ? { message: record.activeMessage } : {}),
+        };
+      });
+  }
+
+  factsState(conversationId: string): Record<string, unknown> | undefined {
+    const records = [...this.records.values()].filter((record) => record.conversationId === conversationId && record.factStatus);
+    if (records.length === 0) return undefined;
+    const priority: MemoryStatusActivity[] = ["retain-failed", "retaining", "retain-queued", "retained"];
+    const selected = records.reduce((best, record) => {
+      if (!best) return record;
+      return priority.indexOf(record.factStatus!) < priority.indexOf(best.factStatus!) ? record : best;
+    }, records[0]!);
+    const status = selected.factStatus === "retaining" ? "flushing"
+      : selected.factStatus === "retain-queued" ? "queued"
+        : selected.factStatus === "retain-failed" ? "failed"
+          : selected.factStatus === "retained" ? "synced" : "idle";
+    return {
+      status,
+      pending_count: records.reduce((total, record) => total + (record.factPendingCount ?? 0), 0),
+      last_error_code: selected.factStatus === "retain-failed" ? "retain_failed" : null,
+      updated_at: selected.factUpdatedAt ?? null,
+    };
   }
 
   /** Clear process-memory runtime material on local sign-out or identity switch. */
@@ -760,6 +811,11 @@ export class SessionHost {
       record.conversationId, authorization, record.workspace, this.options.agentDir, hindsightRuntimeConfig,
       this.approvalService, record.conversationId, record.sessionManager.getSessionId(),
       (error) => this.invalidateExecutionMaterial(authorization, error),
+      (activity, queueRemaining) => {
+        record.factStatus = activity;
+        record.factPendingCount = queueRemaining;
+        record.factUpdatedAt = new Date().toISOString();
+      },
     );
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
@@ -1057,6 +1113,9 @@ export class SessionHost {
     record.activeSourceRef = command.toolCallId ? `${record.conversationId}:${command.toolCallId}` : undefined;
     record.activeSource = command.source;
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
+    record.activeWorkId = workId;
+    record.activeStatus = "thinking";
+    record.activeMessage = undefined;
     const workspaceBefore = this.workspaceSnapshot(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
     let sourceCapture = Promise.resolve();
@@ -1141,6 +1200,9 @@ export class SessionHost {
         record.activeSourceRef = undefined;
         record.activeSourceRole = undefined;
         record.activeSource = undefined;
+        record.activeWorkId = undefined;
+        record.activeStatus = undefined;
+        record.activeMessage = undefined;
         await this.disposeSession(record);
       }
     }
@@ -1486,7 +1548,23 @@ export class SessionHost {
               source_role: record.activeSourceRole ?? (record.role === "coordinator" ? "coordinator" as const : "participant" as const),
             }
       : { conversation_id: record.conversationId };
-    if (!serializePiEvent(event, metadata)) return;
+    const serialized = serializePiEvent(event, metadata);
+    if (!serialized) return;
+    const eventType = (event as unknown as { type?: unknown }).type;
+    if (record.prompting) {
+      if (eventType === "message_update" && serialized.message && typeof serialized.message === "object") {
+        record.activeMessage = serialized.message as Record<string, unknown>;
+        const assistant = serialized.assistantMessageEvent as { type?: unknown } | undefined;
+        record.activeStatus = assistant?.type === "thinking_delta" || assistant?.type === "thinking_start" ? "thinking"
+          : assistant?.type === "text_delta" || assistant?.type === "text_start" ? "text"
+            : assistant?.type === "toolcall_end" ? "tool" : record.activeStatus;
+      } else if (eventType === "tool_execution_start" || eventType === "tool_execution_update") {
+        record.activeStatus = "tool";
+      } else if (eventType === "agent_settled") {
+        record.activeMessage = undefined;
+        record.activeStatus = "waiting";
+      }
+    }
     const entryId = this.entryIdentity(event);
     const envelope: PiEventEnvelope = {
       id: entryId && record.employeeId ? `${record.employeeId}:${entryId}` : entryId ?? `${record.conversationId}:${++record.eventSequence}`,
