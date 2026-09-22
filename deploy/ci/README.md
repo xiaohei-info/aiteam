@@ -23,7 +23,7 @@ PR merge → GitHub Actions → self-hosted runner(taiyi)
   → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
       → TEST 维护窗口：先停止应用 writers/Manager/Operation/Agent，确认已退出
       → 保持应用停止，git pull --ff-only 同步部署根
-      → pnpm install && pnpm build（每次部署重建，避免前后端产物不一致）
+      → 独立 Node Agent 与 web 各自 pnpm install --frozen-lockfile，然后 pnpm build 前端（每次部署重建，避免依赖/产物不一致）
       → 按 checked-out `server/requirements.txt` hash 同步持久化 `.venv`（无 marker、或 hash 与 checked-out 文件不一致时才 pip install；hash 相同则跳过）
       → 启动并确认 PostgreSQL/NewAPI 依赖（应用仍停止）→ 备份 → DDL/迁移
       → 安装/校验新 unit，启动新的三端应用栈

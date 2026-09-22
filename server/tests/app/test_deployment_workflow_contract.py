@@ -184,3 +184,12 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     assert "postgres_container_name_conflict" in helper
     assert ".HostConfig.PortBindings" in helper
     assert "host binding is not loopback-only" in helper
+
+
+def test_taiyi_installs_independent_agent_lockfile_before_startup():
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    install = script.index('(cd server/agent_service && pnpm install --frozen-lockfile')
+    assert script.index('git pull --ff-only origin') < install
+    assert script.index('export PATH="${PNPM_SHIM_DIR}:${PATH}"') < install
+    assert install < script.index('rm -rf "${PNPM_SHIM_DIR}"')
+    assert '|| fail "Agent pnpm install failed:' in script
