@@ -194,8 +194,8 @@ const ConversationCreateRequest = Type.Object({
 }, { $id: "ConversationCreateRequest", additionalProperties: false, description: "创建本地会话请求；群聊的 coordinator/solution 引用必须来自当前成员的本地授权投影。" });
 const ConversationUpdateRequest = Type.Object({
   title: Type.Optional(Type.Union([Type.String({ maxLength: 200, description: "会话标题。" }), Type.Null()])),
-  description: Type.Optional(Type.Union([Type.String({ maxLength: 4000, description: "群简介。" }), Type.Null()])),
-  orchestration: Type.Optional(Type.Union([Type.Ref("GroupOrchestration"), Type.Null()])),
+  description: Type.Optional(Type.Union([Type.String({ maxLength: 4000, description: "自选成员群简介；自动编排时必填，自定义编排时可清空。" }), Type.Null()])),
+  orchestration: Type.Optional(Type.Ref("GroupOrchestration", { description: "更新已有自选成员群的编排；不可清空，下一轮执行生效。" })),
   kind: Type.Optional(Type.String({ minLength: 1, maxLength: 64, description: "会话类型；当前实现按部分更新处理。" })),
   labels: Type.Optional(Type.Array(Type.String({ maxLength: 128, description: "会话标签。" }), { maxItems: 32, description: "会话标签列表。" })),
   permission_mode: Type.Optional(PermissionMode),
@@ -1606,24 +1606,21 @@ export class AgentHttpServer {
     if (body.permission_mode !== undefined) patch.permissionMode = parsePermissionMode(body.permission_mode);
     this.requireOwnedConversation(conversationId, caller);
     const current = this.options.store.getConversationMetadata(conversationId)!;
-    if (["member_employee_ids"].some(key => key in body)
+    if ("member_employee_ids" in body
       || (current.orchestration && (["coordinator_employee_id", "entry_employee_id", "solution_instance_id"].some(key => key in body) || (patch.kind && patch.kind !== "group")))) {
       throw new HttpProblem(422, "invalid_group_configuration", "Group configuration is immutable after creation");
     }
-    if (current.kind === "group" && (body.description !== undefined || body.orchestration !== undefined)) {
-      if (body.orchestration !== undefined) {
-        if (body.orchestration === null) throw new HttpProblem(422, "invalid_group_orchestration", "Group orchestration cannot be cleared");
-        const next = validateCustomGroup({
-          title: current.title ?? "群聊",
-          description: body.description !== undefined
-            ? (body.description === null ? null : this.stringField(body.description, "description", 4000))
-            : current.description,
-          member_employee_ids: this.options.store.listConversationParticipants(conversationId).map((member) => member.employee_id),
-          coordinator_employee_id: current.coordinator_employee_id ?? "",
-          orchestration: body.orchestration,
-        });
-        patch.orchestration = next;
+    if (body.description !== undefined || body.orchestration !== undefined) {
+      if (current.kind !== "group" || !current.orchestration) {
+        throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups support editing group configuration");
       }
+      patch.orchestration = validateCustomGroup({
+        title: current.title ?? "群聊",
+        description: patch.description !== undefined ? patch.description : current.description,
+        member_employee_ids: this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id),
+        coordinator_employee_id: current.coordinator_employee_id ?? "",
+        orchestration: body.orchestration !== undefined ? body.orchestration : current.orchestration,
+      });
     }
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.conversationReads.readPointer(conversationId, caller, body.last_read_entry_id);
     const updated = this.options.store.updateConversation(conversationId, patch);
