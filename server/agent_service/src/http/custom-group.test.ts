@@ -83,7 +83,6 @@ test("custom create rejects invalid, unauthorized and legacy mixed input without
       assert.equal(result.data.permission_mode, id === "permission" ? "workspace-write" : "read-only");
     }
     await f.request("/api/agent/conversations/immutable", { kind: "chat" }, 422, false, "PATCH");
-    await f.request("/api/agent/conversations/immutable", { orchestration: { mode: "auto" } }, 422, false, "PATCH");
     for (const field of ["coordinator_employee_id", "entry_employee_id", "solution_instance_id"]) {
       await f.request("/api/agent/conversations/immutable", { [field]: "e2" }, 422, false, "PATCH");
     }
@@ -130,5 +129,84 @@ test("initialization failure removes the new custom conversation and its partici
     await f.request(path, input(), 500);
     assert.equal(f.store.getConversation("custom"), undefined);
     assert.equal(f.store.listConversationParticipants("custom").length, 0);
+  } finally { await f.cleanup(); }
+});
+
+
+test("group edits validate the merged configuration atomically and preserve fixed members", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("editable"), 201);
+    const endpoint = "/api/agent/conversations/editable";
+    const before = f.store.getConversationMetadata("editable");
+    for (const description of [null, "", "   "]) {
+      await f.request(endpoint, { title: "must not persist", description }, 422, false, "PATCH");
+      assert.deepEqual(f.store.getConversationMetadata("editable"), before);
+    }
+    const auto = (await f.request(endpoint, { description: "新群用途" }, 200, false, "PATCH")).data;
+    assert.equal(auto.description, "新群用途");
+    assert.deepEqual(auto.orchestration, { mode: "auto" });
+    const custom = { mode: "custom", format: "collaboration-markdown-v1", prompt: "@{e1} → @{e2}：检查结果" };
+    const edited = (await f.request(endpoint, { description: null, orchestration: custom }, 200, false, "PUT")).data;
+    assert.equal(edited.description, null);
+    assert.deepEqual(edited.orchestration, custom);
+    const saved = f.store.getConversationMetadata("editable");
+    for (const patch of [
+      { orchestration: null }, { orchestration: { mode: "auto" } },
+      { orchestration: { ...custom, prompt: "@{e3}" } },
+      { orchestration: { ...custom, prompt: "@{e1" } },
+      { orchestration: { ...custom, prompt: " " } },
+      { orchestration: { ...custom, format: "unknown" } },
+      { member_employee_ids: ["e1"] }, { coordinator_employee_id: "e2" },
+      { entry_employee_id: "e2" }, { solution_instance_id: "other" }, { kind: "chat" },
+    ]) {
+      await f.request(endpoint, patch, 422, false, "PATCH");
+      assert.deepEqual(f.store.getConversationMetadata("editable"), saved);
+    }
+    await f.request(endpoint, { description: "other user" }, 404, true, "PATCH");
+    const restored = (await f.request(endpoint, { description: "恢复自动用途", orchestration: { mode: "auto" } }, 200, false, "PATCH")).data;
+    assert.equal(restored.coordinator_employee_id, "e1");
+    assert.equal(restored.solution_instance_id, null);
+    assert.deepEqual(f.store.listConversationParticipants("editable").map(member => member.employee_id), ["e1", "e2"]);
+    const coldStore = new AgentSqliteStore(join(f.dataRoot, "agent.sqlite"));
+    try {
+      assert.equal(coldStore.getConversationMetadata("editable")?.description, "恢复自动用途");
+      assert.deepEqual(coldStore.getConversationMetadata("editable")?.orchestration, { mode: "auto" });
+    } finally { coldStore.close(); }
+  } finally { await f.cleanup(); }
+});
+
+test("group edits cannot convert private or legacy groups into custom groups", async () => {
+  const f = await setup();
+  try {
+    await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
+    await f.request("/api/agent/conversations", { id: "legacy", kind: "group", coordinator_employee_id: "e1" }, 201);
+    for (const id of ["private", "legacy"]) {
+      const before = f.store.getConversationMetadata(id);
+      for (const patch of [{ description: "purpose" }, { orchestration: { mode: "auto" }, description: "purpose" }]) {
+        await f.request(`/api/agent/conversations/${id}`, patch, 422, false, "PATCH");
+        assert.deepEqual(f.store.getConversationMetadata(id), before);
+      }
+    }
+  } finally { await f.cleanup(); }
+});
+
+test("edited group purpose and custom rules take effect on the next prompt", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("editable"), 201);
+    f.faux.setResponses([fauxAssistantMessage("before")]);
+    await f.host.prompt("editable", "before", undefined, caller);
+    for (const patch of [
+      { description: "编辑后的用途" },
+      { description: null, orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "新规则：@{e2} 核对结果" } },
+    ]) {
+      f.contexts.length = 0;
+      await f.request("/api/agent/conversations/editable", patch, 200, false, "PATCH");
+      f.faux.setResponses([fauxAssistantMessage("after")]);
+      await f.host.prompt("editable", "after", undefined, caller);
+      assert(f.contexts.some(context => context.includes(patch.orchestration?.prompt ?? patch.description!)));
+      assert(f.contexts.every(context => !context.includes("自动模式独有用途")));
+    }
   } finally { await f.cleanup(); }
 });
