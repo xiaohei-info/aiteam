@@ -1,3 +1,6 @@
+import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
+import { AutomationTaskService } from "../services/automation-tasks.js";
+import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
 import { GroupConfigurationError, validateCustomGroup } from "../groups/orchestration.js";
 import { CustomGroupCreateRequest, GroupOrchestration } from "./custom-group-schemas.js";
@@ -124,10 +127,12 @@ const ConversationSchedule = Type.Object({
   at: Type.Optional(Type.String({ format: "date-time", description: "一次性或重复调度锚点（ISO 8601 UTC）。" })),
   interval_seconds: Type.Optional(Type.Integer({ minimum: 1, description: "重复执行间隔（秒）。" })),
   one_shot: Type.Boolean({ description: "是否只执行一次。" }),
+  calendar: Type.Optional(CalendarRuleSchema),
   overlap: Type.Literal("skip", { description: "已有执行时跳过本次触发。" }),
   misfire: Type.Literal("skip", { description: "错过触发时间时跳过。" }),
 }, { $id: "ConversationSchedule", additionalProperties: false, description: "已规范化的本地会话定时执行配置；响应始终包含 revision、enabled、one_shot、overlap 和 misfire。" });
 const ConversationScheduleInput = Type.Union([
+  Type.Object({ ...ScheduleCommon, calendar: CalendarRuleSchema, one_shot: Type.Optional(Type.Literal(false)) }, { additionalProperties: false, description: "日历调度，不与固定间隔或单次混用。" }),
   Type.Object({
     ...ScheduleCommon,
     at: Type.String({ format: "date-time", description: "一次性执行时间（ISO 8601 UTC）。" }),
@@ -704,12 +709,14 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
   "updateEmployeeAvatar",
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
+  ...AUTOMATION_PARAMETER_EXAMPLES,
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
   "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1", "X-Aiteam-Reconciliation-Version": "2",
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
+  ...AUTOMATION_OPERATION_DOCS,
   ...CONVERSATION_READ_DOCS,
   ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
@@ -889,10 +896,12 @@ export class AgentHttpServer {
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly conversationReads: ConversationReadService;
   private readonly groupCreation: GroupCreationService;
+  private readonly automation: AutomationTaskService;
   private readonly workRecords: WorkRecordReadService;
   private readonly usageStatistics: UsageStatisticsService;
 
   constructor(private readonly options: AgentHttpServerOptions) {
+    this.automation = new AutomationTaskService(options.store, options.host, options.executionAuthorization);
     this.conversationReads = new ConversationReadService(options.store, options.host);
     this.groupCreation = new GroupCreationService(options.store, options.host);
     this.workRecords = new WorkRecordReadService(options.store, options.host);
@@ -930,9 +939,9 @@ export class AgentHttpServer {
         // CORS headers on the raw response so they survive that boundary.
         reply.raw.setHeader("Access-Control-Allow-Origin", origin);
         reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
-        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, Last-Event-ID, X-Aiteam-Reconciliation-Version");
+        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, Last-Event-ID, X-Aiteam-Reconciliation-Version");
         reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-        reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID");
+        reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID, ETag");
         reply.raw.setHeader("Access-Control-Max-Age", "600");
         reply.raw.setHeader("Vary", "Origin");
         if (request.method === "OPTIONS") return reply.code(204).send();
@@ -1020,7 +1029,7 @@ export class AgentHttpServer {
             if (authenticated || publicAuth) operation.responses["401"] ??= { $ref: "#/components/responses/Unauthorized" };
             if (authenticated || publicAuth) operation.responses["403"] ??= { $ref: "#/components/responses/Forbidden" };
             if (managerBacked) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
-            else delete operation.responses["503"];
+            else if (!operationId.includes("AutomationTask") && operationId !== "listAgentConnectors") delete operation.responses["503"];
             if (path === "/api/auth/resolve-tenant-by-account") {
               operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
               operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
@@ -1036,6 +1045,7 @@ export class AgentHttpServer {
                 for (const content of Object.values(response.content) as any[]) content.examples ??= responseDocs.examples;
               }
               if (response && typeof response === "object" && !response.$ref) {
+                if (status === "204") delete response.content;
                 response.headers ??= {};
                 response.headers["X-Request-ID"] ??= { $ref: "#/components/headers/RequestId" };
                 if (operationId === "subscribeConversationEvents" && status === "200") {
@@ -1297,6 +1307,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { summary: "获取办公场景", description: "返回本地专家工作状态和当前会话摘要。", response: { 200: jsonResponse(Type.Ref("OfficeSceneEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
+    registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -1603,6 +1614,11 @@ export class AgentHttpServer {
     if (body.kind !== undefined) patch.kind = this.stringField(body.kind, "kind", 64);
     if (body.labels !== undefined) patch.labels = this.stringArray(body.labels, "labels", 32);
     if (body.schedule !== undefined) patch.schedule = body.schedule === null ? null : this.parseSchedule(body.schedule);
+    if (body.schedule !== undefined && this.options.store.automation.forConversation(conversationId) && this.options.host.isPrompting(conversationId)) {
+      const currentSchedule = this.options.store.getConversation(conversationId)?.schedule;
+      const disabling = body.schedule === null || JSON.stringify({ ...patch.schedule, enabled: currentSchedule?.enabled }) === JSON.stringify(currentSchedule);
+      if (!disabling) throw new AutomationError(409, "task_busy", "Wait for the current task before changing its execution settings");
+    }
     if (body.permission_mode !== undefined) patch.permissionMode = parsePermissionMode(body.permission_mode);
     this.requireOwnedConversation(conversationId, caller);
     const current = this.options.store.getConversationMetadata(conversationId)!;
@@ -2374,7 +2390,7 @@ export class AgentHttpServer {
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
     let problem: { status: number; code: string; detail: string; errors?: unknown };
-    if (error instanceof HttpProblem) problem = { status: error.status, code: error.code, detail: error.message, errors: error.errors };
+    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };

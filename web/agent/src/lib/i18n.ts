@@ -9,6 +9,7 @@ export type I18nInstance = I18n;
 const agentMessages = {
   "zh-CN": {
     "agent.title": "AI Team 用户端",
+    "agent.nav.tasks": "自动化任务",
     "agent.nav.workspace": "工作台",
     "agent.nav.private_chat": "私聊",
     "agent.nav.group_chat": "群聊",

@@ -610,7 +610,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 53);
+    assert.equal(frontendOperations.length, 62);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -637,6 +637,11 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
       if (!path.includes("/knowledge-bases")) {
         assert(successResponses.length > 0, `${label} missing success response`);
         for (const [status, response] of successResponses) {
+          if (status === "204") {
+            assert.equal((response as any).content, undefined, `${label} must not declare a body for 204`);
+            assert((response as any).headers?.["X-Request-ID"], `${label} 204 missing request ID header`);
+            continue;
+          }
           const content = (response as any).content ?? {};
           assert(Object.keys(content).length > 0, `${label} ${status} missing response content`);
           for (const [media, value] of Object.entries(content) as [string, any][]) {
@@ -667,7 +672,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
     const shortKnowledgeParams = document.paths["/api/agent/knowledge-bases/{knowledge_base_id}/{kind}"].get.parameters;
     assert.deepEqual(shortKnowledgeParams.map((parameter: any) => parameter.name), ["knowledge_base_id", "kind"]);
     assert.deepEqual(document.components.schemas.ConversationState.anyOf.map((branch: any) => branch.enum?.[0]), ["draft", "active", "paused", "muted", "archived"]);
-    assert.equal(document.components.schemas.ConversationScheduleInput.anyOf.length, 2);
+    assert.equal(document.components.schemas.ConversationScheduleInput.anyOf.length, 3);
     assert.equal(document.components.schemas.LocalFileUpload.properties.data.maxLength, 6_990_508);
     assert(document.components.schemas.LocalFileUpload.properties.mime_type.enum.includes("application/pdf"));
     assert.deepEqual(document.components.schemas.ReadinessState.anyOf.map((branch: any) => branch.enum?.[0]), ["ready", "degraded", "blocked", "unknown"]);

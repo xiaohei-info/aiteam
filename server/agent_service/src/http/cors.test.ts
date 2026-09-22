@@ -25,7 +25,7 @@ test("configured Agent client origin receives CORS preflight and response header
     const response = await fetch(`http://127.0.0.1:${address.port}/api/agent/ping`, { headers: { Origin: origin } });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("access-control-allow-origin"), origin);
-    assert.equal(response.headers.get("access-control-expose-headers"), "X-Request-ID");
+    assert.equal(response.headers.get("access-control-expose-headers"), "X-Request-ID, ETag");
     const denied = await fetch(`http://127.0.0.1:${address.port}/api/agent/ping`, { method: "OPTIONS", headers: { Origin: "https://unexpected.example" } });
     assert.equal(denied.status, 403);
   } finally {
