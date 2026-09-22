@@ -77,11 +77,11 @@ it("paginates task and run lists, filters employees, and pauses/enables/deletes 
   fireEvent.click(screen.getByRole("button", { name: "每日简报" }));
   fireEvent.click(await screen.findByRole("button", { name: "更多运行记录" }));
   await waitFor(() => expect(screen.getAllByText("本次结果待确认")).toHaveLength(2));
-  fireEvent.click(screen.getByRole("button", { name: "暂停", exact: true }));
-  fireEvent.click(await screen.findByRole("button", { name: "启用", exact: true }));
-  await screen.findByRole("button", { name: "暂停", exact: true });
+  fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+  fireEvent.click(await screen.findByRole("button", { name: "启用" }));
+  await screen.findByRole("button", { name: "暂停" });
   fireEvent.click(screen.getByRole("button", { name: "删除任务" }));
-  fireEvent.click(screen.getByRole("button", { name: "取消", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(requests.some(r => r.init?.method === "DELETE")).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "删除任务" }));
   fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
@@ -103,7 +103,7 @@ it("a failed create preserves both the form and idempotency key for retry", asyn
   fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await waitFor(() => expect(requests.filter(r => r.init?.method === "POST")).toHaveLength(2));
   const writes = requests.filter(r => r.init?.method === "POST");
-  expect(new Headers(writes[0].init?.headers).get("Idempotency-Key")).toBe(new Headers(writes[1].init?.headers).get("Idempotency-Key"));
+  expect(new Headers(writes[0]!.init?.headers).get("Idempotency-Key")).toBe(new Headers(writes[1]!.init?.headers).get("Idempotency-Key"));
 });
 it.each([
   { mode: "weekly", timezone: "Asia/Shanghai", time: "10:30:00", weekday: 2 },
@@ -113,10 +113,10 @@ it.each([
 ] as const)("existing $mode task loads its exact rule without overwriting it on metadata edits", async schedule => {
   setup(false, path => path.endsWith("/t1") ? response({ ...task, schedule }) : undefined);
   fireEvent.click(await screen.findByRole("button", { name: "每日简报" }));
-  fireEvent.click(await screen.findByRole("button", { name: "编辑", exact: true }));
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
   expect((screen.getByLabelText("执行频率") as HTMLSelectElement).value).toBe(schedule.mode);
-  fireEvent.click(screen.getByRole("button", { name: "取消", exact: true }));
-  expect(screen.getByRole("button", { name: "编辑", exact: true })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
 });
 it("calendar labels and instant conversion honor selected timezone and reject a DST gap", () => {
   const draft = { name: "x", prompt: "x", category: "other", employee_id: "e1", connector_ids: [], mode: "once" as const, timezone: "Asia/Shanghai", time: "09:00", weekday: 1, day: 31, interval: 60, start: "2027-01-01T09:00" };
