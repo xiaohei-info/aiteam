@@ -861,6 +861,8 @@ function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string
   return values;
 }
 
+import { appLogger, makeRequestContext, requestContext, safeError, safeRequestId } from "../observability.js";
+
 export interface AgentHttpServerOptions {
   host: SessionHost;
   store: AgentSqliteStore;
@@ -910,8 +912,8 @@ export class AgentHttpServer {
     this.allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins ?? []);
     this.app = Fastify({
       bodyLimit: Math.max(MAX_UPLOAD_JSON_BYTES, MAX_PROMPT_JSON_BYTES),
-      requestIdHeader: "x-request-id",
-      genReqId: () => randomUUID(),
+      requestIdHeader: false,
+      genReqId: request => safeRequestId(request.headers["x-request-id"]),
       logger: false,
     });
     // Fastify rejects an empty JSON body before the handler. Several command-style
@@ -930,6 +932,24 @@ export class AgentHttpServer {
     this.app.setValidatorCompiler(() => () => true);
     this.app.setSerializerCompiler(() => (data) => JSON.stringify(data));
     this.server = this.app.server;
+    this.app.addHook("onRequest", (request, reply, done) => {
+      const context = makeRequestContext(request.id, request.headers.traceparent);
+      const started = performance.now();
+      reply.raw.setHeader("traceparent", context.traceparent);
+      reply.raw.setHeader("X-Trace-ID", context.trace_id);
+      let logged = false;
+      const finish = () => {
+        if (logged) return;
+        logged = true;
+        requestContext.run(context, () => appLogger.log(reply.raw.statusCode >= 500 ? "error" : "info", "http.completed", {
+          method: request.method, route: request.routeOptions.url ?? "/unmatched", status: reply.raw.statusCode,
+          duration_ms: performance.now() - started, outcome: reply.raw.writableFinished ? "completed" : "disconnected",
+        }));
+      };
+      reply.raw.once("finish", finish);
+      reply.raw.once("close", finish);
+      requestContext.run(context, done);
+    });
     this.app.addHook("onRequest", async (request, reply) => {
       this.requests += 1;
       reply.raw.setHeader("X-Request-ID", request.id);
@@ -939,7 +959,7 @@ export class AgentHttpServer {
         // CORS headers on the raw response so they survive that boundary.
         reply.raw.setHeader("Access-Control-Allow-Origin", origin);
         reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
-        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, Last-Event-ID, X-Aiteam-Reconciliation-Version");
+        reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, Last-Event-ID, X-Aiteam-Reconciliation-Version, X-Request-ID, traceparent");
         reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID, ETag");
         reply.raw.setHeader("Access-Control-Max-Age", "600");
@@ -951,7 +971,7 @@ export class AgentHttpServer {
     });
     this.app.setErrorHandler((error, request, reply) => {
       this.errors += 1;
-      if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
+      if (!(error instanceof EventCursorStaleError)) appLogger.log("error", "http.failed", safeError(error));
       reply.hijack();
       this.writeError(reply.raw, this.fastifyError(error), String(request.id));
     });
@@ -1338,7 +1358,7 @@ export class AgentHttpServer {
           await handler(raw, reply.raw, caller, request);
         } catch (error) {
           this.errors += 1;
-          if (!(error instanceof EventCursorStaleError)) this.options.logger?.error(error);
+          if (!(error instanceof EventCursorStaleError)) appLogger.log("error", "http.failed", safeError(error));
           this.writeError(reply.raw, error, String(request.id));
         }
       },
@@ -2010,7 +2030,7 @@ export class AgentHttpServer {
     } catch (error) {
       const failure = promptFailure(error);
       this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, failure);
-      this.options.logger?.error({ code: failure.code, detail: failure.detail });
+      appLogger.log("error", "prompt.failed", { ...safeError(error) });
     } finally {
       clearInterval(heartbeat);
     }

@@ -1,4 +1,5 @@
 import { connectorTools } from "../connectors.js";
+import { appLogger } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
@@ -299,7 +300,7 @@ export class SessionHost {
     await Promise.all(records.map(async (record) => {
       record.aborting = true;
       const session = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-      await session?.abort().catch(() => undefined);
+      return await session?.abort().catch(() => undefined);
     }));
     return true;
   }
@@ -539,7 +540,7 @@ export class SessionHost {
       record.aborting = true;
       const session = record.session ?? await record.sessionReady?.catch(() => undefined);
       await session?.abort().catch(() => undefined);
-      await record.promptPromise?.catch(() => undefined);
+      return await record.promptPromise?.then(() => undefined).catch(() => undefined);
     }));
   }
 
@@ -557,6 +558,7 @@ export class SessionHost {
           new Promise<void>((resolve) => setTimeout(resolve, MAX_ENTRIES_PROMPT_WAIT_MS)),
         ]);
       }
+      return undefined;
     }));
     if (caller) this.requireHistoryOwner(conversationId, caller);
     return this.readIndexedHistory(conversationId).map((item) => item.entry);
@@ -1109,6 +1111,7 @@ export class SessionHost {
     const owner = authorization?.caller.tenantId ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const workId = owner && this.options.store.getOwnedConversation(record.conversationId, owner.tenantId, owner.memberId)
       ? this.options.store.workRecords.start({ ...owner, employeeId, conversationId: record.conversationId, startedAt, startOrdinal: entriesBefore, promptReceipt: command.idempotencyKey }) : undefined;
+    appLogger.log("info", "execution.started", { work_id: workId, conversation_id: record.conversationId, employee_id: employeeId, source_id: command.source.id, source_type: command.source.type, tenant_id: owner?.tenantId });
     record.prompting = true;
     record.aborting = false;
     record.activeToolCallId = command.toolCallId;
@@ -1176,6 +1179,11 @@ export class SessionHost {
       throw terminalError;
     } finally {
       unsubscribeSource?.();
+      appLogger.log(failed ? "warn" : "info", "execution.finished", {
+        work_id: workId, conversation_id: record.conversationId, employee_id: employeeId,
+        tenant_id: owner?.tenantId, duration_ms: Date.now() - startedAt,
+        outcome: observedWorkOutcome(stopReason, settled, record.aborting, failed),
+      });
       try {
         if (workId && owner && authorization) {
           const entries = record.sessionManager.getEntries().slice(entriesBefore);
@@ -1262,6 +1270,7 @@ export class SessionHost {
       let skills: string[] = [];
       if (snapshot) {
         try {
+          // SAFETY: snapshot is a validated object; capability fields are checked by the parser.
           skills = skillRefsForSnapshot(snapshot as unknown as Record<string, unknown>);
         } catch {
           // Current malformed skills fail closed; do not union a stale legacy
@@ -1530,6 +1539,7 @@ export class SessionHost {
     const expert = record.employeeId
       ? this.options.store.listLoadedExperts(indexed?.tenantId ?? undefined, indexed?.memberId ?? undefined, true).find((item) => item.employee_id === record.employeeId)
       : undefined;
+    // SAFETY: runtime events are objects; optional fields remain unknown until checked below.
     const raw = event as unknown as Record<string, unknown>;
     const message = raw.message as Record<string, unknown> | undefined;
     const isUserMessage = message?.role === "user";
@@ -1554,6 +1564,7 @@ export class SessionHost {
       : { conversation_id: record.conversationId };
     const serialized = serializePiEvent(event, metadata);
     if (!serialized) return;
+    // SAFETY: only the discriminator is read; each supported value is matched explicitly below.
     const eventType = (event as unknown as { type?: unknown }).type;
     if (record.prompting) {
       if (eventType === "message_update" && serialized.message && typeof serialized.message === "object") {
@@ -1586,6 +1597,7 @@ export class SessionHost {
   }
 
   private entryIdentity(event: AgentSessionEvent): string | undefined {
+    // SAFETY: external event extensions are read as unknown and type-checked before use.
     const value = event as unknown as Record<string, unknown>;
     const message = value.message;
     if (message && typeof message === "object" && typeof (message as Record<string, unknown>).id === "string") return (message as Record<string, unknown>).id as string;
@@ -1623,6 +1635,7 @@ export class SessionHost {
 }
 
 function officeEntryTimestamp(entry: SessionEntry | undefined): string | null {
+  // SAFETY: compatibility accepts string/number timestamps only after the checks below.
   const timestamp = entry && (entry as unknown as { timestamp?: unknown }).timestamp;
   if (typeof timestamp === "string") {
     const parsed = Date.parse(timestamp);
