@@ -73,9 +73,11 @@ test("conversation reads are owner-scoped and observational for empty, silent an
     for (const id of ["empty-group", "silent"]) {
       const value = (await request(`/conversations/${id}`)).data;
       assert.equal(value.last_preview, null);
+      assert.equal(value.last_message_at, null);
       assert.equal(value.unread_count, 0);
     }
     assert.equal((await request("/conversations/c1/entries")).data.entries[0].id, "legacy");
+    assert.equal((await request("/conversations/c1")).data.last_message_at, timestamp);
     assert.equal((await request("/messages/search?q=legacy")).data.length, 1);
     assert.equal((await request("/messages/search?q=private")).data.length, 0);
     for (const suffix of ["", "/entries", "/entries?limit=1", "/participants"]) await request(`/conversations/group${suffix}`, 404, undefined, true);
@@ -83,6 +85,21 @@ test("conversation reads are owner-scoped and observational for empty, silent an
     assert.deepEqual((await request("/messages/search?q=answer", 200, undefined, true)).data, []);
     assert.deepEqual(snapshot(fixture), before, "reads must not initialize sessions, alter indexes or write files");
     assert.throws(() => fixture.host.readEntries("group", { ...caller, userId: "other" }), /not owned/);
+  } finally { await http.close(); await fixture.close(); }
+});
+
+test("message time survives HTTP serialization and ignores newer tool entries and metadata edits", async () => {
+  const fixture = await createFixture();
+  persisted(fixture, "c1", null, [
+    message("answer", "assistant", "visible", timestamp),
+    message("tool", "toolResult", "result", "2026-09-05T09:00:00.000Z"),
+    message("thinking", "assistant", [{ type: "thinking", thinking: "hidden" }], "2026-09-05T10:00:00.000Z"),
+  ]);
+  const { http, request } = await serve(fixture);
+  try {
+    const list = await request("/conversations");
+    assert.equal(list.data.find((item: any) => item.id === "c1").last_message_at, timestamp);
+    assert.equal((await request("/conversations/c1", 200, { title: "renamed" })).data.last_message_at, timestamp);
   } finally { await http.close(); await fixture.close(); }
 });
 
@@ -118,6 +135,7 @@ test("history pagination, search location and read pointers share stable partici
     await request("/conversations/group", 404, { last_read_entry_id: hit.entry_ref }, true);
     const mark = await request("/conversations/group", 200, { last_read_entry_id: first.data.entries[1].entry_ref });
     assert.equal(mark.data.unread_count, 1);
+    assert.equal(mark.data.last_message_at, timestamp, "mark-read must not change message time");
     assert.equal((await request("/conversations/group", 200, { last_read_entry_id: hit.entry_ref })).data.unread_count, 0);
     const oldId = await request("/conversations/group", 200, { last_read_entry_id: "human-copy" });
     assert.equal(oldId.data.last_read_entry_id, legacy.data.entries[0].entry_ref);
