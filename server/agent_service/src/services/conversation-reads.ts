@@ -47,14 +47,19 @@ export class ConversationReadService {
     const entries = this.host.readEntries(conversationId, caller);
     const read = metadata.last_read_entry_id ? resolveReadEntry(entries, metadata.last_read_entry_id) : undefined;
     let lastPreview: string | null = null;
+    let lastMessageAt: string | null = null;
     let unreadCount = 0;
     for (const item of entries) {
       const text = visibleHistoryText(item.entry);
       if (!text) continue;
       lastPreview = safeText(text, 200);
+      // History order is normalized from persisted message timestamps, never metadata updates.
+      // Zero is the history reader's sentinel for missing/invalid legacy timestamps.
+      const messageDate = new Date(item.order[0]);
+      lastMessageAt = item.order[0] > 0 && Number.isFinite(messageDate.getTime()) ? messageDate.toISOString() : null;
       if (item.entry.type === "message" && item.entry.message.role === "assistant" && (!read || compareReadOrder(item.order, read.order) > 0)) unreadCount += 1;
     }
-    return { ...metadata, last_preview: lastPreview, unread_count: unreadCount };
+    return { ...metadata, last_preview: lastPreview, last_message_at: lastMessageAt, unread_count: unreadCount };
   }
 
   readPointer(conversationId: string, caller: AuthenticatedCaller, value: unknown): string | null {
