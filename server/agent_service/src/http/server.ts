@@ -182,6 +182,7 @@ const ConversationMetadata = Type.Object({
   permission_mode: PermissionMode,
   last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的 entry_ref；旧存储可能是 raw Pi ID，歧义/失效时按未读处理。" }),
   last_preview: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "最新可见 user/assistant 的脱敏短文本；排除 thinking/tool/internal，图片为占位符，无消息为 null。" }),
+  last_message_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "最新可见 user/assistant 消息时间；无可见消息或旧消息时间缺失为 null。改名、已读、工具事件不改变此值。" }),
   unread_count: Type.Integer({ minimum: 0, description: "已读位置之后的可见 assistant 消息数；输入和 transient delta 不计数。" }),
   created_at: Type.String({ format: "date-time", description: "创建时间。" }),
   updated_at: Type.String({ format: "date-time", description: "最后更新时间。" }),
@@ -655,7 +656,7 @@ const EXAMPLE_CONVERSATION = {
   id: "conversation-1", title: "今日工作摘要", kind: "private", labels: ["daily"], state: "active",
   entry_employee_id: "employee-1", coordinator_employee_id: null, solution_instance_id: null,
   tenant_id: "tenant-1", member_id: "member-1", schedule: null, permission_mode: "read-only",
-  last_read_entry_id: null, last_preview: null, unread_count: 0, created_at: "2026-09-01T08:00:00.000Z", updated_at: "2026-09-01T08:01:00.000Z",
+  last_read_entry_id: null, last_preview: null, last_message_at: null, unread_count: 0, created_at: "2026-09-01T08:00:00.000Z", updated_at: "2026-09-01T08:01:00.000Z",
 };
 const EXAMPLE_FILE = {
   id: "file-1", conversation_id: "conversation-1", tenant_id: "tenant-1", member_id: "member-1",
@@ -886,6 +887,24 @@ export class HttpProblem extends Error {
   }
 }
 
+// Mutable documentation projection emitted by @fastify/swagger, not request input.
+interface DocumentationResponse {
+  $ref?: string;
+  description?: string;
+  content?: Record<string, { examples?: unknown }>;
+  headers?: Record<string, Record<string, unknown>>;
+}
+interface DocumentationOperation {
+  operationId?: string;
+  summary?: string;
+  description?: string;
+  tags?: string[];
+  security?: Array<Record<string, string[]>>;
+  requestBody?: { content?: Record<string, { examples?: unknown }> };
+  parameters?: Array<{ name: string; in: string; description?: string; example?: unknown; schema?: unknown }>;
+  responses: Record<string, DocumentationResponse>;
+}
+
 export class AgentHttpServer {
   readonly server: Server;
   private readonly app: FastifyInstance;
@@ -995,7 +1014,7 @@ export class AgentHttpServer {
           for (const key of ["anyOf", "oneOf", "allOf"]) for (const child of node[key] ?? []) enrichNode(child, field);
         };
         for (const [path, pathItem] of Object.entries(openapiObject.paths ?? {})) {
-          for (const [method, operation] of Object.entries(pathItem as Record<string, any>)) {
+          for (const [method, operation] of Object.entries(pathItem as Record<string, DocumentationOperation>)) {
             if (!operation || typeof operation !== "object" || !operation.responses || !["get", "post", "put", "patch", "delete", "head", "options", "trace"].includes(method)) continue;
             const operationId = String(operation.operationId ?? `${method}_${path}`);
             const summary = String(operation.summary ?? humanize(operationId));
@@ -1038,7 +1057,7 @@ export class AgentHttpServer {
             if (operationId === "subscribeConversationEvents") operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
             if (operationId === "transcribeAudio") operation.responses["502"] ??= { $ref: "#/components/responses/BadGateway" };
             if (["post", "put", "patch", "delete"].includes(method)) operation.responses["409"] ??= { $ref: "#/components/responses/Conflict" };
-            for (const [status, response] of Object.entries(operation.responses as Record<string, any>)) {
+            for (const [status, response] of Object.entries(operation.responses)) {
               const responseDocs = operationDocs?.responses?.[status];
               if (responseDocs?.description && response && typeof response === "object" && !response.$ref) response.description = responseDocs.description;
               if (responseDocs?.examples && response?.content) {
@@ -1059,7 +1078,7 @@ export class AgentHttpServer {
                 }
                 if (operationId === "transcribeAudio" && status === "200") response.headers["Cache-Control"] = { description: "语音结果不缓存。", schema: { type: "string", example: "no-store" } };
               }
-              if (response && responseNames.has(response.description)) {
+              if (response?.description && responseNames.has(response.description)) {
                 operation.responses[status] = { $ref: `#/components/responses/${response.description}` };
                 continue;
               }
@@ -1271,7 +1290,7 @@ export class AgentHttpServer {
     fileCollection("attachment", "listAttachments", ConversationParams);
     fileCollection("artifact", "listArtifacts", ConversationParams);
     const fileItem = (kind: LocalFileKind, idName: "attachment_id" | "artifact_id", operationPrefix: string, params: unknown) => {
-      const route = (request: IncomingMessage, fastifyRequest?: FastifyRequest) => { const values = fastifyRequest?.params as Record<string, string>; return { conversationId: values.conversation_id, kind, fileId: values[idName] }; };
+      const route = (_request: IncomingMessage, fastifyRequest?: FastifyRequest) => { const values = fastifyRequest?.params as Record<string, string>; return { conversationId: values.conversation_id, kind, fileId: values[idName] }; };
       const path = `/api/agent/conversations/:conversation_id/${kind === "artifact" ? "artifacts" : "attachments"}/:${idName}`;
       this.registerRoute("GET", path, (request, response, caller, fastifyRequest) => this.downloadLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`download${operationPrefix}`, { summary: `下载会话${kind === "artifact" ? "产物" : "附件"}`, description: `下载当前成员会话中的${kind === "artifact" ? "产物" : "附件"}二进制内容。`, params, response: { 200: { description: "Local file bytes", content: LOCAL_FILE_DOWNLOAD_CONTENT }, 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
       this.registerRoute("DELETE", path, (request, response, caller, fastifyRequest) => this.deleteLocalFile(response, route(request, fastifyRequest), caller!), routeSchema(`delete${operationPrefix}`, { summary: `删除会话${kind === "artifact" ? "产物" : "附件"}`, description: `删除当前成员会话中的${kind === "artifact" ? "产物" : "附件"}。`, params, response: { 200: jsonResponse(Type.Ref("LocalFileDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
@@ -1303,7 +1322,7 @@ export class AgentHttpServer {
       ["/api/agent/knowledge-bases/:knowledge_base_id/:kind", "knowledgeReadModel", KnowledgeBaseParams],
       ["/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id", "knowledgeReadModelResource", KnowledgeResourceParams],
     ] as const) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema(operationId, { summary: "查询已移除的知识库读模型", description: "该 Agent 知识库旧读模型已移除，请改用 Pi 知识工具。", params, response: { 410: problemResponse("Gone") } }));
-    this.registerRoute("GET", "/api/agent/org/tree", (request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { summary: "获取组织树", description: "从 Manager 拉取当前成员可见的组织结构投影。", response: { 200: jsonResponse(Type.Ref("OrgTreeEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("GET", "/api/agent/org/tree", (_request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { summary: "获取组织树", description: "从 Manager 拉取当前成员可见的组织结构投影。", response: { 200: jsonResponse(Type.Ref("OrgTreeEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { summary: "获取办公场景", description: "返回本地专家工作状态和当前会话摘要。", response: { 200: jsonResponse(Type.Ref("OfficeSceneEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
@@ -1345,12 +1364,12 @@ export class AgentHttpServer {
     });
   }
 
-  private fastifyError(error: unknown): unknown {
-    const candidate = error as { code?: string; statusCode?: number; validation?: unknown };
+  private fastifyError(error: unknown): Error {
+    const candidate = error && typeof error === "object" ? error as { code?: string; statusCode?: number; validation?: unknown } : {};
     if (candidate.code === "FST_ERR_CTP_INVALID_JSON_BODY") return new HttpProblem(400, "invalid_json", "Request body must be a JSON object");
     if (candidate.code === "FST_ERR_CTP_BODY_TOO_LARGE" || candidate.statusCode === 413) return new HttpProblem(413, "request_too_large", "Request body is too large");
     if (candidate.code === "FST_ERR_VALIDATION") return new HttpProblem(422, "validation_error", "Request validation failed", candidate.validation);
-    return error;
+    return error instanceof Error ? error : new Error("Unexpected HTTP error");
   }
 
   private async resolveTenantByAccount(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1469,6 +1488,7 @@ export class AgentHttpServer {
   private async createCustomGroup(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     const body = await this.readJson(request);
     if (!Check({ GroupOrchestration, ConversationPermissionMode: PermissionMode }, CustomGroupCreateRequest, body)) throw new HttpProblem(422, "invalid_group_configuration", "Custom group fields do not match the documented schema");
+    // SAFETY: the preceding TypeBox Check validates all required fields and rejects extras.
     const input = body as unknown as { title: string; description?: string | null; member_employee_ids: string[]; coordinator_employee_id: string; orchestration: unknown };
     const orchestration = validateCustomGroup(input);
     const memberId = caller.userId ?? caller.callerId;
@@ -1725,8 +1745,8 @@ export class AgentHttpServer {
     }
     this.writeJson(response, 200, { data: templates, page: { next_cursor: null, has_more: false } });
   }
-  private listKnowledgeBases(response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools"); }
-  private listKnowledgeReadModel(response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge read endpoints were removed; use the Pi knowledge tools"); }
+  private listKnowledgeBases(_response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools"); }
+  private listKnowledgeReadModel(_response: ServerResponse): void { throw new HttpProblem(410, "gone", "Agent knowledge read endpoints were removed; use the Pi knowledge tools"); }
   private listSnapshots(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private listOutbox(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listUsageOutbox(caller.tenantId, caller.userId ?? caller.callerId), page: { next_cursor: null, has_more: false } }); }
   private approvals() { return (this.options.host as SessionHost).approvalService; }
@@ -1763,7 +1783,7 @@ export class AgentHttpServer {
       // empty list.  Do not let the process env or an offline keyring revive
       // packages after the snapshot/config revoked every signing key.
       const verification = skillSigningVerificationForSnapshot(
-        config as unknown as Record<string, unknown>, envVerification,
+        { ...config }, envVerification,
       );
       // Verify every envelope before changing projections or cache. Missing key means
       // package sync is disabled, not an invitation to accept unsigned content.
@@ -1830,7 +1850,7 @@ export class AgentHttpServer {
     let skills: Array<{ ref: string; status: "ready" | "blocked"; reason?: string; version?: string }>;
     try {
       const verification = snapshot
-        ? skillSigningVerificationForSnapshot(snapshot as unknown as Record<string, unknown>)
+        ? skillSigningVerificationForSnapshot({ ...snapshot })
         : skillSigningVerificationFromEnv();
       skills = malformedSnapshot
         ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }]
@@ -1914,7 +1934,7 @@ export class AgentHttpServer {
   private stringArray(value: unknown, name: string, maxItems: number): string[] { if (!Array.isArray(value) || value.length > maxItems || value.some((item) => typeof item !== "string" || item.length > 128)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an array of strings`); return value as string[]; }
   private objectField(value: unknown, name: string): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpProblem(422, `invalid_${name}`, `${name} must be an object`); return value as Record<string, unknown>; }
   private parseSchedule(value: unknown): Record<string, unknown> {
-    try { return validateSchedule(value) as unknown as Record<string, unknown>; }
+    try { return { ...validateSchedule(value) }; }
     catch (error) { throw new HttpProblem(422, "invalid_schedule", error instanceof Error ? error.message : "Unsupported schedule"); }
   }
 
@@ -2046,7 +2066,7 @@ export class AgentHttpServer {
       response.write(`id: ${envelope.id}\nevent: pi\ndata: ${JSON.stringify(event)}\n\n`);
     };
     const eventType = (envelope: PiEventEnvelope): string => {
-      const type = (envelope.event as unknown as { type?: unknown }).type;
+      const type = envelope.event.type;
       return typeof type === "string" ? type : "";
     };
     const isTransient = (envelope: PiEventEnvelope): boolean => ["message_update", "tool_execution_update"].includes(eventType(envelope));
