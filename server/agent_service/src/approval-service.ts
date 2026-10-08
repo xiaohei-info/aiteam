@@ -267,7 +267,7 @@ export class ApprovalService {
 }
 
 const SAFE_TOOLS = new Set([
-  "read", "grep", "find", "ls", "knowledge_search", "knowledge_get",
+  "read", "grep", "find", "ls", "knowledge_search", "knowledge_get", "local_knowledge_search", "local_knowledge_get",
   "hindsight_recall", "memory_recall", "todo_update", "mention_employee", "delegate_employee",
 ]);
 

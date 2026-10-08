@@ -1,4 +1,6 @@
 import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
+import { registerLocalKnowledgeRoutes } from "./local-knowledge.js";
+import { LocalKnowledgeService, LocalKnowledgeError } from "../services/local-knowledge.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
@@ -10,7 +12,7 @@ import { URL } from "node:url";
 import { createRequire } from "node:module";
 import { readFileSync, statSync } from "node:fs";
 import { extname, join, resolve, relative, isAbsolute } from "node:path";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
@@ -30,7 +32,7 @@ import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQue
 import { WorkRecordReadService } from "../services/work-records.js";
 import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
-import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
+import { type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -1347,6 +1349,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
     registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
+    registerLocalKnowledgeRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request, 3 * 1024 * 1024), send: (response, status, value) => this.writeJson(response, status, value) }, new LocalKnowledgeService(this.options.store));
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -2432,7 +2435,7 @@ export class AgentHttpServer {
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
     let problem: { status: number; code: string; detail: string; errors?: unknown };
-    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
+    if (error instanceof HttpProblem || error instanceof AutomationError || error instanceof LocalKnowledgeError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
