@@ -1366,6 +1366,8 @@ export class AgentHttpServer {
           if (authenticated) {
             try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
             if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+            const context = requestContext.getStore();
+            if (context) context.tenant_id = caller.tenantId;
             const memberId = caller.userId ?? caller.callerId;
             const previous = this.options.executionAuthorization?.get(caller.tenantId, memberId);
             if (previous && previous.caller.accessToken !== caller.accessToken) {

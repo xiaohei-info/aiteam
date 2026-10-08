@@ -1,5 +1,5 @@
 import { connectorTools } from "../connectors.js";
-import { appLogger } from "../observability.js";
+import { appLogger, makeRequestContext, requestContext } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
@@ -270,27 +270,31 @@ export class SessionHost {
   }
 
   async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[], deliveryOptions?: PromptDeliveryOptions): Promise<string | undefined> {
-    const metadata = this.options.store.getConversationMetadata(conversationId);
-    if (!metadata) throw new Error("Conversation does not exist");
-    const targetEmployeeIds = this.resolveTargetEmployeeIds(metadata, caller, mentions ?? []);
-    for (const record of this.records.values()) {
-      if (record.conversationId === conversationId) {
-        record.delegateCalls = 0;
-        record.delegatePromptChars = 0;
+    // Background prompts need one context for every participant and dependency call.
+    const context = { ...(requestContext.getStore() ?? makeRequestContext(undefined, undefined)), ...(caller?.tenantId ? { tenant_id: caller.tenantId } : {}) };
+    return requestContext.run(context, async () => {
+      const metadata = this.options.store.getConversationMetadata(conversationId);
+      if (!metadata) throw new Error("Conversation does not exist");
+      const targetEmployeeIds = this.resolveTargetEmployeeIds(metadata, caller, mentions ?? []);
+      for (const record of this.records.values()) {
+        if (record.conversationId === conversationId) {
+          record.delegateCalls = 0;
+          record.delegatePromptChars = 0;
+        }
       }
-    }
-    const sourceId = caller?.userId ?? caller?.callerId ?? "human";
-    const result = await this.delivery.deliver({
-      conversationId,
-      source: { type: "human", id: sourceId },
-      targetEmployeeIds,
-      text,
-      images,
-      logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-      idempotencyKey: deliveryOptions?.idempotencyKey,
-      caller,
+      const sourceId = caller?.userId ?? caller?.callerId ?? "human";
+      const result = await this.delivery.deliver({
+        conversationId,
+        source: { type: "human", id: sourceId },
+        targetEmployeeIds,
+        text,
+        images,
+        logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        idempotencyKey: deliveryOptions?.idempotencyKey,
+        caller,
+      });
+      return result.replies.at(-1)?.entryId;
     });
-    return result.replies.at(-1)?.entryId;
   }
 
   async abort(conversationId: string): Promise<boolean> {

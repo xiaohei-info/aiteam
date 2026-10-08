@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, lstatSync, mkdirSync, readdirSync, renameSyn
 import { join } from "node:path";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export interface RequestContext { request_id: string; trace_id: string; traceparent: string }
+export interface RequestContext { request_id: string; trace_id: string; traceparent: string; tenant_id?: string }
 export const requestContext = new AsyncLocalStorage<RequestContext>();
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function safeRequestId(value: unknown): string {
@@ -81,9 +81,9 @@ export class ApplicationLogger {
   constructor(private sink: (line: string) => void = () => {}, private level: LogLevel = "info") {}
   log(level: LogLevel, event: string, fields: Record<string, unknown> = {}): void {
     if (levels[level] < levels[this.level]) return;
-    const context = requestContext.getStore();
+    const { tenant_id, ...context } = requestContext.getStore() ?? {};
     const record = { schema_version: 1, timestamp: new Date().toISOString(), service: "agent", instance_id: this.instance_id, pid: process.pid, level,
-      event: /^[a-z][a-z0-9_.]{0,79}$/.test(event) ? event : "invalid_event", ...context, ...safeFields(fields) };
+      event: /^[a-z][a-z0-9_.]{0,79}$/.test(event) ? event : "invalid_event", ...context, ...safeFields({ ...fields, tenant_id: fields.tenant_id ?? tenant_id }) };
     try { this.sink(`${JSON.stringify(record)}\n`); } catch { /* Diagnostics must never break execution. */ }
   }
 }

@@ -10,7 +10,6 @@ export type HistoryEntry = SessionEntry & {
   work_id?: string;
   entry_ref: string;
   participant_employee_id?: string;
-  participant_employee_display_name?: string;
   source_employee_id?: string;
   source_employee_display_name?: string;
   source_type?: "human" | "employee";
@@ -87,10 +86,7 @@ export function mergeHistorySources(store: AgentSqliteStore, conversationId: str
         const workId = workIds.get(ordinal);
         if (workId) entry.work_id = workId;
       }
-      if (source.employeeId) {
-        entry.participant_employee_id = source.employeeId;
-        entry.participant_employee_display_name = experts.get(source.employeeId)?.display_name ?? source.employeeId;
-      }
+      if (source.employeeId) entry.participant_employee_id = source.employeeId;
       if (raw.type === "message" && raw.message?.role === "user") {
         const origin = source.employeeId ? store.getConversationEntrySource(conversationId, source.employeeId, raw.id) : undefined;
         entry.source_type = origin?.source_type ?? "human";
