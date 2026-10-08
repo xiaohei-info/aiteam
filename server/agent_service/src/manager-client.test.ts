@@ -15,8 +15,9 @@ test("HttpManagerClient keeps employee-scoped memory deletion for management ope
   await client.memoryDelete(caller, "employee-1", "memory-1", "delete-key");
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/manager\/memories\/memory-1\?employee_id=employee-1$/);
-  assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>).Authorization, "Bearer jwt");
-  assert.equal(requests[0].init.headers && (requests[0].init.headers as Record<string, string>)["Idempotency-Key"], "delete-key");
+  assert.equal(new Headers(requests[0].init.headers).get("Authorization"), "Bearer jwt");
+  assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "delete-key");
+  assert.match(new Headers(requests[0].init.headers).get("traceparent") ?? "", /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
   assert.equal(requests[0].init.method, "DELETE");
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
 });
@@ -41,7 +42,7 @@ test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async
   const templates = await client.listMarketplaceTemplates(caller);
   assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", description: null, platform_skill_refs: null, model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null });
   assert.equal(request?.url, "https://manager.test/api/manager/recruit/catalog/experts");
-  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
 });
 
 test("marketplace skill counts prefer modern fixed platform refs, including authoritative empty lists", async () => {
@@ -87,7 +88,7 @@ test("HttpManagerClient pulls only the employee-scoped runtime provider config",
   assert.equal("model_version" in config, false);
   assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1" }));
-  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
 });
 
 test("HttpManagerClient pulls member-scoped speech runtime config without employee input", async () => {
@@ -106,7 +107,7 @@ test("HttpManagerClient pulls member-scoped speech runtime config without employ
   assert.equal("model_version" in config, false);
   assert.equal(request?.url, "https://manager.test/api/manager/provider-credentials/speech/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({}));
-  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
 });
 
 test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank input", async () => {
@@ -126,7 +127,7 @@ test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank
   assert.equal(request?.url, "https://manager.test/api/manager/hindsight/runtime-config");
   assert.equal(request?.init.body, JSON.stringify({ employee_id: "employee-1", client_protocol: HINDSIGHT_CLIENT_PROTOCOL }));
   assert.equal(lease.explicit_auto_retain, false); // old response is not permission to auto-upload
-  assert.equal((request?.init.headers as Record<string, string>).Authorization, "Bearer jwt");
+  assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
   assert.doesNotMatch(String(request?.init.body), /opaque-lease-secret|bank_id/);
 });
 

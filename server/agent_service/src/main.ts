@@ -14,6 +14,7 @@ import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } fro
 import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
 import { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
+import { appLogger, configureAgentLogging, safeError } from "./observability.js";
 
 loadAgentConfig();
 scrubAgentEnvironment();
@@ -22,6 +23,8 @@ const configuredDataRoot = resolve(process.env.AITEAM_AGENT_DATA_DIR ?? join(pro
 mkdirSync(configuredDataRoot, { recursive: true, mode: 0o700 });
 chmodSync(configuredDataRoot, 0o700);
 const dataRoot = realpathSync(configuredDataRoot);
+configureAgentLogging(join(dataRoot, "logs"), process.env.LOG_LEVEL);
+appLogger.log("info", "process.starting");
 const port = parsePort(process.env.PORT ?? "8000");
 const hostAddress = process.env.HOST ?? "127.0.0.1";
 const environment = launchConfiguration.environment;
@@ -59,7 +62,7 @@ const sessionHost = new SessionHost({
   sandbox,
   // Faux responses are test artifacts, never billable usage.
   usageRecorder: useFauxModel ? undefined : (_capture, caller) => {
-    void usageFlush.flush(caller).catch((error) => console.error("usage flush deferred", error));
+    void usageFlush.flush(caller).catch((error) => appLogger.log("warn", "usage.flush_deferred", safeError(error)));
   },
   resourceLoaderFactory: (
     conversationId,
@@ -84,7 +87,6 @@ const authenticate = useDevAuth
 
 const schedule = new ScheduleService(store, sessionHost, { authorization: executionAuthorization });
 const http = new AgentHttpServer({
-  logger: console,
   host: sessionHost,
   allowedOrigins: parseAllowedOrigins(process.env.AITEAM_AGENT_ALLOWED_ORIGINS),
   store,
@@ -110,10 +112,11 @@ const boundPort = (() => {
 if (portFile) writePortFile(portFile, hostAddress, boundPort);
 schedule.start();
 usageFlush.start();
-console.log(`AI Team Node Agent listening on http://${hostAddress}:${boundPort}`);
+appLogger.log("info", "process.ready", { port: boundPort });
 console.log(`AI_TEAM_AGENT_READY ${JSON.stringify({ host: hostAddress, port: boundPort, pid: process.pid })}`);
 
 const shutdown = async () => {
+  appLogger.log("info", "process.stopping");
   await schedule.stop();
   await http.close().catch(() => undefined);
   await usageFlush.stop();
@@ -164,6 +167,7 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const persona = typeof snapshot.persona === "string" ? snapshot.persona : "You are an AI Team digital employee.";
   let skills: string[] = [];
   try {
+    // SAFETY: the snapshot is a validated object; the capability parser validates its unknown fields.
     skills = skillRefsForSnapshot(snapshot as unknown as Record<string, unknown>);
   } catch {
     // Do not advertise stale legacy skills when the canonical snapshot field is malformed.

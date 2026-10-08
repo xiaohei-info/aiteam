@@ -16,6 +16,10 @@ from collections import defaultdict
 import contextvars
 from dataclasses import dataclass
 import logging
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 import math
 import re
 import threading
@@ -412,6 +416,48 @@ class _ContextFormatter(logging.Formatter):
         return f"{timestamp} {record.levelname} {' '.join(fields)} {record.name} message={message}"
 
 
+class JsonLogFormatter(logging.Formatter):
+    """Machine-readable metadata only; no formatted arguments, exception text or locals."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        data: dict[str, Any] = {
+            "schema_version": 1,
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname.lower(),
+            "service": _safe_log_value(getattr(record, "service", None)),
+            "pid": os.getpid(),
+            "instance_id": _INSTANCE_ID,
+            "logger": _safe_log_value(record.name),
+            "request_id": _safe_log_value(getattr(record, "request_id", None)),
+            "trace_id": _safe_log_value(getattr(record, "trace_id", None)),
+            "tenant_id": _safe_log_value(getattr(record, "tenant_id", None)),
+            # Format templates are developer-owned; arguments may contain secrets or business text.
+            "event": record.msg if isinstance(record.msg, str) and re.fullmatch(r"[a-z][a-z0-9_.]{0,79}", record.msg) and not record.args else "application.event",
+            "source": {"module": _safe_log_value(record.module), "function": _safe_log_value(record.funcName), "line": record.lineno},
+        }
+        for field in _ContextFormatter._ALLOWED_FIELDS:
+            if hasattr(record, field):
+                value = getattr(record, field)
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    data[field] = value
+                elif field == "event" and value in ("request completed", "request failed"):
+                    data[field] = str(value).replace(" ", ".")
+                elif isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_./:{}*?-]{1,180}", value):
+                    data[field] = value
+        if record.exc_info:
+            data["error_type"] = record.exc_info[0].__name__ if record.exc_info[0] else "Exception"
+            frames = []
+            tb = record.exc_info[2]
+            while tb and len(frames) < 12:
+                frames.append({"file": Path(tb.tb_frame.f_code.co_filename).name, "function": tb.tb_frame.f_code.co_name, "line": tb.tb_lineno})
+                tb = tb.tb_next
+            data["frames"] = frames
+        return json.dumps(data, ensure_ascii=False, allow_nan=False)
+
+
+_INSTANCE_ID = uuid.uuid4().hex
+
+
 def configure_logging(service_name: str, level: str = "INFO") -> None:
     """Configure bounded structured diagnostics for one control-plane service.
 
@@ -427,8 +473,17 @@ def configure_logging(service_name: str, level: str = "INFO") -> None:
     logging.basicConfig(level=numeric_level)
     root = logging.getLogger()
     root.setLevel(numeric_level)
+    # Preserve the existing control-plane console format; optional files use JSONL.
     for handler in root.handlers:
         handler.setFormatter(_ContextFormatter())
+    # Uvicorn otherwise bypasses the shared formatter and prints raw request targets.
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        transport_logger = logging.getLogger(name)
+        transport_logger.handlers.clear()
+        transport_logger.propagate = True
+    logging.getLogger("uvicorn.access").disabled = True  # Our request middleware owns access logs.
+    from shared.log_files import install_file_handler
+    install_file_handler(os.getenv("AITEAM_LOG_DIR"), JsonLogFormatter())
 
 
 def _record_request_metrics(request: Request, response_status: int, duration_seconds: float) -> None:

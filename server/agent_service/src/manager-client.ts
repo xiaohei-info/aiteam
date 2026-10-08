@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { observedFetch } from "./observability.js";
 import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
@@ -98,8 +99,10 @@ export class ManagerAuthError extends Error {
 export class HttpManagerClient implements ManagerClient {
   readonly managerOrigin: string;
 
-  constructor(private readonly baseUrl: string, private readonly fetchImpl: typeof fetch = fetch) {
+  private readonly fetchImpl: typeof fetch;
+  constructor(private readonly baseUrl: string, fetchImpl: typeof fetch = fetch) {
     this.managerOrigin = new URL(baseUrl).origin;
+    this.fetchImpl = observedFetch(fetchImpl);
   }
 
   async resolveTenantByAccount(account: string, enterprise?: string | null): Promise<unknown> {
@@ -495,6 +498,7 @@ function normalizeRuntimePricing(value: unknown): RuntimeProviderConfig["pricing
     const item = raw[key];
     if (item !== null && (typeof item !== "string" || item.trim() === "" || !Number.isFinite(Number(item)) || Number(item) < 0)) throw new ManagerUnavailableError("Manager returned invalid runtime pricing rate");
   }
+  // SAFETY: the whitelist, required fields and each nullable price above validate the pricing contract.
   return raw as unknown as RuntimeProviderConfig["pricing"];
 }
 
@@ -539,6 +543,7 @@ export function normalizeRuntimeProviderConfig(value: unknown): RuntimeProviderC
   const normalized = { ...raw };
   delete normalized.provider_version;
   delete normalized.model_version;
+  // SAFETY: all required provider fields and optional policy fields have been validated above.
   return { ...normalized, base_url: relayUrl.toString().replace(/\/$/u, ""), pricing: normalizeRuntimePricing(raw.pricing), ...(capabilities ? { model_capabilities: capabilities } : {}) } as unknown as RuntimeProviderConfig;
 }
 
@@ -567,6 +572,7 @@ function normalizeRuntimeModelCapabilities(value: unknown): RuntimeProviderConfi
     const map = raw.thinking_level_map as Record<string, unknown>;
     const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     if (Object.keys(map).some((key) => !levels.has(key) || (map[key] !== null && typeof map[key] !== "string"))) throw new ManagerUnavailableError("Manager returned invalid model capabilities");
+    // SAFETY: keys are approved thinking levels and values are strings or null, checked above.
     output.thinking_level_map = map as unknown as NonNullable<typeof output.thinking_level_map>;
   }
   return output;
