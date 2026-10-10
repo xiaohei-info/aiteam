@@ -1,4 +1,6 @@
 import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
+import { registerLocalKnowledgeRoutes, LOCAL_KNOWLEDGE_OPERATION_DOCS, LOCAL_KNOWLEDGE_PARAMETER_EXAMPLES } from "./local-knowledge.js";
+import { LocalKnowledgeService, LocalKnowledgeError } from "../services/local-knowledge.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
@@ -10,7 +12,7 @@ import { URL } from "node:url";
 import { createRequire } from "node:module";
 import { readFileSync, statSync } from "node:fs";
 import { extname, join, resolve, relative, isAbsolute } from "node:path";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
@@ -30,7 +32,7 @@ import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQue
 import { WorkRecordReadService } from "../services/work-records.js";
 import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
-import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
+import { type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -711,6 +713,7 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
+  ...LOCAL_KNOWLEDGE_PARAMETER_EXAMPLES,
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
@@ -718,6 +721,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...AUTOMATION_OPERATION_DOCS,
+  ...LOCAL_KNOWLEDGE_OPERATION_DOCS,
   ...CONVERSATION_READ_DOCS,
   ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
@@ -813,6 +817,7 @@ const OPENAPI_COMPONENT_RESPONSES = {
   NotFound: { description: "会话、文件或目录资源不存在。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { notFound: problemExample("资源不存在", 404, "not_found", "Conversation or file not found") } } } },
   Conflict: { description: "请求与当前会话、幂等收据或游标状态冲突。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { conflict: problemExample("状态冲突", 409, "conflict", "Request conflicts with current state") } } } },
   TooLarge: { description: "请求体、文件或图片超过大小限制。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { tooLarge: problemExample("内容过大", 413, "request_too_large", "File or request exceeds a limit") } } } },
+  UnsupportedMediaType: { description: "请求内容类型或文件格式不受支持。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unsupported: problemExample("格式不支持", 415, "unsupported_media_type", "File type or media type is not supported") } } } },
   ValidationError: { description: "请求参数或请求体校验失败。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { validation: problemExample("参数校验失败", 422, "validation_error", "Request validation failed") } } } },
   ManagerUnavailable: { description: "Manager 或其受控能力当前不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
   BadGateway: { description: "受控上游语音服务返回失败或不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { upstream: problemExample("上游不可用", 502, "speech_upstream_unavailable", "Speech transcription service is unavailable") } } } },
@@ -1016,7 +1021,7 @@ export class AgentHttpServer {
       refResolver: { buildLocalReference: (json: any, _baseUri: any, _fragment: string, index: number) => json.$id ?? `def-${index}` },
       transformObject: (documentObject: any) => {
         const openapiObject = documentObject.openapiObject ?? documentObject.swaggerObject;
-        const responseNames = new Set(["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone", "TooManyRequests"]);
+        const responseNames = new Set(["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "UnsupportedMediaType", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone", "TooManyRequests"]);
         const parameterDescriptions: Record<string, string> = {
           conversation_id: "本地会话 ID。", attachment_id: "本地附件 ID。", artifact_id: "授权附件 ID。", employee_id: "授权员工/专家 ID。", template_id: "专家模板 ID。",
           knowledge_base_id: "旧知识库 ID。", resource_id: "旧资源 ID。", kind: "旧资源类型。", after: "从指定事件之后继续读取；优先于 Last-Event-ID。", cursor: "从上一条会话之后继续读取。", limit: "返回条数上限；缺省为 50，最大 100。", "Idempotency-Key": "写操作幂等键；相同键只能对应同一请求体。", "Last-Event-ID": "SSE 断线重连游标；未提供 after 时使用。",
@@ -1145,7 +1150,7 @@ export class AgentHttpServer {
 
   private registerRoutes(): void {
     const jsonResponse = (schema: unknown, description = "Successful response") => ({ description, content: { "application/json": { schema } } });
-    const problemResponse = (name: "BadRequest" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "TooLarge" | "ValidationError" | "ManagerUnavailable" | "BadGateway" | "InternalError" | "Gone" | "TooManyRequests") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
+    const problemResponse = (name: "BadRequest" | "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "TooLarge" | "UnsupportedMediaType" | "ValidationError" | "ManagerUnavailable" | "BadGateway" | "InternalError" | "Gone" | "TooManyRequests") => ({ description: name, content: { "application/problem+json": { schema: Type.Ref("Problem") } } });
     this.registerRoute("GET", "/healthz", (_request, response) => this.writeJson(response, 200, { data: { status: "ok" } }), routeSchema("healthz", { summary: "Agent 存活检查", description: "检查 Agent 进程是否存活。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ status: Type.String({ description: "服务状态。" }) }, { additionalProperties: false }) }, { additionalProperties: false })) } }), false);
     this.registerRoute("GET", "/metrics", (_request, response) => this.writeMetrics(response), routeSchema("metrics", { summary: "导出 Agent 指标", description: "返回 Prometheus 文本格式的本地 Agent 指标。", response: { 200: { description: "Prometheus metrics", content: { "text/plain": { schema: Type.String({ description: "Prometheus 指标文本。" }) } } } } }), false);
     this.registerRoute("GET", "/readyz", async (_request, response) => {
@@ -1347,6 +1352,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
     registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
+    registerLocalKnowledgeRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request, 3 * 1024 * 1024), send: (response, status, value) => this.writeJson(response, status, value) }, new LocalKnowledgeService(this.options.store));
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -2432,7 +2438,7 @@ export class AgentHttpServer {
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
     let problem: { status: number; code: string; detail: string; errors?: unknown };
-    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
+    if (error instanceof HttpProblem || error instanceof AutomationError || error instanceof LocalKnowledgeError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
