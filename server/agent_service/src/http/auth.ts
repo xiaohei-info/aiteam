@@ -42,7 +42,10 @@ export function parsePublicJwks(raw: string, context = "JWT JWKS"): { keys: JwtJ
     if (key.kty !== "RSA" || key.alg !== "RS256" || (key.use !== undefined && key.use !== "sig") || typeof key.n !== "string" || !key.n || typeof key.e !== "string" || !key.e) throw new Error(`${context} must contain only RSA RS256 public keys`);
     if (typeof key.kid !== "string" || !key.kid.trim() || seen.has(key.kid)) throw new Error(`${context} must not contain duplicate or empty kid values`);
     const result = { kty: "RSA" as const, alg: "RS256" as const, kid: key.kid, n: key.n, e: key.e, ...(key.use === undefined ? {} : { use: "sig" as const }) };
-    try { createPublicKey({ key: result as unknown as JsonWebKey, format: "jwk" }); } catch { throw new Error(`${context} contains an invalid RSA public key`); }
+    try {
+      // SAFETY: validated public RS256 fields above; Node validates key material.
+      createPublicKey({ key: result as unknown as JsonWebKey, format: "jwk" });
+    } catch { throw new Error(`${context} contains an invalid RSA public key`); }
     seen.add(key.kid);
     return result;
   });
@@ -58,6 +61,9 @@ export interface AuthenticatedCaller {
   roles?: string[];
   claims?: JwtClaims;
 }
+
+const verifiedCallers = new WeakSet<AuthenticatedCaller>();
+export function isVerifiedCaller(caller: AuthenticatedCaller): boolean { return verifiedCallers.has(caller); }
 
 export interface JwtAuthenticatorOptions {
   jwks: { keys: JwtJwk[] };
@@ -95,6 +101,7 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
   if (!jwk) throw new Error("Unknown JWT key");
   const signed = `${parts[0]}.${parts[1]}`;
   const signature = decodeBase64UrlBytes(parts[2]);
+  // SAFETY: keys originate from parsePublicJwks, which rejects private and malformed keys.
   const valid = verify("RSA-SHA256", Buffer.from(signed), createPublicKey({ key: jwk as unknown as JsonWebKey, format: "jwk" }), signature);
   if (!valid) throw new Error("Invalid JWT signature");
 
@@ -116,6 +123,7 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
     claims,
   };
   Object.defineProperty(caller, "accessToken", { value: token, enumerable: false });
+  verifiedCallers.add(caller);
   return caller;
 }
 

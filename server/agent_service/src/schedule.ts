@@ -164,7 +164,7 @@ export class ScheduleService {
     }
     const heartbeat = setInterval(() => this.store.renewLease(conversation.id, caller.callerId, key, receipt.ownerInstance), 10_000);
     heartbeat.unref();
-    void this.host.prompt(conversation.id, schedule.prompt_template, undefined, caller, undefined, { logicalMessageId: key, idempotencyKey: key }).then(
+    void this.host.prompt(conversation.id, schedule.prompt_template, undefined, caller, undefined, { logicalMessageId: key, idempotencyKey: key, background: true }).then(
       (lastEntryId) => lastEntryId
         ? this.store.markCompleted(conversation.id, caller.callerId, key, lastEntryId, receipt.ownerInstance)
         : this.store.markUnknown(conversation.id, caller.callerId, key, receipt.ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" }),

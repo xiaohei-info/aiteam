@@ -42,12 +42,15 @@ export class AutomationTaskRepository {
     catch (error) { this.db.exec("ROLLBACK TO automation_write; RELEASE automation_write"); throw error; }
   }
   get(id: string, owner: TaskOwner): AutomationTaskRow | undefined {
+    // SAFETY: better-sqlite3 rows are untyped; columns are fixed by the SELECT projection on automation_task.
     return this.db.prepare("SELECT * FROM automation_task WHERE id = ? AND tenant_id = ? AND member_id = ?").get(id, owner.tenantId, owner.memberId) as unknown as AutomationTaskRow | undefined;
   }
   forConversation(id: string): AutomationTaskRow | undefined {
+    // SAFETY: better-sqlite3 rows are untyped; columns are fixed by the SELECT projection on automation_task.
     return this.db.prepare("SELECT t.* FROM automation_task t JOIN automation_binding b ON b.task_id = t.id WHERE b.conversation_id = ?").get(id) as unknown as AutomationTaskRow | undefined;
   }
   list(owner: TaskOwner): AutomationTaskRow[] {
+    // SAFETY: better-sqlite3 rows are untyped; columns are fixed by the SELECT projection on automation_task.
     return this.db.prepare("SELECT * FROM automation_task WHERE tenant_id = ? AND member_id = ?").all(owner.tenantId, owner.memberId) as unknown as AutomationTaskRow[];
   }
   insert(row: AutomationTaskRow): void {

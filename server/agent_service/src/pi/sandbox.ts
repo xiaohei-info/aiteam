@@ -30,7 +30,7 @@ export class LocalSandbox {
     try {
       const confined = this.provider.confine(["true"], this.policy(workspaceRoot, undefined, mode));
       if (confined.enforcement !== "full") return false;
-      const argv = networkIsolatedArgv(confined.argv);
+      const argv = networkIsolatedArgv(confined.argv, resolve(workspaceRoot));
       return (await run(argv, resolve(workspaceRoot), { onData: () => undefined })).exitCode === 0;
     } catch (error) {
       if (error instanceof SandboxUnavailableError) return false;
@@ -55,7 +55,7 @@ export class LocalSandbox {
           const actualCwd = assertWorkspacePath(cwd, root);
           const confined = this.provider.confine(["bash", "-c", command], policy);
           if (confined.enforcement !== "full") throw new SandboxUnavailableError(policy.mode, "Sandbox backend provides only partial enforcement");
-          return run(networkIsolatedArgv(confined.argv), actualCwd, options);
+          return run(networkIsolatedArgv(confined.argv, root), actualCwd, options);
         },
       },
       read: {
@@ -96,7 +96,7 @@ export class LocalSandbox {
  * network isolation at this final spawn seam so a successful filesystem probe
  * cannot be reported ready while the child still has ambient network access.
  */
-export function networkIsolatedArgv(argv: string[]): string[] {
+export function networkIsolatedArgv(argv: string[], workspaceRoot?: string): string[] {
   const separator = argv.indexOf("--");
   if (separator < 1) throw new SandboxUnavailableError("workspace-write", "Sandbox runner did not return a command separator");
 
@@ -111,11 +111,19 @@ export function networkIsolatedArgv(argv: string[]): string[] {
     const profile = profileIndex >= 0 ? argv[profileIndex + 1] : undefined;
     if (!profile) throw new SandboxUnavailableError("workspace-write", "Seatbelt profile is missing");
     const hardened = [...argv];
-    hardened[profileIndex + 1] = `${profile} (deny network*)`;
+    hardened[profileIndex + 1] = `${profile} (deny network*)${workspaceRoot ? macosReadBoundary(workspaceRoot) : ""}`;
     return hardened;
   }
 
   throw new SandboxUnavailableError("workspace-write", "Sandbox runner has no network isolation");
+}
+
+/** Seatbelt filesystem providers constrain writes only. Restrict data reads too. */
+export function macosReadBoundary(workspaceRoot: string): string {
+  const quote = (value: string) => JSON.stringify(value);
+  const roots = ["/System/Library", "/System/Volumes/Preboot", "/usr", "/bin", "/sbin", "/Library/Apple", "/opt", dirname(realpathSync(process.execPath)), canonicalPath(resolve(workspaceRoot))];
+  // dyld needs the root directory itself; this literal does not grant its children.
+  return ` (deny file-read-data) (allow file-read-data (literal "/") ${roots.map((path) => `(subpath ${quote(path)})`).join(" ")} (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/localtime"))`;
 }
 
 /** Resolve a tool path through its nearest existing parent, rejecting symlink escapes. */
