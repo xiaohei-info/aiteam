@@ -126,7 +126,7 @@ export function macosReadBoundary(workspaceRoot: string): string {
   // developer directory is active (CommandLineTools or Xcode.app). Xcode's
   // xcrun/xcodebuild helpers load DVT* frameworks from SharedFrameworks. The
   // read-only scopes below stay far away from user data and the rest of /Library.
-  const roots = ["/System/Library", "/System/Volumes/Preboot", "/usr", "/bin", "/sbin", "/Library/Apple", "/opt", "/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode.app/Contents/SharedFrameworks", "/Applications/Xcode.app/Contents/Frameworks", dirname(realpathSync(process.execPath)), canonicalPath(resolve(workspaceRoot))];
+  const roots = ["/System/Library", "/System/Volumes/Preboot", "/usr", "/bin", "/sbin", "/Library/Apple", "/Library/Frameworks/Python.framework", "/opt", "/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode.app/Contents/SharedFrameworks", "/Applications/Xcode.app/Contents/Frameworks", dirname(realpathSync(process.execPath)), canonicalPath(resolve(workspaceRoot))];
   // dyld needs the root directory itself; this literal does not grant its children.
   return ` (deny file-read-data) (allow file-read-data (literal "/") ${roots.map((path) => `(subpath ${quote(path)})`).join(" ")} (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/localtime"))`;
 }
