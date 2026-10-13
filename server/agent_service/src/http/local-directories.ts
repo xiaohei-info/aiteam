@@ -37,12 +37,14 @@ const RegisteredDirectoryResource = obj({
   directory_id: str("本地知识目录稳定 ID"),
   display_name: str("目录显示名称"),
   canonical_path: str("桌面宿主规范路径"),
-  device: Type.Integer({ description: "文件系统设备号" }),
-  inode: Type.Integer({ description: "目录 inode 标识" }),
   revision: Type.Integer({ minimum: 1, description: "目录版本号" }),
+  created_at: str("目录注册时间"),
 }, "已注册的本地知识目录记录");
 
 const BindingUpdateResource = obj({
+  employee_id: str("数字员工 ID"),
+  directory_id: str("本地知识目录 ID"),
+  enabled: Type.Boolean({ description: "更新后的绑定状态" }),
   revision: Type.Integer({ minimum: 1, description: "更新后的员工绑定版本号" }),
 }, "员工绑定更新结果");
 
@@ -80,7 +82,7 @@ const CitationParams = obj({ citation_id: str("引用句柄 ID", { minLength: 1 
 
 type Handler = (request: IncomingMessage, response: ServerResponse, caller?: AuthenticatedCaller, fastifyRequest?: FastifyRequest) => void | Promise<void>;
 
-interface Router {
+export interface Router {
   register(method: string, path: string, handler: Handler, schema: Record<string, unknown>): void;
   read(request: IncomingMessage): Promise<Record<string, unknown>>;
   send(response: ServerResponse, status: number, value: unknown): void;
@@ -94,8 +96,9 @@ export function mapLocalDirectoryError(error: LocalDirectoryError): { status: nu
       return { status: 404, code: "local_directory_not_found", detail: "Local directory resource was not found" };
     case "citation_expired":
       return { status: 404, code: "local_directory_citation_expired", detail: "Citation handle is expired or unknown" };
+    case "revision_conflict":
     case "conflict":
-      return { status: 409, code: "local_directory_conflict", detail: "Local directory binding revision conflict" };
+      return { status: 409, code: "local_directory_revision_conflict", detail: "Local directory binding revision conflict; reload the current revision and retry" };
     case "source_changed":
       return { status: 409, code: "local_directory_source_changed", detail: "Source file changed since citation was created" };
     case "authorization_unavailable":
@@ -129,7 +132,20 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
     prefix,
     async (_req, res, caller) => {
       const result = await service.list(caller!);
-      router.send(res, 200, { data: result });
+      router.send(res, 200, {
+        data: {
+          available: result.available,
+          formats: result.formats,
+          directories: result.directories.map((directory) => ({
+            directory_id: directory.directory_id,
+            display_name: directory.display_name,
+            path: directory.path,
+            revision: directory.revision,
+            status: directory.status,
+            bindings: directory.bindings.map((binding) => ({ employee_id: binding.employee_id, enabled: binding.enabled, revision: binding.revision })),
+          })),
+        },
+      });
     },
     schema("listLocalDirectories", "列出当前成员授权的本地知识目录与绑定状态", envelope(LocalDirectoryListPayload)),
   );
@@ -155,7 +171,15 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
       const ticket = typeof body.ticket === "string" ? body.ticket.trim() : typeof body.ticket_id === "string" ? body.ticket_id.trim() : "";
       if (!ticket) throw new LocalDirectoryError("invalid_request");
       const created = await service.register(caller!, ticket);
-      router.send(res, 201, { data: created });
+      router.send(res, 201, {
+        data: {
+          directory_id: created.directory_id,
+          display_name: created.display_name,
+          canonical_path: created.canonical_path,
+          revision: created.revision,
+          created_at: created.created_at,
+        },
+      });
     },
     schema("registerLocalDirectory", "凭原生宿主一次性授权票据注册本地知识目录", envelope(RegisteredDirectoryResource), {
       body: obj({
@@ -175,7 +199,7 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
       const expectedRevision = body.expected_revision === undefined ? 0 : Number(body.expected_revision);
       if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new LocalDirectoryError("invalid_request");
       const updated = await service.bind(caller!, params.directory_id, params.employee_id, body.enabled, expectedRevision);
-      router.send(res, 200, { data: updated });
+      router.send(res, 200, { data: { employee_id: updated.employee_id, directory_id: updated.directory_id, enabled: updated.enabled, revision: updated.revision } });
     },
     schema("setLocalDirectoryBinding", "绑定或解绑数字员工的本地知识目录权限", envelope(BindingUpdateResource), {
       params: BindingParams,
@@ -248,6 +272,21 @@ const exampleCitation = {
   next_offset: null,
 };
 
+const exampleRegistered = {
+  directory_id: exampleDirectory.directory_id,
+  display_name: exampleDirectory.display_name,
+  canonical_path: exampleDirectory.path,
+  revision: 1,
+  created_at: "2026-09-22T00:00:00.000Z",
+};
+
+const exampleBinding = {
+  employee_id: "employee-1",
+  directory_id: exampleDirectory.directory_id,
+  enabled: true,
+  revision: 1,
+};
+
 export const LOCAL_DIRECTORY_PARAMETER_EXAMPLES = {
   directory_id: exampleDirectory.directory_id,
   citation_id: exampleCitation.citation_id,
@@ -285,21 +324,7 @@ export const LOCAL_DIRECTORY_OPERATION_DOCS = {
     responses: {
       "201": {
         description: "已注册的本地知识目录记录。",
-        examples: {
-          registered: {
-            summary: "注册成功",
-            value: {
-              data: {
-                directory_id: exampleDirectory.directory_id,
-                display_name: exampleDirectory.display_name,
-                canonical_path: exampleDirectory.path,
-                device: 1,
-                inode: 100,
-                revision: 1,
-              },
-            },
-          },
-        },
+        examples: { registered: { summary: "注册成功", value: { data: exampleRegistered } } },
       },
     },
   },
@@ -312,8 +337,8 @@ export const LOCAL_DIRECTORY_OPERATION_DOCS = {
     },
     responses: {
       "200": {
-        description: "更新后的员工绑定版本号。",
-        examples: { updated: { summary: "绑定已更新", value: { data: { revision: 1 } } } },
+        description: "更新后的员工绑定状态。",
+        examples: { updated: { summary: "绑定已更新", value: { data: exampleBinding } } },
       },
     },
   },

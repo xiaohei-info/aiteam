@@ -65,47 +65,59 @@ class FakeDirectoryHost implements DirectoryHost {
   }
 }
 
-test("localDirectoryTools enforces strict policy mapping and rejects empty or malformed policies", () => {
+test("localDirectoryTools derives permissions from the real snapshot contract", () => {
   const base: FrozenSnapshot = {
     employee_id: "emp-1",
     version: "v1",
     snapshot_version: "snap-1",
     display_name: "专家一",
   };
-  assert.deepEqual(localDirectoryTools(base), []);
-  assert.deepEqual(localDirectoryTools({ ...base, tool_policy: { allowed_tools: [] } }), []);
-  assert.deepEqual(localDirectoryTools({ ...base, tool_policy: { allowed_tools: ["bash", 123] } }), []);
+  // Real Manager normalization (normalizeKnowledgePolicy) keeps only
+  // state/allowed_operations/revision; tool_policy mirrors the employee tools.
+  const realAllow: FrozenSnapshot = {
+    ...base,
+    tool_policy: {
+      allowed_tools: ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"],
+    },
+    knowledge_policy: { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "7" },
+  };
+  assert.deepEqual(localDirectoryTools(realAllow), ["local_dir_search", "local_dir_read"], "a normal allow snapshot must grant the local tools");
+
+  // Inherit with operations listed (employee has knowledge tools but no bindings yet).
   assert.deepEqual(
-    localDirectoryTools({ ...base, tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] } }),
-    ["local_dir_search", "local_dir_read"],
-  );
-  assert.deepEqual(
-    localDirectoryTools({ ...base, tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get"] } }),
-    ["local_dir_search", "local_dir_read"],
-  );
-  assert.deepEqual(
-    localDirectoryTools({
-      ...base,
-      tool_policy: { allowed_tools: ["knowledge_search", "knowledge_get"], denied_tools: ["local_dir_read"] },
-    }),
+    localDirectoryTools({ ...realAllow, knowledge_policy: { state: "inherit", allowed_operations: ["knowledge_search"], revision: "7" } }),
     ["local_dir_search"],
   );
+  // Empty operations is an explicit denial and never falls back to defaults.
   assert.deepEqual(
-    localDirectoryTools({
-      ...base,
-      knowledge_policy: { enabled: false },
-      tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] },
-    }),
+    localDirectoryTools({ ...realAllow, knowledge_policy: { state: "inherit", allowed_operations: [], revision: "7" } }),
     [],
   );
+  // Deny grants nothing even if the tool allowlist still lists the aliases.
   assert.deepEqual(
-    localDirectoryTools({
-      ...base,
-      knowledge_policy: { enabled: true, local_directory: false },
-      tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] },
-    }),
+    localDirectoryTools({ ...realAllow, knowledge_policy: { state: "deny", allowed_operations: [], revision: "7" } }),
     [],
   );
+  // Malformed knowledge_policy shape never grants.
+  assert.deepEqual(localDirectoryTools({ ...realAllow, knowledge_policy: { enabled: true } as never }), []);
+  // The tool allowlist narrows further: without the aliases (or local names) nothing is granted.
+  assert.deepEqual(
+    localDirectoryTools({ ...realAllow, tool_policy: { allowed_tools: ["bash", "read"] } }),
+    [],
+  );
+  // Explicit local tool names in the allowlist also grant.
+  assert.deepEqual(
+    localDirectoryTools({ ...realAllow, tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] } }),
+    ["local_dir_search", "local_dir_read"],
+  );
+
+  // Filesystem authority requires an explicit knowledge_policy grant: legacy
+  // snapshots without one never qualify, regardless of the allowlist.
+  assert.deepEqual(localDirectoryTools(base), []);
+  assert.deepEqual(localDirectoryTools({ ...base, tool_policy: { allowed_tools: [] } }), []);
+  assert.deepEqual(localDirectoryTools({ ...base, tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] } }), []);
+  // Malformed allowlists never acquire new filesystem authority.
+  assert.deepEqual(localDirectoryTools({ ...realAllow, tool_policy: { allowed_tools: ["bash", 123] } }), []);
 });
 
 test("LocalDirectoryService enforces member/employee/turn isolation, Chinese keyword ranking, code-point offsets, and mid-flight revocation", async () => {
@@ -168,7 +180,8 @@ test("LocalDirectoryService enforces member/employee/turn isolation, Chinese key
           version: "v1",
           snapshot_version: "snap-1",
           display_name: "产品顾问",
-          tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] },
+          tool_policy: { allowed_tools: ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"] },
+          knowledge_policy: { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "5" },
         },
         {
           employee_id: "emp-2",
@@ -177,7 +190,8 @@ test("LocalDirectoryService enforces member/employee/turn isolation, Chinese key
           version: "v1",
           snapshot_version: "snap-2",
           display_name: "助理顾问",
-          tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] },
+          tool_policy: { allowed_tools: ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"] },
+          knowledge_policy: { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "5" },
         },
       ],
       [],
@@ -251,3 +265,145 @@ test("LocalDirectoryService enforces member/employee/turn isolation, Chinese key
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("verifyCitation re-checks current authorization and is tracked by revocation (P1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aifred-local-dir-verify-"));
+  const store = new AgentSqliteStore(join(dir, "agent.sqlite"));
+  try {
+    const identities = new ExecutionAuthorizationRegistry();
+    const host = new FakeDirectoryHost();
+    host.directories.set("", [{ name: "笔记.md", directory: false }]);
+    host.files.set("笔记.md", { text: "唯一验证代号【玄武-931】。", version: "ver-1" });
+
+    const caller = makeCaller();
+    const identity = identities.register(caller)!;
+    seedEmployee(store, "emp-1", "snap-1", "both");
+    store.createConversation({ id: "conv-v", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
+    const service = new LocalDirectoryService(store, host, identities, () => true);
+    const registered = await service.register(caller, await service.challenge(caller));
+    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    const exec: DirectoryExecution = {
+      caller, employeeId: "emp-1", conversationId: "conv-v", sessionId: "sess-v", turnId: "turn-v",
+      snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",
+    };
+    const found = await service.search(exec, "玄武");
+    const citationId = found.items[0]!.citation_id;
+    assert.ok(await service.verifyCitation(caller, citationId));
+
+    // Unbind mid-session: invalidate() drops the handle for the tool AND the UI probe.
+    await service.bind(caller, registered.directory_id, "emp-1", false, 1);
+    await assert.rejects(() => service.verifyCitation(caller, citationId), /citation_expired|unauthorized/);
+    await assert.rejects(() => service.read(exec, citationId), /citation_expired|unauthorized/);
+    await service.bind(caller, registered.directory_id, "emp-1", true, 2);
+
+    // Employee policy no longer lists the operation: both paths must fail even
+    // though the handle itself is still live (fresh re-registration path).
+    const reFound = await service.search(exec, "玄武");
+    const liveHandle = reFound.items[0]!.citation_id;
+    seedEmployee(store, "emp-1", "snap-1", "none");
+    await assert.rejects(() => service.verifyCitation(caller, liveHandle), /unauthorized/);
+    await assert.rejects(() => service.read(exec, liveHandle), /unauthorized/);
+    seedEmployee(store, "emp-1", "snap-1", "both");
+
+    // Logout invalidates citations; a stale handle is unknown even to the UI.
+    identities.invalidate("tenant-1", "member-1");
+    service.invalidate({ tenantId: "tenant-1", memberId: "member-1" });
+    await assert.rejects(() => service.verifyCitation(caller, liveHandle), /citation_expired/);
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("search registers citations only for returned items so >512 hits stay readable (P2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aifred-local-dir-flood-"));
+  const store = new AgentSqliteStore(join(dir, "agent.sqlite"));
+  try {
+    const identities = new ExecutionAuthorizationRegistry();
+    const host = new FakeDirectoryHost();
+    const entries = Array.from({ length: 600 }, (_, index) => ({ name: `doc-${index}.txt`, directory: false }));
+    host.directories.set("", entries);
+    for (let index = 0; index < 600; index++) host.files.set(`doc-${index}.txt`, { text: `文档 ${index}：共同关键词骤雨`, version: "ver-1" });
+
+    const caller = makeCaller();
+    const identity = identities.register(caller)!;
+    seedEmployee(store, "emp-1", "snap-1", "both");
+    store.createConversation({ id: "conv-f", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
+    const service = new LocalDirectoryService(store, host, identities, () => true);
+    const registered = await service.register(caller, await service.challenge(caller));
+    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    const exec: DirectoryExecution = {
+      caller, employeeId: "emp-1", conversationId: "conv-f", sessionId: "sess-f", turnId: "turn-f",
+      snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",
+    };
+
+    const result = await service.search(exec, "骤雨", 15);
+    assert.equal(result.items.length, 15);
+    // Every returned handle must be immediately dereferenceable in the same turn.
+    for (const item of result.items) {
+      const slice = await service.read(exec, item.citation_id);
+      assert.ok(slice.text.includes("骤雨"));
+    }
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("search snippets anchor at the real original-text hit even under NFKC length changes (P2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aifred-local-dir-nfkc-"));
+  const store = new AgentSqliteStore(join(dir, "agent.sqlite"));
+  try {
+    const identities = new ExecutionAuthorizationRegistry();
+    const host = new FakeDirectoryHost();
+    host.directories.set("", [{ name: "全角.txt", directory: false }]);
+    host.files.set("全角.txt", { text: `${"普".repeat(900)}ＡＢＣ 全角命中标记`, version: "ver-1" });
+
+    const caller = makeCaller();
+    const identity = identities.register(caller)!;
+    seedEmployee(store, "emp-1", "snap-1", "both");
+    store.createConversation({ id: "conv-n", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
+    const service = new LocalDirectoryService(store, host, identities, () => true);
+    const registered = await service.register(caller, await service.challenge(caller));
+    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    const exec: DirectoryExecution = {
+      caller, employeeId: "emp-1", conversationId: "conv-n", sessionId: "sess-n", turnId: "turn-n",
+      snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",
+    };
+
+    const result = await service.search(exec, "abc");
+    assert.equal(result.items.length, 1);
+    const item = result.items[0]!;
+    assert.ok(item.offset > 0, "the snippet must anchor at the fullwidth hit, not at offset 0");
+    assert.ok(item.snippet.includes("ＡＢＣ"), `snippet must contain the original fullwidth hit: ...${item.snippet.slice(-40)}`);
+    const slice = await service.read(exec, item.citation_id, item.offset);
+    assert.ok(slice.text.includes("ＡＢＣ"));
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function seedEmployee(store: AgentSqliteStore, employeeId: string, snapshotVersion: string, operations: "both" | "search-only" | "none"): void {
+  const knowledgePolicy = operations === "none"
+    ? { state: "inherit", allowed_operations: [], revision: "3" }
+    : operations === "search-only"
+      ? { state: "allow", allowed_operations: ["knowledge_search"], revision: "3" }
+      : { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "3" };
+  store.replaceProjections(
+    [{ employee_id: employeeId, tenant_id: "tenant-1", member_id: "member-1", version: "v1", handle: employeeId, display_name: "员工", revoked: false, synced_at: "2026-10-12T00:00:00.000Z" }],
+    [],
+    [{
+      employee_id: employeeId,
+      tenant_id: "tenant-1",
+      member_id: "member-1",
+      version: "v1",
+      snapshot_version: snapshotVersion,
+      display_name: "员工",
+      tool_policy: { allowed_tools: ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"] },
+      knowledge_policy: knowledgePolicy,
+    }],
+    [],
+    { tenantId: "tenant-1", memberId: "member-1" },
+  );
+}

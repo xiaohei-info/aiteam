@@ -14,23 +14,31 @@ const MAX_SEARCH_OUTPUT_BYTES = 32 * 1024;
 const fail = (code: string): never => { throw new LocalDirectoryError(code); };
 const object = (value: unknown): Record<string, unknown> | undefined => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
-/** Explicitly named tools, or the legacy knowledge aliases, authorize this capability.
- * Missing/empty/malformed policies never acquire new filesystem authority. */
+const KNOWLEDGE_ALIAS: Record<LocalDirectoryTool, string> = { local_dir_search: "knowledge_search", local_dir_read: "knowledge_get" };
+
+/** Derive the effective local-directory tool set from the real snapshot contract.
+ *
+ * Local-directory access is filesystem authority, so it requires an explicit
+ * knowledge_policy grant: snapshots without one never qualify (the platform RAG
+ * tools have their own legacy defaults, but file reads do not inherit them).
+ * With knowledge_policy present (normalizeKnowledgePolicy keeps only
+ * state/allowed_operations/revision), the semantics mirror ragToolNames:
+ * "deny" or a malformed shape never grants; inherit/allow grants exactly the
+ * operations the Manager listed; tool_policy.allowed_tools narrows further and
+ * an empty allowlist means "not expressed" (operations win). */
 export function localDirectoryTools(snapshot: FrozenSnapshot): LocalDirectoryTool[] {
   const knowledge = snapshot.knowledge_policy;
-  if (knowledge !== undefined) {
-    const policy = object(knowledge);
-    if (!policy || policy.enabled !== true || policy.local_directory === false) return [];
-  }
+  if (knowledge === undefined || knowledge === null || typeof knowledge !== "object") return [];
+  const value = knowledge as Record<string, unknown>;
+  const operations = value.allowed_operations;
+  if (value.state === "deny" || !("inherit" === value.state || "allow" === value.state) || !Array.isArray(operations)) return [];
   const policy = object(snapshot.tool_policy);
-  if (!policy || !Array.isArray(policy.allowed_tools) || policy.allowed_tools.some((name) => typeof name !== "string")) return [];
-  const allowed = new Set(policy.allowed_tools);
-  if (policy.denied_tools !== undefined && (!Array.isArray(policy.denied_tools) || policy.denied_tools.some((name) => typeof name !== "string"))) return [];
-  const denied = new Set(Array.isArray(policy.denied_tools) ? policy.denied_tools : []);
-  return LOCAL_DIRECTORY_TOOLS.filter((name) => {
-    const alias = name === "local_dir_search" ? "knowledge_search" : "knowledge_get";
-    return (allowed.has(name) || allowed.has(alias)) && !denied.has(name) && !denied.has(alias);
-  });
+  const rawAllowed = policy && Array.isArray(policy.allowed_tools) ? policy.allowed_tools : undefined;
+  if (rawAllowed && rawAllowed.some((name) => typeof name !== "string")) return [];
+  const allowed = (rawAllowed ?? []) as string[];
+  const granted = (operation: string): boolean =>
+    allowed.length === 0 || allowed.includes(operation === "knowledge_search" ? "local_dir_search" : "local_dir_read") || allowed.includes(operation);
+  return LOCAL_DIRECTORY_TOOLS.filter((name) => operations.includes(KNOWLEDGE_ALIAS[name]) && granted(KNOWLEDGE_ALIAS[name]));
 }
 
 export interface DirectoryExecution {
@@ -42,8 +50,45 @@ interface Citation {
   title: string; relative: string; snippet: string; version: string; authority: string; bindingRevision: number; expires: number;
 }
 interface ActiveTask { owner: DirectoryOwner; employeeId: string; directoryIds: Set<string>; controller: AbortController }
-interface Hit { citation_id: string; title: string; relative_path: string; content_version: string; snippet: string; offset: number; score: number }
+interface Hit { title: string; relative_path: string; content_version: string; snippet: string; offset: number; score: number }
+interface DeliveredHit { citation_id: string; title: string; relative_path: string; content_version: string; snippet: string; offset: number }
+interface Candidate extends Hit { resource: DirectoryResource; authority: string; bindingRevision: number }
 const FORMATS = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log"]);
+
+/** Per-codepoint NFKC + zh-CN lowercase with a map from normalized codepoint
+ * index back to the original codepoint index. Matching and snippet anchoring
+ * share this pipeline, so every reported hit is locatable in the original text
+ * even when normalization changes length (e.g. fullwidth ＡＢＣ → ABC).
+ * Trade-off: combining-sequence compositions that only whole-string NFKC would
+ * form no longer match (fail-closed recall edge), keeping every hit locatable. */
+function normalizeWithMap(text: string): { normalized: string; map: number[] } {
+  const points: string[] = [];
+  const map: number[] = [];
+  const original = Array.from(text);
+  for (let i = 0; i < original.length; i++) {
+    for (const point of Array.from(original[i]!.normalize("NFKC").toLocaleLowerCase("zh-CN"))) {
+      points.push(point);
+      map.push(i);
+    }
+  }
+  return { normalized: points.join(""), map };
+}
+
+function locateHit(terms: string[], name: string, text: string): { score: number; offset: number; snippet: string } | undefined {
+  const inName = (term: string) => name.includes(term);
+  const mapped = normalizeWithMap(text);
+  const inText = (term: string) => mapped.normalized.includes(term);
+  if (!terms.every((term) => inName(term) || inText(term))) return undefined;
+  const score = terms.reduce((total, term) => total + (inName(term) ? 5 : 0) + (inText(term) ? 1 : 0), 0);
+  const anchors = terms
+    .map((term) => mapped.normalized.indexOf(term))
+    .filter((index) => index >= 0)
+    .map((index) => mapped.map[index] ?? 0);
+  const first = anchors.length > 0 ? Math.min(...anchors) : 0;
+  const offset = Math.max(0, first - 100);
+  const snippet = Array.from(text).slice(offset, offset + 400).join("");
+  return { score, offset, snippet };
+}
 
 export class LocalDirectoryService {
   readonly resources: LocalDirectoryStore;
@@ -193,7 +238,7 @@ export class LocalDirectoryService {
       const deadline = Date.now() + 5_000;
       const coverage = { files_examined: 0, files_skipped: 0, entries_examined: 0, bytes_read: 0 };
       let partial = false;
-      const hits: Hit[] = [];
+      const candidates: Candidate[] = [];
       const checks: { resource: DirectoryResource; binding: number; authority: string }[] = [];
       const checkBudget = () => {
         if (combined.aborted) return fail("cancelled");
@@ -230,34 +275,30 @@ export class LocalDirectoryService {
             coverage.files_examined++;
             if (coverage.bytes_read > 32 * 1024 * 1024) { partial = true; break; }
             const name = path.normalize("NFKC").toLocaleLowerCase("zh-CN");
-            const text = source.text.normalize("NFKC").toLocaleLowerCase("zh-CN");
-            if (!terms.every((term) => name.includes(term) || text.includes(term))) continue;
-            const score = terms.reduce((total, term) => total + (name.includes(term) ? 5 : 0) + (text.includes(term) ? 1 : 0), 0);
-            // Normalization may change length; use original text for source offsets.
-            const first = terms.map((term) => source.text.toLocaleLowerCase("zh-CN").indexOf(term)).find((index) => index >= 0) ?? 0;
-            const offset = Math.max(0, Array.from(source.text.slice(0, first)).length - 100);
-            const snippet = Array.from(source.text).slice(offset, offset + 400).join("");
-            const id = `localdir:${randomUUID()}`;
-            this.prune();
-            this.citations.set(id, { id, context, owner, resource, title: entry.name, relative: path, snippet, version: source.content_version, authority, bindingRevision: binding.revision, expires: Date.now() + 15 * 60_000 });
-            hits.push({ citation_id: id, title: entry.name, relative_path: path, content_version: source.content_version, snippet, offset, score });
+            const located = locateHit(terms, name, source.text);
+            if (!located) continue;
+            candidates.push({ title: entry.name, relative_path: path, content_version: source.content_version, snippet: located.snippet, offset: located.offset, score: located.score, resource, authority, bindingRevision: binding.revision });
           }
         }
       }
       if (checks.length === 0) return fail("unauthorized");
       for (const item of checks) await this.check(context, item.resource, item.binding, item.authority, "local_dir_search", combined);
       if (combined.aborted) return fail("cancelled");
-      const sorted = hits.sort((a, b) => b.score - a.score || a.relative_path.localeCompare(b.relative_path, "zh-CN")).slice(0, limit).map(({ score: _score, ...item }) => item);
-      const items: typeof sorted = [];
+      // Sort and apply the output budget FIRST, then register citations only for
+      // the items actually returned: the 512-entry table must never evict a
+      // handle this same turn handed to the model.
+      const sorted = candidates.sort((a, b) => b.score - a.score || a.relative_path.localeCompare(b.relative_path, "zh-CN")).slice(0, limit);
+      const items: DeliveredHit[] = [];
       let outputBytes = 0;
-      for (const item of sorted) {
-        const size = Buffer.byteLength(JSON.stringify(item));
+      for (const candidate of sorted) {
+        const id = `localdir:${randomUUID()}`;
+        const size = Buffer.byteLength(JSON.stringify({ ...candidate, citation_id: id }));
         if (items.length > 0 && outputBytes + size > MAX_SEARCH_OUTPUT_BYTES) { partial = true; break; }
         outputBytes += size;
-        items.push(item);
+        this.prune();
+        this.citations.set(id, { id, context, owner, resource: candidate.resource, title: candidate.title, relative: candidate.relative_path, snippet: candidate.snippet, version: candidate.content_version, authority: candidate.authority, bindingRevision: candidate.bindingRevision, expires: Date.now() + 15 * 60_000 });
+        items.push({ citation_id: id, title: candidate.title, relative_path: candidate.relative_path, content_version: candidate.content_version, snippet: candidate.snippet, offset: candidate.offset });
       }
-      const delivered = new Set(items.map((item) => item.citation_id));
-      for (const hit of hits) if (!delivered.has(hit.citation_id)) this.citations.delete(hit.citation_id);
       return { source: "local_directory", untrusted_document_content: true, partial, coverage, items };
     });
   }
@@ -288,32 +329,39 @@ export class LocalDirectoryService {
     const citation = this.citations.get(id);
     if (!citation || citation.expires <= Date.now()) return fail("citation_expired");
     if (citation.owner.tenantId !== owner.tenantId || citation.owner.memberId !== owner.memberId) return fail("unauthorized");
-    const current = this.resources.get(owner, citation.resource.directory_id);
-    const binding = this.resources.bindings(owner, citation.resource.directory_id).find((row) => row.employee_id === citation.context.employeeId);
-    if (current.revision !== citation.resource.revision || !binding?.enabled || binding.revision !== citation.bindingRevision) return fail("unauthorized");
-    const authority = await this.host.check(citation.resource);
-    if (authority !== citation.authority) return fail("unauthorized");
-    const source = await this.host.read(citation.resource, citation.relative);
-    if (source.content_version !== citation.version) return fail("source_changed");
-    if (source.authority !== citation.authority) return fail("unauthorized");
-    const points = Array.from(source.text);
-    if (offset > points.length) return fail("invalid_offset");
-    const text = points.slice(offset, offset + 12_000).join("");
-    return {
-      citation_id: citation.id,
-      directory_id: citation.resource.directory_id,
-      directory_display_name: citation.resource.display_name,
-      conversation_id: citation.context.conversationId,
-      employee_id: citation.context.employeeId,
-      turn_id: citation.context.turnId,
-      title: citation.title,
-      relative_path: citation.relative,
-      content_version: citation.version,
-      snippet: citation.snippet,
-      text,
-      offset,
-      next_offset: offset + 12_000 < points.length ? offset + 12_000 : null,
-    };
+    // Re-authorize with the CURRENT caller identity against the stored execution
+    // context: verified identity, current registry generation, employee snapshot
+    // policy, conversation mode and participation must all still hold.
+    const context: DirectoryExecution = { ...citation.context, caller };
+    this.authorize(context, "local_dir_read");
+    return this.trackTask(owner, citation.context.employeeId, undefined, async (task, combined) => {
+      task.directoryIds.add(citation.resource.directory_id);
+      await this.check(context, citation.resource, citation.bindingRevision, citation.authority, "local_dir_read", combined);
+      const source = await this.host.read(citation.resource, citation.relative);
+      if (combined.aborted) return fail("cancelled");
+      if (source.content_version !== citation.version) return fail("source_changed");
+      if (source.authority !== citation.authority) return fail("unauthorized");
+      // Re-verify after IPC yields: a revoke/unbind/logout may have landed meanwhile.
+      await this.check(context, citation.resource, citation.bindingRevision, citation.authority, "local_dir_read", combined);
+      const points = Array.from(source.text);
+      if (offset > points.length) return fail("invalid_offset");
+      const text = points.slice(offset, offset + 12_000).join("");
+      return {
+        citation_id: citation.id,
+        directory_id: citation.resource.directory_id,
+        directory_display_name: citation.resource.display_name,
+        conversation_id: citation.context.conversationId,
+        employee_id: citation.context.employeeId,
+        turn_id: citation.context.turnId,
+        title: citation.title,
+        relative_path: citation.relative,
+        content_version: citation.version,
+        snippet: citation.snippet,
+        text,
+        offset,
+        next_offset: offset + 12_000 < points.length ? offset + 12_000 : null,
+      };
+    });
   }
   private prune() {
     for (const [id, value] of this.citations) if (value.expires <= Date.now()) this.citations.delete(id);
