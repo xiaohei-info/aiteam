@@ -1,6 +1,7 @@
 # v1 server 运行期最小依赖。
 # 契约层只需 pydantic；三端服务壳与 shared 底座需 fastapi/uvicorn；service_client 需 httpx。
-pydantic>=2.11,<3
+# MCP 1.13.1 imports eval_type_backport, removed in Pydantic 2.12.
+pydantic>=2.11,<2.12
 fastapi>=0.115
 # Official MCP Python SDK; FastMCP Streamable HTTP facade.
 mcp==1.13.1

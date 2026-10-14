@@ -89,6 +89,7 @@ test("route handlers project exactly the documented external response fields", a
     bind: projections.bind,
     revoke: () => undefined,
     verifyCitation: async () => verifiedPayload,
+    assertCitationCurrent: () => undefined,
     capabilityState: async () => ({ revision: "x", tools: [] }),
   } as never);
 

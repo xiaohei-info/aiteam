@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import type { DirectoryHost, HostDirectory } from "../local-directory-host.js";
+import { normalizeAuthorizedConfig } from "../manager-client.js";
 import { LocalDirectoryError, type DirectoryOwner, type DirectoryResource } from "../storage/local-directories.js";
 import { AgentSqliteStore, type FrozenSnapshot } from "../storage/sqlite.js";
 import { LocalDirectoryService, localDirectoryTools, type DirectoryExecution } from "./local-directories.js";
@@ -118,6 +119,18 @@ test("localDirectoryTools derives permissions from the real snapshot contract", 
   assert.deepEqual(localDirectoryTools({ ...base, tool_policy: { allowed_tools: ["local_dir_search", "local_dir_read"] } }), []);
   // Malformed allowlists never acquire new filesystem authority.
   assert.deepEqual(localDirectoryTools({ ...realAllow, tool_policy: { allowed_tools: ["bash", 123] } }), []);
+
+  // Exercise the production normalization, including Manager's tools -> tool_policy fallback.
+  const normalized = normalizeAuthorizedConfig({ snapshots: [{
+    ...base, tools: ["knowledge_search", "knowledge_get"],
+    knowledge_policy: { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "7" },
+  }] }, "tenant-1", "member-1").snapshots![0]!;
+  assert.deepEqual(localDirectoryTools(normalized), ["local_dir_search", "local_dir_read"]);
+  assert.equal(Object.hasOwn(normalized.knowledge_policy!, "enabled"), false);
+  for (const state of ["inherit", "deny"] as const) {
+    const denied = normalizeAuthorizedConfig({ snapshots: [{ ...base, tools: ["knowledge_search", "knowledge_get"], knowledge_policy: { state, allowed_operations: [], revision: "8" } }] }).snapshots![0]!;
+    assert.deepEqual(localDirectoryTools(denied), []);
+  }
 });
 
 test("LocalDirectoryService enforces member/employee/turn isolation, Chinese keyword ranking, code-point offsets, and mid-flight revocation", async () => {
@@ -338,6 +351,8 @@ test("search registers citations only for returned items so >512 hits stay reada
     };
 
     const result = await service.search(exec, "骤雨", 15);
+    assert.equal(result.partial, false);
+    assert.equal(result.coverage.files_examined, 600);
     assert.equal(result.items.length, 15);
     // Every returned handle must be immediately dereferenceable in the same turn.
     for (const item of result.items) {
@@ -378,6 +393,19 @@ test("search snippets anchor at the real original-text hit even under NFKC lengt
     assert.ok(item.snippet.includes("ＡＢＣ"), `snippet must contain the original fullwidth hit: ...${item.snippet.slice(-40)}`);
     const slice = await service.read(exec, item.citation_id, item.offset);
     assert.ok(slice.text.includes("ＡＢＣ"));
+
+    for (const [prefix, original, query] of [
+      ["😀".repeat(120) + "x".repeat(900), "ＡＢＣ", "abc"],
+      ["😀".repeat(120) + "ﬃ".repeat(900), "ＡＢＣ", "abc"],
+      ["x".repeat(900), "ﬃ", "ffi"],
+      ["x".repeat(900), "😀", "😀"],
+    ]) {
+      host.files.set("全角.txt", { text: prefix + original, version: "ver-1" });
+      const hit = (await service.search(exec, query)).items[0]!;
+      assert.equal(hit.offset, Array.from(prefix).length - 100);
+      assert.ok(hit.snippet.includes(original));
+      assert.ok((await service.read(exec, hit.citation_id, hit.offset)).text.includes(original));
+    }
   } finally {
     store.close();
     await rm(dir, { recursive: true, force: true });

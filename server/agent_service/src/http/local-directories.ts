@@ -232,6 +232,7 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
       const offset = body.offset === undefined ? 0 : Number(body.offset);
       if (!Number.isInteger(offset) || offset < 0) throw new LocalDirectoryError("invalid_offset");
       const verified = await service.verifyCitation(caller!, params.citation_id, offset);
+      service.assertCitationCurrent(caller!, params.citation_id);
       router.send(res, 200, { data: verified });
     },
     schema("verifyLocalDirectoryCitation", "实时重验本地目录引用句柄并返回受控原文片段", envelope(VerifiedCitationResource), {

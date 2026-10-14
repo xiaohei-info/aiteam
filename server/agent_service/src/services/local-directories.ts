@@ -56,7 +56,7 @@ interface Candidate extends Hit { resource: DirectoryResource; authority: string
 const FORMATS = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log"]);
 
 /** Per-codepoint NFKC + zh-CN lowercase with a map from normalized codepoint
- * index back to the original codepoint index. Matching and snippet anchoring
+ * UTF-16 index back to the original codepoint index. Matching and snippet anchoring
  * share this pipeline, so every reported hit is locatable in the original text
  * even when normalization changes length (e.g. fullwidth ＡＢＣ → ABC).
  * Trade-off: combining-sequence compositions that only whole-string NFKC would
@@ -68,7 +68,8 @@ function normalizeWithMap(text: string): { normalized: string; map: number[] } {
   for (let i = 0; i < original.length; i++) {
     for (const point of Array.from(original[i]!.normalize("NFKC").toLocaleLowerCase("zh-CN"))) {
       points.push(point);
-      map.push(i);
+      // String.indexOf returns UTF-16 offsets, including surrogate pairs.
+      for (let unit = 0; unit < point.length; unit++) map.push(i);
     }
   }
   return { normalized: points.join(""), map };
@@ -278,6 +279,8 @@ export class LocalDirectoryService {
             const located = locateHit(terms, name, source.text);
             if (!located) continue;
             candidates.push({ title: entry.name, relative_path: path, content_version: source.content_version, snippet: located.snippet, offset: located.offset, score: located.score, resource, authority, bindingRevision: binding.revision });
+            candidates.sort((a, b) => b.score - a.score || a.relative_path.localeCompare(b.relative_path, "zh-CN"));
+            candidates.splice(limit);
           }
         }
       }
@@ -287,10 +290,9 @@ export class LocalDirectoryService {
       // Sort and apply the output budget FIRST, then register citations only for
       // the items actually returned: the 512-entry table must never evict a
       // handle this same turn handed to the model.
-      const sorted = candidates.sort((a, b) => b.score - a.score || a.relative_path.localeCompare(b.relative_path, "zh-CN")).slice(0, limit);
       const items: DeliveredHit[] = [];
       let outputBytes = 0;
-      for (const candidate of sorted) {
+      for (const candidate of candidates) {
         const id = `localdir:${randomUUID()}`;
         const size = Buffer.byteLength(JSON.stringify({ ...candidate, citation_id: id }));
         if (items.length > 0 && outputBytes + size > MAX_SEARCH_OUTPUT_BYTES) { partial = true; break; }
@@ -324,8 +326,29 @@ export class LocalDirectoryService {
     });
   }
   async verifyCitation(caller: AuthenticatedCaller, id: string, offset = 0) {
+    const citation = this.assertCitationCurrent(caller, id);
+    const context: DirectoryExecution = { ...citation.context, caller };
+    const source = await this.read(context, id, offset);
+    this.assertCitationCurrent(caller, id);
+    return {
+      citation_id: citation.id,
+      directory_id: citation.resource.directory_id,
+      directory_display_name: citation.resource.display_name,
+      conversation_id: citation.context.conversationId,
+      employee_id: citation.context.employeeId,
+      turn_id: citation.context.turnId,
+      title: citation.title,
+      relative_path: citation.relative,
+      content_version: citation.version,
+      snippet: citation.snippet,
+      text: source.text,
+      offset: source.offset,
+      next_offset: source.next_offset,
+    };
+  }
+  /** Synchronous final gate: callers must not yield between this and sending text. */
+  assertCitationCurrent(caller: AuthenticatedCaller, id: string): Citation {
     const owner = this.owner(caller);
-    if (!Number.isSafeInteger(offset) || offset < 0) return fail("invalid_offset");
     const citation = this.citations.get(id);
     if (!citation || citation.expires <= Date.now()) return fail("citation_expired");
     if (citation.owner.tenantId !== owner.tenantId || citation.owner.memberId !== owner.memberId) return fail("unauthorized");
@@ -334,34 +357,10 @@ export class LocalDirectoryService {
     // policy, conversation mode and participation must all still hold.
     const context: DirectoryExecution = { ...citation.context, caller };
     this.authorize(context, "local_dir_read");
-    return this.trackTask(owner, citation.context.employeeId, undefined, async (task, combined) => {
-      task.directoryIds.add(citation.resource.directory_id);
-      await this.check(context, citation.resource, citation.bindingRevision, citation.authority, "local_dir_read", combined);
-      const source = await this.host.read(citation.resource, citation.relative);
-      if (combined.aborted) return fail("cancelled");
-      if (source.content_version !== citation.version) return fail("source_changed");
-      if (source.authority !== citation.authority) return fail("unauthorized");
-      // Re-verify after IPC yields: a revoke/unbind/logout may have landed meanwhile.
-      await this.check(context, citation.resource, citation.bindingRevision, citation.authority, "local_dir_read", combined);
-      const points = Array.from(source.text);
-      if (offset > points.length) return fail("invalid_offset");
-      const text = points.slice(offset, offset + 12_000).join("");
-      return {
-        citation_id: citation.id,
-        directory_id: citation.resource.directory_id,
-        directory_display_name: citation.resource.display_name,
-        conversation_id: citation.context.conversationId,
-        employee_id: citation.context.employeeId,
-        turn_id: citation.context.turnId,
-        title: citation.title,
-        relative_path: citation.relative,
-        content_version: citation.version,
-        snippet: citation.snippet,
-        text,
-        offset,
-        next_offset: offset + 12_000 < points.length ? offset + 12_000 : null,
-      };
-    });
+    const resource = this.resources.get(owner, citation.resource.directory_id);
+    const binding = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId);
+    if (resource.revision !== citation.resource.revision || !binding?.enabled || binding.revision !== citation.bindingRevision) return fail("unauthorized");
+    return citation;
   }
   private prune() {
     for (const [id, value] of this.citations) if (value.expires <= Date.now()) this.citations.delete(id);
