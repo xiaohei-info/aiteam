@@ -104,6 +104,24 @@ test("six real JWT-authenticated local-directory HTTP responses match OpenAPI an
   } finally { await f.close(); }
 });
 
+test("real HTTP checks current policy again after the controlled read resolves and before responding", async () => {
+  const f = await setup();
+  try {
+    const directory = await f.data(await f.request(f.prefix, "POST", { ticket: "ticket" }), f.prefix, "post", 201);
+    assert.equal((await f.request(`${f.prefix}/${directory.directory_id}/bindings/emp-1`, "PUT", { enabled: true, expected_revision: 0 })).status, 200);
+    const id = await f.citation();
+    const verify = f.service.verifyCitation.bind(f.service);
+    f.service.verifyCitation = async (...args) => {
+      const result = await verify(...args);
+      f.seed(false);
+      return result;
+    };
+    const response = await f.request(`/api/agent/local-directory-citations/${id}/verify`, "POST", {});
+    assert.equal(response.status, 403);
+    assert.doesNotMatch(await response.text(), /sensitive-http-citation-evidence/);
+  } finally { await f.close(); }
+});
+
 for (const action of ["unbind", "logout", "policy", "revoke"] as const) {
   test(`real HTTP verify with IPC in flight rejects concurrent ${action} without returning source text`, { timeout: 10_000 }, async () => {
     const f = await setup();

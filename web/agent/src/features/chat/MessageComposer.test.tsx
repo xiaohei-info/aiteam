@@ -91,8 +91,9 @@ describe("MessageComposer runtime state", () => {
     fireEvent.input(input);
 
     expect(await screen.findByRole("listbox", { name: "可 @ 的群成员" })).toBeInTheDocument();
-    expect(screen.getByRole("option")).toHaveTextContent("测试员");
-    expect(screen.getByRole("option")).not.toHaveTextContent("tester");
+    const option = await screen.findByRole("option");
+    expect(option).toHaveTextContent("测试员");
+    expect(option).not.toHaveTextContent("tester");
   });
 
   it("selects a group mention with Enter without submitting and renders the display name", async () => {
@@ -113,6 +114,7 @@ describe("MessageComposer runtime state", () => {
     placeCaretAtEnd(input);
     fireEvent.input(input);
     expect(await screen.findByRole("listbox", { name: "可 @ 的群成员" })).toBeInTheDocument();
+    await screen.findByRole("option");
 
     fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
 

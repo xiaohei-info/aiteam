@@ -55,8 +55,8 @@ interface DeliveredHit { citation_id: string; title: string; relative_path: stri
 interface Candidate extends Hit { resource: DirectoryResource; authority: string; bindingRevision: number }
 const FORMATS = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log"]);
 
-/** Per-codepoint NFKC + zh-CN lowercase with a map from normalized codepoint
- * UTF-16 index back to the original codepoint index. Matching and snippet anchoring
+/** Per-codepoint NFKC + zh-CN lowercase with a map from normalized UTF-16
+ * index back to the original codepoint index. Matching and snippet anchoring
  * share this pipeline, so every reported hit is locatable in the original text
  * even when normalization changes length (e.g. fullwidth ＡＢＣ → ABC).
  * Trade-off: combining-sequence compositions that only whole-string NFKC would
