@@ -5,7 +5,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const initialParentPid = process.ppid;
+if (initialParentPid > 1) {
+  setInterval(() => {
+    if (process.ppid === 1) process.kill(process.pid, "SIGTERM");
+  }, 2000).unref();
+}
 // Remove inherited control-plane credentials before loading the package config or runtime.
+// Capture the private native channel before generic credential scrubbing.
+await import("../dist/local-directory-host.js");
 const { scrubAgentEnvironment } = await import("../dist/launch-guards.js");
 scrubAgentEnvironment();
 const options = parseArgs(process.argv.slice(2));

@@ -116,6 +116,9 @@ export function createControlledResourceLoader(
     })
     : undefined;
   const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
+  const effectiveSystemPrompt = authorization?.localDirectoryPromptGuidance && !systemPrompt.includes(authorization.localDirectoryPromptGuidance)
+    ? `${systemPrompt}\n\n${authorization.localDirectoryPromptGuidance}`
+    : systemPrompt;
   const loader = new DefaultResourceLoader({
     cwd: workspace,
     agentDir,
@@ -125,7 +128,7 @@ export function createControlledResourceLoader(
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    systemPrompt,
+    systemPrompt: effectiveSystemPrompt,
     skillsOverride: () => skills,
     extensionFactories: [
       ...(lifecycle ? [lifecycle.factory] : []),

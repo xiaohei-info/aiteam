@@ -17,6 +17,7 @@ export interface GroupMessageCommand {
   idempotencyKey?: string;
   toolCallId?: string;
   caller?: AuthenticatedCaller;
+  background?: boolean;
 }
 
 export interface GroupMessageReply {

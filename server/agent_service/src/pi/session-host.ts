@@ -26,7 +26,7 @@ import type { AgentSqliteStore, ConversationPermissionMode, ConversationRecord, 
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { serializePiEntry, serializePiEvent } from "./event-sse.js";
+import { serializePiEvent } from "./event-sse.js";
 import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
@@ -38,7 +38,10 @@ import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFil
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
-import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
+import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
+import { NativeDirectoryHost } from "../local-directory-host.js";
+import { LOCAL_DIRECTORY_PROMPT_GUIDANCE, LocalDirectoryService } from "../services/local-directories.js";
+import { createLocalDirectoryTools } from "./local-directory-tools.js";
 
 export interface PiEventEnvelope {
   id: string;
@@ -68,6 +71,7 @@ export class InvalidEventCursorError extends Error {
 export interface PromptDeliveryOptions {
   logicalMessageId?: string;
   idempotencyKey?: string;
+  background?: boolean;
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -110,6 +114,10 @@ export interface SessionAuthorization {
   groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
   groupContext?: string;
   groupOrchestrationMode?: "auto" | "custom";
+  background?: boolean;
+  generation?: number;
+  localDirectoryCapabilityRevision?: string;
+  localDirectoryPromptGuidance?: string;
 }
 
 export interface SessionHostOptions {
@@ -141,6 +149,7 @@ export interface SessionHostOptions {
   runtimeLeaseCache?: RuntimeLeaseCache<RuntimeProviderConfig>;
   hindsightLeaseCache?: RuntimeLeaseCache<HindsightRuntimeConfig>;
   executionAuthorization?: ExecutionAuthorizationRegistry;
+  localDirectoryService?: LocalDirectoryService;
 }
 
 interface Subscriber {
@@ -187,6 +196,7 @@ interface SessionRecord {
   factUpdatedAt?: string;
   activePromptReceipt?: string;
   activeSnapshotVersion?: string;
+  capabilitySignature?: string;
   hindsightWorkspaces: Set<string>;
   contextOperation?: Promise<void>;
   disposing?: Promise<void>;
@@ -229,6 +239,8 @@ export class SessionHost {
   private readonly listeners = new Map<string, Set<Subscriber>>();
   private readonly delivery: GroupMessageDeliveryService;
   readonly approvalService: ApprovalService;
+  private readonly executionAuthorization: ExecutionAuthorizationRegistry;
+  readonly localDirectoryService: LocalDirectoryService;
   private readonly runtimeLeaseCache: RuntimeLeaseCache<RuntimeProviderConfig>;
   private readonly hindsightLeaseCache: RuntimeLeaseCache<HindsightRuntimeConfig>;
 
@@ -237,6 +249,12 @@ export class SessionHost {
     this.hindsightLeaseCache = options.hindsightLeaseCache ?? new RuntimeLeaseCache<HindsightRuntimeConfig>();
     this.approvalService = options.approvalService ?? new ApprovalService(options.store);
     this.approvalService.setOnRequired((approval) => this.publishApprovalRequired(approval));
+    this.executionAuthorization = options.executionAuthorization ?? new ExecutionAuthorizationRegistry();
+    this.localDirectoryService = options.localDirectoryService ?? new LocalDirectoryService(
+      options.store,
+      new NativeDirectoryHost(),
+      this.executionAuthorization,
+    );
     this.delivery = new GroupMessageDeliveryService((command, employeeId) => this.deliverToParticipant(command, employeeId));
     mkdirSync(options.cwdRoot, { recursive: true, mode: 0o700 });
     mkdirSync(options.sessionDir, { recursive: true, mode: 0o700 });
@@ -292,6 +310,7 @@ export class SessionHost {
         logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         idempotencyKey: deliveryOptions?.idempotencyKey,
         caller,
+        background: deliveryOptions?.background,
       });
       return result.replies.at(-1)?.entryId;
     });
@@ -373,7 +392,8 @@ export class SessionHost {
   clearRuntimeMaterials(tenantId: string, memberId: string): void {
     this.runtimeLeaseCache.clearOwner(encodeScope(["runtime", tenantId, memberId]));
     this.hindsightLeaseCache.clearOwner(encodeScope(["hindsight", tenantId, memberId]));
-    this.options.executionAuthorization?.invalidate(tenantId, memberId);
+    this.executionAuthorization.invalidate(tenantId, memberId);
+    this.localDirectoryService.invalidate({ tenantId, memberId });
   }
 
   private invalidateExecutionMaterial(authorization: SessionAuthorization | undefined, error: unknown): void {
@@ -812,6 +832,39 @@ export class SessionHost {
   }
 
   private async ensureSession(record: SessionRecord, authorization?: SessionAuthorization, options: { skipHindsight?: boolean; skipSandbox?: boolean } = {}): Promise<AgentSession> {
+    const localDirectoryCapability = authorization
+      ? await this.localDirectoryService.capabilityState({
+          caller: authorization.caller,
+          conversationId: record.conversationId,
+          employeeId: authorization.employeeId,
+          snapshotVersion: authorization.snapshot.snapshot_version,
+          generation: authorization.generation ?? 0,
+          permissionMode: record.permissionMode,
+          background: authorization.background,
+        })
+      : { revision: "none", tools: [] as ("local_dir_search" | "local_dir_read")[] };
+    if (authorization) {
+      authorization.localDirectoryCapabilityRevision = localDirectoryCapability.revision;
+      authorization.localDirectoryPromptGuidance = localDirectoryCapability.tools.length > 0
+        ? LOCAL_DIRECTORY_PROMPT_GUIDANCE
+        : undefined;
+    }
+    const capabilitySignature = authorization
+      ? `${authorization.snapshot.version}:${record.permissionMode}:${localDirectoryCapability.revision}`
+      : `anonymous:${record.permissionMode}`;
+    // Sandbox availability is re-verified on every real prompt path, even when a
+    // context-only poll (skipSandbox) created the cached session earlier.
+    if (!options.skipSandbox && authorization && (this.hasCodingTools(authorization.snapshot) || localDirectoryCapability.tools.length > 0)) {
+      if (!this.options.sandbox) throw new Error("Coding and local directory tools require a configured local sandbox");
+      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
+    }
+    if (record.session && record.capabilitySignature !== capabilitySignature) {
+      // Never dispose a session that is actively prompting; per-call
+      // re-authorization in LocalDirectoryService already fails closed for
+      // revoked state, and promptParticipant disposes the session when the
+      // prompt settles, so the next turn rebuilds with fresh capabilities.
+      if (!record.prompting && !record.promptPromise) await this.disposeSession(record);
+    }
     if (record.session) return record.session;
     const hindsightRuntimeConfig = options.skipHindsight ? undefined : await this.resolveHindsightRuntimeConfig(authorization);
     const resourceLoader = this.options.resourceLoaderFactory(
@@ -826,12 +879,12 @@ export class SessionHost {
     );
     record.resourceLoader = resourceLoader;
     await resourceLoader.reload();
-    if (!options.skipSandbox && authorization && this.hasCodingTools(authorization.snapshot)) {
-      if (!this.options.sandbox) throw new Error("Coding tools require a configured local sandbox");
+    if (!options.skipSandbox && authorization && (this.hasCodingTools(authorization.snapshot) || localDirectoryCapability.tools.length > 0)) {
+      if (!this.options.sandbox) throw new Error("Coding and local directory tools require a configured local sandbox");
       await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
     }
     const allowPeerMention = Boolean(authorization?.peerMentionAllowed);
-    const customTools = this.toolsFor(authorization, allowPeerMention, record, record.workspace);
+    const customTools = this.toolsFor(authorization, allowPeerMention, record, record.workspace, undefined, localDirectoryCapability.tools);
     if (authorization) {
       authorization.runtimeScope = record.conversationId;
       await this.ensureRuntimeModel(authorization);
@@ -853,14 +906,23 @@ export class SessionHost {
       customTools,
     });
     record.session = result.session;
+    record.capabilitySignature = capabilitySignature;
     try { chmodSync(record.sessionManager.getSessionFile()!, 0o600); } catch { /* SDK may defer the first write */ }
     record.unsubscribe = result.session.subscribe((event) => this.publish(record, event));
     return result.session;
   }
 
-  private toolsFor(authorization?: SessionAuthorization, allowDelegation = true, record?: SessionRecord, workspace?: string, sessionId?: string): ToolDefinition[] {
+  private toolsFor(
+    authorization?: SessionAuthorization,
+    allowDelegation = true,
+    record?: SessionRecord,
+    workspace?: string,
+    sessionId?: string,
+    localDirectoryToolNames: readonly ("local_dir_search" | "local_dir_read")[] = [],
+  ): ToolDefinition[] {
     if (!authorization) return (this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME);
     const allowed = this.allowedTools(authorization.snapshot);
+    for (const toolName of localDirectoryToolNames) allowed.add(toolName);
     if (allowDelegation && authorization.peerMentionAllowed) allowed.add("mention_employee");
     const operations = this.options.sandbox && workspace
       ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode)
@@ -873,10 +935,24 @@ export class SessionHost {
           createEditToolDefinition(workspace, { operations: operations.edit }),
         ]
       : [];
+    const localDirectoryTools = record && localDirectoryToolNames.length > 0
+      ? createLocalDirectoryTools(this.localDirectoryService, localDirectoryToolNames, () => ({
+          caller: authorization.caller,
+          conversationId: record.conversationId,
+          sessionId: record.sessionManager.getSessionId(),
+          turnId: record.activePromptReceipt ?? `${record.conversationId}:turn`,
+          employeeId: authorization.employeeId,
+          snapshotVersion: authorization.snapshot.snapshot_version,
+          generation: authorization.generation ?? 0,
+          permissionMode: record.permissionMode,
+          background: authorization.background,
+        }))
+      : [];
     const tools = [
       ...(this.options.customTools ?? []).filter((tool) => tool.name !== TODO_UPDATE_TOOL_NAME && (allowDelegation || (tool.name !== "delegate_employee" && tool.name !== "mention_employee"))),
       ...(allowed.has(TODO_UPDATE_TOOL_NAME) ? [createTodoUpdateTool()] : []),
       ...codingTools,
+      ...localDirectoryTools,
       ...(allowDelegation && record ? [
         ...(allowed.has("mention_employee") ? [createMentionEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
         ...(allowed.has("delegate_employee") ? [createDelegateEmployeeTool({ executionMode: this.options.store.getConversationMetadata(record.conversationId)?.orchestration?.mode === "custom" ? "sequential" : "parallel", delegate: (toolCallId, input, signal) => this.mention(record, authorization, toolCallId, input, signal) })] : []),
@@ -962,7 +1038,10 @@ export class SessionHost {
     // coordinator conversation; target delivery still rechecks the authorized
     // solution/roster and fails closed for invalid targets.
     const peerMentionAllowed = record.role === "coordinator" && Boolean(metadata?.coordinator_employee_id);
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient };
+    const generation = caller.tenantId
+      ? ((this.executionAuthorization.get(caller.tenantId, memberId) ?? this.executionAuthorization.register(caller))?.generation ?? 0)
+      : 0;
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient, generation };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -973,6 +1052,7 @@ export class SessionHost {
       await this.flushResourceLoader(record.resourceLoader);
       record.session?.dispose();
       record.session = undefined;
+      record.capabilitySignature = undefined;
       record.resourceLoader = undefined;
       const providerId = record.runtimeProviderId;
       record.runtimeProviderId = undefined;
@@ -1098,6 +1178,7 @@ export class SessionHost {
       throw error;
     }
     authorization!.groupMessageSource = command.source;
+    authorization!.background = command.background;
     if (metadata.kind === "group") {
       authorization!.groupContext = this.buildGroupContext(command.conversationId, employeeId);
       authorization!.groupOrchestrationMode = metadata.orchestration?.mode;
@@ -1243,6 +1324,7 @@ export class SessionHost {
       logicalMessageId: `${record.conversationId}:${toolCallId}`,
       idempotencyKey: `mention:${record.conversationId}:${toolCallId}:${targetEmployeeId}`,
       caller: authorization.caller,
+      background: authorization.background,
     });
     return result.replies[0]?.text ?? "Employee completed without a textual result.";
   }
@@ -1508,15 +1590,6 @@ export class SessionHost {
   private requireDefaultModel(): Model<any> {
     if (!this.options.model) throw new SessionAuthorizationError("No authenticated Pi model is available");
     return this.options.model;
-  }
-
-  private childSummary(entries: ReturnType<SessionManager["getEntries"]>): string {
-    for (const entry of [...entries].reverse()) {
-      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-      const text = entry.message.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("").trim();
-      if (text) return text.slice(0, MAX_DELEGATE_RESULT_CHARS);
-    }
-    return "Employee completed without a textual result.";
   }
 
   private publishApprovalRequired(approval: ApprovalRecord): void {

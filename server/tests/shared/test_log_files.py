@@ -43,6 +43,7 @@ def test_private_rotation_and_reconfiguration(tmp_path):
 
 def test_handler_errors_never_print_raw_records(capsys, tmp_path):
     handler = PrivateRotatingHandler(tmp_path / "test.jsonl", maxBytes=100, backupCount=1)
+    assert handler.stream is not None
     handler.stream.close()
     record = logging.LogRecord("test", logging.ERROR, __file__, 1, "password sentinel", (), None)
     handler.emit(record)

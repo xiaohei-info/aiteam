@@ -268,6 +268,7 @@ export class ApprovalService {
 
 const SAFE_TOOLS = new Set([
   "read", "grep", "find", "ls", "knowledge_search", "knowledge_get",
+  "local_dir_search", "local_dir_read",
   "hindsight_recall", "memory_recall", "todo_update", "mention_employee", "delegate_employee",
 ]);
 
@@ -282,12 +283,14 @@ export function approvalRiskForTool(toolName: string): ApprovalRisk | undefined 
   return "unknown";
 }
 
+type JsonLikeValue = string | number | boolean | null | undefined | JsonLikeValue[] | { [key: string]: JsonLikeValue };
+
 export function canonicalArgsHmac(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonicalize(value)) ?? "undefined").digest("hex");
 }
 
-function canonicalize(value: unknown): unknown {
-  if (value === null || typeof value !== "object") return value;
+function canonicalize(value: unknown): JsonLikeValue {
+  if (value === null || typeof value !== "object") return value as JsonLikeValue;
   if (Array.isArray(value)) return value.map(canonicalize);
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonicalize(item)]));
 }
@@ -298,7 +301,7 @@ function redactedToolSummary(toolName: string, args: unknown): string {
   return `${toolName}: ${serialized.length <= 800 ? serialized : `${serialized.slice(0, 799)}…`}`;
 }
 
-function boundedRedaction(value: unknown, depth = 0): unknown {
+function boundedRedaction(value: unknown, depth = 0): JsonLikeValue {
   if (depth > 3) return "[内容已省略]";
   if (typeof value === "string") return value
     .replace(/(?:bearer\s+|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/giu, "[内容已隐藏]")
@@ -307,7 +310,7 @@ function boundedRedaction(value: unknown, depth = 0): unknown {
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.slice(0, 16).map((item) => boundedRedaction(item, depth + 1));
   if (typeof value !== "object") return undefined;
-  const output: Record<string, unknown> = {};
+  const output: Record<string, JsonLikeValue> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 16)) {
     if (/(?:token|secret|password|credential|authorization|api[_ -]?key|private[_ -]?key|content)/iu.test(key)) continue;
     output[key] = boundedRedaction(item, depth + 1);

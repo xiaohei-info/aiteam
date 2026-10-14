@@ -19,6 +19,7 @@ export function validateCalendar(value: unknown): CalendarRule {
   if (typeof raw.time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(raw.time)) throw new Error("time must be HH:mm:ss");
   if (raw.mode === "weekly" && (!Number.isInteger(raw.weekday) || Number(raw.weekday) < 1 || Number(raw.weekday) > 7)) throw new Error("weekday must be 1–7");
   if (raw.mode === "monthly" && (!Number.isInteger(raw.day_of_month) || Number(raw.day_of_month) < 1 || Number(raw.day_of_month) > 31 || raw.invalid_date_policy !== "skip")) throw new Error("monthly requires day_of_month 1–31 and invalid_date_policy skip");
+  // SAFETY: all allowed keys, mode-specific fields, ranges, timezone and time are validated above.
   return raw as unknown as CalendarRule;
 }
 

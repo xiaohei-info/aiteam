@@ -1,13 +1,13 @@
 """Private, bounded, per-process logs. No shared-file multiprocess rotation."""
 from __future__ import annotations
 
-from contextlib import suppress
 import logging
-from logging.handlers import RotatingFileHandler
 import os
-from pathlib import Path
 import time
 import uuid
+from contextlib import suppress
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 
 class PrivateRotatingHandler(RotatingFileHandler):

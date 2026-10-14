@@ -1,4 +1,6 @@
 import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
+import { registerLocalDirectoryRoutes, mapLocalDirectoryError, LOCAL_DIRECTORY_OPERATION_DOCS, LOCAL_DIRECTORY_PARAMETER_EXAMPLES } from "./local-directories.js";
+import { LocalDirectoryError } from "../storage/local-directories.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
@@ -10,7 +12,7 @@ import { URL } from "node:url";
 import { createRequire } from "node:module";
 import { readFileSync, statSync } from "node:fs";
 import { extname, join, resolve, relative, isAbsolute } from "node:path";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
@@ -30,7 +32,7 @@ import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQue
 import { WorkRecordReadService } from "../services/work-records.js";
 import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
-import { normalizePermissionMode, type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
+import { type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -711,6 +713,7 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
+  ...LOCAL_DIRECTORY_PARAMETER_EXAMPLES,
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
@@ -718,6 +721,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
 };
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...AUTOMATION_OPERATION_DOCS,
+  ...LOCAL_DIRECTORY_OPERATION_DOCS,
   ...CONVERSATION_READ_DOCS,
   ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
@@ -1019,6 +1023,7 @@ export class AgentHttpServer {
         const responseNames = new Set(["BadRequest", "Unauthorized", "Forbidden", "NotFound", "Conflict", "TooLarge", "ValidationError", "ManagerUnavailable", "BadGateway", "InternalError", "Gone", "TooManyRequests"]);
         const parameterDescriptions: Record<string, string> = {
           conversation_id: "本地会话 ID。", attachment_id: "本地附件 ID。", artifact_id: "授权附件 ID。", employee_id: "授权员工/专家 ID。", template_id: "专家模板 ID。",
+          directory_id: "本地知识目录稳定 ID。", citation_id: "会话内单轮有效的引用句柄 ID。",
           knowledge_base_id: "旧知识库 ID。", resource_id: "旧资源 ID。", kind: "旧资源类型。", after: "从指定事件之后继续读取；优先于 Last-Event-ID。", cursor: "从上一条会话之后继续读取。", limit: "返回条数上限；缺省为 50，最大 100。", "Idempotency-Key": "写操作幂等键；相同键只能对应同一请求体。", "Last-Event-ID": "SSE 断线重连游标；未提供 after 时使用。",
         };
         const humanize = (value: string) => value.replace(/_/gu, " ").replace(/([a-z])([A-Z])/gu, "$1 $2");
@@ -1347,6 +1352,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
     registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
+    registerLocalDirectoryRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.options.host.localDirectoryService);
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -2441,6 +2447,7 @@ export class AgentHttpServer {
     else if (error instanceof GroupCreationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof GroupConfigurationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
+    else if (error instanceof LocalDirectoryError) problem = mapLocalDirectoryError(error);
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
