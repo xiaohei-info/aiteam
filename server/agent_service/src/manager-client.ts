@@ -120,10 +120,11 @@ export class HttpManagerClient implements ManagerClient {
   private async authRequest(path: string, body: unknown): Promise<unknown> {
     const response = await this.fetchImpl(new URL(path, this.baseUrl).toString(), {
       method: "POST",
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }).catch((cause: unknown) => { throw new ManagerUnavailableError("Manager authentication is unavailable", { cause }); });
     const payload = await response.json().catch(() => undefined);
     if (!response.ok) throw new ManagerAuthError(response.status, payload);
     return payload;

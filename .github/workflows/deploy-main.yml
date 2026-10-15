@@ -21,6 +21,11 @@ name: deploy (main -> taiyi)
         description: "Branch to deploy (must exist on remote)"
         required: true
         type: string
+      agent_public:
+        description: "Expose secure TEST Agent on 8783 (false restores loopback only)"
+        required: true
+        default: true
+        type: boolean
   pull_request:
     branches: [main]
     types: [closed]
@@ -92,6 +97,21 @@ jobs:
             echo "::error::cannot read origin branch ${DEPLOY_BRANCH} over SSH"; exit 1;
           }
 
+      - name: Back up current release configuration
+        shell: bash
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          backup="/root/app/aiteam-release-backups/${GITHUB_RUN_ID}"
+          mkdir -p "${backup}"
+          chmod 700 "${backup}"
+          [[ ! -f ".env.${DEPLOY_ENV}" ]] || cp -p ".env.${DEPLOY_ENV}" "${backup}/env.before"
+          git rev-parse HEAD > "${backup}/ref.before"
+          systemctl cat "${UNIT_NAME}" > "${backup}/unit.before"
+          chmod 600 "${backup}"/*
+          echo "Protected release backup: ${backup}"
+
       # 把 .env.<env> 写到部署根（ctl.sh 从 $DEPLOY_ROOT/.env.<env> 读）
       # 这步必须在 git pull 之前，.env.<env> 是 gitignored，pull 不会动它。
       - name: Write .env.${{ env.DEPLOY_ENV }} from GitHub secret
@@ -136,6 +156,27 @@ jobs:
             exit 1
           fi
           echo "wrote ${env_file} ($(wc -l < "${env_file}") lines)"
+
+      - name: Persist taiyi TEST Agent public login configuration
+        shell: bash
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${DEPLOY_ENV}" == test && "${DEPLOY_ROOT}" == /root/app/aiteam && "${UNIT_NAME}" == aiteam-v1 ]]
+          # This deployment alone restores the historical public Agent listener.
+          # Manager/Operation/database bindings and ctl's defaults remain unchanged.
+          source ".env.${DEPLOY_ENV}"
+          [[ "${AGENT_PORT:-8783}" == 8783 && "${MANAGER_PORT:-8782}" == 8782 ]]
+          [[ -z "${AITEAM_AGENT_JWKS_JSON:-}" && -z "${AITEAM_AGENT_JWKS_PATH:-}" ]] || { echo '::error::Static JWKS conflicts with Manager mode'; exit 1; }
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.agent_public }}" == false ]]; then
+            printf '%s\n' 'AGENT_HOST=127.0.0.1' 'AITEAM_AGENT_LOCAL_ONLY=true' >> ".env.${DEPLOY_ENV}"
+          else
+            printf '%s\n' 'AGENT_HOST=0.0.0.0' 'AITEAM_AGENT_LOCAL_ONLY=false' >> ".env.${DEPLOY_ENV}"
+          fi
+          printf '%s\n' 'AITEAM_AGENT_DEV_AUTH=false' 'AITEAM_AGENT_JWKS_MODE=manager' 'AITEAM_MANAGER_URL=http://127.0.0.1:8782' >> ".env.${DEPLOY_ENV}"
+          printf 'AITEAM_AGENT_JWT_ISSUER=%q\nAITEAM_AGENT_JWT_AUDIENCE=%q\n' "${AITEAM_JWT_ISSUER-aiteam-manager}" "${AITEAM_JWT_AUDIENCE-aiteam-agent}" >> ".env.${DEPLOY_ENV}"
+          chmod 600 ".env.${DEPLOY_ENV}"
 
       # 部署编排：先从 origin/$DEPLOY_BRANCH 只刷新 deploy/ci/run.sh，再执行它。
       # 持久化根上的旧 inode 不会加载新的 requirements-sync；GHA YAML 来自触发

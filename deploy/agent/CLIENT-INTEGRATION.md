@@ -33,7 +33,7 @@ AGENT_DIR/config/manager-jwks.json → CLIENT_DATA_ROOT/manager-jwks.json（文�
 
 正式交付需要企业确认 Manager HTTPS 正式地址、与 Manager `AITEAM_JWT_ISSUER` **逐字相同**的 `AITEAM_AGENT_JWT_ISSUER`、与 JWT aud 一致的 `AITEAM_AGENT_JWT_AUDIENCE`、可信 RSA RS256 公共 JWKS（kid/n/e）和技能验证公钥。Manager URL 不自动等于 issuer；不能改写 scheme/path/末尾斜杠来“修复”验签。现有严格打包器要求 URL 型 issuer，生产包要求 HTTPS；如 Manager 仍用开发默认 `aiteam-manager`，应由部署方正式配置一致的 issuer 后交付，不能客户端自行猜一个 URL。
 
-Agent 在启动时载入公钥，不会自动下载 JWKS、发现 issuer 或热加载文件。轮换时通过受控安装/配置通道先分发可信 current+next 公钥并重启 Agent，再由 Manager 切换签名；旧 token 有效期及重叠窗口结束后受控移除旧公钥并再次重启。未知 kid/issuer/audience 必须失败，不得自动信任。公钥不等于签名私钥；任何用户密码、service token、Provider/Hindsight/LightRAG secret 均不得入包。
+默认静态 JWKS 模式下，Agent 在启动时载入公钥，不会自动下载 JWKS、发现 issuer 或热加载文件。太乙共享 TEST 的显式固定 Manager 模式另见 [公网登录恢复](../ci/TAIYI-PUBLIC-LOGIN.md)；与静态 JWKS 配置互斥，不改变正式客户端交付口径。轮换时通过受控安装/配置通道先分发可信 current+next 公钥并重启 Agent，再由 Manager 切换签名；旧 token 有效期及重叠窗口结束后受控移除旧公钥并再次重启。未知 kid/issuer/audience 必须失败，不得自动信任。公钥不等于签名私钥；任何用户密码、service token、Provider/Hindsight/LightRAG secret 均不得入包。
 
 企业知识能力可在公共配置中设置 `AITEAM_RAG_MCP_URL=https://manager.example.com/api/manager/rag/mcp`（示例域名）。它必须与配置的 Manager 同 origin、固定此路径、无 query/hash/凭据；测试 Manager 可对应使用 `http://121.40.78.201:8782/api/manager/rag/mcp`。不配置时不装载该 MCP 工具，不把企业 LightRAG 内网地址交给客户端。运行时认证由 Agent 当前会话在内存中提供。
 
