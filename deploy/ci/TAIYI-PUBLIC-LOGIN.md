@@ -1,6 +1,8 @@
-# 太乙 TEST 公网 Agent 恢复
+# 太乙 TEST 三端公网恢复
 
-本部署继续使用现有 `aiteam-v1` / `scripts/ctl.sh` / GitHub `deploy-main.yml`。工作流每次写完 TEST secret 后持久设置 Agent 8783 监听及真实鉴权；Manager、Operation、数据库的监听配置不变。不要只手工追加 HOST，下一次发布会重写 env。
+本部署继续使用现有 `aiteam-v1` / `scripts/ctl.sh` / GitHub `deploy-main.yml`。工作流每次写完 TEST secret 后持久设置 `MANAGER_HOST=0.0.0.0`（8782）、`OPERATION_HOST=0.0.0.0`（8781）及既有 Agent 8783 监听和真实鉴权。设置限定 `/root/app/aiteam`、`aiteam-v1`、TEST 及指定端口；数据库、Redis、NewAPI、LightRAG 的绑定不变。不要只手工追加 HOST，下一次发布会重写 env。
+
+Manager/Operation 的公开监听恢复遵循用户明确接受的既有 TEST 配置；默认服务令牌和 TEST onboarding 写接口风险仍存在，本次不修改令牌、鉴权或 GitHub Secret 内容。`control_plane_public=false` 可独立将这两端恢复回环；`agent_public` 继续只控制 Agent。
 
 ## 固定 Manager 验签
 
@@ -16,10 +18,10 @@
 
 ## 发布与安全回退
 
-先运行 `pnpm --dir server/agent_service check` 和对应测试。GitHub CI 还会在服务启动前重复类型检查和合成 Manager 鉴权测试。仅发布经验证分支；workflow ref 与 branch input 必须都指向此修复分支，发布后核对运行 SHA。
+先运行 `pnpm --dir server/agent_service check` 和对应测试。GitHub CI 还会在服务启动前重复类型检查和合成 Manager 鉴权测试。正常发布通过 PR 合并 main 自动触发既有部署，无需再手动 dispatch；发布后核对运行 SHA。以下命令仅供明确需要手动发布/回退时使用，workflow ref 与 branch input 都须指向受验版本：
 
 ```bash
-gh workflow run deploy-main.yml --repo xiaohei-info/aiteam --ref fix/taiyi-manager-jwks -f branch=fix/taiyi-manager-jwks -f agent_public=true
+gh workflow run deploy-main.yml --repo xiaohei-info/aiteam --ref main -f branch=main -f agent_public=true -f control_plane_public=true
 ```
 
 CI 写 env 前将原 env、unit、SHA 保存到 `/root/app/aiteam-release-backups/<run-id>/`（目录700，文件600）。原 env 可能含开发鉴权，不可直接恢复并公开监听。
@@ -27,7 +29,7 @@ CI 写 env 前将原 env、unit、SHA 保存到 `/root/app/aiteam-release-backup
 若需撤回公网开放，用同一已验签修复版本经 CI 恢复回环监听，仍关闭开发鉴权：
 
 ```bash
-gh workflow run deploy-main.yml --repo xiaohei-info/aiteam --ref fix/taiyi-manager-jwks -f branch=fix/taiyi-manager-jwks -f agent_public=false
+gh workflow run deploy-main.yml --repo xiaohei-info/aiteam --ref main -f branch=main -f agent_public=false -f control_plane_public=false
 ```
 
 此回退仅关闭公网，不恢复旧版 decode-only 鉴权。后续要回退业务代码，应保留本鉴权补丁并选定受验分支再走相同 CI；不得把旧 main 配公网 dev auth。
