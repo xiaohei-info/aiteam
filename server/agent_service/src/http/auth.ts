@@ -107,8 +107,9 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
 
   const now = Math.floor(Date.now() / 1000);
   const skew = options.clockSkewSeconds ?? 30;
-  if (typeof claims.exp !== "number" || claims.exp + skew < now) throw new Error("JWT is expired");
-  if (typeof claims.iat !== "number" || claims.iat - skew > now) throw new Error("JWT issued-at claim is missing or invalid");
+  if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp) || claims.exp + skew <= now) throw new Error("JWT is expired");
+  if (typeof claims.iat !== "number" || !Number.isFinite(claims.iat) || claims.iat - skew > now) throw new Error("JWT issued-at claim is missing or invalid");
+  if (claims.nbf !== undefined && (typeof claims.nbf !== "number" || !Number.isFinite(claims.nbf))) throw new Error("JWT not-before claim is invalid");
   if (claims.iss !== options.issuer) throw new Error("JWT issuer mismatch");
   if (!audienceContains(claims.aud, options.audience)) throw new Error("JWT audience mismatch");
   if (typeof claims.enterprise_id !== "string" || !Array.isArray(claims.roles)) throw new Error("JWT required claims are missing");

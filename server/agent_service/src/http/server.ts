@@ -872,6 +872,7 @@ export interface AgentHttpServerOptions {
   host: SessionHost;
   store: AgentSqliteStore;
   authenticate: AuthenticateRequest;
+  verifyLoginToken?: (token: string, expectedTenant: string) => Promise<AuthenticatedCaller>;
   runtimeReady?: () => boolean | Promise<boolean>;
   localReady?: () => boolean | Promise<boolean>;
   managerClient?: ManagerClient;
@@ -1420,9 +1421,18 @@ export class AgentHttpServer {
     }
   }
 
-  private validateAuthTenant(payload: unknown, expected: string): void {
+  private async validateAuthTenant(payload: unknown, expected: string): Promise<void> {
     const data = payload && typeof payload === "object" ? (payload as { data?: { claims?: { tenant_id?: unknown } } }).data : undefined;
     if (!expected.trim() || data?.claims?.tenant_id !== expected) throw new ManagerUnavailableError("Manager returned an invalid Agent tenant identity");
+    if (this.options.verifyLoginToken) {
+      try {
+        const token = (data as { token?: unknown }).token;
+        if (typeof token !== "string") throw new Error("Manager token missing");
+        const caller = await this.options.verifyLoginToken(token, expected);
+        if (caller.tenantId !== expected || !caller.claims) throw new Error("Manager token identity mismatch");
+        data.claims = caller.claims;
+      } catch { throw new ManagerUnavailableError("Manager token failed local verification"); }
+    }
   }
 
   /** 公开认证端点的企业解析：显式 tenant_id 优先；否则按 account/enterprise 让 Manager 解析。 */
@@ -1453,7 +1463,7 @@ export class AgentHttpServer {
     const tenantId = await this.resolveAuthTenant(this.optionalString(body.tenant_id, "tenant_id"), account, this.optionalString(body.enterprise, "enterprise"));
     try {
       const payload = await this.options.managerClient.login({ tenant_id: tenantId, account, password });
-      this.validateAuthTenant(payload, tenantId);
+      await this.validateAuthTenant(payload, tenantId);
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) {
@@ -1477,7 +1487,7 @@ export class AgentHttpServer {
     };
     try {
       const payload = await this.options.managerClient.ownerReset(input);
-      this.validateAuthTenant(payload, input.tenant_id);
+      await this.validateAuthTenant(payload, input.tenant_id);
       this.writeJson(response, 200, payload);
     } catch (error) {
       if (error instanceof ManagerAuthError) {

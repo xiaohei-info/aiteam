@@ -2,6 +2,7 @@ import { accessSync, chmodSync, constants, mkdirSync, readFileSync, realpathSync
 import { dirname, join, resolve } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, parsePublicJwks } from "./http/auth.js";
+import { ManagerJwksAuthenticator } from "./http/manager-jwks.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
@@ -81,9 +82,15 @@ const sessionHost = new SessionHost({
   ),
 });
 
+const managerJwksMode = process.env.AITEAM_AGENT_JWKS_MODE === "manager";
+if (process.env.AITEAM_AGENT_JWKS_MODE && !["manager", "static"].includes(process.env.AITEAM_AGENT_JWKS_MODE)) throw new Error("Invalid Agent JWKS mode");
+if (managerJwksMode && (useDevAuth || process.env.AITEAM_AGENT_JWKS_JSON?.trim() || process.env.AITEAM_AGENT_JWKS_PATH?.trim())) throw new Error("Manager JWKS mode conflicts with dev auth or static JWKS");
+const managerAuth = managerJwksMode ? new ManagerJwksAuthenticator(
+  managerUrl ?? "", process.env.AITEAM_AGENT_JWT_ISSUER ?? "", process.env.AITEAM_AGENT_JWT_AUDIENCE ?? "",
+) : undefined;
 const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
-  : createJwtAuthenticator(loadJwtOptions());
+  : managerAuth?.authenticate ?? createJwtAuthenticator(loadJwtOptions());
 
 const schedule = new ScheduleService(store, sessionHost, { authorization: executionAuthorization });
 const http = new AgentHttpServer({
@@ -91,6 +98,13 @@ const http = new AgentHttpServer({
   allowedOrigins: parseAllowedOrigins(process.env.AITEAM_AGENT_ALLOWED_ORIGINS),
   store,
   authenticate: (request) => authenticate(request),
+  verifyLoginToken: useDevAuth ? undefined : async (token, tenant) => {
+    const caller = managerAuth
+      ? await managerAuth.verifyLoginToken(token, tenant)
+      : await authenticate({ headers: { authorization: `Bearer ${token}` } } as import("node:http").IncomingMessage);
+    if (caller.tenantId !== tenant) throw new Error("Manager token tenant mismatch");
+    return caller;
+  },
   executionAuthorization,
   managerClient,
   usageFlush,
