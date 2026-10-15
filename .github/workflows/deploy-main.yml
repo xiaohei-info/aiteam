@@ -26,6 +26,11 @@ name: deploy (main -> taiyi)
         required: true
         default: true
         type: boolean
+      control_plane_public:
+        description: "Expose TEST Manager/Operation on 8782/8781 (false restores loopback only)"
+        required: true
+        default: true
+        type: boolean
   pull_request:
     branches: [main]
     types: [closed]
@@ -157,6 +162,24 @@ jobs:
           fi
           echo "wrote ${env_file} ($(wc -l < "${env_file}") lines)"
 
+      - name: Persist taiyi TEST Manager and Operation listener configuration
+        shell: bash
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${DEPLOY_ENV}" == test && "${DEPLOY_ROOT}" == /root/app/aiteam && "${UNIT_NAME}" == aiteam-v1 ]]
+          source ".env.${DEPLOY_ENV}"
+          [[ "${MANAGER_PORT:-8782}" == 8782 && "${OPERATION_PORT:-8781}" == 8781 ]]
+          # Restore the historical TEST listeners after each Secret env rewrite.
+          # Only these two host keys change; credentials and dependency bindings do not.
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.control_plane_public }}" == false ]]; then
+            printf '%s\n' 'MANAGER_HOST=127.0.0.1' 'OPERATION_HOST=127.0.0.1' >> ".env.${DEPLOY_ENV}"
+          else
+            printf '%s\n' 'MANAGER_HOST=0.0.0.0' 'OPERATION_HOST=0.0.0.0' >> ".env.${DEPLOY_ENV}"
+          fi
+          chmod 600 ".env.${DEPLOY_ENV}"
+
       - name: Persist taiyi TEST Agent public login configuration
         shell: bash
         working-directory: ${{ env.DEPLOY_ROOT }}
@@ -164,8 +187,8 @@ jobs:
           set -euo pipefail
           umask 077
           [[ "${DEPLOY_ENV}" == test && "${DEPLOY_ROOT}" == /root/app/aiteam && "${UNIT_NAME}" == aiteam-v1 ]]
-          # This deployment alone restores the historical public Agent listener.
-          # Manager/Operation/database bindings and ctl's defaults remain unchanged.
+          # This step restores the historical public Agent listener independently.
+          # Database bindings and ctl's defaults remain unchanged.
           source ".env.${DEPLOY_ENV}"
           [[ "${AGENT_PORT:-8783}" == 8783 && "${MANAGER_PORT:-8782}" == 8782 ]]
           [[ -z "${AITEAM_AGENT_JWKS_JSON:-}" && -z "${AITEAM_AGENT_JWKS_PATH:-}" ]] || { echo '::error::Static JWKS conflicts with Manager mode'; exit 1; }
