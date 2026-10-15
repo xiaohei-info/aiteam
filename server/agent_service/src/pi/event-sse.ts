@@ -26,6 +26,8 @@ const MAX_ARRAY_ITEMS = 32;
 const MAX_JSON_DEPTH = 4;
 
 type ToolKind = "memory" | "rag" | "todo";
+type BoundedPrimitive = string | number | boolean | null | undefined;
+export type BoundedEventPayload = BoundedPrimitive | Record<string, unknown> | unknown[];
 
 export interface PiEventMetadata {
   conversation_id?: string;
@@ -140,7 +142,7 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     copyIdentifier(result, raw, "argsHash");
     copyInteger(result, raw, "decisionRevision");
     copyText(result, raw, "expiresAt");
-    copyText(result, raw, "summary");
+    copyApprovalSummary(result, raw);
     copyText(result, raw, "riskLevel");
     copyToolName(result, raw);
     const kind = classifyToolKind(raw.toolName);
@@ -185,7 +187,7 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   return result;
 }
 
-function serializeContent(value: unknown): unknown {
+function serializeContent(value: unknown): BoundedEventPayload {
   if (typeof value === "string") return safeText(value, MAX_TEXT_CHARS);
   if (!Array.isArray(value)) return undefined;
   const output: unknown[] = [];
@@ -232,18 +234,18 @@ function serializeAssistantMessageEvent(value: unknown): Record<string, unknown>
   return result;
 }
 
-function safeToolResult(value: unknown, kind?: ToolKind): unknown {
+function safeToolResult(value: unknown, kind?: ToolKind): BoundedEventPayload {
   const payload = unwrapToolResult(value);
   return safeToolValue(payload, kind);
 }
 
-function safeToolValue(value: unknown, _kind?: ToolKind): unknown {
+function safeToolValue(value: unknown, _kind?: ToolKind): BoundedEventPayload {
   return boundedValue(value);
 }
 
-function unwrapToolResult(value: unknown): unknown {
+function unwrapToolResult(value: unknown): BoundedEventPayload {
   const raw = asRecord(value);
-  if (!raw) return value;
+  if (!raw) return value as BoundedEventPayload;
   const content = raw.content;
   if (Array.isArray(content)) {
     const text = content
@@ -253,14 +255,14 @@ function unwrapToolResult(value: unknown): unknown {
       .join("");
     if (text) {
       const bounded = safeText(text, MAX_TEXT_CHARS);
-      try { return JSON.parse(bounded); } catch { return { text: bounded }; }
+      try { return JSON.parse(bounded) as BoundedEventPayload; } catch { return { text: bounded }; }
     }
   }
-  if (raw.details !== undefined) return raw.details;
-  return value;
+  if (raw.details !== undefined) return raw.details as BoundedEventPayload;
+  return value as BoundedEventPayload;
 }
 
-function boundedValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
+function boundedValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): BoundedEventPayload {
   if (SECRET_KEY.test(key) || UNSAFE_VALUE_KEY.test(key)) return undefined;
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") return safeText(value, MAX_TEXT_CHARS);
@@ -305,6 +307,13 @@ function copyToolName(result: Record<string, unknown>, raw: Record<string, unkno
 function copyIdentifier(result: Record<string, unknown>, raw: Record<string, unknown>, key: string): void {
   const value = boundedIdentifier(raw[key], MAX_IDENTIFIER_CHARS);
   if (value) result[key] = value;
+}
+
+function copyApprovalSummary(result: Record<string, unknown>, raw: Record<string, unknown>): void {
+  if (typeof raw.summary === "string") {
+    const redacted = raw.summary.replace(INLINE_SECRET, "[内容已隐藏]");
+    result.summary = redacted.length <= MAX_TEXT_CHARS ? redacted : `${redacted.slice(0, Math.max(0, MAX_TEXT_CHARS - 1))}…`;
+  }
 }
 
 function copyText(result: Record<string, unknown>, raw: Record<string, unknown>, key: string): void {
