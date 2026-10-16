@@ -3,13 +3,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalService, approvalRiskForTool } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalService, POLICY_APPROVER, approvalRiskForTool } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
   tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", participantEmployeeId: "employee-1",
-  sessionId: "session-1", snapshotVersion: "snapshot-1", permissionRevision: "1:full-access", toolCallId: "call-1",
-  toolName: "bash", args: { command: "printf safe" }, riskLevel: "bash" as const, permissionMode: "full-access" as const,
+  sessionId: "session-1", snapshotVersion: "snapshot-1", permissionRevision: "1:workspace-write", toolCallId: "call-1",
+  toolName: "bash", args: { command: "printf safe" }, riskLevel: "bash" as const, permissionMode: "workspace-write" as const,
   ...overrides,
 });
 
@@ -58,7 +58,7 @@ test("permission changes and owner cancellation cannot execute an old approval",
     const service = new ApprovalService(store, { onRequired: (record) => { required = record; } });
     const pending = service.execute(request(), async () => "must-not-run");
     while (!required) await new Promise((resolve) => setImmediate(resolve));
-    await assert.rejects(service.execute(request({ permissionRevision: "2:full-access" }), async () => "changed"), /binding changed/);
+    await assert.rejects(service.execute(request({ permissionRevision: "2:workspace-write" }), async () => "changed"), /binding changed/);
     service.cancelOwner("tenant-1", "member-1");
     await assert.rejects(pending, /cancelled/);
     assert.equal(store.getApprovalRecord(required.id)?.status, "invalidated");
@@ -88,4 +88,28 @@ test("logout/abort cancellation makes an executing approval uncertain and blocks
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("full-access auto-approves local bash/write/edit by policy without a prompt but still audits, caps by lease, and gates external tools", async () => {
+  const { root, store } = fixture();
+  try {
+    let required = 0;
+    const service = new ApprovalService(store, { onRequired: () => { required += 1; } });
+    const full = { permissionMode: "full-access" as const, permissionRevision: "1:full-access" };
+    assert.equal(await service.execute(request(full), async () => "ran"), "ran");
+    assert.equal(required, 0);
+    const [audit] = service.list("conversation-1", "tenant-1", "member-1");
+    assert.equal(audit.status, "succeeded");
+    assert.equal(audit.approved_by, POLICY_APPROVER);
+    assert.equal(audit.consumed, true);
+    // The same tool call cannot be replayed through the policy path.
+    await assert.rejects(service.execute(request(full), async () => "again"), ApprovalDeniedError);
+    // The lease/JWT cutoff still bounds policy approval.
+    await assert.rejects(service.execute(request({ ...full, toolCallId: "call-expired", expiresAt: Date.now() - 1 }), async () => "late"), /expired/i);
+    const pending = service.execute(request({ ...full, toolName: "connector:jira", riskLevel: "external", toolCallId: "call-2" }), async () => "x");
+    while (required === 0) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(service.list("conversation-1", "tenant-1", "member-1").find((record) => record.tool_call_id === "call-2")?.status, "pending");
+    pending.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
