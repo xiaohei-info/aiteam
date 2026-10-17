@@ -4,6 +4,9 @@ import { encodeScope } from "./runtime-lease-cache.js";
 
 export type ApprovalRisk = "bash" | "write" | "edit" | "external" | "unknown";
 
+/** `approved_by` of records approved by conversation policy instead of a human decision. */
+export const POLICY_APPROVER = "policy:full-access";
+
 export interface ApprovalRequest {
   tenantId: string;
   memberId: string;
@@ -79,6 +82,11 @@ export class ApprovalService {
       // read-only is rejected before an ApprovalRecord is created.
       throw new ApprovalPermissionError();
     }
+    // full-access is an explicit per-conversation opt-out of per-call confirmation for local tools. The call still
+    // gets an ApprovalRecord (audit, args hash, single-use claim, lease cap) but is approved by policy without a prompt.
+    // External connectors and unknown tools keep requiring a human decision.
+    const autoApprove = request.permissionMode === "full-access"
+      && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit");
     const hash = canonicalArgsHmac(request.args);
     const existing = this.store.findApprovalForTool({
       tenantId: request.tenantId,
@@ -93,7 +101,7 @@ export class ApprovalService {
     if (existing && (existing.permission_revision !== request.permissionRevision || existing.tool_name !== request.toolName)) {
       throw new ApprovalDeniedError("Approval binding changed; request a new approval");
     }
-    const record = existing ?? this.create(request, hash);
+    const record = existing ?? this.create(request, hash, autoApprove);
     const claimed = await this.waitAndClaim(record, request);
     try {
       const result = await operation();
@@ -154,7 +162,7 @@ export class ApprovalService {
     this.waiters.clear();
   }
 
-  private create(request: ApprovalRequest, hash: string): ApprovalRecord {
+  private create(request: ApprovalRequest, hash: string, autoApprove = false): ApprovalRecord {
     const now = this.now();
     const maxExpiry = now + this.ttlMs;
     const expiry = request.expiresAt !== undefined && Number.isFinite(request.expiresAt)
@@ -181,8 +189,9 @@ export class ApprovalService {
       risk_level: request.riskLevel,
       expires_at: new Date(expiry).toISOString(),
       idempotency_key: encodeScope([request.conversationId, request.sessionId, request.toolCallId]),
+      ...(autoApprove ? { status: "approved" as const, approved_by: POLICY_APPROVER, approved_at: new Date(now).toISOString() } : {}),
     });
-    void this.onRequired?.(record);
+    if (!autoApprove) void this.onRequired?.(record);
     return record;
   }
 

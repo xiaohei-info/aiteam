@@ -183,6 +183,7 @@ Agent 创建方案群聊时只提交 `solution_instance_id`；Agent 根据本地
 - 多目标执行任一结果不确定时不自动重放；
 - `abort` 取消本次涉及的全部 participant Session；
 - 工具副作用仍由 `tool_call` gate、规范化参数 hash、ApprovalRecord 和下游幂等键控制；
+- Conversation 为 `full-access` 时，本地 `bash`/`write`/`edit` 由策略自动批准：仍写入 ApprovalRecord（`approved_by=policy:full-access`），保留参数 hash、单次消费与 lease 过期上限，只是不发出 `approval_required`、不要求人工决定；`external`/`unknown` 工具仍须人工审批，`read-only` 仍拒绝写入；
 - `mention_employee` 受 roster、snapshot、并发、调用次数、输出预算和 parent abort 约束；
 - child Session 不作为群聊持久历史，peer Session 的真实回复保存在目标员工固定 Pi Session 中。
 
