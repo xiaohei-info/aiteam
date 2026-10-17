@@ -22,7 +22,7 @@ import {
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import { isManagerAccessDenial, ManagerUnavailableError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
-import type { AgentSqliteStore, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
+import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
@@ -345,6 +345,28 @@ export class SessionHost {
   }
 
   /**
+   * Change a custom group's roster (and the rule that must stay consistent with it) between turns.
+   * New members get their Session lazily on first use; removed members keep their Session files so
+   * earlier replies stay in the history and a later re-add resumes the same Session.
+   */
+  async updateGroupMembers(
+    conversationId: string,
+    change: { add: readonly { id: string; version: string }[]; remove: readonly string[]; patch: Parameters<AgentSqliteStore["updateConversation"]>[1] },
+  ): Promise<ConversationMetadata> {
+    // Checked synchronously with the write below, so no prompt can start in between.
+    if ([...this.records.values()].some((record) => record.conversationId === conversationId && (record.prompting || record.promptPromise))) throw new ConversationBusyError();
+    const updated = this.options.store.updateGroupMembers(conversationId, change);
+    const removed = new Set(change.remove);
+    for (const [key, record] of [...this.records.entries()]) {
+      if (record.conversationId !== conversationId || !record.employeeId || !removed.has(record.employeeId)) continue;
+      await record.sessionReady?.catch(() => undefined);
+      await this.disposeSession(record);
+      this.records.delete(key);
+    }
+    return updated;
+  }
+
+  /**
    * Return a bounded, already-redacted projection of runs that are still
    * executing. The projection is intentionally process-local and transient;
    * durable content remains the SessionManager JSONL source of truth.
@@ -534,7 +556,7 @@ export class SessionHost {
     const indexed = this.options.store.getOwnedConversation(conversationId, tenantId, memberId);
     if (!indexed) return false;
     this.approvalService.cancelConversation(conversationId, tenantId, memberId);
-    const participants = this.options.store.listConversationParticipants(conversationId);
+    const participants = this.options.store.listConversationParticipants(conversationId, { includeRemoved: true });
     const records = [...this.records.values()].filter((record) => record.conversationId === conversationId);
     for (const record of records) {
       record.aborting = true;
@@ -613,7 +635,8 @@ export class SessionHost {
   private readExistingHistorySources(conversationId: string): HistorySource[] {
     const indexed = this.options.store.getConversation(conversationId);
     if (!indexed) return [];
-    const participants = this.options.store.listConversationParticipants(conversationId);
+    // Members who left the group keep their earlier replies in the shared history.
+    const participants = this.options.store.listConversationParticipants(conversationId, { includeRemoved: true });
     const sources: HistorySource[] = participants.map((participant) => ({
       employeeId: participant.employee_id,
       role: participant.role,

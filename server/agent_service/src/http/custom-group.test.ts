@@ -210,3 +210,167 @@ test("edited group purpose and custom rules take effect on the next prompt", asy
     }
   } finally { await f.cleanup(); }
 });
+
+const members = async (f: Awaited<ReturnType<typeof setup>>, id: string) =>
+  (await f.request(`/api/agent/conversations/${id}/participants`)).data.participants.map((member: { employee_id: string }) => member.employee_id);
+
+test("members can be added and removed between turns, keeping history and the original Session", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("roster"), 201);
+    const endpoint = "/api/agent/conversations/roster/participants";
+    const added = (await f.request(endpoint, { add_employee_ids: ["e3"] }, 200, false, "PATCH")).data;
+    assert.deepEqual(added.participants.map((member: { employee_id: string }) => member.employee_id), ["e1", "e2", "e3"]);
+    assert.equal(added.employee_count, 3);
+    assert.equal(added.conversation.id, "roster");
+    assert.deepEqual(await members(f, "roster"), ["e1", "e2", "e3"]);
+
+    // The new member joins the next turn's context and can be called directly.
+    f.contexts.length = 0;
+    f.faux.setResponses([fauxAssistantMessage("e3 的发言")]);
+    await f.host.prompt("roster", "请 e3 处理", undefined, caller, ["e3"]);
+    assert(f.contexts.some(context => context.includes("e3 的独特简介")));
+    const sessionFile = f.store.getConversationParticipant("roster", "e3")!.session_file;
+    assert(sessionFile);
+
+    const removed = (await f.request(endpoint, { remove_employee_ids: ["e3"] }, 200, false, "PATCH")).data;
+    assert.deepEqual(removed.participants.map((member: { employee_id: string }) => member.employee_id), ["e1", "e2"]);
+    assert.equal(removed.employee_count, 2);
+    // Earlier replies stay readable, but the member no longer takes part.
+    assert(f.host.readEntries("roster", caller).some(({ entry }) => JSON.stringify(entry).includes("e3 的发言")));
+    await assert.rejects(f.host.prompt("roster", "再叫 e3", undefined, caller, ["e3"]));
+    f.contexts.length = 0;
+    f.faux.setResponses([fauxAssistantMessage("协调人回复")]);
+    await f.host.prompt("roster", "继续", undefined, caller);
+    assert(f.contexts.every(context => !context.includes("e3 的独特简介")));
+
+    // Re-adding resumes the same Session instead of starting a new one.
+    await f.request(endpoint, { add_employee_ids: ["e3"] }, 200, false, "PATCH");
+    const resumed = f.store.getConversationParticipant("roster", "e3")!;
+    assert.equal(resumed.session_file, sessionFile);
+    assert.equal(resumed.removed_at, null);
+    assert.equal(resumed.role, "member");
+
+    const coldStore = new AgentSqliteStore(join(f.dataRoot, "agent.sqlite"));
+    try {
+      assert.deepEqual(coldStore.listConversationParticipants("roster").map(member => member.employee_id), ["e1", "e2", "e3"]);
+    } finally { coldStore.close(); }
+
+    await f.host.delete("roster", caller.tenantId, caller.userId);
+    assert.equal(f.store.listConversationParticipants("roster", { includeRemoved: true }).length, 0);
+  } finally { await f.cleanup(); }
+});
+
+test("member edits reject invalid changes without touching the group", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("guarded"), 201);
+    const endpoint = "/api/agent/conversations/guarded/participants";
+    const before = f.store.getConversationMetadata("guarded");
+    for (const [patch, status] of [
+      [{}, 422], [{ add_employee_ids: [] }, 422],
+      [{ add_employee_ids: ["e2"] }, 422],
+      [{ remove_employee_ids: ["e3"] }, 422],
+      [{ remove_employee_ids: ["e1"] }, 422],
+      [{ add_employee_ids: ["e3"], remove_employee_ids: ["e3"] }, 422],
+      [{ add_employee_ids: ["e3", "e3"] }, 422],
+      [{ add_employee_ids: ["unknown"] }, 403],
+      [{ add_employee_ids: ["e3"], coordinator_employee_id: "e3" }, 422],
+      [{ add_employee_ids: ["e3"], orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "@{e9}" } }, 422],
+      [{ add_employee_ids: ["e3"], orchestration: { mode: "auto" }, description: null }, 422],
+    ] as const) {
+      await f.request(endpoint, patch, status, false, "PATCH");
+      assert.deepEqual(f.store.getConversationMetadata("guarded"), before);
+      assert.deepEqual(await members(f, "guarded"), ["e1", "e2"]);
+    }
+    await f.request(endpoint, { add_employee_ids: ["e3"] }, 404, true, "PATCH");
+    await f.request("/api/agent/conversations/missing/participants", { add_employee_ids: ["e3"] }, 404, false, "PATCH");
+
+    // Private chats and groups without a custom configuration are not editable.
+    await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
+    await f.request("/api/agent/conversations", { id: "legacy", kind: "group", coordinator_employee_id: "e1" }, 201);
+    for (const id of ["private", "legacy"]) await f.request(`/api/agent/conversations/${id}/participants`, { add_employee_ids: ["e3"] }, 422, false, "PATCH");
+  } finally { await f.cleanup(); }
+});
+
+test("member edits keep a custom rule consistent with the roster", async () => {
+  const f = await setup();
+  try {
+    const rule = (prompt: string) => ({ mode: "custom", format: "collaboration-markdown-v1", prompt });
+    await f.request(path, { ...input("ruled"), orchestration: rule("@{e1} → @{e2}：核对结果") }, 201);
+    const endpoint = "/api/agent/conversations/ruled/participants";
+    const before = f.store.getConversationMetadata("ruled");
+    // The rule still points at e2, so removing e2 alone must fail and change nothing.
+    const rejected = await f.request(endpoint, { remove_employee_ids: ["e2"] }, 422, false, "PATCH");
+    assert.equal(rejected.code, "invalid_orchestration_reference");
+    assert.deepEqual(f.store.getConversationMetadata("ruled"), before);
+    assert.deepEqual(await members(f, "ruled"), ["e1", "e2"]);
+
+    // Removing e2 together with a rewritten rule succeeds in one step.
+    const rewritten = rule("@{e1} → @{e3}：整理结论");
+    const removed = (await f.request(endpoint, { add_employee_ids: ["e3"], remove_employee_ids: ["e2"], orchestration: rewritten }, 200, false, "PATCH")).data;
+    assert.deepEqual(removed.participants.map((member: { employee_id: string }) => member.employee_id), ["e1", "e3"]);
+    assert.deepEqual(removed.conversation.orchestration, rewritten);
+    f.contexts.length = 0;
+    f.faux.setResponses([fauxAssistantMessage("done")]);
+    await f.host.prompt("ruled", "开始", undefined, caller);
+    assert(f.contexts.some(context => context.includes("整理结论") && context.includes("e3 的独特简介")));
+    assert(f.contexts.every(context => !context.includes("e2 的独特简介")));
+  } finally { await f.cleanup(); }
+});
+
+test("members cannot change while the group is running", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("busy"), 201);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    f.faux.setResponses([async () => { await gate; return fauxAssistantMessage("late"); }]);
+    const running = f.host.prompt("busy", "长任务", undefined, caller);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const before = f.store.getConversationMetadata("busy");
+    const refused = await f.request("/api/agent/conversations/busy/participants", { add_employee_ids: ["e3"] }, 409, false, "PATCH");
+    assert.equal(refused.code, "conversation_busy");
+    assert.deepEqual(f.store.getConversationMetadata("busy"), before);
+    assert.deepEqual(await members(f, "busy"), ["e1", "e2"]);
+    release();
+    await running;
+    await f.request("/api/agent/conversations/busy/participants", { add_employee_ids: ["e3"] }, 200, false, "PATCH");
+  } finally { await f.cleanup(); }
+});
+
+test("orchestration endpoint replaces and switches the rule with the same validation as PATCH", async () => {
+  const f = await setup();
+  try {
+    await f.request(path, input("switch"), 201);
+    const endpoint = "/api/agent/conversations/switch/orchestration";
+    const custom = { mode: "custom", format: "collaboration-markdown-v1", prompt: "  @{e1} → @{e2}：检查结果  " };
+    const toCustom = (await f.request(endpoint, { orchestration: custom, description: null }, 200, false, "PUT")).data;
+    assert.deepEqual(toCustom.orchestration, { ...custom, prompt: "@{e1} → @{e2}：检查结果" });
+    assert.equal(toCustom.description, null);
+    // Back to automatic needs a purpose, either already stored or sent along.
+    const saved = f.store.getConversationMetadata("switch");
+    for (const body of [
+      { orchestration: { mode: "auto" } },
+      { orchestration: { mode: "auto" }, description: "   " },
+      { orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "@{e3}" } },
+      { orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: " " } },
+      { orchestration: { mode: "custom", format: "unknown", prompt: "x" } },
+      { orchestration: null }, {}, { orchestration: { mode: "auto" }, description: "用途", title: "x" },
+    ]) {
+      await f.request(endpoint, body, 422, false, "PUT");
+      assert.deepEqual(f.store.getConversationMetadata("switch"), saved);
+    }
+    const toAuto = (await f.request(endpoint, { orchestration: { mode: "auto" }, description: " 恢复自动用途 " }, 200, false, "PUT")).data;
+    assert.deepEqual(toAuto.orchestration, { mode: "auto" });
+    assert.equal(toAuto.description, "恢复自动用途");
+    f.contexts.length = 0;
+    f.faux.setResponses([fauxAssistantMessage("after")]);
+    await f.host.prompt("switch", "after", undefined, caller);
+    assert(f.contexts.some(context => context.includes("恢复自动用途")));
+    await f.request(endpoint, { orchestration: { mode: "auto" } }, 404, true, "PUT");
+    await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
+    await f.request("/api/agent/conversations/private/orchestration", { orchestration: { mode: "auto" }, description: "用途" }, 422, false, "PUT");
+    assert((await f.request("/openapi.json")).paths["/api/agent/conversations/{conversation_id}/participants"].patch);
+  } finally { await f.cleanup(); }
+});

@@ -128,6 +128,8 @@ export interface ConversationParticipantSession {
   employee_version: string;
   created_at: string;
   updated_at: string;
+  /** Set when the member left the group; the Session stays readable as history but the member no longer takes part. */
+  removed_at: string | null;
 }
 
 export interface ConversationEntrySource {
@@ -446,6 +448,7 @@ export class AgentSqliteStore {
         employee_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        removed_at TEXT,
         PRIMARY KEY (conversation_id, employee_id)
       );
       CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
@@ -610,6 +613,7 @@ export class AgentSqliteStore {
       "ALTER TABLE idempotency_receipt ADD COLUMN failure_detail TEXT",
       "ALTER TABLE schedule_retry ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE schedule_retry ADD COLUMN schedule_generation INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE conversation_participant_session ADD COLUMN removed_at TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
@@ -824,26 +828,60 @@ export class AgentSqliteStore {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  listConversationParticipants(conversationId: string): ConversationParticipantSession[] {
+  /** Current roster. Members that left the group are excluded unless `includeRemoved` is set (history and cleanup only). */
+  listConversationParticipants(conversationId: string, options: { includeRemoved?: boolean } = {}): ConversationParticipantSession[] {
+    // SAFETY: the selected columns are exactly the ConversationParticipantSession fields.
     return this.db.prepare(`
       SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
-             employee_version, created_at, updated_at
+             employee_version, created_at, updated_at, removed_at
       FROM conversation_participant_session
-      WHERE conversation_id = ?
+      WHERE conversation_id = ? AND (? = 1 OR removed_at IS NULL)
       ORDER BY CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
-    `).all(conversationId) as unknown as ConversationParticipantSession[];
+    `).all(conversationId, options.includeRemoved ? 1 : 0) as unknown as ConversationParticipantSession[];
   }
 
+  /** Returns the row even for a removed member so a re-added member resumes the same Session. */
   getConversationParticipant(conversationId: string, employeeId: string): ConversationParticipantSession | undefined {
     return this.db.prepare(`
       SELECT conversation_id, employee_id, role, session_file, workspace, pi_session_id,
-             employee_version, created_at, updated_at
+             employee_version, created_at, updated_at, removed_at
       FROM conversation_participant_session
       WHERE conversation_id = ? AND employee_id = ?
     `).get(conversationId, employeeId) as ConversationParticipantSession | undefined;
   }
 
-  upsertConversationParticipant(input: Omit<ConversationParticipantSession, "created_at" | "updated_at"> & { created_at?: string; updated_at?: string }): ConversationParticipantSession {
+  /**
+   * Apply a membership change and the matching group configuration in one transaction.
+   * Removed members are soft-removed so their earlier replies stay in the group history;
+   * re-adding one reactivates the existing Session.
+   */
+  updateGroupMembers(
+    conversationId: string,
+    change: { add: readonly { id: string; version: string }[]; remove: readonly string[]; patch?: Parameters<AgentSqliteStore["updateConversation"]>[1] },
+  ): ConversationMetadata {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const now = new Date().toISOString();
+      for (const employeeId of change.remove) {
+        this.db.prepare("UPDATE conversation_participant_session SET removed_at = ?, updated_at = ? WHERE conversation_id = ? AND employee_id = ? AND removed_at IS NULL").run(now, now, conversationId, employeeId);
+      }
+      for (const member of change.add) {
+        const previous = this.getConversationParticipant(conversationId, member.id);
+        if (previous) {
+          this.db.prepare("UPDATE conversation_participant_session SET role = 'member', employee_version = ?, removed_at = NULL, updated_at = ? WHERE conversation_id = ? AND employee_id = ?").run(member.version, now, conversationId, member.id);
+        } else {
+          this.upsertConversationParticipant({ conversation_id: conversationId, employee_id: member.id, role: "member", session_file: "", workspace: "", pi_session_id: null, employee_version: member.version });
+        }
+      }
+      // Always bump updated_at so the conversation list reflects the roster change.
+      const updated = this.updateConversation(conversationId, change.patch ?? {});
+      if (!updated) throw new Error("Conversation does not exist");
+      this.db.exec("COMMIT");
+      return updated;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  upsertConversationParticipant(input: Omit<ConversationParticipantSession, "created_at" | "updated_at" | "removed_at"> & { created_at?: string; updated_at?: string }): ConversationParticipantSession {
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO conversation_participant_session (

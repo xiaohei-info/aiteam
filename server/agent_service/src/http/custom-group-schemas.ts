@@ -18,3 +18,25 @@ export const CustomGroupCreateRequest = Type.Object({
   orchestration: Type.Ref("GroupOrchestration"),
   permission_mode: Type.Optional(Type.Ref("ConversationPermissionMode")),
 }, { $id: "CustomGroupCreateRequest", additionalProperties: false, description: "自选成员建群；自动或自定义编排。不能混用旧方案、kind 或客户端所有者字段。" });
+
+const GroupDescription = Type.Union([Type.String({ minLength: 1, maxLength: 4000 }), Type.Null()], { description: "群简介；自动模式必填，自定义模式可传 null 清空。" });
+
+export const GroupOrchestrationUpdateRequest = Type.Object({
+  orchestration: Type.Ref("GroupOrchestration"),
+  description: Type.Optional(GroupDescription),
+}, { $id: "GroupOrchestrationUpdateRequest", additionalProperties: false, description: "整体替换自选成员群的编排；可同时调整群简介（切换到自动模式必须有非空简介）。下一轮执行生效。" });
+
+export const GroupMembersUpdateRequest = Type.Object({
+  add_employee_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 32, uniqueItems: true, description: "要加入的员工；须为当前用户已授权、尚未在群内的员工。" })),
+  remove_employee_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 32, uniqueItems: true, description: "要移出的现有成员；不能包含协调人。" })),
+  orchestration: Type.Optional(Type.Ref("GroupOrchestration", { description: "同一次变更中同步更新的编排；自定义规则引用了被移出的成员时必须一并提供。" })),
+  description: Type.Optional(GroupDescription),
+}, { $id: "GroupMembersUpdateRequest", additionalProperties: false, description: "原子地增减自选成员群成员；成员、简介和编排按合并后的结果统一校验。" });
+
+export const GroupMembersUpdateEnvelope = Type.Object({
+  data: Type.Object({
+    conversation: Type.Ref("ConversationMetadata"),
+    participants: Type.Array(Type.Ref("ConversationParticipant"), { description: "变更后的当前成员，coordinator 优先。" }),
+    employee_count: Type.Integer({ minimum: 0, description: "变更后的成员人数。" }),
+  }, { additionalProperties: false }),
+}, { $id: "GroupMembersUpdateEnvelope", description: "成员变更后的会话元数据与最新成员列表。" });
