@@ -73,7 +73,7 @@
 
 上面仅展示新增字段，并非完整响应。群成员以 `GET /api/agent/conversations/:id/participants` 为准；详情与列表返回相同的简介和编排配置。刷新和进程重启不改变名单，新增员工授权不会自动加入已有群。
 
-本期普通会话 PATCH 拒绝修改成员、协调人和编排等新群配置，也不允许将此类群改成私聊；名称和既有允许修改的元数据沿用原契约。
+普通会话 PATCH 仍拒绝修改成员和协调人，也不允许将此类群改成私聊；成员增减见下文“创建后的成员与编排编辑”，名称和既有允许修改的元数据沿用原契约。
 
 ## 创建一致性与错误
 
@@ -105,11 +105,59 @@
 - 必需编排和成员上下文保留完整，预算 64,000 字符；可选近期历史单独裁剪。必需上下文超限则报错，不带截断规则启动任务。
 - `work_id`、思考/工具历史及 `todo_update` 契约不变；协调人通过更新同一份任务清单反映进度，前端沿用单卡片和可展开执行记录。
 
+## 创建后的成员与编排编辑
+
+仅自选成员群（`orchestration` 不为 null 的 `group`）可编辑；私聊、旧版群和方案群返回 `422 invalid_group_configuration`。两个接口都只允许会话所有者调用，非所有者返回 `404`，修改在下一轮对话生效。能力判断同样读取 `/openapi.json`。
+
+### 增减成员
+
+`PATCH /api/agent/conversations/:conversation_id/participants`
+
+```json
+{
+  "add_employee_ids": ["emp_finance"],
+  "remove_employee_ids": ["emp_pm"],
+  "orchestration": { "mode": "custom", "format": "collaboration-markdown-v1", "prompt": "1. @{emp_tech} → @{emp_finance}：…" },
+  "description": "可选，同步更新群简介"
+}
+```
+
+四个字段都可选，但 `add_employee_ids` 与 `remove_employee_ids` 至少要有一个非空；未提供的 `orchestration`、`description` 保持不变。
+
+| 规则 | 说明 |
+| --- | --- |
+| 新增成员 | 必须是当前用户已授权且快照有效的员工，且尚未在群内；未授权返回 `403` |
+| 移出成员 | 必须是当前成员；协调人不能移出（`invalid_group_coordinator`），协调人固定不变 |
+| 人数 | 变更后 1–32 人，与创建时一致 |
+| 编排一致性 | 成员、简介和编排按**合并后的结果**统一校验。自定义规则里的 `@{id}` 引用了被移出或不在群内的成员时返回 `422 invalid_orchestration_reference`，需要在同一请求里一并提交改写后的 `orchestration` |
+| 原子性 | 成员、简介、编排在同一个 SQLite 事务内写入，任何一项校验失败都不会改动群 |
+| 运行中 | 群内有成员正在执行时返回 `409 conversation_busy`，等本轮结束后重试 |
+
+成功返回 `200`：
+
+```json
+{ "data": { "conversation": { "...": "ConversationMetadata" }, "participants": [], "employee_count": 3 } }
+```
+
+`participants` 与 `GET /participants` 结构相同，是变更后的当前成员。
+
+移出采用软移除：成员不再参与对话、不能被 @、不出现在成员列表和群上下文里，但此前的发言继续保留在群历史中；之后重新加入会沿用原来的 Session。新成员的 Session 在首次被调用时才创建。删除会话时一并清理已移出成员的 Session 文件。
+
+### 修改编排
+
+`PUT /api/agent/conversations/:conversation_id/orchestration`
+
+```json
+{ "orchestration": { "mode": "auto" }, "description": "切换到自动编排时必须有非空群简介" }
+```
+
+整体替换编排，可在 `auto` 与 `custom` 之间切换，`description` 可选（字符串或 null）。校验与 `PATCH /conversations/:id` 完全相同：规则不可清空，自定义规则最多 16,000 字符且只能引用现有成员，自动模式要求去除空白后的群简介非空。`PATCH` 仍可使用，两者共用同一份校验。
+
 ## 实现与验证
 
 主要文件：`src/http/custom-group-schemas.ts`、`src/http/server.ts`、`src/groups/orchestration.ts`、`src/services/group-creation.ts`、`src/storage/sqlite.ts`、`src/pi/session-host.ts`、`src/tools/delegate.ts`、`src/main.ts`。
 
-SQLite 新增 `description` 和 `orchestration_json` 两列，仅升级当前 Agent 本地库，不迁移冻结 MVP 数据。旧群的编排字段为空，维持既有行为。
+SQLite 新增 `description` 和 `orchestration_json` 两列，成员软移除另给 `conversation_participant_session` 加 `removed_at` 列（均为 `ALTER TABLE` 增量迁移，旧行为 NULL 即在群内），仅升级当前 Agent 本地库，不迁移冻结 MVP 数据。旧群的编排字段为空，维持既有行为。
 
 - TypeScript 类型检查通过。
 - 自定义创建、会话读取、工作记录、SessionHost、SSE 与 SQLite 相关回归 67 项通过。
