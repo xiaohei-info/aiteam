@@ -4,8 +4,8 @@ import { LocalDirectoryError } from "../storage/local-directories.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
-import { GroupConfigurationError, validateCustomGroup } from "../groups/orchestration.js";
-import { CustomGroupCreateRequest, GroupOrchestration } from "./custom-group-schemas.js";
+import { GroupConfigurationError, validateCustomGroup, type GroupOrchestration as GroupOrchestrationConfig } from "../groups/orchestration.js";
+import { CustomGroupCreateRequest, GroupMembersUpdateEnvelope, GroupMembersUpdateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest } from "./custom-group-schemas.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { URL } from "node:url";
@@ -18,7 +18,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type IdempotencyReceipt } from "../storage/sqlite.js";
+import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
@@ -593,7 +593,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
@@ -746,6 +746,14 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
     automatic: { summary: "自选成员自动编排", value: { id: "group-client-1", title: "课程协作", description: "根据客户需求协同完成课程方案", member_employee_ids: ["employee-1", "employee-2"], coordinator_employee_id: "employee-1", orchestration: { mode: "auto" } } },
     custom: { summary: "自定义协作提示词", value: { id: "group-client-2", title: "课程协作", member_employee_ids: ["employee-1", "employee-2"], coordinator_employee_id: "employee-1", orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "1. @{employee-1} → @{employee-2}：整理课程方案。" } } },
   }, responses: { "201": { description: "群配置与固定成员创建成功，尚未触发执行。", examples: { created: { summary: "已创建的自选成员群", value: { data: { ...EXAMPLE_CONVERSATION, id: "group-client-1", kind: "group", entry_employee_id: null, coordinator_employee_id: "employee-1", description: "根据客户需求协同完成课程方案", orchestration: { mode: "auto" } } } } } } } },
+  updateConversationParticipants: { request: {
+    add: { summary: "加入成员", value: { add_employee_ids: ["employee-3"] } },
+    swap: { summary: "替换成员并同步改写自定义规则", value: { add_employee_ids: ["employee-3"], remove_employee_ids: ["employee-2"], orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "1. @{employee-1} → @{employee-3}：整理课程方案。" } } },
+  }, responses: { "200": { description: "成员已变更；返回最新会话元数据和当前成员列表。", examples: { updated: { summary: "加入一名成员后", value: { data: { conversation: { ...EXAMPLE_CONVERSATION, id: "group-client-1", kind: "group", entry_employee_id: null, coordinator_employee_id: "employee-1", description: "根据客户需求协同完成课程方案", orchestration: { mode: "auto" } }, participants: [{ employee_id: "employee-1", display_name: "研究员", handle: "researcher", role_title: "研究分析师", department_ids: ["department-research"], role: "coordinator", available: true }, { employee_id: "employee-2", display_name: "分析员", handle: "analyst", role_title: null, department_ids: [], role: "participant", available: true }, { employee_id: "employee-3", display_name: "顾问", handle: "advisor", role_title: null, department_ids: [], role: "participant", available: true }], employee_count: 3 } } } } } } },
+  replaceConversationOrchestration: { request: {
+    custom: { summary: "切换为自定义规则", value: { orchestration: { mode: "custom", format: "collaboration-markdown-v1", prompt: "1. @{employee-1} → @{employee-2}：整理课程方案。" }, description: null } },
+    auto: { summary: "切换为自动编排并补充群简介", value: { orchestration: { mode: "auto" }, description: "根据客户需求协同完成课程方案" } },
+  }, responses: { "200": { description: "编排已替换，下一轮对话生效；返回更新后的会话元数据。", examples: { switched: { summary: "已切换为自动编排", value: { data: { ...EXAMPLE_CONVERSATION, id: "group-client-1", kind: "group", entry_employee_id: null, coordinator_employee_id: "employee-1", description: "根据客户需求协同完成课程方案", orchestration: { mode: "auto" } } } } } } } },
   createConversation: { request: { private: { summary: "私聊会话", value: { title: "今日工作摘要", kind: "private", entry_employee_id: "employee-1", permission_mode: "read-only" } }, scheduled: { summary: "一次性调度会话", value: { title: "定时摘要", kind: "private", entry_employee_id: "employee-1", schedule: EXAMPLE_SCHEDULE } } }, responses: { "201": { description: "创建成功的本地会话元数据。", examples: { created: { summary: "创建成功", value: { data: EXAMPLE_CONVERSATION } } } } } },
   getConversation: { responses: { "200": { description: "本地会话元数据。", examples: { conversation: { summary: "会话详情", value: { data: EXAMPLE_CONVERSATION } } } } } },
   updateConversation: { request: { patch: { summary: "部分更新", value: { title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } }, markRead: { summary: "使用 entries/search 返回的 entry_ref 标记已读（引用仅为形状示例）", value: { last_read_entry_id: "entry_v1_opaque" } } }, responses: { "200": { description: "更新后的本地会话元数据。", examples: { updated: { summary: "更新成功", value: { data: { ...EXAMPLE_CONVERSATION, title: "更新后的标题", labels: ["daily", "updated"], permission_mode: "workspace-write" } } } } } } },
@@ -1267,6 +1275,14 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/participants", (_request, response, caller, fastifyRequest) => {
       this.writeJson(response, 200, this.conversationReads.participants((fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!));
     }, routeSchema("listConversationParticipants", { summary: "读取真实会话成员", description: "仅返回已存在的固定 participant Session 索引成员，不回退到授权全集；撤权成员仍可见但不可执行，不返回本机路径。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationParticipantsEnvelope")), 404: problemResponse("NotFound") } }));
+    this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/participants", (request, response, caller, fastifyRequest) => this.updateGroupParticipants(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationParticipants", {
+      summary: "增减自选成员群成员", description: "在两轮对话之间原子地加入或移出自选成员群成员，可同时提交新的群简介与编排。成员、简介和编排按合并后的结果统一校验：协调人不能移出，自定义规则不能引用已不在群内的成员（需在同一请求里一并改写规则）。移出的成员保留其历史发言，重新加入后沿用原 Session；新成员在首次被调用时才创建 Session。会话正在执行时返回 409。",
+      params: ConversationParams, body: Type.Ref("GroupMembersUpdateRequest"), response: { 200: jsonResponse(Type.Ref("GroupMembersUpdateEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
+    }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/orchestration", (request, response, caller, fastifyRequest) => this.updateGroupOrchestration(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("replaceConversationOrchestration", {
+      summary: "修改群编排规则", description: "整体替换自选成员群的编排，可在自动与自定义模式之间切换，并可同时更新群简介。校验规则与 PATCH 会话详情相同；会话正在执行时返回 409，下一轮执行生效，不可清空。",
+      params: ConversationParams, body: Type.Ref("GroupOrchestrationUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
+    }));
     this.registerRoute("GET", "/api/agent/messages/search", (request, response, caller) => {
       this.writeJson(response, 200, this.conversationReads.search(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
     }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 4,000 字/32 块展示截断影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
@@ -1685,16 +1701,7 @@ export class AgentHttpServer {
       throw new HttpProblem(422, "invalid_group_configuration", "Group configuration is immutable after creation");
     }
     if (body.description !== undefined || body.orchestration !== undefined) {
-      if (current.kind !== "group" || !current.orchestration) {
-        throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups support editing group configuration");
-      }
-      patch.orchestration = validateCustomGroup({
-        title: current.title ?? "群聊",
-        description: patch.description !== undefined ? patch.description : current.description,
-        member_employee_ids: this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id),
-        coordinator_employee_id: current.coordinator_employee_id ?? "",
-        orchestration: body.orchestration !== undefined ? body.orchestration : current.orchestration,
-      });
+      patch.orchestration = this.resolveGroupConfiguration(conversationId, current, { description: patch.description, orchestration: body.orchestration });
     }
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.conversationReads.readPointer(conversationId, caller, body.last_read_entry_id);
     const updated = this.options.store.updateConversation(conversationId, patch);
@@ -1711,6 +1718,64 @@ export class AgentHttpServer {
   private async getConversationContext(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     this.requireOwnedConversation(conversationId, caller);
     this.writeJson(response, 200, { data: await this.options.host.getConversationContext(conversationId, caller) });
+  }
+
+  private requireCustomGroup(current: StoredConversationMetadata): void {
+    if (current.kind !== "group" || !current.orchestration) {
+      throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups support editing group configuration");
+    }
+  }
+
+  /** Validate the merged members, description and rule of an editable custom group; omitted parts keep their current value. */
+  private resolveGroupConfiguration(conversationId: string, current: StoredConversationMetadata, change: { memberIds?: readonly string[]; description?: string | null; orchestration?: unknown }): GroupOrchestrationConfig {
+    this.requireCustomGroup(current);
+    return validateCustomGroup({
+      title: current.title ?? "群聊",
+      description: change.description !== undefined ? change.description : current.description,
+      member_employee_ids: [...(change.memberIds ?? this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id))],
+      coordinator_employee_id: current.coordinator_employee_id ?? "",
+      orchestration: change.orchestration !== undefined ? change.orchestration : current.orchestration,
+    });
+  }
+
+  private async updateGroupOrchestration(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    const body = await this.readJson(request);
+    this.requireOwnedConversation(conversationId, caller);
+    if (!Check({ GroupOrchestration }, GroupOrchestrationUpdateRequest, body)) throw new HttpProblem(422, "invalid_group_orchestration", "Group orchestration fields do not match the documented schema");
+    const current = this.options.store.getConversationMetadata(conversationId)!;
+    const description = body.description === undefined ? undefined : (typeof body.description === "string" ? body.description.trim() || null : null);
+    const orchestration = this.resolveGroupConfiguration(conversationId, current, { description, orchestration: body.orchestration });
+    // Same guard as PATCH /participants; checked synchronously with the write so no prompt can start in between.
+    this.options.host.assertConversationIdle(conversationId);
+    this.options.store.updateConversation(conversationId, { orchestration, ...(description !== undefined ? { description } : {}) });
+    this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
+  }
+
+  private async updateGroupParticipants(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    const body = await this.readJson(request);
+    this.requireOwnedConversation(conversationId, caller);
+    if (!Check({ GroupOrchestration }, GroupMembersUpdateRequest, body)) throw new HttpProblem(422, "invalid_group_members", "Group member fields do not match the documented schema");
+    const current = this.options.store.getConversationMetadata(conversationId)!;
+    this.requireCustomGroup(current);
+    // SAFETY: the preceding TypeBox Check guarantees these optional fields are string arrays.
+    const add = (body.add_employee_ids ?? []) as string[];
+    const remove = (body.remove_employee_ids ?? []) as string[];
+    if (add.length + remove.length === 0) throw new HttpProblem(422, "invalid_group_members", "Specify at least one member to add or remove");
+    const roster = this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id);
+    if (add.some(id => remove.includes(id))) throw new HttpProblem(422, "invalid_group_members", "An employee cannot be added and removed in the same change");
+    if (add.some(id => roster.includes(id))) throw new HttpProblem(422, "invalid_group_members", "Employee is already in this group");
+    if (remove.some(id => !roster.includes(id))) throw new HttpProblem(422, "invalid_group_members", "Employee is not in this group");
+    if (current.coordinator_employee_id && remove.includes(current.coordinator_employee_id)) throw new HttpProblem(422, "invalid_group_coordinator", "The coordinator cannot be removed from the group");
+    const description = body.description === undefined ? undefined : (typeof body.description === "string" ? body.description.trim() || null : null);
+    const seeds = this.groupParticipantSeeds(add, caller);
+    const orchestration = this.resolveGroupConfiguration(conversationId, current, {
+      memberIds: [...roster.filter(id => !remove.includes(id)), ...add],
+      description,
+      orchestration: body.orchestration,
+    });
+    await this.options.host.updateGroupMembers(conversationId, { add: seeds, remove, patch: { orchestration, ...(description !== undefined ? { description } : {}) } });
+    const members = this.conversationReads.participants(conversationId, caller).data;
+    this.writeJson(response, 200, { data: { conversation: this.conversationReads.metadata(conversationId, caller), participants: members.participants, employee_count: members.employee_count } });
   }
 
   private async updateConversationContext(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {

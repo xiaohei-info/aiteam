@@ -29,8 +29,9 @@ test.describe("agent api-contract", () => {
     const response = await request.get(`${TIER_API_ORIGIN.agent}/openapi.json`);
     expect(response.ok()).toBeTruthy();
     const openapi = (await response.json()) as { paths: Record<string, Record<string, unknown>> };
+    const participantsPath = "/api/agent/conversations/{conversation_id}/participants";
+    const orchestrationPath = "/api/agent/conversations/{conversation_id}/orchestration";
     const localReadPaths = [
-      "/api/agent/conversations/{conversation_id}/participants",
       "/api/agent/messages/search",
       "/api/agent/work-records",
       "/api/agent/work-records/changes",
@@ -45,6 +46,8 @@ test.describe("agent api-contract", () => {
       "/api/agent/conversations",
       "/api/agent/conversations/{conversation_id}",
       "/api/agent/conversations/{conversation_id}/state",
+      participantsPath,
+      orchestrationPath,
       ...localReadPaths,
     ]));
     for (const path of localReadPaths) {
@@ -52,6 +55,14 @@ test.describe("agent api-contract", () => {
         ["get", "post", "put", "patch", "delete", "options", "head", "trace"].includes(key));
       expect(methods).toEqual(["get"]);
       expect(openapi.paths[path].get).toMatchObject({ security: [{ bearerAuth: [] }] });
+    }
+    // Participants are readable and editable by the conversation owner; orchestration is replace-only.
+    const httpMethods = (path: string) => Object.keys(openapi.paths[path]).filter((key) =>
+      ["get", "post", "put", "patch", "delete", "options", "head", "trace"].includes(key)).sort();
+    expect(httpMethods(participantsPath)).toEqual(["get", "patch"]);
+    expect(httpMethods(orchestrationPath)).toEqual(["put"]);
+    for (const [path, method] of [[participantsPath, "get"], [participantsPath, "patch"], [orchestrationPath, "put"]] as const) {
+      expect(openapi.paths[path][method]).toMatchObject({ security: [{ bearerAuth: [] }] });
     }
     const automationPaths = [
       "/api/agent/automation-tasks",
