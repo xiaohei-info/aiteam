@@ -1280,8 +1280,8 @@ export class AgentHttpServer {
       params: ConversationParams, body: Type.Ref("GroupMembersUpdateRequest"), response: { 200: jsonResponse(Type.Ref("GroupMembersUpdateEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
     }));
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/orchestration", (request, response, caller, fastifyRequest) => this.updateGroupOrchestration(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("replaceConversationOrchestration", {
-      summary: "修改群编排规则", description: "整体替换自选成员群的编排，可在自动与自定义模式之间切换，并可同时更新群简介。校验规则与 PATCH 会话详情相同；下一轮执行生效，不可清空。",
-      params: ConversationParams, body: Type.Ref("GroupOrchestrationUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound"), 422: problemResponse("ValidationError") },
+      summary: "修改群编排规则", description: "整体替换自选成员群的编排，可在自动与自定义模式之间切换，并可同时更新群简介。校验规则与 PATCH 会话详情相同；会话正在执行时返回 409，下一轮执行生效，不可清空。",
+      params: ConversationParams, body: Type.Ref("GroupOrchestrationUpdateRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
     }));
     this.registerRoute("GET", "/api/agent/messages/search", (request, response, caller) => {
       this.writeJson(response, 200, this.conversationReads.search(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
@@ -1745,6 +1745,8 @@ export class AgentHttpServer {
     const current = this.options.store.getConversationMetadata(conversationId)!;
     const description = body.description === undefined ? undefined : (typeof body.description === "string" ? body.description.trim() || null : null);
     const orchestration = this.resolveGroupConfiguration(conversationId, current, { description, orchestration: body.orchestration });
+    // Same guard as PATCH /participants; checked synchronously with the write so no prompt can start in between.
+    this.options.host.assertConversationIdle(conversationId);
     this.options.store.updateConversation(conversationId, { orchestration, ...(description !== undefined ? { description } : {}) });
     this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
   }

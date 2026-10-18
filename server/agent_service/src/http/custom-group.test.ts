@@ -319,7 +319,7 @@ test("member edits keep a custom rule consistent with the roster", async () => {
   } finally { await f.cleanup(); }
 });
 
-test("members cannot change while the group is running", async () => {
+test("members and orchestration cannot change while the group is running", async () => {
   const f = await setup();
   try {
     await f.request(path, input("busy"), 201);
@@ -333,8 +333,12 @@ test("members cannot change while the group is running", async () => {
     assert.equal(refused.code, "conversation_busy");
     assert.deepEqual(f.store.getConversationMetadata("busy"), before);
     assert.deepEqual(await members(f, "busy"), ["e1", "e2"]);
+    const refusedRule = await f.request("/api/agent/conversations/busy/orchestration", { orchestration: { mode: "auto" }, description: "忙碌中" }, 409, false, "PUT");
+    assert.equal(refusedRule.code, "conversation_busy");
+    assert.deepEqual(f.store.getConversationMetadata("busy"), before);
     release();
     await running;
+    await f.request("/api/agent/conversations/busy/orchestration", { orchestration: { mode: "auto" }, description: "空闲后" }, 200, false, "PUT");
     await f.request("/api/agent/conversations/busy/participants", { add_employee_ids: ["e3"] }, 200, false, "PATCH");
   } finally { await f.cleanup(); }
 });
@@ -371,6 +375,12 @@ test("orchestration endpoint replaces and switches the rule with the same valida
     await f.request(endpoint, { orchestration: { mode: "auto" } }, 404, true, "PUT");
     await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
     await f.request("/api/agent/conversations/private/orchestration", { orchestration: { mode: "auto" }, description: "用途" }, 422, false, "PUT");
-    assert((await f.request("/openapi.json")).paths["/api/agent/conversations/{conversation_id}/participants"].patch);
+    // Mirrors web/e2e/agent/smoke.spec.ts, which cannot run without the full stack.
+    const openapi = await f.request("/openapi.json");
+    const participants = openapi.paths["/api/agent/conversations/{conversation_id}/participants"];
+    const orchestration = openapi.paths["/api/agent/conversations/{conversation_id}/orchestration"];
+    assert.deepEqual(Object.keys(participants).sort(), ["get", "patch"]);
+    assert.deepEqual(Object.keys(orchestration), ["put"]);
+    for (const operation of [participants.get, participants.patch, orchestration.put]) assert.deepEqual(operation.security, [{ bearerAuth: [] }]);
   } finally { await f.cleanup(); }
 });

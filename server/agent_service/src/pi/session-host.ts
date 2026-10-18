@@ -349,12 +349,17 @@ export class SessionHost {
    * New members get their Session lazily on first use; removed members keep their Session files so
    * earlier replies stay in the history and a later re-add resumes the same Session.
    */
+  /** Throws ConversationBusyError while any member of the conversation is executing; synchronous so callers can pair it with a write. */
+  assertConversationIdle(conversationId: string): void {
+    if ([...this.records.values()].some((record) => record.conversationId === conversationId && (record.prompting || record.promptPromise))) throw new ConversationBusyError();
+  }
+
   async updateGroupMembers(
     conversationId: string,
     change: { add: readonly { id: string; version: string }[]; remove: readonly string[]; patch: Parameters<AgentSqliteStore["updateConversation"]>[1] },
   ): Promise<ConversationMetadata> {
     // Checked synchronously with the write below, so no prompt can start in between.
-    if ([...this.records.values()].some((record) => record.conversationId === conversationId && (record.prompting || record.promptPromise))) throw new ConversationBusyError();
+    this.assertConversationIdle(conversationId);
     const updated = this.options.store.updateGroupMembers(conversationId, change);
     const removed = new Set(change.remove);
     for (const [key, record] of [...this.records.entries()]) {
