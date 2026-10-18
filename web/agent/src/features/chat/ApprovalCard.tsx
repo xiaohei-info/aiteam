@@ -18,7 +18,6 @@ const RISK_LABELS: Record<ApprovalRiskLevel, string> = {
 };
 
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
-const INLINE_PATH = /(?:file:\/\/)?\/(?:Users|private|home|tmp|var|workspace|etc|root|opt|srv|usr)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*/gi;
 
 const STATUS_LABELS: Record<ApprovalStatus, string> = {
   pending: "待审批",
@@ -144,7 +143,7 @@ function isApprovalRefreshError(cause: unknown): boolean {
 }
 
 function safeSummary(value: string): string {
-  return value.replace(INLINE_SECRET, "[已隐藏]").replace(INLINE_PATH, "[路径已隐藏]").slice(0, 1_200);
+  return value.replace(INLINE_SECRET, "[已隐藏]").slice(0, 1_200);
 }
 
 function formatExpiry(value: string): string {

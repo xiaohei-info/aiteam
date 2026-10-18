@@ -153,3 +153,19 @@ test("execution work ID rides persisted entries, survives bounding, and is never
   const bounded = serializePiEntry({ id: "entry", type: "message", work_id: id, message: { role: "assistant", content: "x".repeat(100_000) } });
   assert.equal(bounded?.work_id, id);
 });
+
+test("approval_required summary keeps full file paths but still hides credentials and is bounded", () => {
+  const event = serializePiEvent({
+    type: "approval_required",
+    toolName: "bash",
+    summary: "cp '/Users/chendian/a.txt' '/Users/chendian/b.txt' token=unsafe-token",
+  } as never);
+  assert.equal(event?.summary, "cp '/Users/chendian/a.txt' '/Users/chendian/b.txt' [内容已隐藏]");
+
+  const long = serializePiEvent({ type: "approval_required", toolName: "bash", summary: "x".repeat(5_000) } as never);
+  assert.equal(typeof long?.summary, "string");
+  assert.equal((long?.summary as string).length, 4_000);
+  assert.equal((long?.summary as string).endsWith("…"), true);
+
+  assert.equal(serializePiEvent({ type: "approval_required", toolName: "bash", summary: 42 } as never)?.summary, undefined);
+});

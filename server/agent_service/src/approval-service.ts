@@ -314,7 +314,6 @@ function boundedRedaction(value: unknown, depth = 0): JsonLikeValue {
   if (depth > 3) return "[内容已省略]";
   if (typeof value === "string") return value
     .replace(/(?:bearer\s+|(?:api[_ -]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+/giu, "[内容已隐藏]")
-    .replace(/(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/giu, "[路径已隐藏]")
     .slice(0, 240);
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (Array.isArray(value)) return value.slice(0, 16).map((item) => boundedRedaction(item, depth + 1));

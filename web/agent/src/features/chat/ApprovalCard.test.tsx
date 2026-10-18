@@ -59,7 +59,7 @@ describe("ApprovalCard", () => {
     expect(onUpdated).toHaveBeenCalledWith(updated);
   });
 
-  it("renders non-actionable uncertain approvals with sanitized summaries", () => {
+  it("renders non-actionable uncertain approvals with secrets hidden and full paths shown", () => {
     render(
       <ApprovalCard
         client={client}
@@ -75,7 +75,7 @@ describe("ApprovalCard", () => {
 
     expect(screen.getByTestId("approval-status")).toHaveTextContent("结果未知");
     expect(screen.getByText("执行结果未知")).toBeInTheDocument();
-    expect(screen.getByTestId("approval-redacted-summary")).toHaveTextContent("[已隐藏] path=[路径已隐藏]");
+    expect(screen.getByTestId("approval-redacted-summary")).toHaveTextContent("[已隐藏] path=/private/workspace/secret.txt");
     expect(screen.getByText("有效期至：未知")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();

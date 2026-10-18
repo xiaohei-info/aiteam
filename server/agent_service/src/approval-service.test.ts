@@ -113,3 +113,21 @@ test("full-access auto-approves local bash/write/edit by policy without a prompt
     service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("approval summary preserves command file paths", async () => {
+  const { root, store } = fixture();
+  try {
+    let required!: ReturnType<ApprovalService["list"]>[number];
+    const service = new ApprovalService(store, { onRequired: (record) => { required = record; } });
+    const command = "cp '/Users/chendian/a.txt' '/Users/chendian/b.txt'";
+    const pending = service.execute(request({ args: { command } }), async () => "ok");
+    while (!required) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(required.redacted_summary.includes("/Users/chendian/a.txt"), true);
+    assert.equal(required.redacted_summary.includes("[路径已隐藏]"), false);
+    service.decide({ id: required.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "test-path" });
+    assert.equal(await pending, "ok");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
