@@ -370,6 +370,19 @@ describe("TimelineView Pi cards", () => {
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
   });
 
+  it("keeps file paths and links in message bodies but hides them in thinking and tool details", () => {
+    const body = "报告已生成：[月报.md](/Users/x/work/月报.md)，原件见 /tmp/out/a.pdf。token=unsafe";
+    const message = classifyPiRecord(entry("a", "message", { message: { role: "assistant", content: body } }));
+    expect(message.summary).toBe("报告已生成：[月报.md](/Users/x/work/月报.md)，原件见 /tmp/out/a.pdf。[已隐藏]");
+
+    const thinking = classifyPiRecord(entry("t", "thinking", { thinking: "读取 /Users/x/a.txt。" }));
+    expect(thinking.summary).toBe("读取 [路径已隐藏]。");
+
+    const tool = boundedJson({ output: "wrote (/tmp/out/a.txt), see [x](/var/log/x.log)." });
+    expect(tool).toContain("wrote ([路径已隐藏]), see [x]([路径已隐藏]).");
+    expect(tool).not.toContain("/var/log/x.log");
+  });
+
   it("attributes delegated user messages to the coordinating employee", async () => {
     mockedGetEntries.mockResolvedValue([
       entry("human", "message", { message: { role: "user", content: "用户请求" } }),

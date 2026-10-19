@@ -1424,6 +1424,8 @@ export class SessionHost {
         requirements ? `方案交付要求：${requirements}` : "",
       ].filter(Boolean).join("\n"));
     }
+    const freeDescription = !metadata?.orchestration && !solution ? groupContextField(metadata?.description) : undefined;
+    if (freeDescription) sections.push(`群简介：${freeDescription}`);
     if (memberLines.length) sections.push(`群聊成员信息（仅作协作参考，实际权限以当前员工快照为准）：\n${memberLines.join("\n")}`);
     const requiredContext = metadata?.orchestration
       ? orchestrationContext(metadata.orchestration, metadata.description ?? null, targetEmployeeId === metadata.coordinator_employee_id) + "\n\n" + sections.join("\n\n") : null;

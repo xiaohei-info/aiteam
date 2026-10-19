@@ -34,7 +34,10 @@ const NON_CONVERSATION_ENTRY_TYPES = new Set(["model_change", "thinking_level_ch
 
 const SENSITIVE_KEY = /(?:authorization|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key|(?:^|[_-])key$)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
-const INLINE_PATH = /(?:file:\/\/)?\/(?:Users|private|home|tmp|var|workspace|etc|root|opt|srv|usr)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*/gi;
+// Stops at brackets, quotes and sentence punctuation so a path inside a Markdown link or sentence
+// is replaced without swallowing the closing characters.
+const INLINE_PATH = /(?:file:\/\/)?\/(?:Users|private|home|tmp|var|workspace|etc|root|opt|srv|usr)(?:\/[^\s"'<>()\[\]{}，。；：！？、）】》」』]*)*|[A-Za-z]:\\[^\s"'<>()\[\]{}，。；：！？、）】》」』]*/gi;
+const PATH_TRAILING_PUNCTUATION = /[.,;:!?]+$/u;
 
 export type TimelineKind =
   | "message"
@@ -1209,7 +1212,9 @@ function cardDetails(kind: TimelineKind, type: string, value: Record<string, unk
 function summaryFor(kind: TimelineKind, type: string, value: Record<string, unknown> | null, details: ExtractedCardDetails): string {
   switch (kind) {
     case "message": {
-      const content = textFrom(value?.message) ?? textFrom(value?.content) ?? textFrom(value?.text) ?? textFrom(value?.delta) ?? textFrom(value?.assistantMessageEvent);
+      // Message bodies keep the paths and file links the assistant wrote; everything else stays redacted.
+      const body = (part: unknown) => textFrom(part, 0, new WeakSet<object>(), true);
+      const content = body(value?.message) ?? body(value?.content) ?? body(value?.text) ?? body(value?.delta) ?? body(value?.assistantMessageEvent);
       return boundedText(content ?? (type === "message_update" ? "消息正在生成" : "消息"), MAX_SUMMARY_LENGTH);
     }
     case "thinking":
@@ -1666,8 +1671,9 @@ function thinkingTextFrom(value: unknown, depth = 0, seen = new WeakSet<object>(
   }
 }
 
-function textFrom(value: unknown, depth = 0, seen = new WeakSet<object>()): string | null {
-  if (typeof value === "string") return safeDisplayText(value, MAX_SUMMARY_LENGTH);
+/** `showPaths` is only for user/assistant message bodies; tool details and thinking keep paths hidden. */
+function textFrom(value: unknown, depth = 0, seen = new WeakSet<object>(), showPaths = false): string | null {
+  if (typeof value === "string") return safeDisplayText(value, MAX_SUMMARY_LENGTH, showPaths);
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (!value || depth > MAX_JSON_DEPTH) return null;
   if (typeof value === "object") {
@@ -1678,7 +1684,7 @@ function textFrom(value: unknown, depth = 0, seen = new WeakSet<object>()): stri
     if (Array.isArray(value)) {
       let text = "";
       for (const part of value.slice(0, MAX_ARRAY_ITEMS)) {
-        const next = textFrom(part, depth + 1, seen);
+        const next = textFrom(part, depth + 1, seen, showPaths);
         if (!next) continue;
         text += next;
         if (text.length >= MAX_SUMMARY_LENGTH) return boundedText(text, MAX_SUMMARY_LENGTH);
@@ -1690,7 +1696,7 @@ function textFrom(value: unknown, depth = 0, seen = new WeakSet<object>()): stri
     for (const key of ["text", "delta", "thinking", "reasoning", "content", "message", "summary", "preview", "snippet", "output", "result"]) {
       const child = record[key];
       if (typeof child === "string" || Array.isArray(child) || (child && typeof child === "object")) {
-        const text = textFrom(child, depth + 1, seen);
+        const text = textFrom(child, depth + 1, seen, showPaths);
         if (text) return text;
       }
     }
@@ -1712,12 +1718,14 @@ function detailSummary(value: unknown): string | undefined {
   return boundedDetail(value);
 }
 
-function safeDisplayText(value: string, maxLength: number): string {
-  return boundedText(fullDisplayText(value), maxLength);
+function safeDisplayText(value: string, maxLength: number, showPaths = false): string {
+  return boundedText(showPaths ? value.replace(INLINE_SECRET, "[已隐藏]") : fullDisplayText(value), maxLength);
 }
 
 function fullDisplayText(value: string): string {
-  return value.replace(INLINE_SECRET, "[已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
+  const redacted = value.replace(INLINE_SECRET, "[已隐藏]");
+  // Keep sentence punctuation that the greedy match picked up outside the placeholder.
+  return redacted.replace(INLINE_PATH, (match) => `[路径已隐藏]${PATH_TRAILING_PUNCTUATION.exec(match)?.[0] ?? ""}`);
 }
 
 function boundedText(value: string, maxLength: number): string {

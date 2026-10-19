@@ -33,7 +33,9 @@ test("persisted entries use the same redacted boundary as live events", () => {
   });
   assert.equal(entry?.id, "entry-1");
   assert(!JSON.stringify(entry).includes("hidden-token"));
-  assert(!JSON.stringify(entry).includes("/private/file"));
+  // Message bodies keep the paths the assistant wrote; credentials stay redacted.
+  assert(JSON.stringify(entry).includes("/private/file"));
+  assert(!JSON.stringify(entry).includes("hidden-value"));
   assert(!JSON.stringify(entry).includes("provider"));
   assert.equal((entry?.message as { role?: string } | undefined)?.role, "assistant");
 });
@@ -168,4 +170,26 @@ test("approval_required summary keeps full file paths but still hides credential
   assert.equal((long?.summary as string).endsWith("…"), true);
 
   assert.equal(serializePiEvent({ type: "approval_required", toolName: "bash", summary: 42 } as never)?.summary, undefined);
+});
+
+test("assistant and user message text keeps file paths and Markdown links intact", () => {
+  const body = "报告已生成：[月报.md](/Users/x/work/月报.md)，原件见 file:///Users/x/a.pdf。token=unsafe-token";
+  const expected = "报告已生成：[月报.md](/Users/x/work/月报.md)，原件见 file:///Users/x/a.pdf。[内容已隐藏]";
+  const entry = serializePiEntry({ id: "m1", type: "message", message: { role: "assistant", content: [{ type: "text", text: body }] } });
+  assert.deepEqual((entry?.message as { content: unknown }).content, [{ type: "text", text: expected }]);
+  const user = serializePiEntry({ id: "m2", type: "message", message: { role: "user", content: body } });
+  assert.equal((user?.message as { content: unknown }).content, expected);
+
+  const delta = serializePiEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "见 /tmp/out/result.csv" } } as never);
+  assert.equal((delta?.assistantMessageEvent as { delta: string }).delta, "见 /tmp/out/result.csv");
+});
+
+test("thinking and tool output keep hiding paths without swallowing surrounding text", () => {
+  const thinking = serializePiEntry({ id: "t1", type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "读取 /Users/x/a.txt。" }] } });
+  assert.deepEqual((thinking?.message as { content: unknown }).content, [{ type: "thinking", thinking: "读取 [路径已隐藏]。" }]);
+
+  const result = serializePiEntry({ id: "t2", type: "message", message: { role: "toolResult", toolName: "bash", content: [{ type: "text", text: "wrote (/tmp/out/a.txt), see [x](/var/log/x.log)." }] } });
+  const serialized = JSON.stringify(result);
+  assert(!serialized.includes("/tmp/out/a.txt") && !serialized.includes("/var/log/x.log"));
+  assert(serialized.includes("wrote ([路径已隐藏]), see [x]([路径已隐藏])."));
 });
