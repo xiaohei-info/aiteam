@@ -176,18 +176,72 @@ test("group edits validate the merged configuration atomically and preserve fixe
   } finally { await f.cleanup(); }
 });
 
-test("group edits cannot convert private or legacy groups into custom groups", async () => {
+test("group edits cannot convert private or free groups into custom groups", async () => {
   const f = await setup();
   try {
     await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
-    await f.request("/api/agent/conversations", { id: "legacy", kind: "group", coordinator_employee_id: "e1" }, 201);
-    for (const id of ["private", "legacy"]) {
-      const before = f.store.getConversationMetadata(id);
-      for (const patch of [{ description: "purpose" }, { orchestration: { mode: "auto" }, description: "purpose" }]) {
-        await f.request(`/api/agent/conversations/${id}`, patch, 422, false, "PATCH");
-        assert.deepEqual(f.store.getConversationMetadata(id), before);
-      }
+    await f.request("/api/agent/conversations", { id: "free", kind: "group", coordinator_employee_id: "e1" }, 201);
+    for (const patch of [{ description: "purpose" }, { orchestration: { mode: "auto" }, description: "purpose" }]) {
+      await f.request("/api/agent/conversations/private", patch, 422, false, "PATCH");
     }
+    // A free group may edit its purpose but has no orchestration rule to set or replace.
+    const before = f.store.getConversationMetadata("free");
+    await f.request("/api/agent/conversations/free", { orchestration: { mode: "auto" }, description: "purpose" }, 422, false, "PATCH");
+    await f.request("/api/agent/conversations/free/orchestration", { orchestration: { mode: "auto" }, description: "purpose" }, 422, false, "PUT");
+    assert.deepEqual(f.store.getConversationMetadata("free"), before);
+  } finally { await f.cleanup(); }
+});
+
+test("free groups can change members and purpose; solution groups stay fixed", async () => {
+  const f = await setup();
+  try {
+    await f.request("/api/agent/conversations", { id: "free", kind: "group", coordinator_employee_id: "e1" }, 201);
+    const endpoint = "/api/agent/conversations/free/participants";
+    const ids = async () => await members(f, "free");
+    assert.deepEqual(await ids(), ["e1", "e2", "e3"]);
+
+    const removed = (await f.request(endpoint, { remove_employee_ids: ["e3"], description: " 自由群新用途 " }, 200, false, "PATCH")).data;
+    assert.deepEqual(removed.participants.map((member: { employee_id: string }) => member.employee_id), ["e1", "e2"]);
+    assert.equal(removed.conversation.description, "自由群新用途");
+    assert.equal(removed.conversation.orchestration ?? null, null);
+    assert.equal(removed.employee_count, 2);
+
+    // The purpose reaches the next turn; the removed member does not.
+    f.contexts.length = 0;
+    f.faux.setResponses([fauxAssistantMessage("ok")]);
+    await f.host.prompt("free", "开始", undefined, caller);
+    assert(f.contexts.some(context => context.includes("自由群新用途") && context.includes("e2 的独特简介")));
+    assert(f.contexts.every(context => !context.includes("e3 的独特简介")));
+
+    // Purpose-only edits go through the ordinary conversation PATCH.
+    const renamed = (await f.request("/api/agent/conversations/free", { description: "只改用途" }, 200, false, "PATCH")).data;
+    assert.equal(renamed.description, "只改用途");
+    assert.deepEqual(await ids(), ["e1", "e2"]);
+
+    const added = (await f.request(endpoint, { add_employee_ids: ["e3"] }, 200, false, "PATCH")).data;
+    assert.deepEqual(added.participants.map((member: { employee_id: string }) => member.employee_id), ["e1", "e2", "e3"]);
+    assert.equal(added.conversation.description, "只改用途", "omitted purpose is kept");
+
+    // Invalid changes leave the group untouched.
+    const before = f.store.getConversationMetadata("free");
+    for (const [patch, status] of [
+      [{ remove_employee_ids: ["e1"] }, 422],
+      [{ remove_employee_ids: ["e2", "e3"], add_employee_ids: ["e2"] }, 422],
+      [{ add_employee_ids: ["unknown"] }, 403],
+      [{ remove_employee_ids: ["e3"], orchestration: { mode: "auto" } }, 422],
+      [{ remove_employee_ids: ["e3"], description: "x".repeat(4001) }, 422],
+    ] as const) {
+      await f.request(endpoint, patch, status, false, "PATCH");
+      assert.deepEqual(f.store.getConversationMetadata("free"), before);
+      assert.deepEqual(await ids(), ["e1", "e2", "e3"]);
+    }
+    await f.request(endpoint, { remove_employee_ids: ["e3"] }, 404, true, "PATCH");
+
+    // Solution groups take their roster from the solution and remain fixed.
+    f.store.updateConversation("free", { solutionRef: "solution-1" });
+    await f.request(endpoint, { remove_employee_ids: ["e3"] }, 422, false, "PATCH");
+    await f.request("/api/agent/conversations/free", { description: "方案群不可改" }, 422, false, "PATCH");
+    assert.deepEqual(await ids(), ["e1", "e2", "e3"]);
   } finally { await f.cleanup(); }
 });
 
@@ -286,10 +340,9 @@ test("member edits reject invalid changes without touching the group", async () 
     await f.request(endpoint, { add_employee_ids: ["e3"] }, 404, true, "PATCH");
     await f.request("/api/agent/conversations/missing/participants", { add_employee_ids: ["e3"] }, 404, false, "PATCH");
 
-    // Private chats and groups without a custom configuration are not editable.
+    // Private chats are not editable groups.
     await f.request("/api/agent/conversations", { id: "private", entry_employee_id: "e1" }, 201);
-    await f.request("/api/agent/conversations", { id: "legacy", kind: "group", coordinator_employee_id: "e1" }, 201);
-    for (const id of ["private", "legacy"]) await f.request(`/api/agent/conversations/${id}/participants`, { add_employee_ids: ["e3"] }, 422, false, "PATCH");
+    await f.request("/api/agent/conversations/private/participants", { add_employee_ids: ["e3"] }, 422, false, "PATCH");
   } finally { await f.cleanup(); }
 });
 

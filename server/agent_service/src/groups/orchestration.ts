@@ -56,6 +56,29 @@ export function validateCustomGroup(input: {
   return orchestration;
 }
 
+/**
+ * Validate a free group (no orchestration rule, no solution) after a roster or description edit.
+ * Free groups are created with every authorized employee, so a group that is already larger than
+ * the custom-group limit may keep or shrink its roster but never grow past its current size.
+ */
+export function validateFreeGroup(input: {
+  description?: string | null; member_employee_ids: string[]; coordinator_employee_id: string; previous_member_count: number;
+}): void {
+  if ((input.description?.length ?? 0) > 4000) {
+    throw new GroupConfigurationError("invalid_group_configuration", "Invalid group description length");
+  }
+  const members = input.member_employee_ids;
+  const limit = Math.max(32, input.previous_member_count);
+  if (!Array.isArray(members) || members.length < 1 || members.length > limit
+    || members.some(id => typeof id !== "string" || !id.trim())
+    || new Set(members).size !== members.length) {
+    throw new GroupConfigurationError("invalid_group_members", `Choose between 1 and ${limit} distinct employees`);
+  }
+  if (!members.includes(input.coordinator_employee_id)) {
+    throw new GroupConfigurationError("invalid_group_coordinator", "Coordinator must be a selected employee");
+  }
+}
+
 /** Preserve the complete business rule; optional recent history is budgeted separately. */
 export function orchestrationContext(orchestration: GroupOrchestration, description: string | null, coordinator: boolean): string {
   if (!coordinator) return "你是群成员：完成协调人或用户交给你的具体任务，返回实际结果，不自行启动整套协作流程。";

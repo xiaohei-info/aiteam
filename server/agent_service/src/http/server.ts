@@ -4,7 +4,7 @@ import { LocalDirectoryError } from "../storage/local-directories.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
-import { GroupConfigurationError, validateCustomGroup, type GroupOrchestration as GroupOrchestrationConfig } from "../groups/orchestration.js";
+import { GroupConfigurationError, validateCustomGroup, validateFreeGroup, type GroupOrchestration as GroupOrchestrationConfig } from "../groups/orchestration.js";
 import { CustomGroupCreateRequest, GroupMembersUpdateEnvelope, GroupMembersUpdateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest } from "./custom-group-schemas.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -1276,7 +1276,7 @@ export class AgentHttpServer {
       this.writeJson(response, 200, this.conversationReads.participants((fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!));
     }, routeSchema("listConversationParticipants", { summary: "读取真实会话成员", description: "仅返回已存在的固定 participant Session 索引成员，不回退到授权全集；撤权成员仍可见但不可执行，不返回本机路径。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationParticipantsEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/participants", (request, response, caller, fastifyRequest) => this.updateGroupParticipants(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationParticipants", {
-      summary: "增减自选成员群成员", description: "在两轮对话之间原子地加入或移出自选成员群成员，可同时提交新的群简介与编排。成员、简介和编排按合并后的结果统一校验：协调人不能移出，自定义规则不能引用已不在群内的成员（需在同一请求里一并改写规则）。移出的成员保留其历史发言，重新加入后沿用原 Session；新成员在首次被调用时才创建 Session。会话正在执行时返回 409。",
+      summary: "增减自选成员群/自由群成员", description: "在两轮对话之间原子地加入或移出自选成员群或自由群的成员，可同时提交新的群简介；自选成员群还可同时提交编排，自由群没有编排规则。方案群成员由方案固定，不可修改。成员、简介和编排按合并后的结果统一校验：协调人不能移出，自定义规则不能引用已不在群内的成员（需在同一请求里一并改写规则）。移出的成员保留其历史发言，重新加入后沿用原 Session；新成员在首次被调用时才创建 Session。会话正在执行时返回 409。",
       params: ConversationParams, body: Type.Ref("GroupMembersUpdateRequest"), response: { 200: jsonResponse(Type.Ref("GroupMembersUpdateEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") },
     }));
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/orchestration", (request, response, caller, fastifyRequest) => this.updateGroupOrchestration(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("replaceConversationOrchestration", {
@@ -1701,7 +1701,8 @@ export class AgentHttpServer {
       throw new HttpProblem(422, "invalid_group_configuration", "Group configuration is immutable after creation");
     }
     if (body.description !== undefined || body.orchestration !== undefined) {
-      patch.orchestration = this.resolveGroupConfiguration(conversationId, current, { description: patch.description, orchestration: body.orchestration });
+      const orchestration = this.resolveGroupConfiguration(conversationId, current, { description: patch.description, orchestration: body.orchestration });
+      if (orchestration) patch.orchestration = orchestration;
     }
     if (body.last_read_entry_id !== undefined) patch.lastReadEntryId = this.conversationReads.readPointer(conversationId, caller, body.last_read_entry_id);
     const updated = this.options.store.updateConversation(conversationId, patch);
@@ -1720,19 +1721,42 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: await this.options.host.getConversationContext(conversationId, caller) });
   }
 
+  /** Custom groups carry an orchestration rule; free groups have none and no solution; solution and legacy groups are fixed. */
+  private editableGroupKind(current: StoredConversationMetadata): "custom" | "free" | undefined {
+    if (current.kind !== "group") return undefined;
+    if (current.orchestration) return "custom";
+    return !current.solution_instance_id && current.coordinator_employee_id ? "free" : undefined;
+  }
+
+  private requireEditableGroup(current: StoredConversationMetadata): "custom" | "free" {
+    const kind = this.editableGroupKind(current);
+    if (!kind) throw new HttpProblem(422, "invalid_group_configuration", "Only custom and free groups support editing group configuration");
+    return kind;
+  }
+
   private requireCustomGroup(current: StoredConversationMetadata): void {
-    if (current.kind !== "group" || !current.orchestration) {
-      throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups support editing group configuration");
+    if (this.requireEditableGroup(current) !== "custom") {
+      throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups have an orchestration rule to edit");
     }
   }
 
-  /** Validate the merged members, description and rule of an editable custom group; omitted parts keep their current value. */
-  private resolveGroupConfiguration(conversationId: string, current: StoredConversationMetadata, change: { memberIds?: readonly string[]; description?: string | null; orchestration?: unknown }): GroupOrchestrationConfig {
-    this.requireCustomGroup(current);
+  /**
+   * Validate the merged members, description and rule of an editable group; omitted parts keep their current value.
+   * Returns the orchestration to store for a custom group, or undefined for a free group (which has none).
+   */
+  private resolveGroupConfiguration(conversationId: string, current: StoredConversationMetadata, change: { memberIds?: readonly string[]; description?: string | null; orchestration?: unknown }): GroupOrchestrationConfig | undefined {
+    const kind = this.requireEditableGroup(current);
+    const roster = this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id);
+    const description = change.description !== undefined ? change.description : current.description;
+    if (kind === "free") {
+      if (change.orchestration !== undefined) throw new HttpProblem(422, "invalid_group_orchestration", "Free groups have no orchestration rule");
+      validateFreeGroup({ description, member_employee_ids: [...(change.memberIds ?? roster)], coordinator_employee_id: current.coordinator_employee_id ?? "", previous_member_count: roster.length });
+      return undefined;
+    }
     return validateCustomGroup({
       title: current.title ?? "群聊",
-      description: change.description !== undefined ? change.description : current.description,
-      member_employee_ids: [...(change.memberIds ?? this.options.store.listConversationParticipants(conversationId).map(member => member.employee_id))],
+      description,
+      member_employee_ids: [...(change.memberIds ?? roster)],
       coordinator_employee_id: current.coordinator_employee_id ?? "",
       orchestration: change.orchestration !== undefined ? change.orchestration : current.orchestration,
     });
@@ -1743,8 +1767,10 @@ export class AgentHttpServer {
     this.requireOwnedConversation(conversationId, caller);
     if (!Check({ GroupOrchestration }, GroupOrchestrationUpdateRequest, body)) throw new HttpProblem(422, "invalid_group_orchestration", "Group orchestration fields do not match the documented schema");
     const current = this.options.store.getConversationMetadata(conversationId)!;
+    this.requireCustomGroup(current);
     const description = body.description === undefined ? undefined : (typeof body.description === "string" ? body.description.trim() || null : null);
     const orchestration = this.resolveGroupConfiguration(conversationId, current, { description, orchestration: body.orchestration });
+    if (!orchestration) throw new HttpProblem(422, "invalid_group_configuration", "Only custom groups have an orchestration rule to edit");
     // Same guard as PATCH /participants; checked synchronously with the write so no prompt can start in between.
     this.options.host.assertConversationIdle(conversationId);
     this.options.store.updateConversation(conversationId, { orchestration, ...(description !== undefined ? { description } : {}) });
@@ -1756,7 +1782,7 @@ export class AgentHttpServer {
     this.requireOwnedConversation(conversationId, caller);
     if (!Check({ GroupOrchestration }, GroupMembersUpdateRequest, body)) throw new HttpProblem(422, "invalid_group_members", "Group member fields do not match the documented schema");
     const current = this.options.store.getConversationMetadata(conversationId)!;
-    this.requireCustomGroup(current);
+    this.requireEditableGroup(current);
     // SAFETY: the preceding TypeBox Check guarantees these optional fields are string arrays.
     const add = (body.add_employee_ids ?? []) as string[];
     const remove = (body.remove_employee_ids ?? []) as string[];
@@ -1773,7 +1799,7 @@ export class AgentHttpServer {
       description,
       orchestration: body.orchestration,
     });
-    await this.options.host.updateGroupMembers(conversationId, { add: seeds, remove, patch: { orchestration, ...(description !== undefined ? { description } : {}) } });
+    await this.options.host.updateGroupMembers(conversationId, { add: seeds, remove, patch: { ...(orchestration ? { orchestration } : {}), ...(description !== undefined ? { description } : {}) } });
     const members = this.conversationReads.participants(conversationId, caller).data;
     this.writeJson(response, 200, { data: { conversation: this.conversationReads.metadata(conversationId, caller), participants: members.participants, employee_count: members.employee_count } });
   }

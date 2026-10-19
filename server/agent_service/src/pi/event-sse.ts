@@ -13,7 +13,10 @@ const ASSISTANT_EVENTS = new Set([
 ]);
 const SECRET_KEY = /(?:authorization|access.?token|refresh.?token|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
-const INLINE_PATH = /(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/gi;
+// Stop at brackets, quotes and CJK/ASCII sentence punctuation so a path inside a Markdown link,
+// parentheses or a sentence is replaced without swallowing the closing characters.
+const INLINE_PATH = /(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>()\[\]{}，。；：！？、）】》」』]*)*|[A-Za-z]:\\[^\s"'<>()\[\]{}，。；：！？、）】》」』]*)/gi;
+const PATH_TRAILING_PUNCTUATION = /[.,;:!?]+$/u;
 const UNSAFE_VALUE_KEY = /^(?:api|provider|model|raw|headers|request|diagnostics|session)$/i;
 
 const MAX_EVENT_BYTES = 24 * 1024;
@@ -172,7 +175,7 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   if (!raw || (raw.role !== "user" && raw.role !== "assistant" && raw.role !== "toolResult")) return undefined;
   const result: Record<string, unknown> = { role: raw.role };
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) result.timestamp = raw.timestamp;
-  const content = serializeContent(raw.content);
+  const content = serializeContent(raw.content, raw.role !== "toolResult");
   if (content !== undefined) result.content = content;
   if (raw.role === "toolResult") {
     copyIdentifier(result, raw, "toolCallId");
@@ -187,14 +190,15 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   return result;
 }
 
-function serializeContent(value: unknown): BoundedEventPayload {
-  if (typeof value === "string") return safeText(value, MAX_TEXT_CHARS);
+function serializeContent(value: unknown, keepPaths = false): BoundedEventPayload {
+  const text = keepPaths ? safeMessageText : safeText;
+  if (typeof value === "string") return text(value, MAX_TEXT_CHARS);
   if (!Array.isArray(value)) return undefined;
   const output: unknown[] = [];
   for (const part of value.slice(0, MAX_ARRAY_ITEMS)) {
     const raw = asRecord(part);
     if (!raw || typeof raw.type !== "string") continue;
-    if (raw.type === "text" && typeof raw.text === "string") output.push({ type: "text", text: safeText(raw.text, MAX_TEXT_CHARS) });
+    if (raw.type === "text" && typeof raw.text === "string") output.push({ type: "text", text: text(raw.text, MAX_TEXT_CHARS) });
     else if (raw.type === "thinking" && typeof raw.thinking === "string") output.push({ type: "thinking", thinking: safeText(raw.thinking, MAX_TEXT_CHARS) });
     else if (raw.type === "toolCall") {
       const toolCall = serializeToolCall(raw);
@@ -226,8 +230,10 @@ function serializeAssistantMessageEvent(value: unknown): Record<string, unknown>
   if (!raw || typeof raw.type !== "string" || !ASSISTANT_EVENTS.has(raw.type)) return undefined;
   const result: Record<string, unknown> = { type: raw.type };
   if (typeof raw.contentIndex === "number" && Number.isInteger(raw.contentIndex) && raw.contentIndex >= 0 && raw.contentIndex < 1_000) result.contentIndex = raw.contentIndex;
-  if (typeof raw.delta === "string") result.delta = safeText(raw.delta, MAX_TEXT_CHARS);
-  if (typeof raw.content === "string") result.content = safeText(raw.content, MAX_TEXT_CHARS);
+  // Only the answer text keeps its paths; thinking and tool-call deltas stay redacted.
+  const text = raw.type.startsWith("text_") ? safeMessageText : safeText;
+  if (typeof raw.delta === "string") result.delta = text(raw.delta, MAX_TEXT_CHARS);
+  if (typeof raw.content === "string") result.content = text(raw.content, MAX_TEXT_CHARS);
   if (typeof raw.reason === "string" && ["stop", "length", "toolUse", "deferred", "aborted", "error"].includes(raw.reason)) result.reason = raw.reason;
   const toolCall = serializeToolCall(asRecord(raw.toolCall) ?? {});
   if (toolCall) result.toolCall = toolCall;
@@ -337,9 +343,29 @@ function boundedIdentifier(value: unknown, max: number): string | undefined {
   return safeText(value, max);
 }
 
+function redactInlinePaths(value: string): string {
+  // Keep sentence punctuation that the greedy match picked up ("see /tmp/a.txt.") outside the placeholder.
+  return value.replace(INLINE_PATH, (match) => {
+    const trailing = PATH_TRAILING_PUNCTUATION.exec(match)?.[0] ?? "";
+    return `[路径已隐藏]${trailing}`;
+  });
+}
+
+function boundText(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
 export function safeText(value: string, max: number): string {
-  const redacted = value.replace(INLINE_SECRET, "[内容已隐藏]").replace(INLINE_PATH, "[路径已隐藏]");
-  return redacted.length <= max ? redacted : `${redacted.slice(0, Math.max(0, max - 1))}…`;
+  return boundText(redactInlinePaths(value.replace(INLINE_SECRET, "[内容已隐藏]")), max);
+}
+
+/**
+ * User and assistant message bodies keep file paths and file links intact so the person reading
+ * the conversation can open what the assistant refers to. Credentials are still redacted; tool
+ * arguments, results, thinking and diagnostics keep using `safeText`.
+ */
+export function safeMessageText(value: string, max: number): string {
+  return boundText(value.replace(INLINE_SECRET, "[内容已隐藏]"), max);
 }
 
 function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
