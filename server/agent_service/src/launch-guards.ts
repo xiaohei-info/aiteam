@@ -18,7 +18,7 @@ const FORBIDDEN_AGENT_CREDENTIALS = [
 ] as const;
 
 const FORBIDDEN_AGENT_CREDENTIAL_SET = new Set<string>(FORBIDDEN_AGENT_CREDENTIALS);
-const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AITEAM_AGENT_JWKS_PATH", "AITEAM_CONFIG_FILE"]);
+const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AITEAM_AGENT_UPSTREAM_URL", "AITEAM_AGENT_JWKS_PATH", "AITEAM_CONFIG_FILE"]);
 
 /** Shared case-insensitive credential-name policy for every Agent launch path. */
 export function isForbiddenAgentEnvironmentName(name: string): boolean {
@@ -90,6 +90,8 @@ export function assertAgentLaunchConfiguration(env: NodeJS.ProcessEnv = process.
   requireAbsoluteHttpUrl(env, "AITEAM_MANAGER_URL", true);
   requireAbsoluteHttpUrl(env, "AITEAM_AGENT_JWT_ISSUER", true);
   if (managerValue !== issuerValue) throw new Error("AITEAM_AGENT_JWT_ISSUER must exactly match AITEAM_MANAGER_URL in production");
+  // Gateway mode forwards member bearer tokens upstream; never over plain HTTP in production.
+  if (env.AITEAM_AGENT_UPSTREAM_URL?.trim()) requireAbsoluteHttpUrl(env, "AITEAM_AGENT_UPSTREAM_URL", true);
   required(env, "AITEAM_AGENT_JWT_AUDIENCE");
   const rawJwks = env.AITEAM_AGENT_JWKS_JSON?.trim();
   const jwksPath = env.AITEAM_AGENT_JWKS_PATH?.trim();

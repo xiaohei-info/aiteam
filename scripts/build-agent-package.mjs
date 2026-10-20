@@ -42,7 +42,7 @@ const FORBIDDEN_CHILD_ENV = new Set([
   "AUTH_ACCOUNTS", "TOKEN_SECRET", "AITEAM_SKILL_SIGNING_PRIVATE_KEY", "AITEAM_SKILL_SIGNING_CURRENT_PRIVATE_KEY",
   "AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY",
 ]);
-const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AITEAM_AGENT_JWKS_PATH", "AITEAM_CONFIG_FILE"]);
+const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AITEAM_AGENT_UPSTREAM_URL", "AITEAM_AGENT_JWKS_PATH", "AITEAM_CONFIG_FILE"]);
 
 function isForbiddenChildEnvironmentName(name) {
   const upper = name.toUpperCase();
@@ -283,13 +283,21 @@ function validateConfigForPackage(values, strict) {
   const managerUrl = new URL(values.AITEAM_MANAGER_URL);
   if ((managerUrl.protocol !== "https:" && managerUrl.protocol !== "http:") || managerUrl.username || managerUrl.password || managerUrl.search || managerUrl.hash) throw new Error("AITEAM_MANAGER_URL must be an HTTP(S) URL without embedded credentials");
   if (environment === "production" && managerUrl.protocol !== "https:") throw new Error("AITEAM_MANAGER_URL must use HTTPS in a production package");
+  if (values.AITEAM_AGENT_UPSTREAM_URL?.trim()) {
+    // Desktop gateway mode: a bare origin only, because member bearer tokens are forwarded to it.
+    let upstream;
+    try { upstream = new URL(values.AITEAM_AGENT_UPSTREAM_URL.trim()); } catch { throw new Error("AITEAM_AGENT_UPSTREAM_URL must be an absolute HTTP(S) origin"); }
+    if ((upstream.protocol !== "https:" && upstream.protocol !== "http:") || upstream.username || upstream.password || upstream.search || upstream.hash || upstream.pathname !== "/") throw new Error("AITEAM_AGENT_UPSTREAM_URL must be a bare HTTP(S) origin without path, credentials, query or fragment");
+    if (environment === "production" && upstream.protocol !== "https:") throw new Error("AITEAM_AGENT_UPSTREAM_URL must use HTTPS in a production package");
+  }
   const devAuth = values.AITEAM_AGENT_DEV_AUTH?.toLowerCase() === "true";
   if (environment === "production" && devAuth) throw new Error("AITEAM_AGENT_DEV_AUTH=true is forbidden in a production package");
   if (!devAuth) {
     for (const name of ["AITEAM_AGENT_JWT_ISSUER", "AITEAM_AGENT_JWT_AUDIENCE"]) {
       if (!values[name]?.trim()) throw new Error(`packaged Agent config requires ${name} when development auth is disabled`);
     }
-    const issuer = new URL(values.AITEAM_AGENT_JWT_ISSUER);
+    let issuer;
+    try { issuer = new URL(values.AITEAM_AGENT_JWT_ISSUER); } catch { throw new Error("AITEAM_AGENT_JWT_ISSUER must be an absolute HTTP(S) URL"); }
     if ((issuer.protocol !== "https:" && issuer.protocol !== "http:") || issuer.username || issuer.password || issuer.search || issuer.hash || (environment === "production" && issuer.protocol !== "https:")) throw new Error("AITEAM_AGENT_JWT_ISSUER must be an HTTP(S) URL without credentials");
     if (environment === "production" && values.AITEAM_AGENT_JWT_ISSUER.trim() !== values.AITEAM_MANAGER_URL.trim()) throw new Error("AITEAM_AGENT_JWT_ISSUER must exactly match AITEAM_MANAGER_URL in production");
     if (!values.AITEAM_AGENT_JWKS_JSON?.trim() && !values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("packaged Agent config requires AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");

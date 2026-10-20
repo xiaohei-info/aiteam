@@ -108,6 +108,8 @@ JWT/Skill private key
 
 Agent 的本地目录工具仅在 macOS 桌面宿主桥、已验签成员身份、当前员工知识策略、用户目录授权与员工绑定、前台受限会话同时有效时启用。缺少宿主配置、私有同 uid socket 或有效令牌时失败关闭；Linux/Windows sidecar 不提供该目录能力。引用与文件正文只在本机按需读取，不持久化到控制面。
 
+**桌面网关模式**（配置 `AITEAM_AGENT_UPSTREAM_URL` 时）：会话在上游 Agent 执行，本机 Agent 只保留身份、授权同步和本地目录，其余契约路由带着成员自己的 Bearer 原样流式转发（`src/http/upstream-gateway.ts`、`src/http/gateway-routes.ts`）。私聊 prompt 转发前，本机在入口员工已启用的绑定里做一次有预算的检索或列目录，把命中的片段、文件名放进 `<aiteam-local-context>` 块追加到 `text`（`src/services/gateway-local-context.ts`）。这条路径不依赖本机会话记录，也不按 `permission_mode` 拦截，因为上游工具碰不到这台电脑；但仍要求已验签成员、当前员工知识策略和启用的绑定。**命中的片段和文件名会进入上游的对话历史并被持久化**，撤销授权无法收回已发出的内容。群聊与带提及的 prompt 不检索。
+
 Seatbelt 限制的是受限 Bash 子进程的文件读取和网络访问。Node 主进程及受信任扩展仍具有宿主 uid 权限；此功能不提供针对恶意 Node 扩展或同 uid 本地程序的隔离。
 
 本仓的 HTTP、合成宿主协议和原生 Bash 测试不代表桌面产品联调验收。桌面开放前必须记录实际桌面仓库/PR/完整 SHA、打包 Agent SHA，并验证原生 selector、一次性票据消费、原子文件身份、软硬链接/TOCTOU、撤权与宿主重启。尚未取得该配套版本及联调证据时，保持桌面功能未验收；三端服务部署成功不代表桌面功能已发布。

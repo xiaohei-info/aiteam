@@ -39,6 +39,9 @@ import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord } from "../storage/sqlite.js";
 import { SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, skillSigningVerificationFromEnv, verifySignedSkillPackage } from "../skills.js";
 import { ALLOWED_FILE_MIMES, AUDIO_MIMES, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
+import { AITEAM_ORIGIN_HEADER, GatewayRequestTooLargeError, UpstreamUnavailableError, type UpstreamGateway } from "./upstream-gateway.js";
+import { GatewayPrompts, isGatewayHandledRoute, isOpenApiDocument, LOCAL_CONTEXT_HEADER, mergeOpenApiDocuments, UPSTREAM_STATE_HEADER, type OpenApiDocument } from "./gateway-routes.js";
+import type { GatewayLocalContext } from "../services/gateway-local-context.js";
 export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -55,6 +58,8 @@ const TERMINAL_EVENT_TYPES = new Set([
 ]);
 const MAX_BASE64_FILE_CHARS = Math.ceil(MAX_LOCAL_FILE_BYTES / 3) * 4;
 const MAX_UPLOAD_JSON_BYTES = MAX_BASE64_FILE_CHARS + 64 * 1024;
+/** Forwarded bodies get the same ceiling Fastify applies to local routes. */
+const MAX_GATEWAY_BODY_BYTES = Math.max(MAX_UPLOAD_JSON_BYTES, MAX_PROMPT_JSON_BYTES);
 const MAX_AUDIO_RESPONSE_BYTES = 2 * 1024 * 1024;
 const FILE_MIME_TYPES = [...ALLOWED_FILE_MIMES].sort();
 const AUDIO_MIME_TYPES = [...AUDIO_MIMES].sort();
@@ -893,6 +898,13 @@ export interface AgentHttpServerOptions {
   skillCache?: SkillCache;
   /** Injected for deterministic upstream transcription tests. */
   fetch?: typeof fetch;
+  /**
+   * Desktop gateway mode: every contract route the local Agent does not own is
+   * streamed to this upstream Agent (see http/gateway-routes.ts).
+   */
+  upstream?: UpstreamGateway;
+  /** Gateway-side local-directory retrieval for single-chat prompts. */
+  localContext?: GatewayLocalContext;
 }
 
 export class HttpProblem extends Error {
@@ -933,6 +945,8 @@ export class AgentHttpServer {
   private readonly automation: AutomationTaskService;
   private readonly workRecords: WorkRecordReadService;
   private readonly usageStatistics: UsageStatisticsService;
+  private readonly gatewayPrompts?: GatewayPrompts;
+  private openApiCache?: { document: unknown; upstream: "ok" | "unavailable"; expires: number };
 
   constructor(private readonly options: AgentHttpServerOptions) {
     this.automation = new AutomationTaskService(options.store, options.host, options.executionAuthorization);
@@ -940,6 +954,7 @@ export class AgentHttpServer {
     this.groupCreation = new GroupCreationService(options.store, options.host);
     this.workRecords = new WorkRecordReadService(options.store, options.host);
     this.usageStatistics = new UsageStatisticsService(options.store);
+    this.gatewayPrompts = options.upstream ? new GatewayPrompts(options.upstream, options.localContext) : undefined;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.allowedOrigins = normalizeAllowedOrigins(options.allowedOrigins ?? []);
     this.app = Fastify({
@@ -993,7 +1008,8 @@ export class AgentHttpServer {
         reply.raw.setHeader("Access-Control-Allow-Credentials", "true");
         reply.raw.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, If-Match, Last-Event-ID, X-Aiteam-Reconciliation-Version, X-Request-ID, traceparent");
         reply.raw.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-        reply.raw.setHeader("Access-Control-Expose-Headers", "X-Request-ID, ETag");
+        // Gateway diagnostics headers exist only in gateway mode.
+        reply.raw.setHeader("Access-Control-Expose-Headers", options.upstream ? `X-Request-ID, ETag, ${AITEAM_ORIGIN_HEADER}, ${LOCAL_CONTEXT_HEADER}, ${UPSTREAM_STATE_HEADER}` : "X-Request-ID, ETag");
         reply.raw.setHeader("Access-Control-Max-Age", "600");
         reply.raw.setHeader("Vary", "Origin");
         if (request.method === "OPTIONS") return reply.code(204).send();
@@ -1001,6 +1017,31 @@ export class AgentHttpServer {
         return reply.code(403).send();
       }
     });
+    if (options.upstream) {
+      const upstream = options.upstream;
+      // Gateway split: local routes continue through Fastify; every other
+      // contract route is hijacked before body parsing and streamed upstream.
+      this.app.addHook("onRequest", async (request, reply) => {
+        if (request.method === "OPTIONS") return;
+        if (isGatewayHandledRoute(request.method, request.routeOptions.url)) {
+          reply.raw.setHeader(AITEAM_ORIGIN_HEADER, "local");
+          return;
+        }
+        reply.hijack();
+        const requestId = String(request.id);
+        if (Number(request.headers["content-length"] ?? 0) > MAX_GATEWAY_BODY_BYTES) {
+          this.errors += 1;
+          this.writeError(reply.raw, new GatewayRequestTooLargeError(), requestId);
+          return;
+        }
+        void upstream.forward(request.raw, reply.raw, { maxBodyBytes: MAX_GATEWAY_BODY_BYTES }).catch((error: unknown) => {
+          if (reply.raw.headersSent || reply.raw.destroyed) return;
+          this.errors += 1;
+          appLogger.log("warn", "gateway.forward_failed", safeError(error));
+          this.writeError(reply.raw, error, requestId);
+        });
+      });
+    }
     this.app.setErrorHandler((error, request, reply) => {
       this.errors += 1;
       if (!(error instanceof EventCursorStaleError)) appLogger.log("error", "http.failed", safeError(error));
@@ -1154,6 +1195,8 @@ export class AgentHttpServer {
   async close(): Promise<void> {
     await this.options.host.abortAll();
     await Promise.allSettled([...this.promptWorkers]);
+    // Tear down forwarded streams (SSE included) so app.close() is not held open.
+    this.options.upstream?.close();
     await this.app.close();
   }
 
@@ -1173,7 +1216,7 @@ export class AgentHttpServer {
     this.registerRoute(
       "GET",
       "/openapi.json",
-      (_request, response) => this.writeJson(response, 200, this.app.swagger()),
+      (_request, response) => this.options.upstream ? this.writeGatewayOpenApi(response) : this.writeJson(response, 200, this.app.swagger()),
       routeSchema("openapi", {
         summary: "获取 Agent OpenAPI",
         description: "返回当前用户端 Agent 的 OpenAPI 3.1 文档。",
@@ -1200,17 +1243,22 @@ export class AgentHttpServer {
     this.registerRoute("POST", "/api/auth/resolve-tenant-by-account", (request, response) => this.resolveTenantByAccount(request, response), routeSchema("resolveTenantByAccount", { summary: "解析员工账号所属企业", description: "在登录前根据员工账号解析唯一企业租户。", body: Type.Ref("ResolveTenantRequest"), response: { 200: jsonResponse(Type.Ref("TenantResolutionEnvelope"), "租户解析成功；仅返回 tenant_id。"), 400: problemResponse("BadRequest"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict") } }), false);
     this.registerRoute("POST", "/api/agent/login", (request, response) => this.login(request, response), routeSchema("login", { summary: "Agent 登录", description: "使用 Manager 返回的企业租户、账号和密码建立本地会话。", body: Type.Ref("AgentLoginRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
     this.registerRoute("POST", "/api/agent/reset-password", (request, response) => this.resetPassword(request, response), routeSchema("resetPassword", { summary: "重置负责人密码", description: "使用当前凭据向 Manager 请求重置密码。", body: Type.Ref("AgentResetPasswordRequest"), response: { 200: jsonResponse(Type.Ref("AuthResultEnvelope")) } }), false);
-    this.registerRoute("POST", "/api/agent/logout", async (_request, response, caller) => {
-      const memberId = caller!.userId ?? caller!.callerId;
-      const host = this.options.host as SessionHost & {
-        abortOwner?: (tenantId: string, memberId: string) => Promise<boolean>;
-        clearRuntimeMaterials?: (tenantId: string, memberId: string) => void;
-      };
-      await host.abortOwner?.(caller!.tenantId!, memberId);
-      this.options.executionAuthorization?.invalidate(caller!.tenantId!, memberId);
-      host.clearRuntimeMaterials?.(caller!.tenantId!, memberId);
+    this.registerRoute("POST", "/api/agent/logout", async (request, response, caller) => {
+      if (caller) {
+        const memberId = caller.userId ?? caller.callerId;
+        const host = this.options.host as SessionHost & {
+          abortOwner?: (tenantId: string, memberId: string) => Promise<boolean>;
+          clearRuntimeMaterials?: (tenantId: string, memberId: string) => void;
+        };
+        await host.abortOwner?.(caller.tenantId!, memberId);
+        this.options.executionAuthorization?.invalidate(caller.tenantId!, memberId);
+        host.clearRuntimeMaterials?.(caller.tenantId!, memberId);
+        this.gatewayPrompts?.forget(caller);
+        await this.options.localContext?.forget(caller);
+      }
+      if (this.options.upstream) return this.forwardLogout(request, response);
       this.writeJson(response, 200, { data: { signed_out: true } });
-    }, routeSchema("logout", { summary: "注销本地执行身份", description: "清理当前进程的短期执行身份和运行材料；不会上传会话内容。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }));
+    }, routeSchema("logout", { summary: "注销本地执行身份", description: "清理当前进程的短期执行身份和运行材料；不会上传会话内容。", response: { 200: jsonResponse(Type.Object({ data: Type.Object({ signed_out: Type.Boolean({ const: true }) }, { additionalProperties: false }) }, { additionalProperties: false })) }, hide: true }), this.options.upstream ? "optional" : true);
     this.registerRoute("POST", "/api/agent/audio/transcriptions", (request, response, caller) => this.transcribeAudio(request, response, caller!), routeSchema("transcribeAudio", { summary: "语音转文字", description: "使用当前成员所属企业已开放的 ASR 模型，把本地录音转换为文本；不绑定 employee。", body: Type.Ref("AudioTranscriptionRequest"), response: { 200: jsonResponse(Type.Ref("AudioTranscriptionEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("POST", "/api/agent/employees/:employee_id/avatar", (request, response, caller, fastifyRequest) => this.updateEmployeeAvatar(request, response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("updateEmployeeAvatar", { summary: "更新本地员工头像", description: "只将头像保存到本机 Agent managed data root，并原子更新本地员工投影和冻结快照；不会上传头像字节或改写 Manager 主数据。", params: ExpertParams, body: Type.Ref("EmployeeAvatarRequest"), response: { 200: jsonResponse(Type.Object({ data: Type.Ref("EmployeeAvatarResponse") })), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 413: problemResponse("TooLarge"), 415: problemResponse("ValidationError") } }));
     this.registerRoute("GET", "/api/agent/employees/:employee_id/avatar/content", (_request, response, caller, fastifyRequest) => this.getEmployeeAvatar(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("getEmployeeAvatar", { summary: "读取本地员工头像", description: "读取当前成员本机 projection 中的员工头像；只返回本地 managed data root 内的图片对象。", params: ExpertParams, response: { 200: { description: "本地员工头像二进制内容。", content: LOCAL_AVATAR_DOWNLOAD_CONTENT }, 404: problemResponse("NotFound") } }));
@@ -1235,7 +1283,7 @@ export class AgentHttpServer {
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/thinking-level", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationThinkingLevel", { summary: "设置会话思考档位", description: "设置当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
-    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { summary: "提交会话提示", description: "向本地会话提交文本、图片和群聊提及；使用 Idempotency-Key 保证重试安全。", params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.promptRoute(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller), routeSchema("promptConversation", { summary: "提交会话提示", description: "向本地会话提交文本、图片和群聊提及；使用 Idempotency-Key 保证重试安全。", params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }), this.gatewayPrompts ? "optional" : true);
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/events", (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
@@ -1345,7 +1393,10 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { summary: "列出冻结快照", description: "列出当前成员本地缓存的员工执行快照。", response: { 200: jsonResponse(Type.Ref("SnapshotListEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { summary: "检查授权执行就绪状态", description: "检查 Agent runtime 和当前授权专家是否可以执行。", response: { 200: jsonResponse(Type.Ref("ReadinessEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { summary: "检查专家就绪状态", description: "检查指定授权专家的本地执行条件。", params: ExpertParams, response: { 200: jsonResponse(Type.Ref("ExpertReadinessEnvelope")) } }));
-    this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { summary: "同步授权配置", description: "主动从 Manager 拉取当前成员的增量授权配置并更新本地投影。", body: Type.Ref("GrantSyncRequest"), response: { 200: jsonResponse(Type.Ref("GrantSyncEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("POST", "/api/agent/grants/sync", async (request, response, caller) => {
+      if (this.options.upstream) response.setHeader(UPSTREAM_STATE_HEADER, await this.syncUpstreamGrants(request));
+      await this.syncGrants(request, response, caller!);
+    }, routeSchema("syncGrants", { summary: "同步授权配置", description: "主动从 Manager 拉取当前成员的增量授权配置并更新本地投影。", body: Type.Ref("GrantSyncRequest"), response: { 200: jsonResponse(Type.Ref("GrantSyncEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/work-records", (request, response, caller) => {
       this.writeJson(response, 200, this.workRecords.history(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
     }, routeSchema("listWorkRecords", { summary: "读取本机员工工作历史", description: "owner 隔离的实际 promptParticipant 观察及明确 provenance 的旧 Pi 历史，不是 Run/Task 执行状态机。按 occurred_at DESC/稳定创建序号 DESC，before 向更早翻页。精确 UTC [window_start,window_end)；未知旧时间为 null、不虚构开始/结束/用量。meta.after 保持第一页水位，随后轮询已看到记录的终态更新。正文摘要仅从 Pi 读取脱敏，不保存第二份正文，不上传。", querystring: WorkHistoryQuery, response: { 200: jsonResponse(Type.Ref("WorkHistoryEnvelope")) } }));
@@ -1374,7 +1425,12 @@ export class AgentHttpServer {
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
 
-  private registerRoute(method: string | string[], url: string, handler: AgentRouteHandler, schema: Record<string, unknown>, authenticated = true): void {
+  /**
+   * `authenticated: "optional"` is for gateway routes the upstream Agent
+   * authenticates anyway: a caller the local Agent cannot verify is passed on
+   * as undefined instead of being rejected here.
+   */
+  private registerRoute(method: string | string[], url: string, handler: AgentRouteHandler, schema: Record<string, unknown>, authenticated: boolean | "optional" = true): void {
     const routeSchemaWithAuth = { ...schema, security: authenticated ? [{ bearerAuth: [] }] : [] };
     this.app.route({
       method: method as never,
@@ -1387,8 +1443,16 @@ export class AgentHttpServer {
         try {
           let caller: AuthenticatedCaller | undefined;
           if (authenticated) {
-            try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
-            if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+            try {
+              try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
+              if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
+            } catch (error) {
+              if (authenticated !== "optional") throw error;
+              caller = undefined;
+            }
+          }
+          // The tenant check is repeated only to narrow the type after the try block.
+          if (caller && typeof caller.tenantId === "string") {
             const context = requestContext.getStore();
             if (context) context.tenant_id = caller.tenantId;
             const memberId = caller.userId ?? caller.callerId;
@@ -1945,6 +2009,69 @@ export class AgentHttpServer {
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
       throw error;
     }
+  }
+
+  /**
+   * Gateway mode keeps both projections current: the upstream Agent executes
+   * conversations with its own copy, the local one backs local directories.
+   * Best effort; the local sync result decides the response.
+   */
+  private async syncUpstreamGrants(request: IncomingMessage): Promise<"synced" | "failed" | "unavailable"> {
+    const body = await this.readJson(request);
+    try {
+      const result = await this.options.upstream!.requestJson("POST", "/api/agent/grants/sync", {
+        authorization: this.header(request, "authorization"), "x-request-id": this.header(request, "x-request-id"), traceparent: this.header(request, "traceparent"),
+      }, { body, timeoutMs: 20_000 });
+      if (result.status >= 200 && result.status < 300) return "synced";
+      appLogger.log("warn", "gateway.grants_sync_failed", { status: result.status });
+      return "failed";
+    } catch (error) {
+      appLogger.log("warn", "gateway.grants_sync_failed", safeError(error));
+      return "unavailable";
+    }
+  }
+
+  private async promptRoute(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller | undefined): Promise<void> {
+    if (!this.gatewayPrompts) return this.prompt(request, response, conversationId, caller!);
+    const payload = await this.readJson(request, MAX_PROMPT_JSON_BYTES);
+    await this.gatewayPrompts.handle(request, response, conversationId, caller, payload, (status, body, contentType) => this.writeJson(response, status, body, contentType));
+  }
+
+  private async forwardLogout(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const payload = await this.readJson(request);
+    // Fastify answers 415 to a body without Content-Type, so an empty request stays empty.
+    const body = request.headers["content-type"] ? JSON.stringify(payload) : "";
+    try {
+      await this.options.upstream!.forward(request, response, { body });
+    } catch (error) {
+      if (!(error instanceof UpstreamUnavailableError)) throw error;
+      // Local sign-out already happened; an unreachable upstream must not block it.
+      response.setHeader(UPSTREAM_STATE_HEADER, "unavailable");
+      this.writeJson(response, 200, { data: { signed_out: true } });
+    }
+  }
+
+  /** Upstream contract merged with local definitions; the local document alone while upstream is unreachable. */
+  private async writeGatewayOpenApi(response: ServerResponse): Promise<void> {
+    const now = Date.now();
+    if (!this.openApiCache || this.openApiCache.expires <= now) {
+      const local = this.app.swagger() as OpenApiDocument;
+      let document: unknown = local;
+      let upstream: "ok" | "unavailable" = "unavailable";
+      try {
+        const result = await this.options.upstream!.requestJson("GET", "/openapi.json", {}, { timeoutMs: 3_000 });
+        if (result.status === 200 && isOpenApiDocument(result.body)) {
+          document = mergeOpenApiDocuments(local, result.body);
+          upstream = "ok";
+        }
+      } catch (error) {
+        appLogger.log("warn", "gateway.openapi_unavailable", safeError(error));
+      }
+      // A failed fetch is retried soon instead of pinning the local-only document for a minute.
+      this.openApiCache = { document, upstream, expires: now + (upstream === "ok" ? 60_000 : 5_000) };
+    }
+    response.setHeader(UPSTREAM_STATE_HEADER, this.openApiCache.upstream);
+    this.writeJson(response, 200, this.openApiCache.document);
   }
 
   private async readiness(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
@@ -2551,6 +2678,8 @@ export class AgentHttpServer {
     else if (error instanceof LocalDirectoryError) problem = mapLocalDirectoryError(error);
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
+    else if (error instanceof UpstreamUnavailableError) problem = { status: 502, code: "upstream_unavailable", detail: "Upstream Agent is unavailable" };
+    else if (error instanceof GatewayRequestTooLargeError) problem = { status: 413, code: "request_too_large", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
     this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
   }

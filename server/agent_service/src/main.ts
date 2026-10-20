@@ -16,6 +16,8 @@ import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-
 import { loadAgentConfig } from "./config.js";
 import { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
 import { appLogger, configureAgentLogging, safeError } from "./observability.js";
+import { parseUpstreamOrigin, UpstreamGateway } from "./http/upstream-gateway.js";
+import { GatewayLocalContext, ModelQueryPlanner } from "./services/gateway-local-context.js";
 
 loadAgentConfig();
 scrubAgentEnvironment();
@@ -93,6 +95,17 @@ const authenticate = useDevAuth
   : managerAuth?.authenticate ?? createJwtAuthenticator(loadJwtOptions());
 
 const schedule = new ScheduleService(store, sessionHost, { authorization: executionAuthorization });
+// Desktop gateway mode: conversations execute on the upstream Agent, while this
+// process keeps identity, grants and the user's authorized local directories.
+const upstreamOrigin = parseUpstreamOrigin(process.env.AITEAM_AGENT_UPSTREAM_URL);
+const upstream = upstreamOrigin ? new UpstreamGateway(upstreamOrigin) : undefined;
+const localContext = upstream ? new GatewayLocalContext(
+  sessionHost.localDirectoryService,
+  // Faux responses cannot plan a search; the deterministic rules take over.
+  useFauxModel || !managerClient ? undefined : new ModelQueryPlanner(configured.runtime, managerClient, store, (caller) => {
+    void usageFlush.flush(caller).catch((error) => appLogger.log("warn", "usage.flush_deferred", safeError(error)));
+  }),
+) : undefined;
 const http = new AgentHttpServer({
   host: sessionHost,
   allowedOrigins: parseAllowedOrigins(process.env.AITEAM_AGENT_ALLOWED_ORIGINS),
@@ -115,6 +128,8 @@ const http = new AgentHttpServer({
   },
   runtimeReady: () => managerClient !== undefined || configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),
+  upstream,
+  localContext,
 });
 
 const portFile = process.env.AITEAM_AGENT_PORT_FILE?.trim();
@@ -126,6 +141,8 @@ const boundPort = (() => {
 if (portFile) writePortFile(portFile, hostAddress, boundPort);
 schedule.start();
 usageFlush.start();
+// The structured log keeps allowlisted labels only; the origin itself is in the packaged config.
+if (upstream) appLogger.log("info", "gateway.enabled", { dependency: "upstream_agent" });
 appLogger.log("info", "process.ready", { port: boundPort });
 console.log(`AI_TEAM_AGENT_READY ${JSON.stringify({ host: hostAddress, port: boundPort, pid: process.pid })}`);
 
