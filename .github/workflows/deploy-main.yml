@@ -162,6 +162,35 @@ jobs:
           fi
           echo "wrote ${env_file} ($(wc -l < "${env_file}") lines)"
 
+      # The Secret above carries the whole env file and cannot be read back, so the
+      # externally reachable relay URL is overridden from a repository variable
+      # (Settings -> Secrets and variables -> Actions -> Variables). Empty keeps the
+      # Secret value. Only the URL is printed; no other env content reaches the log.
+      - name: Override NEWAPI_PUBLIC_BASE_URL from repository variable
+        shell: bash
+        working-directory: ${{ env.DEPLOY_ROOT }}
+        env:
+          NEWAPI_PUBLIC_BASE_URL_OVERRIDE: ${{ vars.NEWAPI_PUBLIC_BASE_URL_TEST }}
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "${DEPLOY_ENV}" == test && "${DEPLOY_ROOT}" == /root/app/aiteam ]]
+          if [[ -z "${NEWAPI_PUBLIC_BASE_URL_OVERRIDE}" ]]; then
+            echo "NEWAPI_PUBLIC_BASE_URL_TEST not set; keeping the value from the env Secret"
+            exit 0
+          fi
+          # Absolute HTTPS URL ending in /v1, no credentials/query/whitespace (same contract as Operation).
+          if [[ ! "${NEWAPI_PUBLIC_BASE_URL_OVERRIDE}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~-]+)*/v1$ ]]; then
+            echo "::error::NEWAPI_PUBLIC_BASE_URL_TEST must be an absolute https URL ending in /v1"; exit 1
+          fi
+          env_file=".env.${DEPLOY_ENV}"
+          tmp="$(mktemp "${env_file}.XXXXXX")"
+          { grep -v '^NEWAPI_PUBLIC_BASE_URL=' "${env_file}" || true; } > "${tmp}"
+          printf 'NEWAPI_PUBLIC_BASE_URL=%s\n' "${NEWAPI_PUBLIC_BASE_URL_OVERRIDE}" >> "${tmp}"
+          chmod 600 "${tmp}"
+          mv -f "${tmp}" "${env_file}"
+          echo "NEWAPI_PUBLIC_BASE_URL overridden to ${NEWAPI_PUBLIC_BASE_URL_OVERRIDE}"
+
       - name: Persist taiyi TEST Manager and Operation listener configuration
         shell: bash
         working-directory: ${{ env.DEPLOY_ROOT }}
