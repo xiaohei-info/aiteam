@@ -102,16 +102,17 @@ class TestUpdateDepartment:
 class TestDeleteDepartment:
     def test_deleted_returns_true_and_clears_denormalized_assignments(self):
         router = FakeRouter()
-        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=1))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=1))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="d-1") is True
-        assert len(router.executed) == 6
-        assert "SET parent_id" in router.executed[0][0]  # 子部门先上移，再删除
-        assert all("department_ids" in sql for sql, _ in router.executed[1:4])
-        assert "knowledge_space_binding" in router.executed[4][0]
+        assert len(router.executed) == 7
+        assert "pg_advisory_xact_lock" in router.executed[0][0]  # 与移动 / 升级串行
+        assert "SET parent_id" in router.executed[1][0]  # 子部门先上移，再删除
+        assert all("department_ids" in sql for sql, _ in router.executed[2:5])
+        assert "knowledge_space_binding" in router.executed[5][0]
 
     def test_not_found_returns_false(self):
         router = FakeRouter()
-        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=0))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=0))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="x") is False
 
 
@@ -324,6 +325,20 @@ class TestMoveDepartment:
         row = MemberDeptRepository(router).move_department(ctx(), department_id="d-1", parent_id="d-2")
         assert row.parent_id == "d-2"
         assert "pg_advisory_xact_lock" in router.executed[0][0]
+
+    def test_rename_and_move_are_one_statement(self):
+        router = FakeRouter()
+        router.queue_many(
+            FakeCursor(),
+            FakeCursor(fetchall=[("d-1", None), ("d-2", None)]),
+            FakeCursor(fetchone=_dept_row("d-1", parent="d-2")),
+        )
+        MemberDeptRepository(router).move_department(
+            ctx(), department_id="d-1", parent_id="d-2", display_name="新名字"
+        )
+        updates = [(sql, params) for sql, params in router.executed if "UPDATE department" in sql]
+        assert len(updates) == 1
+        assert "display_name" in updates[0][0] and "新名字" in updates[0][1]
 
     def test_unknown_department_returns_none(self):
         router = FakeRouter()

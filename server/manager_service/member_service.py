@@ -118,20 +118,20 @@ class MemberDeptService:
         moving = "parent_id" in req.model_fields_set
         if req.display_name is None and not moving:
             raise ValidationProblem("display_name or parent_id is required")
-        row = None
-        # 先移动：移动失败（防环/层数）时不留下已改名的半成品。
         if moving:
+            # 改名与移动在同一事务内完成：移动失败（防环/层数）时不会留下已改名的半成品。
             row = self._repo.move_department(
-                ctx, department_id=department_id, parent_id=req.parent_id
+                ctx,
+                department_id=department_id,
+                parent_id=req.parent_id,
+                display_name=req.display_name,
             )
-            if row is None:
-                raise NotFound("department not found")
-        if req.display_name is not None:
+        else:
             row = self._repo.update_department(
                 ctx, department_id=department_id, display_name=req.display_name
             )
-            if row is None:
-                raise NotFound("department not found")
+        if row is None:
+            raise NotFound("department not found")
         return _department_out(row)
 
     def promote_department(self, ctx: TenantContext, department_id: str, req: DepartmentPromote) -> DepartmentOut:

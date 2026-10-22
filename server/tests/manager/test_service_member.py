@@ -64,11 +64,11 @@ class _FakeDeptRepo:
         self._depts[child_id] = c
         return c
 
-    def move_department(self, ctx, *, department_id, parent_id):
+    def move_department(self, ctx, *, department_id, parent_id, display_name=None):
         d = self._depts.get(department_id)
         if d is None:
             return None
-        d = DepartmentRow(id=d.id, department_slug=d.department_slug, display_name=d.display_name, parent_id=parent_id)
+        d = DepartmentRow(id=d.id, department_slug=d.department_slug, display_name=display_name or d.display_name, parent_id=parent_id)
         self._depts[department_id] = d
         return d
 
@@ -516,6 +516,15 @@ def test_update_department_moves_to_parent_and_to_top_level():
     assert moved.parent_id == "d-1" and moved.display_name == "Engineering"
     top = svc.update_department(_owner_ctx(), "d-2", DepartmentUpdate(parent_id=None))
     assert top.parent_id is None
+
+
+def test_update_department_rename_and_move_use_one_repo_call():
+    from manager_service.schemas import DepartmentUpdate
+    svc, _, repo, _ = _service()
+    svc.create_department(_owner_ctx(), _dept_create("a"))
+    svc.create_department(_owner_ctx(), _dept_create("b"))
+    out = svc.update_department(_owner_ctx(), "d-2", DepartmentUpdate(parent_id="d-1", display_name="Renamed"))
+    assert out.parent_id == "d-1" and out.display_name == "Renamed"
 
 
 def test_update_department_requires_a_change_and_write_role():

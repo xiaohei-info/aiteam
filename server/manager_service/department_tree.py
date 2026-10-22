@@ -9,6 +9,18 @@ from collections.abc import Mapping
 
 from shared.errors import NotFound, ValidationProblem
 
+
+class DepartmentInvalidMove(ValidationProblem):
+    """移动 / 升级的目标不合法（自己、自己的下级、不是下级）。code 供调用方稳定识别，不依赖文案。"""
+
+    code = "department_invalid_move"
+
+
+class DepartmentDepthExceeded(ValidationProblem):
+    """部门层级超过 MAX_DEPARTMENT_DEPTH。"""
+
+    code = "department_depth_exceeded"
+
 # 顶级部门为第 1 层。
 MAX_DEPARTMENT_DEPTH = 5
 
@@ -51,17 +63,17 @@ def check_parent(parents: Mapping[str, str | None], parent_id: str | None, *, mo
         raise NotFound("parent department not found in this tenant")
     if moving is not None:
         if parent_id == moving:
-            raise ValidationProblem("a department cannot be its own parent")
+            raise DepartmentInvalidMove("a department cannot be its own parent")
         # 沿上级链往上走，遇到被移动的部门就说明目标在它的子树里。
         current, seen = parent_id, set()
         while current is not None and current not in seen:
             if current == moving:
-                raise ValidationProblem("a department cannot be moved under its own sub-department")
+                raise DepartmentInvalidMove("a department cannot be moved under its own sub-department")
             seen.add(current)
             current = parents.get(current)
     subtree = _height(parents, moving) if moving is not None else 1
     if _depth(parents, parent_id) + subtree > MAX_DEPARTMENT_DEPTH:
-        raise ValidationProblem(f"department hierarchy is limited to {MAX_DEPARTMENT_DEPTH} levels")
+        raise DepartmentDepthExceeded(f"department hierarchy is limited to {MAX_DEPARTMENT_DEPTH} levels")
 
 
 def check_promote(parents: Mapping[str, str | None], department_id: str, child_id: str) -> dict[str, str | None]:
@@ -80,10 +92,10 @@ def check_promote(parents: Mapping[str, str | None], department_id: str, child_i
         seen.add(current)
         current = parents.get(current)
     if not is_descendant:
-        raise ValidationProblem("promoted department must be a sub-department of the target")
+        raise DepartmentInvalidMove("promoted department must be a sub-department of the target")
     top = parents[department_id]
     updated = {**parents, child_id: top, department_id: child_id}
     base = 0 if top is None else _depth(updated, top)
     if base + _height(updated, child_id) > MAX_DEPARTMENT_DEPTH:
-        raise ValidationProblem(f"department hierarchy is limited to {MAX_DEPARTMENT_DEPTH} levels")
+        raise DepartmentDepthExceeded(f"department hierarchy is limited to {MAX_DEPARTMENT_DEPTH} levels")
     return updated

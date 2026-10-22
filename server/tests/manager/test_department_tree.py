@@ -2,7 +2,13 @@
 
 import pytest
 
-from manager_service.department_tree import MAX_DEPARTMENT_DEPTH, check_parent, check_promote
+from manager_service.department_tree import (
+    MAX_DEPARTMENT_DEPTH,
+    DepartmentDepthExceeded,
+    DepartmentInvalidMove,
+    check_parent,
+    check_promote,
+)
 from shared.errors import NotFound, ValidationProblem
 
 # a -> b -> c，d 独立顶级
@@ -73,3 +79,16 @@ def test_promote_respects_depth_limit():
     parents = {"n1": None, "n2": "n1", "a": "n2", "c": "a", "b": "a", "y": "b", "m": "y"}
     with pytest.raises(ValidationProblem):
         check_promote(parents, "a", "c")
+
+
+def test_errors_carry_stable_codes_not_just_text():
+    with pytest.raises(DepartmentInvalidMove) as moved:
+        check_parent(PARENTS, "c", moving="a")
+    assert moved.value.code == "department_invalid_move" and moved.value.status == 422
+    chain = {str(i): (str(i - 1) if i else None) for i in range(MAX_DEPARTMENT_DEPTH)}
+    chain["x"] = None
+    with pytest.raises(DepartmentDepthExceeded) as deep:
+        check_parent(chain, str(MAX_DEPARTMENT_DEPTH - 1), moving="x")
+    assert deep.value.code == "department_depth_exceeded"
+    with pytest.raises(DepartmentInvalidMove):
+        check_promote(PARENTS, "d", "c")

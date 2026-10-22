@@ -265,10 +265,10 @@ export class HttpManagerClient implements ManagerClient {
     }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
-      const detail = await readManagerProblemDetail(response);
+      const { code: problemCode, detail } = await readManagerProblem(response);
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
-      if (response.status === 422) throw new ManagerValidationError(message);
+      if (response.status === 422) throw new ManagerValidationError(message, problemCode);
       throw new ManagerUnavailableError(message);
     }
     return response;
@@ -288,15 +288,15 @@ export class ManagerUnavailableError extends Error {
   }
 }
 
-async function readManagerProblemDetail(response: Response): Promise<string> {
+async function readManagerProblem(response: Response): Promise<{ code: string; detail: string }> {
   try {
     const value = JSON.parse(await response.text()) as Record<string, unknown>;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { code: "", detail: "" };
     const code = typeof value.code === "string" ? value.code.trim() : "";
     const detail = typeof value.detail === "string" ? value.detail.trim() : "";
-    return [code, detail].filter(Boolean).join(": ").slice(0, 300);
+    return { code, detail: [code, detail].filter(Boolean).join(": ").slice(0, 300) };
   } catch {
-    return "";
+    return { code: "", detail: "" };
   }
 }
 
@@ -317,8 +317,12 @@ export class ManagerPolicyDeniedError extends ManagerUnavailableError {
 
 /** Manager rejected the payload (for example a department cycle); not an outage and not an access denial. */
 export class ManagerValidationError extends ManagerUnavailableError {
-  constructor(message = "Manager rejected the request") {
+  /** Manager 返回的稳定错误码（problem+json 的 code）；调用方按它分类，不要解析 message 文案。 */
+  readonly code: string;
+
+  constructor(message = "Manager rejected the request", code = "") {
     super(message);
+    this.code = code;
     this.name = "ManagerValidationError";
   }
 }

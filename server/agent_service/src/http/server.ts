@@ -2893,9 +2893,8 @@ function orgWriteProblem(error: unknown, unavailable: string): HttpProblem {
   if (error instanceof ManagerAuthorizationError) return new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.status === 401 ? error.message : "Only owner or enterprise_admin can manage departments");
   if (error instanceof ManagerPolicyDeniedError) return new HttpProblem(error.status, error.status === 404 ? "org_target_not_found" : "org_conflict", error.status === 404 ? "Department or employee was not found" : "Department already exists or conflicts with current organization data");
   if (error instanceof ManagerValidationError) {
-    const text = error.message;
-    if (/limited to \d+ levels/.test(text)) return new HttpProblem(422, "org_depth_exceeded", "Department hierarchy is limited to 5 levels");
-    if (/sub-department|own parent|must be a sub/.test(text)) return new HttpProblem(422, "org_invalid_move", "A department cannot be moved under itself or its own sub-department");
+    if (error.code === "department_depth_exceeded") return new HttpProblem(422, "org_depth_exceeded", "Department hierarchy is limited to 5 levels");
+    if (error.code === "department_invalid_move") return new HttpProblem(422, "org_invalid_move", "A department cannot be moved under itself or its own sub-department");
     return new HttpProblem(422, "org_invalid_request", "The department change was rejected");
   }
   return new HttpProblem(503, "manager_unavailable", unavailable);
