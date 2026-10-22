@@ -78,8 +78,10 @@ test("Org department writes are forwarded to Manager and keep empty departments 
     updateDepartment: async (_caller, id, patch) => {
       if (denyWrites) throw new ManagerAuthorizationError(403);
       if (id === "missing") throw new ManagerPolicyDeniedError(404);
-      if (patch.parent_id === "cycle") throw new ManagerValidationError("Manager returned HTTP 422 for /x: a department cannot be moved under its own sub-department");
-      if (patch.parent_id === "deep") throw new ManagerValidationError("Manager returned HTTP 422 for /x: department hierarchy is limited to 5 levels");
+      if (patch.parent_id === "cycle") throw new ManagerValidationError("Manager returned HTTP 422 for /x: a department cannot be moved under its own sub-department", "department_invalid_move");
+      if (patch.parent_id === "deep") throw new ManagerValidationError("Manager returned HTTP 422 for /x: department hierarchy is limited to 5 levels", "department_depth_exceeded");
+      // 文案即使很像也不能当作错误码：只认 Manager 给的 code。
+      if (patch.parent_id === "reworded") throw new ManagerValidationError("Manager returned HTTP 422 for /x: hierarchy limited to 5 levels");
       calls.push({ kind: "update", args: [id, patch] });
       return { id, display_name: patch.display_name ?? "旧名", parent_id: patch.parent_id ?? null };
     },
@@ -135,6 +137,9 @@ test("Org department writes are forwarded to Manager and keep empty departments 
     const deep = await patch("d-1", { parent_id: "deep" });
     assert.equal(deep.status, 422);
     assert.equal((await deep.json() as { code: string }).code, "org_depth_exceeded");
+    const reworded = await patch("d-1", { parent_id: "reworded" });
+    assert.equal(reworded.status, 422);
+    assert.equal((await reworded.json() as { code: string }).code, "org_invalid_request");
 
     const promoted = await fetch(`${admin.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({ child_id: "d-3" }) });
     assert.equal(promoted.status, 200);

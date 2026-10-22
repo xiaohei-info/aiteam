@@ -53,7 +53,7 @@ test("HttpManagerClient renames, moves and promotes departments, surfacing Manag
     requests.push({ url: String(input), init: init ?? {} });
     return status === 200
       ? Response.json({ data: { id: "d/1", department_slug: "s", display_name: "新", parent_id: null } })
-      : Response.json({ status: 422, code: "validation_error", detail: "department hierarchy is limited to 5 levels" }, { status: 422 });
+      : Response.json({ status: 422, code: "department_depth_exceeded", detail: "department hierarchy is limited to 5 levels" }, { status: 422 });
   });
   await client.updateDepartment(caller, "d/1", { display_name: "新", parent_id: null });
   await client.promoteDepartment(caller, "d/1", "c-1");
@@ -64,7 +64,7 @@ test("HttpManagerClient renames, moves and promotes departments, surfacing Manag
   assert.equal(requests[1].init.method, "POST");
   assert.deepEqual(JSON.parse(String(requests[1].init.body)), { child_id: "c-1" });
   status = 422;
-  await assert.rejects(() => client.updateDepartment(caller, "d-1", { parent_id: "x" }), (error) => error instanceof ManagerValidationError && /limited to 5 levels/.test(error.message));
+  await assert.rejects(() => client.updateDepartment(caller, "d-1", { parent_id: "x" }), (error) => error instanceof ManagerValidationError && error.code === "department_depth_exceeded" && /limited to 5 levels/.test(error.message));
 });
 
 test("HttpManagerClient preserves the safe Manager problem detail for runtime failures", async () => {

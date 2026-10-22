@@ -120,9 +120,17 @@ class MemberDeptRepository:
         return None if row is None else self._dept(row)
 
     def move_department(
-        self, ctx: TenantContext, *, department_id: str, parent_id: str | None
+        self,
+        ctx: TenantContext,
+        *,
+        department_id: str,
+        parent_id: str | None,
+        display_name: str | None = None,
     ) -> DepartmentRow | None:
-        """把部门移到另一个部门下（parent_id=None 为顶级）。校验与写入在同一事务内完成。"""
+        """把部门移到另一个部门下（parent_id=None 为顶级）。校验与写入在同一事务内完成。
+
+        同时传 display_name 时改名与移动同事务，要么都生效要么都不生效。
+        """
         with self._router.session(ctx) as s:
             self._lock_hierarchy(s, ctx)
             parents = self._parents(s)
@@ -130,9 +138,9 @@ class MemberDeptRepository:
                 return None
             check_parent(parents, parent_id, moving=department_id)
             row = s.execute(
-                "UPDATE department SET parent_id = %s WHERE id = %s "
-                f"RETURNING {self._DEPT_COLUMNS}",
-                (parent_id, department_id),
+                "UPDATE department SET parent_id = %s, display_name = COALESCE(%s, display_name) "
+                f"WHERE id = %s RETURNING {self._DEPT_COLUMNS}",
+                (parent_id, display_name, department_id),
             ).fetchone()
         return None if row is None else self._dept(row)
 
@@ -162,6 +170,8 @@ class MemberDeptRepository:
         deleted department's parent instead of being deleted or orphaned.
         """
         with self._router.session(ctx) as s:
+            # 与移动 / 升级串行：否则别人刚把部门移到被删部门下，外键会让删除失败。
+            self._lock_hierarchy(s, ctx)
             s.execute(
                 "UPDATE department SET parent_id = (SELECT parent_id FROM department WHERE id = %s) "
                 "WHERE parent_id = %s",
