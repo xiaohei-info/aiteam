@@ -14,6 +14,8 @@ export interface DepartmentsApi {
   getDepartment: (departmentId: string) => Promise<Department | null>;
   createDepartment: (input: CreateDepartmentInput) => Promise<Department | null>;
   updateDepartment: (departmentId: string, input: UpdateDepartmentInput) => Promise<Department | null>;
+  /** 下级部门升级：childId 取代 departmentId 的位置，departmentId 成为它的子部门。 */
+  promoteDepartment: (departmentId: string, childId: string) => Promise<Department | null>;
   deleteDepartment: (departmentId: string) => Promise<DeleteDepartmentResult | null>;
 }
 
@@ -34,6 +36,9 @@ export function useDepartmentsApi(): DepartmentsApi {
       },
       updateDepartment(departmentId, input) {
         return client.patch<Department>(`/api/manager/departments/${departmentId}`, { body: input });
+      },
+      promoteDepartment(departmentId, childId) {
+        return client.post<Department>(`/api/manager/departments/${departmentId}/promote`, { body: { child_id: childId } });
       },
       deleteDepartment(departmentId) {
         return client.del<DeleteDepartmentResult>(`/api/manager/departments/${departmentId}`);

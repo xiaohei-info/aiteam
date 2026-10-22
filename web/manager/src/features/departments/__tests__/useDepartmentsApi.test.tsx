@@ -58,6 +58,8 @@ describe("useDepartmentsApi", () => {
 
     await result.current.createDepartment({ department_slug: "sales", display_name: "销售部" });
     await result.current.updateDepartment("d1", { display_name: "工程部" });
+    await result.current.updateDepartment("d1", { parent_id: null });
+    await result.current.promoteDepartment("d1", "d2");
     await result.current.deleteDepartment("d1");
 
     expect(client.post).toHaveBeenCalledWith("/api/manager/departments", {
@@ -66,6 +68,8 @@ describe("useDepartmentsApi", () => {
     expect(client.patch).toHaveBeenCalledWith("/api/manager/departments/d1", {
       body: { display_name: "工程部" },
     });
+    expect(client.patch).toHaveBeenCalledWith("/api/manager/departments/d1", { body: { parent_id: null } });
+    expect(client.post).toHaveBeenCalledWith("/api/manager/departments/d1/promote", { body: { child_id: "d2" } });
     expect(client.del).toHaveBeenCalledWith("/api/manager/departments/d1");
   });
 });
