@@ -25,7 +25,7 @@ class OrgService:
         with self._router.session(ctx) as s:
             # 取所有部门
             dept_rows = s.execute(
-                "SELECT id, department_slug, display_name FROM department ORDER BY department_slug",
+                "SELECT id, department_slug, display_name, parent_id FROM department ORDER BY department_slug",
             ).fetchall()
             # 取所有员工（含 department_ids）
             emp_rows = s.execute(
@@ -65,7 +65,18 @@ class OrgService:
             "id": "root", "type": "department", "name": "企业",
             "parent_id": None, "status": None, "children": [],
         }
-        root["children"].extend(dept_nodes.values())
+        # 部门按 parent_id 嵌套；上级缺失（历史脏数据）时按顶级处理。
+        for r in dept_rows:
+            node = dept_nodes[str(r[0])]
+            parent_id = None if r[3] is None else str(r[3])
+            parent = dept_nodes.get(parent_id) if parent_id else None
+            if parent is None or parent is node:
+                root["children"].append(node)
+            else:
+                node["parent_id"] = parent_id
+                # 子部门放在员工之前，和 UI 的展示顺序一致。
+                sub = [c for c in parent["children"] if c["type"] == "department"]
+                parent["children"].insert(len(sub), node)
         if unassigned_employees:
             root["children"].append({
                 "id": UNASSIGNED_DEPARTMENT_ID,

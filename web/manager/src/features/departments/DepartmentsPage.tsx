@@ -11,6 +11,7 @@ import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
 import { Text } from "@astryxdesign/core/Text";
@@ -20,14 +21,18 @@ import { Link } from "react-router-dom";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { useDepartmentsApi } from "./useDepartmentsApi";
+import { flattenDepartments, selectableParents } from "./departmentTree";
 import type { Department, UpdateDepartmentInput } from "./types";
 
 type DepartmentRow = Department & Record<string, unknown>;
 
 type EditorState =
   | { mode: "closed" }
-  | { mode: "create"; departmentSlug: string; displayName: string }
-  | { mode: "edit"; departmentId: string; departmentSlug: string; displayName: string };
+  | { mode: "create"; departmentSlug: string; displayName: string; parentId: string }
+  | { mode: "edit"; departmentId: string; departmentSlug: string; displayName: string; parentId: string; originalName: string; originalParentId: string };
+
+/** Selector 不接受空值，用哨兵表示“顶级部门”。 */
+const TOP_LEVEL = "__top__";
 
 const CLOSED_EDITOR: EditorState = { mode: "closed" };
 const MAX_PROBLEM_DETAIL_LENGTH = 240;
@@ -80,6 +85,8 @@ export function DepartmentsPage(): ReactNode {
   const [notice, setNotice] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>(CLOSED_EDITOR);
   const [pendingDelete, setPendingDelete] = useState<Department | null>(null);
+  const [pendingPromote, setPendingPromote] = useState<Department | null>(null);
+  const nodes = useMemo(() => flattenDepartments(departments), [departments]);
 
   const translate = useCallback((key: string) => i18n.t(key), [i18n]);
   const load = useCallback(async () => {
@@ -99,7 +106,7 @@ export function DepartmentsPage(): ReactNode {
   const openCreate = useCallback(() => {
     setActionError(null);
     setNotice(null);
-    setEditor({ mode: "create", departmentSlug: "", displayName: "" });
+    setEditor({ mode: "create", departmentSlug: "", displayName: "", parentId: TOP_LEVEL });
   }, []);
 
   const openEdit = useCallback((department: Department) => {
@@ -110,6 +117,9 @@ export function DepartmentsPage(): ReactNode {
       departmentId: department.id,
       departmentSlug: department.department_slug,
       displayName: department.display_name,
+      parentId: department.parent_id ?? TOP_LEVEL,
+      originalName: department.display_name,
+      originalParentId: department.parent_id ?? TOP_LEVEL,
     });
   }, []);
 
@@ -117,7 +127,7 @@ export function DepartmentsPage(): ReactNode {
     if (!working) setEditor(CLOSED_EDITOR);
   }, [working]);
 
-  const updateEditor = useCallback((field: "departmentSlug" | "displayName", value: string) => {
+  const updateEditor = useCallback((field: "departmentSlug" | "displayName" | "parentId", value: string) => {
     setEditor((current) => current.mode === "closed" ? current : { ...current, [field]: value });
   }, []);
 
@@ -137,10 +147,18 @@ export function DepartmentsPage(): ReactNode {
     setNotice(null);
     try {
       if (editor.mode === "create") {
-        await api.createDepartment({ department_slug: departmentSlug, display_name: displayName });
+        await api.createDepartment({
+          department_slug: departmentSlug,
+          display_name: displayName,
+          ...(editor.parentId !== TOP_LEVEL ? { parent_id: editor.parentId } : {}),
+        });
         setNotice(i18n.t("manager.departments.create_ok"));
       } else {
-        const input: UpdateDepartmentInput = { display_name: displayName };
+        // 只提交改动过的字段：只改名称时与旧版 Manager 兼容。
+        const input: UpdateDepartmentInput = {};
+        if (displayName !== editor.originalName) input.display_name = displayName;
+        if (editor.parentId !== editor.originalParentId) input.parent_id = editor.parentId === TOP_LEVEL ? null : editor.parentId;
+        if (Object.keys(input).length === 0) input.display_name = displayName;
         await api.updateDepartment(editor.departmentId, input);
         setNotice(i18n.t("manager.departments.update_ok"));
       }
@@ -169,6 +187,34 @@ export function DepartmentsPage(): ReactNode {
     }
   }, [api, i18n, load, pendingDelete, translate]);
 
+  const handlePromote = useCallback(async () => {
+    if (!pendingPromote?.parent_id) return;
+    setWorking(true);
+    setActionError(null);
+    try {
+      await api.promoteDepartment(pendingPromote.parent_id, pendingPromote.id);
+      setPendingPromote(null);
+      setNotice(i18n.t("manager.departments.promote_ok"));
+      await load();
+    } catch (err) {
+      setActionError(formatDepartmentError(err, i18n.t("manager.departments.action_error"), translate));
+    } finally {
+      setWorking(false);
+    }
+  }, [api, i18n, load, pendingPromote, translate]);
+
+  const depthOf = useMemo(() => new Map(nodes.map(({ department, depth }) => [department.id, depth])), [nodes]);
+  const parentOptions = useMemo(() => {
+    const movingId = editor.mode === "edit" ? editor.departmentId : undefined;
+    return [
+      { value: TOP_LEVEL, label: i18n.t("manager.departments.top_level") },
+      ...selectableParents(departments, movingId).map(({ department, depth }) => ({
+        value: department.id,
+        label: `${"　".repeat(depth - 1)}${department.display_name || department.department_slug}`,
+      })),
+    ];
+  }, [departments, editor, i18n]);
+
   const columns = useMemo<TableColumn<DepartmentRow>[]>(() => {
     const base: TableColumn<DepartmentRow>[] = [
       {
@@ -176,8 +222,8 @@ export function DepartmentsPage(): ReactNode {
         header: i18n.t("manager.departments.col_name"),
         width: proportional(1),
         renderCell: (department) => (
-          <Text weight="bold" data-testid="department-row" data-department-id={department.id}>
-            {department.display_name || "未命名部门"}
+          <Text weight="bold" data-testid="department-row" data-department-id={department.id} data-depth={depthOf.get(department.id) ?? 1}>
+            {`${"　".repeat((depthOf.get(department.id) ?? 1) - 1)}${department.display_name || "未命名部门"}`}
           </Text>
         ),
       },
@@ -192,7 +238,7 @@ export function DepartmentsPage(): ReactNode {
       base.push({
         key: "actions",
         header: i18n.t("manager.departments.col_actions"),
-        width: pixel(170),
+        width: pixel(260),
         align: "end",
         resizable: false,
         renderCell: (department) => (
@@ -205,6 +251,16 @@ export function DepartmentsPage(): ReactNode {
               isDisabled={working}
               onClick={() => openEdit(department)}
             />
+            {department.parent_id && depthOf.has(department.parent_id) && (
+              <Button
+                label={i18n.t("manager.departments.promote")}
+                variant="ghost"
+                size="sm"
+                data-testid={`department-promote-${department.id}`}
+                isDisabled={working}
+                onClick={() => { setActionError(null); setPendingPromote(department); }}
+              />
+            )}
             <Button
               label={i18n.t("manager.departments.delete")}
               variant="destructive"
@@ -218,7 +274,7 @@ export function DepartmentsPage(): ReactNode {
       });
     }
     return base;
-  }, [canWrite, i18n, openEdit, working]);
+  }, [canWrite, depthOf, i18n, openEdit, working]);
 
   const editorTitle = editor.mode === "create"
     ? i18n.t("manager.departments.create_title")
@@ -270,7 +326,7 @@ export function DepartmentsPage(): ReactNode {
           <Table
             aria-label={i18n.t("manager.nav.departments")}
             tableProps={{ "aria-label": i18n.t("manager.nav.departments") }}
-            data={departments as DepartmentRow[]}
+            data={nodes.map(({ department }) => department) as DepartmentRow[]}
             columns={columns}
             idKey="id"
             hasHover
@@ -311,6 +367,14 @@ export function DepartmentsPage(): ReactNode {
                         isDisabled={working}
                         data-testid="department-name-input"
                       />
+                      <Selector
+                        label={i18n.t("manager.departments.parent")}
+                        options={parentOptions}
+                        value={editor.parentId}
+                        onChange={(value) => updateEditor("parentId", value)}
+                        isDisabled={working}
+                        data-testid="department-parent-select"
+                      />
                     </FormLayout>
                   </VStack>
                 </form>
@@ -334,6 +398,19 @@ export function DepartmentsPage(): ReactNode {
           />
         </Dialog>
       )}
+
+      <AlertDialog
+        isOpen={pendingPromote != null}
+        title={i18n.t("manager.departments.promote_title")}
+        description={pendingPromote
+          ? i18n.t("manager.departments.promote_confirm").replace("{name}", pendingPromote.display_name || pendingPromote.department_slug)
+          : ""}
+        cancelLabel={i18n.t("manager.departments.delete_cancel")}
+        actionLabel={i18n.t("manager.departments.promote_confirm_ok")}
+        isActionLoading={working}
+        onOpenChange={(isOpen) => { if (!isOpen && !working) setPendingPromote(null); }}
+        onAction={() => void handlePromote()}
+      />
 
       <AlertDialog
         isOpen={pendingDelete != null}

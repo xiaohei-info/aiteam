@@ -83,6 +83,11 @@ export interface ManagerClient {
   pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
+  /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
+  createDepartment?(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown>;
+  updateDepartment?(caller: AuthenticatedCaller, departmentId: string, input: { display_name?: string; parent_id?: string | null }): Promise<unknown>;
+  promoteDepartment?(caller: AuthenticatedCaller, departmentId: string, childId: string): Promise<unknown>;
+  assignEmployeeDepartment?(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
@@ -183,6 +188,22 @@ export class HttpManagerClient implements ManagerClient {
     return this.unwrap(response);
   }
 
+  async createDepartment(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown> {
+    return this.unwrap(await this.request("/api/manager/departments", caller, input));
+  }
+
+  async updateDepartment(caller: AuthenticatedCaller, departmentId: string, input: { display_name?: string; parent_id?: string | null }): Promise<unknown> {
+    return this.unwrap(await this.request(`/api/manager/departments/${encodeURIComponent(departmentId)}`, caller, input, undefined, "PATCH"));
+  }
+
+  async promoteDepartment(caller: AuthenticatedCaller, departmentId: string, childId: string): Promise<unknown> {
+    return this.unwrap(await this.request(`/api/manager/departments/${encodeURIComponent(departmentId)}/promote`, caller, { child_id: childId }));
+  }
+
+  async assignEmployeeDepartment(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown> {
+    return this.unwrap(await this.request(`/api/manager/org/assignments/${encodeURIComponent(employeeId)}`, caller, { department_id: departmentId }, undefined, "PATCH"));
+  }
+
   async listMarketplaceTemplates(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]> {
     const response = await this.request("/api/manager/recruit/catalog/experts", caller);
     const value = this.unwrap(response);
@@ -203,7 +224,7 @@ export class HttpManagerClient implements ManagerClient {
     caller: AuthenticatedCaller,
     body?: unknown,
     query?: Record<string, string>,
-    method?: "GET" | "POST" | "DELETE",
+    method?: "GET" | "POST" | "PATCH" | "DELETE",
     idempotencyKey?: string,
   ): Promise<unknown> {
     const response = await this.requestResponse(path, caller, body, query, method, idempotencyKey);
@@ -220,7 +241,7 @@ export class HttpManagerClient implements ManagerClient {
     caller: AuthenticatedCaller,
     body?: unknown,
     query?: Record<string, string>,
-    method?: "GET" | "POST" | "DELETE",
+    method?: "GET" | "POST" | "PATCH" | "DELETE",
     idempotencyKey?: string,
   ): Promise<Response> {
     const url = new URL(path, this.baseUrl);
@@ -244,9 +265,10 @@ export class HttpManagerClient implements ManagerClient {
     }
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
-      const detail = await readManagerProblemDetail(response);
+      const { code: problemCode, detail } = await readManagerProblem(response);
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
+      if (response.status === 422) throw new ManagerValidationError(message, problemCode);
       throw new ManagerUnavailableError(message);
     }
     return response;
@@ -266,15 +288,15 @@ export class ManagerUnavailableError extends Error {
   }
 }
 
-async function readManagerProblemDetail(response: Response): Promise<string> {
+async function readManagerProblem(response: Response): Promise<{ code: string; detail: string }> {
   try {
     const value = JSON.parse(await response.text()) as Record<string, unknown>;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { code: "", detail: "" };
     const code = typeof value.code === "string" ? value.code.trim() : "";
     const detail = typeof value.detail === "string" ? value.detail.trim() : "";
-    return [code, detail].filter(Boolean).join(": ").slice(0, 300);
+    return { code, detail: [code, detail].filter(Boolean).join(": ").slice(0, 300) };
   } catch {
-    return "";
+    return { code: "", detail: "" };
   }
 }
 
@@ -290,6 +312,18 @@ export class ManagerPolicyDeniedError extends ManagerUnavailableError {
   constructor(readonly status: 404 | 409, message = "Manager runtime policy denied the request") {
     super(message);
     this.name = "ManagerPolicyDeniedError";
+  }
+}
+
+/** Manager rejected the payload (for example a department cycle); not an outage and not an access denial. */
+export class ManagerValidationError extends ManagerUnavailableError {
+  /** Manager 返回的稳定错误码（problem+json 的 code）；调用方按它分类，不要解析 message 文案。 */
+  readonly code: string;
+
+  constructor(message = "Manager rejected the request", code = "") {
+    super(message);
+    this.code = code;
+    this.name = "ManagerValidationError";
   }
 }
 
