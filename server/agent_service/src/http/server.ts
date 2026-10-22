@@ -20,7 +20,7 @@ import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
-import { ManagerAuthError, ManagerAuthorizationError, ManagerUnavailableError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
+import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
@@ -486,6 +486,33 @@ const OrgTreeNode = Type.Object({
   children: Type.Array(Type.Ref("OrgTreeNode"), { description: "递归子组织节点。" }),
 }, { $id: "OrgTreeNode", additionalProperties: false, description: "递归组织树投影。" });
 const OrgTreeEnvelope = Type.Object({ data: Type.Ref("OrgTreeNode") }, { $id: "OrgTreeEnvelope" });
+const OrgDepartmentParams = Type.Object({ department_id: Type.String({ minLength: 1, maxLength: 128, description: "部门 ID（组织树 department 节点 id）。" }) });
+const OrgDepartmentCreateRequest = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 64, description: "部门名称；首尾空白会被去除。" }),
+  parent_id: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "上级部门 ID；省略表示顶级部门。" })),
+}, { $id: "OrgDepartmentCreateRequest", additionalProperties: false, description: "创建部门请求；仅 owner/enterprise_admin 可用，部门标识由服务端生成。" });
+const OrgDepartmentUpdateRequest = Type.Object({
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 64, description: "新的部门名称；首尾空白会被去除。" })),
+  parent_id: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 128 }), Type.Null()], { description: "新的上级部门 ID；null 表示移到顶级，省略表示不移动。不能放到自己的下级部门下，最多 5 层。" })),
+}, { $id: "OrgDepartmentUpdateRequest", additionalProperties: false, description: "重命名和/或移动部门，至少提供一项；仅 owner/enterprise_admin 可用。" });
+const OrgDepartmentPromoteRequest = Type.Object({
+  child_id: Type.String({ minLength: 1, maxLength: 128, description: "要升级的下级部门 ID（任意深度的下级）。" }),
+}, { $id: "OrgDepartmentPromoteRequest", additionalProperties: false, description: "下级部门升级：它取代该部门的位置，该部门成为它的子部门；该部门的其他子部门仍跟随该部门。" });
+const OrgDepartmentEnvelope = Type.Object({
+  data: Type.Object({
+    id: Type.String({ minLength: 1, description: "新部门 ID。" }),
+    name: Type.String({ description: "部门名称。" }),
+  }, { additionalProperties: false }),
+}, { $id: "OrgDepartmentEnvelope", description: "创建后的部门。" });
+const OrgAssignmentRequest = Type.Object({
+  department_id: Type.String({ minLength: 1, maxLength: 128, description: "要追加的部门 ID（组织树 department 节点 id）。" }),
+}, { $id: "OrgAssignmentRequest", additionalProperties: false, description: "为员工追加一个部门；不会移除员工已有部门。" });
+const OrgAssignmentEnvelope = Type.Object({
+  data: Type.Object({
+    employee_id: Type.String({ minLength: 1, description: "员工 ID。" }),
+    department_id: Type.String({ minLength: 1, description: "已追加的部门 ID。" }),
+  }, { additionalProperties: false }),
+}, { $id: "OrgAssignmentEnvelope", description: "部门追加结果。" });
 const OfficeSceneEnvelope = Type.Object({
   data: Type.Object({
     employees: Type.Array(Type.Object({
@@ -598,7 +625,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
@@ -713,13 +740,13 @@ type OpenApiOperationDocs = {
 const MANAGER_BACKED_OPERATION_IDS = new Set([
   "resolveTenantByAccount", "login", "resetPassword", "transcribeAudio", "getConversationContext",
   "updateConversationContext", "setConversationThinkingLevel", "promptConversation", "syncGrants",
-  "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree",
+  "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree", "createOrgDepartment", "updateOrgDepartment", "promoteOrgDepartment", "assignOrgDepartment",
   "updateEmployeeAvatar",
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
   ...LOCAL_DIRECTORY_PARAMETER_EXAMPLES,
-  conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1",
+  conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1", department_id: "department-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
   "Idempotency-Key": "prompt-1", "Last-Event-ID": "employee-1:assistant-1", "X-Aiteam-Reconciliation-Version": "2",
@@ -790,6 +817,10 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   flushUsage: { request: { limit: { summary: "批量上限", value: { limit: 50 } } }, responses: { "200": { description: "用量摘要发送结果。", examples: { flushed: { summary: "刷新成功", value: { data: { sent: ["summary-1"], failed: [] } } } } } } },
   listMarketplaceTemplates: { responses: { "200": { description: "当前成员可见的人才市场模板。", examples: { list: { summary: "模板列表", value: { data: [{ template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", description: "研究与报告整理", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:example" }], skills_count: 1, recruit_count: null, is_recruited: false, tags: ["research"], avatar_url: null }], page: EXAMPLE_PAGE } } } } } },
   getMarketplaceTemplate: { responses: { "200": { description: "单个人才市场模板。", examples: { template: { summary: "模板详情", value: { data: { template_id: "template-1", display_name: "研究助手", category: "research", model_name: "model-1", description: "研究与报告整理", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:example" }], skills_count: 1, recruit_count: null, is_recruited: false, tags: ["research"], avatar_url: null } } } } } } },
+  createOrgDepartment: { request: { department: { summary: "新部门", value: { name: "研究部" } } }, responses: { "201": { description: "部门已创建。", examples: { created: { summary: "创建成功", value: { data: { id: "dept-1", name: "研究部" } } } } } } },
+  updateOrgDepartment: { request: { rename: { summary: "重命名", value: { name: "研究中心" } }, move: { summary: "移动到另一部门下", value: { parent_id: "dept-2" } }, top: { summary: "移到顶级", value: { parent_id: null } } }, responses: { "200": { description: "部门已更新。", examples: { updated: { summary: "更新成功", value: { data: { id: "dept-1", name: "研究中心", parent_id: "dept-2" } } } } } } },
+  promoteOrgDepartment: { request: { promote: { summary: "下级升级", value: { child_id: "dept-3" } } }, responses: { "200": { description: "下级部门已升级，返回升级后的部门。", examples: { promoted: { summary: "升级成功", value: { data: { id: "dept-3", name: "平台组", parent_id: null } } } } } } },
+  assignOrgDepartment: { request: { assignment: { summary: "追加部门", value: { department_id: "dept-1" } } }, responses: { "200": { description: "员工已追加到该部门（重复追加不改变配置）。", examples: { assigned: { summary: "追加成功", value: { data: { employee_id: "employee-1", department_id: "dept-1" } } } } } } },
   orgTree: {
     responses: {
       "200": {
@@ -1416,6 +1447,10 @@ export class AgentHttpServer {
       ["/api/agent/knowledge-bases/:knowledge_base_id/:kind/:resource_id", "knowledgeReadModelResource", KnowledgeResourceParams],
     ] as const) this.registerRoute("GET", path, (_request, response) => this.listKnowledgeReadModel(response), routeSchema(operationId, { summary: "查询已移除的知识库读模型", description: "该 Agent 知识库旧读模型已移除，请改用 Pi 知识工具。", params, response: { 410: problemResponse("Gone") } }));
     this.registerRoute("GET", "/api/agent/org/tree", (_request, response, caller) => this.orgTree(response, caller!), routeSchema("orgTree", { summary: "获取组织树", description: "从 Manager 拉取当前成员可见的组织结构投影。", response: { 200: jsonResponse(Type.Ref("OrgTreeEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("POST", "/api/agent/org/departments", (request, response, caller) => this.createOrgDepartment(request, response, caller!), routeSchema("createOrgDepartment", { summary: "创建部门", description: "转发到 Manager 创建租户部门；仅 owner/enterprise_admin 可用，由 Manager 校验角色。", body: Type.Ref("OrgDepartmentCreateRequest"), response: { 201: jsonResponse(Type.Ref("OrgDepartmentEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 409: problemResponse("Conflict"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("PATCH", "/api/agent/org/departments/:department_id", (request, response, caller, fastifyRequest) => this.updateOrgDepartment(request, response, (fastifyRequest?.params as { department_id: string }).department_id, caller!), routeSchema("updateOrgDepartment", { summary: "重命名或移动部门", description: "转发到 Manager 重命名和/或移动部门；仅 owner/enterprise_admin 可用，由 Manager 校验角色、防环和层数。", params: OrgDepartmentParams, body: Type.Ref("OrgDepartmentUpdateRequest"), response: { 200: jsonResponse(Type.Ref("OrgDepartmentEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("POST", "/api/agent/org/departments/:department_id/promote", (request, response, caller, fastifyRequest) => this.promoteOrgDepartment(request, response, (fastifyRequest?.params as { department_id: string }).department_id, caller!), routeSchema("promoteOrgDepartment", { summary: "下级部门升级", description: "转发到 Manager，在同一事务内让下级部门取代该部门的位置；仅 owner/enterprise_admin 可用。", params: OrgDepartmentParams, body: Type.Ref("OrgDepartmentPromoteRequest"), response: { 200: jsonResponse(Type.Ref("OrgDepartmentEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("PATCH", "/api/agent/org/assignments/:employee_id", (request, response, caller, fastifyRequest) => this.assignOrgDepartment(request, response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("assignOrgDepartment", { summary: "为员工追加部门", description: "转发到 Manager 为员工追加一个真实部门；仅 owner/enterprise_admin 可用，不会移除已有部门。", params: ExpertParams, body: Type.Ref("OrgAssignmentRequest"), response: { 200: jsonResponse(Type.Ref("OrgAssignmentEnvelope")), 400: problemResponse("BadRequest"), 401: problemResponse("Unauthorized"), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("GET", "/api/agent/office/scene", (_request, response, caller) => this.officeScene(response, caller!), routeSchema("officeScene", { summary: "获取办公场景", description: "返回本地专家工作状态和当前会话摘要。", response: { 200: jsonResponse(Type.Ref("OfficeSceneEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/office/feed", (_request, response, caller) => this.officeFeed(response, caller!), routeSchema("officeFeed", { summary: "获取办公动态", description: "返回本地已配置会话调度的动态摘要。", response: { 200: jsonResponse(Type.Ref("OfficeFeedEnvelope")) } }));
 
@@ -2127,11 +2162,78 @@ export class AgentHttpServer {
           .filter((expert) => !expert.revoked)
           .map((expert) => expert.employee_id),
       );
-      this.writeJson(response, 200, { data: projectOrgTree(raw, visibleEmployees) });
+      // 管理员需要看到尚无员工的新部门，才能继续分配；普通成员仍只看到有可见员工的部门。
+      const keepEmptyDepartments = canManageOrg(caller);
+      this.writeJson(response, 200, { data: projectOrgTree(raw, visibleEmployees, keepEmptyDepartments) });
     }
     catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
       throw new HttpProblem(503, "manager_unavailable", "Organization projection is unavailable");
+    }
+  }
+
+  private async createOrgDepartment(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
+    const client = this.options.managerClient;
+    if (!client?.createDepartment) throw new HttpProblem(503, "manager_unavailable", "Department management is unavailable");
+    const body = await this.readJson(request);
+    const name = this.stringField(typeof body.name === "string" ? body.name.trim() : body.name, "name", 64);
+    const parentId = body.parent_id === undefined ? undefined : this.stringField(body.parent_id, "parent_id", 128);
+    try {
+      const created = await client.createDepartment(caller, { department_slug: `dept-${randomUUID().replaceAll("-", "").slice(0, 12)}`, display_name: name, ...(parentId ? { parent_id: parentId } : {}) });
+      const id = (created as { id?: unknown } | null)?.id;
+      if (typeof id !== "string" || !id) throw new ManagerUnavailableError("Manager returned an invalid department");
+      this.writeJson(response, 201, { data: { id, name, parent_id: parentId ?? null } });
+    } catch (error) {
+      throw orgWriteProblem(error, "Department management is unavailable");
+    }
+  }
+
+  private departmentPayload(value: unknown, fallbackId: string): { id: string; name: string; parent_id: string | null } {
+    const row = value as { id?: unknown; display_name?: unknown; parent_id?: unknown } | null;
+    if (!row || typeof row.id !== "string" || !row.id || typeof row.display_name !== "string") throw new ManagerUnavailableError("Manager returned an invalid department");
+    return { id: row.id || fallbackId, name: row.display_name, parent_id: typeof row.parent_id === "string" ? row.parent_id : null };
+  }
+
+  private async updateOrgDepartment(request: IncomingMessage, response: ServerResponse, departmentId: string, caller: AuthenticatedCaller): Promise<void> {
+    const client = this.options.managerClient;
+    if (!client?.updateDepartment) throw new HttpProblem(503, "manager_unavailable", "Department management is unavailable");
+    const body = await this.readJson(request);
+    const patch: { display_name?: string; parent_id?: string | null } = {};
+    if (body.name !== undefined) patch.display_name = this.stringField(typeof body.name === "string" ? body.name.trim() : body.name, "name", 64);
+    if (body.parent_id !== undefined) patch.parent_id = body.parent_id === null ? null : this.stringField(body.parent_id, "parent_id", 128);
+    if (patch.display_name === undefined && patch.parent_id === undefined) throw new HttpProblem(422, "invalid_department_update", "name or parent_id is required");
+    try {
+      const updated = await client.updateDepartment(caller, departmentId, patch);
+      this.writeJson(response, 200, { data: this.departmentPayload(updated, departmentId) });
+    } catch (error) {
+      throw orgWriteProblem(error, "Department management is unavailable");
+    }
+  }
+
+  private async promoteOrgDepartment(request: IncomingMessage, response: ServerResponse, departmentId: string, caller: AuthenticatedCaller): Promise<void> {
+    const client = this.options.managerClient;
+    if (!client?.promoteDepartment) throw new HttpProblem(503, "manager_unavailable", "Department management is unavailable");
+    const body = await this.readJson(request);
+    const childId = this.stringField(body.child_id, "child_id", 128);
+    try {
+      const promoted = await client.promoteDepartment(caller, departmentId, childId);
+      this.writeJson(response, 200, { data: this.departmentPayload(promoted, childId) });
+    } catch (error) {
+      throw orgWriteProblem(error, "Department management is unavailable");
+    }
+  }
+
+  private async assignOrgDepartment(request: IncomingMessage, response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
+    const client = this.options.managerClient;
+    if (!client?.assignEmployeeDepartment) throw new HttpProblem(503, "manager_unavailable", "Department management is unavailable");
+    this.requireAuthorizedEmployee(employeeId, caller);
+    const body = await this.readJson(request);
+    const departmentId = this.stringField(body.department_id, "department_id", 128);
+    try {
+      await client.assignEmployeeDepartment(caller, employeeId, departmentId);
+      this.writeJson(response, 200, { data: { employee_id: employeeId, department_id: departmentId } });
+    } catch (error) {
+      throw orgWriteProblem(error, "Department management is unavailable");
     }
   }
 
@@ -2780,21 +2882,40 @@ function approvalPublic(record: ApprovalRecord): Record<string, unknown> {
   };
 }
 
-function projectOrgTree(value: unknown, visibleEmployees: ReadonlySet<string>): Record<string, unknown> {
-  const root = projectOrgNode(value, visibleEmployees, true);
+const ORG_MANAGE_ROLES: ReadonlySet<string> = new Set(["owner", "enterprise_admin"]);
+
+function canManageOrg(caller: AuthenticatedCaller): boolean {
+  return (caller.roles ?? []).some((role) => ORG_MANAGE_ROLES.has(role));
+}
+
+function orgWriteProblem(error: unknown, unavailable: string): HttpProblem {
+  if (error instanceof HttpProblem) return error;
+  if (error instanceof ManagerAuthorizationError) return new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.status === 401 ? error.message : "Only owner or enterprise_admin can manage departments");
+  if (error instanceof ManagerPolicyDeniedError) return new HttpProblem(error.status, error.status === 404 ? "org_target_not_found" : "org_conflict", error.status === 404 ? "Department or employee was not found" : "Department already exists or conflicts with current organization data");
+  if (error instanceof ManagerValidationError) {
+    const text = error.message;
+    if (/limited to \d+ levels/.test(text)) return new HttpProblem(422, "org_depth_exceeded", "Department hierarchy is limited to 5 levels");
+    if (/sub-department|own parent|must be a sub/.test(text)) return new HttpProblem(422, "org_invalid_move", "A department cannot be moved under itself or its own sub-department");
+    return new HttpProblem(422, "org_invalid_request", "The department change was rejected");
+  }
+  return new HttpProblem(503, "manager_unavailable", unavailable);
+}
+
+function projectOrgTree(value: unknown, visibleEmployees: ReadonlySet<string>, keepEmptyDepartments = false): Record<string, unknown> {
+  const root = projectOrgNode(value, visibleEmployees, true, keepEmptyDepartments);
   return root ?? { id: "root", name: "企业", type: "department", role_title: null, children: [] };
 }
 
-function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, root = false): Record<string, unknown> | undefined {
+function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, root = false, keepEmptyDepartments = false): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
   if (typeof source.id !== "string" || typeof source.name !== "string" || typeof source.type !== "string") return undefined;
   if (source.type === "employee" && !visibleEmployees.has(source.id)) return undefined;
   if (source.type !== "employee" && source.type !== "department") return undefined;
   const children = Array.isArray(source.children)
-    ? source.children.map((child) => projectOrgNode(child, visibleEmployees)).filter((child): child is Record<string, unknown> => child !== undefined)
+    ? source.children.map((child) => projectOrgNode(child, visibleEmployees, false, keepEmptyDepartments)).filter((child): child is Record<string, unknown> => child !== undefined)
     : [];
-  if (!root && source.type === "department" && children.length === 0) return undefined;
+  if (!root && !keepEmptyDepartments && source.type === "department" && children.length === 0) return undefined;
   return {
     id: source.id,
     name: source.name,

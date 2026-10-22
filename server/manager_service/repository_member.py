@@ -13,6 +13,7 @@ from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import ValidationProblem
 
+from .department_tree import check_parent, check_promote
 from .schemas import RESOURCE_TYPES
 
 
@@ -32,6 +33,7 @@ class DepartmentRow:
     department_slug: str
     display_name: str
     created_at: datetime | None = None
+    parent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,34 +62,51 @@ class MemberDeptRepository:
         self._router = router
 
     # ---- 部门 ----
+    _DEPT_COLUMNS = "id, department_slug, display_name, created_at, parent_id"
+
+    @staticmethod
+    def _dept(row) -> DepartmentRow:
+        return DepartmentRow(_s(row[0]), row[1], row[2], row[3], None if row[4] is None else _s(row[4]))
+
+    @staticmethod
+    def _lock_hierarchy(s, ctx: TenantContext) -> None:
+        """同一租户的层级写入串行化，避免两个并发移动合起来形成环。事务结束自动释放。"""
+        s.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"department-hierarchy:{ctx.tenant_id}",))
+
+    @staticmethod
+    def _parents(s) -> dict[str, str | None]:
+        rows = s.execute("SELECT id, parent_id FROM department").fetchall()
+        return {_s(r[0]): (None if r[1] is None else _s(r[1])) for r in rows}
+
     def create_department(
-        self, ctx: TenantContext, *, department_slug: str, display_name: str
+        self, ctx: TenantContext, *, department_slug: str, display_name: str, parent_id: str | None = None
     ) -> DepartmentRow:
         with self._router.session(ctx) as s:
+            if parent_id is not None:
+                self._lock_hierarchy(s, ctx)
+                check_parent(self._parents(s), parent_id)
             row = s.execute(
-                "INSERT INTO department (tenant_id, department_slug, display_name) "
-                "VALUES (%s, %s, %s) "
-                "RETURNING id, department_slug, display_name, created_at",
-                (ctx.tenant_id, department_slug, display_name),
+                "INSERT INTO department (tenant_id, department_slug, display_name, parent_id) "
+                "VALUES (%s, %s, %s, %s) "
+                f"RETURNING {self._DEPT_COLUMNS}",
+                (ctx.tenant_id, department_slug, display_name, parent_id),
             ).fetchone()
-        return DepartmentRow(_s(row[0]), row[1], row[2], row[3])
+        return self._dept(row)
 
     def get_department(self, ctx: TenantContext, *, department_id: str) -> DepartmentRow | None:
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT id, department_slug, display_name, created_at "
-                "FROM department WHERE id = %s",
+                f"SELECT {self._DEPT_COLUMNS} FROM department WHERE id = %s",
                 (department_id,),
             ).fetchone()
-        return None if row is None else DepartmentRow(_s(row[0]), row[1], row[2], row[3])
+        return None if row is None else self._dept(row)
 
     def list_departments(self, ctx: TenantContext) -> list[DepartmentRow]:
         with self._router.session(ctx) as s:
             rows = s.execute(
-                "SELECT id, department_slug, display_name, created_at "
-                "FROM department ORDER BY created_at"
+                f"SELECT {self._DEPT_COLUMNS} FROM department ORDER BY created_at"
             ).fetchall()
-        return [DepartmentRow(_s(r[0]), r[1], r[2], r[3]) for r in rows]
+        return [self._dept(r) for r in rows]
 
     def update_department(
         self, ctx: TenantContext, *, department_id: str, display_name: str
@@ -95,19 +114,59 @@ class MemberDeptRepository:
         with self._router.session(ctx) as s:
             row = s.execute(
                 "UPDATE department SET display_name = %s WHERE id = %s "
-                "RETURNING id, department_slug, display_name, created_at",
+                f"RETURNING {self._DEPT_COLUMNS}",
                 (display_name, department_id),
             ).fetchone()
-        return None if row is None else DepartmentRow(_s(row[0]), row[1], row[2], row[3])
+        return None if row is None else self._dept(row)
+
+    def move_department(
+        self, ctx: TenantContext, *, department_id: str, parent_id: str | None
+    ) -> DepartmentRow | None:
+        """把部门移到另一个部门下（parent_id=None 为顶级）。校验与写入在同一事务内完成。"""
+        with self._router.session(ctx) as s:
+            self._lock_hierarchy(s, ctx)
+            parents = self._parents(s)
+            if department_id not in parents:
+                return None
+            check_parent(parents, parent_id, moving=department_id)
+            row = s.execute(
+                "UPDATE department SET parent_id = %s WHERE id = %s "
+                f"RETURNING {self._DEPT_COLUMNS}",
+                (parent_id, department_id),
+            ).fetchone()
+        return None if row is None else self._dept(row)
+
+    def promote_department(
+        self, ctx: TenantContext, *, department_id: str, child_id: str
+    ) -> DepartmentRow | None:
+        """下级部门升级：在同一事务内完成两次改动，要么都生效要么都不生效。返回升级后的 child。"""
+        with self._router.session(ctx) as s:
+            self._lock_hierarchy(s, ctx)
+            parents = self._parents(s)
+            if department_id not in parents or child_id not in parents:
+                return None
+            updated = check_promote(parents, department_id, child_id)
+            top = updated[child_id]
+            # 先把 child 放到原部门的位置，再把原部门挂到 child 下，过程中不会出现环。
+            s.execute("UPDATE department SET parent_id = %s WHERE id = %s", (top, child_id))
+            s.execute("UPDATE department SET parent_id = %s WHERE id = %s", (child_id, department_id))
+            row = s.execute(f"SELECT {self._DEPT_COLUMNS} FROM department WHERE id = %s", (child_id,)).fetchone()
+        return None if row is None else self._dept(row)
 
     def delete_department(self, ctx: TenantContext, *, department_id: str) -> bool:
         """Delete a department and remove every tenant-local assignment first.
 
         Department ids are denormalized text arrays on users, employees, and grants;
         clearing them in the same transaction prevents dangling org/authorization
-        references after a successful delete.
+        references after a successful delete. Child departments move up to the
+        deleted department's parent instead of being deleted or orphaned.
         """
         with self._router.session(ctx) as s:
+            s.execute(
+                "UPDATE department SET parent_id = (SELECT parent_id FROM department WHERE id = %s) "
+                "WHERE parent_id = %s",
+                (department_id, department_id),
+            )
             s.execute(
                 "UPDATE app_user SET department_ids = array_remove(department_ids, %s) "
                 "WHERE %s = ANY(department_ids)",

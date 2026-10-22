@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentHttpServer } from "./server.js";
 import { createFixture } from "../test-fixture.js";
-import { HttpManagerClient, ManagerUnavailableError, type ManagerClient } from "../manager-client.js";
+import { HttpManagerClient, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, type ManagerClient } from "../manager-client.js";
 import { aggregateUsage } from "../usage.js";
 import { validateSchedule } from "../schedule.js";
 
-async function start(managerClient?: ManagerClient) {
+async function start(managerClient?: ManagerClient, roles: string[] = ["member"]) {
   const fixture = await createFixture();
   fixture.store.replaceProjections([
     { employee_id: "e1", tenant_id: "t1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test", provider_ref: "test" } },
   ], [{ solution_instance_id: "s1", display_name: "Solution", version: "1" }], [{ employee_id: "e1", tenant_id: "t1", version: "1", snapshot_version: "s1", display_name: "Helper" }]);
-  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, managerClient, authenticate: () => ({ callerId: "m1", userId: "m1", tenantId: "t1", roles: ["member"] }) });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, managerClient, authenticate: () => ({ callerId: "m1", userId: "m1", tenantId: "t1", roles }) });
   await http.listen(0);
   const address = http.server.address();
   assert(address && typeof address === "object");
@@ -58,6 +58,118 @@ test("Agent platform metadata, local projections, readiness, office, identity an
   } finally {
     await http.close();
     await fixture.close();
+  }
+});
+
+test("Org department writes are forwarded to Manager and keep empty departments visible to admins only", async () => {
+  const calls: Array<{ kind: string; args: unknown[] }> = [];
+  let denyWrites = false;
+  const remote: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [], snapshots: [], revoked_ids: [] }),
+    getOrgTree: async () => ({ id: "root", type: "department", name: "Tenant", children: [
+      { id: "d-empty", type: "department", name: "Empty", parent_id: "root", children: [] },
+      { id: "e1", type: "employee", name: "Helper", parent_id: "root", children: [] },
+    ] }),
+    createDepartment: async (_caller, input) => {
+      if (denyWrites) throw new ManagerAuthorizationError(403);
+      calls.push({ kind: "create", args: [input] });
+      return { id: "d-new", department_slug: input.department_slug, display_name: input.display_name };
+    },
+    updateDepartment: async (_caller, id, patch) => {
+      if (denyWrites) throw new ManagerAuthorizationError(403);
+      if (id === "missing") throw new ManagerPolicyDeniedError(404);
+      if (patch.parent_id === "cycle") throw new ManagerValidationError("Manager returned HTTP 422 for /x: a department cannot be moved under its own sub-department");
+      if (patch.parent_id === "deep") throw new ManagerValidationError("Manager returned HTTP 422 for /x: department hierarchy is limited to 5 levels");
+      calls.push({ kind: "update", args: [id, patch] });
+      return { id, display_name: patch.display_name ?? "旧名", parent_id: patch.parent_id ?? null };
+    },
+    promoteDepartment: async (_caller, id, childId) => {
+      if (denyWrites) throw new ManagerAuthorizationError(403);
+      calls.push({ kind: "promote", args: [id, childId] });
+      return { id: childId, display_name: "平台组", parent_id: null };
+    },
+    assignEmployeeDepartment: async (_caller, employeeId, departmentId) => {
+      if (denyWrites) throw new ManagerAuthorizationError(403);
+      if (departmentId === "missing") throw new ManagerPolicyDeniedError(404);
+      calls.push({ kind: "assign", args: [employeeId, departmentId] });
+      return { updated: true };
+    },
+  };
+  const admin = await start(remote, ["enterprise_admin"]);
+  try {
+    const tree = (await (await fetch(`${admin.base}/api/agent/org/tree`, { headers: auth })).json() as { data: { children: Array<{ id: string }> } }).data;
+    assert.deepEqual(tree.children.map((child) => child.id), ["d-empty", "e1"]);
+
+    const created = await fetch(`${admin.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "  研究部  " }) });
+    assert.equal(created.status, 201);
+    assert.deepEqual((await created.json() as { data: unknown }).data, { id: "d-new", name: "研究部", parent_id: null });
+    const createCall = calls[0]!.args[0] as { department_slug: string; display_name: string };
+    assert.equal(createCall.display_name, "研究部");
+    assert.match(createCall.department_slug, /^dept-[0-9a-f]{12}$/);
+    assert.equal((await fetch(`${admin.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "   " }) })).status, 422);
+    assert.equal((await fetch(`${admin.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "x".repeat(65) }) })).status, 422);
+
+    const assigned = await fetch(`${admin.base}/api/agent/org/assignments/e1`, { method: "PATCH", headers: auth, body: JSON.stringify({ department_id: "d-empty" }) });
+    assert.equal(assigned.status, 200);
+    assert.deepEqual((await assigned.json() as { data: unknown }).data, { employee_id: "e1", department_id: "d-empty" });
+    assert.deepEqual(calls[1], { kind: "assign", args: ["e1", "d-empty"] });
+    assert.equal((await fetch(`${admin.base}/api/agent/org/assignments/e1`, { method: "PATCH", headers: auth, body: JSON.stringify({ department_id: "missing" }) })).status, 404);
+    assert.equal((await fetch(`${admin.base}/api/agent/org/assignments/unknown`, { method: "PATCH", headers: auth, body: JSON.stringify({ department_id: "d-empty" }) })).status, 403);
+    assert.equal(calls.length, 2);
+
+    const patch = (id: string, body: unknown) => fetch(`${admin.base}/api/agent/org/departments/${id}`, { method: "PATCH", headers: auth, body: JSON.stringify(body) });
+    const renamed = await patch("d-1", { name: "  研究中心 " });
+    assert.equal(renamed.status, 200);
+    assert.deepEqual((await renamed.json() as { data: unknown }).data, { id: "d-1", name: "研究中心", parent_id: null });
+    assert.deepEqual(calls[2], { kind: "update", args: ["d-1", { display_name: "研究中心" }] });
+    assert.equal((await patch("d-1", { parent_id: "d-2" })).status, 200);
+    assert.deepEqual(calls[3], { kind: "update", args: ["d-1", { parent_id: "d-2" }] });
+    assert.equal((await patch("d-1", { parent_id: null })).status, 200);
+    assert.deepEqual(calls[4], { kind: "update", args: ["d-1", { parent_id: null }] });
+    assert.equal((await patch("d-1", {})).status, 422);
+    assert.equal((await patch("d-1", { name: "   " })).status, 422);
+    assert.equal((await patch("missing", { name: "x" })).status, 404);
+    const cycle = await patch("d-1", { parent_id: "cycle" });
+    assert.equal(cycle.status, 422);
+    assert.equal((await cycle.json() as { code: string }).code, "org_invalid_move");
+    const deep = await patch("d-1", { parent_id: "deep" });
+    assert.equal(deep.status, 422);
+    assert.equal((await deep.json() as { code: string }).code, "org_depth_exceeded");
+
+    const promoted = await fetch(`${admin.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({ child_id: "d-3" }) });
+    assert.equal(promoted.status, 200);
+    assert.deepEqual((await promoted.json() as { data: unknown }).data, { id: "d-3", name: "平台组", parent_id: null });
+    assert.deepEqual(calls[5], { kind: "promote", args: ["d-1", "d-3"] });
+    assert.equal((await fetch(`${admin.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({}) })).status, 422);
+    const child = await fetch(`${admin.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "子部门", parent_id: "d-1" }) });
+    assert.equal((await child.json() as { data: { parent_id: string } }).data.parent_id, "d-1");
+  } finally {
+    await admin.http.close();
+    await admin.fixture.close();
+  }
+
+  const member = await start(remote, ["member"]);
+  try {
+    const tree = (await (await fetch(`${member.base}/api/agent/org/tree`, { headers: auth })).json() as { data: { children: Array<{ id: string }> } }).data;
+    assert.deepEqual(tree.children.map((child) => child.id), ["e1"]);
+    denyWrites = true;
+    const denied = await fetch(`${member.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "越权" }) });
+    assert.equal(denied.status, 403);
+    const deniedAssign = await fetch(`${member.base}/api/agent/org/assignments/e1`, { method: "PATCH", headers: auth, body: JSON.stringify({ department_id: "d-empty" }) });
+    assert.equal(deniedAssign.status, 403);
+    assert.equal((await fetch(`${member.base}/api/agent/org/departments/d-1`, { method: "PATCH", headers: auth, body: JSON.stringify({ name: "x" }) })).status, 403);
+    assert.equal((await fetch(`${member.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({ child_id: "d-3" }) })).status, 403);
+  } finally {
+    await member.http.close();
+    await member.fixture.close();
+  }
+
+  const offline = await start({ pullAuthorizedConfig: remote.pullAuthorizedConfig, getOrgTree: remote.getOrgTree }, ["owner"]);
+  try {
+    assert.equal((await fetch(`${offline.base}/api/agent/org/departments`, { method: "POST", headers: auth, body: JSON.stringify({ name: "x" }) })).status, 503);
+  } finally {
+    await offline.http.close();
+    await offline.fixture.close();
   }
 });
 

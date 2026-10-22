@@ -52,7 +52,7 @@ async function fakeUpstream() {
   };
 }
 
-async function setup(options: { upstreamOrigin?: string } = {}) {
+async function setup(options: { upstreamOrigin?: string; managerClient?: Partial<ManagerClient> } = {}) {
   const fixture = await createFixture();
   const upstream = await fakeUpstream();
   const identities = new ExecutionAuthorizationRegistry();
@@ -90,7 +90,7 @@ async function setup(options: { upstreamOrigin?: string } = {}) {
     snapshots: [{ employee_id: "emp-1", version: "1", snapshot_version: "snap-1", display_name: "员工", tools: ["knowledge_search", "knowledge_get"], knowledge_policy: { state: "allow", allowed_operations: ["knowledge_search", "knowledge_get"], revision: "1" } }],
   }, "tenant-1", "member-1");
   fixture.store.replaceProjections(config.experts, [], config.snapshots!, [], { tenantId: "tenant-1", memberId: "member-1" });
-  const managerClient = { pullAuthorizedConfig: async () => config, getOrgTree: async () => ({}) } as unknown as ManagerClient;
+  const managerClient = { pullAuthorizedConfig: async () => config, getOrgTree: async () => ({}), ...options.managerClient } as unknown as ManagerClient;
   const gateway = new UpstreamGateway(options.upstreamOrigin ?? upstream.origin, { headersTimeoutMs: 5_000 });
   const server = new AgentHttpServer({
     host, store: fixture.store, authenticate, executionAuthorization: identities, managerClient,
@@ -137,6 +137,7 @@ test("gateway route split keeps identity, grants, prompt and local directories l
   for (const [method, url] of [
     ["GET", "/api/agent/whoami"], ["POST", "/api/agent/grants/sync"], ["GET", "/api/agent/grants/readiness"],
     ["POST", "/api/agent/conversations/:conversation_id/prompt"], ["POST", "/api/agent/logout"],
+    ["GET", "/api/agent/org/tree"], ["POST", "/api/agent/org/departments"], ["PATCH", "/api/agent/org/assignments/:employee_id"], ["PATCH", "/api/agent/org/departments/:department_id"], ["POST", "/api/agent/org/departments/:department_id/promote"],
     ["GET", "/api/agent/local-directories"], ["PUT", "/api/agent/local-directories/:directory_id/bindings/:employee_id"],
     ["POST", "/api/agent/local-directory-citations/:citation_id/verify"], ["GET", "/healthz"], ["GET", "/openapi.json"], ["GET", undefined],
   ] as const) assert.equal(isGatewayHandledRoute(method, url), true, `${method} ${url}`);
@@ -321,6 +322,46 @@ test("grants sync updates both projections; logout clears locally and is forward
     assert.equal(logout.status, 200);
     assert.equal(logout.headers.get("x-aiteam-origin"), "upstream");
     assert.equal(f.upstream.find("POST", "/api/agent/logout")[0]!.headers.authorization, `Bearer ${f.token}`);
+  } finally { await f.close(); }
+});
+
+test("organization reads and department writes are answered locally and never streamed to the upstream Agent", async () => {
+  const calls: string[] = [];
+  const f = await setup({
+    managerClient: {
+      getOrgTree: async () => ({ id: "root", type: "department", name: "企业", children: [
+        { id: "dept-1", type: "department", name: "研究部", children: [{ id: "emp-1", type: "employee", name: "员工", children: [] }] },
+      ] }),
+      createDepartment: async (_caller, input) => { calls.push(`create:${input.display_name}`); return { id: "dept-2" }; },
+      assignEmployeeDepartment: async (_caller, employeeId, departmentId) => { calls.push(`assign:${employeeId}:${departmentId}`); return { updated: true }; },
+      updateDepartment: async (_caller, id, patch) => { calls.push(`update:${id}:${patch.display_name ?? ""}:${patch.parent_id ?? ""}`); return { id, display_name: patch.display_name ?? "x", parent_id: patch.parent_id ?? null }; },
+      promoteDepartment: async (_caller, id, childId) => { calls.push(`promote:${id}:${childId}`); return { id: childId, display_name: "c", parent_id: null }; },
+    },
+  });
+  try {
+    const tree = await f.request("/api/agent/org/tree");
+    assert.equal(tree.status, 200, await tree.clone().text());
+    assert.equal(tree.headers.get("x-aiteam-origin"), "local");
+    assert.equal(((await tree.json()) as { data: { children: Array<{ id: string }> } }).data.children[0]!.id, "dept-1");
+
+    const created = await f.request("/api/agent/org/departments", { method: "POST", body: { name: "运营部" } });
+    assert.equal(created.status, 201, await created.clone().text());
+    assert.equal(created.headers.get("x-aiteam-origin"), "local");
+    assert.deepEqual(((await created.json()) as { data: unknown }).data, { id: "dept-2", name: "运营部", parent_id: null });
+
+    const assigned = await f.request("/api/agent/org/assignments/emp-1", { method: "PATCH", body: { department_id: "dept-2" } });
+    assert.equal(assigned.status, 200, await assigned.clone().text());
+    assert.equal(assigned.headers.get("x-aiteam-origin"), "local");
+
+    const renamed = await f.request("/api/agent/org/departments/dept-1", { method: "PATCH", body: { name: "研究中心" } });
+    assert.equal(renamed.status, 200, await renamed.clone().text());
+    assert.equal(renamed.headers.get("x-aiteam-origin"), "local");
+    const promoted = await f.request("/api/agent/org/departments/dept-1/promote", { method: "POST", body: { child_id: "dept-3" } });
+    assert.equal(promoted.status, 200, await promoted.clone().text());
+    assert.equal(promoted.headers.get("x-aiteam-origin"), "local");
+
+    assert.deepEqual(calls, ["create:运营部", "assign:emp-1:dept-2", "update:dept-1:研究中心:", "promote:dept-1:dept-3"]);
+    assert.equal(f.upstream.requests.length, 0, "org routes must not reach the upstream Agent");
   } finally { await f.close(); }
 });
 

@@ -13,6 +13,9 @@ export const UPSTREAM_STATE_HEADER = "X-Aiteam-Upstream";
  * Routes (Fastify templates) the desktop gateway answers locally. Prompt and
  * logout reach a local handler that preprocesses and then forwards; every
  * other contract `/api/**` route is streamed to the upstream Agent unchanged.
+ * Organization reads and department writes stay local too: the upstream Agent
+ * has no department management, so this Agent forwards them to Manager with the
+ * member's own bearer and Manager keeps enforcing the owner/enterprise_admin role.
  * Unmatched URLs stay local (404 or SPA), so the gateway is never an open proxy.
  */
 const LOCAL_ROUTES = new Set([
@@ -21,6 +24,11 @@ const LOCAL_ROUTES = new Set([
   "GET /api/agent/grants/readiness",
   "POST /api/agent/conversations/:conversation_id/prompt",
   "POST /api/agent/logout",
+  "GET /api/agent/org/tree",
+  "POST /api/agent/org/departments",
+  "PATCH /api/agent/org/departments/:department_id",
+  "POST /api/agent/org/departments/:department_id/promote",
+  "PATCH /api/agent/org/assignments/:employee_id",
 ]);
 
 export function isGatewayHandledRoute(method: string, url: string | undefined): boolean {
@@ -31,7 +39,7 @@ export function isGatewayHandledRoute(method: string, url: string | undefined): 
 
 /** OpenAPI path keys whose local definition wins over the upstream document. */
 function isLocalDocumentPath(path: string): boolean {
-  return !path.startsWith("/api/") || ["/api/agent/whoami", "/api/agent/grants/sync", "/api/agent/grants/readiness"].includes(path)
+  return !path.startsWith("/api/") || ["/api/agent/whoami", "/api/agent/grants/sync", "/api/agent/grants/readiness", "/api/agent/org/tree", "/api/agent/org/departments", "/api/agent/org/departments/{department_id}", "/api/agent/org/departments/{department_id}/promote", "/api/agent/org/assignments/{employee_id}"].includes(path)
     || path === "/api/agent/local-directories" || path.startsWith("/api/agent/local-directories/") || path.startsWith("/api/agent/local-directory-citations/");
 }
 
