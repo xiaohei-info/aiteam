@@ -12,7 +12,7 @@ from __future__ import annotations
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Forbidden, NotFound
+from shared.errors import Forbidden, NotFound, ValidationProblem
 
 from .auth_service import AuthService
 from .repository_member import (
@@ -26,6 +26,7 @@ from .repository_member import (
 from .schemas import (
     DepartmentCreate,
     DepartmentOut,
+    DepartmentPromote,
     DepartmentUpdate,
     MemberCreate,
     MemberGrantCreate,
@@ -60,6 +61,7 @@ def _department_out(row: DepartmentRow) -> DepartmentOut:
         department_slug=row.department_slug,
         display_name=row.display_name,
         created_at=row.created_at,
+        parent_id=row.parent_id,
     )
 
 
@@ -95,7 +97,8 @@ class MemberDeptService:
     def create_department(self, ctx: TenantContext, req: DepartmentCreate) -> DepartmentOut:
         _ensure_can_write(ctx)
         row = self._repo.create_department(
-            ctx, department_slug=req.department_slug, display_name=req.display_name
+            ctx, department_slug=req.department_slug, display_name=req.display_name,
+            parent_id=req.parent_id,
         )
         return _department_out(row)
 
@@ -112,9 +115,28 @@ class MemberDeptService:
         self, ctx: TenantContext, department_id: str, req: DepartmentUpdate
     ) -> DepartmentOut:
         _ensure_can_write(ctx)
-        row = self._repo.update_department(
-            ctx, department_id=department_id, display_name=req.display_name
-        )
+        moving = "parent_id" in req.model_fields_set
+        if req.display_name is None and not moving:
+            raise ValidationProblem("display_name or parent_id is required")
+        row = None
+        # 先移动：移动失败（防环/层数）时不留下已改名的半成品。
+        if moving:
+            row = self._repo.move_department(
+                ctx, department_id=department_id, parent_id=req.parent_id
+            )
+            if row is None:
+                raise NotFound("department not found")
+        if req.display_name is not None:
+            row = self._repo.update_department(
+                ctx, department_id=department_id, display_name=req.display_name
+            )
+            if row is None:
+                raise NotFound("department not found")
+        return _department_out(row)
+
+    def promote_department(self, ctx: TenantContext, department_id: str, req: DepartmentPromote) -> DepartmentOut:
+        _ensure_can_write(ctx)
+        row = self._repo.promote_department(ctx, department_id=department_id, child_id=req.child_id)
         if row is None:
             raise NotFound("department not found")
         return _department_out(row)
