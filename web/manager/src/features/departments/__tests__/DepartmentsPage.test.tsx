@@ -36,6 +36,7 @@ function mockApi(overrides: Partial<apiModule.DepartmentsApi> = {}) {
     getDepartment: vi.fn().mockResolvedValue(department),
     createDepartment: vi.fn().mockResolvedValue(department),
     updateDepartment: vi.fn().mockResolvedValue({ ...department, display_name: "工程部" }),
+    promoteDepartment: vi.fn().mockResolvedValue(department),
     deleteDepartment: vi.fn().mockResolvedValue({ deleted: department.id }),
     ...overrides,
   };
@@ -175,5 +176,52 @@ describe("DepartmentsPage 部门管理", () => {
     expect(screen.getByTestId("departments-action-error")).toHaveTextContent("部门操作存在冲突");
     expect(screen.getByTestId("departments-action-error")).toHaveTextContent("department still has members");
     expect(screen.getByRole("alertdialog", { name: "删除部门" })).toBeInTheDocument();
+  });
+
+  const tree: Department[] = [
+    { ...department, id: "p", display_name: "总部", parent_id: null },
+    { ...department, id: "c", display_name: "研发中心", parent_id: "p" },
+    { ...department, id: "g", display_name: "平台组", parent_id: "c" },
+  ];
+
+  it("按层级缩进展示，只有有上级的部门才有“升为上级”", async () => {
+    mockApi({ listDepartments: vi.fn().mockResolvedValue(tree) });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("department-row")).toHaveLength(3));
+    expect(screen.getAllByTestId("department-row").map((row) => row.getAttribute("data-depth"))).toEqual(["1", "2", "3"]);
+    expect(screen.queryByTestId("department-promote-p")).not.toBeInTheDocument();
+    expect(screen.getByTestId("department-promote-c")).toBeInTheDocument();
+  });
+
+  it("升为上级需要确认，并以原上级和自己的 id 调用接口", async () => {
+    const api = mockApi({ listDepartments: vi.fn().mockResolvedValue(tree) });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("department-row")).toHaveLength(3));
+
+    fireEvent.click(screen.getByTestId("department-promote-g"));
+    expect(screen.getByRole("alertdialog", { name: "升级部门" })).toBeInTheDocument();
+    expect(api.promoteDepartment).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认升级" }));
+    await waitFor(() => expect(api.promoteDepartment).toHaveBeenCalledWith("c", "g"));
+    await waitFor(() => expect(screen.getByTestId("departments-notice")).toHaveTextContent("部门已升级"));
+  });
+
+  it("升级被 Manager 拒绝时保留确认框并显示原因", async () => {
+    mockApi({
+      listDepartments: vi.fn().mockResolvedValue(tree),
+      promoteDepartment: vi.fn().mockRejectedValue(new ApiError("department hierarchy is limited to 5 levels", 422, "validation_error")),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("department-row")).toHaveLength(3));
+    fireEvent.click(screen.getByTestId("department-promote-c"));
+    fireEvent.click(screen.getByRole("button", { name: "确认升级" }));
+    await waitFor(() => expect(screen.getByTestId("departments-action-error")).toHaveTextContent("limited to 5 levels"));
+  });
+
+  it("member 角色看不到“升为上级”", async () => {
+    mockApi({ listDepartments: vi.fn().mockResolvedValue(tree) });
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getAllByTestId("department-row")).toHaveLength(3));
+    expect(screen.queryByTestId("department-promote-c")).not.toBeInTheDocument();
   });
 });
