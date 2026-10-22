@@ -275,6 +275,9 @@ function validateConfigForPackage(values, strict) {
   const forbidden = Object.keys(values).filter((key) => isForbiddenChildEnvironmentName(key) && values[key].trim() !== "");
   if (forbidden.length) throw new Error(`Agent package config contains control-plane/upstream secret settings: ${forbidden.join(", ")}`);
   if (values.AITEAM_AGENT_JWKS_JSON?.trim() && values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("Agent JWT config must set exactly one of AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
+  const jwksMode = values.AITEAM_AGENT_JWKS_MODE?.trim();
+  if (jwksMode && jwksMode !== "manager" && jwksMode !== "static") throw new Error("AITEAM_AGENT_JWKS_MODE must be manager or static");
+  if (jwksMode === "manager" && (values.AITEAM_AGENT_JWKS_JSON?.trim() || values.AITEAM_AGENT_JWKS_PATH?.trim())) throw new Error("AITEAM_AGENT_JWKS_MODE=manager conflicts with static AITEAM_AGENT_JWKS_JSON / AITEAM_AGENT_JWKS_PATH");
   if (!strict) return;
 
   const environment = values.AITEAM_ENV;
@@ -292,7 +295,8 @@ function validateConfigForPackage(values, strict) {
     const issuer = new URL(values.AITEAM_AGENT_JWT_ISSUER);
     if ((issuer.protocol !== "https:" && issuer.protocol !== "http:") || issuer.username || issuer.password || issuer.search || issuer.hash || (environment === "production" && issuer.protocol !== "https:")) throw new Error("AITEAM_AGENT_JWT_ISSUER must be an HTTP(S) URL without credentials");
     if (environment === "production" && values.AITEAM_AGENT_JWT_ISSUER.trim() !== values.AITEAM_MANAGER_URL.trim()) throw new Error("AITEAM_AGENT_JWT_ISSUER must exactly match AITEAM_MANAGER_URL in production");
-    if (!values.AITEAM_AGENT_JWKS_JSON?.trim() && !values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("packaged Agent config requires AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
+    // "manager" mode fetches public keys from the fixed Manager origin (same as the hosted Agent); otherwise a static JWKS is required.
+    if (values.AITEAM_AGENT_JWKS_MODE?.trim() !== "manager" && !values.AITEAM_AGENT_JWKS_JSON?.trim() && !values.AITEAM_AGENT_JWKS_PATH?.trim()) throw new Error("packaged Agent config requires AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH (or AITEAM_AGENT_JWKS_MODE=manager)");
   }
   if (values.AITEAM_AGENT_JWKS_JSON?.includes('"d"') || values.AITEAM_AGENT_JWKS_JSON?.includes("BEGIN PRIVATE KEY")) throw new Error("Agent config must contain public JWKS only");
   if (values.AITEAM_AGENT_JWKS_JSON?.trim()) validateJwks(values.AITEAM_AGENT_JWKS_JSON);

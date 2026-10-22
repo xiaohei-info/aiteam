@@ -93,6 +93,11 @@ export function assertAgentLaunchConfiguration(env: NodeJS.ProcessEnv = process.
   required(env, "AITEAM_AGENT_JWT_AUDIENCE");
   const rawJwks = env.AITEAM_AGENT_JWKS_JSON?.trim();
   const jwksPath = env.AITEAM_AGENT_JWKS_PATH?.trim();
+  // Same verification as the hosted Agent: public keys come from the fixed (HTTPS) Manager origin.
+  if (env.AITEAM_AGENT_JWKS_MODE?.trim() === "manager") {
+    if (rawJwks || jwksPath) throw new Error("Manager JWKS mode conflicts with static JWKS (AITEAM_AGENT_JWKS_JSON / AITEAM_AGENT_JWKS_PATH)");
+    return { environment, useFauxModel, useDevAuth };
+  }
   if (!rawJwks && !jwksPath) throw new Error("Production Agent JWT JWKS is required (set AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH)");
   if (rawJwks && jwksPath) throw new Error("Production Agent JWT config must set exactly one of AITEAM_AGENT_JWKS_JSON or AITEAM_AGENT_JWKS_PATH");
 
