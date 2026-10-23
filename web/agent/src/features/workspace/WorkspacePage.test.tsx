@@ -74,7 +74,8 @@ describe("WorkspacePage", () => {
 
     await waitFor(() => expect(screen.getByTestId("workspace-dashboard")).toBeInTheDocument());
     expect(screen.getByText("本地会话、协作与执行状态总览；会话内容始终保存在本机。")).toBeInTheDocument();
-    expect(screen.getByTestId("workspace-summary")).toHaveTextContent("总会话3");
+    // The dashboard shell renders before the conversation list resolves, so wait for the data.
+    await waitFor(() => expect(screen.getByTestId("workspace-summary")).toHaveTextContent("总会话3"));
     expect(screen.getByTestId("workspace-summary")).toHaveTextContent("进行中2");
     expect(screen.getByTestId("workspace-summary")).toHaveTextContent("群聊1");
     expect(screen.getByTestId("workspace-summary")).toHaveTextContent("已调度1");
