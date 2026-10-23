@@ -114,7 +114,7 @@ async def promote_department(
     return Envelope[DepartmentOut](data=member_svc.promote_department(ctx, department_id, body))
 
 
-@router.delete("/departments/{department_id}", description="删部门。删除前部门内应无成员。", summary="删部门", operation_id="manager_delete_department")
+@router.delete("/departments/{department_id}", description="删部门（owner/enterprise_admin）。不要求部门为空：其子部门上移到被删部门的上级；成员、员工、授权中的该部门归属一并清除（成员和员工本身不删）；绑定到该部门的知识空间记录一并删除。同一事务内完成，与移动/升级串行。", summary="删部门", operation_id="manager_delete_department")
 async def delete_department(
     department_id: str,
     request: Request,

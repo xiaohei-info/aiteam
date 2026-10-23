@@ -64,6 +64,9 @@ test("HttpManagerClient renames, moves and promotes departments, surfacing Manag
   assert.equal(requests[1].url, "https://manager.test/api/manager/departments/d%2F1/promote");
   assert.equal(requests[1].init.method, "POST");
   assert.deepEqual(JSON.parse(String(requests[1].init.body)), { child_id: "c-1" });
+  assert.equal(requests[2].url, "https://manager.test/api/manager/departments/d%2F1");
+  assert.equal(requests[2].init.method, "DELETE");
+  assert.equal(requests[2].init.body, undefined);
   status = 422;
   await assert.rejects(() => client.updateDepartment(caller, "d-1", { parent_id: "x" }), (error) => error instanceof ManagerValidationError && error.code === "department_depth_exceeded" && /limited to 5 levels/.test(error.message));
 });
