@@ -87,6 +87,8 @@ export interface ManagerClient {
   createDepartment?(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown>;
   updateDepartment?(caller: AuthenticatedCaller, departmentId: string, input: { display_name?: string; parent_id?: string | null }): Promise<unknown>;
   promoteDepartment?(caller: AuthenticatedCaller, departmentId: string, childId: string): Promise<unknown>;
+  /** 删除部门：子部门上移到被删部门的上级，员工的该部门归属一并清除。 */
+  deleteDepartment?(caller: AuthenticatedCaller, departmentId: string): Promise<void>;
   assignEmployeeDepartment?(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
@@ -198,6 +200,10 @@ export class HttpManagerClient implements ManagerClient {
 
   async promoteDepartment(caller: AuthenticatedCaller, departmentId: string, childId: string): Promise<unknown> {
     return this.unwrap(await this.request(`/api/manager/departments/${encodeURIComponent(departmentId)}/promote`, caller, { child_id: childId }));
+  }
+
+  async deleteDepartment(caller: AuthenticatedCaller, departmentId: string): Promise<void> {
+    await this.request(`/api/manager/departments/${encodeURIComponent(departmentId)}`, caller, undefined, undefined, "DELETE");
   }
 
   async assignEmployeeDepartment(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown> {

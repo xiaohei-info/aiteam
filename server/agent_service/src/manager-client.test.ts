@@ -57,6 +57,7 @@ test("HttpManagerClient renames, moves and promotes departments, surfacing Manag
   });
   await client.updateDepartment(caller, "d/1", { display_name: "新", parent_id: null });
   await client.promoteDepartment(caller, "d/1", "c-1");
+  await client.deleteDepartment(caller, "d/1");
   assert.equal(requests[0].url, "https://manager.test/api/manager/departments/d%2F1");
   assert.equal(requests[0].init.method, "PATCH");
   assert.deepEqual(JSON.parse(String(requests[0].init.body)), { display_name: "新", parent_id: null });

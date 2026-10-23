@@ -85,6 +85,11 @@ test("Org department writes are forwarded to Manager and keep empty departments 
       calls.push({ kind: "update", args: [id, patch] });
       return { id, display_name: patch.display_name ?? "旧名", parent_id: patch.parent_id ?? null };
     },
+    deleteDepartment: async (_caller, id) => {
+      if (denyWrites) throw new ManagerAuthorizationError(403);
+      if (id === "missing") throw new ManagerPolicyDeniedError(404);
+      calls.push({ kind: "delete", args: [id] });
+    },
     promoteDepartment: async (_caller, id, childId) => {
       if (denyWrites) throw new ManagerAuthorizationError(403);
       calls.push({ kind: "promote", args: [id, childId] });
@@ -141,6 +146,11 @@ test("Org department writes are forwarded to Manager and keep empty departments 
     assert.equal(reworded.status, 422);
     assert.equal((await reworded.json() as { code: string }).code, "org_invalid_request");
 
+    const removed = await fetch(`${admin.base}/api/agent/org/departments/d-9`, { method: "DELETE", headers: auth });
+    assert.equal(removed.status, 200);
+    assert.deepEqual((await removed.json() as { data: unknown }).data, { deleted: true, id: "d-9" });
+    assert.equal((await fetch(`${admin.base}/api/agent/org/departments/missing`, { method: "DELETE", headers: auth })).status, 404);
+    assert.deepEqual(calls.pop(), { kind: "delete", args: ["d-9"] });
     const promoted = await fetch(`${admin.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({ child_id: "d-3" }) });
     assert.equal(promoted.status, 200);
     assert.deepEqual((await promoted.json() as { data: unknown }).data, { id: "d-3", name: "平台组", parent_id: null });
@@ -163,6 +173,7 @@ test("Org department writes are forwarded to Manager and keep empty departments 
     const deniedAssign = await fetch(`${member.base}/api/agent/org/assignments/e1`, { method: "PATCH", headers: auth, body: JSON.stringify({ department_id: "d-empty" }) });
     assert.equal(deniedAssign.status, 403);
     assert.equal((await fetch(`${member.base}/api/agent/org/departments/d-1`, { method: "PATCH", headers: auth, body: JSON.stringify({ name: "x" }) })).status, 403);
+    assert.equal((await fetch(`${member.base}/api/agent/org/departments/d-1`, { method: "DELETE", headers: auth })).status, 403);
     assert.equal((await fetch(`${member.base}/api/agent/org/departments/d-1/promote`, { method: "POST", headers: auth, body: JSON.stringify({ child_id: "d-3" }) })).status, 403);
   } finally {
     await member.http.close();
