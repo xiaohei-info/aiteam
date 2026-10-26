@@ -90,12 +90,24 @@ class DepartmentCreate(BaseModel):
 
     department_slug: str = Field(description="租户内部门 slug，唯一约束 (tenant_id, slug)")
     display_name: str = ""
+    parent_id: str | None = Field(default=None, description="上级部门 id；为空表示顶级部门。")
 
 
 class DepartmentUpdate(BaseModel):
+    """改名和/或移动部门，至少提供一项。parent_id 显式传 null 表示移到顶级。"""
+
     model_config = ConfigDict(extra="forbid")
 
-    display_name: str
+    display_name: str | None = None
+    parent_id: str | None = Field(default=None, description="新的上级部门 id；传 null 移到顶级，不传则不移动。")
+
+
+class DepartmentPromote(BaseModel):
+    """让部门的某个下级部门升级，取代它的位置；它自己成为该下级的子部门。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_id: str = Field(description="要升级的下级部门 id（可以是任意深度的下级）。")
 
 
 class DepartmentOut(BaseModel):
@@ -107,6 +119,7 @@ class DepartmentOut(BaseModel):
     department_slug: str
     display_name: str
     created_at: datetime | None = None
+    parent_id: str | None = Field(default=None, description="上级部门 id；顶级部门为 null。")
 
 
 class MemberCreate(BaseModel):

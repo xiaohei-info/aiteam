@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
+import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerValidationError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -41,6 +41,55 @@ test("HttpManagerClient retains employee-scoped memory through the Manager facad
 
   const invalid = new HttpManagerClient("https://manager.test", async () => Response.json({ data: { success: true } }, { status: 201 }));
   await assert.rejects(() => invalid.memoryRetain(caller, "employee-1", "summary"), /invalid memory retain acknowledgement/);
+});
+
+test("HttpManagerClient creates departments and appends assignments with the member's own bearer", async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return Response.json({ data: { id: "dept-1", department_slug: "dept-abc", display_name: "研究部" } }, { status: 201 });
+  });
+
+  const created = await client.createDepartment(caller, { department_slug: "dept-abc", display_name: "研究部" });
+  await client.assignEmployeeDepartment(caller, "employee/1", "dept-1");
+
+  assert.deepEqual(created, { id: "dept-1", department_slug: "dept-abc", display_name: "研究部" });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "https://manager.test/api/manager/departments");
+  assert.equal(requests[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { department_slug: "dept-abc", display_name: "研究部" });
+  assert.equal(requests[1].url, "https://manager.test/api/manager/org/assignments/employee%2F1");
+  assert.equal(requests[1].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(requests[1].init.body)), { department_id: "dept-1" });
+  for (const request of requests) {
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer jwt");
+    assert.equal(new Headers(request.init.headers).get("Content-Type"), "application/json");
+  }
+});
+
+test("HttpManagerClient renames, moves and promotes departments, surfacing Manager 422 as a validation error", async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  let status = 200;
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return status === 200
+      ? Response.json({ data: { id: "d/1", department_slug: "s", display_name: "新", parent_id: null } })
+      : Response.json({ status: 422, code: "department_depth_exceeded", detail: "department hierarchy is limited to 5 levels" }, { status: 422 });
+  });
+  await client.updateDepartment(caller, "d/1", { display_name: "新", parent_id: null });
+  await client.promoteDepartment(caller, "d/1", "c-1");
+  await client.deleteDepartment(caller, "d/1");
+  assert.equal(requests[0].url, "https://manager.test/api/manager/departments/d%2F1");
+  assert.equal(requests[0].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { display_name: "新", parent_id: null });
+  assert.equal(requests[1].url, "https://manager.test/api/manager/departments/d%2F1/promote");
+  assert.equal(requests[1].init.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[1].init.body)), { child_id: "c-1" });
+  assert.equal(requests[2].url, "https://manager.test/api/manager/departments/d%2F1");
+  assert.equal(requests[2].init.method, "DELETE");
+  assert.equal(requests[2].init.body, undefined);
+  status = 422;
+  await assert.rejects(() => client.updateDepartment(caller, "d-1", { parent_id: "x" }), (error) => error instanceof ManagerValidationError && error.code === "department_depth_exceeded" && /limited to 5 levels/.test(error.message));
 });
 
 test("HttpManagerClient preserves the safe Manager problem detail for runtime failures", async () => {

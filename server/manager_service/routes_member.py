@@ -19,7 +19,7 @@ from shared.errors import AppError, ValidationProblem
 
 from .member_service import build_member_dept_service, MemberDeptService
 from .openapi_schemas import DeletedResourceOut
-from .schemas import DepartmentCreate, DepartmentOut, DepartmentUpdate, MemberCreate, MemberOut, MemberUpdate, validate_uuid_string_list
+from .schemas import DepartmentCreate, DepartmentOut, DepartmentPromote, DepartmentUpdate, MemberCreate, MemberOut, MemberUpdate, validate_uuid_string_list
 from .routes_auth import _auth_service
 
 
@@ -102,7 +102,19 @@ async def update_department(
     return Envelope[DepartmentOut](data=member_svc.update_department(ctx, department_id, body))
 
 
-@router.delete("/departments/{department_id}", description="删部门。删除前部门内应无成员。", summary="删部门", operation_id="manager_delete_department")
+@router.post("/departments/{department_id}/promote", description="下级部门升级（owner/enterprise_admin）：child_id 取代该部门的位置，该部门成为 child 的子部门；该部门的其他子部门仍跟随它。同一事务内完成。", summary="下级部门升级", operation_id="manager_promote_department")
+async def promote_department(
+    department_id: str,
+    body: DepartmentPromote,
+    request: Request,
+    claims: TokenClaims = Depends(_token_claims),
+) -> Envelope[DepartmentOut]:
+    ctx = tenant_context_from(claims)
+    member_svc, _ = _services(request)
+    return Envelope[DepartmentOut](data=member_svc.promote_department(ctx, department_id, body))
+
+
+@router.delete("/departments/{department_id}", description="删部门（owner/enterprise_admin）。不要求部门为空：其子部门上移到被删部门的上级；成员、员工、授权中的该部门归属一并清除（成员和员工本身不删）；绑定到该部门的知识空间记录一并删除。同一事务内完成，与移动/升级串行。", summary="删部门", operation_id="manager_delete_department")
 async def delete_department(
     department_id: str,
     request: Request,

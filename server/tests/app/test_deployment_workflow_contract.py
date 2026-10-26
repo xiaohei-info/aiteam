@@ -89,6 +89,20 @@ def test_taiyi_deploy_uses_persistent_root_without_workspace_checkout():
     assert 'chmod 600 "${env_file}"' in workflow
 
 
+def test_taiyi_deploy_overrides_public_relay_url_from_repository_variable():
+    workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
+    write = workflow.index("Write .env.${{ env.DEPLOY_ENV }} from GitHub secret")
+    override = workflow.index("Override NEWAPI_PUBLIC_BASE_URL from repository variable")
+    persist = workflow.index("Persist taiyi TEST Manager and Operation listener configuration")
+    assert write < override < persist
+    block = workflow[override:persist]
+    assert "NEWAPI_PUBLIC_BASE_URL_OVERRIDE: ${{ vars.NEWAPI_PUBLIC_BASE_URL_TEST }}" in block
+    assert "^https://" in block and "/v1$" in block
+    assert "grep -v '^NEWAPI_PUBLIC_BASE_URL='" in block
+    # Only the URL itself is logged; the env file is never dumped.
+    assert "cat \"${env_file}\"" not in block and "cat \"${tmp}\"" not in block
+
+
 def test_taiyi_deploy_refreshes_run_sh_from_origin_before_exec():
     workflow = (ROOT / ".github/workflows/deploy-main.yml").read_text(encoding="utf-8")
     fetch = workflow.index('git fetch origin "${DEPLOY_BRANCH}"')

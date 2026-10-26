@@ -15,8 +15,8 @@ def test_build_tree_assigns_employees_from_employee_department_ids():
     router.queue_many(
         FakeCursor(
             fetchall=[
-                ("dept-a", "sales", "Sales"),
-                ("dept-b", "engineering", "Engineering"),
+                ("dept-a", "sales", "Sales", None),
+                ("dept-b", "engineering", "Engineering", None),
             ]
         ),
         FakeCursor(
@@ -86,3 +86,26 @@ def test_update_assignment_rejects_missing_employee():
 
     with pytest.raises(NotFound, match="employee not found"):
         OrgService(router).update_assignment(ctx(), "missing", "dept-a")
+
+
+def test_build_tree_nests_departments_by_parent_and_keeps_employees_under_their_own_department():
+    router = FakeRouter()
+    router.queue_many(
+        FakeCursor(
+            fetchall=[
+                ("d-root", "a", "总部", None),
+                ("d-child", "b", "研发部", "d-root"),
+                ("d-orphan", "c", "游离", "d-missing"),
+            ]
+        ),
+        FakeCursor(fetchall=[("emp-1", "alice", "Alice", ["d-child"], None)]),
+    )
+
+    tree = OrgService(router).build_tree(ctx())
+
+    assert [c["id"] for c in tree["children"]] == ["d-root", "d-orphan"]
+    root = tree["children"][0]
+    assert [c["id"] for c in root["children"]] == ["d-child"]
+    child = root["children"][0]
+    assert child["parent_id"] == "d-root"
+    assert [c["id"] for c in child["children"]] == ["emp-1"]

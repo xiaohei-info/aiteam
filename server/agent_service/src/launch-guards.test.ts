@@ -33,6 +33,19 @@ test("production launch configuration requires native sandbox readiness and iden
   }
 });
 
+test("production accepts Manager JWKS mode instead of a static JWKS, like the hosted Agent", () => {
+  const { AITEAM_AGENT_JWKS_JSON: _static, ...withoutJwks } = production;
+  const managerMode = { ...withoutJwks, AITEAM_AGENT_JWKS_MODE: "manager" } as NodeJS.ProcessEnv;
+  assert.equal(assertAgentLaunchConfiguration(managerMode).environment, "production");
+  // The Manager origin is the trust root, so it must stay HTTPS and match the issuer.
+  assert.throws(() => assertAgentLaunchConfiguration({ ...managerMode, AITEAM_MANAGER_URL: "http://manager.example.test", AITEAM_AGENT_JWT_ISSUER: "http://manager.example.test" }), /HTTPS in production/);
+  assert.throws(() => assertAgentLaunchConfiguration({ ...managerMode, AITEAM_AGENT_JWT_ISSUER: "https://other.example.test" }), /exactly match/);
+  // Static and Manager-fetched keys are mutually exclusive, and static stays the default.
+  assert.throws(() => assertAgentLaunchConfiguration({ ...managerMode, AITEAM_AGENT_JWKS_JSON: production.AITEAM_AGENT_JWKS_JSON }), /conflicts with static JWKS/);
+  assert.throws(() => assertAgentLaunchConfiguration({ ...managerMode, AITEAM_AGENT_JWKS_PATH: "manager-jwks.json" }), /conflicts with static JWKS/);
+  assert.throws(() => assertAgentLaunchConfiguration({ ...withoutJwks, AITEAM_AGENT_JWKS_MODE: "static" } as NodeJS.ProcessEnv), /JWT JWKS is required/);
+});
+
 test("production rejects faux runtime, development auth, and malformed Manager URL", () => {
   assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_PI_FAKE: "TRUE" }), /PI_FAKE=true/);
   assert.throws(() => assertAgentLaunchConfiguration({ ...production, AITEAM_AGENT_DEV_AUTH: "true" }), /DEV_AUTH=true/);

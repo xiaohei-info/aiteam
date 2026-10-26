@@ -35,10 +35,10 @@ class _FakeDeptRepo:
         self._members = {}
         self._dept_counter = 0
 
-    def create_department(self, ctx, *, department_slug, display_name):
+    def create_department(self, ctx, *, department_slug, display_name, parent_id=None):
         self._dept_counter += 1
         did = f"d-{self._dept_counter}"
-        d = DepartmentRow(id=did, department_slug=department_slug, display_name=display_name)
+        d = DepartmentRow(id=did, department_slug=department_slug, display_name=display_name, parent_id=parent_id)
         self._depts[did] = d
         return d
 
@@ -52,7 +52,23 @@ class _FakeDeptRepo:
         d = self._depts.get(department_id)
         if d is None:
             return None
-        d = DepartmentRow(id=d.id, department_slug=d.department_slug, display_name=display_name)
+        d = DepartmentRow(id=d.id, department_slug=d.department_slug, display_name=display_name, parent_id=d.parent_id)
+        self._depts[department_id] = d
+        return d
+
+    def promote_department(self, ctx, *, department_id, child_id):
+        c = self._depts.get(child_id)
+        if department_id not in self._depts or c is None:
+            return None
+        c = DepartmentRow(id=c.id, department_slug=c.department_slug, display_name=c.display_name, parent_id=None)
+        self._depts[child_id] = c
+        return c
+
+    def move_department(self, ctx, *, department_id, parent_id, display_name=None):
+        d = self._depts.get(department_id)
+        if d is None:
+            return None
+        d = DepartmentRow(id=d.id, department_slug=d.department_slug, display_name=display_name or d.display_name, parent_id=parent_id)
         self._depts[department_id] = d
         return d
 
@@ -489,3 +505,52 @@ def test_build_member_dept_service():
     member_svc, grant_svc = build_member_dept_service("postgresql://localhost/test", auth=auth)
     assert isinstance(member_svc, MemberDeptService)
     assert isinstance(grant_svc, GrantService)
+
+
+def test_update_department_moves_to_parent_and_to_top_level():
+    from manager_service.schemas import DepartmentUpdate
+    svc, _, repo, _ = _service()
+    svc.create_department(_owner_ctx(), _dept_create("a"))
+    svc.create_department(_owner_ctx(), _dept_create("b"))
+    moved = svc.update_department(_owner_ctx(), "d-2", DepartmentUpdate(parent_id="d-1"))
+    assert moved.parent_id == "d-1" and moved.display_name == "Engineering"
+    top = svc.update_department(_owner_ctx(), "d-2", DepartmentUpdate(parent_id=None))
+    assert top.parent_id is None
+
+
+def test_update_department_rename_and_move_use_one_repo_call():
+    from manager_service.schemas import DepartmentUpdate
+    svc, _, repo, _ = _service()
+    svc.create_department(_owner_ctx(), _dept_create("a"))
+    svc.create_department(_owner_ctx(), _dept_create("b"))
+    out = svc.update_department(_owner_ctx(), "d-2", DepartmentUpdate(parent_id="d-1", display_name="Renamed"))
+    assert out.parent_id == "d-1" and out.display_name == "Renamed"
+
+
+def test_update_department_requires_a_change_and_write_role():
+    from manager_service.schemas import DepartmentUpdate
+    svc, _, _, _ = _service()
+    svc.create_department(_owner_ctx(), _dept_create())
+    with pytest.raises(ValidationProblem):
+        svc.update_department(_owner_ctx(), "d-1", DepartmentUpdate())
+    with pytest.raises(Forbidden):
+        svc.update_department(_member_ctx(), "d-1", DepartmentUpdate(parent_id=None))
+
+
+def test_update_department_move_unknown_is_not_found():
+    from manager_service.schemas import DepartmentUpdate
+    svc, _, _, _ = _service()
+    with pytest.raises(NotFound):
+        svc.update_department(_owner_ctx(), "nope", DepartmentUpdate(parent_id=None))
+
+
+def test_promote_department_requires_write_role_and_existing_ids():
+    from manager_service.schemas import DepartmentPromote
+    svc, _, _, _ = _service()
+    svc.create_department(_owner_ctx(), _dept_create("a"))
+    svc.create_department(_owner_ctx(), _dept_create("b"))
+    assert svc.promote_department(_owner_ctx(), "d-1", DepartmentPromote(child_id="d-2")).id == "d-2"
+    with pytest.raises(Forbidden):
+        svc.promote_department(_member_ctx(), "d-1", DepartmentPromote(child_id="d-2"))
+    with pytest.raises(NotFound):
+        svc.promote_department(_owner_ctx(), "d-1", DepartmentPromote(child_id="nope"))

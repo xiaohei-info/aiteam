@@ -26,8 +26,8 @@ from shared.errors import ValidationProblem
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
-def _dept_row(uid="d-1", slug="eng", name="Engineering", created=None):
-    return (uid, slug, name, created or datetime(2026, 1, 1))
+def _dept_row(uid="d-1", slug="eng", name="Engineering", created=None, parent=None):
+    return (uid, slug, name, created or datetime(2026, 1, 1), parent)
 
 
 def _member_row(uid="m-1", name="Alice", status="active", roles=None, dept_ids=None):
@@ -102,15 +102,17 @@ class TestUpdateDepartment:
 class TestDeleteDepartment:
     def test_deleted_returns_true_and_clears_denormalized_assignments(self):
         router = FakeRouter()
-        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=1))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=1))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="d-1") is True
-        assert len(router.executed) == 5
-        assert all("department_ids" in sql for sql, _ in router.executed[:3])
-        assert "knowledge_space_binding" in router.executed[3][0]
+        assert len(router.executed) == 7
+        assert "pg_advisory_xact_lock" in router.executed[0][0]  # 与移动 / 升级串行
+        assert "SET parent_id" in router.executed[1][0]  # 子部门先上移，再删除
+        assert all("department_ids" in sql for sql, _ in router.executed[2:5])
+        assert "knowledge_space_binding" in router.executed[5][0]
 
     def test_not_found_returns_false(self):
         router = FakeRouter()
-        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=0))
+        router.queue_many(FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(), FakeCursor(rowcount=0))
         assert MemberDeptRepository(router).delete_department(ctx(), department_id="x") is False
 
 
@@ -310,3 +312,67 @@ class TestRowDataclassFields:
     def test_grant_row_defaults(self):
         grant = GrantRow(id="g-1", resource_type="expert", resource_id="e-1", department_ids=[], member_ids=[])
         assert grant.updated_at is None
+
+
+class TestMoveDepartment:
+    def test_moves_and_returns_row(self):
+        router = FakeRouter()
+        router.queue_many(
+            FakeCursor(),  # advisory lock
+            FakeCursor(fetchall=[("d-1", None), ("d-2", None)]),
+            FakeCursor(fetchone=_dept_row("d-1", parent="d-2")),
+        )
+        row = MemberDeptRepository(router).move_department(ctx(), department_id="d-1", parent_id="d-2")
+        assert row.parent_id == "d-2"
+        assert "pg_advisory_xact_lock" in router.executed[0][0]
+
+    def test_rename_and_move_are_one_statement(self):
+        router = FakeRouter()
+        router.queue_many(
+            FakeCursor(),
+            FakeCursor(fetchall=[("d-1", None), ("d-2", None)]),
+            FakeCursor(fetchone=_dept_row("d-1", parent="d-2")),
+        )
+        MemberDeptRepository(router).move_department(
+            ctx(), department_id="d-1", parent_id="d-2", display_name="新名字"
+        )
+        updates = [(sql, params) for sql, params in router.executed if "UPDATE department" in sql]
+        assert len(updates) == 1
+        assert "display_name" in updates[0][0] and "新名字" in updates[0][1]
+
+    def test_unknown_department_returns_none(self):
+        router = FakeRouter()
+        router.queue_many(FakeCursor(), FakeCursor(fetchall=[("d-2", None)]))
+        assert MemberDeptRepository(router).move_department(ctx(), department_id="x", parent_id=None) is None
+
+    def test_cycle_is_rejected_before_writing(self):
+        router = FakeRouter()
+        router.queue_many(FakeCursor(), FakeCursor(fetchall=[("a", None), ("b", "a")]))
+        with pytest.raises(ValidationProblem):
+            MemberDeptRepository(router).move_department(ctx(), department_id="a", parent_id="b")
+        assert not any("UPDATE department" in sql for sql, _ in router.executed)
+
+
+class TestPromoteDepartment:
+    def test_promotes_in_one_transaction(self):
+        router = FakeRouter()
+        router.queue_many(
+            FakeCursor(),  # advisory lock
+            FakeCursor(fetchall=[("a", None), ("c", "a")]),
+            FakeCursor(), FakeCursor(),
+            FakeCursor(fetchone=_dept_row("c", parent=None)),
+        )
+        row = MemberDeptRepository(router).promote_department(ctx(), department_id="a", child_id="c")
+        assert row.id == "c" and row.parent_id is None
+        updates = [params for sql, params in router.executed if sql.startswith("UPDATE department")]
+        assert updates == [(None, "c"), ("c", "a")]
+
+    def test_unknown_returns_none_and_invalid_writes_nothing(self):
+        router = FakeRouter()
+        router.queue_many(FakeCursor(), FakeCursor(fetchall=[("a", None)]))
+        assert MemberDeptRepository(router).promote_department(ctx(), department_id="a", child_id="zz") is None
+        router = FakeRouter()
+        router.queue_many(FakeCursor(), FakeCursor(fetchall=[("a", None), ("d", None)]))
+        with pytest.raises(ValidationProblem):
+            MemberDeptRepository(router).promote_department(ctx(), department_id="a", child_id="d")
+        assert not any(sql.startswith("UPDATE department") for sql, _ in router.executed)
