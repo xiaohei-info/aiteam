@@ -28,6 +28,9 @@ const MAX_OBJECT_KEYS = 24;
 const MAX_ARRAY_ITEMS = 32;
 const MAX_JSON_DEPTH = 4;
 
+/** Session custom entry marking where a new model context starts; never sent to the LLM. */
+export const CONTEXT_RESET_ENTRY_TYPE = "aiteam_context_reset";
+
 type ToolKind = "memory" | "rag" | "todo";
 type BoundedPrimitive = string | number | boolean | null | undefined;
 export type BoundedEventPayload = BoundedPrimitive | Record<string, unknown> | unknown[];
@@ -65,6 +68,12 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   }
   if (raw.source_type === "human" || raw.source_type === "employee") result.source_type = raw.source_type;
   if (raw.source_role === "human" || raw.source_role === "child" || raw.source_role === "participant" || raw.source_role === "coordinator") result.source_role = raw.source_role;
+  // Only the context-reset marker crosses the boundary; other extension custom entries stay opaque.
+  if (raw.type === "custom" && raw.customType === CONTEXT_RESET_ENTRY_TYPE) {
+    result.customType = CONTEXT_RESET_ENTRY_TYPE;
+    const data = boundedValue(raw.data);
+    if (data !== undefined) result.data = data;
+  }
   for (const key of ["summary", "firstKeptEntryId", "reason"] as const) {
     if (typeof raw[key] === "string") result[key] = safeText(raw[key], MAX_TEXT_CHARS);
   }

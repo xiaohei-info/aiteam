@@ -193,3 +193,12 @@ test("thinking and tool output keep hiding paths without swallowing surrounding 
   assert(!serialized.includes("/tmp/out/a.txt") && !serialized.includes("/var/log/x.log"));
   assert(serialized.includes("wrote ([路径已隐藏]), see [x]([路径已隐藏])."));
 });
+
+test("history entries expose only the context-reset custom marker with bounded data", () => {
+  const marker = serializePiEntry({ id: "r1", type: "custom", customType: "aiteam_context_reset", data: { reset_id: "reset-1", message_count: 3, memory_saved: true, memory_reason: "saved", token: "hidden" } });
+  assert.equal(marker?.customType, "aiteam_context_reset");
+  assert.deepEqual(marker?.data, { reset_id: "reset-1", message_count: 3, memory_saved: true, memory_reason: "saved" });
+  // Other extension custom entries stay opaque.
+  const other = serializePiEntry({ id: "c1", type: "custom", customType: "other_extension", data: { note: "private" } });
+  assert.deepEqual(other, { id: "c1", type: "custom" });
+});

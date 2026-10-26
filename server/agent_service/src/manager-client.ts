@@ -70,6 +70,11 @@ export interface ManagerOwnerResetInput {
   new_password: string;
 }
 
+/** Manager accepted an async Hindsight retain; completion is not implied. */
+export interface MemoryRetainAck {
+  operationId: string;
+}
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -85,6 +90,8 @@ export interface ManagerClient {
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
+  /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
+  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
@@ -192,6 +199,12 @@ export class HttpManagerClient implements ManagerClient {
 
   async memoryDelete(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void> {
     await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, { employee_id: employeeId }, "DELETE", idempotencyKey);
+  }
+
+  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown> = {}, idempotencyKey?: string): Promise<MemoryRetainAck> {
+    const value = this.unwrap(await this.request("/api/manager/memories/retain", caller, { employee_id: employeeId, content, metadata }, undefined, "POST", idempotencyKey)) as { success?: unknown; operation_id?: unknown };
+    if (value.success !== true || typeof value.operation_id !== "string" || !value.operation_id) throw new ManagerUnavailableError("Manager returned an invalid memory retain acknowledgement");
+    return { operationId: value.operation_id };
   }
 
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {

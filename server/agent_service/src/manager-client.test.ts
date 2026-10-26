@@ -22,6 +22,27 @@ test("HttpManagerClient keeps employee-scoped memory deletion for management ope
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
 });
 
+test("HttpManagerClient retains employee-scoped memory through the Manager facade", async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return new Response(JSON.stringify({ data: { success: true, async: true, operation_id: "op-1" } }), { status: 201, headers: { "content-type": "application/json" } });
+  });
+
+  const ack = await client.memoryRetain(caller, "employee-1", "summary", { source: "context_reset" }, "retain-key");
+  assert.deepEqual(ack, { operationId: "op-1" });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://manager.test/api/manager/memories/retain");
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(new Headers(requests[0].init.headers).get("Authorization"), "Bearer jwt");
+  assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "retain-key");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { employee_id: "employee-1", content: "summary", metadata: { source: "context_reset" } });
+  assert.doesNotMatch(String(requests[0].init.body), /bank_id/);
+
+  const invalid = new HttpManagerClient("https://manager.test", async () => Response.json({ data: { success: true } }, { status: 201 }));
+  await assert.rejects(() => invalid.memoryRetain(caller, "employee-1", "summary"), /invalid memory retain acknowledgement/);
+});
+
 test("HttpManagerClient preserves the safe Manager problem detail for runtime failures", async () => {
   const client = new HttpManagerClient("https://manager.test", async () => Response.json(
     { type: "about:blank", title: "Not Found", status: 404, code: "not_found", detail: "platform model is unavailable" },

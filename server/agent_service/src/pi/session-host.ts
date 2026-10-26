@@ -1,7 +1,7 @@
 import { connectorTools } from "../connectors.js";
-import { appLogger, makeRequestContext, requestContext } from "../observability.js";
+import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -15,25 +15,26 @@ import {
   type ResourceLoader,
   type ToolDefinition,
   type SessionEntry,
+  type SessionMessageEntry,
   ModelRuntime,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
-import { isManagerAccessDenial, ManagerUnavailableError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
+import { isManagerAccessDenial, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { serializePiEvent } from "./event-sse.js";
+import { CONTEXT_RESET_ENTRY_TYPE, serializePiEvent } from "./event-sse.js";
 import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
-import { isMemoryPolicyEnabled, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
+import { isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
@@ -87,6 +88,28 @@ export interface ConversationContext {
   available_thinking_levels: ConversationThinkingLevel[];
   prompting: boolean;
 }
+
+/** Why a reset did or did not hand the previous context to long-term memory. */
+export type ContextResetMemoryReason = "saved" | "empty" | "retain_disabled" | "policy" | "unauthorized" | "error";
+
+export interface ContextResetParticipant {
+  employee_id: string;
+  reset: boolean;
+  message_count: number;
+  memory_saved: boolean;
+  memory_reason: ContextResetMemoryReason;
+  operation_id: string | null;
+}
+
+export interface ContextResetResult {
+  conversation_id: string;
+  reset_id: string;
+  reset: boolean;
+  memory_saved: boolean;
+  participants: ContextResetParticipant[];
+}
+
+export { CONTEXT_RESET_ENTRY_TYPE };
 
 export interface OfficeEmployeeActivity {
   employee_id: string;
@@ -208,6 +231,9 @@ const MAX_DELEGATE_RESULT_CHARS = 2_000;
 const MAX_ENTRIES_PROMPT_WAIT_MS = 5_000;
 const MAX_GROUP_CONTEXT_CHARS = 8_000;
 const MAX_GROUP_CONTEXT_FIELD_CHARS = 600;
+/** Stays below the Manager retain limit (131072) including the header. */
+const MAX_CONTEXT_RESET_TRANSCRIPT_CHARS = 100_000;
+const CONTEXT_RESET_TRANSCRIPT_HEADER = "以下是用户主动开启新上下文前的对话记录，请提取值得长期记住的事实、偏好和决定。";
 const DEFAULT_AGENT_TOOLS = [
   "bash", "read", "write", "edit", "todo_update",
   "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain",
@@ -456,7 +482,7 @@ export class SessionHost {
       let latest: SessionEntry | undefined;
       let latestTimestamp = -1;
       for (const entry of entries) {
-        if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info") continue;
+        if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info" || entry.type === "custom") continue;
         const timestamp = historyTimestamp(entry);
         if (timestamp >= latestTimestamp) {
           latestTimestamp = timestamp;
@@ -508,6 +534,117 @@ export class SessionHost {
         if (!record.prompting) await this.disposeSession(record);
       }
     });
+  }
+
+  /**
+   * Start a fresh model context for every participant of the conversation while keeping the
+   * Session file (and so the visible history). The previous branch is handed to the Manager's
+   * memory retain endpoint first; the user's click is the consent, so no approval gate applies.
+   */
+  async resetContext(conversationId: string, caller: AuthenticatedCaller): Promise<ContextResetResult> {
+    const records = this.resetTargets(conversationId, caller);
+    // Synchronous with the lock acquisition below, so no prompt can start in between.
+    this.assertConversationIdle(conversationId);
+    const resetId = randomUUID();
+    const timestamp = new Date().toISOString();
+    const participants = await Promise.all(records.map((record) =>
+      this.withContextOperation(record, () => this.resetRecordContext(record, caller, resetId, timestamp))));
+    return {
+      conversation_id: conversationId,
+      reset_id: resetId,
+      reset: participants.some((item) => item.reset),
+      memory_saved: participants.some((item) => item.memory_saved),
+      participants,
+    };
+  }
+
+  /** Single chats reset their entry employee; groups reset only participants that already have a Session. */
+  private resetTargets(conversationId: string, caller: AuthenticatedCaller): SessionRecord[] {
+    const metadata = this.options.store.getOwnedConversationMetadata(conversationId, caller.tenantId ?? "", caller.userId ?? caller.callerId);
+    if (!metadata) throw new SessionAuthorizationError("Conversation is not owned by the authenticated member");
+    if (metadata.kind !== "group") return [this.ensureContextRecord(conversationId, caller)];
+    const indexed = this.options.store.getConversation(conversationId);
+    return this.options.store.listConversationParticipants(conversationId)
+      .filter((participant) => {
+        if (this.records.has(this.recordKey(conversationId, participant.employee_id))) return true;
+        const sessionFile = participant.session_file || (indexed ? this.legacySessionFile(indexed, participant.employee_id) : undefined);
+        return Boolean(sessionFile && existsSync(sessionFile));
+      })
+      .map((participant) => this.ensureRecord(conversationId, participant.employee_id));
+  }
+
+  private async resetRecordContext(record: SessionRecord, caller: AuthenticatedCaller, resetId: string, timestamp: string): Promise<ContextResetParticipant> {
+    if (record.prompting || record.promptPromise) throw new ConversationBusyError();
+    const employeeId = record.employeeId ?? "conversation";
+    const branch = record.sessionManager.getBranch();
+    const messages = branch.filter((entry): entry is SessionMessageEntry =>
+      entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"));
+    // Pi persists nothing before the first assistant reply, so there is no context to reset yet.
+    if (!messages.some((entry) => entry.message.role === "assistant")) {
+      return { employee_id: employeeId, reset: false, message_count: messages.length, memory_saved: false, memory_reason: "empty", operation_id: null };
+    }
+    const memory = await this.retainResetTranscript(record, caller, messages, resetId);
+    const thinking = [...branch].reverse().find((entry) => entry.type === "thinking_level_change");
+    // A context poll may still be building the session; dispose it only once it exists.
+    await record.sessionReady?.catch(() => undefined);
+    if (record.prompting || record.promptPromise) throw new ConversationBusyError();
+    await this.disposeSession(record);
+    record.sessionManager.resetLeaf();
+    record.sessionManager.appendCustomEntry(CONTEXT_RESET_ENTRY_TYPE, {
+      reset_id: resetId,
+      timestamp,
+      message_count: messages.length,
+      memory_saved: memory.reason === "saved",
+      memory_reason: memory.reason,
+    });
+    // The new branch starts at the marker; keep the user's chosen thinking level on it.
+    if (thinking?.type === "thinking_level_change") record.sessionManager.appendThinkingLevelChange(thinking.thinkingLevel);
+    return {
+      employee_id: employeeId,
+      reset: true,
+      message_count: messages.length,
+      memory_saved: memory.reason === "saved",
+      memory_reason: memory.reason,
+      operation_id: memory.operationId,
+    };
+  }
+
+  /** Never blocks the reset: every failure becomes a reason the UI can show. */
+  private async retainResetTranscript(
+    record: SessionRecord,
+    caller: AuthenticatedCaller,
+    messages: readonly SessionMessageEntry[],
+    resetId: string,
+  ): Promise<{ reason: ContextResetMemoryReason; operationId: string | null }> {
+    let authorization: SessionAuthorization | undefined;
+    try {
+      authorization = this.resolveAuthorization(record, caller);
+    } catch {
+      return { reason: "unauthorized", operationId: null };
+    }
+    if (!authorization) return { reason: "unauthorized", operationId: null };
+    const client = authorization.managerClient;
+    if (!client?.memoryRetain || !isMemoryRetainAllowed(authorization.snapshot)) return { reason: "retain_disabled", operationId: null };
+    const transcript = resetTranscript(messages);
+    if (!transcript.content) return { reason: "empty", operationId: null };
+    const lastEntryId = messages.at(-1)?.id ?? resetId;
+    const idempotencyKey = `context-reset:${createHash("sha256").update(`${record.conversationId}\0${authorization.employeeId}\0${lastEntryId}`).digest("hex").slice(0, 48)}`;
+    try {
+      const ack = await client.memoryRetain(caller, authorization.employeeId, transcript.content, {
+        source: "context_reset",
+        conversation_id: record.conversationId,
+        reset_id: resetId,
+        message_count: messages.length,
+        truncated: transcript.truncated,
+      }, idempotencyKey);
+      return { reason: "saved", operationId: ack.operationId };
+    } catch (error) {
+      this.invalidateExecutionMaterial(authorization, error);
+      if (error instanceof ManagerAuthorizationError) return { reason: "unauthorized", operationId: null };
+      if (error instanceof ManagerPolicyDeniedError || isManagerAccessDenial(error)) return { reason: "policy", operationId: null };
+      appLogger.log("warn", "context_reset.retain_failed", safeError(error));
+      return { reason: "error", operationId: null };
+    }
   }
 
   private async withContextOperation<T>(record: SessionRecord, operation: () => Promise<T>): Promise<T> {
@@ -1434,7 +1571,8 @@ export class SessionHost {
     for (const participant of rows) {
       if (participant.employee_id === targetEmployeeId) continue;
       const record = this.ensureRecord(conversationId, participant.employee_id);
-      const messages = record.sessionManager.getEntries()
+      // Only the current branch: earlier contexts were reset by the user.
+      const messages = record.sessionManager.getBranch()
         .filter((entry) => entry.type === "message")
         .slice(-4)
         .map((entry) => {
@@ -1771,6 +1909,22 @@ function officeEntryTask(entries: readonly SessionEntry[]): string | null {
     if (task) return task.slice(0, 240);
   }
   return null;
+}
+
+/** Plain user/assistant text of the branch being reset, newest content kept when over budget. */
+function resetTranscript(messages: readonly SessionMessageEntry[]): { content: string; truncated: boolean } {
+  const lines = messages.flatMap((entry) => {
+    const content = entry.message.role === "user" || entry.message.role === "assistant" ? entry.message.content : "";
+    const text = typeof content === "string"
+      ? content
+      : content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("\n");
+    const trimmed = text.trim();
+    return trimmed ? [`${entry.message.role === "user" ? "用户" : "Agent"}: ${trimmed}`] : [];
+  });
+  let body = lines.join("\n\n");
+  const truncated = body.length > MAX_CONTEXT_RESET_TRANSCRIPT_CHARS;
+  if (truncated) body = body.slice(-MAX_CONTEXT_RESET_TRANSCRIPT_CHARS);
+  return { content: body ? `${CONTEXT_RESET_TRANSCRIPT_HEADER}\n\n${body}` : "", truncated };
 }
 
 function normalizeThinkingLevel(value: unknown): ConversationThinkingLevel {
