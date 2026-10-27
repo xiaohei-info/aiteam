@@ -332,6 +332,17 @@ class _FakeOrderRepo(RecruitOrderRepository):
         self._bucket(ctx)[row.id] = row
         return row
 
+    def claim_provisioning(self, ctx, **kw):
+        row = self.get_by_idempotency_key(ctx, idempotency_key=kw["idempotency_key"])
+        if row is None:
+            row = self.create(ctx, **kw, requested_by=ctx.user_id)
+        elif row.status not in ("pending", "failed", "cancelled"):
+            raise Conflict("recruitment order is already provisioning or succeeded")
+        return self.update(ctx, row._replace(
+            status="provisioning", created_employee_id=None,
+            error_code=None, error_message=None, requested_by=ctx.user_id,
+        ))
+
     def get(self, ctx, *, order_id):
         return self._bucket(ctx).get(order_id)
 
@@ -407,6 +418,71 @@ def _expert_template(template_id="tpl-1", version="v1", display_name="专家A") 
 
 
 # ---- F06 招募专家 ----
+
+
+def test_failed_recruit_can_retry_same_request_without_deleting_order(monkeypatch):
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, emp, _, recruit, orders = _build_service(catalog)
+    ctx = _ctx("t-a")
+    req = RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert")
+    resolve = catalog.resolve_tenant_access
+
+    def unavailable(**kwargs):
+        raise Conflict("relay provisioning unavailable")
+
+    monkeypatch.setattr(catalog, "resolve_tenant_access", unavailable)
+    for _ in range(2):
+        with pytest.raises(Conflict, match="relay provisioning unavailable"):
+            svc.recruit_expert(ctx, req)
+        failed = orders.list_orders(ctx)
+        assert len(failed) == 1
+        assert failed[0].status == "failed"
+        assert failed[0].error_code == "conflict"
+        assert emp._bucket(ctx) == {}
+    order_id = failed[0].id
+
+    monkeypatch.setattr(catalog, "resolve_tenant_access", resolve)
+    result = svc.recruit_expert(ctx, req)
+    assert result.order.order_id == order_id
+    assert result.order.status == "succeeded"
+    assert result.order.error_code is None and result.order.error_message is None
+    assert result.order.created_employee_id == result.employee_id
+    assert len(emp._bucket(ctx)) == 1
+    assert len(orders.list_orders(ctx)) == 1
+    with pytest.raises(Conflict, match="already recruited"):
+        svc.recruit_expert(ctx, req)
+    assert len(emp._bucket(ctx)) == 1
+
+
+@pytest.mark.parametrize("status", ["provisioning", "succeeded"])
+def test_active_or_succeeded_order_rejects_recruit_before_provider_side_effects(status, monkeypatch):
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, emp, _, _, orders = _build_service(catalog)
+    ctx = _ctx("t-a")
+    orders.create(ctx, idempotency_key="recruit:tpl-1:retry-expert", status=status)
+
+    def unexpected(**kwargs):
+        pytest.fail("duplicate request must not provision relay access")
+
+    monkeypatch.setattr(catalog, "resolve_tenant_access", unexpected)
+    with pytest.raises(Conflict, match="already provisioning or succeeded"):
+        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert"))
+    assert emp._bucket(ctx) == {}
+
+
+@pytest.mark.parametrize("status", ["pending", "cancelled"])
+def test_recruit_resumes_unfinished_order(status):
+    catalog = FakeOperatorCatalogClient()
+    catalog.seed_expert(_expert_template())
+    svc, _, _, _, orders = _build_service(catalog)
+    ctx = _ctx("t-a")
+    previous = orders.create(ctx, idempotency_key="recruit:tpl-1:retry-expert", status=status)
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert"))
+    assert result.order.order_id == previous.id
+    assert result.order.status == "succeeded"
+
 
 
 def test_recruit_expert_auto_installs_pinned_platform_skills():
@@ -954,6 +1030,19 @@ def test_fake_catalog_versioned_and_latest_lookup():
 # ---- AITEAM-243: 招募订单追踪验收 ----
 
 
+def test_order_failure_preserves_business_error_codes():
+    from manager_service.recruit_service import _error_code
+    from shared.errors import InvalidTransition
+
+    class ProviderConflict(Conflict):
+        code = "provider_unavailable"
+
+    assert _error_code(ProviderConflict("unavailable")) == "provider_unavailable"
+    assert _error_code(InvalidTransition("invalid state")) == "invalid_transition"
+    assert _error_code(ValueError("invalid config")) == "invalid_request"
+    assert _error_code(RuntimeError("unexpected")) == "RuntimeError"
+
+
 def test_recruit_expert_returns_completed_order():
     """F06 招募成功后，result.order 应携带 succeeded 状态 + created_employee_id。"""
     catalog = FakeOperatorCatalogClient()
@@ -992,7 +1081,7 @@ def test_recruit_expert_failure_marks_order_failed():
     stored = orders.list_orders(_ctx("t-a"))
     assert len(stored) == 1
     assert stored[0].status == "failed"
-    assert stored[0].error_code == "template_not_found"
+    assert stored[0].error_code == "not_found"
     # restore (not strictly needed)
     emp.create = original_create
 

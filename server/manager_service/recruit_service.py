@@ -625,15 +625,11 @@ def _idempotency_key(template_id: str, slug: str) -> str:
 
 
 def _error_code(exc: BaseException) -> str:
-    name = type(exc).__name__
-    # 映射常见业务异常为可读 error_code。
-    mapping = {
-        "Conflict": "employee_slug_conflict",
-        "Forbidden": "forbidden",
-        "NotFound": "template_not_found",
-        "ValueError": "invalid_request",
-    }
-    return mapping.get(name, name)
+    from shared.errors import AppError
+
+    if isinstance(exc, AppError):
+        return exc.code
+    return "invalid_request" if isinstance(exc, ValueError) else type(exc).__name__
 
 
 def _order_out(row) -> RecruitmentOrderOut:
@@ -661,21 +657,14 @@ def _track_provision(
     template_id: str,
     solution_id: str | None = None,
 ) -> RecruitmentOrderRow:
-    """幂等创建招募追踪订单并推进到 provisioning（返回行，含状态机）。"""
-    existing = orders.get_by_idempotency_key(ctx, idempotency_key=idem)
-    if existing is not None:
-        return existing
-    row = orders.create(
+    """Claim the order before performing remote or publication side effects."""
+    return orders.claim_provisioning(
         ctx,
         idempotency_key=idem,
         action="apply_solution" if solution_id else "recruit_expert",
         template_id=template_id,
         solution_id=solution_id,
-        requested_by=ctx.user_id,
     )
-    provisioning = row.start_provisioning()
-    row = orders.update(ctx, provisioning)
-    return row
 
 
 def build_recruit_service(
