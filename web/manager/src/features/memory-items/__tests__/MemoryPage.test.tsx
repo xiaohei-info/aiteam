@@ -51,6 +51,12 @@ function mockApi(overrides: Partial<apiModule.MemoryApi> = {}) {
   return api;
 }
 
+async function openCurrentEmployeeMemory() {
+  const button = await screen.findByRole("button", { name: "查看当前员工记忆" });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
+
 function renderPage() {
   return render(
     <I18nContext.Provider value={makeI18n()}>
@@ -71,7 +77,7 @@ describe("MemoryPage 记忆管理", () => {
   it("点击当前专家后在弹窗中渲染记忆条目列表", async () => {
     mockApi();
     const { container } = renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await openCurrentEmployeeMemory();
     expect(await screen.findByTestId("memory-item")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "记忆列表 · 专家B" })).toBeInTheDocument();
     expect(screen.getByText("用户偏好中文回答")).toBeInTheDocument();
@@ -108,14 +114,14 @@ describe("MemoryPage 记忆管理", () => {
   it("打开具体员工记忆时，加载失败展示错误", async () => {
     mockApi({ list: vi.fn().mockRejectedValue(new ApiError("记忆服务不可用", 503, "memory_unavailable")) });
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await openCurrentEmployeeMemory();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("记忆服务不可用"));
   });
 
   it("创建记忆后刷新列表", async () => {
     const api = mockApi();
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await openCurrentEmployeeMemory();
     await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("+ 新增记忆"));
@@ -132,7 +138,7 @@ describe("MemoryPage 记忆管理", () => {
   it("编辑记忆后刷新列表并带员工授权范围", async () => {
     const api = mockApi();
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await openCurrentEmployeeMemory();
     await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("编辑"));
@@ -146,7 +152,7 @@ describe("MemoryPage 记忆管理", () => {
   it("删除记忆后刷新列表", async () => {
     const api = mockApi();
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "查看当前员工记忆" }));
+    await openCurrentEmployeeMemory();
     await screen.findByTestId("memory-item");
 
     fireEvent.click(screen.getByText("删除"));

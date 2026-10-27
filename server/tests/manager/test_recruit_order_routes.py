@@ -42,6 +42,25 @@ def _fake_order(order_id="ro-1"):
     )
 
 
+def test_recruit_order_invalid_transition_returns_409():
+    from manager_service.recruit_order_repository import RecruitmentOrderRow
+
+    def recruit_expert(ctx, req):
+        RecruitmentOrderRow(
+            id="order", idempotency_key="key", action="recruit_expert", template_id="t-1",
+            solution_id=None, requested_by=None, created_employee_id=None,
+            status="failed", error_code="conflict", error_message="previous failure",
+        ).mark_succeeded("employee")
+
+    fake = type("FakeRecruit", (), {"recruit_expert": staticmethod(recruit_expert)})()
+    with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
+        response = _client("postgresql://fake/fake").post(
+            "/api/manager/recruit/experts", headers=_hdr(), json={"template_id": "t-1"},
+        )
+    assert response.status_code == 409
+    assert response.json()["code"] == "invalid_transition"
+
+
 def test_list_orders_requires_auth():
     client = _client("postgresql://fake/fake")
     r = client.get("/api/manager/recruit/orders")

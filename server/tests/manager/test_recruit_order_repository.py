@@ -12,6 +12,8 @@ from manager_service.recruit_order_repository import (
     _row_to_order,
 )
 
+from shared.errors import Conflict, InvalidTransition
+
 from ._fake_router import FakeCursor, FakeRouter, ctx
 
 
@@ -52,6 +54,21 @@ def test_create_returns_row():
     assert row.idempotency_key == "idem-1"
     assert row.status == "pending"
     assert "recruitment_order" in router.last_sql
+
+
+def test_claim_provisioning_returns_claim_or_conflict():
+    router = FakeRouter()
+    router.queue(FakeCursor(fetchone=_row(status="provisioning")))
+    claimed = RecruitOrderRepository(router).claim_provisioning(
+        ctx(), idempotency_key="k-1", action="recruit_expert", template_id="t-1",
+    )
+    assert claimed.status == "provisioning"
+    missing = FakeRouter()
+    missing.queue(FakeCursor(fetchone=None))
+    with pytest.raises(Conflict, match="already provisioning or succeeded"):
+        RecruitOrderRepository(missing).claim_provisioning(
+            ctx(), idempotency_key="k-1", action="recruit_expert", template_id="t-1",
+        )
 
 
 def test_get_found_and_not_found():
@@ -117,21 +134,21 @@ def test_start_provisioning_ok():
 
 
 def test_start_provisioning_from_non_pending_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidTransition):
         _mk("provisioning").start_provisioning()
 
 
 def test_mark_succeeded_requires_provisioning():
     out = _mk("provisioning").mark_succeeded("emp-1")
     assert out.status == "succeeded" and out.created_employee_id == "emp-1"
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidTransition):
         out.cancel()
 
 
 def test_mark_failed_requires_provisioning():
     out = _mk("provisioning").mark_failed("E_BOOM", "no more")
     assert out.status == "failed" and out.error_code == "E_BOOM"
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidTransition):
         _mk("pending").mark_failed("E", "m")
 
 
@@ -139,5 +156,5 @@ def test_cancel_from_pending_or_provisioning_ok_and_terminal_raises():
     for st in ("pending", "provisioning"):
         assert _mk(st).cancel().status == "cancelled"
     for st in ("succeeded", "cancelled"):
-        with pytest.raises(ValueError):
+        with pytest.raises(InvalidTransition):
             _mk(st).cancel()
