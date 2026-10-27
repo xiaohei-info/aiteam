@@ -831,7 +831,11 @@ test("Agent context reset route starts a new context for the owned conversation 
   const address = http.server.address();
   assert(address && typeof address === "object");
   const base = `http://127.0.0.1:${address.port}`;
-  const reset = (conversationId: string) => fetch(`${base}/api/agent/conversations/${conversationId}/context/reset`, { method: "POST", headers: { Authorization: "Bearer test" } });
+  const reset = (conversationId: string, body?: unknown) => fetch(`${base}/api/agent/conversations/${conversationId}/context/reset`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
   try {
     const empty = await reset("c1");
     assert.equal(empty.status, 200);
@@ -846,6 +850,24 @@ test("Agent context reset route starts a new context for the owned conversation 
     assert.equal(typeof body.reset_id, "string");
     assert.equal(body.participants[0]?.memory_reason, "retain_disabled");
 
+    const replay = await reset("c1");
+    const replayed = (await replay.json() as { data: { reset: boolean; already_reset: boolean; reset_id: string; confirmation_required: boolean } }).data;
+    assert.equal(replayed.reset, true);
+    assert.equal(replayed.already_reset, true);
+    assert.equal(replayed.reset_id, body.reset_id);
+    assert.equal(replayed.confirmation_required, false);
+
+    fixture.faux.setResponses([fauxAssistantMessage("ok again")]);
+    await fixture.host.prompt("c1", "hello again", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const skipped = await reset("c1", { save_memory: false, on_memory_failure: "proceed" });
+    assert.equal(skipped.status, 200);
+    const skippedBody = (await skipped.json() as { data: { reset: boolean; participants: Array<{ memory_reason: string }> } }).data;
+    assert.equal(skippedBody.reset, true);
+    assert.equal(skippedBody.participants[0]?.memory_reason, "skipped");
+
+    assert.equal((await reset("c1", { save_memory: "no" })).status, 422);
+    assert.equal((await reset("c1", { on_memory_failure: "ignore" })).status, 422);
+    assert.equal((await reset("c1", { force: true })).status, 422);
     assert.equal((await reset("other-member")).status, 404);
   } finally {
     await http.close();

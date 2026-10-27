@@ -5,7 +5,9 @@ import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
 import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
-import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
+import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
+import { appLogger } from "../observability.js";
+import { resetTranscript } from "./session-host.js";
 
 function lease(version: number, token: string): HindsightRuntimeConfig {
   return {
@@ -746,7 +748,9 @@ test("resetContext retains the old branch, keeps visible history, and hides it f
     const result = await host.resetContext("conversation-1", caller);
     assert.equal(result.reset, true);
     assert.equal(result.memory_saved, true);
-    assert.deepEqual(result.participants, [{ employee_id: "employee-1", reset: true, message_count: 2, memory_saved: true, memory_reason: "saved", operation_id: "op-1" }]);
+    assert.equal(result.already_reset, false);
+    assert.equal(result.confirmation_required, false);
+    assert.deepEqual(result.participants, [{ employee_id: "employee-1", reset: true, already_reset: false, reset_id: result.reset_id, message_count: 2, memory_saved: true, memory_reason: "saved", operation_id: "op-1" }]);
     assert.equal(retained.length, 1);
     assert.equal(retained[0]!.employeeId, "employee-1");
     assert.match(retained[0]!.content, /用户: 我喜欢菠萝/);
@@ -767,6 +771,7 @@ test("resetContext retains the old branch, keeps visible history, and hides it f
     const entries = await host.entries("conversation-1", caller) as Array<Record<string, any>>;
     const marker = entries.find((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
     assert.equal(marker?.data?.reset_id, result.reset_id);
+    assert.equal(marker?.data?.memory_reason, "saved", "the divider can show whether memory was saved");
     assert.equal(typeof marker?.entry_ref, "string");
     const texts = JSON.stringify(entries);
     assert(texts.includes("我喜欢菠萝"), "visible history keeps pre-reset messages");
@@ -804,34 +809,178 @@ test("resetContext still resets when memory retain is not enabled, and is a no-o
     assert.equal(retainCalls, 0);
 
     const again = await host.resetContext("conversation-1", caller);
-    assert.equal(again.reset, false, "a fresh context has nothing to reset");
+    assert.equal(again.reset, true, "a replay reports the earlier reset instead of empty");
+    assert.equal(again.already_reset, true);
+    assert.equal(again.reset_id, result.reset_id);
+    assert.equal(again.participants[0]?.memory_reason, "retain_disabled");
+    assert.equal(again.participants[0]?.reset_id, result.reset_id);
+    const markers = (await host.entries("conversation-1", caller) as Array<Record<string, any>>)
+      .filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1, "a replay must not write a second marker");
     await host.dispose();
   } finally {
     await fixture.close();
   }
 });
 
-test("resetContext reports a Manager retain failure without blocking the reset", async () => {
+test("resetContext keeps the context on a transient retain failure until the user proceeds", async () => {
   const fixture = await createFixture();
   const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let failure: Error = new Error("boom");
+  let retainCalls = 0;
   const manager: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
     getOrgTree: async () => ({}),
-    memoryRetain: async () => { throw new Error("boom"); },
+    memoryRetain: async () => { retainCalls += 1; throw failure; },
+  };
+  const logged: Array<{ event: string; fields: Record<string, unknown> }> = [];
+  const originalLog = appLogger.log;
+  appLogger.log = (_level, event, fields = {}) => { logged.push({ event, fields }); };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("conversation-1", "hello", undefined, caller);
+
+    const cases: Array<[Error, string]> = [
+      [new Error("boom"), "manager_unavailable"],
+      [new ManagerUnavailableError("Manager returned HTTP 503", { status: 503 }), "manager_unavailable"],
+      [new ManagerUnavailableError("Manager returned HTTP 413", { status: 413 }), "too_large"],
+      [new ManagerTimeoutError(), "timeout"],
+      [new MemoryRetainUnverifiedError(), "retention_unverified"],
+      [new ManagerAuthorizationError(401), "unauthorized"],
+    ];
+    for (const [error, reason] of cases) {
+      failure = error;
+      logged.length = 0;
+      const blocked = await host.resetContext("conversation-1", caller);
+      assert.equal(blocked.reset, false, reason);
+      assert.equal(blocked.confirmation_required, true, reason);
+      assert.equal(blocked.participants[0]?.memory_reason, reason);
+      assert.equal(blocked.participants[0]?.reset_id, null);
+      const log = logged.find((item) => item.event === "context_reset.retain_failed");
+      assert.equal(log?.fields.reset_id, blocked.reset_id, `log carries reset_id for ${reason}`);
+      assert.equal(log?.fields.memory_reason, reason);
+    }
+    // The context was kept: the next prompt still sees the earlier message.
+    let seen = "";
+    fixture.faux.setResponses([(context) => { seen = JSON.stringify(context.messages); return fauxAssistantMessage("still here"); }]);
+    await host.prompt("conversation-1", "again", undefined, caller);
+    assert.equal(seen.includes("hello"), true);
+
+    failure = new ManagerTimeoutError();
+    const proceeded = await host.resetContext("conversation-1", caller, { onMemoryFailure: "proceed" });
+    assert.equal(proceeded.reset, true);
+    assert.equal(proceeded.confirmation_required, false);
+    assert.equal(proceeded.participants[0]?.memory_reason, "timeout");
+    assert.equal(proceeded.participants[0]?.operation_id, null);
+    const entries = await host.entries("conversation-1", caller) as Array<Record<string, any>>;
+    const markers = entries.filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0]?.data?.memory_reason, "timeout", "the divider shows why memory was not saved");
+    assert.equal(retainCalls, cases.length + 1);
+    await host.dispose();
+  } finally {
+    appLogger.log = originalLog;
+    await fixture.close();
+  }
+});
+
+test("resetContext resets directly when policy denies the retain or save_memory is false", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let retainCalls = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; throw new ManagerPolicyDeniedError(409); },
+  };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("one")]);
+    await host.prompt("conversation-1", "first", undefined, caller);
+    const denied = await host.resetContext("conversation-1", caller);
+    assert.equal(denied.reset, true);
+    assert.equal(denied.confirmation_required, false);
+    assert.equal(denied.participants[0]?.memory_reason, "policy");
+    assert.equal(retainCalls, 1);
+
+    fixture.faux.setResponses([fauxAssistantMessage("two")]);
+    await host.prompt("conversation-1", "second", undefined, caller);
+    const skipped = await host.resetContext("conversation-1", caller, { saveMemory: false });
+    assert.equal(skipped.reset, true);
+    assert.equal(skipped.participants[0]?.memory_reason, "skipped");
+    assert.equal(retainCalls, 1, "save_memory=false never calls Manager");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("resetContext answers a retry that races the first request with the same reset", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let retainCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; await gate; return { operationId: "op-race" }; },
   };
   try {
     resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
     const host = fixture.createHost(undefined, manager);
     fixture.faux.setResponses([fauxAssistantMessage("ok")]);
     await host.prompt("conversation-1", "hello", undefined, caller);
-    const result = await host.resetContext("conversation-1", caller);
-    assert.equal(result.reset, true);
-    assert.equal(result.participants[0]?.memory_reason, "error");
-    assert.equal(result.participants[0]?.operation_id, null);
+
+    const first = host.resetContext("conversation-1", caller);
+    // The retry arrives while the first request is still waiting on Manager.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const retry = host.resetContext("conversation-1", caller);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(retainCalls, 1, "the retry waits behind the first request");
+    release();
+    const [a, b] = await Promise.all([first, retry]);
+    assert.equal(a.reset, true);
+    assert.equal(a.already_reset, false);
+    assert.equal(b.reset, true);
+    assert.equal(b.already_reset, true);
+    assert.equal(b.reset_id, a.reset_id);
+    assert.equal(b.participants[0]?.memory_reason, "saved");
+    assert.equal(b.participants[0]?.operation_id, "op-race");
+    assert.equal(retainCalls, 1);
+    const markers = (await host.entries("conversation-1", caller) as Array<Record<string, any>>)
+      .filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1);
     await host.dispose();
   } finally {
     await fixture.close();
   }
+});
+
+test("resetTranscript keeps long Chinese transcripts under the UTF-8 byte budget", () => {
+  const message = (id: string, role: "user" | "assistant", text: string) => ({
+    type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+    message: role === "user" ? { role, content: text, timestamp: 0 } : { role, content: [{ type: "text", text }], timestamp: 0 },
+  }) as unknown as Parameters<typeof resetTranscript>[0][number];
+  const long = "中文记忆内容".repeat(20_000); // 120k chars, ~360 KB in UTF-8
+  const result = resetTranscript([message("m1", "user", long), message("m2", "assistant", "最后一句结论😀")]);
+  assert.equal(result.truncated, true);
+  const bytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+  assert(bytes <= 200 * 1024, `content is ${bytes} bytes`);
+  assert(bytes > 190 * 1024, "truncation keeps close to the budget");
+  assert(result.content.length <= 131_072);
+  assert(result.content.endsWith("Agent: 最后一句结论😀"), "newest content is kept");
+  assert(result.content.startsWith("以下是用户主动开启新上下文前的对话记录"), "header is kept");
+  // Manager body limit: content plus envelope and metadata stays under 256 KiB.
+  const body = JSON.stringify({ employee_id: "employee-1", content: result.content, metadata: { source: "context_reset", conversation_id: "c".repeat(64), reset_id: "r".repeat(36), message_count: 2, truncated: true } });
+  assert(Buffer.byteLength(body, "utf8") < 256 * 1024);
+
+  const short = resetTranscript([message("m1", "user", "你好"), message("m2", "assistant", "好的")]);
+  assert.equal(short.truncated, false);
+  assert.match(short.content, /用户: 你好\n\nAgent: 好的$/);
 });
 
 test("resetContext keeps the chosen thinking level and rejects while a prompt is running", async () => {

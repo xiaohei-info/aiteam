@@ -22,7 +22,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
-import { isManagerAccessDenial, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
+import { isManagerAccessDenial, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
@@ -89,12 +89,34 @@ export interface ConversationContext {
   prompting: boolean;
 }
 
-/** Why a reset did or did not hand the previous context to long-term memory. */
-export type ContextResetMemoryReason = "saved" | "empty" | "retain_disabled" | "policy" | "unauthorized" | "error";
+/**
+ * Why a reset did or did not hand the previous context to long-term memory.
+ * Failures (unauthorized … timeout) are transient and block the reset unless the caller proceeds;
+ * the rest are final outcomes that never block it.
+ */
+export type ContextResetMemoryReason =
+  | "saved" | "empty" | "skipped" | "retain_disabled" | "policy"
+  | "unauthorized" | "too_large" | "manager_unavailable" | "retention_unverified" | "timeout";
+
+const CONTEXT_RESET_MEMORY_FAILURES: ReadonlySet<ContextResetMemoryReason> = new Set(["unauthorized", "too_large", "manager_unavailable", "retention_unverified", "timeout"]);
+
+export function isContextResetMemoryFailure(reason: ContextResetMemoryReason): boolean {
+  return CONTEXT_RESET_MEMORY_FAILURES.has(reason);
+}
+
+export interface ContextResetOptions {
+  /** false resets without exporting the old context; defaults to true. */
+  saveMemory?: boolean;
+  /** "proceed" resets even when saving memory failed; the default "abort" keeps the context. */
+  onMemoryFailure?: "abort" | "proceed";
+}
 
 export interface ContextResetParticipant {
   employee_id: string;
   reset: boolean;
+  /** True when the branch already started at a reset marker; the marker's outcome is returned. */
+  already_reset: boolean;
+  reset_id: string | null;
   message_count: number;
   memory_saved: boolean;
   memory_reason: ContextResetMemoryReason;
@@ -105,7 +127,10 @@ export interface ContextResetResult {
   conversation_id: string;
   reset_id: string;
   reset: boolean;
+  already_reset: boolean;
   memory_saved: boolean;
+  /** Some participant kept its context because saving memory failed; retry with on_memory_failure=proceed. */
+  confirmation_required: boolean;
   participants: ContextResetParticipant[];
 }
 
@@ -231,8 +256,10 @@ const MAX_DELEGATE_RESULT_CHARS = 2_000;
 const MAX_ENTRIES_PROMPT_WAIT_MS = 5_000;
 const MAX_GROUP_CONTEXT_CHARS = 8_000;
 const MAX_GROUP_CONTEXT_FIELD_CHARS = 600;
-/** Stays below the Manager retain limit (131072) including the header. */
+/** Stays below the Manager retain content limit (131072 characters) including the header. */
 const MAX_CONTEXT_RESET_TRANSCRIPT_CHARS = 100_000;
+/** JSON-encoded UTF-8 bytes of the content; leaves room for metadata under the Manager 256 KiB body limit. */
+const MAX_CONTEXT_RESET_TRANSCRIPT_BYTES = 200 * 1024;
 const CONTEXT_RESET_TRANSCRIPT_HEADER = "以下是用户主动开启新上下文前的对话记录，请提取值得长期记住的事实、偏好和决定。";
 const DEFAULT_AGENT_TOOLS = [
   "bash", "read", "write", "edit", "todo_update",
@@ -541,19 +568,24 @@ export class SessionHost {
    * Session file (and so the visible history). The previous branch is handed to the Manager's
    * memory retain endpoint first; the user's click is the consent, so no approval gate applies.
    */
-  async resetContext(conversationId: string, caller: AuthenticatedCaller): Promise<ContextResetResult> {
+  async resetContext(conversationId: string, caller: AuthenticatedCaller, options: ContextResetOptions = {}): Promise<ContextResetResult> {
     const records = this.resetTargets(conversationId, caller);
     // Synchronous with the lock acquisition below, so no prompt can start in between.
     this.assertConversationIdle(conversationId);
     const resetId = randomUUID();
     const timestamp = new Date().toISOString();
     const participants = await Promise.all(records.map((record) =>
-      this.withContextOperation(record, () => this.resetRecordContext(record, caller, resetId, timestamp))));
+      this.withContextOperation(record, () => this.resetRecordContext(record, caller, resetId, timestamp, options))));
+    const done = participants.filter((item) => item.reset);
+    const fresh = done.some((item) => !item.already_reset);
     return {
       conversation_id: conversationId,
-      reset_id: resetId,
-      reset: participants.some((item) => item.reset),
+      // A pure replay answers with the id the earlier reset wrote into the marker.
+      reset_id: fresh ? resetId : done[0]?.reset_id ?? resetId,
+      reset: done.length > 0,
+      already_reset: done.length > 0 && !fresh,
       memory_saved: participants.some((item) => item.memory_saved),
+      confirmation_required: participants.some((item) => !item.reset && isContextResetMemoryFailure(item.memory_reason)),
       participants,
     };
   }
@@ -573,43 +605,56 @@ export class SessionHost {
       .map((participant) => this.ensureRecord(conversationId, participant.employee_id));
   }
 
-  private async resetRecordContext(record: SessionRecord, caller: AuthenticatedCaller, resetId: string, timestamp: string): Promise<ContextResetParticipant> {
+  private async resetRecordContext(record: SessionRecord, caller: AuthenticatedCaller, resetId: string, timestamp: string, options: ContextResetOptions): Promise<ContextResetParticipant> {
     if (record.prompting || record.promptPromise) throw new ConversationBusyError();
     const employeeId = record.employeeId ?? "conversation";
     const branch = record.sessionManager.getBranch();
+    // Runs under the per-record lock, so a retry that raced the first request sees its marker here.
+    const previous = lastResetMarker(branch);
+    if (previous) return { employee_id: employeeId, ...previous };
     const messages = branch.filter((entry): entry is SessionMessageEntry =>
       entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"));
     // Pi persists nothing before the first assistant reply, so there is no context to reset yet.
     if (!messages.some((entry) => entry.message.role === "assistant")) {
-      return { employee_id: employeeId, reset: false, message_count: messages.length, memory_saved: false, memory_reason: "empty", operation_id: null };
+      return { employee_id: employeeId, reset: false, already_reset: false, reset_id: null, message_count: messages.length, memory_saved: false, memory_reason: "empty", operation_id: null };
     }
-    const memory = await this.retainResetTranscript(record, caller, messages, resetId);
+    const memory = options.saveMemory === false
+      ? { reason: "skipped" as const, operationId: null }
+      : await this.retainResetTranscript(record, caller, messages, resetId);
+    // Transient save failures keep the context so the user can retry or explicitly proceed without memory.
+    if (isContextResetMemoryFailure(memory.reason) && options.onMemoryFailure !== "proceed") {
+      return { employee_id: employeeId, reset: false, already_reset: false, reset_id: null, message_count: messages.length, memory_saved: false, memory_reason: memory.reason, operation_id: null };
+    }
     const thinking = [...branch].reverse().find((entry) => entry.type === "thinking_level_change");
     // A context poll may still be building the session; dispose it only once it exists.
     await record.sessionReady?.catch(() => undefined);
     if (record.prompting || record.promptPromise) throw new ConversationBusyError();
     await this.disposeSession(record);
     record.sessionManager.resetLeaf();
-    record.sessionManager.appendCustomEntry(CONTEXT_RESET_ENTRY_TYPE, {
+    const marker: ContextResetMarkerData = {
       reset_id: resetId,
       timestamp,
       message_count: messages.length,
       memory_saved: memory.reason === "saved",
       memory_reason: memory.reason,
-    });
+      operation_id: memory.operationId,
+    };
+    record.sessionManager.appendCustomEntry(CONTEXT_RESET_ENTRY_TYPE, marker);
     // The new branch starts at the marker; keep the user's chosen thinking level on it.
     if (thinking?.type === "thinking_level_change") record.sessionManager.appendThinkingLevelChange(thinking.thinkingLevel);
     return {
       employee_id: employeeId,
       reset: true,
+      already_reset: false,
+      reset_id: resetId,
       message_count: messages.length,
-      memory_saved: memory.reason === "saved",
+      memory_saved: marker.memory_saved,
       memory_reason: memory.reason,
       operation_id: memory.operationId,
     };
   }
 
-  /** Never blocks the reset: every failure becomes a reason the UI can show. */
+  /** Every Manager outcome becomes a reason code; the caller decides whether it blocks the reset. */
   private async retainResetTranscript(
     record: SessionRecord,
     caller: AuthenticatedCaller,
@@ -628,6 +673,7 @@ export class SessionHost {
     const transcript = resetTranscript(messages);
     if (!transcript.content) return { reason: "empty", operationId: null };
     const lastEntryId = messages.at(-1)?.id ?? resetId;
+    // Sent for traceability only: the Manager retain route does not deduplicate on it.
     const idempotencyKey = `context-reset:${createHash("sha256").update(`${record.conversationId}\0${authorization.employeeId}\0${lastEntryId}`).digest("hex").slice(0, 48)}`;
     try {
       const ack = await client.memoryRetain(caller, authorization.employeeId, transcript.content, {
@@ -640,10 +686,15 @@ export class SessionHost {
       return { reason: "saved", operationId: ack.operationId };
     } catch (error) {
       this.invalidateExecutionMaterial(authorization, error);
-      if (error instanceof ManagerAuthorizationError) return { reason: "unauthorized", operationId: null };
-      if (error instanceof ManagerPolicyDeniedError || isManagerAccessDenial(error)) return { reason: "policy", operationId: null };
-      appLogger.log("warn", "context_reset.retain_failed", safeError(error));
-      return { reason: "error", operationId: null };
+      const reason = retainFailureReason(error);
+      appLogger.log("warn", "context_reset.retain_failed", {
+        ...safeError(error),
+        reset_id: resetId,
+        memory_reason: reason,
+        conversation_id: record.conversationId,
+        employee_id: authorization.employeeId,
+      });
+      return { reason, operationId: null };
     }
   }
 
@@ -1911,8 +1962,64 @@ function officeEntryTask(entries: readonly SessionEntry[]): string | null {
   return null;
 }
 
-/** Plain user/assistant text of the branch being reset, newest content kept when over budget. */
-function resetTranscript(messages: readonly SessionMessageEntry[]): { content: string; truncated: boolean } {
+interface ContextResetMarkerData {
+  reset_id: string;
+  timestamp: string;
+  message_count: number;
+  memory_saved: boolean;
+  memory_reason: ContextResetMemoryReason;
+  operation_id: string | null;
+}
+
+const CONTEXT_RESET_MEMORY_REASONS: ReadonlySet<string> = new Set<ContextResetMemoryReason>([
+  "saved", "empty", "skipped", "retain_disabled", "policy",
+  "unauthorized", "too_large", "manager_unavailable", "retention_unverified", "timeout",
+]);
+
+/**
+ * The outcome stored on the marker when the branch ends at a reset (only bookkeeping entries after it).
+ * Markers written before reason codes were split may carry "error"; it reads back as manager_unavailable.
+ */
+function lastResetMarker(branch: readonly SessionEntry[]): Omit<ContextResetParticipant, "employee_id"> | undefined {
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index]!;
+    if (entry.type === "thinking_level_change" || entry.type === "model_change" || entry.type === "label" || entry.type === "session_info") continue;
+    if (entry.type !== "custom" || entry.customType !== CONTEXT_RESET_ENTRY_TYPE) return undefined;
+    const data = (entry.data && typeof entry.data === "object" ? entry.data : {}) as Partial<Record<keyof ContextResetMarkerData, unknown>>;
+    const reason = typeof data.memory_reason === "string" && CONTEXT_RESET_MEMORY_REASONS.has(data.memory_reason)
+      ? data.memory_reason as ContextResetMemoryReason
+      : "manager_unavailable";
+    return {
+      reset: true,
+      already_reset: true,
+      reset_id: typeof data.reset_id === "string" ? data.reset_id : entry.id,
+      message_count: typeof data.message_count === "number" ? data.message_count : 0,
+      memory_saved: data.memory_saved === true,
+      memory_reason: reason,
+      operation_id: typeof data.operation_id === "string" ? data.operation_id : null,
+    };
+  }
+  return undefined;
+}
+
+function retainFailureReason(error: unknown): ContextResetMemoryReason {
+  if (error instanceof ManagerAuthorizationError) return "unauthorized";
+  if (error instanceof ManagerPolicyDeniedError) return "policy";
+  if (error instanceof MemoryRetainUnverifiedError) return "retention_unverified";
+  if (error instanceof ManagerTimeoutError) return "timeout";
+  // 413 is the body limit; 422 here can only be the content/metadata size validation.
+  if (error instanceof ManagerValidationError || (error instanceof ManagerUnavailableError && error.httpStatus === 413)) return "too_large";
+  if (!(error instanceof ManagerUnavailableError) && isManagerAccessDenial(error)) return "policy";
+  return "manager_unavailable";
+}
+
+/** JSON-encoded UTF-8 size, which is what the content contributes to the Manager request body. */
+function jsonUtf8Bytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+/** Plain user/assistant text of the branch being reset, newest content kept when over the char or byte budget. */
+export function resetTranscript(messages: readonly SessionMessageEntry[]): { content: string; truncated: boolean } {
   const lines = messages.flatMap((entry) => {
     const content = entry.message.role === "user" || entry.message.role === "assistant" ? entry.message.content : "";
     const text = typeof content === "string"
@@ -1921,10 +2028,27 @@ function resetTranscript(messages: readonly SessionMessageEntry[]): { content: s
     const trimmed = text.trim();
     return trimmed ? [`${entry.message.role === "user" ? "用户" : "Agent"}: ${trimmed}`] : [];
   });
-  let body = lines.join("\n\n");
-  const truncated = body.length > MAX_CONTEXT_RESET_TRANSCRIPT_CHARS;
-  if (truncated) body = body.slice(-MAX_CONTEXT_RESET_TRANSCRIPT_CHARS);
-  return { content: body ? `${CONTEXT_RESET_TRANSCRIPT_HEADER}\n\n${body}` : "", truncated };
+  const body = lines.join("\n\n");
+  if (!body) return { content: "", truncated: false };
+  const prefix = `${CONTEXT_RESET_TRANSCRIPT_HEADER}\n\n`;
+  const fits = (start: number) => {
+    const content = prefix + body.slice(start);
+    return content.length <= MAX_CONTEXT_RESET_TRANSCRIPT_CHARS && jsonUtf8Bytes(content) <= MAX_CONTEXT_RESET_TRANSCRIPT_BYTES;
+  };
+  if (fits(0)) return { content: prefix + body, truncated: false };
+  // Smallest start offset that fits; size shrinks monotonically as start grows.
+  let low = 1;
+  let high = body.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(middle)) high = middle;
+    else low = middle + 1;
+  }
+  let start = low;
+  // Never begin on the second half of a surrogate pair.
+  const code = body.charCodeAt(start);
+  if (code >= 0xdc00 && code <= 0xdfff) start += 1;
+  return { content: prefix + body.slice(start), truncated: true };
 }
 
 function normalizeThinkingLevel(value: unknown): ConversationThinkingLevel {
