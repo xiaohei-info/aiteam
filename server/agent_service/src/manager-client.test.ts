@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
-import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerValidationError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
+import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
 
@@ -20,6 +20,39 @@ test("HttpManagerClient keeps employee-scoped memory deletion for management ope
   assert.match(new Headers(requests[0].init.headers).get("traceparent") ?? "", /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
   assert.equal(requests[0].init.method, "DELETE");
   for (const request of requests) assert.doesNotMatch(`${request.url}${request.init.body ?? ""}`, /bank_id/);
+});
+
+test("HttpManagerClient retains employee-scoped memory through the Manager facade", async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return new Response(JSON.stringify({ data: { success: true, async: true, operation_id: "op-1" } }), { status: 201, headers: { "content-type": "application/json" } });
+  });
+
+  const ack = await client.memoryRetain(caller, "employee-1", "summary", { source: "context_reset" }, "retain-key");
+  assert.deepEqual(ack, { operationId: "op-1" });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://manager.test/api/manager/memories/retain");
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(new Headers(requests[0].init.headers).get("Authorization"), "Bearer jwt");
+  assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "retain-key");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { employee_id: "employee-1", content: "summary", metadata: { source: "context_reset" } });
+  assert.doesNotMatch(String(requests[0].init.body), /bank_id/);
+
+  const invalid = new HttpManagerClient("https://manager.test", async () => Response.json({ data: { success: true } }, { status: 201 }));
+  await assert.rejects(() => invalid.memoryRetain(caller, "employee-1", "summary"), (error: unknown) => error instanceof MemoryRetainUnverifiedError && /invalid memory retain acknowledgement/.test(error.message));
+
+  const unreadable = new HttpManagerClient("https://manager.test", async () => new Response("not json", { status: 201 }));
+  await assert.rejects(() => unreadable.memoryRetain(caller, "employee-1", "summary"), MemoryRetainUnverifiedError);
+
+  const tooLarge = new HttpManagerClient("https://manager.test", async () => Response.json({ code: "request_too_large" }, { status: 413 }));
+  await assert.rejects(() => tooLarge.memoryRetain(caller, "employee-1", "summary"), (error: unknown) => error instanceof ManagerUnavailableError && error.httpStatus === 413);
+
+  const timedOut = new HttpManagerClient("https://manager.test", async () => { throw new DOMException("The operation timed out", "TimeoutError"); });
+  await assert.rejects(() => timedOut.memoryRetain(caller, "employee-1", "summary"), ManagerTimeoutError);
+
+  const down = new HttpManagerClient("https://manager.test", async () => { throw new TypeError("fetch failed"); });
+  await assert.rejects(() => down.memoryRetain(caller, "employee-1", "summary"), (error: unknown) => error instanceof ManagerUnavailableError && !(error instanceof ManagerTimeoutError));
 });
 
 test("HttpManagerClient creates departments and appends assignments with the member's own bearer", async () => {

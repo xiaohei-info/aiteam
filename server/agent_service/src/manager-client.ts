@@ -70,6 +70,11 @@ export interface ManagerOwnerResetInput {
   new_password: string;
 }
 
+/** Manager accepted an async Hindsight retain; completion is not implied. */
+export interface MemoryRetainAck {
+  operationId: string;
+}
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -92,6 +97,8 @@ export interface ManagerClient {
   assignEmployeeDepartment?(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
+  /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
+  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
@@ -221,6 +228,19 @@ export class HttpManagerClient implements ManagerClient {
     await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, { employee_id: employeeId }, "DELETE", idempotencyKey);
   }
 
+  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown> = {}, idempotencyKey?: string): Promise<MemoryRetainAck> {
+    const response = await this.requestResponse("/api/manager/memories/retain", caller, { employee_id: employeeId, content, metadata }, undefined, "POST", idempotencyKey);
+    // A 2xx without a usable acknowledgement may still have been accepted, so it is not reported as an outage.
+    let value: { success?: unknown; operation_id?: unknown };
+    try {
+      value = this.unwrap(await response.json()) as { success?: unknown; operation_id?: unknown };
+    } catch (error) {
+      throw new MemoryRetainUnverifiedError("Manager returned an unreadable memory retain acknowledgement", { cause: error });
+    }
+    if (value.success !== true || typeof value.operation_id !== "string" || !value.operation_id) throw new MemoryRetainUnverifiedError("Manager returned an invalid memory retain acknowledgement");
+    return { operationId: value.operation_id };
+  }
+
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
     return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [summary], audits: [] }, undefined, "POST", summary.summary_id));
   }
@@ -267,6 +287,7 @@ export class HttpManagerClient implements ManagerClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch (error) {
+      if ((error as { name?: unknown } | undefined)?.name === "TimeoutError") throw new ManagerTimeoutError("Manager request timed out", { cause: error });
       throw new ManagerUnavailableError("Manager request failed", { cause: error });
     }
     if (!response.ok) {
@@ -275,7 +296,7 @@ export class HttpManagerClient implements ManagerClient {
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
       if (response.status === 422) throw new ManagerValidationError(message, problemCode);
-      throw new ManagerUnavailableError(message);
+      throw new ManagerUnavailableError(message, { status: response.status });
     }
     return response;
   }
@@ -288,9 +309,29 @@ export class HttpManagerClient implements ManagerClient {
 }
 
 export class ManagerUnavailableError extends Error {
-  constructor(message = "Manager is unavailable", options?: { cause?: unknown }) {
-    super(message, options);
+  /** Upstream HTTP status when Manager answered with an unclassified error (for example 413 or 5xx). */
+  readonly httpStatus?: number;
+
+  constructor(message = "Manager is unavailable", options?: { cause?: unknown; status?: number }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+    if (options?.status !== undefined) this.httpStatus = options.status;
     this.name = "ManagerUnavailableError";
+  }
+}
+
+/** The request hit the client-side timeout; Manager may or may not have processed it. */
+export class ManagerTimeoutError extends ManagerUnavailableError {
+  constructor(message = "Manager request timed out", options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ManagerTimeoutError";
+  }
+}
+
+/** Manager answered 2xx to a retain but the acknowledgement could not be read, so retention is unknown. */
+export class MemoryRetainUnverifiedError extends ManagerUnavailableError {
+  constructor(message = "Manager memory retain acknowledgement is invalid", options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "MemoryRetainUnverifiedError";
   }
 }
 

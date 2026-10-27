@@ -168,6 +168,11 @@ export function isMemoryPolicyEnabled(snapshot: FrozenSnapshot): boolean {
   return getMemoryPolicy(snapshot)?.enabled === true;
 }
 
+/** True only when the snapshot explicitly allows retain; legacy/unknown policies never export conversations. */
+export function isMemoryRetainAllowed(snapshot: FrozenSnapshot): boolean {
+  return getMemoryPolicy(snapshot)?.retain === true;
+}
+
 interface MemoryPolicy { enabled: boolean; recall: boolean; retain: boolean; autoRetain: boolean; factOnly: boolean }
 
 function getMemoryPolicy(snapshot: FrozenSnapshot, lease?: HindsightRuntimeConfig): MemoryPolicy | undefined {

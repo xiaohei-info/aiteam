@@ -5,7 +5,9 @@ import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
 import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
-import type { HindsightRuntimeConfig, ManagerClient } from "../manager-client.js";
+import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
+import { appLogger } from "../observability.js";
+import { resetTranscript } from "./session-host.js";
 
 function lease(version: number, token: string): HindsightRuntimeConfig {
   return {
@@ -712,6 +714,351 @@ test("SessionHost aborts an active Pi prompt", async () => {
     assert.equal(slowHost.isPrompting("conversation-2"), false);
     assert.deepEqual(slowHost.activeRuns("conversation-2"), []);
     await slowHost.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+function resetFixtureProjections(fixture: Awaited<ReturnType<typeof createFixture>>, memoryPolicy?: Record<string, unknown>): void {
+  const now = new Date().toISOString();
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "Helper", ...(memoryPolicy ? { memory_policy: memoryPolicy } : {}), tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+}
+
+test("resetContext retains the old branch, keeps visible history, and hides it from the next prompt", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const retained: Array<{ employeeId: string; content: string; metadata?: Record<string, unknown>; idempotencyKey?: string }> = [];
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async (_caller, employeeId, content, metadata, idempotencyKey) => {
+      retained.push({ employeeId, content, metadata, idempotencyKey });
+      return { operationId: "op-1" };
+    },
+  };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("记住了菠萝")]);
+    await host.prompt("conversation-1", "我喜欢菠萝", undefined, caller);
+
+    const result = await host.resetContext("conversation-1", caller);
+    assert.equal(result.reset, true);
+    assert.equal(result.memory_saved, true);
+    assert.equal(result.already_reset, false);
+    assert.equal(result.confirmation_required, false);
+    assert.deepEqual(result.participants, [{ employee_id: "employee-1", reset: true, already_reset: false, reset_id: result.reset_id, message_count: 2, memory_saved: true, memory_reason: "saved", operation_id: "op-1" }]);
+    assert.equal(retained.length, 1);
+    assert.equal(retained[0]!.employeeId, "employee-1");
+    assert.match(retained[0]!.content, /用户: 我喜欢菠萝/);
+    assert.match(retained[0]!.content, /Agent: 记住了菠萝/);
+    assert.equal(retained[0]!.metadata?.source, "context_reset");
+    assert.equal(retained[0]!.metadata?.reset_id, result.reset_id);
+    assert(retained[0]!.idempotencyKey && retained[0]!.idempotencyKey.length <= 128);
+
+    let seen = "";
+    fixture.faux.setResponses([(context) => {
+      seen = JSON.stringify(context.messages);
+      return fauxAssistantMessage("新的开始");
+    }]);
+    await host.prompt("conversation-1", "你好", undefined, caller);
+    assert.equal(seen.includes("菠萝"), false);
+    assert.equal(seen.includes("你好"), true);
+
+    const entries = await host.entries("conversation-1", caller) as Array<Record<string, any>>;
+    const marker = entries.find((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(marker?.data?.reset_id, result.reset_id);
+    assert.equal(marker?.data?.memory_reason, "saved", "the divider can show whether memory was saved");
+    assert.equal(typeof marker?.entry_ref, "string");
+    const texts = JSON.stringify(entries);
+    assert(texts.includes("我喜欢菠萝"), "visible history keeps pre-reset messages");
+    assert(texts.includes("新的开始"));
+    const activities = await host.getOfficeActivities("conversation-1");
+    assert.equal(activities[0]?.last_status, "completed");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("resetContext still resets when memory retain is not enabled, and is a no-op without replies", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let retainCalls = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; return { operationId: "op-unexpected" }; },
+  };
+  try {
+    resetFixtureProjections(fixture);
+    const host = fixture.createHost(undefined, manager);
+    const empty = await host.resetContext("conversation-1", caller);
+    assert.equal(empty.reset, false);
+    assert.equal(empty.participants[0]?.memory_reason, "empty");
+
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("conversation-1", "hello", undefined, caller);
+    const result = await host.resetContext("conversation-1", caller);
+    assert.equal(result.reset, true);
+    assert.equal(result.memory_saved, false);
+    assert.equal(result.participants[0]?.memory_reason, "retain_disabled");
+    assert.equal(retainCalls, 0);
+
+    const again = await host.resetContext("conversation-1", caller);
+    assert.equal(again.reset, true, "a replay reports the earlier reset instead of empty");
+    assert.equal(again.already_reset, true);
+    assert.equal(again.reset_id, result.reset_id);
+    assert.equal(again.participants[0]?.memory_reason, "retain_disabled");
+    assert.equal(again.participants[0]?.reset_id, result.reset_id);
+    const markers = (await host.entries("conversation-1", caller) as Array<Record<string, any>>)
+      .filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1, "a replay must not write a second marker");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("resetContext keeps the context on a transient retain failure until the user proceeds", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let failure: Error = new Error("boom");
+  let retainCalls = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; throw failure; },
+  };
+  const logged: Array<{ event: string; fields: Record<string, unknown> }> = [];
+  const originalLog = appLogger.log;
+  appLogger.log = (_level, event, fields = {}) => { logged.push({ event, fields }); };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("conversation-1", "hello", undefined, caller);
+
+    const cases: Array<[Error, string]> = [
+      [new Error("boom"), "manager_unavailable"],
+      [new ManagerUnavailableError("Manager returned HTTP 503", { status: 503 }), "manager_unavailable"],
+      [new ManagerUnavailableError("Manager returned HTTP 413", { status: 413 }), "too_large"],
+      [new ManagerTimeoutError(), "timeout"],
+      [new MemoryRetainUnverifiedError(), "retention_unverified"],
+      [new ManagerAuthorizationError(401), "unauthorized"],
+    ];
+    for (const [error, reason] of cases) {
+      failure = error;
+      logged.length = 0;
+      const blocked = await host.resetContext("conversation-1", caller);
+      assert.equal(blocked.reset, false, reason);
+      assert.equal(blocked.confirmation_required, true, reason);
+      assert.equal(blocked.participants[0]?.memory_reason, reason);
+      assert.equal(blocked.participants[0]?.reset_id, null);
+      const log = logged.find((item) => item.event === "context_reset.retain_failed");
+      assert.equal(log?.fields.reset_id, blocked.reset_id, `log carries reset_id for ${reason}`);
+      assert.equal(log?.fields.memory_reason, reason);
+    }
+    // The context was kept: the next prompt still sees the earlier message.
+    let seen = "";
+    fixture.faux.setResponses([(context) => { seen = JSON.stringify(context.messages); return fauxAssistantMessage("still here"); }]);
+    await host.prompt("conversation-1", "again", undefined, caller);
+    assert.equal(seen.includes("hello"), true);
+
+    failure = new ManagerTimeoutError();
+    const proceeded = await host.resetContext("conversation-1", caller, { onMemoryFailure: "proceed" });
+    assert.equal(proceeded.reset, true);
+    assert.equal(proceeded.confirmation_required, false);
+    assert.equal(proceeded.participants[0]?.memory_reason, "timeout");
+    assert.equal(proceeded.participants[0]?.operation_id, null);
+    const entries = await host.entries("conversation-1", caller) as Array<Record<string, any>>;
+    const markers = entries.filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0]?.data?.memory_reason, "timeout", "the divider shows why memory was not saved");
+    assert.equal(retainCalls, cases.length + 1);
+    await host.dispose();
+  } finally {
+    appLogger.log = originalLog;
+    await fixture.close();
+  }
+});
+
+test("resetContext resets directly when policy denies the retain or save_memory is false", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let retainCalls = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; throw new ManagerPolicyDeniedError(409); },
+  };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("one")]);
+    await host.prompt("conversation-1", "first", undefined, caller);
+    const denied = await host.resetContext("conversation-1", caller);
+    assert.equal(denied.reset, true);
+    assert.equal(denied.confirmation_required, false);
+    assert.equal(denied.participants[0]?.memory_reason, "policy");
+    assert.equal(retainCalls, 1);
+
+    fixture.faux.setResponses([fauxAssistantMessage("two")]);
+    await host.prompt("conversation-1", "second", undefined, caller);
+    const skipped = await host.resetContext("conversation-1", caller, { saveMemory: false });
+    assert.equal(skipped.reset, true);
+    assert.equal(skipped.participants[0]?.memory_reason, "skipped");
+    assert.equal(retainCalls, 1, "save_memory=false never calls Manager");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("resetContext answers a retry that races the first request with the same reset", async () => {
+  const fixture = await createFixture();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let retainCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retainCalls += 1; await gate; return { operationId: "op-race" }; },
+  };
+  try {
+    resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
+    const host = fixture.createHost(undefined, manager);
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("conversation-1", "hello", undefined, caller);
+
+    const first = host.resetContext("conversation-1", caller);
+    // The retry arrives while the first request is still waiting on Manager.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const retry = host.resetContext("conversation-1", caller);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(retainCalls, 1, "the retry waits behind the first request");
+    release();
+    const [a, b] = await Promise.all([first, retry]);
+    assert.equal(a.reset, true);
+    assert.equal(a.already_reset, false);
+    assert.equal(b.reset, true);
+    assert.equal(b.already_reset, true);
+    assert.equal(b.reset_id, a.reset_id);
+    assert.equal(b.participants[0]?.memory_reason, "saved");
+    assert.equal(b.participants[0]?.operation_id, "op-race");
+    assert.equal(retainCalls, 1);
+    const markers = (await host.entries("conversation-1", caller) as Array<Record<string, any>>)
+      .filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("resetTranscript keeps long Chinese transcripts under the UTF-8 byte budget", () => {
+  const message = (id: string, role: "user" | "assistant", text: string) => ({
+    type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+    message: role === "user" ? { role, content: text, timestamp: 0 } : { role, content: [{ type: "text", text }], timestamp: 0 },
+  }) as unknown as Parameters<typeof resetTranscript>[0][number];
+  const long = "中文记忆内容".repeat(20_000); // 120k chars, ~360 KB in UTF-8
+  const result = resetTranscript([message("m1", "user", long), message("m2", "assistant", "最后一句结论😀")]);
+  assert.equal(result.truncated, true);
+  const bytes = Buffer.byteLength(JSON.stringify(result.content), "utf8");
+  assert(bytes <= 200 * 1024, `content is ${bytes} bytes`);
+  assert(bytes > 190 * 1024, "truncation keeps close to the budget");
+  assert(result.content.length <= 131_072);
+  assert(result.content.endsWith("Agent: 最后一句结论😀"), "newest content is kept");
+  assert(result.content.startsWith("以下是用户主动开启新上下文前的对话记录"), "header is kept");
+  // Manager body limit: content plus envelope and metadata stays under 256 KiB.
+  const body = JSON.stringify({ employee_id: "employee-1", content: result.content, metadata: { source: "context_reset", conversation_id: "c".repeat(64), reset_id: "r".repeat(36), message_count: 2, truncated: true } });
+  assert(Buffer.byteLength(body, "utf8") < 256 * 1024);
+
+  const short = resetTranscript([message("m1", "user", "你好"), message("m2", "assistant", "好的")]);
+  assert.equal(short.truncated, false);
+  assert.match(short.content, /用户: 你好\n\nAgent: 好的$/);
+});
+
+test("resetContext keeps the chosen thinking level and rejects while a prompt is running", async () => {
+  const fixture = await createFixture();
+  const reasoning = fauxProvider({
+    api: "aiteam-reset-api",
+    provider: "aiteam-reset",
+    models: [{ id: "aiteam-reset-1", name: "Reset Test", reasoning: true, contextWindow: 1_000 }],
+    tokensPerSecond: 50,
+  });
+  fixture.modelRuntime.registerNativeProvider(reasoning.provider);
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const host = fixture.createHost(reasoning.getModel());
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: reasoning.getModel().id } },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    await host.setThinkingLevel("conversation-1", "high", caller);
+    reasoning.setResponses([fauxAssistantMessage("first")]);
+    await host.prompt("conversation-1", "one", undefined, caller);
+    const result = await host.resetContext("conversation-1", caller);
+    assert.equal(result.reset, true);
+    assert.equal((await host.getConversationContext("conversation-1", caller)).thinking_level, "high");
+
+    reasoning.setResponses([fauxAssistantMessage("slow ".repeat(200))]);
+    const pending = host.prompt("conversation-1", "two", undefined, caller);
+    for (let attempt = 0; attempt < 40 && host.activeRuns("conversation-1").length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(host.activeRuns("conversation-1").length, 1);
+    await assert.rejects(host.resetContext("conversation-1", caller), /active Pi prompt/);
+    await host.abort("conversation-1");
+    // The abort can land during Session initialization; only the reset rejection matters here.
+    await pending.catch(() => undefined);
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("group resetContext resets only participants with a Session and shares one reset id", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const contexts: string[] = [];
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "Coordinator", revoked: false, synced_at: now },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "worker", display_name: "Worker", revoked: false, synced_at: now },
+    ], [{ solution_instance_id: "solution-reset", tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: "Reset Group", coordinator_employee_id: "coordinator", expert_employee_ids: ["coordinator", "worker"] }], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord-snapshot", display_name: "Coordinator", tool_policy: { allowed_tools: [] } },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "worker-snapshot", display_name: "Worker", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "reset-group", kind: "group", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", solutionRef: "solution-reset", sessionFile: "", workspace: "" });
+    const host = fixture.createHost(undefined, undefined, (_id, authorization) => {
+      contexts.push(authorization?.groupContext ?? "");
+      return createControlledResourceLoader("test system prompt");
+    });
+    await host.initializeConversationParticipants("reset-group", caller);
+    fixture.faux.setResponses([fauxAssistantMessage("旧话题回复")]);
+    await host.prompt("reset-group", "旧话题", undefined, caller);
+
+    const result = await host.resetContext("reset-group", caller);
+    assert.equal(result.reset, true);
+    const reset = result.participants.filter((item) => item.reset).map((item) => item.employee_id);
+    assert.deepEqual(reset, ["coordinator"]);
+    assert.equal(result.participants.some((item) => item.employee_id === "worker" && item.reset), false);
+
+    const entries = await host.entries("reset-group", caller) as Array<Record<string, any>>;
+    const markers = entries.filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0]?.data?.reset_id, result.reset_id);
+
+    contexts.length = 0;
+    fixture.faux.setResponses([fauxAssistantMessage("新话题回复")]);
+    await host.prompt("reset-group", "新话题", undefined, caller);
+    assert.equal(contexts.some((context) => context.includes("旧话题")), false, "group context must not carry pre-reset messages");
+    await host.dispose();
   } finally {
     await fixture.close();
   }
