@@ -433,26 +433,31 @@ def test_newapi_client_uses_server_management_identity_and_normalizes_models():
     assert seen["headers"]["new-api-user"] == "1"
 
 
-def test_newapi_client_reads_full_key_from_verified_token_detail():
+def test_newapi_client_reads_full_key_from_key_reveal_endpoint():
     paths = []
 
     def handler(request: httpx.Request):
         paths.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/api/token/7/key":
+            return httpx.Response(200, json={"success": True, "data": {"key": "relay-key"}})
         if request.url.path == "/api/token/7":
+            # GET carries masked key metadata only; it must never supply the credential.
             return httpx.Response(200, json={"success": True, "data": {
                 "id": 7, "status": 1, "expired_time": -1,
-                "model_limits_enabled": True, "model_limits": "m1", "key": "relay-key",
+                "model_limits_enabled": True, "model_limits": "m1", "key": "rel****key",
             }})
         return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "relay"}]}})
 
     client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
     assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="relay", model_ids=["m1"], remain_quota=10) == (7, "sk-relay-key")
+    assert ("POST", "/api/token/7/key") in paths
     assert ("GET", "/api/token/7") in paths
-    assert not any(path.endswith("/key") for _, path in paths)
 
 
-def test_newapi_client_rejects_masked_verified_token_key():
+def test_newapi_client_rejects_masked_key_from_reveal_endpoint():
     def handler(request: httpx.Request):
+        if request.method == "POST" and request.url.path == "/api/token/7/key":
+            return httpx.Response(200, json={"success": True, "data": {"key": "sk-********"}})
         if request.url.path == "/api/token/7":
             return httpx.Response(200, json={"success": True, "data": {
                 "id": 7, "status": 1, "expired_time": -1,
@@ -520,10 +525,12 @@ def test_newapi_relay_token_reuses_existing_deterministic_name_without_posting_a
 
     def handler(request: httpx.Request):
         calls.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/api/token/7/key":
+            return httpx.Response(200, json={"success": True, "data": {"key": "relay-key"}})
         if request.method == "GET" and request.url.path == "/api/token/7":
             return httpx.Response(200, json={"success": True, "data": {
                 "id": 7, "status": 1, "expired_time": -1,
-                "model_limits_enabled": True, "model_limits": "m1", "key": "relay-key",
+                "model_limits_enabled": True, "model_limits": "m1", "key": "rel****key",
             }})
         assert request.method == "GET" and request.url.path == "/api/token/"
         return httpx.Response(200, json={"success": True, "data": {"items": [{"id": 7, "name": "aiteam-tenant-v1"}]}})
@@ -531,6 +538,7 @@ def test_newapi_relay_token_reuses_existing_deterministic_name_without_posting_a
     client = NewApiAdminClient("http://newapi.test", "admin", "1", transport=httpx.MockTransport(handler))
     assert client.create_relay_token(dashboard_token="dashboard", user_id=2, name="aiteam-tenant-v1", model_ids=["m1"], remain_quota=10) == (7, "sk-relay-key")
     assert ("POST", "/api/token/") not in calls
+    assert ("POST", "/api/token/7/key") in calls
 
 
 def test_newapi_reconcile_relay_token_never_posts_after_an_unknown_create():
@@ -547,6 +555,8 @@ def test_newapi_reconcile_relay_token_never_posts_after_an_unknown_create():
                 "model_limits_enabled": True,
                 "model_limits": "m1",
             }]}})
+        if request.method == "POST" and request.url.path == "/api/token/7/key":
+            return httpx.Response(200, json={"success": True, "data": {"key": "relay-key"}})
         if request.method == "GET" and request.url.path == "/api/token/7":
             return httpx.Response(200, json={"success": True, "data": {
                 "id": 7,
@@ -554,7 +564,7 @@ def test_newapi_reconcile_relay_token_never_posts_after_an_unknown_create():
                 "expired_time": -1,
                 "model_limits_enabled": True,
                 "model_limits": "m1",
-                "key": "relay-key",
+                "key": "rel***key",
             }})
         raise AssertionError((request.method, request.url.path))
 
@@ -596,10 +606,12 @@ def test_newapi_relay_token_polls_after_create_without_retrying_post():
                 "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1",
             }]
             return httpx.Response(200, json={"success": True, "data": {"items": items}})
+        if request.method == "POST" and request.url.path == "/api/token/8/key":
+            return httpx.Response(200, json={"success": True, "data": {"key": "created-key"}})
         if request.method == "GET" and request.url.path == "/api/token/8":
             return httpx.Response(200, json={"success": True, "data": {
                 "id": 8, "status": 1, "expired_time": -1,
-                "model_limits_enabled": True, "model_limits": "m1", "key": "created-key",
+                "model_limits_enabled": True, "model_limits": "m1", "key": "cre***key",
             }})
         raise AssertionError((request.method, request.url.path))
 
@@ -760,11 +772,14 @@ def test_newapi_client_rejects_invalid_login_token_detail_and_keys(monkeypatch):
     client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 8}}
     with pytest.raises(NewApiError, match="mismatched relay token id"):
         client.get_relay_token_detail(dashboard_token="dashboard", user_id=1, token_id=7)
-    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 7, "status": 1, "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1", "key": "*masked"}}
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"key": "*masked"}}
     with pytest.raises(NewApiError, match="full relay token key"):
         client.get_relay_token_key(dashboard_token="dashboard", user_id=1, token_id=7)
-    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"id": 7, "status": 1, "expired_time": -1, "model_limits_enabled": True, "model_limits": "m1", "key": "full"}}
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": {"key": "full"}}
     assert client.get_relay_token_key(dashboard_token="dashboard", user_id=1, token_id=7) == "sk-full"
+    client._request = lambda *_args, **_kwargs: {"success": True, "data": "not-a-dict"}
+    with pytest.raises(NewApiError, match="invalid relay token key payload"):
+        client.get_relay_token_key(dashboard_token="dashboard", user_id=1, token_id=7)
 
 
 def test_newapi_client_reconciles_missing_disabled_and_delete_states(monkeypatch):
