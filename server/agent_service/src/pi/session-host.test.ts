@@ -756,8 +756,9 @@ test("resetContext retains the old branch, keeps visible history, and hides it f
     assert.match(retained[0]!.content, /用户: 我喜欢菠萝/);
     assert.match(retained[0]!.content, /Agent: 记住了菠萝/);
     assert.equal(retained[0]!.metadata?.source, "context_reset");
-    assert.equal(retained[0]!.metadata?.reset_id, result.reset_id);
-    assert(retained[0]!.idempotencyKey && retained[0]!.idempotencyKey.length <= 128);
+    assert.equal(retained[0]!.metadata?.reset_id, undefined, "the random reset id never reaches the retain body");
+    assert.match(String(retained[0]!.metadata?.context_id), /^[0-9a-f]{48}$/);
+    assert.equal(retained[0]!.idempotencyKey, `context-reset:${retained[0]!.metadata?.context_id}`);
 
     let seen = "";
     fixture.faux.setResponses([(context) => {
@@ -828,10 +829,15 @@ test("resetContext keeps the context on a transient retain failure until the use
   const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
   let failure: Error = new Error("boom");
   let retainCalls = 0;
+  const bodies: string[] = [];
   const manager: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
     getOrgTree: async () => ({}),
-    memoryRetain: async () => { retainCalls += 1; throw failure; },
+    memoryRetain: async (_caller, employeeId, content, metadata, idempotencyKey) => {
+      retainCalls += 1;
+      bodies.push(JSON.stringify({ employeeId, content, metadata, idempotencyKey }));
+      throw failure;
+    },
   };
   const logged: Array<{ event: string; fields: Record<string, unknown> }> = [];
   const originalLog = appLogger.log;
@@ -845,6 +851,7 @@ test("resetContext keeps the context on a transient retain failure until the use
     const cases: Array<[Error, string]> = [
       [new Error("boom"), "manager_unavailable"],
       [new ManagerUnavailableError("Manager returned HTTP 503", { status: 503 }), "manager_unavailable"],
+      [new ManagerUnavailableError("Manager returned HTTP 503", { status: 503, problemCode: "memory_retention_unverified" }), "retention_unverified"],
       [new ManagerUnavailableError("Manager returned HTTP 413", { status: 413 }), "too_large"],
       [new ManagerTimeoutError(), "timeout"],
       [new MemoryRetainUnverifiedError(), "retention_unverified"],
@@ -869,6 +876,8 @@ test("resetContext keeps the context on a transient retain failure until the use
     assert.equal(seen.includes("hello"), true);
 
     failure = new ManagerTimeoutError();
+    bodies.length = 0;
+    await host.resetContext("conversation-1", caller);
     const proceeded = await host.resetContext("conversation-1", caller, { onMemoryFailure: "proceed" });
     assert.equal(proceeded.reset, true);
     assert.equal(proceeded.confirmation_required, false);
@@ -878,7 +887,11 @@ test("resetContext keeps the context on a transient retain failure until the use
     const markers = entries.filter((entry) => entry.type === "custom" && entry.customType === "aiteam_context_reset");
     assert.equal(markers.length, 1);
     assert.equal(markers[0]?.data?.memory_reason, "timeout", "the divider shows why memory was not saved");
-    assert.equal(retainCalls, cases.length + 1);
+    assert.equal(retainCalls, cases.length + 2);
+    // Timeout, then the confirmed retry: Manager must receive byte-identical retain requests,
+    // so it derives the same operation_id/document_id for this context.
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[1], bodies[0]);
     await host.dispose();
   } finally {
     appLogger.log = originalLog;
@@ -890,28 +903,39 @@ test("resetContext resets directly when policy denies the retain or save_memory 
   const fixture = await createFixture();
   const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
   let retainCalls = 0;
+  let denial: Error = new ManagerAuthorizationError(403);
   const manager: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
     getOrgTree: async () => ({}),
-    memoryRetain: async () => { retainCalls += 1; throw new ManagerPolicyDeniedError(409); },
+    memoryRetain: async () => { retainCalls += 1; throw denial; },
   };
   try {
     resetFixtureProjections(fixture, { enabled: true, allowed_operations: ["recall", "retain"] });
     const host = fixture.createHost(undefined, manager);
     fixture.faux.setResponses([fauxAssistantMessage("one")]);
     await host.prompt("conversation-1", "first", undefined, caller);
+    // Manager answers 403 for memory-policy denials; that is final, not an expired login.
+    const forbidden = await host.resetContext("conversation-1", caller);
+    assert.equal(forbidden.reset, true);
+    assert.equal(forbidden.confirmation_required, false);
+    assert.equal(forbidden.participants[0]?.memory_reason, "policy");
+    assert.equal(retainCalls, 1);
+
+    denial = new ManagerPolicyDeniedError(409);
+    fixture.faux.setResponses([fauxAssistantMessage("two")]);
+    await host.prompt("conversation-1", "second", undefined, caller);
     const denied = await host.resetContext("conversation-1", caller);
     assert.equal(denied.reset, true);
     assert.equal(denied.confirmation_required, false);
     assert.equal(denied.participants[0]?.memory_reason, "policy");
-    assert.equal(retainCalls, 1);
+    assert.equal(retainCalls, 2);
 
-    fixture.faux.setResponses([fauxAssistantMessage("two")]);
-    await host.prompt("conversation-1", "second", undefined, caller);
+    fixture.faux.setResponses([fauxAssistantMessage("three")]);
+    await host.prompt("conversation-1", "third", undefined, caller);
     const skipped = await host.resetContext("conversation-1", caller, { saveMemory: false });
     assert.equal(skipped.reset, true);
     assert.equal(skipped.participants[0]?.memory_reason, "skipped");
-    assert.equal(retainCalls, 1, "save_memory=false never calls Manager");
+    assert.equal(retainCalls, 2, "save_memory=false never calls Manager");
     await host.dispose();
   } finally {
     await fixture.close();

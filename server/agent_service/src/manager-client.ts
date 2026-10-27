@@ -296,7 +296,7 @@ export class HttpManagerClient implements ManagerClient {
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
       if (response.status === 422) throw new ManagerValidationError(message, problemCode);
-      throw new ManagerUnavailableError(message, { status: response.status });
+      throw new ManagerUnavailableError(message, { status: response.status, problemCode });
     }
     return response;
   }
@@ -311,10 +311,13 @@ export class HttpManagerClient implements ManagerClient {
 export class ManagerUnavailableError extends Error {
   /** Upstream HTTP status when Manager answered with an unclassified error (for example 413 or 5xx). */
   readonly httpStatus?: number;
+  /** Stable problem+json code from that error response, when Manager supplied one. */
+  readonly problemCode?: string;
 
-  constructor(message = "Manager is unavailable", options?: { cause?: unknown; status?: number }) {
+  constructor(message = "Manager is unavailable", options?: { cause?: unknown; status?: number; problemCode?: string }) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     if (options?.status !== undefined) this.httpStatus = options.status;
+    if (options?.problemCode) this.problemCode = options.problemCode;
     this.name = "ManagerUnavailableError";
   }
 }
