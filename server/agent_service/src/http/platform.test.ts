@@ -325,6 +325,45 @@ test("Grant sync maps a Manager transport outage to the formal 503 problem contr
   }
 });
 
+test("Grant sync skips only the employee whose snapshot Manager refuses and retries it next sync", async () => {
+  let brokenFixed = false;
+  const snapshotRequests: string[] = [];
+  const remote = new HttpManagerClient("https://manager.test", async (input, init) => {
+    const body = JSON.parse(String(init?.body)) as { known_versions?: Record<string, string>; employee_id?: string; employee_version?: string };
+    if (String(input).endsWith("/grants/authorized-config")) {
+      const experts = [
+        { employee_id: "ok", employee_slug: "ok", display_name: "OK", version: 1, status: "active", source_template_id: "tpl-ok", avatar_sync_version: "1:avatar-0:p2", model_policy: { model: "test", provider_ref: "test" } },
+        { employee_id: "broken", employee_slug: "broken", display_name: "Broken", version: 1, status: "active", source_template_id: "tpl-broken", avatar_sync_version: "1:avatar-0:p2", model_policy: { model: "test", provider_ref: "test" } },
+      ].filter((expert) => body.known_versions?.[expert.employee_id] !== expert.avatar_sync_version);
+      return new Response(JSON.stringify({ data: { experts, solutions: [], revoked_ids: [] } }));
+    }
+    snapshotRequests.push(body.employee_id!);
+    if (body.employee_id === "broken" && !brokenFixed) {
+      return new Response(JSON.stringify({ title: "Not Found", detail: "platform model unavailable" }), { status: 404 });
+    }
+    return new Response(JSON.stringify({ data: { snapshot: { employee_id: body.employee_id, version: body.employee_version, snapshot_version: `s-${body.employee_id}`, display_name: body.employee_id } } }));
+  });
+  const { fixture, http, base } = await start(remote);
+  const sync = () => fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+  // start() preloads e1; only the employees this test syncs matter here.
+  const synced = () => fixture.store.listLoadedExperts("t1", "m1").filter((expert) => expert.employee_id !== "e1");
+  const loaded = () => synced().map((expert) => expert.employee_id).sort();
+  try {
+    const first = await sync();
+    assert.equal(first.status, 200, await first.text());
+    assert.deepEqual(loaded(), ["ok"]);
+    assert.equal(synced()[0]!.source_template_id, "tpl-ok");
+    assert.deepEqual(fixture.store.listSnapshots("t1", "m1").map((snapshot) => snapshot.employee_id).filter((id) => id !== "e1"), ["ok"]);
+
+    brokenFixed = true;
+    snapshotRequests.length = 0;
+    const second = await sync();
+    assert.equal(second.status, 200, await second.text());
+    assert.deepEqual(snapshotRequests, ["broken"]);
+    assert.deepEqual(loaded(), ["broken", "ok"]);
+  } finally { await http.close(); await fixture.close(); }
+});
+
 test("Lifecycle known_versions deltas update readiness without mutating an already loaded snapshot", async () => {
   let status = "draft";
   let version = 1;

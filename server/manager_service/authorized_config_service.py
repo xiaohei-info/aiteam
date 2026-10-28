@@ -29,6 +29,12 @@ _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.ENTERPRISE_ADMIN.value,
 })
 
+# Expert delta shape revision carried in the sync marker. Bump it when the delta
+# gains a field already-synced Agents must receive without an employee config
+# change (2: source_template_id / source_template_version, which are excluded
+# from snapshot_version and so never bump employee.version on their own).
+_PROJECTION_REVISION = 2
+
 
 def _catalog_row_to_out(row) -> SkillCatalogOut:
     """把 capability_catalog_row 转成安全的 SkillCatalogOut 投影。
@@ -113,7 +119,7 @@ class AuthorizedConfigService:
         for cfg in authorized_configs:
             avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
             avatar_version = avatar.version if avatar else 0
-            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
+            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}:p{_PROJECTION_REVISION}"
             known_ver = req.known_versions.get(cfg.employee_id)
             # Keep employee.version as the config version. The additive sync
             # version lets an avatar-only change trigger one bounded projection

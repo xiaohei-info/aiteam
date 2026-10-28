@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -211,11 +212,11 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     ))
     assert first.experts[0]["version"] == created.version
     assert first.experts[0]["avatar_version"] == 4
-    assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4"
+    assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4:p2"
 
     same = svc.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1",
-        known_versions={created.employee_id: f"{created.version}:avatar-4"},
+        known_versions={created.employee_id: f"{created.version}:avatar-4:p2"},
     ))
     assert same.experts == []
 
@@ -227,7 +228,7 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     )
     no_avatar = no_avatar_service.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1",
-        known_versions={created.employee_id: f"{created.version}:avatar-0"},
+        known_versions={created.employee_id: f"{created.version}:avatar-0:p2"},
     ))
     assert no_avatar.experts == []
     # Agents predating avatar_sync_version only send the employee config
@@ -237,6 +238,48 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
         known_versions={created.employee_id: str(created.version)},
     ))
     assert legacy_no_avatar.experts == []
+
+
+def test_expert_delta_carries_source_template_and_repushes_pre_revision_markers():
+    repo = _FakeRepo()
+    config_svc = EmployeeConfigService(repo)
+    member_svc = _FakeMemberService()
+    member_svc.set_member("t-a", "admin-1")
+    ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
+    recruited = config_svc.create(ctx, _body(), employee_slug="exp-tpl")
+    direct = config_svc.create(ctx, _body(), employee_slug="exp-direct")
+    # Recruitment writes provenance on the employee row; it never bumps employee.version.
+    bucket = repo._bucket(ctx)
+    bucket[recruited.employee_id] = dataclasses.replace(
+        bucket[recruited.employee_id], source_template_id="tpl-hr", source_template_version="v3",
+    )
+    svc = AuthorizedConfigService(
+        config_service=config_svc,
+        grant_service=_FakeGrantService(),
+        member_service=member_svc,
+        avatar_repository=SimpleNamespace(get=lambda _ctx, _employee_id: None),
+    )
+
+    # Agents that synced before the projection revision hold "{v}:avatar-0";
+    # they must receive exactly one delta carrying the provenance field.
+    pre_revision = {
+        recruited.employee_id: f"{recruited.version}:avatar-0",
+        direct.employee_id: f"{direct.version}:avatar-0",
+    }
+    resp = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1", known_versions=pre_revision,
+    ))
+    by_id = {e["employee_id"]: e for e in resp.experts}
+    assert by_id[recruited.employee_id]["source_template_id"] == "tpl-hr"
+    assert by_id[recruited.employee_id]["source_template_version"] == "v3"
+    assert by_id[direct.employee_id]["source_template_id"] is None
+    assert by_id[direct.employee_id]["source_template_version"] is None
+
+    synced = {e["employee_id"]: e["avatar_sync_version"] for e in resp.experts}
+    again = svc.pull(ctx, AuthorizedConfigPullRequest(
+        tenant_id="t-a", member_id="admin-1", known_versions=synced,
+    ))
+    assert again.experts == []
 
 
 def test_role_title_change_reaches_only_authorized_member_delta():

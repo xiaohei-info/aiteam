@@ -1992,7 +1992,26 @@ export class AgentHttpServer {
     };
     try {
       const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions), caller.tenantId, memberId);
-      const snapshots = config.snapshots ?? (this.options.managerClient.pullSnapshots ? await this.options.managerClient.pullSnapshots(caller, config.experts ?? []) : []);
+      let experts = config.experts ?? [];
+      let snapshots = config.snapshots ?? [];
+      if (!config.snapshots && this.options.managerClient.pullSnapshots) {
+        // One employee whose snapshot Manager refuses (404/409: version race,
+        // unavailable platform model/price, deleted employee) must not block
+        // every other employee. Leave that employee untouched locally so its
+        // known version stays stale and the next sync retries it.
+        const synced: LoadedExpertProjection[] = [];
+        snapshots = [];
+        for (const expert of experts) {
+          try {
+            snapshots.push(...await this.options.managerClient.pullSnapshots(caller, [expert]));
+            synced.push(expert);
+          } catch (error) {
+            if (!(error instanceof ManagerPolicyDeniedError)) throw error;
+            this.options.logger?.error(`grants sync skipped employee ${expert.employee_id}: ${error.message}`);
+          }
+        }
+        experts = synced;
+      }
       const skillPackagesAuthoritative = config.skill_packages !== undefined;
       const signedPackages = config.skill_packages ?? [];
       const envVerification = skillSigningVerificationFromEnv();
@@ -2015,7 +2034,7 @@ export class AgentHttpServer {
           throw error;
         }
       }
-      const result = this.options.store.replaceProjections(config.experts ?? [], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
+      const result = this.options.store.replaceProjections(experts, config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
       const hasNewSigningKeySet = Array.isArray(config.skill_signing_keys) && config.skill_signing_keys.length > 0;
       if ((skillPackagesAuthoritative || hasNewSigningKeySet) && this.options.skillCache && (signedPackages.length === 0 || verification.publicKeys !== undefined || (verification.publicKey && verification.keyId))) {
         const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);

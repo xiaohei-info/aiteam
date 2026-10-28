@@ -60,6 +60,8 @@ class _FakeRepo:
             status="draft",
             role_title=kw.get("role_title"),
             department_ids=list(kw.get("department_ids") or []),
+            source_template_id=kw.get("source_template_id"),
+            source_template_version=kw.get("source_template_version"),
         )
         self._bucket(ctx)[row.employee_id] = row
         return row
