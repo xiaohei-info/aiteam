@@ -325,6 +325,57 @@ test("Grant sync maps a Manager transport outage to the formal 503 problem contr
   }
 });
 
+for (const reason of ["employee_unavailable", "employee_dependency_unavailable"] as const) {
+  test(`Readiness blocks ${reason} despite a cached snapshot and recovers after sync`, async () => {
+    let unavailable = true;
+    const remote = new HttpManagerClient("https://manager.test", async (input, init) => {
+      if (String(input).endsWith("/grants/authorized-config")) return Response.json({ data: {
+        experts: [{ employee_id: "e1", display_name: "Helper", version: 2, status: "active", model_policy: { model: "test", provider_ref: "test" } }],
+        solutions: [], revoked_ids: [],
+      } });
+      if (unavailable) return Response.json({ code: reason, detail: "Employee cannot execute" }, { status: 404 });
+      return Response.json({ data: { snapshot: { employee_id: "e1", version: "2", snapshot_version: "recovered", display_name: "Helper" } } });
+    });
+    const { fixture, http, base } = await start(remote);
+    fixture.store.replaceProjections([
+      { employee_id: "e1", tenant_id: "t1", member_id: "m1", version: "1", handle: "helper", display_name: "Helper", status: "active", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test", provider_ref: "test" } },
+    ], [], [{ employee_id: "e1", tenant_id: "t1", member_id: "m1", version: "1", snapshot_version: "cached", display_name: "Helper" }], [], { tenantId: "t1", memberId: "m1" });
+    type Readiness = { employee_id: string; available: boolean; provider: string; reasons: string[] };
+    const readiness = async (): Promise<Readiness[]> => {
+      const list = await fetch(`${base}/api/agent/grants/readiness`, { headers: auth });
+      const single = await fetch(`${base}/api/agent/grants/experts/e1/readiness`, { headers: auth });
+      assert.equal(list.status, 200);
+      assert.equal(single.status, 200);
+      const all = (await list.json() as { data: { experts: Readiness[] } }).data.experts;
+      return [all.find((expert) => expert.employee_id === "e1")!, (await single.json() as { data: Readiness }).data];
+    };
+    const sync = () => fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+    try {
+      assert((await readiness()).every((expert) => expert.available));
+      const blocked = await sync();
+      assert.equal(blocked.status, 200);
+      assert.equal((await blocked.json() as { data: { partial: boolean } }).data.partial, true);
+      assert.equal(fixture.store.listSnapshots("t1", "m1")[0]!.snapshot_version, "cached");
+      for (const expert of await readiness()) {
+        assert.equal(expert.available, false);
+        assert(expert.reasons.includes(reason === "employee_dependency_unavailable"
+          ? "Employee model, provider or price is unavailable" : "Employee is unavailable"));
+        assert.equal(expert.provider, reason === "employee_dependency_unavailable" ? "blocked" : "ready");
+        assert(!expert.reasons.includes("Manager snapshot has no model provider"));
+      }
+      unavailable = false;
+      const recovered = await sync();
+      assert.equal(recovered.status, 200);
+      assert.equal((await recovered.json() as { data: { partial: boolean } }).data.partial, false);
+      for (const expert of await readiness()) {
+        assert.equal(expert.available, true);
+        assert.equal(expert.provider, "ready");
+        assert.deepEqual(expert.reasons, []);
+      }
+    } finally { await http.close(); await fixture.close(); }
+  });
+}
+
 test("Grant sync skips only the employee whose snapshot Manager refuses and retries it next sync", async () => {
   let brokenFixed = false;
   const snapshotRequests: string[] = [];
@@ -339,7 +390,7 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     }
     snapshotRequests.push(body.employee_id!);
     if (body.employee_id === "broken" && !brokenFixed) {
-      return new Response(JSON.stringify({ title: "Not Found", detail: "platform model unavailable" }), { status: 404 });
+      return new Response(JSON.stringify({ code: "employee_dependency_unavailable", title: "Not Found", detail: "platform model unavailable" }), { status: 404 });
     }
     return new Response(JSON.stringify({ data: { snapshot: { employee_id: body.employee_id, version: body.employee_version, snapshot_version: `s-${body.employee_id}`, display_name: body.employee_id } } }));
   });
@@ -354,8 +405,13 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     const firstResult = (await first.json() as { data: { partial: boolean; skipped_employee_ids: string[] } }).data;
     assert.equal(firstResult.partial, true);
     assert.deepEqual(firstResult.skipped_employee_ids, ["broken"]);
-    assert.deepEqual(loaded(), ["ok"]);
-    assert.equal(synced()[0]!.source_template_id, "tpl-ok");
+    assert.deepEqual(loaded(), ["broken", "ok"]);
+    const unavailable = synced().find((expert) => expert.employee_id === "broken")!;
+    assert.equal(unavailable.availability_reason, "employee_dependency_unavailable");
+    assert(unavailable.availability_revision);
+    assert.equal(synced().find((expert) => expert.employee_id === "ok")!.source_template_id, "tpl-ok");
+    await sync();
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_revision, unavailable.availability_revision, "repeated failure retains event identity");
     assert.deepEqual(fixture.store.listSnapshots("t1", "m1").map((snapshot) => snapshot.employee_id).filter((id) => id !== "e1"), ["ok"]);
 
     brokenFixed = true;
@@ -366,6 +422,8 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     assert.equal(secondResult.partial, false);
     assert.deepEqual(secondResult.skipped_employee_ids, []);
     assert.deepEqual(snapshotRequests, ["broken"]);
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_reason, undefined);
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_revision, undefined);
     assert.deepEqual(loaded(), ["broken", "ok"]);
   } finally { await http.close(); await fixture.close(); }
 });

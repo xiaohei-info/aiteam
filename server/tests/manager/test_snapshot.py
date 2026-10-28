@@ -121,6 +121,38 @@ def _services() -> tuple[EmployeeConfigService, _FakeGrantService, _FakeMemberSe
 # ---- 成员级授权（04 §6.2 / 05 F16）----
 
 
+def test_dependency_unavailable_has_explicit_code():
+    from manager_service.snapshot_service import EmployeeDependencyUnavailable
+    from shared.contracts.snapshot import ModelPolicy
+
+    class Catalog:
+        def list_platform_catalog(self, *, tenant_id=None):
+            return {"providers": [], "models": []}
+
+    config = EmployeeConfigOut(
+        employee_id="e1", employee_slug="e1", version=1, status="active",
+        display_name="Employee", model_policy=ModelPolicy(model="m1", provider_ref="p1"),
+    )
+    svc = SnapshotService(config_service=None, grant_service=None, member_service=None, platform_catalog=Catalog())
+    with pytest.raises(EmployeeDependencyUnavailable) as exc:
+        svc._resolve_pricing(config, tenant_id="t-a")
+    assert exc.value.code == "employee_dependency_unavailable"
+
+
+def test_non_active_execution_has_explicit_code():
+    from manager_service.snapshot_service import EmployeeUnavailable
+
+    class Config:
+        def get(self, _ctx, *, employee_id):
+            return EmployeeConfigOut(employee_id=employee_id, employee_slug="e1", version=1, status="archived", display_name="Employee")
+
+    svc = SnapshotService(config_service=Config(), grant_service=None, member_service=None)
+    with pytest.raises(EmployeeUnavailable) as exc:
+        svc._ensure_runnable(_ctx("t-a"), employee_id="e1")
+    assert exc.value.code == "employee_unavailable"
+
+
+
 def test_unauthorized_member_is_forbidden():
     """未被 grant 该专家的 member → 403（不可拉取执行配置）。"""
     config_svc, _grant, member_svc, snap_svc = _services()

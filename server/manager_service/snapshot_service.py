@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 _SNAPSHOT_PULL_DENIED = "snapshot_pull_denied"
 
 
+class EmployeeUnavailable(NotFound):
+    code = "employee_unavailable"
+
+
+class EmployeeDependencyUnavailable(NotFound):
+    code = "employee_dependency_unavailable"
+
+
 class KnowledgeBindingReader(Protocol):
     def list_all(self, ctx: TenantContext, *, employee_id: str): ...
 
@@ -96,7 +104,7 @@ class SnapshotService:
         """Reject non-active employees before an execution backend is contacted."""
         config = self._config.get(ctx, employee_id=employee_id)
         if config.status != "active":
-            raise NotFound("employee is not runnable")
+            raise EmployeeUnavailable("employee is not runnable")
 
     def generate(
         self,
@@ -161,18 +169,18 @@ class SnapshotService:
             None,
         )
         if not provider or provider.get("status") != "published":
-            raise NotFound("platform provider is unavailable")
+            raise EmployeeDependencyUnavailable("platform provider is unavailable")
         for item in catalog.get("models", []):
             model = item.get("model") or {}
             rate = item.get("rate") or {}
             if model.get("provider_id") != policy.provider_ref or model.get("model_id") != policy.model:
                 continue
             if model.get("status") != "published":
-                raise NotFound("platform model is unavailable")
+                raise EmployeeDependencyUnavailable("platform model is unavailable")
             if rate.get("pricing_status") != "known":
-                raise NotFound("platform model price is unknown")
+                raise EmployeeDependencyUnavailable("platform model price is unknown")
             return PricingSnapshot(**{key: rate.get(key) for key in PricingSnapshot.model_fields})
-        raise NotFound("platform model is unavailable")
+        raise EmployeeDependencyUnavailable("platform model is unavailable")
 
     def _authorize(self, ctx: TenantContext, *, member_id: str, employee_id: str) -> None:
         """成员级授权 enforcement（04 §6.2 / 05 F16）。

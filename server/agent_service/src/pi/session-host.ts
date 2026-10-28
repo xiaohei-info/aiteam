@@ -1241,6 +1241,11 @@ export class SessionHost {
     const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
     const expert = experts.find((item) => item.employee_id === employeeId);
     if (!expert || expert.revoked) throw new SessionAuthorizationError();
+    if (expert.availability_reason || (typeof expert.status === "string" && expert.status !== "active")) {
+      throw new SessionAuthorizationError(expert.availability_reason === "employee_dependency_unavailable"
+        ? "Employee model or provider is unavailable"
+        : "Employee is unavailable");
+    }
     let rosterEmployeeIds: ReadonlySet<string> | undefined;
     if (metadata?.kind === "group" || metadata?.coordinator_employee_id) {
       rosterEmployeeIds = new Set(this.options.store.listConversationParticipants(record.conversationId).map((item) => item.employee_id));

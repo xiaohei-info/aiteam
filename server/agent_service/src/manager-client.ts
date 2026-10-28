@@ -294,7 +294,7 @@ export class HttpManagerClient implements ManagerClient {
       if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
       const { code: problemCode, detail } = await readManagerProblem(response);
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
-      if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message);
+      if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message, problemCode);
       if (response.status === 422) throw new ManagerValidationError(message, problemCode);
       throw new ManagerUnavailableError(message, { status: response.status, problemCode });
     }
@@ -359,7 +359,7 @@ export class ManagerAuthorizationError extends ManagerUnavailableError {
 
 /** A revoked, disabled, or policy-denied runtime grant must never use an old cache entry. */
 export class ManagerPolicyDeniedError extends ManagerUnavailableError {
-  constructor(readonly status: 404 | 409, message = "Manager runtime policy denied the request") {
+  constructor(readonly status: 404 | 409, message = "Manager runtime policy denied the request", readonly code = "") {
     super(message);
     this.name = "ManagerPolicyDeniedError";
   }

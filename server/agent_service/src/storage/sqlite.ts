@@ -152,6 +152,8 @@ export interface LoadedExpertProjection {
   display_name: string;
   revoked: boolean;
   synced_at: string;
+  availability_reason?: string;
+  availability_revision?: string;
   role_title?: string | null;
   department_ids?: string[];
   model_policy?: Record<string, unknown> | null;
@@ -1145,7 +1147,7 @@ export class AgentSqliteStore {
       const syncVersion = typeof expert.avatar_sync_version === "string" && expert.avatar_sync_version.length > 0
         ? expert.avatar_sync_version
         : expert.version;
-      versions[expert.employee_id] = syncVersion;
+      versions[expert.employee_id] = expert.availability_reason ? `unavailable:${syncVersion}` : syncVersion;
     }
     const solutions = this.db.prepare("SELECT solution_instance_id, version FROM loaded_solution_projection WHERE tenant_id = ? AND (member_id = '' OR member_id = ?)").all(tenantId, memberId) as { solution_instance_id: string; version: string }[];
     for (const solution of solutions) versions[solution.solution_instance_id] = solution.version;

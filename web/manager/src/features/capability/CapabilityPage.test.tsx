@@ -76,9 +76,9 @@ describe("CapabilityPage", () => {
     mockApi();
     renderPage();
     expect(await screen.findByRole("heading", { level: 1, name: "能力目录" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "技能目录" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "连接器目录" })).toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "记忆策略目录" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "技能目录" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "连接器目录" })).toBeInTheDocument();
+    expect(await screen.findByRole("table", { name: "记忆策略目录" })).toBeInTheDocument();
   });
 
   it("只读成员不显示新增、编辑和删除操作", async () => {
