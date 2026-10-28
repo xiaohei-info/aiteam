@@ -29,12 +29,6 @@ _GRANT_EXEMPT_ROLES = frozenset({
     EnterpriseRole.ENTERPRISE_ADMIN.value,
 })
 
-# Expert delta shape revision carried in the sync marker. Bump it when the delta
-# gains a field already-synced Agents must receive without an employee config
-# change (2: source_template_id / source_template_version, which are excluded
-# from snapshot_version and so never bump employee.version on their own).
-_PROJECTION_REVISION = 2
-
 
 def _catalog_row_to_out(row) -> SkillCatalogOut:
     """把 capability_catalog_row 转成安全的 SkillCatalogOut 投影。
@@ -119,23 +113,14 @@ class AuthorizedConfigService:
         for cfg in authorized_configs:
             avatar = self._avatars.get(ctx, cfg.employee_id) if self._avatars is not None else None
             avatar_version = avatar.version if avatar else 0
-            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}:p{_PROJECTION_REVISION}"
+            avatar_sync_version = f"{cfg.version}:avatar-{avatar_version}"
             known_ver = req.known_versions.get(cfg.employee_id)
-            # Keep employee.version as the config version. The additive sync
-            # version lets an avatar-only change trigger one bounded projection
-            # delta without changing snapshot/config CAS semantics.
-            if self._avatars is None:
-                changed = str(cfg.version) != known_ver
-            else:
-                # Keep old Agents (which only persisted employee.version)
-                # compatible when no tenant avatar exists. Once an avatar is
-                # present, the additive sync version is required so an
-                # avatar-only change cannot be mistaken for an unchanged
-                # employee config.
-                accepted_versions = {avatar_sync_version}
-                if avatar_version == 0:
-                    accepted_versions.add(str(cfg.version))
-                changed = known_ver not in accepted_versions
+            # The config revision also covers one-time projection backfills. Do
+            # not add a second projection revision to the existing sync marker.
+            accepted_versions = {avatar_sync_version}
+            if avatar_version == 0:
+                accepted_versions.add(str(cfg.version))
+            changed = known_ver not in accepted_versions
             if changed:
                 policy = self._knowledge_policy.resolve(
                     ctx, employee_id=cfg.employee_id, tools=cfg.tools, version=str(cfg.version),

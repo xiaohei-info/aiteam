@@ -212,11 +212,11 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     ))
     assert first.experts[0]["version"] == created.version
     assert first.experts[0]["avatar_version"] == 4
-    assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4:p2"
+    assert first.experts[0]["avatar_sync_version"] == f"{created.version}:avatar-4"
 
     same = svc.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1",
-        known_versions={created.employee_id: f"{created.version}:avatar-4:p2"},
+        known_versions={created.employee_id: f"{created.version}:avatar-4"},
     ))
     assert same.experts == []
 
@@ -228,7 +228,7 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     )
     no_avatar = no_avatar_service.pull(ctx, AuthorizedConfigPullRequest(
         tenant_id="t-a", member_id="admin-1",
-        known_versions={created.employee_id: f"{created.version}:avatar-0:p2"},
+        known_versions={created.employee_id: f"{created.version}:avatar-0"},
     ))
     assert no_avatar.experts == []
     # Agents predating avatar_sync_version only send the employee config
@@ -240,7 +240,9 @@ def test_avatar_only_change_uses_additive_sync_version_without_config_cas_change
     assert legacy_no_avatar.experts == []
 
 
-def test_expert_delta_carries_source_template_and_repushes_pre_revision_markers():
+@pytest.mark.parametrize("with_avatar_repository", [False, True])
+@pytest.mark.parametrize("known_format", ["plain", "avatar"])
+def test_expert_provenance_backfill_uses_config_revision(with_avatar_repository, known_format):
     repo = _FakeRepo()
     config_svc = EmployeeConfigService(repo)
     member_svc = _FakeMemberService()
@@ -248,36 +250,35 @@ def test_expert_delta_carries_source_template_and_repushes_pre_revision_markers(
     ctx = _ctx("t-a", roles=["owner"], user_id="admin-1")
     recruited = config_svc.create(ctx, _body(), employee_slug="exp-tpl")
     direct = config_svc.create(ctx, _body(), employee_slug="exp-direct")
-    # Recruitment writes provenance on the employee row; it never bumps employee.version.
     bucket = repo._bucket(ctx)
+    # Migration 0047 advances existing template-backed employees once.
     bucket[recruited.employee_id] = dataclasses.replace(
         bucket[recruited.employee_id], source_template_id="tpl-hr", source_template_version="v3",
+        version=recruited.version + 1,
     )
     svc = AuthorizedConfigService(
         config_service=config_svc,
         grant_service=_FakeGrantService(),
         member_service=member_svc,
-        avatar_repository=SimpleNamespace(get=lambda _ctx, _employee_id: None),
+        avatar_repository=SimpleNamespace(get=lambda _ctx, _employee_id: None) if with_avatar_repository else None,
     )
+    def known(version):
+        return str(version) if known_format == "plain" else f"{version}:avatar-0"
 
-    # Agents that synced before the projection revision hold "{v}:avatar-0";
-    # they must receive exactly one delta carrying the provenance field.
-    pre_revision = {
-        recruited.employee_id: f"{recruited.version}:avatar-0",
-        direct.employee_id: f"{direct.version}:avatar-0",
-    }
+    before = {recruited.employee_id: known(recruited.version), direct.employee_id: known(direct.version)}
     resp = svc.pull(ctx, AuthorizedConfigPullRequest(
-        tenant_id="t-a", member_id="admin-1", known_versions=pre_revision,
+        tenant_id="t-a", member_id="admin-1", known_versions=before,
     ))
-    by_id = {e["employee_id"]: e for e in resp.experts}
-    assert by_id[recruited.employee_id]["source_template_id"] == "tpl-hr"
-    assert by_id[recruited.employee_id]["source_template_version"] == "v3"
-    assert by_id[direct.employee_id]["source_template_id"] is None
-    assert by_id[direct.employee_id]["source_template_version"] is None
-
-    synced = {e["employee_id"]: e["avatar_sync_version"] for e in resp.experts}
+    assert len(resp.experts) == 1
+    expert = resp.experts[0]
+    assert expert["employee_id"] == recruited.employee_id
+    assert expert["version"] == recruited.version + 1
+    assert expert["source_template_id"] == "tpl-hr"
+    assert expert["source_template_version"] == "v3"
+    assert expert["avatar_sync_version"] == f"{recruited.version + 1}:avatar-0"
+    before[recruited.employee_id] = expert["avatar_sync_version"]
     again = svc.pull(ctx, AuthorizedConfigPullRequest(
-        tenant_id="t-a", member_id="admin-1", known_versions=synced,
+        tenant_id="t-a", member_id="admin-1", known_versions=before,
     ))
     assert again.experts == []
 

@@ -332,8 +332,8 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     const body = JSON.parse(String(init?.body)) as { known_versions?: Record<string, string>; employee_id?: string; employee_version?: string };
     if (String(input).endsWith("/grants/authorized-config")) {
       const experts = [
-        { employee_id: "ok", employee_slug: "ok", display_name: "OK", version: 1, status: "active", source_template_id: "tpl-ok", avatar_sync_version: "1:avatar-0:p2", model_policy: { model: "test", provider_ref: "test" } },
-        { employee_id: "broken", employee_slug: "broken", display_name: "Broken", version: 1, status: "active", source_template_id: "tpl-broken", avatar_sync_version: "1:avatar-0:p2", model_policy: { model: "test", provider_ref: "test" } },
+        { employee_id: "ok", employee_slug: "ok", display_name: "OK", version: 1, status: "active", source_template_id: "tpl-ok", avatar_sync_version: "1:avatar-0", model_policy: { model: "test", provider_ref: "test" } },
+        { employee_id: "broken", employee_slug: "broken", display_name: "Broken", version: 1, status: "active", source_template_id: "tpl-broken", avatar_sync_version: "1:avatar-0", model_policy: { model: "test", provider_ref: "test" } },
       ].filter((expert) => body.known_versions?.[expert.employee_id] !== expert.avatar_sync_version);
       return new Response(JSON.stringify({ data: { experts, solutions: [], revoked_ids: [] } }));
     }
@@ -350,7 +350,10 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
   const loaded = () => synced().map((expert) => expert.employee_id).sort();
   try {
     const first = await sync();
-    assert.equal(first.status, 200, await first.text());
+    assert.equal(first.status, 200, await first.clone().text());
+    const firstResult = (await first.json() as { data: { partial: boolean; skipped_employee_ids: string[] } }).data;
+    assert.equal(firstResult.partial, true);
+    assert.deepEqual(firstResult.skipped_employee_ids, ["broken"]);
     assert.deepEqual(loaded(), ["ok"]);
     assert.equal(synced()[0]!.source_template_id, "tpl-ok");
     assert.deepEqual(fixture.store.listSnapshots("t1", "m1").map((snapshot) => snapshot.employee_id).filter((id) => id !== "e1"), ["ok"]);
@@ -358,11 +361,63 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     brokenFixed = true;
     snapshotRequests.length = 0;
     const second = await sync();
-    assert.equal(second.status, 200, await second.text());
+    assert.equal(second.status, 200, await second.clone().text());
+    const secondResult = (await second.json() as { data: { partial: boolean; skipped_employee_ids: string[] } }).data;
+    assert.equal(secondResult.partial, false);
+    assert.deepEqual(secondResult.skipped_employee_ids, []);
     assert.deepEqual(snapshotRequests, ["broken"]);
     assert.deepEqual(loaded(), ["broken", "ok"]);
   } finally { await http.close(); await fixture.close(); }
 });
+
+for (const status of [404, 409] as const) {
+  test(`Grant sync reports skipped ${status} employees, retains their old version, and still applies revocations`, async () => {
+    const remote: ManagerClient = {
+      pullAuthorizedConfig: async () => ({ experts: [{ employee_id: "broken", tenant_id: "t1", member_id: "m1", version: "2", handle: "broken", display_name: "Broken", revoked: false, synced_at: "2026-01-01T00:00:00.000Z" }], solutions: [], revoked_ids: ["e1"] }),
+      pullSnapshots: async () => { throw new ManagerPolicyDeniedError(status); },
+      getOrgTree: async () => ({}),
+    };
+    const { fixture, http, base } = await start(remote);
+    fixture.store.replaceProjections(
+      [{ employee_id: "broken", tenant_id: "t1", member_id: "m1", version: "1", handle: "broken", display_name: "Old", revoked: false, synced_at: "2026-01-01T00:00:00.000Z" }], [],
+      [{ employee_id: "broken", tenant_id: "t1", member_id: "m1", version: "1", snapshot_version: "old-snapshot", display_name: "Old" }], [], { tenantId: "t1", memberId: "m1" },
+    );
+    const knownBefore = fixture.store.knownProjectionVersions("t1", "m1").broken;
+    try {
+      const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+      assert.equal(response.status, 200);
+      const data = (await response.json() as { data: { partial: boolean; skipped_employee_ids: string[]; revoked: number } }).data;
+      assert.equal(data.partial, true);
+      assert.deepEqual(data.skipped_employee_ids, ["broken"]);
+      assert.equal(data.revoked, 1);
+      assert.equal(fixture.store.knownProjectionVersions("t1", "m1").broken, knownBefore);
+      assert.equal(fixture.store.listLoadedExperts("t1", "m1").find((e) => e.employee_id === "broken")?.version, "1");
+      assert.equal(fixture.store.listSnapshots("t1", "m1").find((s) => s.employee_id === "broken")?.snapshot_version, "old-snapshot");
+      assert(!fixture.store.listLoadedExperts("t1", "m1").some((e) => e.employee_id === "e1" && !e.revoked));
+    } finally { await http.close(); await fixture.close(); }
+  });
+}
+
+for (const status of [401, 403, 500] as const) {
+  test(`Grant sync does not downgrade snapshot ${status} into partial success`, async () => {
+    const remote = new HttpManagerClient("https://manager.test", async (input, init) => {
+      if (String(input).endsWith("/grants/authorized-config")) return Response.json({ data: {
+        experts: ["ok", "broken"].map((employee_id) => ({ employee_id, version: 1, display_name: employee_id })),
+        solutions: [], revoked_ids: [],
+      } });
+      const body = JSON.parse(String(init?.body)) as { employee_id: string; employee_version: string };
+      if (body.employee_id === "broken") return Response.json({ detail: "Snapshot rejected" }, { status });
+      return Response.json({ data: { snapshot: { employee_id: body.employee_id, version: body.employee_version, snapshot_version: "ok-snapshot", display_name: "OK" } } });
+    });
+    const { fixture, http, base } = await start(remote);
+    try {
+      const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
+      assert.equal(response.status, status === 500 ? 503 : status);
+      assert(!fixture.store.listLoadedExperts("t1", "m1").some((e) => e.employee_id === "ok"));
+      assert(!fixture.store.listSnapshots("t1", "m1").some((s) => s.employee_id === "ok"));
+    } finally { await http.close(); await fixture.close(); }
+  });
+}
 
 test("Lifecycle known_versions deltas update readiness without mutating an already loaded snapshot", async () => {
   let status = "draft";

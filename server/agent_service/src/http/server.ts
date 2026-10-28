@@ -490,7 +490,7 @@ const ExpertReadiness = Type.Object({
 }, { $id: "ExpertReadiness", additionalProperties: false, description: "单个专家的本地执行就绪状态；专家不存在时仍返回 200 和 available=false。" });
 const ExpertReadinessEnvelope = Type.Object({ data: Type.Ref("ExpertReadiness") }, { $id: "ExpertReadinessEnvelope", description: "单个专家就绪状态响应。" });
 const ReadinessEnvelope = Type.Object({ data: Type.Object({ runtime: Type.Ref("ReadinessState"), runtime_reason: Type.Optional(Type.String({ description: "runtime 不可用原因。" })), experts: Type.Array(Type.Ref("ExpertReadiness"), { description: "各授权专家状态。" }) }, { additionalProperties: false }) }, { $id: "ReadinessEnvelope", description: "Agent runtime 与已装载专家的就绪状态响应。" });
-const GrantSyncEnvelope = Type.Object({ data: Type.Object({ ok: Type.Boolean({ const: true, description: "同步是否成功；成功响应固定为 true。" }), upserted: Type.Integer({ minimum: 0, description: "写入或更新的投影数量。" }), revoked: Type.Integer({ minimum: 0, description: "撤销并移除的投影数量。" }) }, { additionalProperties: false }) }, { $id: "GrantSyncEnvelope", description: "授权同步结果；投影正文通过后续本地 grants 接口读取。" });
+const GrantSyncEnvelope = Type.Object({ data: Type.Object({ ok: Type.Boolean({ const: true, description: "同步请求是否完成；partial=true 表示仍有员工未更新。" }), upserted: Type.Integer({ minimum: 0, description: "写入或更新的投影数量。" }), revoked: Type.Integer({ minimum: 0, description: "撤销并移除的投影数量。" }), partial: Type.Optional(Type.Boolean({ description: "是否有员工因快照 404/409 未更新；客户端应提示部分同步并允许稍后重试。" })), skipped_employee_ids: Type.Optional(Type.Array(Type.String({ minLength: 1, description: "本次未更新的员工 ID。" }), { description: "快照被 Manager 拒绝的员工；保留旧版本，下次同步重新请求。" })) }, { additionalProperties: false }) }, { $id: "GrantSyncEnvelope", description: "授权同步结果；partial/未更新员工可用于提示，投影正文通过后续本地 grants 接口读取。" });
 const UsageFlushEnvelope = Type.Object({ data: Type.Object({ sent: Type.Array(Type.String({ minLength: 1, description: "摘要 ID。" }), { description: "已成功上报的摘要 ID。" }), failed: Type.Array(Type.String({ minLength: 1, description: "摘要 ID。" }), { description: "本次上报失败、仍留在本地 outbox 的摘要 ID。" }) }, { additionalProperties: false }) }, { $id: "UsageFlushEnvelope", description: "用量 outbox 刷新结果；失败项不会被误标记为成功。" });
 const OrgTreeNode = Type.Object({
   role_title: EmployeeDisplayProperties.role_title,
@@ -1993,6 +1993,7 @@ export class AgentHttpServer {
     try {
       const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions), caller.tenantId, memberId);
       let experts = config.experts ?? [];
+      const skippedEmployeeIds: string[] = [];
       let snapshots = config.snapshots ?? [];
       if (!config.snapshots && this.options.managerClient.pullSnapshots) {
         // One employee whose snapshot Manager refuses (404/409: version race,
@@ -2007,7 +2008,8 @@ export class AgentHttpServer {
             synced.push(expert);
           } catch (error) {
             if (!(error instanceof ManagerPolicyDeniedError)) throw error;
-            this.options.logger?.error(`grants sync skipped employee ${expert.employee_id}: ${error.message}`);
+            skippedEmployeeIds.push(expert.employee_id);
+            appLogger.log("warn", "grants.sync_employee_skipped", { employee_id: expert.employee_id, status: error.status });
           }
         }
         experts = synced;
@@ -2046,7 +2048,7 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative });
       }
-      this.writeJson(response, 200, { data: { ok: true, ...result } });
+      this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
       if (error instanceof ManagerUnavailableError || error instanceof TypeError) throw new HttpProblem(503, "manager_unavailable", "Manager sync is unavailable");
