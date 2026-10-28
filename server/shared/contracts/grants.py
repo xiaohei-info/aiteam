@@ -52,3 +52,5 @@ class LoadedExpertProjection(BaseModel):
     synced_at: datetime | None = Field(default=None, description="最后同步时间（UTC）")
     revoked: bool = Field(default=False, description="授权撤销后置 true 并从可用列表移除")
     handle: str = Field(default="", description="ASCII 稳定句柄，供 roster / @提及使用；后端未给时回退 employee_id")
+    source_template_id: str | None = Field(default=None, description="来源人才模板 ID（直接招募专家时存在）")
+    source_template_version: str | None = Field(default=None, description="来源人才模板版本")

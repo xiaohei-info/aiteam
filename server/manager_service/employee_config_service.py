@@ -251,6 +251,8 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         status=row.status,
         archive_reason=row.archive_reason,
         archived_at=row.archived_at,
+        source_template_id=row.source_template_id,
+        source_template_version=row.source_template_version,
     )
 
 
