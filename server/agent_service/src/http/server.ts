@@ -454,6 +454,8 @@ const SkillSigningKeyMetadata = Type.Object({
 }, { $id: "SkillSigningKeyMetadata", additionalProperties: false, description: "技能签名公钥元数据；不包含私钥。" });
 const ExpertProjection = Type.Object({
   ...EmployeeDisplayProperties,
+  availability_reason: Type.Optional(Type.String({ description: "本机持久化的员工不可用原因；缺省表示没有同步阻断。" })),
+  availability_revision: Type.Optional(Type.String({ description: "本次不可用事件标识；恢复后再次不可用会更换。" })),
   employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL；优先本地 override，其次 Manager tenant 头像，再次模板/默认 fallback。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("manager"), Type.Literal("template")], { description: "头像来源优先级。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本；不改变 employee 配置 version。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本；用于 known_versions。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
 }, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影；未知扩展字段由 Manager 配置透传，但不包含凭据。", "x-dynamic-json": true });
 const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
@@ -1993,6 +1995,8 @@ export class AgentHttpServer {
     try {
       const config = normalizeAuthorizedConfig(await this.options.managerClient.pullAuthorizedConfig(caller, knownVersions), caller.tenantId, memberId);
       let experts = config.experts ?? [];
+      const previousExperts = this.options.store.listLoadedExperts(caller.tenantId, memberId);
+      const unavailableExperts: LoadedExpertProjection[] = [];
       const skippedEmployeeIds: string[] = [];
       let snapshots = config.snapshots ?? [];
       if (!config.snapshots && this.options.managerClient.pullSnapshots) {
@@ -2009,6 +2013,18 @@ export class AgentHttpServer {
           } catch (error) {
             if (!(error instanceof ManagerPolicyDeniedError)) throw error;
             skippedEmployeeIds.push(expert.employee_id);
+            // Keep configuration version stale, but persist an explicit execution block.
+            // An old server's unclassified 404/409 is only a transient sync failure.
+            if (error.code === "employee_unavailable" || error.code === "employee_dependency_unavailable") {
+              const previous = previousExperts.find((item) => item.employee_id === expert.employee_id);
+              unavailableExperts.push({
+                ...(previous ?? expert),
+                availability_reason: error.code,
+                availability_revision: previous?.availability_reason === error.code
+                  ? previous.availability_revision ?? randomUUID()
+                  : randomUUID(),
+              });
+            }
             appLogger.log("warn", "grants.sync_employee_skipped", { employee_id: expert.employee_id, status: error.status });
           }
         }
@@ -2036,7 +2052,7 @@ export class AgentHttpServer {
           throw error;
         }
       }
-      const result = this.options.store.replaceProjections(experts, config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
+      const result = this.options.store.replaceProjections([...experts.map((expert) => ({ ...expert, availability_reason: undefined, availability_revision: undefined })), ...unavailableExperts], config.solutions ?? [], snapshots, config.revoked_ids ?? [], { tenantId: caller.tenantId!, memberId });
       const hasNewSigningKeySet = Array.isArray(config.skill_signing_keys) && config.skill_signing_keys.length > 0;
       if ((skillPackagesAuthoritative || hasNewSigningKeySet) && this.options.skillCache && (signedPackages.length === 0 || verification.publicKeys !== undefined || (verification.publicKey && verification.keyId))) {
         const experts = this.options.store.listLoadedExperts(caller.tenantId, memberId);

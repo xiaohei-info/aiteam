@@ -339,7 +339,7 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     }
     snapshotRequests.push(body.employee_id!);
     if (body.employee_id === "broken" && !brokenFixed) {
-      return new Response(JSON.stringify({ title: "Not Found", detail: "platform model unavailable" }), { status: 404 });
+      return new Response(JSON.stringify({ code: "employee_dependency_unavailable", title: "Not Found", detail: "platform model unavailable" }), { status: 404 });
     }
     return new Response(JSON.stringify({ data: { snapshot: { employee_id: body.employee_id, version: body.employee_version, snapshot_version: `s-${body.employee_id}`, display_name: body.employee_id } } }));
   });
@@ -354,8 +354,13 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     const firstResult = (await first.json() as { data: { partial: boolean; skipped_employee_ids: string[] } }).data;
     assert.equal(firstResult.partial, true);
     assert.deepEqual(firstResult.skipped_employee_ids, ["broken"]);
-    assert.deepEqual(loaded(), ["ok"]);
-    assert.equal(synced()[0]!.source_template_id, "tpl-ok");
+    assert.deepEqual(loaded(), ["broken", "ok"]);
+    const unavailable = synced().find((expert) => expert.employee_id === "broken")!;
+    assert.equal(unavailable.availability_reason, "employee_dependency_unavailable");
+    assert(unavailable.availability_revision);
+    assert.equal(synced().find((expert) => expert.employee_id === "ok")!.source_template_id, "tpl-ok");
+    await sync();
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_revision, unavailable.availability_revision, "repeated failure retains event identity");
     assert.deepEqual(fixture.store.listSnapshots("t1", "m1").map((snapshot) => snapshot.employee_id).filter((id) => id !== "e1"), ["ok"]);
 
     brokenFixed = true;
@@ -366,6 +371,8 @@ test("Grant sync skips only the employee whose snapshot Manager refuses and retr
     assert.equal(secondResult.partial, false);
     assert.deepEqual(secondResult.skipped_employee_ids, []);
     assert.deepEqual(snapshotRequests, ["broken"]);
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_reason, undefined);
+    assert.equal(synced().find((expert) => expert.employee_id === "broken")!.availability_revision, undefined);
     assert.deepEqual(loaded(), ["broken", "ok"]);
   } finally { await http.close(); await fixture.close(); }
 });
