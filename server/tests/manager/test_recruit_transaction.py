@@ -45,7 +45,7 @@ def state(router, ctx):
 
 
 @pytest.mark.parametrize("repository,method", [
-    ("employees", "create"), ("employees", "transition_status"), ("orders", "create"), ("orders", "update"),
+    ("employees", "create"), ("employees", "transition_status"), ("orders", "claim_provisioning"), ("orders", "update"),
     ("grants", "extend"), ("grants", "upsert"), ("recruit", "create_solution_instance"),
     ("recruit", "append_recruit_event"), ("recruit", "create_solution_apply_record"),
 ])
@@ -69,6 +69,36 @@ def test_every_local_publication_failure_rolls_back_preexisting_audience(recruit
     assert state(router, ctx) == before
     grant = GrantRepository(router).list_by_resource(ctx, resource_type="expert", resource_id=employee)[0]
     assert grant.member_ids == [a]
+
+
+def test_recruit_failure_then_same_request_succeeds(recruitment, monkeypatch):
+    svc, router, ctx, _, _, _ = recruitment
+    svc._catalog.seed_expert(_expert_template(template_id="retry-template"))
+    req = RecruitExpertRequest(template_id="retry-template", employee_slug="retry-expert")
+    resolve = svc._catalog.resolve_tenant_access
+
+    def unavailable(**kwargs):
+        raise Conflict("provider temporarily unavailable")
+
+    monkeypatch.setattr(svc._catalog, "resolve_tenant_access", unavailable)
+    for _ in range(2):
+        with pytest.raises(Conflict, match="provider temporarily unavailable"):
+            svc.recruit_expert(ctx, req)
+    failed = next(row for row in svc._orders.list_orders(ctx) if row.template_id == "retry-template")
+    assert failed.status == "failed" and failed.error_code == "conflict"
+    assert svc._employees.get_by_source_template(ctx, source_template_id="retry-template") is None
+
+    monkeypatch.setattr(svc._catalog, "resolve_tenant_access", resolve)
+    result = svc.recruit_expert(ctx, req)
+    assert result.order.order_id == failed.id
+    assert result.order.status == "succeeded"
+    assert result.order.error_code is None and result.order.error_message is None
+    with pytest.raises(Conflict, match="already recruited"):
+        svc.recruit_expert(ctx, req)
+    with router.session(ctx) as session:
+        assert session.execute(
+            "SELECT count(*) FROM employee WHERE source_template_id = %s", ("retry-template",),
+        ).fetchone()[0] == 1
 
 
 def test_solution_apply_rejects_cross_tenant_audience_before_publication(recruitment):

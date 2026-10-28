@@ -278,15 +278,26 @@ class NewApiAdminClient:
         model_ids: list[str] | None = None,
         expired_time: int | None = None,
     ) -> str:
-        """Read a full key only from the verified token-detail response."""
-        detail = self.get_relay_token_detail(
-            dashboard_token=dashboard_token, user_id=user_id, token_id=token_id,
-        )
+        """Read the full key from NewAPI's dedicated key-reveal endpoint.
+
+        ``GET /api/token/:id`` deliberately answers with a masked key, so it can
+        only serve metadata checks.  ``POST /api/token/:id/key`` is the contract
+        that returns the key itself; it runs behind the same UserAuth middleware
+        and owner-scoped lookup, so the permission model is unchanged.
+        """
         if model_ids is not None and expired_time is not None:
+            detail = self.get_relay_token_detail(
+                dashboard_token=dashboard_token, user_id=user_id, token_id=token_id,
+            )
             self._validate_token_metadata(
                 detail, model_ids=model_ids, expired_time=expired_time,
             )
-        key = detail.get("key")
+        revealed = self._request(
+            "POST", f"/api/token/{token_id}/key", token=dashboard_token, user_id=user_id,
+        ).get("data")
+        if not isinstance(revealed, dict):
+            raise NewApiError("NewAPI returned an invalid relay token key payload")
+        key = revealed.get("key")
         if not isinstance(key, str) or not key or "*" in key:
             raise NewApiError("NewAPI did not return a full relay token key")
         return key if key.startswith("sk-") else f"sk-{key}"

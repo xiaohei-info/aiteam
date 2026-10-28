@@ -277,7 +277,10 @@ def _derive_snapshot_version(
     """
     payload = config.model_dump(
         mode="json",
-        exclude={"employee_id", "employee_slug", "version", "knowledge_refs"},
+        exclude={
+            "employee_id", "employee_slug", "version", "knowledge_refs",
+            "source_template_id", "source_template_version",
+        },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)
     payload["knowledge_policy"] = knowledge_policy.projection.model_dump(mode="json")

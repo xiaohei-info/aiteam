@@ -527,3 +527,53 @@ def test_snapshot_service_has_no_write_methods():
     methods = {m for m in dir(SnapshotService) if not m.startswith("_")}
     assert not (methods & write_like), f"SnapshotService 暴露了写能力: {methods & write_like}"
     assert methods == {"generate"}, f"SnapshotService 应只暴露 generate，实际: {methods}"
+
+
+@pytest.fixture
+def provenance_config():
+    from shared.contracts.snapshot import ModelPolicy
+
+    return EmployeeConfigOut(
+        employee_id="employee-provenance", employee_slug="provenance",
+        display_name="Expert", version=7, status="active",
+        model_policy=ModelPolicy(model="model-a", provider_ref="relay", thinking_level="high"),
+        tools=["read"],
+    )
+
+
+def _provenance_snapshot_version(config):
+    from manager_service.knowledge_access_policy import KnowledgeAccessPolicy
+    from manager_service.snapshot_service import _derive_snapshot_version
+
+    policy = KnowledgeAccessPolicy().resolve(
+        _ctx("tenant-a", roles=["owner"], user_id="member-a"),
+        employee_id=config.employee_id, tools=config.tools, version=str(config.version),
+    )
+    return _derive_snapshot_version(
+        config, version=str(config.version), knowledge_refs=list(policy.refs), knowledge_policy=policy,
+    )
+
+
+@pytest.mark.parametrize("template_id,template_version", [
+    (None, None), ("template-a", "v1"), ("template-b", "v1"), ("template-a", "v2"),
+])
+def test_template_provenance_preserves_pre_addition_snapshot_version(
+    provenance_config, template_id, template_version,
+):
+    config = provenance_config.model_copy(update={
+        "source_template_id": template_id, "source_template_version": template_version,
+    })
+    # Captured with the pre-provenance EmployeeConfigOut schema at main 9c01bfc.
+    # Comparing against that baseline also covers newly added null fields.
+    assert _provenance_snapshot_version(config) == "snap_7_10bad084e52883b4"
+
+
+@pytest.mark.parametrize("change", ["model", "thinking_level", "tools"])
+def test_provenance_exclusion_still_hashes_execution_configuration(provenance_config, change):
+    if change == "tools":
+        modified = provenance_config.model_copy(update={"tools": ["read", "bash"]})
+    else:
+        value = "model-b" if change == "model" else "low"
+        policy = provenance_config.model_policy.model_copy(update={change: value})
+        modified = provenance_config.model_copy(update={"model_policy": policy})
+    assert _provenance_snapshot_version(modified) != _provenance_snapshot_version(provenance_config)

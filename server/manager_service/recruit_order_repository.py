@@ -16,6 +16,7 @@ from typing import Any
 
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
+from shared.errors import Conflict, InvalidTransition
 
 # status 取值与迁移 0013 CHECK 约束严格对齐（禁止漂移）。
 RECRUITMENT_ORDER_STATUSES = ("pending", "provisioning", "succeeded", "failed", "cancelled")
@@ -42,22 +43,22 @@ class RecruitmentOrderRow:
     # 状态机转换（对应旧 app/team_panel RecruitmentOrder 语义）
     def start_provisioning(self) -> "RecruitmentOrderRow":
         if self.status != "pending":
-            raise ValueError(f"Cannot start provisioning from {self.status}")
+            raise InvalidTransition(f"Cannot start provisioning from {self.status}")
         return self._replace(status="provisioning")
 
     def mark_succeeded(self, employee_id: str) -> "RecruitmentOrderRow":
         if self.status != "provisioning":
-            raise ValueError(f"Cannot mark succeeded from {self.status}")
+            raise InvalidTransition(f"Cannot mark succeeded from {self.status}")
         return self._replace(status="succeeded", created_employee_id=employee_id)
 
     def mark_failed(self, error_code: str, error_message: str) -> "RecruitmentOrderRow":
         if self.status != "provisioning":
-            raise ValueError(f"Cannot mark failed from {self.status}")
+            raise InvalidTransition(f"Cannot mark failed from {self.status}")
         return self._replace(status="failed", error_code=error_code, error_message=error_message)
 
     def cancel(self) -> "RecruitmentOrderRow":
         if self.status in ("succeeded", "cancelled"):
-            raise ValueError(f"Cannot cancel from {self.status}")
+            raise InvalidTransition(f"Cannot cancel from {self.status}")
         return self._replace(status="cancelled")
 
     def _replace(self, **kw: Any) -> "RecruitmentOrderRow":
@@ -127,6 +128,32 @@ class RecruitOrderRepository:
                 "RETURNING " + _ORDER_COLUMNS,
                 (ctx.tenant_id, idempotency_key, action, template_id, solution_id, requested_by, status),
             ).fetchone()
+        return _row_to_order(row)
+
+    def claim_provisioning(
+        self, ctx: TenantContext, *, idempotency_key: str, action: str,
+        template_id: str, solution_id: str | None = None,
+    ) -> RecruitmentOrderRow:
+        """Atomically claim a new/pending order or retry a failed/cancelled one.
+
+        The unique tenant/key constraint serializes concurrent requests. Active
+        and successful orders cannot be claimed again. Keep the order identity
+        and creation time, but clear the previous attempt's result and error.
+        """
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO recruitment_order "
+                "(tenant_id, idempotency_key, action, template_id, solution_id, requested_by, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'provisioning') "
+                "ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET "
+                "status = 'provisioning', created_employee_id = NULL, "
+                "error_code = NULL, error_message = NULL, requested_by = EXCLUDED.requested_by "
+                "WHERE recruitment_order.status IN ('pending', 'failed', 'cancelled') "
+                "RETURNING " + _ORDER_COLUMNS,
+                (ctx.tenant_id, idempotency_key, action, template_id, solution_id, ctx.user_id),
+            ).fetchone()
+        if row is None:
+            raise Conflict("recruitment order is already provisioning or succeeded")
         return _row_to_order(row)
 
     def get(self, ctx: TenantContext, *, order_id: str) -> RecruitmentOrderRow | None:
