@@ -48,7 +48,7 @@ def test_provenance_refresh_advances_existing_template_employees_only(admin_url,
             ).fetchone() == (1,)
             late_id = conn.execute(
                 "INSERT INTO employee (tenant_id, employee_slug, source_template_id, source_template_version, version) "
-                "VALUES (%s, %s, 'template-a', 'v1', 7) RETURNING id",
+                "VALUES (%s, %s, 'template-late', 'v1', 7) RETURNING id",
                 (two_tenants[0], "provenance-late-" + uuid.uuid4().hex),
             ).fetchone()[0]
             ids.append(late_id)
