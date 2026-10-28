@@ -304,3 +304,54 @@ def test_member_cannot_write_config():
     ctx_owner = _ctx("t-a", roles=["owner"])
     created = svc.create(ctx_owner, _body(), employee_slug="x")
     assert svc.get(ctx_member, employee_id=created.employee_id).employee_slug == "x"
+
+
+# ---- 来源模板字段（source_template_id / source_template_version）----
+
+
+def _db_row(*extra):
+    """按 _CONFIG_COLUMNS 顺序构造一行：前 20 列固定，之后是 extra。"""
+    base = [
+        "emp-1", "slug", "名", "persona", "m", "p", None, 600,
+        [], [], [], [], {}, 3, "active", None, None, None, [], "岗位",
+    ]
+    return tuple(base + list(extra))
+
+
+def test_row_mapping_reads_source_template_by_column_position():
+    from manager_service.employee_config_repository import _row_to_config
+
+    row = _row_to_config(_db_row("tpl-1", "v7"))
+    assert row.source_template_id == "tpl-1"
+    assert row.source_template_version == "v7"
+    # 不能和相邻列串位
+    assert row.role_title == "岗位"
+    assert row.department_ids == []
+
+
+def test_row_mapping_source_template_null_and_legacy_short_row():
+    from manager_service.employee_config_repository import _row_to_config
+
+    row = _row_to_config(_db_row(None, None))
+    assert row.source_template_id is None
+    assert row.source_template_version is None
+    short = _row_to_config(_db_row())
+    assert short.source_template_id is None
+    assert short.source_template_version is None
+
+
+def test_config_response_exposes_source_template():
+    from manager_service.employee_config_service import _to_out
+
+    base = _db_row("tpl-1", "v7")
+    from manager_service.employee_config_repository import _row_to_config
+
+    out = _to_out(_row_to_config(base))
+    assert (out.source_template_id, out.source_template_version) == ("tpl-1", "v7")
+    dumped = out.model_dump()
+    assert dumped["source_template_id"] == "tpl-1"
+    assert dumped["source_template_version"] == "v7"
+
+    manual = _to_out(_row_to_config(_db_row(None, None)))
+    assert manual.source_template_id is None
+    assert manual.model_dump()["source_template_version"] is None
