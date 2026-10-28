@@ -219,7 +219,8 @@ def _validate_thinking_level(value: str | None, capabilities: dict) -> None:
         } if isinstance(mapping, dict) else set()
     if supported and value not in supported:
         raise Conflict(f"thinking level {value!r} is not supported by selected model")
-    if capabilities.get("reasoning") is False:
+    reasoning_cap = capabilities.get("reasoning")
+    if isinstance(reasoning_cap, bool) and not reasoning_cap:
         raise Conflict("selected model does not support thinking")
 
 
@@ -251,6 +252,8 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         status=row.status,
         archive_reason=row.archive_reason,
         archived_at=row.archived_at,
+        source_template_id=row.source_template_id,
+        source_template_version=row.source_template_version,
     )
 
 

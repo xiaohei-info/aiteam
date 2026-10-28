@@ -43,13 +43,15 @@ class EmployeeConfigRow:
     platform_model_ref: dict | None = None
     department_ids: list[str] = field(default_factory=list)
     role_title: str | None = None
+    source_template_id: str | None = None
+    source_template_version: str | None = None
 
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
     "timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
     "memory_policy, version, status, archive_reason, archived_at, platform_model_ref, "
-    "department_ids, role_title"
+    "department_ids, role_title, source_template_id, source_template_version"
 )
 
 
@@ -80,6 +82,8 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         platform_model_ref=dict(row[17]) if row[17] else None,
         department_ids=department_ids,
         role_title=row[19] if len(row) > 19 else None,
+        source_template_id=row[20] if len(row) > 20 else None,
+        source_template_version=row[21] if len(row) > 21 else None,
     )
 
 
