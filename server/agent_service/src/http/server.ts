@@ -2088,7 +2088,8 @@ export class AgentHttpServer {
   }
 
   private expertReadinessValue(expert: LoadedExpertProjection, runtime: boolean, caller: AuthenticatedCaller) {
-    const provider = expert.model_policy?.model && expert.model_policy.provider_ref ? "ready" : "blocked";
+    const dependencyUnavailable = expert.availability_reason === "employee_dependency_unavailable";
+    const provider = !dependencyUnavailable && expert.model_policy?.model && expert.model_policy.provider_ref ? "ready" : "blocked";
     const lifecycle = typeof expert.status === "string" && expert.status !== "active" ? "blocked" : "ready";
     const memberId = caller.userId ?? caller.callerId;
     const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === expert.employee_id && item.version === expert.version);
@@ -2113,7 +2114,7 @@ export class AgentHttpServer {
           : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_missing" }));
     } catch { skills = malformedSnapshot ? [{ ref: "snapshot", status: "blocked", reason: "skill_snapshot_invalid" }] : refs.map((ref) => ({ ref, status: "blocked", reason: "skill_invalid_or_expired" })); }
     const missing = skills.filter((skill) => skill.status !== "ready");
-    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(provider === "ready" ? [] : ["Manager snapshot has no model provider"]) ] };
+    return { employee_id: expert.employee_id, display_name: expert.display_name, handle: expert.handle, available: !expert.availability_reason && runtime && provider === "ready" && lifecycle === "ready" && missing.length === 0, runtime: runtime ? "ready" : "blocked", provider, skills, capabilities: [], reasons: [ ...missing.map((skill) => `Required skill ${skill.ref}: ${skill.reason}`), ...(runtime ? [] : ["Pi runtime is not ready"]), ...(lifecycle === "ready" ? [] : ["Manager has not activated this expert"]), ...(expert.availability_reason ? [dependencyUnavailable ? "Employee model, provider or price is unavailable" : "Employee is unavailable"] : []), ...(provider === "ready" || dependencyUnavailable ? [] : ["Manager snapshot has no model provider"]) ] };
   }
 
   private async orgTree(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
