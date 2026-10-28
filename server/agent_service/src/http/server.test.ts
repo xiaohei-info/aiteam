@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { AgentHttpServer } from "./server.js";
-import { HttpManagerClient } from "../manager-client.js";
+import { HttpManagerClient, ManagerTimeoutError, type ManagerClient } from "../manager-client.js";
 import { createFixture } from "../test-fixture.js";
 
 function pngBytes(size = 8): Buffer {
@@ -871,6 +871,63 @@ test("Agent context reset route starts a new context for the owned conversation 
     assert.equal((await reset("other-member")).status, 404);
   } finally {
     await http.close();
+    await fixture.close();
+  }
+});
+
+test("Agent context reset route holds on a temporary memory failure, validates its body, and proceeds on confirmation", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  let retains = 0;
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async () => { retains += 1; throw new ManagerTimeoutError(); },
+  };
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", memory_policy: { enabled: true, allowed_operations: ["recall", "retain"] }, tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  const host = fixture.createHost(undefined, manager);
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const reset = (body?: unknown) => fetch(`http://127.0.0.1:${address.port}/api/agent/conversations/c1/context/reset`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  type ResetBody = { data: { reset: boolean; already_reset: boolean; needs_confirmation: boolean; reset_id: string; participants: Array<{ memory_reason: string; already_reset: boolean }> } };
+  try {
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("c1", "hello", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+
+    for (const invalid of [{ save_memory: "no" }, { on_memory_failure: "force" }, { unknown: true }]) {
+      assert.equal((await reset(invalid)).status, 422, JSON.stringify(invalid));
+    }
+    assert.equal(retains, 0, "invalid bodies never reach the memory save");
+
+    const held = await reset();
+    assert.equal(held.status, 200);
+    const heldBody = (await held.json() as ResetBody).data;
+    assert.equal(heldBody.reset, false);
+    assert.equal(heldBody.needs_confirmation, true);
+    assert.equal(heldBody.participants[0]?.memory_reason, "timeout");
+
+    const proceeded = (await (await reset({ on_memory_failure: "proceed" })).json() as ResetBody).data;
+    assert.equal(proceeded.reset, true);
+    assert.equal(proceeded.already_reset, false);
+    assert.equal(proceeded.participants[0]?.memory_reason, "timeout");
+
+    const repeated = (await (await reset({ save_memory: false })).json() as ResetBody).data;
+    assert.equal(repeated.reset, true);
+    assert.equal(repeated.already_reset, true);
+    assert.equal(repeated.reset_id, proceeded.reset_id);
+    assert.equal(retains, 2);
+  } finally {
+    await http.close();
+    await host.dispose();
     await fixture.close();
   }
 });
