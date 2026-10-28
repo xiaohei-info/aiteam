@@ -29,12 +29,13 @@ function sessionValue(roles: string[]): SessionContextValue {
   return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
 }
 
-function mockApi(): ExpertsApi {
+function mockApi(grantsOverrides: Partial<GrantsApi> = {}): ExpertsApi {
   const grantsApi: GrantsApi = {
     listGrants: vi.fn().mockResolvedValue([]), createGrant: vi.fn(), updateGrant: vi.fn(), deleteGrant: vi.fn(),
     listMembers: vi.fn().mockResolvedValue([{ id: "m-1", display_name: "成员一" }]),
     listDepartments: vi.fn().mockResolvedValue([{ id: "d-1", display_name: "部门一" }]),
     listExperts: vi.fn().mockResolvedValue([]), listSolutions: vi.fn().mockResolvedValue([]),
+    ...grantsOverrides,
   };
   (useGrantsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(grantsApi);
   const api: ExpertsApi = {
@@ -70,7 +71,7 @@ async function applyDefaultSolution(): Promise<HTMLElement> {
   const cardButton = screen.getAllByRole("button", { name: "应用方案" })[0]!;
   fireEvent.click(cardButton);
   const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
-  fireEvent.click(within(dialog).getByRole("combobox", { name: /授权成员/ }));
+  fireEvent.click(await within(dialog).findByRole("combobox", { name: /授权成员/ }));
   fireEvent.click(screen.getByRole("option", { name: "成员一", hidden: true }));
   fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
   return dialog;
@@ -94,9 +95,15 @@ describe("SolutionsPage", () => {
   });
 
   it("应用方案：选择授权成员后提交 solution_id + member_ids", async () => {
-    const api = mockApi(); renderPage(["owner"]);
+    let finishMembers!: (members: { id: string; display_name: string }[]) => void;
+    const pendingMembers = new Promise<{ id: string; display_name: string }[]>((resolve) => { finishMembers = resolve; });
+    const api = mockApi({ listMembers: vi.fn().mockReturnValue(pendingMembers) }); renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
-    await applyDefaultSolution();
+    const applying = applyDefaultSolution().then(() => undefined, (error: unknown) => error);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    expect(within(dialog).queryByRole("combobox", { name: /授权成员/ })).not.toBeInTheDocument();
+    finishMembers([{ id: "m-1", display_name: "成员一" }]);
+    expect(await applying).toBeUndefined();
     await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: ["m-1"], department_ids: [] }));
   });
 
@@ -105,7 +112,7 @@ describe("SolutionsPage", () => {
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
     const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
-    fireEvent.click(within(dialog).getByRole("combobox", { name: /所属部门/ }));
+    fireEvent.click(await within(dialog).findByRole("combobox", { name: /所属部门/ }));
     expect(screen.getByRole("option", { name: "未设置", hidden: true })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
     await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: [], department_ids: [] }));
