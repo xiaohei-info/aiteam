@@ -898,7 +898,7 @@ test("Agent context reset route holds on a temporary memory failure, validates i
     headers: { Authorization: "Bearer test", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  type ResetBody = { data: { reset: boolean; already_reset: boolean; needs_confirmation: boolean; reset_id: string; participants: Array<{ memory_reason: string; already_reset: boolean }> } };
+  type ResetBody = { data: { reset: boolean; already_reset: boolean; confirmation_required: boolean; reset_id: string; participants: Array<{ memory_reason: string; already_reset: boolean }> } };
   try {
     fixture.faux.setResponses([fauxAssistantMessage("ok")]);
     await host.prompt("c1", "hello", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
@@ -912,7 +912,7 @@ test("Agent context reset route holds on a temporary memory failure, validates i
     assert.equal(held.status, 200);
     const heldBody = (await held.json() as ResetBody).data;
     assert.equal(heldBody.reset, false);
-    assert.equal(heldBody.needs_confirmation, true);
+    assert.equal(heldBody.confirmation_required, true);
     assert.equal(heldBody.participants[0]?.memory_reason, "timeout");
 
     const proceeded = (await (await reset({ on_memory_failure: "proceed" })).json() as ResetBody).data;
