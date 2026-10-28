@@ -672,17 +672,19 @@ export class SessionHost {
     if (!client?.memoryRetain || !isMemoryRetainAllowed(authorization.snapshot)) return { reason: "retain_disabled", operationId: null };
     const transcript = resetTranscript(messages);
     if (!transcript.content) return { reason: "empty", operationId: null };
-    const lastEntryId = messages.at(-1)?.id ?? resetId;
-    // Sent for traceability only: the Manager retain route does not deduplicate on it.
-    const idempotencyKey = `context-reset:${createHash("sha256").update(`${record.conversationId}\0${authorization.employeeId}\0${lastEntryId}`).digest("hex").slice(0, 48)}`;
+    // Identifies this exact context. The body carries nothing random, so a retry after a timeout or
+    // with on_memory_failure=proceed sends identical bytes and Manager derives the same
+    // operation_id/document_id from them (scoped_retain_body). The random reset_id stays off the body.
+    const contextId = createHash("sha256").update(`${record.conversationId}\0${authorization.employeeId}\0${messages.at(-1)!.id}`).digest("hex").slice(0, 48);
     try {
+      // The Manager retain route ignores Idempotency-Key; it is sent for traceability only.
       const ack = await client.memoryRetain(caller, authorization.employeeId, transcript.content, {
         source: "context_reset",
         conversation_id: record.conversationId,
-        reset_id: resetId,
+        context_id: contextId,
         message_count: messages.length,
         truncated: transcript.truncated,
-      }, idempotencyKey);
+      }, `context-reset:${contextId}`);
       return { reason: "saved", operationId: ack.operationId };
     } catch (error) {
       this.invalidateExecutionMaterial(authorization, error);
@@ -690,6 +692,7 @@ export class SessionHost {
       appLogger.log("warn", "context_reset.retain_failed", {
         ...safeError(error),
         reset_id: resetId,
+        context_id: contextId,
         memory_reason: reason,
         conversation_id: record.conversationId,
         employee_id: authorization.employeeId,
@@ -2003,9 +2006,12 @@ function lastResetMarker(branch: readonly SessionEntry[]): Omit<ContextResetPart
 }
 
 function retainFailureReason(error: unknown): ContextResetMemoryReason {
-  if (error instanceof ManagerAuthorizationError) return "unauthorized";
+  // 401 is an expired token (transient); Manager uses 403 for explicit memory-policy, snapshot,
+  // lease and acceptance-expiry denials, which a retry cannot change.
+  if (error instanceof ManagerAuthorizationError) return error.status === 401 ? "unauthorized" : "policy";
   if (error instanceof ManagerPolicyDeniedError) return "policy";
   if (error instanceof MemoryRetainUnverifiedError) return "retention_unverified";
+  if (error instanceof ManagerUnavailableError && error.problemCode === "memory_retention_unverified") return "retention_unverified";
   if (error instanceof ManagerTimeoutError) return "timeout";
   // 413 is the body limit; 422 here can only be the content/metadata size validation.
   if (error instanceof ManagerValidationError || (error instanceof ManagerUnavailableError && error.httpStatus === 413)) return "too_large";

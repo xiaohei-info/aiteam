@@ -48,6 +48,9 @@ test("HttpManagerClient retains employee-scoped memory through the Manager facad
   const tooLarge = new HttpManagerClient("https://manager.test", async () => Response.json({ code: "request_too_large" }, { status: 413 }));
   await assert.rejects(() => tooLarge.memoryRetain(caller, "employee-1", "summary"), (error: unknown) => error instanceof ManagerUnavailableError && error.httpStatus === 413);
 
+  const unverified = new HttpManagerClient("https://manager.test", async () => Response.json({ code: "memory_retention_unverified", detail: "Native retention contract is unavailable" }, { status: 503 }));
+  await assert.rejects(() => unverified.memoryRetain(caller, "employee-1", "summary"), (error: unknown) => error instanceof ManagerUnavailableError && error.httpStatus === 503 && error.problemCode === "memory_retention_unverified");
+
   const timedOut = new HttpManagerClient("https://manager.test", async () => { throw new DOMException("The operation timed out", "TimeoutError"); });
   await assert.rejects(() => timedOut.memoryRetain(caller, "employee-1", "summary"), ManagerTimeoutError);
 
