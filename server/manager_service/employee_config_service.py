@@ -219,8 +219,7 @@ def _validate_thinking_level(value: str | None, capabilities: dict) -> None:
         } if isinstance(mapping, dict) else set()
     if supported and value not in supported:
         raise Conflict(f"thinking level {value!r} is not supported by selected model")
-    reasoning_cap = capabilities.get("reasoning")
-    if isinstance(reasoning_cap, bool) and not reasoning_cap:
+    if capabilities.get("reasoning") is False:
         raise Conflict("selected model does not support thinking")
 
 
