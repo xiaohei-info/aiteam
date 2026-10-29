@@ -268,11 +268,11 @@ describe("D13 红线：绝不渲染会话内容/执行明细/raw event", () => {
   it("BoardPage 脱敏聚合字段（token_total）允许出现", async () => {
     mockResponse(mockBoard);
     const { container } = renderWithProviders(<BoardPage />);
+    // 标题先于看板数据渲染，聚合字段要等异步数据到达后再断言。
     await waitFor(() => {
-      expect(screen.getByText("跨企业治理看板")).toBeInTheDocument();
+      expect(container.textContent).toContain("Token");
+      expect(container.textContent).toContain("5,000,000");
     });
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).toContain("5,000,000");
   });
 
   it("BoardPage 加载中/错误态也不泄露会话内容", async () => {
