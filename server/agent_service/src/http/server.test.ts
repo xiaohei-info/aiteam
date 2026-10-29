@@ -492,6 +492,82 @@ test("Agent context HUD is authenticated and thinking changes apply to later pro
   }
 });
 
+test("Agent introduction sends a hidden tool-less instruction once, shows only the employee reply, and falls back to normal input on failure", async () => {
+  const fixture = await createFixture();
+  fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+  fixture.store.updateConversation("conversation-2", { entryEmployeeId: "employee-1" });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const introduce = (id: string) => fetch(`${base}/api/agent/conversations/${id}/introduction`, { method: "POST", headers: { Authorization: "Bearer test" } });
+  const promptText = (id: string, key: string, text: string) => fetch(`${base}/api/agent/conversations/${id}/prompt`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify({ text }) });
+  const settledState = async (id: string, key: string) => {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const body = await (await fetch(`${base}/api/agent/conversations/${id}/receipts/${key}`, { headers: { Authorization: "Bearer test" } })).json() as { data?: { state: string } };
+      if (body.data && body.data.state !== "accepted") return body.data.state;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("timed out waiting for the prompt receipt to settle");
+  };
+  try {
+    // The only model input is the hidden instruction, and the turn runs with no tools.
+    let introductionInput: { messages: number; tools: number } | undefined;
+    fixture.faux.setResponses([(context) => {
+      introductionInput = { messages: context.messages.length, tools: context.tools?.length ?? 0 };
+      return fauxAssistantMessage("你好，我是 Helper。");
+    }]);
+    const started = await introduce("c1");
+    assert.equal(started.status, 202);
+    const receipt = (await started.json() as { data: { state: string; idempotency_key: string } }).data;
+    assert.equal(receipt.state, "accepted");
+    assert.equal(await settledState("c1", receipt.idempotency_key), "completed");
+    const entries = await waitForEntries(`${base}/api/agent/conversations/c1/entries`, "Bearer test") as Array<{ type: string; message?: { role: string } }>;
+    assert.deepEqual(introductionInput, { messages: 1, tools: 0 });
+    assert.equal(entries.some((entry) => entry.type === "custom_message"), false, "hidden instruction must not reach visible history");
+    assert.equal(entries.some((entry) => entry.message?.role === "user"), false);
+    assert(entries.some((entry) => entry.message?.role === "assistant"));
+
+    const repeated = await introduce("c1");
+    assert.equal(repeated.status, 202);
+    assert.equal((await repeated.json() as { data: { idempotency_key: string } }).data.idempotency_key, receipt.idempotency_key);
+
+    // The tool restriction applies to the introduction turn only.
+    let laterTools = 0;
+    fixture.faux.setResponses([(context) => { laterTools = context.tools?.length ?? 0; return fauxAssistantMessage("ok"); }]);
+    assert.equal((await promptText("c1", "after-intro", "hello")).status, 202);
+    assert.equal(await settledState("c1", "after-intro"), "completed");
+    assert(laterTools > 0, "later turns keep the snapshot's tools");
+
+    // A failed introduction is not replayed; the conversation falls back to normal input.
+    let modelCalls = 0;
+    fixture.faux.setResponses([() => { modelCalls += 1; return fauxAssistantMessage("", { stopReason: "error", errorMessage: "not retryable" }); }]);
+    assert.equal((await introduce("conversation-1")).status, 202);
+    assert.notEqual(await settledState("conversation-1", receipt.idempotency_key), "completed");
+    assert.equal((await introduce("conversation-1")).status, 202);
+    assert.equal(modelCalls, 1, "a failed introduction must not run again");
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    assert.equal((await promptText("conversation-1", "first", "hello")).status, 202);
+    assert.equal(await settledState("conversation-1", "first"), "completed");
+    // 已有可见消息后不再介绍；失败的介绍收据在前，所以这里仍返回同一收据而不是 409。
+    assert.equal((await introduce("conversation-1")).status, 202);
+
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    assert.equal((await promptText("conversation-2", "first", "hello")).status, 202);
+    assert.equal(await settledState("conversation-2", "first"), "completed");
+    assert.equal((await introduce("conversation-2")).status, 409);
+
+    fixture.store.updateConversation("conversation-2", { kind: "group", coordinatorEmployeeId: "employee-1" });
+    assert.equal((await introduce("conversation-2")).status, 422);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent prompt rejects aggregate decoded image bytes over 20 MiB", async () => {
   const fixture = await createFixture();
   fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
@@ -610,7 +686,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 76);
+    assert.equal(frontendOperations.length, 77);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

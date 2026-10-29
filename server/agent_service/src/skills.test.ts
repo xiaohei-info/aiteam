@@ -386,3 +386,57 @@ test("actual pinned Pi loader agrees with bounded custom SKILL.md frontmatter co
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("displayNameFor returns signed display_name only for the matching verified scope", () => {
+  const key = generateKeyPairSync("ed25519");
+  const other = generateKeyPairSync("ed25519");
+  const publicKey = key.publicKey.export({ format: "der", type: "spki" }).toString("base64");
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "aiteam-skill-display-"));
+  try {
+    const cache = new SkillCache(root);
+    const scope = { tenantId: "tenant-a", memberId: "member-a" };
+    cache.reconcile(scope, [signed(key)], ["review"], verification(publicKey));
+    assert.equal(cache.displayNameFor(scope, "review", verification(publicKey)), "Review");
+    assert.equal(cache.displayNameFor(scope, "review@1", verification(publicKey)), "Review");
+    assert.equal(cache.displayNameFor(scope, "review@2", verification(publicKey)), undefined);
+    assert.equal(cache.displayNameFor(scope, "missing", verification(publicKey)), undefined);
+    assert.equal(cache.displayNameFor({ tenantId: "tenant-a", memberId: "member-b" }, "review", verification(publicKey)), undefined);
+    assert.equal(cache.displayNameFor(scope, "review@1", { publicKeys: [metadata(other, "skill-key-1")] }), undefined);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("authorized expert list exposes signed skill display names without changing skills", async (t) => {
+  const key = generateKeyPairSync("ed25519");
+  const scope = { tenantId: "tenant-a", memberId: "member-a" };
+  const keys = [metadata(key, "skill-key-1")];
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "aiteam-skill-details-"));
+  const fixture = await createFixture();
+  const cache = new SkillCache(root);
+  fixture.store.replaceProjections([
+    { employee_id: "e1", tenant_id: scope.tenantId, member_id: scope.memberId, version: "1", display_name: "Fixture", handle: "fixture", revoked: false, synced_at: new Date().toISOString(), skills: ["review@1"], status: "active" },
+    ...Array.from({ length: 5 }, (_, index) => ({ employee_id: `plain-${index}`, tenant_id: scope.tenantId, member_id: scope.memberId, version: "1", display_name: `Plain ${index}`, handle: `plain-${index}`, revoked: false, synced_at: new Date().toISOString(), skills: [], status: "active" })),
+  ], [], [{ employee_id: "e1", tenant_id: scope.tenantId, member_id: scope.memberId, version: "1", snapshot_version: "s1", display_name: "Fixture", skills: ["review@1"], skill_signing_keys: keys }], [], scope);
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, skillCache: cache,
+    authenticate: () => ({ callerId: scope.memberId, userId: scope.memberId, tenantId: scope.tenantId, roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address(); assert(address && typeof address === "object");
+  const listAll = async () => (await (await fetch(`http://127.0.0.1:${address.port}/api/agent/grants/experts`, { headers: { Authorization: "Bearer fixture" } })).json() as any).data as Array<{ employee_id: string; skills: string[]; skill_details: unknown }>;
+  const list = async () => (await listAll()).find((expert) => expert.employee_id === "e1")!;
+  try {
+    assert.deepEqual((await list()).skill_details, [{ ref: "review@1", display_name: null }]);
+    // Experts without skills skip the lookup, and one request reads snapshots at most once.
+    const snapshotReads = t.mock.method(fixture.store, "listSnapshots");
+    const all = await listAll();
+    assert.equal(snapshotReads.mock.callCount(), 1);
+    assert.deepEqual(all.filter((expert) => expert.employee_id.startsWith("plain-")).map((expert) => expert.skill_details), [[], [], [], [], []]);
+    snapshotReads.mock.restore();
+    cache.reconcile(scope, [signed(key)], ["review@1"], { publicKeys: keys });
+    const expert = await list();
+    assert.deepEqual(expert.skills, ["review@1"]);
+    assert.deepEqual(expert.skill_details, [{ ref: "review@1", display_name: "Review" }]);
+  } finally {
+    await http.close();
+    await fixture.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

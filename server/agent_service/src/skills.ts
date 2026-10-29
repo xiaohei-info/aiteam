@@ -363,6 +363,28 @@ export class SkillCache {
     });
   }
 
+  /**
+   * Display-only lookup of a cached skill's Manager display name. The manifest
+   * signature is verified, but file trees are not rehashed; execution paths
+   * still go through pathsFor/readinessFor.
+   */
+  displayNameFor(scope: SkillScope, ref: string, verification: SkillVerificationOptions = {}): string | undefined {
+    try {
+      const { skillId, version: requested } = parseRef(ref);
+      const resolved = this.verificationFor(scope, verification, false);
+      const version = requested ?? this.readCurrent(scope, skillId, resolved);
+      if (!version) return undefined;
+      safeSegment(version, "version");
+      const path = join(this.scopeRoot(scope), skillId, version, ".aiteam-manifest.json");
+      this.assertNoSymlink(path);
+      const manifest = JSON.parse(readFileSync(path, "utf8")) as SkillManifest;
+      if (manifest.package.skill_id !== skillId || manifest.package.version !== version) return undefined;
+      verifySignedSkillPackage(manifest, { ...resolved, tenantId: scope.tenantId, memberId: scope.memberId });
+      const name = manifest.package.display_name.trim();
+      return name || undefined;
+    } catch { return undefined; }
+  }
+
   private materialize(scope: SkillScope, envelope: SignedSkillPackage, verification: SkillVerificationOptions): void {
     const pkg = envelope.package;
     safeSegment(pkg.skill_id, "skill_id"); safeSegment(pkg.version, "version");
