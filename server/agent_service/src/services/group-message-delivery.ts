@@ -20,6 +20,8 @@ export interface GroupMessageCommand {
   background?: boolean;
   /** Deliver text as a non-displayed Pi custom message of this type: the model sees it, the visible transcript does not. */
   hiddenPromptType?: string;
+  /** Run this turn with no active tools; the session's tool set is restored afterwards. */
+  disableTools?: boolean;
 }
 
 export interface GroupMessageReply {

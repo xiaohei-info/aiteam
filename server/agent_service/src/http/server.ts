@@ -21,7 +21,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
 import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
-import { SessionAuthorizationError } from "../pi/session-host.js";
+import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
 import { visibleHistoryText } from "../pi/session-history.js";
@@ -33,7 +33,7 @@ import { WORK_RECORD_DOCS, WORK_RECORD_SCHEMAS, WorkHistoryQuery, WorkChangesQue
 import { WorkRecordReadService } from "../services/work-records.js";
 import { GroupCreationError, GroupCreationService, type GroupParticipantSeed, type ResolvedGroupConversation } from "../services/group-creation.js";
 import { UsageStatisticsService } from "../services/usage-statistics.js";
-import { type ConversationPermissionMode, type ConversationState, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
+import { type ConversationPermissionMode, type ConversationState, type FrozenSnapshot, type LoadedExpertProjection, type LocalFileKind } from "../storage/sqlite.js";
 import { validateSchedule } from "../schedule.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
@@ -49,7 +49,8 @@ const MAX_PROMPT_IMAGES = 8;
 // and the instruction is a non-displayed custom message so only the employee's reply is visible.
 const INTRODUCTION_RECEIPT_KEY = "aiteam-introduction";
 const INTRODUCTION_PROMPT_TYPE = "aiteam.introduction";
-const INTRODUCTION_PROMPT = "用户刚从人才市场选择了你并打开这个对话，还没有发送任何消息。请以你的身份主动打招呼，用一段简短的话（不超过 150 字）介绍你是谁、擅长做什么、能怎样帮到用户，最后邀请用户说出需求。不要调用工具，也不要提及这条说明。";
+// Entry-neutral on purpose: any frontend entry may open an empty chat, so the backend does not name one.
+const INTRODUCTION_PROMPT = "用户刚打开和你的对话，还没有发送任何消息。请以你的身份主动打招呼，用一段简短的话（不超过 150 字）介绍你是谁、擅长做什么、能怎样帮到用户，最后邀请用户说出需求。不要提及这条说明。";
 const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_JSON_BYTES = Math.ceil(MAX_PROMPT_IMAGE_BYTES / 3) * 4 + 512 * 1024;
 const MAX_PENDING_EVENTS = 512;
@@ -1925,16 +1926,26 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ ...expert, ...employeeDisplay(expert), skill_details: this.expertSkillDetails(expert, caller) })), page: { next_cursor: null, has_more: false } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void {
+    const memberId = caller.userId ?? caller.callerId;
+    // Snapshots are only needed for experts with skills; read and index them at most once per request.
+    let snapshots: Map<string, FrozenSnapshot> | undefined;
+    const snapshotFor = (expert: LoadedExpertProjection): FrozenSnapshot | undefined => {
+      snapshots ??= new Map(this.options.store.listSnapshots(caller.tenantId, memberId).map((item) => [`${item.employee_id}\u0000${item.version}`, item]));
+      return snapshots.get(`${expert.employee_id}\u0000${expert.version}`);
+    };
+    this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, memberId).map((expert) => ({ ...expert, ...employeeDisplay(expert), skill_details: this.expertSkillDetails(expert, caller, snapshotFor) })), page: { next_cursor: null, has_more: false } });
+  }
 
   // 只读展示名：名称来自本机已验签技能包，取不到时返回 null，由前端回退到技能引用。
-  private expertSkillDetails(expert: LoadedExpertProjection, caller: AuthenticatedCaller): Array<{ ref: string; display_name: string | null }> {
+  private expertSkillDetails(expert: LoadedExpertProjection, caller: AuthenticatedCaller, snapshotFor: (expert: LoadedExpertProjection) => FrozenSnapshot | undefined): Array<{ ref: string; display_name: string | null }> {
     let refs: string[];
     try { refs = skillRefsForSnapshot({ skills: expert.skills }); } catch { return []; }
+    if (refs.length === 0) return [];
     const cache = this.options.skillCache;
     if (!caller.tenantId || !cache) return refs.map((ref) => ({ ref, display_name: null }));
     const memberId = caller.userId ?? caller.callerId;
-    const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === expert.employee_id && item.version === expert.version);
+    const snapshot = snapshotFor(expert);
     let verification: ReturnType<typeof skillSigningVerificationFromEnv>;
     try { verification = snapshot ? skillSigningVerificationForSnapshot({ ...snapshot }) : skillSigningVerificationFromEnv(); } catch { return refs.map((ref) => ({ ref, display_name: null })); }
     const scope = { tenantId: caller.tenantId, memberId };
@@ -2317,7 +2328,7 @@ export class AgentHttpServer {
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, []));
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint: INTRODUCTION_PROMPT_TYPE });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
-    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, INTRODUCTION_PROMPT, [], [], [], INTRODUCTION_PROMPT_TYPE);
+    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, INTRODUCTION_PROMPT, [], [], [], { hiddenPromptType: INTRODUCTION_PROMPT_TYPE, disableTools: true });
     this.promptWorkers.add(worker);
     void worker.finally(() => this.promptWorkers.delete(worker));
     this.writeReceipt(response, conversationId, key, "accepted");
@@ -2395,11 +2406,11 @@ export class AgentHttpServer {
     return;
   }
 
-  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: ImageContent[], mentions: string[], attachmentIds: string[], hiddenPromptType?: string): Promise<void> {
+  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: ImageContent[], mentions: string[], attachmentIds: string[], delivery: Pick<PromptDeliveryOptions, "hiddenPromptType" | "disableTools"> = {}): Promise<void> {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, hiddenPromptType });
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, ...delivery });
       if (!lastEntryId) {
         this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" });
         return;

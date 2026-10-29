@@ -75,6 +75,8 @@ export interface PromptDeliveryOptions {
   background?: boolean;
   /** See GroupMessageCommand.hiddenPromptType. */
   hiddenPromptType?: string;
+  /** See GroupMessageCommand.disableTools. */
+  disableTools?: boolean;
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -367,6 +369,7 @@ export class SessionHost {
         caller,
         background: deliveryOptions?.background,
         hiddenPromptType: deliveryOptions?.hiddenPromptType,
+        disableTools: deliveryOptions?.disableTools,
       });
       return result.replies.at(-1)?.entryId;
     });
@@ -1455,10 +1458,18 @@ export class SessionHost {
         void sourceCapture.catch(() => undefined); // Awaited at settlement; avoid an unhandled rejection during streaming.
       });
       const promptPromise = (async () => {
-        if (command.hiddenPromptType) {
-          await session.sendCustomMessage({ customType: command.hiddenPromptType, content: command.text, display: false }, { triggerTurn: true });
-        } else {
-          await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        // A tool-less turn is enforced on the session, not requested in the prompt; the
+        // previous tool set is restored so later turns keep the snapshot's permissions.
+        const restoreTools = command.disableTools ? session.getActiveToolNames() : undefined;
+        if (restoreTools) session.setActiveToolsByName([]);
+        try {
+          if (command.hiddenPromptType) {
+            await session.sendCustomMessage({ customType: command.hiddenPromptType, content: command.text, display: false }, { triggerTurn: true });
+          } else {
+            await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+          }
+        } finally {
+          if (restoreTools) session.setActiveToolsByName(restoreTools);
         }
         await sourceCapture;
         this.recordEntrySources(record, command, entriesBefore);
