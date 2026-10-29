@@ -171,8 +171,12 @@ test("a stalled skill market only delays the marketplace catalog by the short na
   t.mock.method(appLogger, "log", (level: string, event: string, fields: Record<string, unknown> = {}) => { logged.push({ level, event, fields }); });
   const client = new HttpManagerClient("https://manager.test", async (input, init) => {
     if (String(input).endsWith("/api/manager/skill-market")) {
-      // Hang until the client-side budget aborts the request.
-      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+      // Hang until the client-side budget aborts the request. AbortSignal.timeout() is unref'd,
+      // so a ref'd timer keeps the event loop alive while the test waits for it.
+      return new Promise<Response>((_resolve, reject) => {
+        const keepAlive = setTimeout(() => reject(new Error("skill-name budget never fired")), 10_000);
+        init?.signal?.addEventListener("abort", () => { clearTimeout(keepAlive); reject(init.signal!.reason); });
+      });
     }
     return new Response(JSON.stringify({ data: [{ template_id: "tpl", platform_skill_refs: [{ skill_id: "skill-1", version: "1", content_hash: "sha256:abc" }] }] }), { status: 200 });
   });
@@ -184,6 +188,25 @@ test("a stalled skill market only delays the marketplace catalog by the short na
   const warning = logged.find((entry) => entry.event === "marketplace.skill_names_unavailable");
   assert.equal(warning?.level, "warn");
   assert.equal(warning?.fields.outcome, "timeout");
+});
+
+test("a skill market whose body stalls past the name budget is logged as a timeout", async (t) => {
+  const logged: Array<{ event: string; fields: Record<string, unknown> }> = [];
+  t.mock.method(appLogger, "log", (_level: string, event: string, fields: Record<string, unknown> = {}) => { logged.push({ event, fields }); });
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    if (String(input).endsWith("/api/manager/skill-market")) {
+      // Headers arrive at once; the body never finishes before the budget aborts it.
+      const keepAlive = setTimeout(() => undefined, 10_000);
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(new TextEncoder().encode("{\"data\":["));
+        init?.signal?.addEventListener("abort", () => { clearTimeout(keepAlive); controller.error(init.signal!.reason); });
+      } });
+      return new Response(body, { status: 200 });
+    }
+    return new Response(JSON.stringify({ data: [{ template_id: "tpl", platform_skill_refs: [] }] }), { status: 200 });
+  });
+  await client.listMarketplaceTemplates(caller);
+  assert.equal(logged.find((entry) => entry.event === "marketplace.skill_names_unavailable")?.fields.outcome, "timeout");
 });
 
 test("authorized employee projection preserves real position and all departments without inference", () => {

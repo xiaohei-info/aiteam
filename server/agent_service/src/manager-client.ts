@@ -285,6 +285,8 @@ export class HttpManagerClient implements ManagerClient {
     try {
       return await response.json();
     } catch (error) {
+      // The request signal also bounds the body read, so a slow body is a timeout, not a malformed response.
+      if ((error as { name?: unknown } | undefined)?.name === "TimeoutError") throw new ManagerTimeoutError("Manager response timed out", { cause: error });
       throw new ManagerUnavailableError("Manager returned an invalid response", { cause: error });
     }
   }
