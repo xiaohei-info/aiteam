@@ -24,6 +24,7 @@ import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, 
 import { SessionAuthorizationError } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
 import { materializeAttachments } from "../pi/attachment-tool.js";
+import { visibleHistoryText } from "../pi/session-history.js";
 import { InvalidReadCursorError } from "../storage/read-cursor.js";
 import { ConversationReadError, ConversationReadService, readPageLimit, validateReadQuery } from "../services/conversation-reads.js";
 import { employeeDisplay } from "../services/employee-display.js";
@@ -44,6 +45,11 @@ export type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_LOCAL_FILE_NAME = 255;
 const MAX_PROMPT_IMAGES = 8;
+// First-chat introduction: one fixed receipt per conversation makes the request idempotent,
+// and the instruction is a non-displayed custom message so only the employee's reply is visible.
+const INTRODUCTION_RECEIPT_KEY = "aiteam-introduction";
+const INTRODUCTION_PROMPT_TYPE = "aiteam.introduction";
+const INTRODUCTION_PROMPT = "用户刚从人才市场选择了你并打开这个对话，还没有发送任何消息。请以你的身份主动打招呼，用一段简短的话（不超过 150 字）介绍你是谁、擅长做什么、能怎样帮到用户，最后邀请用户说出需求。不要调用工具，也不要提及这条说明。";
 const MAX_PROMPT_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_JSON_BYTES = Math.ceil(MAX_PROMPT_IMAGE_BYTES / 3) * 4 + 512 * 1024;
 const MAX_PENDING_EVENTS = 512;
@@ -457,6 +463,7 @@ const ExpertProjection = Type.Object({
   availability_reason: Type.Optional(Type.String({ description: "本机持久化的员工不可用原因；缺省表示没有同步阻断。" })),
   availability_revision: Type.Optional(Type.String({ description: "本次不可用事件标识；恢复后再次不可用会更换。" })),
   employee_id: Type.String({ description: "员工/专家 ID。" }), tenant_id: Type.String({ description: "企业租户 ID。" }), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), version: Type.String({ description: "配置版本。" }), handle: Type.String({ description: "用于 @提及的稳定句柄。" }), display_name: Type.String({ description: "展示名称。" }), revoked: Type.Boolean({ description: "是否已撤销授权。" }), synced_at: Type.String({ format: "date-time", description: "同步时间。" }), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Array(Type.String(), { description: "允许使用的工具。" }), skills: Type.Array(Type.String(), { description: "技能引用。" }), skill_refs: Type.Optional(Type.Array(Type.String(), { description: "兼容技能引用字段。" })), knowledge_refs: Type.Optional(Type.Array(Type.String(), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String(), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), persona: Type.Optional(Type.String({ description: "员工人设。" })), status: Type.Optional(Type.String({ description: "员工生命周期状态。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL；优先本地 override，其次 Manager tenant 头像，再次模板/默认 fallback。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("manager"), Type.Literal("template")], { description: "头像来源优先级。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本；不改变 employee 配置 version。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本；用于 known_versions。" })), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })),
+  skill_details: Type.Optional(Type.Array(Type.Object({ ref: Type.String({ description: "技能引用。" }), display_name: Type.Union([Type.String(), Type.Null()], { description: "已验签技能包中的展示名称；本机缓存缺失或失效时为 null。" }) }, { additionalProperties: false }), { description: "技能展示信息，顺序与 skills 一致；仅用于展示，不参与授权。" })),
 }, { $id: "ExpertProjection", additionalProperties: true, description: "Manager 授权给当前成员的专家投影；未知扩展字段由 Manager 配置透传，但不包含凭据。", "x-dynamic-json": true });
 const SolutionProjection = Type.Object({ solution_instance_id: Type.String({ description: "方案实例 ID。" }), solution_id: Type.Optional(Type.String({ description: "Operator 方案模板 ID。" })), display_name: Type.String({ description: "方案展示名称。" }), description: Type.Optional(Type.String({ description: "方案描述。" })), icon: Type.Optional(Type.String({ description: "方案图标。" })), tags: Type.Optional(Type.Array(Type.String(), { description: "方案标签。" })), version: Type.String({ description: "方案配置版本。" }), status: Type.Optional(Type.String({ description: "方案状态。" })), coordinator_instructions: Type.Optional(Type.String({ description: "方案协调说明。" })), workflow_skill_ref: Type.Optional(JsonObject), output_requirements: Type.Optional(Type.String({ description: "方案交付要求。" })), config_version: Type.Optional(Type.Integer({ minimum: 1, description: "方案配置版本号。" })), coordinator_employee_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "协调员工 ID。" })), expert_employee_ids: Type.Optional(Type.Array(Type.String(), { description: "方案内专家 ID。" })), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })) }, { $id: "SolutionProjection", additionalProperties: true, description: "Manager 授权给当前成员的方案投影。", "x-dynamic-json": true });
 const SnapshotProjection = Type.Object({ employee_id: Type.String({ minLength: 1, description: "员工 ID。" }), version: Type.String({ minLength: 1, description: "员工配置版本。" }), snapshot_version: Type.String({ minLength: 1, description: "执行快照版本。" }), display_name: Type.String({ minLength: 1, description: "员工展示名称。" }), tenant_id: Type.Optional(Type.String({ description: "企业租户 ID。" })), member_id: Type.Optional(Type.String({ description: "成员 ID。" })), avatar_url: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "当前生效头像 URL。" })), avatar_source: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("manager"), Type.Literal("template")], { description: "头像来源优先级。" })), avatar_version: Type.Optional(Type.Integer({ minimum: 0, description: "Manager tenant 头像版本。" })), avatar_sync_version: Type.Optional(Type.String({ minLength: 1, description: "Manager 头像增量版本。" })), persona: Type.Optional(Type.String({ description: "员工人设。" })), model_policy: Type.Optional(Type.Ref("AgentModelPolicy")), execution_policy: Type.Optional(JsonObject), tools: Type.Optional(Type.Array(Type.String({ description: "工具名称。" }), { description: "快照允许的工具。" })), skills: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "规范技能引用；该字段一旦出现（包括 []）即为权威，不读取 skill_refs。" })), skill_refs: Type.Optional(Type.Array(Type.String({ description: "技能引用。" }), { description: "旧本地投影兼容字段；仅当规范 skills 字段缺失时使用，不能覆盖显式 skills=[]。" })), knowledge_refs: Type.Optional(Type.Array(Type.String({ description: "知识引用。" }), { description: "知识引用。" })), connector_refs: Type.Optional(Type.Array(Type.String({ description: "连接器引用。" }), { description: "连接器引用。" })), memory_policy: Type.Optional(JsonObject), skill_signing_keys: Type.Optional(Type.Array(Type.Ref("SkillSigningKeyMetadata"), { description: "技能签名公钥列表；不包含私钥。" })), tool_policy: Type.Optional(Type.Object({ allowed_tools: Type.Array(Type.String({ description: "工具名称。" }), { description: "允许的工具名称。" }) }, { additionalProperties: false, description: "快照工具白名单。" })) }, { $id: "SnapshotProjection", additionalProperties: true, description: "冻结的员工执行快照；skills 是 presence-aware 的规范技能字段（包括 []），skill_refs 仅在 skills 缺失时兼容旧投影；用于离线执行和授权校验。", "x-dynamic-json": true });
@@ -767,7 +774,7 @@ type OpenApiOperationDocs = {
 };
 const MANAGER_BACKED_OPERATION_IDS = new Set([
   "resolveTenantByAccount", "login", "resetPassword", "transcribeAudio", "getConversationContext",
-  "updateConversationContext", "setConversationThinkingLevel", "resetConversationContext", "promptConversation", "syncGrants",
+  "updateConversationContext", "setConversationThinkingLevel", "resetConversationContext", "promptConversation", "introduceConversation", "syncGrants",
   "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree", "createOrgDepartment", "updateOrgDepartment", "promoteOrgDepartment", "deleteOrgDepartment", "assignOrgDepartment",
   "updateEmployeeAvatar",
 ]);
@@ -829,6 +836,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   } } } },
   updateConversationContext: { request: { thinking: { summary: "思考档位", value: { thinking_level: "high" } } }, responses: { "200": { description: "更新后的上下文状态。", examples: { updated: { summary: "设置成功", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: null, used_tokens: null, context_window: 0, percentage: null, thinking_level: "high", available_thinking_levels: ["off", "low", "high"], prompting: false } } } } } } },
   setConversationThinkingLevel: { request: { thinking: { summary: "思考档位", value: { thinking_level: "low" } } }, responses: { "200": { description: "更新后的上下文状态；PUT 是 PATCH 的兼容别名。", examples: { updated: { summary: "设置成功", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: null, used_tokens: null, context_window: 0, percentage: null, thinking_level: "low", available_thinking_levels: ["off", "low"], prompting: false } } } } } } },
+  introduceConversation: { responses: { "202": { description: "自我介绍已开始或幂等重放；员工回复通过 SSE/entries 获取，可用返回的幂等键查询收据。", examples: { accepted: { summary: "首次开始", value: { data: { conversation_id: "conversation-1", accepted: true, state: "accepted", idempotency_key: INTRODUCTION_RECEIPT_KEY } } }, completed: { summary: "已介绍过", value: { data: { conversation_id: "conversation-1", accepted: true, state: "completed", idempotency_key: INTRODUCTION_RECEIPT_KEY } } } } } } },
   promptConversation: { request: { textOnly: { summary: "文本提示", value: { text: "请总结今天的工作" } }, withImages: { summary: "提示、内联图片和附件", value: { text: "请分析附件", images: [{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" }], attachment_ids: ["file-1"], mentions: ["researcher"] } } }, responses: { "202": { description: "提示已接受或幂等重放；后台执行通过 SSE/entries 获取。", examples: { accepted: { summary: "首次接受", value: { data: { conversation_id: "conversation-1", accepted: true, state: "accepted", idempotency_key: "prompt-1" } } }, completed: { summary: "幂等重放", value: { data: { conversation_id: "conversation-1", accepted: true, state: "completed", idempotency_key: "prompt-1" } } } } } } },
   listConversationEntries: { request: { limit: { summary: "条数", value: 50 }, cursor: { summary: "上一页 next_cursor", value: "page_v1.opaque" }, entry_ref: { summary: "搜索定位", value: "entry_v1_opaque" } }, responses: { "200": { description: "脱敏历史条目；无参数不返回 page，分页参数启用正序续读。", examples: { paged: { summary: "带 limit 的历史分页；引用仅为形状示例，实际值来自响应", value: { data: { conversation_id: "conversation-1", entries: [{ id: "pi-entry-1", entry_ref: "entry_v1_opaque", participant_employee_id: "employee-1", type: "message", parentId: null, timestamp: "2026-09-05T08:00:00.000Z", source_employee_id: "employee-1", source_role: "participant", message: { role: "assistant", content: "以下是今日总结。" } }] }, page: { next_cursor: "page_v1.opaque", has_more: true } } }, entries: { summary: "消息、思考和工具条目", value: { data: { conversation_id: "conversation-1", entries: [{ id: "entry-1", type: "message", timestamp: "2026-09-01T08:02:00.000Z", message: { role: "user", content: "请总结今天的工作" } }, { id: "entry-2", type: "message", timestamp: "2026-09-01T08:02:01.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "整理信息" }, { type: "text", text: "这是摘要" }] } }, { id: "entry-3", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: false, content: "done" } }] } } } } } } },
   abortConversation: { responses: { "200": { description: "终止结果；没有活动执行时 aborted 为 false。", examples: { aborted: { summary: "终止结果", value: { data: { conversation_id: "conversation-1", aborted: true } } } } } } },
@@ -1306,6 +1314,7 @@ export class AgentHttpServer {
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/thinking-level", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationThinkingLevel", { summary: "设置会话思考档位", description: "设置当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
+    this.registerRoute("POST", "/api/agent/conversations/:conversation_id/introduction", (_request, response, caller, fastifyRequest) => this.introduceConversation(response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("introduceConversation", { summary: "员工自我介绍", description: "让空单聊的入口员工先发一条自我介绍。触发指令不进入可见历史，只显示员工回复；每个会话只执行一次，重复请求返回同一收据。会话已有消息时返回 409。", params: ConversationParams, response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/prompt", (request, response, caller, fastifyRequest) => this.prompt(request, response, String((fastifyRequest?.params as { conversation_id: string }).conversation_id), caller!), routeSchema("promptConversation", { summary: "提交会话提示", description: "向本地会话提交文本、图片和群聊提及；使用 Idempotency-Key 保证重试安全。", params: ConversationParams, headers: promptHeaders, body: Type.Ref("PromptRequest"), response: { 202: jsonResponse(Type.Ref("PromptAcceptedEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError") } }));
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/events", (request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
@@ -1916,7 +1925,21 @@ export class AgentHttpServer {
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
-  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ ...expert, ...employeeDisplay(expert) })), page: { next_cursor: null, has_more: false } }); }
+  private listExperts(response: ServerResponse, caller: AuthenticatedCaller): void { this.writeJson(response, 200, { data: this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).map((expert) => ({ ...expert, ...employeeDisplay(expert), skill_details: this.expertSkillDetails(expert, caller) })), page: { next_cursor: null, has_more: false } }); }
+
+  // 只读展示名：名称来自本机已验签技能包，取不到时返回 null，由前端回退到技能引用。
+  private expertSkillDetails(expert: LoadedExpertProjection, caller: AuthenticatedCaller): Array<{ ref: string; display_name: string | null }> {
+    let refs: string[];
+    try { refs = skillRefsForSnapshot({ skills: expert.skills }); } catch { return []; }
+    const cache = this.options.skillCache;
+    if (!caller.tenantId || !cache) return refs.map((ref) => ({ ref, display_name: null }));
+    const memberId = caller.userId ?? caller.callerId;
+    const snapshot = this.options.store.listSnapshots(caller.tenantId, memberId).find((item) => item.employee_id === expert.employee_id && item.version === expert.version);
+    let verification: ReturnType<typeof skillSigningVerificationFromEnv>;
+    try { verification = snapshot ? skillSigningVerificationForSnapshot({ ...snapshot }) : skillSigningVerificationFromEnv(); } catch { return refs.map((ref) => ({ ref, display_name: null })); }
+    const scope = { tenantId: caller.tenantId, memberId };
+    return refs.map((ref) => ({ ref, display_name: cache.displayNameFor(scope, ref, verification) ?? null }));
+  }
 
   private async updateEmployeeAvatar(request: IncomingMessage, response: ServerResponse, employeeId: string, caller: AuthenticatedCaller): Promise<void> {
     this.requireAuthorizedEmployee(employeeId, caller);
@@ -2271,6 +2294,35 @@ export class AgentHttpServer {
     catch (error) { throw new HttpProblem(422, "invalid_schedule", error instanceof Error ? error.message : "Unsupported schedule"); }
   }
 
+  private assertRunnableTargets(caller: AuthenticatedCaller, employeeIds: string[]): void {
+    for (const employeeId of employeeIds) {
+      const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked);
+      const snapshot = expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
+      if (!expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
+      if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
+    }
+  }
+
+  private introduceConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): void {
+    const callerId = caller.callerId;
+    const key = INTRODUCTION_RECEIPT_KEY;
+    const conversation = this.options.store.getOwnedConversation(conversationId, caller.tenantId!, caller.userId ?? caller.callerId);
+    if (!conversation) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    if (conversation.kind === "group") throw new HttpProblem(422, "introduction_not_supported", "Only single-employee conversations support an introduction");
+    const previous = this.options.store.getPromptReceipt(conversationId, callerId, key);
+    if (previous) return this.writeReceipt(response, conversationId, key, previous.state);
+    if (this.options.host.readEntries(conversationId, caller).some((item) => visibleHistoryText(item.entry))) {
+      throw new HttpProblem(409, "conversation_not_empty", "Conversation already has messages");
+    }
+    this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, []));
+    const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint: INTRODUCTION_PROMPT_TYPE });
+    if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
+    const worker = this.runPrompt(conversationId, caller, key, receipt.ownerInstance, INTRODUCTION_PROMPT, [], [], [], INTRODUCTION_PROMPT_TYPE);
+    this.promptWorkers.add(worker);
+    void worker.finally(() => this.promptWorkers.delete(worker));
+    this.writeReceipt(response, conversationId, key, "accepted");
+  }
+
   private async prompt(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     const callerId = caller.callerId;
     const key = this.header(request, "idempotency-key");
@@ -2291,13 +2343,7 @@ export class AgentHttpServer {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
-    const targetEmployeeIds = this.resolvePromptTargets(conversation, caller, mentions);
-    for (const employeeId of targetEmployeeIds) {
-      const expert = this.options.store.listLoadedExperts(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && !item.revoked);
-      const snapshot = expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
-      if (!expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
-      if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
-    }
+    this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint });
@@ -2349,11 +2395,11 @@ export class AgentHttpServer {
     return;
   }
 
-  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: ImageContent[], mentions: string[], attachmentIds: string[]): Promise<void> {
+  private async runPrompt(conversationId: string, caller: AuthenticatedCaller, key: string, ownerInstance: string | undefined, text: string, images: ImageContent[], mentions: string[], attachmentIds: string[], hiddenPromptType?: string): Promise<void> {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key });
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, hiddenPromptType });
       if (!lastEntryId) {
         this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" });
         return;

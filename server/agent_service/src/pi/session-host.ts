@@ -73,6 +73,8 @@ export interface PromptDeliveryOptions {
   logicalMessageId?: string;
   idempotencyKey?: string;
   background?: boolean;
+  /** See GroupMessageCommand.hiddenPromptType. */
+  hiddenPromptType?: string;
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -364,6 +366,7 @@ export class SessionHost {
         idempotencyKey: deliveryOptions?.idempotencyKey,
         caller,
         background: deliveryOptions?.background,
+        hiddenPromptType: deliveryOptions?.hiddenPromptType,
       });
       return result.replies.at(-1)?.entryId;
     });
@@ -1452,7 +1455,11 @@ export class SessionHost {
         void sourceCapture.catch(() => undefined); // Awaited at settlement; avoid an unhandled rejection during streaming.
       });
       const promptPromise = (async () => {
-        await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        if (command.hiddenPromptType) {
+          await session.sendCustomMessage({ customType: command.hiddenPromptType, content: command.text, display: false }, { triggerTurn: true });
+        } else {
+          await session.prompt(command.text, command.images ? { images: command.images } : undefined);
+        }
         await sourceCapture;
         this.recordEntrySources(record, command, entriesBefore);
         return record.sessionManager.getLeafId() ?? undefined;

@@ -79,6 +79,8 @@ export function mergeHistorySources(store: AgentSqliteStore, conversationId: str
     const workIds = workIdsForEntries(source.entries, workRecords.filter((row) => row.employee_id === source.employeeId));
     return source.entries.flatMap((raw, ordinal): IndexedHistoryEntry[] => {
       if (typeof raw.id !== "string" || raw.type === ("session" as string)) return [];
+      // Non-displayed custom messages are model-only instructions (e.g. the first-chat introduction).
+      if (raw.type === "custom_message" && !raw.display) return [];
       const entry: HistoryEntry = { ...raw, entry_ref: historyEntryRef(conversationId, source.employeeId, raw.id) };
       // Never trust a raw runtime field over the owner-scoped work index.
       delete entry.work_id;
