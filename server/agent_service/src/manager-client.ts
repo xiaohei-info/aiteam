@@ -46,7 +46,7 @@ export interface AuthorizedConfig {
 export interface MarketplaceTemplate {
   template_id: string;
   description: string | null;
-  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string }> | null;
+  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string; display_name: string | null }> | null;
   display_name: string;
   category: string;
   model_name: string;
@@ -218,10 +218,27 @@ export class HttpManagerClient implements ManagerClient {
   }
 
   async listMarketplaceTemplates(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]> {
-    const response = await this.request("/api/manager/recruit/catalog/experts", caller);
+    const [response, names] = await Promise.all([
+      this.request("/api/manager/recruit/catalog/experts", caller),
+      this.skillMarketNames(caller),
+    ]);
     const value = this.unwrap(response);
     if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace catalog");
-    return value.map(normalizeMarketplaceTemplate);
+    return value.map((item) => normalizeMarketplaceTemplate(item, names));
+  }
+
+  /** 平台技能 ID → 展示名，供人才市场显示技能名称；技能市场不可用时返回空表，模板照常列出。 */
+  private async skillMarketNames(caller: AuthenticatedCaller): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    try {
+      const value = this.unwrap(await this.request("/api/manager/skill-market", caller));
+      for (const item of Array.isArray(value) ? value : []) {
+        const raw = objectValue(item);
+        const name = typeof raw?.display_name === "string" ? raw.display_name.trim() : "";
+        if (typeof raw?.skill_id === "string" && raw.skill_id && name) names.set(raw.skill_id, name);
+      }
+    } catch { /* names are cosmetic; the catalog itself decides availability */ }
+    return names;
   }
 
   async memoryDelete(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void> {
@@ -444,13 +461,13 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
   };
 }
 
-function normalizeMarketplaceTemplate(value: unknown): MarketplaceTemplate {
+function normalizeMarketplaceTemplate(value: unknown, skillNames: ReadonlyMap<string, string> = new Map()): MarketplaceTemplate {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const raw = value as Record<string, unknown>;
   if (typeof raw.template_id !== "string" || raw.template_id.length === 0 || raw.template_id.length > 256) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const skills = Array.isArray(raw.platform_skill_refs)
     ? raw.platform_skill_refs.filter((ref) => ref && typeof ref === "object" && !Array.isArray(ref) && ["skill_id", "version", "content_hash"].every((key) => typeof ref[key] === "string" && ref[key].length > 0))
-      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string }))
+      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string, display_name: skillNames.get(ref.skill_id as string) ?? null }))
     : stringArray(raw.skill_ids);
   const tags = stringArray(raw.tags);
   return {

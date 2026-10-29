@@ -121,6 +121,7 @@ test("HttpManagerClient preserves the safe Manager problem detail for runtime fa
 test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async () => {
   let request: { url: string; init: RequestInit } | undefined;
   const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    if (String(input).endsWith("/api/manager/skill-market")) return new Response(JSON.stringify({ data: [] }), { status: 200 });
     request = { url: String(input), init: init ?? {} };
     return new Response(JSON.stringify({ data: [{ template_id: "tpl-1", display_name: "Researcher", category: "research", default_model: "model-1", skill_ids: ["skill-1"], tags: ["analysis"] }] }), { status: 200 });
   });
@@ -132,7 +133,7 @@ test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async
 
 test("marketplace skill counts prefer modern fixed platform refs, including authoritative empty lists", async () => {
   const ref = { skill_id: "skill-1", version: "1", content_hash: "sha256:abc" };
-  const client = new HttpManagerClient("https://manager.test", async () => new Response(JSON.stringify({ data: [
+  const client = new HttpManagerClient("https://manager.test", async (input) => String(input).endsWith("/api/manager/skill-market") ? new Response("unavailable", { status: 503 }) : new Response(JSON.stringify({ data: [
     { template_id: "modern", description: "真实描述", platform_skill_refs: [ref, { ...ref, skill_id: "skill-2", private_key: "not-public" }], skill_ids: ["old"], skills_count: 9 },
     { template_id: "empty", platform_skill_refs: [], skill_ids: ["old"] },
     { template_id: "invalid", platform_skill_refs: [null, "not-a-ref", {}, ref] },
@@ -140,11 +141,28 @@ test("marketplace skill counts prefer modern fixed platform refs, including auth
   const templates = await client.listMarketplaceTemplates(caller);
   assert.deepEqual(templates.map((template) => template.skills_count), [2, 0, 1]);
   assert.equal(templates[0].description, "真实描述");
-  assert.deepEqual(templates[0].platform_skill_refs, [ref, { ...ref, skill_id: "skill-2" }]);
+  // 技能市场不可用时模板照常返回，只是没有展示名。
+  const unnamed = { ...ref, display_name: null };
+  assert.deepEqual(templates[0].platform_skill_refs, [unnamed, { ...unnamed, skill_id: "skill-2" }]);
   assert.deepEqual(templates[1].platform_skill_refs, []);
-  assert.deepEqual(templates[2].platform_skill_refs, [ref]);
+  assert.deepEqual(templates[2].platform_skill_refs, [unnamed]);
   assert.equal(templates[0].recruit_count, null);
   assert.doesNotMatch(JSON.stringify(templates), /private_key|not-public|usage_stats|price_tier/);
+});
+
+test("marketplace skill refs carry display names from the Manager skill market", async () => {
+  const ref = { skill_id: "skill-1", version: "1", content_hash: "sha256:abc" };
+  const urls: string[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (input) => {
+    urls.push(String(input));
+    if (String(input).endsWith("/api/manager/skill-market")) {
+      return new Response(JSON.stringify({ data: [{ skill_id: "skill-1", display_name: " 深度研究 " }, { skill_id: "skill-3", display_name: "" }, { display_name: "no id" }] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ data: [{ template_id: "tpl", platform_skill_refs: [ref, { ...ref, skill_id: "skill-2" }] }] }), { status: 200 });
+  });
+  const [template] = await client.listMarketplaceTemplates(caller);
+  assert.deepEqual(template.platform_skill_refs, [{ ...ref, display_name: "深度研究" }, { ...ref, skill_id: "skill-2", display_name: null }]);
+  assert.deepEqual(urls.sort(), ["https://manager.test/api/manager/recruit/catalog/experts", "https://manager.test/api/manager/skill-market"]);
 });
 
 test("authorized employee projection preserves real position and all departments without inference", () => {
