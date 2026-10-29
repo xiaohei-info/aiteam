@@ -1,5 +1,5 @@
 import { lookup } from "node:dns/promises";
-import { observedFetch } from "./observability.js";
+import { appLogger, observedFetch, safeError } from "./observability.js";
 import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
@@ -9,6 +9,9 @@ import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, skill
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
 export const HINDSIGHT_CLIENT_PROTOCOL = "aiteam-memory-v1" as const;
+const MANAGER_REQUEST_TIMEOUT_MS = 10_000;
+/** Skill display names are best-effort; a slow skill market must not hold up the marketplace catalog. */
+const SKILL_MARKET_NAMES_TIMEOUT_MS = 1_500;
 
 export interface HindsightRuntimeConfig {
   /** Manager facade URL; never a direct Hindsight service URL. */
@@ -227,17 +230,23 @@ export class HttpManagerClient implements ManagerClient {
     return value.map((item) => normalizeMarketplaceTemplate(item, names));
   }
 
-  /** 平台技能 ID → 展示名，供人才市场显示技能名称；技能市场不可用时返回空表，模板照常列出。 */
+  /**
+   * 平台技能 ID → 展示名，供人才市场显示技能名称；技能市场不可用时返回空表，模板照常列出。
+   * 与模板目录并行请求，所以单独给一个短超时，避免拖慢整个人才市场列表。
+   */
   private async skillMarketNames(caller: AuthenticatedCaller): Promise<Map<string, string>> {
     const names = new Map<string, string>();
     try {
-      const value = this.unwrap(await this.request("/api/manager/skill-market", caller));
+      const value = this.unwrap(await this.request("/api/manager/skill-market", caller, undefined, undefined, undefined, undefined, SKILL_MARKET_NAMES_TIMEOUT_MS));
       for (const item of Array.isArray(value) ? value : []) {
         const raw = objectValue(item);
         const name = typeof raw?.display_name === "string" ? raw.display_name.trim() : "";
         if (typeof raw?.skill_id === "string" && raw.skill_id && name) names.set(raw.skill_id, name);
       }
-    } catch { /* names are cosmetic; the catalog itself decides availability */ }
+    } catch (error) {
+      // Names are cosmetic; the catalog itself decides availability. Log so missing names stay diagnosable.
+      appLogger.log("warn", "marketplace.skill_names_unavailable", { dependency: "manager", outcome: error instanceof ManagerTimeoutError ? "timeout" : "failed", ...safeError(error) });
+    }
     return names;
   }
 
@@ -269,8 +278,9 @@ export class HttpManagerClient implements ManagerClient {
     query?: Record<string, string>,
     method?: "GET" | "POST" | "PATCH" | "DELETE",
     idempotencyKey?: string,
+    timeoutMs?: number,
   ): Promise<unknown> {
-    const response = await this.requestResponse(path, caller, body, query, method, idempotencyKey);
+    const response = await this.requestResponse(path, caller, body, query, method, idempotencyKey, timeoutMs);
     if (response.status === 204) return undefined;
     try {
       return await response.json();
@@ -286,6 +296,7 @@ export class HttpManagerClient implements ManagerClient {
     query?: Record<string, string>,
     method?: "GET" | "POST" | "PATCH" | "DELETE",
     idempotencyKey?: string,
+    timeoutMs = MANAGER_REQUEST_TIMEOUT_MS,
   ): Promise<Response> {
     const url = new URL(path, this.baseUrl);
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
@@ -294,7 +305,7 @@ export class HttpManagerClient implements ManagerClient {
     try {
       response = await this.fetchImpl(url.toString(), {
         method: requestMethod,
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: {
           Accept: "application/json",
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),

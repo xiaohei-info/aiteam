@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
+import { appLogger } from "./observability.js";
 import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
@@ -163,6 +164,26 @@ test("marketplace skill refs carry display names from the Manager skill market",
   const [template] = await client.listMarketplaceTemplates(caller);
   assert.deepEqual(template.platform_skill_refs, [{ ...ref, display_name: "深度研究" }, { ...ref, skill_id: "skill-2", display_name: null }]);
   assert.deepEqual(urls.sort(), ["https://manager.test/api/manager/recruit/catalog/experts", "https://manager.test/api/manager/skill-market"]);
+});
+
+test("a stalled skill market only delays the marketplace catalog by the short name budget and logs a warning", async (t) => {
+  const logged: Array<{ level: string; event: string; fields: Record<string, unknown> }> = [];
+  t.mock.method(appLogger, "log", (level: string, event: string, fields: Record<string, unknown> = {}) => { logged.push({ level, event, fields }); });
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    if (String(input).endsWith("/api/manager/skill-market")) {
+      // Hang until the client-side budget aborts the request.
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+    }
+    return new Response(JSON.stringify({ data: [{ template_id: "tpl", platform_skill_refs: [{ skill_id: "skill-1", version: "1", content_hash: "sha256:abc" }] }] }), { status: 200 });
+  });
+  const started = performance.now();
+  const [template] = await client.listMarketplaceTemplates(caller);
+  const elapsed = performance.now() - started;
+  assert(elapsed < 5_000, `catalog waited ${Math.round(elapsed)}ms for skill names`);
+  assert.equal(template.platform_skill_refs?.[0]?.display_name, null);
+  const warning = logged.find((entry) => entry.event === "marketplace.skill_names_unavailable");
+  assert.equal(warning?.level, "warn");
+  assert.equal(warning?.fields.outcome, "timeout");
 });
 
 test("authorized employee projection preserves real position and all departments without inference", () => {
