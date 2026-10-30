@@ -3,7 +3,7 @@
  * - 渲染合计、按员工、按成员
  * - 未知价格显示「未定价」，部分未定价显示「≥ 已知小计」，从不显示为 0
  * - 切换时间范围重新请求；加载失败展示错误
- * - 切换后慢返回的旧范围结果（成功或失败）不覆盖新范围
+ * - 切换后慢返回的旧范围结果（成功或失败）不覆盖新范围；切换时取消旧请求
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
@@ -97,8 +97,8 @@ describe("UsagePage 用量监控", () => {
     expect(within(employees).queryByText("$0.00")).not.toBeInTheDocument();
     expect(within(screen.getByRole("table", { name: "成员用量" })).getByText("成员甲")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "今日" })).toHaveAttribute("aria-pressed", "true");
-    expect(api.getStatistics).toHaveBeenCalledWith("employee", expect.objectContaining({ window_start: expect.any(String) }));
-    expect(api.getStatistics).toHaveBeenCalledWith("member", expect.objectContaining({ window_end: expect.any(String) }));
+    expect(api.getStatistics).toHaveBeenCalledWith("employee", expect.objectContaining({ window_start: expect.any(String) }), expect.any(AbortSignal));
+    expect(api.getStatistics).toHaveBeenCalledWith("member", expect.objectContaining({ window_end: expect.any(String) }), expect.any(AbortSignal));
   });
 
   it("切换到全部时不带时间窗重新请求", async () => {
@@ -106,8 +106,8 @@ describe("UsagePage 用量监控", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("4 次")).toBeInTheDocument());
     fireEvent.click(screen.getByText("全部"));
-    await waitFor(() => expect(api.getStatistics).toHaveBeenCalledWith("employee", null));
-    expect(api.getStatistics).toHaveBeenCalledWith("member", null);
+    await waitFor(() => expect(api.getStatistics).toHaveBeenCalledWith("employee", null, expect.any(AbortSignal)));
+    expect(api.getStatistics).toHaveBeenCalledWith("member", null, expect.any(AbortSignal));
   });
 
   it("切换范围后，慢返回的旧范围结果不覆盖新范围", async () => {
@@ -130,6 +130,22 @@ describe("UsagePage 用量监控", () => {
     expect(screen.getByText("9 次")).toBeInTheDocument();
     expect(screen.queryByText("4 次")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("切换范围时取消旧范围的请求", async () => {
+    const signals: AbortSignal[] = [];
+    mockApi({
+      getStatistics: vi.fn((groupBy: UsageGroupBy, window, signal?: AbortSignal) => {
+        if (window !== null && signal) { signals.push(signal); return new Promise<UsageStatistics | null>(() => {}); }
+        return Promise.resolve(responses[groupBy]);
+      }),
+    });
+    renderPage();
+    await waitFor(() => expect(signals.length).toBe(2));
+    expect(signals.some((signal) => signal.aborted)).toBe(false);
+    fireEvent.click(screen.getByText("全部"));
+    await waitFor(() => expect(screen.getByText("4 次")).toBeInTheDocument());
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it("切换范围后，旧范围请求失败不清空新范围、不报错", async () => {

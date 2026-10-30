@@ -36,6 +36,7 @@ describe("useUsageApi", () => {
     await result.current.getStatistics("employee", { window_start: "2026-10-29T16:00:00Z", window_end: "2026-10-30T03:00:00Z" });
     expect(client.get).toHaveBeenCalledWith(
       "/api/manager/usage/statistics?group_by=employee&window_start=2026-10-29T16%3A00%3A00Z&window_end=2026-10-30T03%3A00%3A00Z",
+      { signal: undefined },
     );
   });
 
@@ -43,7 +44,15 @@ describe("useUsageApi", () => {
     const { client, wrapper } = setup();
     const { result } = renderHook(() => useUsageApi(), { wrapper });
     await result.current.getStatistics("member", null);
-    expect(client.get).toHaveBeenCalledWith("/api/manager/usage/statistics?group_by=member");
+    expect(client.get).toHaveBeenCalledWith("/api/manager/usage/statistics?group_by=member", { signal: undefined });
+  });
+
+  it("透传取消信号", async () => {
+    const { client, wrapper } = setup();
+    const { result } = renderHook(() => useUsageApi(), { wrapper });
+    const controller = new AbortController();
+    await result.current.getStatistics("member", null, controller.signal);
+    expect(client.get).toHaveBeenCalledWith("/api/manager/usage/statistics?group_by=member", { signal: controller.signal });
   });
 });
 

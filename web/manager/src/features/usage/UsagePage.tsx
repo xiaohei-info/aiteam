@@ -55,18 +55,19 @@ export function UsagePage(): ReactNode {
   const [byMember, setByMember] = useState<UsageStatistics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // 只采用最近一次请求的结果：切换时间范围后，慢返回的旧范围结果（含失败）一律丢弃。
+  // 只采用最近一次请求的结果：切换时间范围或离开页面时取消旧请求；
+  // 取消前已返回的旧结果（含失败）按序号丢弃。
   const latestRequest = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal: AbortSignal) => {
     const requestId = ++latestRequest.current;
     setLoading(true);
     setError(null);
     const window = RANGES.find((item) => item.key === range)!.window();
     try {
       const [employeeStats, memberStats] = await Promise.all([
-        api.getStatistics("employee", window),
-        api.getStatistics("member", window),
+        api.getStatistics("employee", window, signal),
+        api.getStatistics("member", window, signal),
       ]);
       if (requestId !== latestRequest.current) return;
       setByEmployee(employeeStats);
@@ -82,9 +83,12 @@ export function UsagePage(): ReactNode {
   }, [api, range]);
 
   useEffect(() => {
-    void load();
-    // 卸载或换范围后作废进行中的请求。
-    return () => { latestRequest.current += 1; };
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => {
+      latestRequest.current += 1;
+      controller.abort();
+    };
   }, [load]);
 
   const columns = useMemo(() => (nameHeader: string): TableColumn<GroupRow>[] => [
