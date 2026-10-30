@@ -1,0 +1,112 @@
+/* 人才市场卡片补充与模板详情（议题 7）。卡片基础样式复用 experts.css。 */
+
+[data-ui="marketplace-card-tags"] {
+  display: flex;
+  min-height: 22px;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow: hidden;
+}
+
+[data-ui="marketplace-tag"],
+[data-ui="marketplace-output-type"] {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+[data-ui="marketplace-tag"] {
+  background: var(--expert-surface-muted);
+  color: var(--expert-ink);
+}
+
+[data-ui="marketplace-output-type"] {
+  border: 1px solid var(--expert-line);
+  color: var(--expert-muted);
+}
+
+[data-ui="expert-card-meta"] span[data-tone="success"],
+[data-ui="marketplace-rate"][data-tone="success"] {
+  color: var(--color-text-green, #27786b);
+}
+
+[data-ui="expert-card-meta"] span[data-tone="warning"],
+[data-ui="marketplace-rate"][data-tone="warning"] {
+  color: var(--color-text-yellow, #986b1d);
+}
+
+[data-ui="marketplace-rate"][data-tone="muted"] {
+  color: var(--expert-muted);
+}
+
+[data-ui="marketplace-detail-body"] {
+  display: flex;
+  min-height: 160px;
+  flex-direction: column;
+  gap: 16px;
+}
+
+[data-ui="marketplace-detail-section"] {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+[data-ui="marketplace-detail-list"] {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+[data-ui="marketplace-detail-muted"] {
+  color: var(--expert-muted);
+}
+
+[data-ui="marketplace-detail-rows"] {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+}
+
+[data-ui="marketplace-detail-rows"] div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+}
+
+[data-ui="marketplace-detail-rows"] dt {
+  color: var(--expert-muted);
+}
+
+[data-ui="marketplace-detail-rows"] dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-ui="marketplace-prompt-pills"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+[data-ui="marketplace-prompt-pill"] {
+  padding: 4px 12px;
+  border: 1px solid var(--expert-line);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+[data-ui="marketplace-detail-footer"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--expert-line);
+  color: var(--expert-muted);
+  font-size: 12px;
+}

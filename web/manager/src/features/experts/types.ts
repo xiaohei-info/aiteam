@@ -8,8 +8,49 @@
  * - 实例：/api/manager/employees（EmployeeConfigOut；PUT 全量 EmployeeConfigIn）
  */
 
-/** 可招募专家模板（对齐 ExpertTemplateDetail）。 */
-export interface ExpertTemplate {
+/** 产出类型（对齐 shared/contracts/expert_profile.py OutputType）。 */
+export type OutputType = "document" | "spreadsheet" | "code" | "presentation" | "system_operation";
+
+/** 模板计价（参考价，非账单）；per_token 按百万 Token 计。unit_price 为十进制字符串。 */
+export interface TemplatePricing {
+  mode: "per_call" | "per_token" | "subscription";
+  unit_price: string | number;
+  currency: "USD";
+}
+
+/** 本企业内该模板直接招募员工的段落解决率（对齐 TemplateStatsOut，只含计数）。 */
+export interface TemplateStats {
+  /** 已评估少于 min_sample 段时为 null，界面显示「样本不足」，不显示 0%。 */
+  resolution_rate: number | null;
+  evaluated_segments: number;
+  resolved_segments: number;
+  min_sample: number;
+}
+
+/**
+ * 人才市场展示字段（议题 7），Operator 持有、Manager 原样投影；旧模板可能缺省。
+ * 字符串空串表示未填写；required_permissions / pricing 为 null 表示未声明。
+ */
+export interface ExpertTemplateProfile {
+  tagline?: string;
+  use_cases?: string[];
+  limitations?: string[];
+  example_prompts?: string[];
+  sample_outputs?: Array<{ title: string; output_type: OutputType; preview_url: string }>;
+  output_types?: OutputType[];
+  required_connectors?: string[];
+  optional_connectors?: string[];
+  recommended_knowledge?: string[];
+  required_permissions?: { full_access: boolean; local_directories: boolean } | null;
+  pricing?: TemplatePricing | null;
+  memory_policy_summary?: string;
+  publisher?: string;
+  changelog_url?: string;
+  updated_at?: string | null;
+}
+
+/** 可招募专家模板（对齐 RecruitableExpertOut = ExpertTemplateDetail + is_recruited + stats）。 */
+export interface ExpertTemplate extends ExpertTemplateProfile {
   template_id: string;
   version: string;
   display_name: string;
@@ -22,6 +63,8 @@ export interface ExpertTemplate {
   platform_skill_refs?: Array<{ skill_id: string; version: string; content_hash: string }>;
   platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   is_recruited?: boolean;
+  /** 本企业尚无该模板评估数据或统计不可用时为 null。 */
+  stats?: TemplateStats | null;
 }
 
 /** 方案包内专家摘要（对齐 SolutionPackage.experts 的 ExpertTemplateDetail）。 */
