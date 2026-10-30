@@ -1,0 +1,378 @@
+AITeam 接口与数据结构设计文档
+================================
+【已废弃，仅供历史参考】本文包含未落地的 WebSocket、Hermes 风格 HTTP 与前端 Tauri SQLite
+双写设想，不代表当前运行时。现行 Agent `/api/agent/*` + 会话级 SSE 架构及 SQLite 边界请见
+`docs/api-agent-migration.md`。
+
+生成日期：2026-06-12
+
+一、架构总览
+============
+
+UI Layer (React)
+    ↕ Zustand Stores
+Transport Layer
+    ├── WebSocket (实时消息/AI 回复流)
+    ├── HTTP REST API (axios)       ← 已配置，待全面对接
+    └── Tauri IPC                   ← 本地 SQLite 持久化
+
+
+二、HTTP REST 接口
+==================
+
+基础配置
+--------
+Base URL : VITE_API_BASE_URL | http://localhost:8080
+鉴权     : Authorization: Bearer <token>
+超时     : 30s
+401 处理 : 自动调用 logout()
+
+
+2.1 认证
+--------
+当前为本地 SHA-256 鉴权，后续需服务端对接。
+
+方法    路径              描述
+POST    /auth/login       登录，返回 token
+POST    /auth/logout      登出，撤销 token
+POST    /auth/refresh     刷新 token
+
+LoginRequest {
+  email: string
+  password: string
+}
+LoginResponse {
+  token: string
+  userId: string
+  username: string
+  avatar?: string
+}
+
+
+2.2 消息发送
+------------
+messageSender.ts 中已预留 TODO，乐观更新 + DB 持久化逻辑已就绪，仅需填入服务端调用。
+
+方法    路径        描述
+POST    /messages   发送消息（文本/图片/文件/卡片）
+
+SendMessageRequest {
+  local_id: string          // 客户端生成的 UUID，用于 ack 回填
+  conv_id: string           // 对话 ID（= peer_id）
+  msg_type: MsgType
+  content: string           // 文本内容 或 CDN URL（图片/文件）
+  card_title?: string
+  card_description?: string
+}
+
+SendMessageResponse {
+  server_id: string         // 服务端消息 ID，回填本地记录
+  created_at: number        // 服务端时间戳（ms）
+}
+
+type MsgType = 'text' | 'image' | 'file' | 'card'
+
+
+2.3 文件上传
+------------
+方法    路径              描述
+POST    /files/upload     上传图片或文件，返回 CDN URL（multipart/form-data）
+
+UploadResponse {
+  url: string
+  file_id: string
+  filename: string
+  size: number
+  mime_type: string
+}
+
+
+2.4 Agent 管理
+--------------
+方法      路径              描述
+GET       /agents           获取当前用户所有 Agent
+POST      /agents           创建 Agent
+PUT       /agents/:id       更新 Agent
+DELETE    /agents/:id       删除 Agent
+
+Agent {
+  id: string
+  emoji: string
+  name: string
+  profession: string
+  system_prompt?: string
+  model_name: string
+  model_tokens: number
+  model_cost: number
+  talents: string[]
+  memories: string[]
+  stats: AgentStats
+  created_at: number
+  updated_at: number
+}
+
+AgentStats {
+  tasks: number
+  accuracy: number          // 0~1
+  avg_time: number          // 秒
+}
+
+
+2.5 知识库
+----------
+方法      路径                                描述
+GET       /knowledge-bases                   获取知识库列表
+POST      /knowledge-bases                   创建知识库
+GET       /knowledge-bases/:id              知识库详情 + 文件列表
+DELETE    /knowledge-bases/:id              删除知识库
+POST      /knowledge-bases/:id/files        导入文档（multipart）
+DELETE    /knowledge-bases/:id/files/:fid   删除文档
+GET       /knowledge-bases/stats            全局统计
+
+KnowledgeBase {
+  id: string
+  icon: string
+  name: string
+  doc_count: number
+  updated_at: number
+  progress?: number         // 0~100，索引进度
+}
+
+KbFile {
+  id: string
+  name: string
+  size: number
+  type: string
+  uploaded_at: number
+  status: 'indexing' | 'ready' | 'error'
+}
+
+KnowledgeStats {
+  total_bases: number
+  total_docs: number
+  total_chunks: number
+  storage_used: number      // bytes
+}
+
+
+2.6 技能中心
+------------
+方法      路径                    描述
+GET       /skills/categories      技能分类列表
+GET       /skills                 技能列表（category/search/page 过滤）
+GET       /skills/mine            我拥有的技能
+POST      /skills/:id/install     安装技能
+DELETE    /skills/:id/install     卸载技能
+
+Skill {
+  id: string
+  name: string
+  description: string
+  icon: string
+  category: string
+  author: string
+  usage_count: number
+  rating: number            // 0~5
+  tags: string[]
+  created_at: number
+  is_owned?: boolean
+}
+
+SkillCategory {
+  id: string
+  label: string
+  count: number
+}
+
+
+2.7 技能市场（Talent Market）
+-----------------------------
+方法    路径                  描述
+GET     /market/categories    市场分类
+GET     /market/agents        Agent 列表（category/page/pageSize）
+
+MarketAgent {
+  id: string
+  icon: string
+  icon_bg: string
+  name: string
+  title: string
+  desc: string
+  tags: string[]
+  rating: number
+  reviews: number
+  category: string
+}
+
+PagedResponse<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+}
+
+
+三、WebSocket 接口
+==================
+
+连接
+----
+ws://<host>/ws?token=<encoded_token>
+
+- 单例连接，登录后自动建立，登出时断开
+- 状态：disconnected → connecting → connected | error
+
+消息帧结构
+----------
+服务端 → 客户端：
+
+ServerMessage {
+  id: string                // 服务端消息唯一 ID
+  conv_id: string           // 对话 ID
+  sender_id: string
+  receiver_id: string
+  msg_type: MsgType
+  content: string           // 文本内容 或 JSON 字符串
+  created_at: number        // ms 时间戳
+  thinking?: string         // AI 推理过程（可选）
+}
+
+客户端 → 服务端：
+
+MessageAck {
+  type: 'ack'
+  message_id: string
+}
+
+Ping {
+  type: 'ping'
+}
+
+流式播放协议（当前 Mock，待服务端对齐）
+----------------------------------------
+当前客户端通过 setInterval(18ms, +3字符) 模拟流式打字效果。
+建议服务端采用 SSE 或 WebSocket 分块推送：
+
+StreamChunk {
+  type: 'stream_chunk'
+  conv_id: string
+  message_id: string
+  delta: string             // 本次增量内容
+  done: boolean             // 是否结束
+}
+
+
+四、Tauri IPC 命令（本地 SQLite）
+==================================
+
+命令                          入参                                出参
+db_init                       userId: string                      void
+db_get_conversations          -                                   Conversation[]
+db_get_messages               peerId, offset, limit               Message[]
+db_insert_message             peerId, NewMessage                  string (localId)
+db_update_message_server_id   peerId, localId, serverId           void
+db_update_message_status      peerId, localId, status             void
+db_upsert_conversation        UpsertConversation                  void
+db_search_messages            peerId, query                       Message[]
+db_upsert_user                UpsertUser                          void
+db_get_users_by_role          role: 'self'|'contact'|'agent'      DbUser[]
+
+
+五、核心数据模型
+================
+
+DB 层（Tauri SQLite 原始结构）
+------------------------------
+
+Conversation {
+  peer_id: string
+  title: string
+  last_message_preview: string
+  last_message_at: number
+  unread_count: number
+  is_pinned: boolean
+  created_at: number
+  updated_at: number
+}
+
+Message {
+  local_id: string
+  server_id?: string
+  sender_id: string
+  receiver_id: string
+  msg_type: MsgType
+  status: MsgStatus
+  content: string
+  created_at: number
+  server_at?: number
+}
+
+DbUser {
+  id: string
+  username: string
+  avatar: string
+  role: 'self' | 'contact' | 'agent'
+  extra: string             // JSON 序列化的 AgentExtra
+  created_at: number
+  updated_at: number
+}
+
+type MsgStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed'
+
+UI Store 层（Zustand）
+----------------------
+
+ConversationItem {
+  id: string
+  title: string
+  agentEmoji: string
+  agentName: string
+  lastMessage: string
+  time: string
+  unread?: number
+}
+
+UIMessage {
+  id: string
+  role: 'user' | 'assistant'
+  msgType: MsgType
+  content: string
+  time: string
+  thinking?: string
+  status?: MsgStatus
+}
+
+
+六、待对接优先级
+================
+
+优先级  模块            位置                    说明
+P0      消息发送        messageSender.ts        替换本地 Mock 为 POST /messages（4 处 TODO）
+P0      WebSocket 接收  socket.ts               调整 buildWsUrl() + parseServerMessage()
+P1      Agent CRUD      AgentConfig/            统一到 chat store，移除硬编码 INITIAL_AGENTS
+P1      知识库          knowledgeBase.ts store  全部为内存 Mock，需接入 REST API
+P2      技能中心        SkillCenter/api.ts      接口签名已抽象，替换 Mock 实现即可
+P2      技能市场        TalentMarket/api.ts     同上
+P3      认证            auth.ts                 本地 SHA-256 → 服务端 JWT
+P3      流式协议        useStreamingMsg.ts      客户端 setInterval 模拟 → 服务端真实分块推送
+
+
+七、关键注意点
+==============
+
+1. local_id 回填
+   发送消息前须生成 UUID 作为 local_id，服务端 ack 后通过 db_update_message_server_id 回填，
+   避免重复消息。
+
+2. 知识库进度轮询
+   文档索引为异步任务，需轮询 GET /knowledge-bases/:id 或 WebSocket 推送 progress 事件。
+
+3. AgentExtra 序列化
+   Agent 扩展信息存为 users.extra JSON 字符串，读写时需 JSON.parse/stringify。
+
+4. WebSocket 重连
+   当前无自动重连逻辑，断线后需手动触发 connect()，建议增加指数退避重连。
+
+5. 文件发送流程
+   先 POST /files/upload 获取 CDN URL，再 POST /messages 携带 URL，
+   两步原子性需客户端保证。
