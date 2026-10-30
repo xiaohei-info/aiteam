@@ -24,6 +24,7 @@ import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import { isManagerAccessDenial, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
+import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../storage/context-segments.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
@@ -113,6 +114,8 @@ export interface ContextResetOptions {
   saveMemory?: boolean;
   /** "proceed" resets even when saving memory failed; the default "abort" keeps the context. */
   onMemoryFailure?: "abort" | "proceed";
+  /** The member's verdict on the segment this reset ends; omitted leaves it unevaluated. */
+  evaluation?: SegmentEvaluation;
 }
 
 export interface ContextResetParticipant {
@@ -136,6 +139,10 @@ export interface ContextResetResult {
   /** Some participant kept its context because saving memory failed; retry with on_memory_failure=proceed. */
   confirmation_required: boolean;
   participants: ContextResetParticipant[];
+  /** The segment this reset ended; null when nothing was reset or a replayed reset predates segment records. */
+  segment_id: string | null;
+  outcome: SegmentOutcome | null;
+  segment: ContextSegment | null;
 }
 
 export { CONTEXT_RESET_ENTRY_TYPE };
@@ -584,15 +591,29 @@ export class SessionHost {
       this.withContextOperation(record, () => this.resetRecordContext(record, caller, resetId, timestamp, options))));
     const done = participants.filter((item) => item.reset);
     const fresh = done.some((item) => !item.already_reset);
+    const resultId = fresh ? resetId : done[0]?.reset_id ?? resetId;
+    const owner = { tenantId: caller.tenantId ?? "", memberId: caller.userId ?? caller.callerId };
+    // Only a fresh reset opens a row; a replay must not attach a verdict to an older reset.
+    const segment = !done.length ? null : fresh
+      ? this.options.store.contextSegments.record(owner, {
+        conversationId, segmentId: resetId,
+        employeeIds: done.filter((item) => !item.already_reset).map((item) => item.employee_id),
+        messageCount: Math.max(...done.map((item) => item.message_count)),
+        endedAt: Date.parse(timestamp), evaluation: options.evaluation,
+      })
+      : this.options.store.contextSegments.get(owner, conversationId, resultId) ?? null;
     return {
       conversation_id: conversationId,
       // A pure replay answers with the id the earlier reset wrote into the marker.
-      reset_id: fresh ? resetId : done[0]?.reset_id ?? resetId,
+      reset_id: resultId,
       reset: done.length > 0,
       already_reset: done.length > 0 && !fresh,
       memory_saved: participants.some((item) => item.memory_saved),
       confirmation_required: participants.some((item) => !item.reset && isContextResetMemoryFailure(item.memory_reason)),
       participants,
+      segment_id: segment?.segment_id ?? null,
+      outcome: segment?.outcome ?? null,
+      segment,
     };
   }
 
@@ -626,7 +647,7 @@ export class SessionHost {
     }
     const memory = options.saveMemory === false
       ? { reason: "skipped" as const, operationId: null }
-      : await this.retainResetTranscript(record, caller, messages, resetId);
+      : await this.retainResetTranscript(record, caller, messages, resetId, options.evaluation);
     // Transient save failures keep the context so the user can retry or explicitly proceed without memory.
     if (isContextResetMemoryFailure(memory.reason) && options.onMemoryFailure !== "proceed") {
       return { employee_id: employeeId, reset: false, already_reset: false, reset_id: null, message_count: messages.length, memory_saved: false, memory_reason: memory.reason, operation_id: null };
@@ -666,6 +687,7 @@ export class SessionHost {
     caller: AuthenticatedCaller,
     messages: readonly SessionMessageEntry[],
     resetId: string,
+    evaluation?: SegmentEvaluation,
   ): Promise<{ reason: ContextResetMemoryReason; operationId: string | null }> {
     let authorization: SessionAuthorization | undefined;
     try {
@@ -690,6 +712,9 @@ export class SessionHost {
         context_id: contextId,
         message_count: messages.length,
         truncated: transcript.truncated,
+        // Lets the employee tell lessons from successes. Flat strings; absent keeps legacy bytes unchanged.
+        ...(evaluation?.outcome ? { outcome: evaluation.outcome } : {}),
+        ...(evaluation?.outcome && evaluation.reasons.length ? { outcome_reasons: evaluation.reasons.join(",") } : {}),
       }, `context-reset:${contextId}`);
       return { reason: "saved", operationId: ack.operationId };
     } catch (error) {

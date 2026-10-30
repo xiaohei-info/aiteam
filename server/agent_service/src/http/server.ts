@@ -1,6 +1,8 @@
 import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
 import { registerLocalDirectoryRoutes, mapLocalDirectoryError, LOCAL_DIRECTORY_OPERATION_DOCS, LOCAL_DIRECTORY_PARAMETER_EXAMPLES } from "./local-directories.js";
 import { LocalDirectoryError } from "../storage/local-directories.js";
+import { registerContextSegmentRoutes, mapContextSegmentError, parseSegmentEvaluation, ContextSegmentSchema, SegmentEvaluationProperties, EVALUATION_FIELDS, CONTEXT_SEGMENT_OPERATION_DOCS, CONTEXT_SEGMENT_PARAMETER_EXAMPLES } from "./context-segments.js";
+import { ContextSegmentError } from "../storage/context-segments.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
@@ -256,6 +258,8 @@ const ContextResetMemoryReason = Type.Union(["saved", "empty", "skipped", "retai
 const ConversationContextResetRequest = Type.Object({
   save_memory: Type.Optional(Type.Boolean({ default: true, description: "是否在重置前把旧上下文交给 Manager 记忆保存；false 时直接重置，memory_reason 为 skipped。" })),
   on_memory_failure: Type.Optional(Type.Union([Type.Literal("abort"), Type.Literal("proceed")], { default: "abort", description: "记忆保存失败时的处理：abort（默认）保留上下文并返回 reset=false；proceed 在用户确认后照常重置。" })),
+  outcome: Type.Optional(Type.String({ enum: ["resolved", "unresolved"], description: "对本段的结果评估：resolved 已解决 / unresolved 未解决；省略为未评估，旧客户端行为不变。确认重试（proceed）时须再次携带。" })),
+  ...SegmentEvaluationProperties,
 }, { $id: "ConversationContextResetRequest", additionalProperties: false, description: "开启新上下文请求；请求体可省略。" });
 const ConversationContextResetParticipantOut = Type.Object({
   employee_id: Type.String({ description: "参与者员工 ID。" }),
@@ -275,6 +279,9 @@ const ConversationContextResetOut = Type.Object({
   confirmation_required: Type.Boolean({ description: "有参与者因记忆保存失败而保留了上下文；用户确认后用 on_memory_failure=proceed 再调一次。" }),
   memory_saved: Type.Boolean({ description: "是否至少有一个参与者的旧上下文已提交记忆保存。" }),
   participants: Type.Array(Type.Ref("ConversationContextResetParticipantOut"), { description: "各参与者的重置结果；单聊只有一项。" }),
+  segment_id: Type.Union([Type.String(), Type.Null()], { description: "本次重置结束的段落 ID（等于 reset_id）；未重置或重放的旧重置没有段落记录时为 null。" }),
+  outcome: Type.Union([Type.String({ enum: ["resolved", "unresolved"] }), Type.Null()], { description: "该段的结果评估；未评估为 null。" }),
+  segment: Type.Union([ContextSegmentSchema, Type.Null()], { description: "该段完整记录，可直接用于撤销（PATCH outcome=null）。" }),
 }, { $id: "ConversationContextResetOut", additionalProperties: false, description: "开启新上下文结果。" });
 const ConversationContextResetEnvelope = Type.Object({ data: Type.Ref("ConversationContextResetOut") }, { $id: "ConversationContextResetEnvelope", description: "开启新上下文结果。" });
 const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Type.Boolean({ description: "是否删除成功；成功响应固定为 true。" }) }, { additionalProperties: false }) }, { $id: "ConversationDeleteEnvelope", description: "会话删除结果。" });
@@ -783,6 +790,7 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
   ...LOCAL_DIRECTORY_PARAMETER_EXAMPLES,
+  ...CONTEXT_SEGMENT_PARAMETER_EXAMPLES,
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1", department_id: "department-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
@@ -791,6 +799,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
 const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...AUTOMATION_OPERATION_DOCS,
   ...LOCAL_DIRECTORY_OPERATION_DOCS,
+  ...CONTEXT_SEGMENT_OPERATION_DOCS,
   ...CONVERSATION_READ_DOCS,
   ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
@@ -831,7 +840,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   getConversationState: { responses: { "200": { description: "持久化 state 与瞬时 prompting 状态。", examples: { state: { summary: "运行状态", value: { data: { conversation_id: "conversation-1", state: "active", prompting: false } } } } } } },
   setConversationState: { request: { state: { summary: "目标状态", value: { state: "paused" } } }, responses: { "200": { description: "状态更新后的完整会话元数据。", examples: { paused: { summary: "暂停成功", value: { data: { ...EXAMPLE_CONVERSATION, state: "paused" } } } } } } },
   getConversationContext: { responses: { "200": { description: "当前模型和上下文使用情况。", examples: { context: { summary: "上下文状态", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: { provider: "provider-1", id: "model-1", name: "Model One" }, used_tokens: 120, context_window: 128000, percentage: 9, thinking_level: "medium", available_thinking_levels: ["off", "low", "medium", "high"], prompting: false } } } } } } },
-  resetConversationContext: { request: { default: { summary: "默认：保存记忆，失败时不重置", value: {} }, proceed: { summary: "用户确认后忽略保存失败", value: { on_memory_failure: "proceed" } }, skipMemory: { summary: "不保存记忆直接重置", value: { save_memory: false } } }, responses: { "200": { description: "重置结果；记忆保存失败时 reset=false 且 confirmation_required=true。", examples: {
+  resetConversationContext: { request: { default: { summary: "默认：保存记忆，失败时不重置", value: {} }, proceed: { summary: "用户确认后忽略保存失败", value: { on_memory_failure: "proceed" } }, skipMemory: { summary: "不保存记忆直接重置", value: { save_memory: false } }, unresolved: { summary: "记为未解决并开启", value: { outcome: "unresolved", outcome_reasons: ["missing_info"], outcome_note: "缺少报价单", follow_up: true } } }, responses: { "200": { description: "重置结果；记忆保存失败时 reset=false 且 confirmation_required=true。", examples: {
     reset: { summary: "已开启新上下文并提交记忆", value: { data: { conversation_id: "conversation-1", reset_id: "0b6f1c9e-2d4a-4f61-9b7e-3c2a1d5e8f90", reset: true, already_reset: false, confirmation_required: false, memory_saved: true, participants: [{ employee_id: "employee-1", reset: true, already_reset: false, reset_id: "0b6f1c9e-2d4a-4f61-9b7e-3c2a1d5e8f90", message_count: 6, memory_saved: true, memory_reason: "saved", operation_id: "op-1" }] } } },
     memoryFailed: { summary: "记忆保存失败，等待用户确认", value: { data: { conversation_id: "conversation-1", reset_id: "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", reset: false, already_reset: false, confirmation_required: true, memory_saved: false, participants: [{ employee_id: "employee-1", reset: false, already_reset: false, reset_id: null, message_count: 6, memory_saved: false, memory_reason: "manager_unavailable", operation_id: null }] } } },
     replay: { summary: "重复请求，返回上一次结果", value: { data: { conversation_id: "conversation-1", reset_id: "0b6f1c9e-2d4a-4f61-9b7e-3c2a1d5e8f90", reset: true, already_reset: true, confirmation_required: false, memory_saved: true, participants: [{ employee_id: "employee-1", reset: true, already_reset: true, reset_id: "0b6f1c9e-2d4a-4f61-9b7e-3c2a1d5e8f90", message_count: 6, memory_saved: true, memory_reason: "saved", operation_id: "op-1" }] } } },
@@ -1457,6 +1466,7 @@ export class AgentHttpServer {
 
     registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
     registerLocalDirectoryRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.options.host.localDirectoryService);
+    registerContextSegmentRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request, 4096), send: (response, status, value) => this.writeJson(response, status, value) }, this.options.store.contextSegments, (conversationId, caller) => this.requireOwnedConversation(conversationId, caller));
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -1900,15 +1910,18 @@ export class AgentHttpServer {
 
   private async resetConversationContext(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     this.requireOwnedConversation(conversationId, caller);
-    const body = await this.readJson(request, 1024);
+    // A 500-character note can take ~1.5 KB of UTF-8.
+    const body = await this.readJson(request, 4096);
     for (const key of Object.keys(body)) {
-      if (key !== "save_memory" && key !== "on_memory_failure") throw new HttpProblem(422, "invalid_request", `Unknown field: ${key}`);
+      if (key !== "save_memory" && key !== "on_memory_failure" && !(EVALUATION_FIELDS as readonly string[]).includes(key)) throw new HttpProblem(422, "invalid_request", `Unknown field: ${key}`);
     }
+    const evaluation = parseSegmentEvaluation(body, { allowClear: false });
     if (body.save_memory !== undefined && typeof body.save_memory !== "boolean") throw new HttpProblem(422, "invalid_save_memory", "save_memory must be a boolean");
     if (body.on_memory_failure !== undefined && body.on_memory_failure !== "abort" && body.on_memory_failure !== "proceed") throw new HttpProblem(422, "invalid_on_memory_failure", "on_memory_failure must be abort or proceed");
     this.writeJson(response, 200, { data: await this.options.host.resetContext(conversationId, caller, {
       saveMemory: body.save_memory as boolean | undefined,
       onMemoryFailure: body.on_memory_failure as "abort" | "proceed" | undefined,
+      evaluation,
     }) });
   }
 
@@ -2811,6 +2824,7 @@ export class AgentHttpServer {
     else if (error instanceof GroupConfigurationError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof LocalDirectoryError) problem = mapLocalDirectoryError(error);
+    else if (error instanceof ContextSegmentError) problem = mapContextSegmentError(error);
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };

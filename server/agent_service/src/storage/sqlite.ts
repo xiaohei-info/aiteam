@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { usdDecimal, usdUnits, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
+import { ContextSegmentStore } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -399,6 +400,7 @@ export class AgentSqliteStore {
   readonly attachmentRoot: string;
   readonly avatarRoot: string;
   readonly workRecords: WorkRecordRepository;
+  readonly contextSegments: ContextSegmentStore;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
@@ -636,6 +638,7 @@ export class AgentSqliteStore {
     this.db.prepare("UPDATE approval_record SET status = 'uncertain', consumed = 1, updated_at = ? WHERE status IN ('pending', 'approved', 'executing')").run(new Date().toISOString());
     this.automation = new AutomationTaskRepository(this.db);
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
+    this.contextSegments = new ContextSegmentStore(this.db);
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
   }
@@ -816,6 +819,7 @@ export class AgentSqliteStore {
     try {
       if (existing.tenantId && existing.memberId) {
         this.workRecords.deleteConversation(id, { tenantId: existing.tenantId, memberId: existing.memberId });
+        this.contextSegments.deleteConversation({ tenantId: existing.tenantId, memberId: existing.memberId }, id);
         this.deleteConversationLocalFiles(id, existing.tenantId, existing.memberId);
       }
       this.automation.conversationDeleted(id);
