@@ -108,8 +108,17 @@ def test_ingest_rejects_invalid_segment_outcome(overrides, error):
 
 def test_ingest_rejects_employee_not_granted_to_member():
     svc = UsageAuditQuotaService(_UsageRepo(granted=False), _OutcomeRepo())
-    with pytest.raises(Forbidden):
+    with pytest.raises(Forbidden) as exc:
         svc.ingest_segment_outcomes(CTX, [_outcome()])
+    assert exc.value.code == "employee_not_granted"
+
+
+def test_segment_outcomes_route_reports_revoked_employee_with_its_own_code():
+    # 员工级拒绝用 employee_not_granted，和登录失效的 403 区分开，Agent 据此只终止这一条。
+    client = _usage_client(UsageAuditQuotaService(_UsageRepo(granted=False), _OutcomeRepo()))
+    response = client.post("/api/manager/usage/segment-outcomes", json={"segment_outcomes": [_outcome()]}, headers=_headers("member"))
+    assert response.status_code == 403
+    assert response.json()["code"] == "employee_not_granted"
 
 
 def test_ingest_without_outcome_storage_is_503():

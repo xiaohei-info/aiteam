@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { AgentSqliteStore } from "./sqlite.js";
 import { outcomeStatistics } from "../http/context-segments.js";
-import { ManagerPolicyDeniedError, ManagerValidationError } from "../manager-client.js";
+import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerValidationError } from "../manager-client.js";
 import { UsageFlushService } from "../usage-flush.js";
 import type { SegmentOutcomeSummary } from "../usage.js";
 
@@ -126,3 +126,33 @@ test("group-chat segments count once per employee so totals equal the sum of the
   const one = outcomeStatistics(rows, "e2");
   assert.deepEqual([one.totals.evaluated_count, one.groups.length], [1, 1]);
 });
+
+test("a revoked employee (403 employee_not_granted) stops only that summary and keeps the member's authorization", withStore(async (store) => {
+  store.contextSegments.record(owner, { conversationId: "c1", segmentId: "s1", employeeIds: ["e1", "e2"], messageCount: 2, endedAt: hour + 1_000, evaluation: resolved });
+  const invalidated: string[] = [];
+  const authorization = { invalidate: (tenantId: string, memberId: string) => { invalidated.push(`${tenantId}:${memberId}`); } };
+  const uploaded: string[] = [];
+  const flush = new UsageFlushService(store, {
+    uploadUsage: async () => ({}),
+    uploadSegmentOutcomes: async (_caller: unknown, summary: SegmentOutcomeSummary) => {
+      if (summary.employee_id === "e1") throw new ManagerAuthorizationError(403, "employee_not_granted");
+      uploaded.push(summary.employee_id);
+    },
+  } as never, { authorization: authorization as never });
+  const result = await flush.flush(caller);
+  assert.deepEqual(result.failed, [], "an employee-level rejection is neither an outage nor a retry");
+  assert.equal(result.sent.length, 1);
+  assert.deepEqual(uploaded, ["e2"], "the other employee's summary still uploads in the same batch");
+  assert.deepEqual(invalidated, []);
+  assert.deepEqual(outcomeRows(store).map((row) => [row.payload.employee_id, row.status]), [["e1", "rejected"], ["e2", "sent"]]);
+  assert.deepEqual(await flush.flush(caller), { sent: [], failed: [] }, "rejected rows are terminal");
+
+  // A plain authentication 403 still invalidates the member, as before.
+  store.contextSegments.record(owner, { conversationId: "c2", segmentId: "s2", employeeIds: ["e3"], messageCount: 2, endedAt: hour + 2_000, evaluation: resolved });
+  const denied = new UsageFlushService(store, {
+    uploadUsage: async () => ({}),
+    uploadSegmentOutcomes: async () => { throw new ManagerAuthorizationError(403, "forbidden"); },
+  } as never, { authorization: authorization as never });
+  assert.equal((await denied.flush(caller)).failed.length, 1);
+  assert.deepEqual(invalidated, ["tenant-1:member-1"]);
+}));

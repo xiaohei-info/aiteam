@@ -217,6 +217,12 @@ test("segment outcome counts upload through their own endpoint with the summary 
   assert.equal(requests[0].url, "https://manager.test/api/manager/usage/segment-outcomes");
   assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "seg-1");
   assert.deepEqual(JSON.parse(String(requests[0].init.body)), { tenant_id: "tenant-1", segment_outcomes: [summary] });
+
+  const revoked = new HttpManagerClient("https://manager.test", async () => new Response(
+    JSON.stringify({ status: 403, code: "employee_not_granted", title: "Employee Not Granted", detail: "usage employee is not granted to the authenticated member" }),
+    { status: 403, headers: { "Content-Type": "application/problem+json" } },
+  ));
+  await assert.rejects(revoked.uploadSegmentOutcomes(caller, summary), (error: { status?: number; problemCode?: string }) => error.status === 403 && error.problemCode === "employee_not_granted");
 });
 
 test("a stalled skill market only delays the marketplace catalog by the short name budget and logs a warning", async (t) => {

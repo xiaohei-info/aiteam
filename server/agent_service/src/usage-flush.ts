@@ -108,6 +108,12 @@ export class UsageFlushService {
           outcomesUnsupported = true;
           continue;
         }
+        // The employee was revoked for this member: stop this summary only, keep the member's authorization.
+        // Not a Manager outage either, so it is not reported as failed and does not back off the member.
+        if (isEmployeeNotGranted(error)) {
+          this.store.markUsageRejected(row.summary_id, row.claim_token, safeUsageError(error));
+          continue;
+        }
         this.store.markUsageFailed(row.summary_id, row.claim_token, safeUsageError(error));
         if (isAccessDenial(error)) {
           const authorization = this.options.authorization;
@@ -121,6 +127,10 @@ export class UsageFlushService {
     }
     return { sent, failed };
   }
+}
+
+function isEmployeeNotGranted(error: unknown): boolean {
+  return (error as { problemCode?: unknown } | undefined)?.problemCode === "employee_not_granted";
 }
 
 function isEndpointMissing(error: unknown): boolean {

@@ -487,13 +487,13 @@ class UsageAuditQuotaService:
             raise Forbidden("usage employee authorization is not configured")
         try:
             if not validator(self._repo, ctx, employee_id=employee_id):
-                raise Forbidden("usage employee is not in the authenticated tenant")
+                raise EmployeeNotGranted("usage employee is not in the authenticated tenant")
             if set(ctx.roles) & {EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value}:
                 return
             if member_id is None or not granted(
                 self._repo, ctx, employee_id=employee_id, member_id=member_id,
             ):
-                raise Forbidden("usage employee is not granted to the authenticated member")
+                raise EmployeeNotGranted("usage employee is not granted to the authenticated member")
         except (ValueError, TypeError) as exc:
             raise ValidationProblem("usage employee/member IDs must be UUIDs") from exc
 
@@ -758,6 +758,15 @@ def _to_quota_out(row: QuotaPolicyRow) -> QuotaPolicyOut:
         status=row.status,
         version=row.version,
     )
+
+
+class EmployeeNotGranted(Forbidden):
+    """摘要里的员工已不属于本租户或不再授权给该成员。
+
+    只针对这一个员工，不代表成员登录失效：Agent 据 code 终止这条摘要，不作废成员授权。
+    """
+
+    code, title = "employee_not_granted", "Employee Not Granted"
 
 
 class _SegmentOutcomesUnavailable(AppError):

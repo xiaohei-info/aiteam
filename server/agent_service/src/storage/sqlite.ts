@@ -1412,6 +1412,11 @@ export class AgentSqliteStore {
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(error.slice(0, 500), summaryId, claimToken);
   }
 
+  /** Terminal: Manager rejected this summary for a reason that retrying cannot fix (for example a revoked employee). */
+  markUsageRejected(summaryId: string, claimToken: string, error: string): void {
+    this.db.prepare("UPDATE usage_summary_outbox SET status = 'rejected', claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(error.slice(0, 500), summaryId, claimToken);
+  }
+
   /** Return a claimed row to pending without recording a failure (for example Manager has no endpoint for it yet). */
   releaseUsageClaim(summaryId: string, claimToken: string, note: string): void {
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'pending', attempts = MAX(attempts - 1, 0), claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(note.slice(0, 500), summaryId, claimToken);
