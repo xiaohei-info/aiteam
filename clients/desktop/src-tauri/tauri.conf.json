@@ -1,0 +1,52 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri-apps/main/schema/2.0.0/tauri.schema.json",
+  "productName": "AIFred",
+  "version": "0.1.0",
+  "identifier": "com.aiteam.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "pnpm agent:check && pnpm dev",
+    "beforeBuildCommand": "pnpm agent:check && pnpm check:agent-package && pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AIFred",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost https://aifred.cn http://121.40.78.201:8783 http://127.0.0.1:* http://localhost:* http://[::1]:* ws://127.0.0.1:* ws://localhost:* ws://[::1]:*; img-src 'self' asset: http://asset.localhost http://121.40.78.201:8783 blob: data: https:; media-src 'self' asset: http://asset.localhost blob: data:; frame-src 'self' blob:; worker-src 'self' blob:; manifest-src 'self'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/*/*/file/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": {
+      "resources/agent/": "agent/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
+  }
+}

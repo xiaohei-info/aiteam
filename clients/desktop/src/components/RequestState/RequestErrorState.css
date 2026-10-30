@@ -1,0 +1,123 @@
+/* ═══════════════════════════════════════════
+   RequestErrorState — 远端数据加载错误
+   ═══════════════════════════════════════════ */
+
+.rs-error {
+  display: flex;
+  width: min(100%, 720px);
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 24px auto;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--glass-card-bg);
+  box-shadow: var(--glass-card-shadow);
+  color: var(--text-secondary);
+  text-align: left;
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+}
+
+.rs-error.compact {
+  width: 100%;
+  min-height: 0;
+  justify-content: flex-start;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+}
+
+.rs-error-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  border-radius: var(--radius-lg);
+  background: rgba(248, 113, 113, 0.08);
+  color: #f87171;
+}
+
+.rs-error[data-kind='forbidden'] .rs-error-icon,
+.rs-error[data-kind='unavailable'] .rs-error-icon {
+  border-color: rgba(212, 175, 55, 0.24);
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+}
+
+.rs-error-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.rs-error-copy strong,
+.rs-error-copy span {
+  display: block;
+}
+
+.rs-error-copy strong {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.rs-error-copy span {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.rs-error-retry {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 12px;
+  transition: background var(--duration-fast), opacity var(--duration-fast), transform 100ms;
+}
+
+.rs-error-retry:hover:not(:disabled) {
+  background: var(--brand-bg-active);
+}
+
+.rs-error-retry:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.rs-error-retry:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.rs-error-retry svg.spinning {
+  animation: rs-spin 0.75s linear infinite;
+}
+
+@keyframes rs-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .rs-error {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .rs-error-retry {
+    margin-left: 56px;
+  }
+}

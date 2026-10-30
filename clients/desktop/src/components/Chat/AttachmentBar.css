@@ -1,0 +1,122 @@
+/* ═══════════════════════════════════════════
+   AttachmentBar — 消息附件展示
+   ═══════════════════════════════════════════ */
+
+.att-bar {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.att-error {
+  max-width: 280px;
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+/* ─── 单附件 ─── */
+
+.att-single {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-card-border);
+  background: var(--glass-card-bg);
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  transition: background 0.15s;
+}
+
+.att-single:hover {
+  background: color-mix(in srgb, var(--glass-card-bg) 80%, var(--text-primary) 20%);
+}
+
+.att-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.att-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+}
+
+.att-dl {
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+/* ─── 多附件 ─── */
+
+.att-multi {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.att-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-card-border);
+  background: var(--glass-card-bg);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  transition: background 0.15s;
+}
+
+.att-toggle:hover {
+  background: color-mix(in srgb, var(--glass-card-bg) 80%, var(--text-primary) 20%);
+}
+
+.att-list {
+  width: 100%;
+  min-width: 180px;
+  background: var(--surface-2, var(--glass-card-bg));
+  border-radius: 8px;
+  border: 1px solid var(--glass-card-border);
+  padding: 4px;
+}
+
+.att-list-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.12s;
+}
+
+.att-list-item:hover {
+  background: color-mix(in srgb, var(--glass-card-bg) 60%, var(--text-primary) 40%);
+}
+
+.att-list-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  text-align: left;
+}

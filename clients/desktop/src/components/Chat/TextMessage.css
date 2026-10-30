@@ -1,0 +1,146 @@
+/* ═══════════════════════════════════════════
+   TextMessage — Markdown 消息
+   ═══════════════════════════════════════════ */
+
+.tm-md {
+  font-size: 0.69rem;
+  line-height: 1.65;
+  color: inherit;
+  word-break: break-word;
+}
+
+/* ─── 段落 ─── */
+
+.tm-md p { margin: 0 0 0.5em; }
+.tm-md p:last-child { margin-bottom: 0; }
+
+/* ─── 标题 ─── */
+
+.tm-md h1, .tm-md h2, .tm-md h3,
+.tm-md h4, .tm-md h5, .tm-md h6 {
+  margin: 0.8em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+.tm-md h1 { font-size: 1.2em; }
+.tm-md h2 { font-size: 1.1em; }
+.tm-md h3 { font-size: 1em; }
+
+/* ─── 表格 ─── */
+
+.tm-md table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  font-size: 0.9em;
+}
+.tm-md th, .tm-md td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  text-align: left;
+}
+.tm-md th {
+  background: var(--surface-3);
+  font-weight: 600;
+}
+.tm-md tr:nth-child(even) td { background: var(--surface-2); }
+
+/* ─── 引用块 ─── */
+
+.tm-md blockquote {
+  margin: 0.5em 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--brand);
+  background: var(--surface-2);
+  border-radius: 0 4px 4px 0;
+  color: var(--text-secondary);
+}
+.tm-md blockquote p { margin: 0; }
+
+/* ─── 行内代码 ─── */
+
+.tm-code-inline {
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  color: var(--brand);
+}
+
+/* ─── 列表 ─── */
+
+.tm-md ul, .tm-md ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.tm-md li { margin: 0.15em 0; }
+
+/* ─── 链接 ─── */
+
+.tm-link {
+  color: var(--brand);
+  text-decoration: none;
+}
+.tm-link:hover { text-decoration: underline; }
+
+/* 指向会话生成文件的链接：按钮语义，外观与普通链接一致 */
+.tm-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.tm-link-button:disabled { opacity: 0.6; cursor: progress; }
+.tm-link-notice {
+  margin-left: 8px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+/* ─── 图片 ─── */
+
+.tm-img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 4px 0;
+}
+
+/* ─── 分割线 ─── */
+
+.tm-md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.6em 0;
+}
+
+/* ─── 波浪点动画（流式推理中占位符） ─── */
+
+.tm-wave-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+
+.tm-wave-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: wave-dot 1.2s ease-in-out infinite;
+  opacity: 0.4;
+}
+
+@keyframes wave-dot {
+  0%, 100% { opacity: 0.4; transform: translateY(0); }
+  50%       { opacity: 1.0; transform: translateY(-3px); }
+}

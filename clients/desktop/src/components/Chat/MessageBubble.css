@@ -1,0 +1,158 @@
+/* ═══════════════════════════════════════════
+   MessageBubble — 消息气泡基础布局
+   ═══════════════════════════════════════════ */
+
+.mb {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+}
+
+.mb.left  { flex-direction: row; }
+.mb.right { flex-direction: row-reverse; }
+
+/* ─── Avatar ─── */
+
+.mb-avatar-wrap {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.mb-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 50%;
+  border: 1px solid rgba(212, 175, 55, 0.42);
+  font-size: 14px;
+}
+
+.mb-avatar.left {
+  background:
+    radial-gradient(circle at 50% 36%, rgba(255, 255, 255, 0.08), transparent 48%),
+    linear-gradient(145deg, rgba(66, 66, 68, 0.88), rgba(29, 30, 37, 0.98));
+  color: var(--brand);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -18px 28px rgba(0, 0, 0, 0.18);
+}
+
+.mb-avatar.right {
+  background: var(--brand-ghost);
+  border-color: var(--glass-gold-border);
+}
+
+.mb-avatar.streaming  { animation: pulse-warm 3s var(--ease-standard) infinite; }
+
+.mb-thinking {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ─── Content column ─── */
+
+.mb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-width: 75%;
+}
+
+.mb-col.left  { align-items: flex-start; }
+.mb-col.right { align-items: flex-end; }
+
+.mb-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.mb-name {
+  font-size: 12px;
+  color: var(--brand);
+}
+
+.mb-recipient {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.mb-recipient-arrow {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.mb-recipient-name {
+  color: var(--brand);
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid rgba(212, 175, 55, 0.28);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.mb-thinking {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ─── Above slot ─── */
+
+.mb-above { width: 100%; }
+
+/* ─── Bubble shell ─── */
+
+.mb-bubble {
+  /* 气泡宽度以 .mb-col 为上限：代码块里的长路径等不可换行内容在块内横向滚动，
+     不能把气泡及整个消息列表撑宽（否则开关详情面板时消息区会整体横向错位）。 */
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 16px;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
+}
+
+.mb-bubble.left {
+  background: var(--glass-card-bg);
+  border: 1px solid var(--glass-card-border);
+  border-top-left-radius: 5px;
+  box-shadow: var(--glass-card-shadow);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+}
+
+.mb-bubble.right {
+  background: rgba(212, 175, 55, 0.10);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-top-right-radius: 5px;
+  box-shadow: 0 2px 12px rgba(212, 175, 55, 0.06);
+}
+
+
+/* ─── Time ─── */
+
+.mb-time {
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+}

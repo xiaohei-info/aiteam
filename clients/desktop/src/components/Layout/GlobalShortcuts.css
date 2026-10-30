@@ -1,0 +1,14 @@
+.global-shortcut-error {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10000;
+  max-width: min(360px, calc(100vw - 40px));
+  padding: 10px 14px;
+  border: 1px solid rgb(248 113 113 / 35%);
+  border-radius: 8px;
+  background: var(--surface-3);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+  color: var(--text-primary);
+  font-size: 12px;
+}

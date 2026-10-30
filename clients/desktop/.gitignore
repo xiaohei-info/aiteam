@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+.cache/
+.vite/
+
+# Build output
+dist/
+src-tauri/target/
+src-tauri/target-fresh/
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Tauri generated schemas
+src-tauri/gen/schemas/
+
+# 随包 Agent 由 `pnpm agent:build` 从本仓库 server/agent_service 构建导入，不入库。
+/src-tauri/resources/
+
+# office-map 预览页打包产物（用 node scripts/build-office-map-preview.mjs 生成）
+/public/office-preview/
+
+# 浏览器 smoke 测试截图输出（tests/*-browser-smoke.mjs 生成）
+/output/file-access-smoke/
+/output/knowledge-create-smoke/
+
+# 本地代码索引
+.codegraph/
