@@ -40,6 +40,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden, ValidationProblem
 
 from .usage_analytics_schemas import (
+    SegmentOutcomeStatisticsOut,
     UsageOperatorDeliveryOut,
     UsageStatisticsGroupedOut,
     UsageStatisticsOut,
@@ -59,7 +60,12 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
-from .openapi_schemas import UsageRollupItemsOut, UsageUploadDetailedOut, UsageUploadOut
+from .openapi_schemas import (
+    UsageRollupItemsOut,
+    UsageUploadDetailedOut,
+    UsageUploadOut,
+    UsageUploadWithOutcomesOut,
+)
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
     build_usage_audit_quota_service,
@@ -95,6 +101,13 @@ class UsageSummaryUploadIn(BaseModel):
     tenant_id: str | None = Field(default=None, description="可选租户标识；省略时绑定当前 TenantContext，提供时必须匹配")
     usage: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
     audits: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")
+    segment_outcomes: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "可选：段落结果评估小时计数（成员 + 员工 + UTC 小时的已评估/已解决段数，绝对值）。"
+            "只含计数，不含会话文本、评估备注或原因标签；省略时回执与旧版一致。"
+        ),
+    )
 
 
 def _service(request: Request) -> UsageAuditQuotaService:
@@ -168,13 +181,15 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         body: UsageSummaryUploadIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageUploadOut | UsageUploadDetailedOut]:
+    ) -> Envelope[UsageUploadWithOutcomesOut | UsageUploadDetailedOut | UsageUploadOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if body.tenant_id is not None and body.tenant_id != ctx.tenant_id:
             raise Forbidden("usage tenant_id must match the authenticated tenant")
         enterprise_id = _lookup_enterprise_id(request, ctx.tenant_id)
         upload = body.model_dump(exclude={"tenant_id"})
+        if upload.get("segment_outcomes") is None:
+            upload.pop("segment_outcomes", None)
         if enterprise_id is None:
             result = svc.ingest_upload(ctx, upload)
         else:
@@ -183,11 +198,43 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
             _report_to_operator(request, svc, ctx)
         except Exception:  # best effort; Agent outbox already has durable retry semantics
             logger.warning("usage rollup upload to Operator deferred", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
-        if "usage_ingested" in result or "audits_ingested" in result:
+        if "segment_outcomes_ingested" in result:
+            data = UsageUploadWithOutcomesOut(**result)
+        elif "usage_ingested" in result or "audits_ingested" in result:
             data = UsageUploadDetailedOut(**result)
         else:
             data = UsageUploadOut(**result)
-        return Envelope[UsageUploadOut | UsageUploadDetailedOut](data=data)
+        return Envelope[UsageUploadWithOutcomesOut | UsageUploadDetailedOut | UsageUploadOut](data=data)
+
+    @router.get(
+        "/usage/outcomes",
+        description=(
+            "查询本租户段落结果评估（问题已解决/未解决）汇总与按员工分组的解决率。"
+            "解决率 = 已解决 ÷ 已评估；已评估少于 min_sample（10）段时 resolution_rate 为 null。"
+            "时间窗按段落结束所在 UTC 整点 [window_start,window_end) 过滤，必须成对。"
+            "数据归属：评估真相在用户端 Agent 本机；Manager 只持有 Agent 上报的成员+员工+小时计数，"
+            "不含会话内容、备注或原因标签。租户边界：只读当前 TenantContext 租户；"
+            "owner/enterprise_admin/finance_admin 可读全租户，普通成员只能读自己。"
+        ),
+        summary="查询租户段落解决率",
+        operation_id="manager_usage_outcomes",
+        response_model_exclude_none=False,
+    )
+    async def get_usage_outcomes(
+        request: Request,
+        employee_id: str | None = Query(default=None, description="可选员工 ID。"),
+        member_id: str | None = Query(default=None, description="管理员可选成员过滤；普通成员仅可读取自己。"),
+        window_start: datetime | None = Query(default=None, description="UTC 整点包含起点；必须与 window_end 成对。"),
+        window_end: datetime | None = Query(default=None, description="UTC 整点不包含终点；必须与 window_start 成对。"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[SegmentOutcomeStatisticsOut]:
+        member_scope = _usage_member_scope(claims, member_id)
+        data = _service(request).segment_outcomes(
+            tenant_context_from(claims),
+            employee_id=employee_id, member_id=member_scope,
+            window_start=window_start, window_end=window_end,
+        )
+        return Envelope[SegmentOutcomeStatisticsOut](data=data)
 
     # ---- Manager enterprise usage/work statistics ----
 

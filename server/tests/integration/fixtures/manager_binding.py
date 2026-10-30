@@ -118,6 +118,7 @@ _FRESH_TENANT_TABLES: tuple[str, ...] = (
     "billing_balance",
     "recharge_record",
     "usage_rollup",
+    "segment_outcome_rollup",
     "audit_summary_event",
     "enterprise_audit",
     "audit_event",

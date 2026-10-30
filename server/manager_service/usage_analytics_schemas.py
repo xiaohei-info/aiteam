@@ -139,3 +139,34 @@ class UsageOperatorDeliveryOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     sent_at: datetime | None = None
+
+
+class SegmentOutcomeGroupOut(BaseModel):
+    """One employee's count-only segment outcome totals."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    employee_id: str = Field(description="员工 ID。")
+    display_name: str | None = Field(default=None, description="员工显示名；员工已删除时为 null。")
+    evaluated_count: int = Field(default=0, ge=0, description="已评估段数。")
+    resolved_count: int = Field(default=0, ge=0, description="已解决段数。")
+    unresolved_count: int = Field(default=0, ge=0, description="未解决段数。")
+    resolution_rate: float | None = Field(default=None, ge=0, le=1, description="已解决 ÷ 已评估；样本不足 min_sample 时为 null。")
+
+
+class SegmentOutcomeStatisticsOut(BaseModel):
+    """Tenant solve rate built from Agent count-only segment outcome uploads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["tenant"] = "tenant"
+    employee_id: str | None = None
+    member_id: str | None = None
+    window_start: datetime | None = Field(default=None, description="UTC 整点包含起点（按段落结束所在小时）；未筛选为 null。")
+    window_end: datetime | None = Field(default=None, description="UTC 整点不包含终点；未筛选为 null。")
+    min_sample: int = Field(ge=1, description="发布解决率所需的最少已评估段数。")
+    evaluated_count: int = Field(default=0, ge=0, description="已评估段数。")
+    resolved_count: int = Field(default=0, ge=0, description="已解决段数。")
+    unresolved_count: int = Field(default=0, ge=0, description="未解决段数。")
+    resolution_rate: float | None = Field(default=None, ge=0, le=1, description="已解决 ÷ 已评估；样本不足 min_sample 时为 null。")
+    groups: list[SegmentOutcomeGroupOut] = Field(default_factory=list, description="按员工分组，已评估段数降序；群聊段落计入其中每位员工。")

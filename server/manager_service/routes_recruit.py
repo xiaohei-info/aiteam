@@ -10,11 +10,13 @@ Operator 目录拉取端口注入：app.state._operator_catalog 由 `manager_ser
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Request, status
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.envelope import Envelope, ListEnvelope
@@ -23,6 +25,11 @@ from shared.errors import AppError, ValidationProblem
 
 from .operator_catalog import OperatorCatalogPort
 from .recruit_service import RecruitService, build_recruit_service
+from .segment_outcome_repository import (
+    RESOLUTION_RATE_MIN_SAMPLE,
+    SegmentOutcomeRepository,
+    resolution_rate,
+)
 from .schemas import (
     ApplySolutionRequest,
     ApplySolutionResult,
@@ -35,8 +42,50 @@ from .schemas import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
+class TemplateStatsOut(BaseModel):
+    """本企业内该模板直接招募员工的段落解决率（议题 7 人才市场「效果」）。只含计数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolution_rate: float | None = Field(
+        default=None, ge=0, le=1,
+        description=f"已解决 ÷ 已评估；已评估少于 {RESOLUTION_RATE_MIN_SAMPLE} 段时为 null。",
+    )
+    evaluated_segments: int = Field(default=0, ge=0, description="本企业已评估段数。")
+    resolved_segments: int = Field(default=0, ge=0, description="本企业已解决段数。")
+    min_sample: int = Field(default=RESOLUTION_RATE_MIN_SAMPLE, ge=1, description="发布解决率所需的最少已评估段数。")
+
+
 class RecruitableExpertOut(ExpertTemplateDetail):
     is_recruited: bool = Field(default=False)
+    stats: TemplateStatsOut | None = Field(
+        default=None,
+        description="本企业内该模板的解决率统计；本企业尚无该模板的评估数据或统计暂不可用时为 null。",
+    )
+
+
+def _template_stats(request: Request, ctx) -> dict[str, TemplateStatsOut]:
+    """按来源模板汇总本租户段落评估；统计失败只记日志，不影响目录浏览。"""
+    repo = getattr(request.app.state, "_segment_outcome_repository", None)
+    if repo is None:
+        repo = SegmentOutcomeRepository(PgTenantRouter(request.app.state.settings.db_url))
+        request.app.state._segment_outcome_repository = repo
+    try:
+        counts = repo.counts_by_source_template(ctx)
+    except Exception:  # noqa: BLE001 - stats are optional decoration on the catalog
+        logger.warning("marketplace template stats unavailable", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
+        return {}
+    return {
+        template_id: TemplateStatsOut(
+            resolution_rate=resolution_rate(item.evaluated_count, item.resolved_count),
+            evaluated_segments=item.evaluated_count,
+            resolved_segments=item.resolved_count,
+        )
+        for template_id, item in counts.items()
+    }
 
 
 def _validate_audience(body):
@@ -127,7 +176,11 @@ def build_recruit_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get(
-        "/catalog/experts", description="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
+        "/catalog/experts", description=(
+            "F06 浏览可招募专家模板（拉 Operator 目录列表，只读）。模板展示字段（tagline/use_cases/pricing 等）"
+            "由 Operator 持有并原样投影；stats 是当前 TenantContext 租户内该模板直接招募员工的段落解决率"
+            "（Agent 上报的计数汇总，不含会话内容，不跨企业）。成功响应遵循统一 envelope，失败返回 problem+json。"
+        ), summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
         operation_id="manager_list_recruitable_experts",
     )
     async def list_recruitable_experts(
@@ -147,9 +200,13 @@ def build_recruit_router(verifier) -> APIRouter:
         except Exception as exc:
             raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
         recruited = _service(request).recruited_template_ids(ctx)
+        stats = _template_stats(request, ctx) if templates else {}
         return ListEnvelope[RecruitableExpertOut](
             data=[
-                RecruitableExpertOut(**item.model_dump(), is_recruited=item.template_id in recruited)
+                RecruitableExpertOut(
+                    **item.model_dump(), is_recruited=item.template_id in recruited,
+                    stats=stats.get(item.template_id),
+                )
                 for item in templates
             ]
         )
