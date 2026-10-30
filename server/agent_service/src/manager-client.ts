@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
-import type { UsageSummary } from "./usage.js";
+import type { SegmentOutcomeSummary, UsageSummary } from "./usage.js";
 import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, skillRefsForSnapshot, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
@@ -46,10 +46,36 @@ export interface AuthorizedConfig {
   skill_signing_keys?: SkillSigningKeyMetadata[];
 }
 
-export interface MarketplaceTemplate {
+export const MARKETPLACE_OUTPUT_TYPES = ["document", "spreadsheet", "code", "presentation", "system_operation"] as const;
+export type MarketplaceOutputType = typeof MARKETPLACE_OUTPUT_TYPES[number];
+export const MARKETPLACE_PRICING_MODES = ["per_call", "per_token", "subscription"] as const;
+
+/** 人才市场展示字段（议题 7）；Operator 持有，Manager 原样投影，旧模板为空列表/null。 */
+export interface MarketplaceTemplateProfile {
+  tagline: string | null;
+  use_cases: string[];
+  limitations: string[];
+  example_prompts: string[];
+  sample_outputs: Array<{ title: string; output_type: MarketplaceOutputType; preview_url: string | null }>;
+  output_types: MarketplaceOutputType[];
+  required_connectors: string[];
+  optional_connectors: string[];
+  recommended_knowledge: string[];
+  required_permissions: { full_access: boolean; local_directories: boolean } | null;
+  pricing: { mode: typeof MARKETPLACE_PRICING_MODES[number]; unit_price: string; currency: "USD" } | null;
+  memory_policy_summary: string | null;
+  publisher: string | null;
+  version: string | null;
+  updated_at: string | null;
+  changelog_url: string | null;
+  /** Manager 按本企业段落评估汇总；样本不足时 resolution_rate 为 null。 */
+  stats: { resolution_rate: number | null; evaluated_segments: number; resolved_segments: number; min_sample: number } | null;
+}
+
+export interface MarketplaceTemplate extends MarketplaceTemplateProfile {
   template_id: string;
   description: string | null;
-  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string; display_name: string | null }> | null;
+  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string; display_name: string | null; summary: string | null }> | null;
   display_name: string;
   category: string;
   model_name: string;
@@ -146,6 +172,7 @@ export interface ManagerClient {
   /** Enterprise knowledge bases the member can read in the current tenant. */
   listKnowledgeSpaces?(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
+  uploadSegmentOutcomes?(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -264,27 +291,28 @@ export class HttpManagerClient implements ManagerClient {
   }
 
   async listMarketplaceTemplates(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]> {
-    const [response, names] = await Promise.all([
+    const [response, skills] = await Promise.all([
       this.request("/api/manager/recruit/catalog/experts", caller),
-      this.skillMarketNames(caller),
+      this.skillMarketEntries(caller),
     ]);
     const value = this.unwrap(response);
     if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace catalog");
-    return value.map((item) => normalizeMarketplaceTemplate(item, names));
+    return value.map((item) => normalizeMarketplaceTemplate(item, skills));
   }
 
   /**
-   * 平台技能 ID → 展示名，供人才市场显示技能名称；技能市场不可用时返回空表，模板照常列出。
+   * 平台技能 ID → 展示名与一句说明，供人才市场显示技能；技能市场不可用时返回空表，模板照常列出。
    * 与模板目录并行请求，所以单独给一个短超时，避免拖慢整个人才市场列表。
    */
-  private async skillMarketNames(caller: AuthenticatedCaller): Promise<Map<string, string>> {
-    const names = new Map<string, string>();
+  private async skillMarketEntries(caller: AuthenticatedCaller): Promise<Map<string, SkillMarketEntry>> {
+    const names = new Map<string, SkillMarketEntry>();
     try {
       const value = this.unwrap(await this.request("/api/manager/skill-market", caller, undefined, undefined, undefined, undefined, SKILL_MARKET_NAMES_TIMEOUT_MS));
       for (const item of Array.isArray(value) ? value : []) {
         const raw = objectValue(item);
-        const name = typeof raw?.display_name === "string" ? raw.display_name.trim() : "";
-        if (typeof raw?.skill_id === "string" && raw.skill_id && name) names.set(raw.skill_id, name);
+        if (typeof raw?.skill_id !== "string" || !raw.skill_id) continue;
+        const entry = { display_name: trimmedOrNull(raw.display_name), summary: trimmedOrNull(raw.summary) };
+        if (entry.display_name || entry.summary) names.set(raw.skill_id, entry);
       }
     } catch (error) {
       // Names are cosmetic; the catalog itself decides availability. Log so missing names stay diagnosable.
@@ -353,6 +381,10 @@ export class HttpManagerClient implements ManagerClient {
 
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
     return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [summary], audits: [] }, undefined, "POST", summary.summary_id));
+  }
+
+  async uploadSegmentOutcomes(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown> {
+    return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [], audits: [], segment_outcomes: [summary] }, undefined, "POST", summary.summary_id));
   }
 
   private async request(
@@ -558,13 +590,62 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
   };
 }
 
-function normalizeMarketplaceTemplate(value: unknown, skillNames: ReadonlyMap<string, string> = new Map()): MarketplaceTemplate {
+interface SkillMarketEntry { display_name: string | null; summary: string | null }
+
+function trimmedOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isOutputType(value: unknown): value is MarketplaceOutputType {
+  return typeof value === "string" && (MARKETPLACE_OUTPUT_TYPES as readonly string[]).includes(value);
+}
+
+/** Manager 投影的展示字段做形状校验；不合法的单项丢弃，不让单个模板拖垮目录。 */
+function normalizeMarketplaceProfile(raw: Record<string, unknown>): MarketplaceTemplateProfile {
+  const permissions = objectValue(raw.required_permissions);
+  const pricing = objectValue(raw.pricing);
+  const stats = objectValue(raw.stats);
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const rate = stats?.resolution_rate;
+  return {
+    tagline: trimmedOrNull(raw.tagline),
+    use_cases: stringArray(raw.use_cases),
+    limitations: stringArray(raw.limitations),
+    example_prompts: stringArray(raw.example_prompts),
+    sample_outputs: (Array.isArray(raw.sample_outputs) ? raw.sample_outputs : []).flatMap((item) => {
+      const output = objectValue(item);
+      const title = trimmedOrNull(output?.title);
+      return title && isOutputType(output?.output_type) ? [{ title, output_type: output.output_type, preview_url: trimmedOrNull(output.preview_url) }] : [];
+    }),
+    output_types: [...new Set((Array.isArray(raw.output_types) ? raw.output_types : []).filter(isOutputType))],
+    required_connectors: stringArray(raw.required_connectors),
+    optional_connectors: stringArray(raw.optional_connectors),
+    recommended_knowledge: stringArray(raw.recommended_knowledge),
+    required_permissions: permissions ? { full_access: permissions.full_access === true, local_directories: permissions.local_directories === true } : null,
+    pricing: pricing && (MARKETPLACE_PRICING_MODES as readonly unknown[]).includes(pricing.mode) && typeof pricing.unit_price === "string" && /^\d+(\.\d+)?$/.test(pricing.unit_price) && pricing.currency === "USD"
+      ? { mode: pricing.mode as typeof MARKETPLACE_PRICING_MODES[number], unit_price: pricing.unit_price, currency: "USD" }
+      : null,
+    memory_policy_summary: trimmedOrNull(raw.memory_policy_summary),
+    publisher: trimmedOrNull(raw.publisher),
+    version: trimmedOrNull(raw.version),
+    updated_at: typeof raw.updated_at === "string" && Number.isFinite(Date.parse(raw.updated_at)) ? new Date(raw.updated_at).toISOString() : null,
+    changelog_url: typeof raw.changelog_url === "string" && /^https?:\/\/\S+$/u.test(raw.changelog_url.trim()) ? raw.changelog_url.trim() : null,
+    stats: stats ? {
+      resolution_rate: typeof rate === "number" && rate >= 0 && rate <= 1 ? rate : null,
+      evaluated_segments: count(stats.evaluated_segments),
+      resolved_segments: count(stats.resolved_segments),
+      min_sample: count(stats.min_sample) || 1,
+    } : null,
+  };
+}
+
+function normalizeMarketplaceTemplate(value: unknown, skillMarket: ReadonlyMap<string, SkillMarketEntry> = new Map()): MarketplaceTemplate {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const raw = value as Record<string, unknown>;
   if (typeof raw.template_id !== "string" || raw.template_id.length === 0 || raw.template_id.length > 256) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const skills = Array.isArray(raw.platform_skill_refs)
     ? raw.platform_skill_refs.filter((ref) => ref && typeof ref === "object" && !Array.isArray(ref) && ["skill_id", "version", "content_hash"].every((key) => typeof ref[key] === "string" && ref[key].length > 0))
-      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string, display_name: skillNames.get(ref.skill_id as string) ?? null }))
+      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string, display_name: skillMarket.get(ref.skill_id as string)?.display_name ?? null, summary: skillMarket.get(ref.skill_id as string)?.summary ?? null }))
     : stringArray(raw.skill_ids);
   const tags = stringArray(raw.tags);
   return {
@@ -581,6 +662,7 @@ function normalizeMarketplaceTemplate(value: unknown, skillNames: ReadonlyMap<st
     is_recruited: raw.is_recruited === true,
     tags,
     avatar_url: typeof raw.avatar_url === "string" && raw.avatar_url.length > 0 ? raw.avatar_url : null,
+    ...normalizeMarketplaceProfile(raw),
   };
 }
 

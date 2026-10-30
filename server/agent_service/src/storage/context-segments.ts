@@ -35,6 +35,9 @@ interface SegmentRow {
   revision: number; created_at: number; evaluated_at: number | null;
 }
 export interface OutcomeFilter extends SegmentOwner { employeeId?: string; start?: number; end?: number }
+/** One employee's UTC hour whose evaluated/resolved counts may have changed. */
+export interface SegmentOutcomeBucket { employeeId: string; hourStart: number }
+export type SegmentOutcomeListener = (owner: SegmentOwner, buckets: SegmentOutcomeBucket[]) => void;
 export class ContextSegmentError extends Error {
   constructor(readonly code: "segment_not_found" | "revision_conflict" | "edit_window_closed") { super(code); }
 }
@@ -44,7 +47,8 @@ export class ContextSegmentError extends Error {
  * Holds no message bodies; the note is the member's own words about the result.
  */
 export class ContextSegmentStore {
-  constructor(private readonly db: DatabaseSync) {
+  /** The listener runs on the same connection, inside any transaction the caller holds. */
+  constructor(private readonly db: DatabaseSync, private readonly onOutcomesChanged?: SegmentOutcomeListener) {
     db.exec(`CREATE TABLE IF NOT EXISTS context_segment (
       tenant_id TEXT NOT NULL, member_id TEXT NOT NULL, conversation_id TEXT NOT NULL, segment_id TEXT NOT NULL,
       employee_ids_json TEXT NOT NULL, message_count INTEGER NOT NULL,
@@ -59,11 +63,12 @@ export class ContextSegmentStore {
   /** Idempotent per reset: a replayed request returns the row the first one wrote. */
   record(owner: SegmentOwner, input: { conversationId: string; segmentId: string; employeeIds: string[]; messageCount: number; endedAt: number; evaluation?: SegmentEvaluation }): ContextSegment {
     const evaluation = input.evaluation;
-    this.db.prepare(`INSERT INTO context_segment VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)
+    const inserted = this.db.prepare(`INSERT INTO context_segment VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)
       ON CONFLICT(tenant_id,member_id,conversation_id,segment_id) DO NOTHING`)
       .run(owner.tenantId, owner.memberId, input.conversationId, input.segmentId, JSON.stringify(input.employeeIds), input.messageCount,
         evaluation?.outcome ?? null, JSON.stringify(evaluation?.reasons ?? []), evaluation?.note ?? null, evaluation?.followUp ? 1 : 0,
         input.endedAt, evaluation?.outcome ? input.endedAt : null, input.endedAt);
+    if (Number(inserted.changes) > 0 && evaluation?.outcome) this.notify(owner, [{ employeeIds: input.employeeIds, createdAt: input.endedAt }]);
     return this.get(owner, input.conversationId, input.segmentId)!;
   }
 
@@ -91,6 +96,8 @@ export class ContextSegmentStore {
       WHERE tenant_id=? AND member_id=? AND conversation_id=? AND segment_id=? AND revision=?`)
       .run(evaluation.outcome, JSON.stringify(cleared ? [] : evaluation.reasons), cleared ? null : evaluation.note, !cleared && evaluation.followUp ? 1 : 0,
         cleared ? null : now, now, owner.tenantId, owner.memberId, conversationId, segmentId, expectedRevision);
+    // Reasons, notes and follow-up never leave the machine; only an outcome change moves the counts.
+    if (current.outcome !== evaluation.outcome) this.notify(owner, [{ employeeIds: current.employee_ids, createdAt: Date.parse(current.ended_at) }]);
     return this.get(owner, conversationId, segmentId)!;
   }
 
@@ -107,10 +114,36 @@ export class ContextSegmentStore {
       .filter((row) => !filter.employeeId || row.employeeIds.includes(filter.employeeId));
   }
 
+  /** Absolute counts for one employee's UTC hour [hourStart, hourStart + 1h), keyed by segment end. */
+  hourlyCounts(owner: SegmentOwner, employeeId: string, hourStart: number): { evaluated: number; resolved: number } {
+    // SAFETY: owner-scoped query on this module's table.
+    const row = this.db.prepare(`SELECT COUNT(*) AS evaluated, COALESCE(SUM(outcome = 'resolved'), 0) AS resolved FROM context_segment
+      WHERE tenant_id=? AND member_id=? AND outcome IS NOT NULL AND created_at >= ? AND created_at < ?
+        AND EXISTS (SELECT 1 FROM json_each(employee_ids_json) WHERE value = ?)`)
+      .get(owner.tenantId, owner.memberId, hourStart, hourStart + HOUR_MS, employeeId) as { evaluated: number; resolved: number };
+    return { evaluated: Number(row.evaluated), resolved: Number(row.resolved) };
+  }
+
   deleteConversation(owner: SegmentOwner, conversationId: string): void {
+    // SAFETY: owner-scoped query on this module's table.
+    const evaluated = this.db.prepare("SELECT employee_ids_json, created_at FROM context_segment WHERE tenant_id=? AND member_id=? AND conversation_id=? AND outcome IS NOT NULL")
+      .all(owner.tenantId, owner.memberId, conversationId) as unknown as Array<{ employee_ids_json: string; created_at: number }>;
     this.db.prepare("DELETE FROM context_segment WHERE tenant_id=? AND member_id=? AND conversation_id=?").run(owner.tenantId, owner.memberId, conversationId);
+    this.notify(owner, evaluated.map((row) => ({ employeeIds: parseStrings(row.employee_ids_json), createdAt: row.created_at })));
+  }
+
+  private notify(owner: SegmentOwner, segments: Array<{ employeeIds: string[]; createdAt: number }>): void {
+    if (!this.onOutcomesChanged || segments.length === 0) return;
+    const buckets = new Map<string, SegmentOutcomeBucket>();
+    for (const segment of segments) {
+      const hourStart = segment.createdAt - (segment.createdAt % HOUR_MS);
+      for (const employeeId of segment.employeeIds) buckets.set(`${employeeId}\u0000${hourStart}`, { employeeId, hourStart });
+    }
+    this.onOutcomesChanged(owner, [...buckets.values()]);
   }
 }
+
+const HOUR_MS = 60 * 60 * 1000;
 
 export function isOutcomeReason(value: unknown): value is SegmentOutcomeReason {
   return typeof value === "string" && (SEGMENT_OUTCOME_REASONS as readonly string[]).includes(value);

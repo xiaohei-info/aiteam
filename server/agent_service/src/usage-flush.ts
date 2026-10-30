@@ -69,7 +69,9 @@ export class UsageFlushService {
   private async flushInternal(caller: AuthenticatedCaller, limit: number): Promise<{ sent: string[]; failed: string[] }> {
     const client = this.managerClient;
     if (!client?.uploadUsage) throw new Error("Manager usage upload is not configured");
-    const rows = this.store.claimUsageOutbox(caller.tenantId!, caller.userId ?? caller.callerId, limit);
+    // Clients without the outcome uploader leave segment_outcome rows pending instead of failing them.
+    const kinds = client.uploadSegmentOutcomes ? ["usage", "segment_outcome"] as const : ["usage"] as const;
+    const rows = this.store.claimUsageOutbox(caller.tenantId!, caller.userId ?? caller.callerId, limit, kinds);
     const sent: string[] = [];
     const failed: string[] = [];
     let denied = false;
@@ -80,7 +82,8 @@ export class UsageFlushService {
         continue;
       }
       try {
-        await client.uploadUsage(caller, row.payload);
+        if (row.kind === "segment_outcome") await client.uploadSegmentOutcomes!(caller, row.payload);
+        else await client.uploadUsage(caller, row.payload);
         this.store.markUsageSent(row.summary_id, row.claim_token);
         sent.push(row.summary_id);
       } catch (error) {

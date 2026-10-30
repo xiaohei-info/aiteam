@@ -5,6 +5,11 @@ import { appLogger } from "./observability.js";
 import { HINDSIGHT_CLIENT_PROTOCOL, HttpManagerClient, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, normalizeAuthorizedConfig, normalizeHindsightRuntimeConfig, normalizeRuntimeProviderConfig } from "./manager-client.js";
 
 const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1", accessToken: "jwt" };
+const EMPTY_PROFILE = {
+  tagline: null, use_cases: [], limitations: [], example_prompts: [], sample_outputs: [], output_types: [],
+  required_connectors: [], optional_connectors: [], recommended_knowledge: [], required_permissions: null, pricing: null,
+  memory_policy_summary: null, publisher: null, version: null, updated_at: null, changelog_url: null, stats: null,
+};
 
 test("HttpManagerClient keeps employee-scoped memory deletion for management operations", async () => {
   const requests: { url: string; init: RequestInit }[] = [];
@@ -127,7 +132,7 @@ test("HttpManagerClient pulls a bounded marketplace catalog from Manager", async
     return new Response(JSON.stringify({ data: [{ template_id: "tpl-1", display_name: "Researcher", category: "research", default_model: "model-1", skill_ids: ["skill-1"], tags: ["analysis"] }] }), { status: 200 });
   });
   const templates = await client.listMarketplaceTemplates(caller);
-  assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", description: null, platform_skill_refs: null, model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null });
+  assert.deepEqual(templates[0], { template_id: "tpl-1", display_name: "Researcher", category: "research", description: null, platform_skill_refs: null, model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null, ...EMPTY_PROFILE });
   assert.equal(request?.url, "https://manager.test/api/manager/recruit/catalog/experts");
   assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
 });
@@ -143,7 +148,7 @@ test("marketplace skill counts prefer modern fixed platform refs, including auth
   assert.deepEqual(templates.map((template) => template.skills_count), [2, 0, 1]);
   assert.equal(templates[0].description, "真实描述");
   // 技能市场不可用时模板照常返回，只是没有展示名。
-  const unnamed = { ...ref, display_name: null };
+  const unnamed = { ...ref, display_name: null, summary: null };
   assert.deepEqual(templates[0].platform_skill_refs, [unnamed, { ...unnamed, skill_id: "skill-2" }]);
   assert.deepEqual(templates[1].platform_skill_refs, []);
   assert.deepEqual(templates[2].platform_skill_refs, [unnamed]);
@@ -157,13 +162,55 @@ test("marketplace skill refs carry display names from the Manager skill market",
   const client = new HttpManagerClient("https://manager.test", async (input) => {
     urls.push(String(input));
     if (String(input).endsWith("/api/manager/skill-market")) {
-      return new Response(JSON.stringify({ data: [{ skill_id: "skill-1", display_name: " 深度研究 " }, { skill_id: "skill-3", display_name: "" }, { display_name: "no id" }] }), { status: 200 });
+      return new Response(JSON.stringify({ data: [{ skill_id: "skill-1", display_name: " 深度研究 ", summary: " 检索并整理 " }, { skill_id: "skill-2", display_name: "", summary: "只有说明" }, { skill_id: "skill-3", display_name: "" }, { display_name: "no id" }] }), { status: 200 });
     }
     return new Response(JSON.stringify({ data: [{ template_id: "tpl", platform_skill_refs: [ref, { ...ref, skill_id: "skill-2" }] }] }), { status: 200 });
   });
   const [template] = await client.listMarketplaceTemplates(caller);
-  assert.deepEqual(template.platform_skill_refs, [{ ...ref, display_name: "深度研究" }, { ...ref, skill_id: "skill-2", display_name: null }]);
+  assert.deepEqual(template.platform_skill_refs, [{ ...ref, display_name: "深度研究", summary: "检索并整理" }, { ...ref, skill_id: "skill-2", display_name: null, summary: "只有说明" }]);
   assert.deepEqual(urls.sort(), ["https://manager.test/api/manager/recruit/catalog/experts", "https://manager.test/api/manager/skill-market"]);
+});
+
+test("marketplace profile fields and tenant stats are projected with per-field shape checks", async () => {
+  const client = new HttpManagerClient("https://manager.test", async (input) => String(input).endsWith("/api/manager/skill-market") ? new Response(JSON.stringify({ data: [] }), { status: 200 }) : new Response(JSON.stringify({ data: [
+    {
+      template_id: "full", version: "3", tagline: " 周报助手 ", use_cases: ["周报", 7], limitations: ["不做财务"], example_prompts: ["写周报"],
+      sample_outputs: [{ title: "周报", output_type: "document", preview_url: "https://cdn.test/a.png" }, { title: "坏", output_type: "video" }, { output_type: "code" }],
+      output_types: ["document", "document", "video", "code"], required_connectors: ["feishu"], optional_connectors: [], recommended_knowledge: ["产品文档"],
+      required_permissions: { full_access: true, local_directories: "yes" }, pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" },
+      memory_policy_summary: "只记偏好", publisher: "AI Team", updated_at: "2026-10-30T08:00:00Z", changelog_url: "https://docs.test/changelog",
+      stats: { resolution_rate: 0.75, evaluated_segments: 12, resolved_segments: 9, min_sample: 10 },
+    },
+    { template_id: "bad", pricing: { mode: "free", unit_price: "1", currency: "USD" }, changelog_url: "javascript:alert(1)", updated_at: "not a date", stats: { resolution_rate: 2, evaluated_segments: -1 } },
+  ] }), { status: 200 }));
+  const [full, bad] = await client.listMarketplaceTemplates(caller);
+  assert.equal(full.tagline, "周报助手");
+  assert.equal(full.version, "3");
+  assert.deepEqual(full.use_cases, ["周报"]);
+  assert.deepEqual(full.sample_outputs, [{ title: "周报", output_type: "document", preview_url: "https://cdn.test/a.png" }]);
+  assert.deepEqual(full.output_types, ["document", "code"]);
+  assert.deepEqual(full.required_permissions, { full_access: true, local_directories: false });
+  assert.deepEqual(full.pricing, { mode: "per_call", unit_price: "0.05", currency: "USD" });
+  assert.equal(full.updated_at, "2026-10-30T08:00:00.000Z");
+  assert.equal(full.changelog_url, "https://docs.test/changelog");
+  assert.deepEqual(full.stats, { resolution_rate: 0.75, evaluated_segments: 12, resolved_segments: 9, min_sample: 10 });
+  assert.equal(bad.pricing, null);
+  assert.equal(bad.changelog_url, null);
+  assert.equal(bad.updated_at, null);
+  assert.deepEqual(bad.stats, { resolution_rate: null, evaluated_segments: 0, resolved_segments: 0, min_sample: 1 });
+});
+
+test("segment outcome counts upload through the usage endpoint with the summary id as idempotency key", async () => {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    requests.push({ url: String(input), init: init ?? {} });
+    return new Response(JSON.stringify({ data: { usage_ingested: 0, audits_ingested: 0, segment_outcomes_ingested: 1 } }), { status: 200 });
+  });
+  const summary = { schema_version: "1" as const, summary_id: "seg-1", tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1", window_start: "2026-10-30T02:00:00.000Z", window_end: "2026-10-30T03:00:00.000Z", evaluated_count: 3, resolved_count: 2 };
+  await client.uploadSegmentOutcomes(caller, summary);
+  assert.equal(requests[0].url, "https://manager.test/api/manager/usage/upload");
+  assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "seg-1");
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { tenant_id: "tenant-1", usage: [], audits: [], segment_outcomes: [summary] });
 });
 
 test("a stalled skill market only delays the marketplace catalog by the short name budget and logs a warning", async (t) => {

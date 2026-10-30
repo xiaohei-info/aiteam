@@ -259,7 +259,7 @@ test("Agent projections use real Manager catalog, schedules, and usage payloads"
   const remote: ManagerClient = {
     pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
     getOrgTree: async () => ({}),
-    listMarketplaceTemplates: async () => [{ template_id: "template-1", display_name: "Researcher", category: "research", description: "真实市场描述", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:abc", display_name: "深度研究" }], model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null }],
+    listMarketplaceTemplates: async () => [{ template_id: "template-1", display_name: "Researcher", category: "research", description: "真实市场描述", platform_skill_refs: [{ skill_id: "research", version: "1", content_hash: "sha256:abc", display_name: "深度研究", summary: null }], model_name: "model-1", skills_count: 1, recruit_count: null, is_recruited: false, tags: ["analysis"], avatar_url: null, tagline: "研究助手", use_cases: ["行业调研"], limitations: [], example_prompts: [], sample_outputs: [{ title: "周报", output_type: "document", preview_url: null }], output_types: ["document"], required_connectors: [], optional_connectors: [], recommended_knowledge: [], required_permissions: { full_access: false, local_directories: true }, pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" }, memory_policy_summary: null, publisher: "AI Team", version: "1", updated_at: "2026-10-30T00:00:00.000Z", changelog_url: null, stats: { resolution_rate: 0.75, evaluated_segments: 12, resolved_segments: 9, min_sample: 10 } }],
   };
   const { fixture, http, base } = await start(remote);
   try {
@@ -276,7 +276,11 @@ test("Agent projections use real Manager catalog, schedules, and usage payloads"
     assert.equal(detail.status, 200);
     const template = (await detail.json() as { data: Record<string, unknown> }).data;
     assert.equal(template.description, "真实市场描述");
-    assert.deepEqual(template.platform_skill_refs, [{ skill_id: "research", version: "1", content_hash: "sha256:abc", display_name: "深度研究" }]);
+    assert.deepEqual(template.platform_skill_refs, [{ skill_id: "research", version: "1", content_hash: "sha256:abc", display_name: "深度研究", summary: null }]);
+    assert.equal(template.tagline, "研究助手");
+    assert.deepEqual(template.pricing, { mode: "per_call", unit_price: "0.05", currency: "USD" });
+    assert.deepEqual(template.stats, { resolution_rate: 0.75, evaluated_segments: 12, resolved_segments: 9, min_sample: 10 });
+    assert.deepEqual(template.sample_outputs, [{ title: "周报", output_type: "document", preview_url: null }]);
     assert.equal(template.recruit_count, null);
     const feed = await fetch(`${base}/api/agent/office/feed`, { headers: auth });
     assert.equal((await feed.json() as { data: { events: unknown[] } }).data.events.length, 1);

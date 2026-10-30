@@ -2,9 +2,9 @@ import { AutomationTaskRepository } from "./automation-tasks.js";
 import { parseOrchestration, type GroupOrchestration } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { usdDecimal, usdUnits, type UsageSummary } from "../usage.js";
+import { segmentOutcomeSummary, usdDecimal, usdUnits, type SegmentOutcomeSummary, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
-import { ContextSegmentStore } from "./context-segments.js";
+import { ContextSegmentStore, type SegmentOutcomeBucket, type SegmentOwner } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -276,6 +276,11 @@ export interface UsageOutboxItem {
   /** The allowlisted aggregate that will be sent to Manager; never session content. */
   payload?: UsageSummary;
 }
+
+export type UsageOutboxKind = "usage" | "segment_outcome";
+export type ClaimedUsageOutboxRow =
+  | { summary_id: string; tenant_id: string; kind: "usage"; payload: UsageSummary; claim_token: string }
+  | { summary_id: string; tenant_id: string; kind: "segment_outcome"; payload: SegmentOutcomeSummary; claim_token: string };
 
 export type LocalFileKind = "attachment" | "artifact";
 
@@ -638,7 +643,7 @@ export class AgentSqliteStore {
     this.db.prepare("UPDATE approval_record SET status = 'uncertain', consumed = 1, updated_at = ? WHERE status IN ('pending', 'approved', 'executing')").run(new Date().toISOString());
     this.automation = new AutomationTaskRepository(this.db);
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
-    this.contextSegments = new ContextSegmentStore(this.db);
+    this.contextSegments = new ContextSegmentStore(this.db, (owner, buckets) => this.publishSegmentOutcomes(owner, buckets));
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
   }
@@ -1357,18 +1362,46 @@ export class AgentSqliteStore {
     `).run(summary.summary_id, summary.tenant_id, summary.member_id, JSON.stringify(summary), now, cost === undefined ? null : usdDecimal(cost));
   }
 
-  claimUsageOutbox(tenantId: string, memberIdOrLimit?: string | number, limit = 50): Array<{ summary_id: string; tenant_id: string; payload: UsageSummary; claim_token: string }> {
+  /**
+   * Replace (not add to) the absolute verdict counts of each changed employee hour. Runs inside the
+   * caller's transaction; a zero bucket is only written when an earlier non-zero bucket must be overwritten.
+   */
+  private publishSegmentOutcomes(owner: SegmentOwner, buckets: SegmentOutcomeBucket[]): void {
+    const now = new Date().toISOString();
+    for (const bucket of buckets) {
+      const counts = this.contextSegments.hourlyCounts(owner, bucket.employeeId, bucket.hourStart);
+      const summary = segmentOutcomeSummary({ tenantId: owner.tenantId, memberId: owner.memberId, employeeId: bucket.employeeId, hourStart: bucket.hourStart, ...counts });
+      const payload = JSON.stringify(summary);
+      if (counts.evaluated === 0) {
+        this.db.prepare("UPDATE usage_summary_outbox SET payload_json = ?, status = 'pending', last_error = NULL WHERE summary_id = ? AND kind = 'segment_outcome'").run(payload, summary.summary_id);
+        continue;
+      }
+      this.db.prepare(`
+        INSERT INTO usage_summary_outbox (summary_id, tenant_id, member_id, kind, status, attempts, last_error, payload_json, created_at)
+        VALUES (?, ?, ?, 'segment_outcome', 'pending', 0, NULL, ?, ?)
+        ON CONFLICT(summary_id) DO UPDATE SET payload_json = excluded.payload_json, status = 'pending', last_error = NULL
+        WHERE usage_summary_outbox.kind = 'segment_outcome'
+      `).run(summary.summary_id, summary.tenant_id, summary.member_id, payload, now);
+    }
+  }
+
+  claimUsageOutbox(tenantId: string, memberIdOrLimit?: string | number, limit = 50, kinds: readonly UsageOutboxKind[] = ["usage", "segment_outcome"]): ClaimedUsageOutboxRow[] {
     const memberId = typeof memberIdOrLimit === "string" ? memberIdOrLimit : undefined;
     const effectiveLimit = typeof memberIdOrLimit === "number" ? memberIdOrLimit : limit;
     const claimToken = randomUUID();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const rows = this.db.prepare(`SELECT summary_id, tenant_id, payload_json FROM usage_summary_outbox
-        WHERE tenant_id = ? AND member_id <> '' AND (? IS NULL OR member_id = ?) AND status IN ('pending', 'failed') ORDER BY created_at ASC LIMIT ?`).all(tenantId, memberId ?? null, memberId ?? null, Math.min(Math.max(effectiveLimit, 1), 100)) as { summary_id: string; tenant_id: string; payload_json: string }[];
+      const rows = this.db.prepare(`SELECT summary_id, tenant_id, kind, payload_json FROM usage_summary_outbox
+        WHERE tenant_id = ? AND member_id <> '' AND (? IS NULL OR member_id = ?) AND status IN ('pending', 'failed')
+          AND kind IN (SELECT value FROM json_each(?)) ORDER BY created_at ASC LIMIT ?`).all(tenantId, memberId ?? null, memberId ?? null, JSON.stringify(kinds), Math.min(Math.max(effectiveLimit, 1), 100)) as { summary_id: string; tenant_id: string; kind: UsageOutboxKind; payload_json: string }[];
       for (const row of rows) this.db.prepare("UPDATE usage_summary_outbox SET status = 'sending', attempts = attempts + 1, claim_token = ?, claimed_at = ?, last_error = NULL WHERE summary_id = ? AND status IN ('pending', 'failed')").run(claimToken, new Date().toISOString(), row.summary_id);
       this.db.exec("COMMIT");
-      return rows.map((row) => ({ summary_id: row.summary_id, tenant_id: row.tenant_id, payload: JSON.parse(row.payload_json) as UsageSummary, claim_token: claimToken }));
-    } catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
+      // SAFETY: payload_json is only written by upsertUsageSummary/publishSegmentOutcomes with the shape matching kind.
+      return rows.map((row) => ({ summary_id: row.summary_id, tenant_id: row.tenant_id, kind: row.kind, payload: JSON.parse(row.payload_json), claim_token: claimToken }) as ClaimedUsageOutboxRow);
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* no open transaction to roll back; the original error is what matters */ }
+      throw error;
+    }
   }
 
   markUsageSent(summaryId: string, claimToken: string): void {
