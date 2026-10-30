@@ -118,3 +118,15 @@ test('发布信息只显示有数据的部分', () => {
   assert.equal(talentReleaseLabel({ version: 'v1.4', updated_at: null }), 'v1.4')
   assert.equal(talentReleaseLabel({ version: '1.4', updated_at: '2026-10-21T12:00:00Z' }), 'v1.4 · 10/21 更新')
 })
+
+test('套餐按周期显示，旧服务端没有周期时显示「套餐」', () => {
+  const pricing = (extra: Record<string, unknown>) =>
+    toTalentProfile({ ...legacyTemplate, pricing: { mode: 'subscription', unit_price: '99', currency: 'USD', ...extra } as MarketplaceTemplate['pricing'] }).pricing!
+  assert.equal(formatTemplatePricing(pricing({ billing_period: 'month' })), '$99/月')
+  assert.equal(formatTemplatePricing({ ...pricing({ billing_period: 'year' }), unit_price: '999' }), '$999/年')
+  assert.equal(formatTemplatePricing(pricing({})), '$99 套餐')
+  assert.equal(formatTemplatePricing(pricing({ billing_period: 'week' })), '$99 套餐')
+  const perCall = toTalentProfile({ ...legacyTemplate, pricing: { mode: 'per_call', unit_price: '0.05', currency: 'USD', billing_period: 'month' } }).pricing!
+  assert.equal(perCall.billing_period, undefined)
+  assert.equal(formatTemplatePricing(perCall), '$0.05/次')
+})
