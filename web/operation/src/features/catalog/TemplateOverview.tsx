@@ -12,6 +12,9 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { AvatarFileInput, AvatarPreview } from "./AvatarFileInput";
+import { ExpertProfileSummary } from "./ExpertProfileSummary";
+import { ExpertProfileFields } from "./register/ExpertProfileFields";
+import { profileFromItem, type ProfileErrors } from "./profile";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import type { CatalogItem } from "./types";
 import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
@@ -57,6 +60,7 @@ interface TemplateOverviewProps {
   draft: CatalogItem;
   editing: boolean;
   canWrite: boolean;
+  profileErrors?: ProfileErrors;
   visibilityChanging: boolean;
   onChange: (next: CatalogItem) => void;
   onVisibilityChange: (next: "public" | "enterprise" | "hidden") => void;
@@ -130,12 +134,14 @@ function ExpertDetailSections({
   draft,
   onChange,
   editing,
+  profileErrors,
   modelOptions,
   modelLoading,
 }: {
   draft: CatalogItem;
   onChange: (next: CatalogItem) => void;
   editing: boolean;
+  profileErrors?: ProfileErrors;
   modelOptions: ModelOption[];
   modelLoading: boolean;
 }): ReactNode {
@@ -223,6 +229,21 @@ function ExpertDetailSections({
       <DetailSection title="技能">
         <SkillNames refs={draft.platform_skill_refs} legacyIds={draft.skill_ids} />
       </DetailSection>
+
+      {editing ? (
+        <Card>
+          <ExpertProfileFields
+            value={profileFromItem(draft)}
+            disabled={false}
+            errors={profileErrors}
+            onChange={(profile) => onChange({ ...draft, ...profile })}
+          />
+        </Card>
+      ) : (
+        <DetailSection title="人才市场展示">
+          <ExpertProfileSummary item={draft} />
+        </DetailSection>
+      )}
     </>
   );
 }
@@ -283,7 +304,7 @@ function SolutionDetailSections({ draft, onChange, editing }: {
   );
 }
 
-export function TemplateOverview({ item, draft, editing, canWrite, visibilityChanging, onChange, onVisibilityChange }: TemplateOverviewProps): ReactNode {
+export function TemplateOverview({ item, draft, editing, canWrite, profileErrors, visibilityChanging, onChange, onVisibilityChange }: TemplateOverviewProps): ReactNode {
   const isExpert = item.catalog_type === "expert_template";
   const providerApi = usePlatformProvidersApi();
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
@@ -348,7 +369,7 @@ export function TemplateOverview({ item, draft, editing, canWrite, visibilityCha
       </Card>
 
       {isExpert
-        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} modelOptions={modelOptions} modelLoading={modelLoading} />
+        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} profileErrors={profileErrors} modelOptions={modelOptions} modelLoading={modelLoading} />
         : <SolutionDetailSections draft={draft} onChange={onChange} editing={editing} />}
     </VStack>
   );

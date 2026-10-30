@@ -22,10 +22,11 @@ import type {
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
 } from "./types";
+import type { ExpertTemplateProfile } from "./profile";
 
 /** 编辑请求体——对齐后端 UpdateExpertTemplateRequest | UpdateSolutionTemplateRequest。
  * 部分更新：调用方只填要改的字段，未出现的字段不参与 PATCH。 */
-export type UpdateExpertTemplateChanges = {
+export type UpdateExpertTemplateChanges = Partial<ExpertTemplateProfile> & {
   display_name?: string;
   category?: string;
   /** New values are local image data URLs; avatar_url remains for Catalog wire compatibility. */
