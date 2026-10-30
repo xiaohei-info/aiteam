@@ -9,7 +9,11 @@ const limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 50
 const cursor = (description: string) => Type.Optional(Type.String({ minLength: 1, maxLength: 8192, description }));
 export const WorkHistoryQuery = Type.Object({ employee_id: employee, ...range, limit, before: cursor("上一页 page.next_cursor，向更早历史翻页；绑定 owner/employee/时间筛选，不是 after 或 entry_ref。") }, { additionalProperties: false });
 export const WorkChangesQuery = Type.Object({ employee_id: employee, limit, after: cursor("history.meta.after 或上次 changes.page.next_cursor；绑定 owner/employee，从该水位之后读更新。省略从起点消费。") }, { additionalProperties: false });
-export const UsageStatisticsQuery = Type.Object({ employee_id: employee, ...range }, { additionalProperties: false });
+export const UsageStatisticsQuery = Type.Object({
+  employee_id: employee, ...range,
+  conversation_id: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "仅此本机会话；小时摘要不含会话，提供时改为汇总该会话已结算的 live 工作记录（coverage=work_records）。" })),
+  group_by: Type.Optional(Type.Literal("employee", { description: "额外返回按员工分组的 groups[]；合计字段不变。" })),
+}, { additionalProperties: false });
 const nullableText = (description: string, maxLength?: number) => Type.Union([Type.String({ ...(maxLength ? { maxLength } : {}) }), Type.Null()], { description });
 const date = (description: string) => Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description });
 const count = (description: string) => Type.Integer({ minimum: 0, description });
@@ -57,8 +61,8 @@ const WorkChangesEnvelope = Type.Object({ data: Type.Array(Type.Ref("WorkChange"
 }, { additionalProperties: false }) }, { $id: "WorkChangesEnvelope", description: "单调 change sequence 正序；仅 owner/employee 过滤，删除 tombstone 不留时间/会话信息。" });
 const Statistics = Type.Object({
   scope: Type.Literal("member_local", { description: "当前认证成员、本机数据，不是企业/平台全量。" }),
-  coverage: Type.Literal("recorded_hourly_summaries", { description: "仅真实保留的小时摘要；不补造旧缺失数据，不包含重建历史或崩溃未结算；旧计数/价格精度按原摘要保留。" }),
-  employee_id: nullableText("员工筛选；未筛选为 null。"), window_start: date("包含 UTC 整点起点；未筛选为 null。"), window_end: date("不包含 UTC 整点终点；未筛选为 null。"),
+  coverage: Type.String({ enum: ["recorded_hourly_summaries", "work_records"], description: "recorded_hourly_summaries：仅真实保留的小时摘要，不补造旧缺失数据，不包含重建历史或崩溃未结算，旧计数/价格精度按原摘要保留。work_records：按 conversation_id 筛选时汇总该会话已结算的 live 工作记录，时间窗按 occurred_at 归属，缺少计量的执行计入 unpriced_execution_count。" }),
+  employee_id: nullableText("员工筛选；未筛选为 null。"), conversation_id: nullableText("会话筛选；未筛选为 null。"), window_start: date("包含 UTC 整点起点；未筛选为 null。"), window_end: date("不包含 UTC 整点终点；未筛选为 null。"),
   bucket: Type.Literal("utc_hour", { description: "按执行开始所在 UTC 小时归属。精确分钟范围请查 work-records，不接受非整点统计。" }),
   execution_count: count("摘要中的员工 prompt 执行次数，不是用户业务任务数，也不是 HTTP 接收次数。"), succeeded_count: count("摘要已记录的成功次数；旧摘要不反推修正历史结果。"), non_success_count: count("摘要中的非成功次数（包含 error/abort/unknown），不伪造历史细分。"),
   input_tokens: count("保留摘要输入 token。"), output_tokens: count("保留摘要输出 token。"), cache_tokens: count("保留摘要 cache token。"), token_total: count("保留摘要 token 合计。"), duration_ms_total: count("保留摘要 duration 合计。"),
@@ -68,10 +72,22 @@ const Statistics = Type.Object({
   cost_minor: Type.Union([count("最终 USD cents。"), Type.Null()], { description: "从最终已知总费用一次舍入；未知时 null。优先用 cost_total。" }),
   pricing_status: Type.String({ enum: ["known", "partial", "unknown"], description: "所有已知/部分已知/无已知计价。" }),
   unpriced_execution_count: count("未知定价或缺失完整计量的摘要执行次数。"), excluded_summary_count: count("损坏、非 USD、身份不符等不能安全使用的 owner 摘要行数；不能静默当零。"),
+  groups: Type.Optional(Type.Array(Type.Ref("UsageStatisticsGroup"), { description: "仅 group_by=employee 时返回；按 token_total 降序。" })),
 }, { $id: "UsageStatistics", additionalProperties: false, description: "直接汇总全部 pending/sending/sent/failed 小时 outbox。上传成功、会话删除不缩水，无第二账本。" });
+const StatisticsGroup = Type.Object({
+  employee_id: Type.String({ description: "执行这些工作的员工。" }),
+  execution_count: count("执行次数。"), succeeded_count: count("成功次数。"), non_success_count: count("非成功次数。"),
+  input_tokens: count("输入 token。"), output_tokens: count("输出 token。"), cache_tokens: count("cache token。"), token_total: count("token 合计。"), duration_ms_total: count("耗时合计。"),
+  currency: Type.Literal("USD", { description: "只相加 USD。" }),
+  cost_total: Type.Union([money("该员工最终费用。"), Type.Null()], { description: "该员工全部执行可计价时有值，否则 null。" }),
+  known_cost_total: money("该员工已知价格小计。"),
+  cost_minor: Type.Union([count("该员工 USD cents。"), Type.Null()], { description: "未知时 null。" }),
+  pricing_status: Type.String({ enum: ["known", "partial", "unknown"], description: "该员工的计价完整度。" }),
+  unpriced_execution_count: count("该员工未定价执行次数。"),
+}, { $id: "UsageStatisticsGroup", additionalProperties: false, description: "单个员工的用量分组，口径与合计一致。" });
 const StatisticsEnvelope = Type.Object({ data: Type.Ref("UsageStatistics") }, { $id: "UsageStatisticsEnvelope", description: "成员本机小时统计。" });
 
-export const WORK_RECORD_SCHEMAS = [WorkUsage, WorkRecord, WorkHistoryEnvelope, WorkChange, WorkChangesEnvelope, Statistics, StatisticsEnvelope];
+export const WORK_RECORD_SCHEMAS = [WorkUsage, WorkRecord, WorkHistoryEnvelope, WorkChange, WorkChangesEnvelope, StatisticsGroup, Statistics, StatisticsEnvelope];
 const recordExample = { id: "opaque-execution-id", employee_id: "employee-1", employee_display_name: "研究员", conversation_id: "conversation-1", conversation_title: "总结", provenance: "live", outcome: "active", reason: null, time_basis: "prompt_start", occurred_at: "2026-09-05T08:01:02.123Z", started_at: "2026-09-05T08:01:02.123Z", ended_at: null, updated_at: "2026-09-05T08:01:02.123Z", first_entry_at: null, last_entry_at: null, input_entry_ref: null, output_entry_ref: null, source_type: null, source_id: null, task_summary: null, result_summary: null, usage: null };
 const requestExamples = {
   employee_id: { summary: "员工", value: "employee-1" }, window_start: { summary: "UTC 起点", value: "2026-09-05T08:00:00Z" }, window_end: { summary: "UTC 终点", value: "2026-09-05T09:00:00Z" },
@@ -80,5 +96,5 @@ const requestExamples = {
 export const WORK_RECORD_DOCS = {
   listWorkRecords: { request: requestExamples, responses: { "200": { description: "精确历史与初始变更水位；不创建/调用 Pi Session。", examples: { active: { summary: "实际执行尚未结算", value: { data: [recordExample], page: { next_cursor: null, has_more: false }, meta: { after: "page_v1.opaque" } } } } } } },
   listWorkRecordChanges: { request: requestExamples, responses: { "200": { description: "最新 upsert/delete；空页也返回可继续轮询的 next_cursor。", examples: { deleted: { summary: "会话删除后 UI 清除", value: { data: [{ operation: "delete", record_id: "opaque-execution-id" }], page: { next_cursor: "page_v1.opaque", has_more: false } } } } } } },
-  getUsageStatistics: { request: requestExamples, responses: { "200": { description: "全部 outbox 状态的小时统计；未知总费用为 null。", examples: { unknown: { summary: "未定价不冒充免费", value: { data: { scope: "member_local", coverage: "recorded_hourly_summaries", employee_id: null, window_start: null, window_end: null, bucket: "utc_hour", execution_count: 1, succeeded_count: 1, non_success_count: 0, input_tokens: 10, output_tokens: 5, cache_tokens: 0, token_total: 15, duration_ms_total: 1234, currency: "USD", cost_total: null, known_cost_total: "0.000000000000", cost_minor: null, pricing_status: "unknown", unpriced_execution_count: 1, excluded_summary_count: 0 } } } } } } },
+  getUsageStatistics: { request: requestExamples, responses: { "200": { description: "全部 outbox 状态的小时统计；未知总费用为 null。", examples: { unknown: { summary: "未定价不冒充免费", value: { data: { scope: "member_local", coverage: "recorded_hourly_summaries", employee_id: null, conversation_id: null, window_start: null, window_end: null, bucket: "utc_hour", execution_count: 1, succeeded_count: 1, non_success_count: 0, input_tokens: 10, output_tokens: 5, cache_tokens: 0, token_total: 15, duration_ms_total: 1234, currency: "USD", cost_total: null, known_cost_total: "0.000000000000", cost_minor: null, pricing_status: "unknown", unpriced_execution_count: 1, excluded_summary_count: 0 } } } } } } },
 };

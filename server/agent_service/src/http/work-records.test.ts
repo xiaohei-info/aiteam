@@ -226,6 +226,38 @@ test("concurrent group fan-out counts actual employee executions once, and peer 
   } finally { release(); await http.close(); await fixture.close(); }
 });
 
+test("usage statistics filter one conversation from live work records and group totals by employee", async () => {
+  const fixture = await createFixture();
+  seed(fixture, true);
+  await fixture.host.initializeConversationParticipants("c1", caller);
+  fixture.faux.setResponses([response("first"), response("second")]);
+  const { http, request } = await serve(fixture);
+  try {
+    await request("/conversations/c1/prompt", { method: "POST", status: 202, body: { text: "fanout", mentions: ["e1", "e2"] }, key: "group-stats" });
+    await until(() => sources(fixture) === 2);
+    await until(() => !fixture.host.isPrompting("c1"));
+    const member = (await request("/usage/statistics?group_by=employee")).data;
+    assert.equal(member.coverage, "recorded_hourly_summaries");
+    assert.equal(member.conversation_id, null);
+    assert.deepEqual(member.groups.map((group: any) => group.employee_id).sort(), ["e1", "e2"]);
+    const scoped = (await request("/usage/statistics?conversation_id=c1&group_by=employee")).data;
+    assert.equal(scoped.coverage, "work_records");
+    assert.equal(scoped.conversation_id, "c1");
+    assert.equal(scoped.execution_count, 2);
+    assert.equal(scoped.token_total, member.token_total, "both ledgers measure the same executions");
+    assert.equal(scoped.groups.length, 2);
+    assert.equal(scoped.groups.reduce((sum: number, group: any) => sum + group.token_total, 0), scoped.token_total);
+    assert.equal(scoped.groups.reduce((sum: number, group: any) => sum + group.execution_count, 0), 2);
+    assert.equal(scoped.pricing_status, "unknown");
+    assert.equal(scoped.cost_total, null);
+    assert.equal((await request("/usage/statistics?conversation_id=c1&employee_id=e1")).data.execution_count, 1);
+    assert.equal((await request("/usage/statistics?conversation_id=c1")).data.groups, undefined);
+    assert.equal((await request("/usage/statistics?conversation_id=missing")).data.execution_count, 0);
+    assert.equal((await request("/usage/statistics?conversation_id=c1", { other: true })).data.execution_count, 0);
+    for (const path of ["/usage/statistics?group_by=member", "/usage/statistics?conversation_id=%20", "/usage/statistics?conversation_id=c1&conversation_id=c2"]) await request(path, { status: 422 });
+  } finally { await http.close(); await fixture.close(); }
+});
+
 function persisted(fixture: Fixture, conversationId: string, employeeId: string | null, entries: unknown[]) {
   const path = join(fixture.dataRoot, "sessions", `${conversationId}-${employeeId ?? "legacy"}.jsonl`);
   writeFileSync(path, [JSON.stringify({ type: "session", version: 3, id: `${conversationId}-${employeeId}`, timestamp, cwd: fixture.dataRoot }), ...entries.map((entry) => JSON.stringify(entry)), ""].join("\n"));
@@ -491,7 +523,7 @@ test("work APIs expose concrete OpenAPI schemas, cursor directions, nullable pro
   const { http, request } = await serve(fixture);
   try {
     const doc = await request("/openapi.json");
-    for (const [path, parameters] of [["work-records", ["employee_id", "window_start", "window_end", "limit", "before"]], ["work-records/changes", ["employee_id", "after", "limit"]], ["usage/statistics", ["employee_id", "window_start", "window_end"]]] as const) {
+    for (const [path, parameters] of [["work-records", ["employee_id", "window_start", "window_end", "limit", "before"]], ["work-records/changes", ["employee_id", "after", "limit"]], ["usage/statistics", ["employee_id", "conversation_id", "group_by", "window_start", "window_end"]]] as const) {
       const operation = doc.paths[`/api/agent/${path}`].get;
       assert(operation.summary && operation.description && operation.security.length);
       assert.deepEqual(operation.parameters.map((item: any) => item.name).sort(), [...parameters].sort());
