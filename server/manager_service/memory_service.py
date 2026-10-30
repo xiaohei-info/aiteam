@@ -3,28 +3,50 @@
 Manager does not store memory data. It resolves the current employee snapshot
 before every upstream operation so grants and memory policy are enforced against
 the current enterprise state, not caller-supplied scope.
+
+The bank is shared by every member of the employee. Members read and delete only
+memories stamped with their own ``contributor_member_id`` at retain time; memories
+retained before stamping carry no contributor and stay visible to managers only.
 """
 
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
-from typing import Any, Protocol
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Protocol
 
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.snapshot import EmployeeExecutionSnapshot
 from shared.contracts.tenancy import TenantContext
 from .active_principal import require_admin
+from .hindsight_operation_policy import CONTRIBUTOR_METADATA_KEY
 from .memory_policy_service import normalize_policy, require_retention_ready, is_retention_guarded
 from shared.errors import AppError, Forbidden
 
 _MAX_ANALYTICS_PAGES = 32
 _ANALYTICS_PAGE_SIZE = 200
 _MEMORY_MANAGER_ROLES = frozenset({EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value})
+# A member reading or deleting memories they contributed. It is not a Hindsight
+# policy operation: any enabled memory policy (recall or retain) authorizes it.
+_OWN_MEMORY_OPERATION = "own"
+_RECENT_MEMORY_WINDOW = timedelta(days=7)
+
+MemoryScope = Literal["mine", "all"]
 
 
 def _is_memory_manager(ctx: TenantContext) -> bool:
     return bool(set(ctx.roles) & _MEMORY_MANAGER_ROLES)
+
+
+def effective_memory_scope(ctx: TenantContext, requested: MemoryScope | None) -> MemoryScope:
+    """Members only ever see what they contributed; managers default to the whole bank."""
+    if not _is_memory_manager(ctx):
+        return "mine"
+    return requested or "all"
+
+
+class MemoryNotContributed(Forbidden):
+    code, title = "memory_not_contributor", "Memory Not Contributed By Caller"
 
 
 class MemoryBackend(Protocol):
@@ -48,11 +70,12 @@ class MemoryBackend(Protocol):
 class MemoryService:
     """Authorize memory access with a fresh snapshot, then delegate to Hindsight."""
 
-    def __init__(self, *, snapshot, backend: MemoryBackend, employee_reader=None, retention_service=None):
+    def __init__(self, *, snapshot, backend: MemoryBackend, employee_reader=None, retention_service=None, member_reader=None):
         self._snapshot = snapshot
         self._backend = backend
         self._employee_reader = employee_reader
         self._retention = retention_service
+        self._member_reader = member_reader
 
     def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
         snapshot = self._authorize(ctx, employee_id=employee_id, operation="recall")
@@ -99,80 +122,192 @@ class MemoryService:
         query: str | None,
         limit: int,
         offset: int,
+        scope: MemoryScope | None = None,
     ) -> dict:
-        snapshot = self._authorize(ctx, employee_id=employee_id, operation="list", management=True)
+        scope = effective_memory_scope(ctx, scope)
+        operation, management = _scope_authorization(ctx)
+        snapshot = self._authorize(ctx, employee_id=employee_id, operation=operation, management=management)
         if self._retention is not None and is_retention_guarded(snapshot.memory_policy):
-            items = []
-            bank = self._bank(ctx, employee_id)
-            for page_index in range(_MAX_ANALYTICS_PAGES):
-                raw = self._retention.backend.retention_request(bank, "memories/list", params={"state": "valid", "limit": 200, "offset": page_index*200, **({"q": query} if query else {})})
-                page = raw.get("items")
-                if not isinstance(page, list) or len(page)>200:
-                    from .hindsight_client import HindsightUnavailable
-                    raise HindsightUnavailable("Invalid native memory list")
-                # The pinned ListMemoryUnitsResponse calls this discriminator
-                # ``type``.  Older Manager fixtures used ``fact_type``; accept
-                # that spelling only as a compatibility fallback and keep the
-                # bounded text/source projection safe before retention filtering.
-                for fact in page:
-                    if not isinstance(fact, dict):
-                        continue
-                    fact_type = _native_memory_type(fact)
-                    text = _safe_memory_text(fact.get("text"))
-                    if fact_type is None or text is None:
-                        continue
-                    metadata = fact.get("metadata") if isinstance(fact.get("metadata"), dict) else {}
-                    items.append({
-                        "id": fact.get("id"),
-                        "text": text,
-                        "metadata": metadata,
-                        "document_id": fact.get("document_id"),
-                        "type": fact_type,
-                        "source": _memory_source(fact, metadata),
-                        "date": fact.get("date") or fact.get("created_at") or fact.get("mentioned_at"),
-                        "importance": fact.get("importance"),
-                        "state": fact.get("state"),
-                    })
-                if len(page)<200:
-                    self._unchanged_policy(ctx, snapshot, operation="list", management=True)
-                    policy = snapshot.memory_policy
-                    visible = []
-                    for start in range(0, len(items), 200):
-                        visible.extend(self._retention.filter_recall(ctx, employee_id=employee_id, bank_id=bank, policy=policy, response={"results": items[start:start+200]})["results"])
-                    self._unchanged_policy(ctx, snapshot, operation="list", management=True)
-                    # Scanning can take time: recheck selected facts at the final clock.
-                    selected_ids = {item["id"] for item in visible[offset:offset+limit]}
-                    selected = [item for item in items if item["id"] in selected_ids][:limit]
-                    final = self._retention.filter_recall(
-                        ctx, employee_id=employee_id, bank_id=bank, policy=policy,
-                        response={"results": selected},
-                    )["results"]
-                    # Finite recall deliberately returns only id/text/type.  The
-                    # Manager list still exposes its stable source/date labels by
-                    # joining those approved IDs back to the already validated
-                    # ListMemoryUnitsResponse projection; no native metadata is
-                    # copied into the recall response or persistence.
-                    selected_by_id = {item["id"]: item for item in selected}
-                    projected = [
-                        {**fact, **{
-                            key: selected_by_id[fact["id"]].get(key)
-                            for key in ("source", "date", "importance", "state")
-                            if key in selected_by_id[fact["id"]]
-                        }}
-                        for fact in final
-                        if isinstance(fact, dict) and fact.get("id") in selected_by_id
-                    ]
-                    return normalize_memory_list(
-                        {"items": projected, "total": len(visible) - (len(selected) - len(final))},
-                        employee_id=employee_id, limit=limit, offset=offset,
-                    )
-            from .hindsight_client import HindsightUnavailable
-            raise HindsightUnavailable("Finite memory listing exceeds the bounded scan")
+            policy = snapshot.memory_policy
+            bank, items, visible = self._guarded_scan(
+                ctx, employee_id=employee_id, query=query, snapshot=snapshot,
+                operation=operation, management=management,
+            )
+            by_id = {item["id"]: item for item in items}
+            if scope == "mine":
+                visible = [fact for fact in visible if _contributor(by_id.get(fact.get("id"), {}).get("metadata")) == ctx.user_id]
+            # Scanning can take time: recheck selected facts at the final clock.
+            selected_ids = {item["id"] for item in visible[offset:offset+limit]}
+            selected = [item for item in items if item["id"] in selected_ids][:limit]
+            final = self._retention.filter_recall(
+                ctx, employee_id=employee_id, bank_id=bank, policy=policy,
+                response={"results": selected},
+            )["results"]
+            # Finite recall deliberately returns only id/text/type.  The
+            # Manager list still exposes its stable source/date labels by
+            # joining those approved IDs back to the already validated
+            # ListMemoryUnitsResponse projection; only the server-stamped
+            # contributor is copied from native metadata.
+            selected_by_id = {item["id"]: item for item in selected}
+            projected = [
+                {**fact, **{
+                    key: selected_by_id[fact["id"]].get(key)
+                    for key in ("source", "date", "importance", "state")
+                    if key in selected_by_id[fact["id"]]
+                }, "metadata": _contributor_metadata(selected_by_id[fact["id"]].get("metadata"))}
+                for fact in final
+                if isinstance(fact, dict) and fact.get("id") in selected_by_id
+            ]
+            result = normalize_memory_list(
+                {"items": projected, "total": len(visible) - (len(selected) - len(final))},
+                employee_id=employee_id, limit=limit, offset=offset, member_id=ctx.user_id,
+            )
+            return self._with_contributor_names(ctx, {**result, "scope": scope, "truncated": False})
+        if scope == "mine":
+            items, truncated = self._scan_items(ctx, employee_id=employee_id, query=query)
+            self._unchanged_policy(ctx, snapshot, operation=operation, management=management)
+            own = [item for item in items if item["is_mine"] and item["state"] == "valid"]
+            return self._with_contributor_names(ctx, {
+                "items": own[offset:offset+limit], "total": len(own), "limit": limit, "offset": offset,
+                "scope": scope, "truncated": truncated,
+            })
         raw = sanitize_metadata(self._backend.list(
             ctx, employee_id=employee_id, query=query, limit=limit, offset=offset,
         ))
-        self._unchanged_policy(ctx, snapshot, operation="list", management=True)
-        return normalize_memory_list(raw, employee_id=employee_id, limit=limit, offset=offset)
+        self._unchanged_policy(ctx, snapshot, operation=operation, management=management)
+        result = normalize_memory_list(raw, employee_id=employee_id, limit=limit, offset=offset, member_id=ctx.user_id)
+        return self._with_contributor_names(ctx, {**result, "scope": scope, "truncated": False})
+
+    def summary(self, ctx: TenantContext, *, employee_id: str, scope: MemoryScope | None = None) -> dict[str, Any]:
+        """Counts by contributor without memory text, so members learn only how much others hold."""
+        scope = effective_memory_scope(ctx, scope)
+        operation, management = _scope_authorization(ctx)
+        snapshot = self._authorize(ctx, employee_id=employee_id, operation=operation, management=management)
+        items, truncated = self._visible_items(
+            ctx, employee_id=employee_id, snapshot=snapshot, operation=operation, management=management,
+        )
+        self._unchanged_policy(ctx, snapshot, operation=operation, management=management)
+        items = [item for item in items if item["state"] == "valid"]
+        own_count = sum(1 for item in items if item["is_mine"])
+        unattributed_count = sum(1 for item in items if item["contributor_member_id"] is None)
+        in_scope = [item for item in items if item["is_mine"]] if scope == "mine" else items
+        recent_since = datetime.now(timezone.utc) - _RECENT_MEMORY_WINDOW
+        created = [_memory_datetime(item["created_at"]) for item in in_scope]
+        used = [(parsed, item["last_used_at"]) for item in in_scope
+                if (parsed := _memory_datetime(item["last_used_at"])) is not None]
+        return {
+            "employee_id": employee_id,
+            "scope": scope,
+            "total_count": len(in_scope),
+            "own_count": own_count,
+            "others_count": len(items) - own_count - unattributed_count,
+            "unattributed_count": unattributed_count,
+            "recent_count": sum(1 for value in created if value is not None and value >= recent_since),
+            "latest_used_at": max(used, key=lambda entry: entry[0])[1] if used else None,
+            "truncated": truncated,
+        }
+
+    def _visible_items(
+        self, ctx: TenantContext, *, employee_id: str, snapshot, operation: str, management: bool,
+    ) -> tuple[list[dict], bool]:
+        """Every normalized item the bank currently exposes, bounded like analytics."""
+        if self._retention is not None and is_retention_guarded(snapshot.memory_policy):
+            _bank, items, visible = self._guarded_scan(
+                ctx, employee_id=employee_id, query=None, snapshot=snapshot,
+                operation=operation, management=management,
+            )
+            by_id = {item["id"]: item for item in items}
+            approved = {fact.get("id") for fact in visible if isinstance(fact, dict)}
+            result = normalize_memory_list(
+                {"items": [item for item_id, item in by_id.items() if item_id in approved]},
+                employee_id=employee_id, limit=len(approved), offset=0, member_id=ctx.user_id,
+            )
+            return result["items"], False
+        return self._scan_items(ctx, employee_id=employee_id, query=None)
+
+    def _scan_items(self, ctx: TenantContext, *, employee_id: str, query: str | None) -> tuple[list[dict], bool]:
+        items: list[dict] = []
+        for page_index in range(_MAX_ANALYTICS_PAGES):
+            offset = page_index * _ANALYTICS_PAGE_SIZE
+            raw = sanitize_metadata(self._backend.list(
+                ctx, employee_id=employee_id, query=query, limit=_ANALYTICS_PAGE_SIZE, offset=offset,
+            ))
+            page = normalize_memory_list(
+                raw, employee_id=employee_id, limit=_ANALYTICS_PAGE_SIZE, offset=offset, member_id=ctx.user_id,
+            )
+            items.extend(page["items"])
+            # Page on the upstream row count: normalization may drop malformed rows.
+            raw_items = raw.get("items") if isinstance(raw, dict) else None
+            raw_count = len(raw_items) if isinstance(raw_items, list) else 0
+            total = raw.get("total") if isinstance(raw, dict) else None
+            if raw_count < _ANALYTICS_PAGE_SIZE or (isinstance(total, int) and total <= offset + raw_count):
+                return items, False
+        return items, True
+
+    def _guarded_scan(
+        self, ctx: TenantContext, *, employee_id: str, query: str | None, snapshot, operation: str, management: bool,
+    ) -> tuple[str, list[dict], list[dict]]:
+        """Bounded native listing; returns the bank, projected candidates and retention-visible facts."""
+        items = []
+        bank = self._bank(ctx, employee_id)
+        for page_index in range(_MAX_ANALYTICS_PAGES):
+            raw = self._retention.backend.retention_request(bank, "memories/list", params={"state": "valid", "limit": 200, "offset": page_index*200, **({"q": query} if query else {})})
+            page = raw.get("items")
+            if not isinstance(page, list) or len(page)>200:
+                from .hindsight_client import HindsightUnavailable
+                raise HindsightUnavailable("Invalid native memory list")
+            # The pinned ListMemoryUnitsResponse calls this discriminator
+            # ``type``.  Older Manager fixtures used ``fact_type``; accept
+            # that spelling only as a compatibility fallback and keep the
+            # bounded text/source projection safe before retention filtering.
+            for fact in page:
+                if not isinstance(fact, dict):
+                    continue
+                fact_type = _native_memory_type(fact)
+                text = _safe_memory_text(fact.get("text"))
+                if fact_type is None or text is None:
+                    continue
+                metadata = fact.get("metadata") if isinstance(fact.get("metadata"), dict) else {}
+                items.append({
+                    "id": fact.get("id"),
+                    "text": text,
+                    "metadata": metadata,
+                    "document_id": fact.get("document_id"),
+                    "type": fact_type,
+                    "source": _memory_source(fact, metadata),
+                    "date": fact.get("date") or fact.get("created_at") or fact.get("mentioned_at"),
+                    "importance": fact.get("importance"),
+                    "state": fact.get("state"),
+                })
+            if len(page)<200:
+                self._unchanged_policy(ctx, snapshot, operation=operation, management=management)
+                policy = snapshot.memory_policy
+                visible = []
+                for start in range(0, len(items), 200):
+                    visible.extend(self._retention.filter_recall(ctx, employee_id=employee_id, bank_id=bank, policy=policy, response={"results": items[start:start+200]})["results"])
+                self._unchanged_policy(ctx, snapshot, operation=operation, management=management)
+                return bank, items, visible
+        from .hindsight_client import HindsightUnavailable
+        raise HindsightUnavailable("Finite memory listing exceeds the bounded scan")
+
+    def _with_contributor_names(self, ctx: TenantContext, result: dict) -> dict:
+        """Attach member display names when the member directory is wired; ids stay authoritative."""
+        if self._member_reader is None:
+            return result
+        names: dict[str, str | None] = {}
+        for item in result["items"]:
+            member_id = item.get("contributor_member_id")
+            if member_id is None or member_id in names:
+                continue
+            try:
+                member = self._member_reader.get_member(ctx, member_id=member_id)
+            except Exception:  # noqa: BLE001 - names are cosmetic; the list stays available without them
+                member = None
+            name = getattr(member, "display_name", None)
+            names[member_id] = name[:256] if isinstance(name, str) and name.strip() else None
+        for item in result["items"]:
+            item["contributor_display_name"] = names.get(item.get("contributor_member_id"))
+        return result
 
     def update(
         self,
@@ -291,7 +426,18 @@ class MemoryService:
     def delete(
         self, ctx: TenantContext, *, employee_id: str, memory_id: str, idempotency_key: str
     ) -> dict:
-        snapshot = self._authorize(ctx, employee_id=employee_id, operation="delete", management=True)
+        if _is_memory_manager(ctx):
+            snapshot = self._authorize(ctx, employee_id=employee_id, operation="delete", management=True)
+        else:
+            # Members may delete only what they contributed. Ownership comes from the
+            # server-stamped contributor in the bank, never from the request.
+            snapshot = self._authorize(ctx, employee_id=employee_id, operation=_OWN_MEMORY_OPERATION)
+            items, _truncated = self._visible_items(
+                ctx, employee_id=employee_id, snapshot=snapshot, operation=_OWN_MEMORY_OPERATION, management=False,
+            )
+            if not any(item["memory_id"] == memory_id and item["is_mine"] for item in items):
+                raise MemoryNotContributed("members can only delete memories they contributed")
+            self._unchanged_policy(ctx, snapshot, operation=_OWN_MEMORY_OPERATION)
         if is_retention_guarded(snapshot.memory_policy):
             raw = self._backend.delete(ctx, employee_id=employee_id, memory_id=memory_id, idempotency_key=idempotency_key)
             if raw.get("state") != "invalidated":
@@ -326,6 +472,10 @@ class MemoryService:
         is_manager = _is_memory_manager(ctx)
         if management and is_manager:
             return snapshot
+        if operation == _OWN_MEMORY_OPERATION:
+            if not isinstance(policy, dict) or not normalize_policy(policy)["allowed_operations"]:
+                raise Forbidden("memory policy does not authorize this operation")
+            return snapshot
         if not isinstance(policy, dict) or operation not in normalize_policy(policy)["allowed_operations"]:
             raise Forbidden("memory policy does not authorize this operation")
 
@@ -351,12 +501,40 @@ class MemoryService:
         return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
 
 
-def build_memory_service(*, snapshot, backend: MemoryBackend, employee_reader=None, retention_service=None) -> MemoryService:
-    return MemoryService(snapshot=snapshot, backend=backend, employee_reader=employee_reader, retention_service=retention_service)
+def build_memory_service(
+    *, snapshot, backend: MemoryBackend, employee_reader=None, retention_service=None, member_reader=None,
+) -> MemoryService:
+    return MemoryService(
+        snapshot=snapshot, backend=backend, employee_reader=employee_reader,
+        retention_service=retention_service, member_reader=member_reader,
+    )
 
 
-def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int) -> dict:
-    """Expose only stable, non-sensitive fields from Hindsight memory units."""
+def _scope_authorization(ctx: TenantContext) -> tuple[str, bool]:
+    """Managers read through memory management; members through their own contributions."""
+    return ("list", True) if _is_memory_manager(ctx) else (_OWN_MEMORY_OPERATION, False)
+
+
+def _contributor(metadata: Any) -> str | None:
+    """The server-stamped contributor; memories retained before stamping have none."""
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get(CONTRIBUTOR_METADATA_KEY)
+    if not isinstance(value, str) or not value.strip() or len(value) > 256 or any(char in value for char in "\x00\r\n"):
+        return None
+    return value
+
+
+def _contributor_metadata(metadata: Any) -> dict[str, str]:
+    contributor = _contributor(metadata)
+    return {CONTRIBUTOR_METADATA_KEY: contributor} if contributor is not None else {}
+
+
+def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int, member_id: str | None = None) -> dict:
+    """Expose only stable, non-sensitive fields from Hindsight memory units.
+
+    ``member_id`` is the caller; it only marks which items the caller contributed.
+    """
     items = raw.get("items", []) if isinstance(raw, dict) else []
     if not isinstance(items, list):
         items = []
@@ -377,6 +555,7 @@ def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int
             continue
         memory_id = memory_id.strip()
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        contributor = _contributor(metadata)
         category = _safe_source(_native_memory_type(item) or item.get("category")) or "memory"
         source = _memory_source(item, metadata) or "hindsight"
         state_value = item.get("state")
@@ -394,6 +573,9 @@ def normalize_memory_list(raw: Any, *, employee_id: str, limit: int, offset: int
             "created_at": _safe_timestamp(item.get("date") or item.get("created_at") or item.get("mentioned_at")),
             "last_used_at": _safe_timestamp(item.get("last_used_at")),
             "state": state,
+            "contributor_member_id": contributor,
+            "contributor_display_name": None,
+            "is_mine": contributor is not None and contributor == member_id,
         })
     total = raw.get("total") if isinstance(raw, dict) and isinstance(raw.get("total"), int) else len(normalized)
     return {"items": normalized, "total": total, "limit": limit, "offset": offset}

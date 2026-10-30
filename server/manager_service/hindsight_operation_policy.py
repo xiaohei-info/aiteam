@@ -114,12 +114,17 @@ def parse_operation_body(operation: str, body: bytes) -> dict:
         raise HindsightLeaseForbidden("Unsupported Hindsight operation body") from exc
 
 
+CONTRIBUTOR_METADATA_KEY = "contributor_member_id"
+
+
 def scoped_retain_body(body: dict, *, tenant_id: str, member_id: str, employee_id: str) -> dict:
     """Retry-stable append-only document identities, never caller-selected overwrite targets.
 
     The digest includes the complete accepted request: changing content under a
     reused caller operation/document ID cannot rewrite the earlier document.
     No body or digest is persisted here. Finite retention is separately blocked.
+    ``member_id`` is the authenticated principal (JWT or lease), so it replaces any
+    caller-supplied contributor: member-scoped memory views depend on it.
     """
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256(f"{tenant_id}:{member_id}:{employee_id}:{canonical}".encode()).hexdigest()
@@ -128,7 +133,8 @@ def scoped_retain_body(body: dict, *, tenant_id: str, member_id: str, employee_i
     for index, source in enumerate(body["items"]):
         item = {k: v for k, v in source.items() if k not in {"document_id", "update_mode", "strategy", "metadata"}}
         metadata = {k: v for k, v in source.get("metadata", {}).items()
-                    if k not in {"cwd", "pi_session_file"} and not any(s in k.lower() for s in ("token", "secret", "password", "credential", "authorization", "api_key", "cookie"))}
+                    if k not in {"cwd", "pi_session_file", CONTRIBUTOR_METADATA_KEY} and not any(s in k.lower() for s in ("token", "secret", "password", "credential", "authorization", "api_key", "cookie"))}
+        metadata[CONTRIBUTOR_METADATA_KEY] = member_id
         item.update(document_id=f"aiteam-{digest}-{index}", metadata=metadata)
         items.append(item)
     return {"items": items, "async": True, "operation_id": operation}

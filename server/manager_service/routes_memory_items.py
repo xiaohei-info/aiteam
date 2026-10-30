@@ -149,6 +149,25 @@ class MemoryItemOut(BaseModel):
     created_at: str | None = None
     last_used_at: str | None = None
     state: str = "valid"
+    contributor_member_id: str | None = Field(
+        default=None,
+        description="写入这条记忆的成员 ID，由 Manager 在 retain 时按登录身份写入；功能上线前的历史记忆为 null。",
+    )
+    contributor_display_name: str | None = Field(default=None, description="贡献成员的显示名；查不到时为 null。")
+    is_mine: bool = Field(default=False, description="是否由当前调用成员贡献。")
+
+
+class MemorySummaryOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    employee_id: str
+    scope: Literal["mine", "all"] = Field(description="实际生效的范围；普通成员固定为 mine。")
+    total_count: int = Field(ge=0, description="当前范围内的有效记忆条数。")
+    own_count: int = Field(ge=0, description="当前成员贡献的有效记忆条数。")
+    others_count: int = Field(ge=0, description="其他成员贡献的有效记忆条数；只给数量，不给内容。")
+    unattributed_count: int = Field(ge=0, description="没有贡献者的历史记忆条数；只有企业管理员能看到内容。")
+    recent_count: int = Field(ge=0, description="当前范围内近 7 天新增的条数。")
+    latest_used_at: str | None = Field(default=None, description="当前范围内最近一次被用到的时间。")
+    truncated: bool = Field(description="记忆超过扫描上限时为 true，计数只覆盖前 6400 条。")
 
 
 class _ManagerNotConfigured(AppError):
@@ -178,6 +197,7 @@ def _service(request: Request) -> MemoryService:
             backend=backend,
             employee_reader=EmployeeConfigRepository(router),
             retention_service=build_memory_retention_service(request),
+            member_reader=member_repo,
         )
         request.app.state._memory_service = service
     return service
@@ -210,23 +230,56 @@ def build_memory_items_router(verifier) -> APIRouter:
             data=[MemoryAnalyticsOut.model_validate(data)],
         )
 
-    @router.get("", summary="列出指定专家的 Hindsight 记忆", operation_id="manager_memory_list")
+    @router.get(
+        "",
+        summary="列出指定专家的 Hindsight 记忆",
+        description=(
+            "记忆存放在当前企业该专家的 Hindsight bank，成员共享；只在 JWT 选定的企业内读取。"
+            "scope=mine 只返回当前成员贡献的有效记忆；普通成员一律按 mine 处理，"
+            "企业 owner/管理员不传时为 all（原有行为）。没有贡献者的历史记忆只在 all 中出现。"
+        ),
+        operation_id="manager_memory_list",
+    )
     async def list_memories(
         request: Request,
         employee_id: str = Query(min_length=1, max_length=_MAX_MEMORY_ID_CHARS),
         keyword: str | None = Query(default=None, max_length=_MAX_MEMORY_QUERY_CHARS),
+        scope: Literal["mine", "all"] | None = Query(default=None, description="mine 只看自己贡献的；all 看全部（仅企业管理员）。"),
         limit: int = Query(default=100, ge=1, le=200),
         offset: int = Query(default=0, ge=0, le=_MAX_MEMORY_OFFSET),
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[MemoryItemOut]:
         result = _service(request).list(
             tenant_context_from(claims), employee_id=employee_id,
-            query=keyword, limit=limit, offset=offset,
+            query=keyword, limit=limit, offset=offset, scope=scope,
         )
         return ListEnvelope[MemoryItemOut](
             data=[MemoryItemOut(**item) for item in result["items"]],
-            meta={"total": result["total"], "limit": result["limit"], "offset": result["offset"]},
+            meta={
+                "total": result["total"], "limit": result["limit"], "offset": result["offset"],
+                "scope": result["scope"], "truncated": result["truncated"],
+            },
         )
+
+    @router.get(
+        "/summary",
+        summary="读取指定专家的记忆条数摘要",
+        description=(
+            "按贡献者统计当前企业该专家的有效记忆条数，不返回任何记忆正文；只在 JWT 选定的企业内读取。"
+            "普通成员可借此看到「另有 N 条来自其他成员」，但看不到内容。"
+        ),
+        operation_id="manager_memory_summary",
+    )
+    async def memory_summary(
+        request: Request,
+        employee_id: str = Query(min_length=1, max_length=_MAX_MEMORY_ID_CHARS),
+        scope: Literal["mine", "all"] | None = Query(default=None, description="total_count 等字段的统计范围；普通成员固定为 mine。"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[MemorySummaryOut]:
+        data = await asyncio.to_thread(
+            _service(request).summary, tenant_context_from(claims), employee_id=employee_id, scope=scope,
+        )
+        return Envelope[MemorySummaryOut](data=MemorySummaryOut.model_validate(data))
 
     @router.get("/recall", summary="从 Hindsight 检索记忆", operation_id="manager_memory_recall", response_model_exclude_none=True)
     async def recall(
@@ -292,8 +345,16 @@ def build_memory_items_router(verifier) -> APIRouter:
         )
         return Envelope[MemoryResultOut](data=MemoryResultOut.model_validate(data))
 
-    @router.delete("/{memory_id}", summary="删除 Hindsight 记忆", operation_id="manager_memory_delete",
-                   status_code=status.HTTP_204_NO_CONTENT)
+    @router.delete(
+        "/{memory_id}",
+        summary="删除 Hindsight 记忆",
+        description=(
+            "企业 owner/管理员可删除该专家的任意记忆；普通成员只能删除自己贡献的记忆，"
+            "否则返回 403 memory_not_contributor。只作用于 JWT 选定企业内该专家的 bank。"
+        ),
+        operation_id="manager_memory_delete",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
     async def delete_memory(
         request: Request,
         memory_id: str = Path(..., min_length=1, max_length=_MAX_MEMORY_ID_CHARS),

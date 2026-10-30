@@ -120,9 +120,15 @@ def test_trusted_retain_document_operation_scope_and_retry_identity():
     assert scoped == scoped_retain_body(parsed, tenant_id="t", member_id="m", employee_id="e")
     assert scoped["operation_id"] != body["operation_id"]
     assert scoped["items"][0]["document_id"] != "victim"
-    assert scoped["items"][0]["metadata"] == {"label": "ok"}
+    assert scoped["items"][0]["metadata"] == {"label": "ok", "contributor_member_id": "m"}
     assert "strategy" not in scoped["items"][0] and "update_mode" not in scoped["items"][0]
     assert scoped != scoped_retain_body(parsed, tenant_id="t", member_id="other", employee_id="e")
+
+
+def test_retain_stamps_authenticated_contributor_over_client_value():
+    body = {"items": [{"content": "fixture", "metadata": {"contributor_member_id": "forged", "label": "ok"}}], "async": True}
+    scoped = scoped_retain_body(body, tenant_id="t", member_id="member-real", employee_id="e")
+    assert scoped["items"][0]["metadata"] == {"label": "ok", "contributor_member_id": "member-real"}
 
 
 def test_trusted_bank_get_then_put_only_on_confirmed_404_and_preserve_existing():
