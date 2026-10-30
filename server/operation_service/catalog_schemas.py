@@ -10,11 +10,25 @@ SolutionPackage）一律从 shared.contracts.crosstier import，**禁在此重�
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from shared.contracts.enums import CatalogStatus, CatalogType
+from shared.contracts.expert_profile import (
+    ConnectorKey,
+    ExamplePrompt,
+    ExpertTemplateProfile,
+    KnowledgeCategory,
+    Limitation,
+    OutputType,
+    RequiredPermissions,
+    SampleOutput,
+    TemplatePricing,
+    UseCase,
+    validate_http_url,
+)
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
 
@@ -39,7 +53,7 @@ class ExpertBinding(BaseModel):
 ThinkingLevel = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
-class RegisterExpertTemplateRequest(BaseModel):
+class RegisterExpertTemplateRequest(ExpertTemplateProfile):
     """注册专家模板（北向请求）。注册即草稿态，发布前不外溢 Manager。
 
     字段对齐 PRD-v2 S02：name->display_name / category / avatar_url / system_prompt /
@@ -48,6 +62,7 @@ class RegisterExpertTemplateRequest(BaseModel):
     ``avatar_url`` 保留为 Catalog 兼容字段；新头像必须是经过校验的本地图片 data URL，
     旧 HTTP/path 值仅为兼容历史 API 数据。
     技能只接受 Operator 内部平台技能的固定版本引用，未选择时为空。
+    人才市场展示字段（tagline/use_cases/pricing 等，议题 7）继承自 ExpertTemplateProfile，全部可选。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -136,7 +151,11 @@ class SetVisibilityRequest(BaseModel):
 
 
 class UpdateExpertTemplateRequest(BaseModel):
-    """编辑专家模板（北向请求）。部分更新。字段对齐 PRD-v2 S02。"""
+    """编辑专家模板（北向请求）。部分更新。字段对齐 PRD-v2 S02。
+
+    人才市场展示字段与 ExpertTemplateProfile 同约束；省略表示不改。required_permissions/pricing
+    显式传 null 表示清除。
+    """
     model_config = ConfigDict(extra="forbid")
     display_name: str | None = None
     category: str | None = None
@@ -155,6 +174,39 @@ class UpdateExpertTemplateRequest(BaseModel):
     platform_skill_refs: list[PlatformSkillRef] | None = None
     skill_ids: list[str] | None = None
     description: str | None = None
+    tagline: str | None = Field(default=None, max_length=40, description="一句话定位（≤40 字）")
+    use_cases: list[UseCase] | None = Field(default=None, max_length=6, description="适用场景（每条 ≤30 字，最多 6 条）")
+    limitations: list[Limitation] | None = Field(default=None, max_length=3, description="不适用场景（最多 3 条）")
+    example_prompts: list[ExamplePrompt] | None = Field(default=None, max_length=3, description="示例问题（最多 3 条）")
+    sample_outputs: list[SampleOutput] | None = Field(default=None, max_length=6, description="示例产出（最多 6 条）")
+    output_types: list[OutputType] | None = Field(default=None, description="产出类型")
+    required_connectors: list[ConnectorKey] | None = Field(default=None, max_length=10, description="必需的外部系统")
+    optional_connectors: list[ConnectorKey] | None = Field(default=None, max_length=10, description="可选的外部系统")
+    recommended_knowledge: list[KnowledgeCategory] | None = Field(default=None, max_length=10, description="推荐知识类别")
+    required_permissions: RequiredPermissions | None = Field(default=None, description="需要的本机权限；显式 null 清除")
+    pricing: TemplatePricing | None = Field(default=None, description="计价信息；显式 null 清除")
+    memory_policy_summary: str | None = Field(default=None, max_length=200, description="记忆策略说明")
+    publisher: str | None = Field(default=None, max_length=60, description="发布者")
+    changelog_url: str | None = Field(default=None, max_length=2048, description="更新说明链接（http/https）")
+
+    @field_validator("tagline", "memory_policy_summary", "publisher")
+    @classmethod
+    def _strip_profile_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+    @field_validator("output_types")
+    @classmethod
+    def _dedupe_output_types(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else list(dict.fromkeys(value))
+
+    @field_validator("changelog_url")
+    @classmethod
+    def _validate_changelog_url(cls, value: str | None) -> str | None:
+        return None if value is None else validate_http_url(value)
+
+
+# PATCH 时显式 null 表示清除的展示字段；其余字段 null 等同省略。
+CLEARABLE_EXPERT_PROFILE_FIELDS = frozenset({"required_permissions", "pricing"})
 
 
 class UpdateSolutionTemplateRequest(BaseModel):
@@ -170,8 +222,11 @@ class UpdateSolutionTemplateRequest(BaseModel):
     tags: list[str] | None = None
 
 
-class CatalogEntryResponse(BaseModel):
-    """目录项响应（北向）。Operator 持有的模板真相态投影。"""
+class CatalogEntryResponse(ExpertTemplateProfile):
+    """目录项响应（北向）。Operator 持有的模板真相态投影。
+
+    人才市场展示字段继承自 ExpertTemplateProfile，仅专家模板有值；行业方案恒为默认值。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -195,6 +250,7 @@ class CatalogEntryResponse(BaseModel):
     description: str = Field(default="")
     initial_memories: list[dict[str, Any]] = Field(default_factory=list, description="模板预置记忆条目。")
     sort_order: int = Field(default=0)
+    updated_at: datetime | None = Field(default=None, description="最近一次注册/编辑/发布时间；旧目录项为 null")
 
     # payload 顶层字段（对齐前端 CatalogItem 编辑模式预填与回写）。
     expert_bindings: list["ExpertBinding"] | None = Field(

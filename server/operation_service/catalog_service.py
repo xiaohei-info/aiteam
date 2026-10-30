@@ -9,9 +9,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from pydantic import ValidationError
 
 from shared.contracts.crosstier import CatalogReleaseNotify
+from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.errors import Conflict, NotFound, ValidationProblem
@@ -83,9 +86,30 @@ def _with_auto_id(repo, make_entry, display_name, *, attempts=_ID_MAX_ATTEMPTS):
 
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _updated_at(payload: dict) -> datetime | None:
+    """读取 payload 中的模板更新时间；旧模板缺失或格式不合法时为 None。"""
+    value = payload.get("updated_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _profile_projection(payload: dict) -> dict:
+    """人才市场展示字段 + updated_at 投影；旧模板按默认值返回。"""
+    return {**profile_from_payload(payload).model_dump(), "updated_at": _updated_at(payload)}
+
+
 def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
     payload = entry.payload or {}
     return CatalogEntryResponse(
+        **_profile_projection(payload),
         catalog_type=entry.catalog_type,
         template_id=entry.template_id,
         version=entry.version,
@@ -155,6 +179,7 @@ def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
 
     payload = entry.payload or {}
     return CatalogDetailView(
+        **_profile_projection(payload),
         catalog_type=entry.catalog_type,
         template_id=entry.template_id,
         version=entry.version,
@@ -213,6 +238,8 @@ class CatalogService:
                     "platform_skill_refs": [ref.model_dump(mode="json") for ref in req.platform_skill_refs],
                     "tags": [],
                     "description": req.description,
+                    **req.model_dump(mode="json", include=set(EXPERT_PROFILE_FIELDS)),
+                    "updated_at": _now_iso(),
                 },
             )
 
@@ -310,7 +337,8 @@ class CatalogService:
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
-            entry, status=CatalogStatus.PUBLISHED, visible_scope=req.visible_scope
+            entry, status=CatalogStatus.PUBLISHED, visible_scope=req.visible_scope,
+            payload={**(entry.payload or {}), "updated_at": _now_iso()},
         )
         self._notify(updated, action="published")
         return _to_response(updated)
@@ -373,6 +401,8 @@ class CatalogService:
         body 中 None 值已在 routes 层经 exclude_none 排除，此处 changes 不含 None。
         """
         entry = self._repo.get(catalog_type, template_id)
+        if catalog_type == CatalogType.SOLUTION_TEMPLATE and set(changes) & set(EXPERT_PROFILE_FIELDS):
+            raise ValidationProblem("talent market profile fields apply to expert templates only")
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "avatar_url" in changes:
             changes = {**changes, "avatar_url": normalize_avatar_for_service(changes["avatar_url"])}
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
@@ -387,7 +417,7 @@ class CatalogService:
         payload_updates = {k: v for k, v in changes.items() if k not in _top_fields}
         top_updates = {k: v for k, v in changes.items() if k in _top_fields}
         if payload_updates:
-            new_payload = {**(entry.payload or {}), **payload_updates}
+            new_payload = {**(entry.payload or {}), **payload_updates, "updated_at": _now_iso()}
             if entry.catalog_type == CatalogType.EXPERT_TEMPLATE and (
                 "thinking_level" in payload_updates or "platform_model_ref" in payload_updates
             ):
@@ -481,6 +511,7 @@ class CatalogService:
         payload = entry.payload or {}
         persona, recommended = self._backfill_expert(payload)
         return ExpertTemplateDetail(
+            **_profile_projection(payload),
             template_id=entry.template_id,
             version=entry.version,
             display_name=entry.display_name,
@@ -571,6 +602,7 @@ class CatalogService:
             persona, recommended = self._backfill_expert(payload)
             results.append(
                 ExpertTemplateDetail(
+                    **_profile_projection(payload),
                     template_id=entry.template_id,
                     version=entry.version,
                     display_name=entry.display_name,
