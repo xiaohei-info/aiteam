@@ -96,6 +96,8 @@ class UsageRecordOut(BaseModel):
 
 
 _BILLING_ROLES = ["owner", "finance_admin"]
+# 用量只读监控额外开放给 enterprise_admin；余额/充值仍限 _BILLING_ROLES。
+_USAGE_READ_ROLES = ["owner", "finance_admin", "enterprise_admin"]
 
 
 class _ManagerNotConfigured(AppError):
@@ -151,7 +153,7 @@ def build_billing_router(verifier) -> APIRouter:
         data = svc.create_recharge(ctx, body.amount, body.payment_method)
         return Envelope(data=RechargeOut(**data))
 
-    @router.get("/usage/overview", summary="查询用量总览（owner/finance_admin）", operation_id="manager_billing_usage_overview")
+    @router.get("/usage/overview", summary="查询用量总览（owner/finance_admin/enterprise_admin）", operation_id="manager_billing_usage_overview")
     async def get_usage_overview(
         request: Request,
         period: str = Query(default="month", description="统计周期：month / last_month / all"),
@@ -159,7 +161,7 @@ def build_billing_router(verifier) -> APIRouter:
         member_id: str | None = Query(default=None, description="可选成员 ID 过滤。"),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[UsageOverviewOut]:
-        authorize(claims, _BILLING_ROLES)
+        authorize(claims, _USAGE_READ_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         data = svc.get_usage_overview(
@@ -173,7 +175,7 @@ def build_billing_router(verifier) -> APIRouter:
         data.setdefault("pricing_status", "unknown" if unknown_pricing else "known")
         return Envelope(data=UsageOverviewOut(**data))
 
-    @router.get("/usage/records", summary="查询员工用量明细（owner/finance_admin）", operation_id="manager_billing_usage_records")
+    @router.get("/usage/records", summary="查询员工用量明细（owner/finance_admin/enterprise_admin）", operation_id="manager_billing_usage_records")
     async def list_usage_records(
         request: Request,
         period: str = Query(default="month", description="统计周期：month / last_month / all"),
@@ -181,7 +183,7 @@ def build_billing_router(verifier) -> APIRouter:
         member_id: str | None = Query(default=None, description="可选成员 id 过滤"),
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[UsageRecordOut]:
-        authorize(claims, _BILLING_ROLES)
+        authorize(claims, _USAGE_READ_ROLES)
         ctx = tenant_context_from(claims)
         svc = _service(request)
         items = svc.list_usage_records(

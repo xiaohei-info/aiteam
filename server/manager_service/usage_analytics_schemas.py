@@ -56,6 +56,36 @@ class UsageStatisticsOut(BaseModel):
     task_count_status: TaskCountStatus = "unknown"
 
 
+class UsageStatisticsGroupOut(BaseModel):
+    """One employee/member slice of the statistics scope; same metrics as the totals."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    group_id: str | None = Field(default=None, description="员工或成员 ID；旧摘要缺失归属时为 null，保证分组之和等于合计。")
+    display_name: str = Field(description="员工/成员显示名；缺失归属为「未知员工/未知成员」，已删除为「已删除员工/已删除成员」。")
+    summary_count: int = Field(default=0, ge=0)
+    execution_count: int = Field(default=0, ge=0, description="口径同合计 execution_count。")
+    succeeded_count: int = Field(default=0, ge=0)
+    non_success_count: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_tokens: int = Field(default=0, ge=0)
+    token_total: int = Field(default=0, ge=0)
+    duration_ms_total: int = Field(default=0, ge=0)
+    currency: Literal["USD"] = "USD"
+    cost_total: Decimal | None = Field(default=None, description="该分组有未知价格摘要时为 null，不把未知成本当作 0。")
+    known_cost_total: Decimal | None = Field(default=None, ge=0, description="该分组已知价格摘要费用；没有已知价格时为 null。")
+    pricing_status: UsagePricingStatus = "unknown"
+    unpriced_execution_count: int = Field(default=0, ge=0)
+
+
+class UsageStatisticsGroupedOut(UsageStatisticsOut):
+    """Totals plus per-employee/member groups; returned only when group_by is requested."""
+
+    group_by: Literal["employee", "member"]
+    groups: list[UsageStatisticsGroupOut] = Field(default_factory=list, description="按 token_total 降序；各分组之和等于合计。")
+
+
 class UsageWorkHistoryOut(BaseModel):
     """One Manager-held hourly usage summary, not an Agent work-record body."""
 

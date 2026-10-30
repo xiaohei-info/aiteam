@@ -14,9 +14,17 @@ from typing import Any
 from shared.contracts.tenancy import TenantContext
 from shared.errors import ValidationProblem
 
-from .usage_analytics_schemas import UsageStatisticsOut, UsageWorkHistoryOut
+from .usage_analytics_schemas import (
+    UsageStatisticsGroupedOut,
+    UsageStatisticsGroupOut,
+    UsageStatisticsOut,
+    UsageWorkHistoryOut,
+)
 
 UTC_HOUR = timedelta(hours=1)
+USAGE_STATISTICS_GROUP_BY = ("employee", "member")
+_UNKNOWN_GROUP_NAME = {"employee": "未知员工", "member": "未知成员"}
+_DELETED_GROUP_NAME = {"employee": "已删除员工", "member": "已删除成员"}
 
 
 def parse_utc_datetime(value: datetime | str, *, field: str) -> datetime:
@@ -112,6 +120,58 @@ def _decimal(value: Any) -> Decimal:
     return result
 
 
+def _aggregate_metrics(aggregate: dict[str, Any]) -> dict[str, Any]:
+    """Derive pricing/execution metrics shared by statistics totals and groups."""
+
+    summary_count = int(aggregate.get("summary_count", 0))
+    unknown_summaries = int(aggregate.get("unknown_summary_count", 0))
+    known_summary_count = max(0, summary_count - unknown_summaries)
+    known_cost = (
+        _decimal(aggregate.get("known_cost_total"))
+        if known_summary_count > 0
+        else None
+    )
+    if summary_count == 0 or unknown_summaries >= summary_count:
+        pricing_status = "unknown"
+    elif unknown_summaries:
+        pricing_status = "partial"
+    else:
+        pricing_status = "known"
+    raw_execution_count = aggregate.get("execution_count")
+    execution_count = int(
+        raw_execution_count
+        if raw_execution_count is not None
+        else aggregate.get("prompt_count") or aggregate.get("run_count", 0)
+    )
+    return {
+        "summary_count": summary_count,
+        "execution_count": execution_count,
+        "succeeded_count": int(aggregate.get("settled_count", 0)),
+        "non_success_count": int(aggregate.get("error_count", 0)),
+        "input_tokens": int(aggregate.get("input_tokens", 0)),
+        "output_tokens": int(aggregate.get("output_tokens", 0)),
+        "cache_tokens": int(aggregate.get("cache_tokens", 0)),
+        "token_total": int(aggregate.get("token_total", 0)),
+        "duration_ms_total": int(aggregate.get("duration_ms_total", 0)),
+        "cost_total": None if unknown_summaries or not summary_count else known_cost,
+        "known_cost_total": known_cost,
+        "pricing_status": pricing_status,
+        "unpriced_execution_count": int(aggregate.get("unknown_pricing_runs", 0)),
+    }
+
+
+def _statistics_group(group_by: str, aggregate: dict[str, Any]) -> UsageStatisticsGroupOut:
+    group_id = aggregate.get("group_id")
+    display_name = aggregate.get("display_name") or (
+        _UNKNOWN_GROUP_NAME[group_by] if group_id is None else _DELETED_GROUP_NAME[group_by]
+    )
+    return UsageStatisticsGroupOut(
+        group_id=group_id,
+        display_name=display_name,
+        **_aggregate_metrics(aggregate),
+    )
+
+
 class UsageAnalyticsService:
     """Read-only tenant analytics over retained Manager usage summaries."""
 
@@ -126,69 +186,48 @@ class UsageAnalyticsService:
         member_id: str | None = None,
         window_start: datetime | str | None = None,
         window_end: datetime | str | None = None,
+        group_by: str | None = None,
     ) -> UsageStatisticsOut:
         _validate_identity_filter(employee_id, field="employee_id")
         _validate_identity_filter(member_id, field="member_id")
+        if group_by is not None and group_by not in USAGE_STATISTICS_GROUP_BY:
+            raise ValidationProblem("group_by must be employee or member")
         start, end = validate_aligned_window(window_start, window_end)
-        aggregate = self._repository.aggregate_usage_statistics(
-            ctx,
+        scope = {
+            "employee_id": employee_id,
+            "member_id": member_id,
+            "window_start": start,
+            "window_end": end,
+        }
+        aggregate = self._repository.aggregate_usage_statistics(ctx, **scope)
+        metrics = _aggregate_metrics(aggregate)
+        token_total = metrics["token_total"]
+        total_cost = metrics["cost_total"]
+        totals = dict(
             employee_id=employee_id,
             member_id=member_id,
             window_start=start,
             window_end=end,
-        )
-        summary_count = int(aggregate.get("summary_count", 0))
-        unknown_summaries = int(aggregate.get("unknown_summary_count", 0))
-        known_summary_count = max(0, summary_count - unknown_summaries)
-        known_cost = (
-            _decimal(aggregate.get("known_cost_total"))
-            if known_summary_count > 0
-            else None
-        )
-        if summary_count == 0 or unknown_summaries >= summary_count:
-            pricing_status = "unknown"
-        elif unknown_summaries:
-            pricing_status = "partial"
-        else:
-            pricing_status = "known"
-        total_cost = None if unknown_summaries or not summary_count else known_cost
-        raw_execution_count = aggregate.get("execution_count")
-        execution_count = int(
-            raw_execution_count
-            if raw_execution_count is not None
-            else aggregate.get("prompt_count") or aggregate.get("run_count", 0)
-        )
-        compatibility_run_count = int(aggregate.get("run_count", execution_count))
-        token_total = int(aggregate.get("token_total", 0))
-        return UsageStatisticsOut(
-            employee_id=employee_id,
-            member_id=member_id,
-            window_start=start,
-            window_end=end,
-            summary_count=summary_count,
-            execution_count=execution_count,
-            run_count=compatibility_run_count,
-            succeeded_count=int(aggregate.get("settled_count", 0)),
-            non_success_count=int(aggregate.get("error_count", 0)),
-            input_tokens=int(aggregate.get("input_tokens", 0)),
-            output_tokens=int(aggregate.get("output_tokens", 0)),
-            cache_tokens=int(aggregate.get("cache_tokens", 0)),
-            token_total=token_total,
+            **metrics,
+            run_count=int(aggregate.get("run_count", metrics["execution_count"])),
             total_tokens=token_total,
             token_spending=token_total,
-            duration_ms_total=int(aggregate.get("duration_ms_total", 0)),
             duration_seconds_total=int(aggregate.get("duration_seconds_total", 0)),
-            cost_total=total_cost,
             total_cost=total_cost,
             total_spending=total_cost,
-            known_cost_total=known_cost,
-            pricing_status=pricing_status,
-            unpriced_execution_count=int(aggregate.get("unknown_pricing_runs", 0)),
             excluded_summary_count=0,
             # No current cross-turn task/event contract exists.  Keep this
             # explicitly unknown rather than relabelling prompt_count/run_count.
             task_count=None,
             task_count_status="unknown",
+        )
+        if group_by is None:
+            return UsageStatisticsOut(**totals)
+        rows = self._repository.aggregate_usage_statistics_groups(ctx, group_by=group_by, **scope)
+        return UsageStatisticsGroupedOut(
+            **totals,
+            group_by=group_by,
+            groups=[_statistics_group(group_by, row) for row in rows],
         )
 
     def work_history(

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
@@ -41,6 +41,7 @@ from shared.errors import AppError, Forbidden, ValidationProblem
 
 from .usage_analytics_schemas import (
     UsageOperatorDeliveryOut,
+    UsageStatisticsGroupedOut,
     UsageStatisticsOut,
     UsageWorkHistoryOut,
 )
@@ -195,7 +196,9 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         description=(
             "查询本租户保留的 Agent 小时用量摘要；可按 member_id/employee_id 和 UTC 整点 "
             "[window_start,window_end) 过滤。统计包含已接收的全部 Manager 聚合，不受 Operator delivery 状态影响；"
-            "task_count 在没有可靠任务事件时为 null。"
+            "task_count 在没有可靠任务事件时为 null。group_by=employee|member 时额外返回 groups[]（合计字段不变）。"
+            "数据归属：只读当前 TenantContext 租户内 Agent 上报的脱敏小时摘要，不含会话内容；"
+            "仅 owner/enterprise_admin/finance_admin 可读。"
         ),
         summary="查询租户小时用量统计",
         operation_id="manager_usage_statistics",
@@ -207,18 +210,24 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         member_id: str | None = Query(default=None, description="可选成员 ID；旧摘要缺失归属保持 null。"),
         window_start: datetime | None = Query(default=None, description="UTC 整点包含起点；必须与 window_end 成对。"),
         window_end: datetime | None = Query(default=None, description="UTC 整点不包含终点；必须与 window_start 成对。"),
+        group_by: Literal["employee", "member"] | None = Query(
+            default=None,
+            description="可选：employee/member，额外返回按员工或成员分组的 groups[]；缺失归属汇入 group_id=null 分组。",
+        ),
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageStatisticsOut]:
+    ) -> Envelope[UsageStatisticsGroupedOut | UsageStatisticsOut]:
         authorize(claims, _USAGE_ANALYTICS_ROLES)
         svc = _service(request)
-        data = svc.statistics(
-            tenant_context_from(claims),
-            employee_id=employee_id,
-            member_id=member_id,
-            window_start=window_start,
-            window_end=window_end,
-        )
-        return Envelope[UsageStatisticsOut](data=data)
+        filters: dict[str, Any] = {
+            "employee_id": employee_id,
+            "member_id": member_id,
+            "window_start": window_start,
+            "window_end": window_end,
+        }
+        if group_by is not None:
+            filters["group_by"] = group_by
+        data = svc.statistics(tenant_context_from(claims), **filters)
+        return Envelope[UsageStatisticsGroupedOut | UsageStatisticsOut](data=data)
 
     @router.get(
         "/usage/work-history",
