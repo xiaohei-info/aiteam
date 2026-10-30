@@ -75,14 +75,14 @@ def test_resolution_rate_requires_min_sample():
 def test_ingest_stores_segment_outcomes_and_reports_count():
     outcomes = _OutcomeRepo()
     svc = UsageAuditQuotaService(_UsageRepo(), outcomes)
-    result = svc.ingest_upload(CTX, {"usage": [], "audits": [], "segment_outcomes": [_outcome()]})
-    assert result == {"usage_ingested": 0, "audits_ingested": 0, "segment_outcomes_ingested": 1}
+    result = svc.ingest_segment_outcomes(CTX, [_outcome()])
+    assert result == {"segment_outcomes_ingested": 1}
     stored = outcomes.rows["seg-1"]
     assert stored["evaluated_count"] == 3 and stored["resolved_count"] == 2
     assert stored["window_start"] == datetime(2026, 10, 30, 2, tzinfo=timezone.utc)
 
 
-def test_ingest_without_segment_outcomes_keeps_legacy_receipt():
+def test_usage_upload_receipt_has_no_segment_outcome_field():
     svc = UsageAuditQuotaService(_UsageRepo(), _OutcomeRepo())
     assert svc.ingest_upload(CTX, {"usage": [], "audits": []}) == {"usage_ingested": 0, "audits_ingested": 0}
 
@@ -101,7 +101,7 @@ def test_ingest_rejects_invalid_segment_outcome(overrides, error):
     outcomes = _OutcomeRepo()
     svc = UsageAuditQuotaService(_UsageRepo(), outcomes)
     with pytest.raises(error):
-        svc.ingest_upload(CTX, {"segment_outcomes": [_outcome(), _outcome(summary_id="seg-2", **overrides)]})
+        svc.ingest_segment_outcomes(CTX, [_outcome(), _outcome(summary_id="seg-2", **overrides)])
     # 先整体校验再写：一条坏数据不会让前面的条目半写入。
     assert outcomes.rows == {}
 
@@ -109,13 +109,13 @@ def test_ingest_rejects_invalid_segment_outcome(overrides, error):
 def test_ingest_rejects_employee_not_granted_to_member():
     svc = UsageAuditQuotaService(_UsageRepo(granted=False), _OutcomeRepo())
     with pytest.raises(Forbidden):
-        svc.ingest_upload(CTX, {"segment_outcomes": [_outcome()]})
+        svc.ingest_segment_outcomes(CTX, [_outcome()])
 
 
 def test_ingest_without_outcome_storage_is_503():
     svc = UsageAuditQuotaService(_UsageRepo())
     with pytest.raises(AppError) as exc:
-        svc.ingest_upload(CTX, {"segment_outcomes": [_outcome()]})
+        svc.ingest_segment_outcomes(CTX, [_outcome()])
     assert exc.value.status == 503
 
 
@@ -194,26 +194,49 @@ def _headers(role: str, user_id: str = MEMBER):
     return {"Authorization": "Bearer " + sign_inmem_token(SIGNER, TENANT, [role], user_id=user_id)}
 
 
-def test_upload_route_passes_segment_outcomes_and_returns_extended_receipt():
+def test_segment_outcomes_route_stores_counts_and_returns_receipt():
+    outcomes = _OutcomeRepo()
+    client = _usage_client(UsageAuditQuotaService(_UsageRepo(), outcomes))
+    response = client.post("/api/manager/usage/segment-outcomes", json={"tenant_id": TENANT, "segment_outcomes": [_outcome()]}, headers=_headers("member"))
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {"segment_outcomes_ingested": 1}
+    assert outcomes.rows["seg-1"]["resolved_count"] == 2
+
+
+@pytest.mark.parametrize("body", [
+    {"segment_outcomes": []},
+    {"segment_outcomes": [_outcome(note="会话内容")]},
+    {"segment_outcomes": [_outcome(schema_version="2")]},
+    {"segment_outcomes": [_outcome(evaluated_count=-1)]},
+    {"segment_outcomes": [_outcome()], "usage": []},
+])
+def test_segment_outcomes_route_rejects_invalid_fields_as_422(body):
+    # 字段错误是真 422，不是“接口不存在”；Agent 只把 404 当作 Manager 尚不支持。
+    outcomes = _OutcomeRepo()
+    client = _usage_client(UsageAuditQuotaService(_UsageRepo(), outcomes))
+    response = client.post("/api/manager/usage/segment-outcomes", json=body, headers=_headers("member"))
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "validation_error"
+    assert outcomes.rows == {}
+
+
+def test_segment_outcomes_route_rejects_other_tenant():
+    client = _usage_client(UsageAuditQuotaService(_UsageRepo(), _OutcomeRepo()))
+    response = client.post(
+        "/api/manager/usage/segment-outcomes",
+        json={"tenant_id": "66666666-6666-6666-6666-666666666666", "segment_outcomes": [_outcome()]},
+        headers=_headers("member"),
+    )
+    assert response.status_code == 403
+
+
+def test_usage_upload_route_no_longer_accepts_segment_outcomes():
     svc = MagicMock()
-    svc.ingest_upload.return_value = {"usage_ingested": 0, "audits_ingested": 0, "segment_outcomes_ingested": 1}
     client = _usage_client(svc)
     with patch("manager_service.routes_usage_audit_quota._report_to_operator"):
         response = client.post("/api/manager/usage/upload", json={"segment_outcomes": [_outcome()]}, headers=_headers("member"))
-    assert response.status_code == 200, response.text
-    assert response.json()["data"]["segment_outcomes_ingested"] == 1
-    upload = svc.ingest_upload.call_args.args[1]
-    assert upload["segment_outcomes"][0]["summary_id"] == "seg-1"
-
-
-def test_upload_route_without_segment_outcomes_omits_field():
-    svc = MagicMock()
-    svc.ingest_upload.return_value = {"usage_ingested": 0, "audits_ingested": 0}
-    client = _usage_client(svc)
-    with patch("manager_service.routes_usage_audit_quota._report_to_operator"):
-        response = client.post("/api/manager/usage/upload", json={"usage": []}, headers=_headers("member"))
-    assert response.json()["data"] == {"usage_ingested": 0, "audits_ingested": 0}
-    assert "segment_outcomes" not in svc.ingest_upload.call_args.args[1]
+    assert response.status_code == 422
+    svc.ingest_upload.assert_not_called()
 
 
 def test_outcomes_route_scopes_members_to_themselves():

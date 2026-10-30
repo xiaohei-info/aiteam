@@ -182,8 +182,14 @@ test("marketplace profile fields and tenant stats are projected with per-field s
       stats: { resolution_rate: 0.75, evaluated_segments: 12, resolved_segments: 9, min_sample: 10 },
     },
     { template_id: "bad", pricing: { mode: "free", unit_price: "1", currency: "USD" }, changelog_url: "javascript:alert(1)", updated_at: "not a date", stats: { resolution_rate: 2, evaluated_segments: -1 } },
+    { template_id: "monthly", pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" } },
+    { template_id: "legacy-subscription", pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "week" } },
+    { template_id: "per-call-with-period", pricing: { mode: "per_call", unit_price: "0.05", currency: "USD", billing_period: "month" } },
   ] }), { status: 200 }));
-  const [full, bad] = await client.listMarketplaceTemplates(caller);
+  const [full, bad, monthly, legacySubscription, perCallWithPeriod] = await client.listMarketplaceTemplates(caller);
+  assert.deepEqual(monthly.pricing, { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" });
+  assert.deepEqual(legacySubscription.pricing, { mode: "subscription", unit_price: "99", currency: "USD" }, "an unknown period is dropped, the price stays");
+  assert.deepEqual(perCallWithPeriod.pricing, { mode: "per_call", unit_price: "0.05", currency: "USD" }, "only subscription carries billing_period");
   assert.equal(full.tagline, "周报助手");
   assert.equal(full.version, "3");
   assert.deepEqual(full.use_cases, ["周报"]);
@@ -200,17 +206,17 @@ test("marketplace profile fields and tenant stats are projected with per-field s
   assert.deepEqual(bad.stats, { resolution_rate: null, evaluated_segments: 0, resolved_segments: 0, min_sample: 1 });
 });
 
-test("segment outcome counts upload through the usage endpoint with the summary id as idempotency key", async () => {
+test("segment outcome counts upload through their own endpoint with the summary id as idempotency key", async () => {
   const requests: { url: string; init: RequestInit }[] = [];
   const client = new HttpManagerClient("https://manager.test", async (input, init) => {
     requests.push({ url: String(input), init: init ?? {} });
-    return new Response(JSON.stringify({ data: { usage_ingested: 0, audits_ingested: 0, segment_outcomes_ingested: 1 } }), { status: 200 });
+    return new Response(JSON.stringify({ data: { segment_outcomes_ingested: 1 } }), { status: 200 });
   });
   const summary = { schema_version: "1" as const, summary_id: "seg-1", tenant_id: "tenant-1", member_id: "member-1", employee_id: "employee-1", window_start: "2026-10-30T02:00:00.000Z", window_end: "2026-10-30T03:00:00.000Z", evaluated_count: 3, resolved_count: 2 };
   await client.uploadSegmentOutcomes(caller, summary);
-  assert.equal(requests[0].url, "https://manager.test/api/manager/usage/upload");
+  assert.equal(requests[0].url, "https://manager.test/api/manager/usage/segment-outcomes");
   assert.equal(new Headers(requests[0].init.headers).get("Idempotency-Key"), "seg-1");
-  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { tenant_id: "tenant-1", usage: [], audits: [], segment_outcomes: [summary] });
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), { tenant_id: "tenant-1", segment_outcomes: [summary] });
 });
 
 test("a stalled skill market only delays the marketplace catalog by the short name budget and logs a warning", async (t) => {

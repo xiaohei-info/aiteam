@@ -90,9 +90,10 @@ class UsageUploadDetailedOut(BaseModel):
     audits_ingested: int = Field(ge=0, description="已接收的审计摘要条数。")
 
 
-class UsageUploadWithOutcomesOut(UsageUploadDetailedOut):
-    """F13 receipt when the upload carried segment_outcomes[]; otherwise the receipt is unchanged."""
+class SegmentOutcomeUploadOut(BaseModel):
+    """Receipt for POST /api/manager/usage/segment-outcomes."""
 
+    model_config = ConfigDict(extra="forbid")
     segment_outcomes_ingested: int = Field(ge=0, description="已接收的段落评估小时计数条数。")
 
 

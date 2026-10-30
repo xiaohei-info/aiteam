@@ -1116,6 +1116,7 @@ _BODY_NOT_FOUND_OPERATION_IDS = frozenset({
 
 _NO_NOT_FOUND_OPERATION_IDS = frozenset({
     "operation_enterprise_rollup",
+    "manager_usage_segment_outcomes_upload",
     "manager_connector_status",
     "manager_connector_test",
     "manager_connector_grants",
@@ -1151,6 +1152,7 @@ _NO_CONFLICT_OPERATION_IDS = frozenset({
     "manager_grants_authorized_config_pull",
     "manager_snapshot_generate",
     "manager_usage_upload",
+    "manager_usage_segment_outcomes_upload",
     "manager_memory_create",
     "manager_memory_retain",
     "manager_connector_test",

@@ -128,6 +128,26 @@ function tally(rows: ReadonlyArray<{ outcome: SegmentOutcome; reasons: readonly 
   };
 }
 
+type EvaluatedRow = { employeeIds: readonly string[]; outcome: SegmentOutcome; reasons: readonly SegmentOutcomeReason[] };
+
+/**
+ * Totals and per-employee groups for evaluated segments. A group-chat segment counts once per
+ * employee in it (the same unit Manager stores), so totals always equal the sum of the groups.
+ */
+export function outcomeStatistics<T extends EvaluatedRow>(rows: readonly T[], employeeId?: string) {
+  const byEmployee = new Map<string, T[]>();
+  for (const row of rows) for (const id of new Set(row.employeeIds)) {
+    if (employeeId && id !== employeeId) continue;
+    byEmployee.set(id, [...(byEmployee.get(id) ?? []), row]);
+  }
+  return {
+    totals: tally([...byEmployee.values()].flat()),
+    groups: [...byEmployee.entries()]
+      .map(([id, group]) => ({ employee_id: id, ...tally(group) }))
+      .sort((a, b) => b.evaluated_count - a.evaluated_count || a.employee_id.localeCompare(b.employee_id)),
+  };
+}
+
 function owner(caller: AuthenticatedCaller) {
   return { tenantId: caller.tenantId ?? "", memberId: caller.userId ?? caller.callerId };
 }
@@ -167,29 +187,18 @@ export function registerContextSegmentRoutes(router: Router, store: ContextSegme
     const groupBy = query.get("group_by");
     if (groupBy !== null && groupBy !== "employee") invalid("invalid_group_by", "group_by must be employee");
     const filter = workReadFilter(caller!, query);
-    const rows = store.evaluated(filter);
-    const byEmployee = new Map<string, typeof rows>();
-    if (groupBy !== null) {
-      for (const row of rows) for (const employeeId of new Set(row.employeeIds)) {
-        if (filter.employeeId && employeeId !== filter.employeeId) continue;
-        byEmployee.set(employeeId, [...(byEmployee.get(employeeId) ?? []), row]);
-      }
-    }
+    const { totals, groups } = outcomeStatistics(store.evaluated(filter), filter.employeeId);
     router.send(res, 200, { data: {
       scope: "member_local",
       employee_id: filter.employeeId ?? null,
       window_start: filter.start === undefined ? null : new Date(filter.start).toISOString(),
       window_end: filter.end === undefined ? null : new Date(filter.end).toISOString(),
       min_sample: RESOLUTION_RATE_MIN_SAMPLE,
-      ...tally(rows),
-      ...(groupBy === null ? {} : {
-        groups: [...byEmployee.entries()]
-          .map(([employeeId, group]) => ({ employee_id: employeeId, ...tally(group) }))
-          .sort((a, b) => b.evaluated_count - a.evaluated_count || a.employee_id.localeCompare(b.employee_id)),
-      }),
+      ...totals,
+      ...(groupBy === null ? {} : { groups }),
     } });
   }, schema("getUsageOutcomes", "读取当前成员本机的段落解决率",
-    "已解决 ÷（已解决 + 未解决），未评估不进分母；样本少于 10 段时 resolution_rate 为 null。时间窗按段落结束时间精确筛选，不要求整点。群聊段落计入其中每位员工。",
+    "已解决 ÷（已解决 + 未解决），未评估不进分母；样本少于 10 段时 resolution_rate 为 null。时间窗按段落结束时间精确筛选，不要求整点。群聊段落按其中每位员工各计一次（与 Manager 汇总口径一致），合计等于各员工分组之和；按 employee_id 筛选时只计该员工那一次。",
     envelope(OutcomeStatistics), { querystring: OutcomeQuery }));
 }
 

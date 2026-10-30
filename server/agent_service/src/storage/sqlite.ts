@@ -1412,6 +1412,11 @@ export class AgentSqliteStore {
     this.db.prepare("UPDATE usage_summary_outbox SET status = 'failed', claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(error.slice(0, 500), summaryId, claimToken);
   }
 
+  /** Return a claimed row to pending without recording a failure (for example Manager has no endpoint for it yet). */
+  releaseUsageClaim(summaryId: string, claimToken: string, note: string): void {
+    this.db.prepare("UPDATE usage_summary_outbox SET status = 'pending', attempts = MAX(attempts - 1, 0), claim_token = NULL, claimed_at = NULL, last_error = ? WHERE summary_id = ? AND status = 'sending' AND claim_token = ?").run(note.slice(0, 500), summaryId, claimToken);
+  }
+
   listUsageOutboxOwners(): Array<{ tenant_id: string; member_id: string }> {
     return this.db.prepare("SELECT DISTINCT tenant_id, member_id FROM usage_summary_outbox WHERE status IN ('pending', 'failed') AND member_id <> '' ORDER BY tenant_id, member_id").all() as Array<{ tenant_id: string; member_id: string }>;
   }

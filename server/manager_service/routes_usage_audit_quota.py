@@ -2,6 +2,7 @@
 
 路径：
 - /api/manager/usage/upload       接收 A5 上报的脱敏 UsageSummaryUpload（F13，本端消费落库聚合）
+- /api/manager/usage/segment-outcomes 接收 Agent 上报的段落评估小时计数（只含计数）
 - /api/manager/usage/statistics  查保留小时摘要的成员/员工统计
 - /api/manager/usage/work-history 查 Manager 持有的脱敏用量元数据历史
 - /api/manager/usage/rollup       查本租户 usage 聚合 / 明细
@@ -61,10 +62,10 @@ from .schemas import (
     UsageRollupOut,
 )
 from .openapi_schemas import (
+    SegmentOutcomeUploadOut,
     UsageRollupItemsOut,
     UsageUploadDetailedOut,
     UsageUploadOut,
-    UsageUploadWithOutcomesOut,
 )
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
@@ -101,12 +102,32 @@ class UsageSummaryUploadIn(BaseModel):
     tenant_id: str | None = Field(default=None, description="可选租户标识；省略时绑定当前 TenantContext，提供时必须匹配")
     usage: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
     audits: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")
-    segment_outcomes: list[dict[str, Any]] | None = Field(
-        default=None,
-        description=(
-            "可选：段落结果评估小时计数（成员 + 员工 + UTC 小时的已评估/已解决段数，绝对值）。"
-            "只含计数，不含会话文本、评估备注或原因标签；省略时回执与旧版一致。"
-        ),
+
+
+class SegmentOutcomeSummaryIn(BaseModel):
+    """一个成员 + 员工 + UTC 小时的段落评估计数（绝对值，同 summary_id 重传覆盖）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"] = Field(description="计数摘要版本，当前只接受 \"1\"。")
+    summary_id: str = Field(min_length=1, max_length=256, description="Agent 生成的稳定摘要 ID；重传同一 ID 覆盖计数。")
+    tenant_id: str | None = Field(default=None, description="可选租户标识；提供时必须匹配当前 TenantContext。")
+    member_id: str = Field(min_length=1, max_length=256, description="上报成员 ID，必须是当前登录成员。")
+    employee_id: str = Field(min_length=1, max_length=256, description="员工 ID，必须属于本租户且授权给该成员。")
+    window_start: str = Field(description="UTC 整点包含起点（ISO 8601）。")
+    window_end: str = Field(description="UTC 整点不包含终点，必须等于 window_start + 1 小时。")
+    evaluated_count: int = Field(ge=0, description="该小时内已评估段数。")
+    resolved_count: int = Field(ge=0, description="其中标记为已解决的段数，不超过 evaluated_count。")
+
+
+class SegmentOutcomeUploadIn(BaseModel):
+    """段落评估计数上报体。只含计数，不含会话文本、评估备注或原因标签。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str | None = Field(default=None, description="可选租户标识；省略时绑定当前 TenantContext，提供时必须匹配")
+    segment_outcomes: list[SegmentOutcomeSummaryIn] = Field(
+        min_length=1, max_length=100, description="段落评估小时计数，1–100 条；任一条校验失败则整批不写入。",
     )
 
 
@@ -181,15 +202,13 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         body: UsageSummaryUploadIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageUploadWithOutcomesOut | UsageUploadDetailedOut | UsageUploadOut]:
+    ) -> Envelope[UsageUploadDetailedOut | UsageUploadOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if body.tenant_id is not None and body.tenant_id != ctx.tenant_id:
             raise Forbidden("usage tenant_id must match the authenticated tenant")
         enterprise_id = _lookup_enterprise_id(request, ctx.tenant_id)
         upload = body.model_dump(exclude={"tenant_id"})
-        if upload.get("segment_outcomes") is None:
-            upload.pop("segment_outcomes", None)
         if enterprise_id is None:
             result = svc.ingest_upload(ctx, upload)
         else:
@@ -198,13 +217,34 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
             _report_to_operator(request, svc, ctx)
         except Exception:  # best effort; Agent outbox already has durable retry semantics
             logger.warning("usage rollup upload to Operator deferred", extra={"tenant_id": ctx.tenant_id}, exc_info=True)
-        if "segment_outcomes_ingested" in result:
-            data = UsageUploadWithOutcomesOut(**result)
-        elif "usage_ingested" in result or "audits_ingested" in result:
+        if "usage_ingested" in result or "audits_ingested" in result:
             data = UsageUploadDetailedOut(**result)
         else:
             data = UsageUploadOut(**result)
-        return Envelope[UsageUploadWithOutcomesOut | UsageUploadDetailedOut | UsageUploadOut](data=data)
+        return Envelope[UsageUploadDetailedOut | UsageUploadOut](data=data)
+
+    @router.post(
+        "/usage/segment-outcomes",
+        description=(
+            "接收 Agent 上报的段落结果评估小时计数（成员 + 员工 + UTC 小时的已评估/已解决段数，绝对值）。"
+            "只含计数，不含会话文本、评估备注或原因标签；同一 summary_id 重传覆盖。"
+            "member_id 必须是当前成员，employee_id 必须属于本租户且授权给该成员；任一条失败整批不写入。"
+            "本端点不因业务原因返回 404：Agent 收到 404 即视为 Manager 尚不支持，保留待发送。"
+        ),
+        summary="接收段落评估小时计数",
+        operation_id="manager_usage_segment_outcomes_upload",
+    )
+    async def upload_segment_outcomes(
+        body: SegmentOutcomeUploadIn,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[SegmentOutcomeUploadOut]:
+        ctx = tenant_context_from(claims)
+        if body.tenant_id is not None and body.tenant_id != ctx.tenant_id:
+            raise Forbidden("segment outcome tenant_id must match the authenticated tenant")
+        items = [item.model_dump() for item in body.segment_outcomes]
+        result = _service(request).ingest_segment_outcomes(ctx, items)
+        return Envelope[SegmentOutcomeUploadOut](data=SegmentOutcomeUploadOut(**result))
 
     @router.get(
         "/usage/outcomes",

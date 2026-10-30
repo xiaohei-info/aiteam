@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { AgentSqliteStore } from "./sqlite.js";
+import { outcomeStatistics } from "../http/context-segments.js";
+import { ManagerPolicyDeniedError, ManagerValidationError } from "../manager-client.js";
 import { UsageFlushService } from "../usage-flush.js";
 import type { SegmentOutcomeSummary } from "../usage.js";
 
@@ -85,3 +87,42 @@ test("flush uploads outcome rows through their own uploader and leaves them pend
   assert.equal(uploaded[0]!.evaluated_count, 1);
   assert.equal(outcomeRows(store)[0]!.status, "sent");
 }));
+
+test("a Manager without the outcome endpoint (404) leaves outcome rows pending and pauses retries; 422 stays a real failure", withStore(async (store) => {
+  store.contextSegments.record(owner, { conversationId: "c1", segmentId: "s1", employeeIds: ["e1", "e2"], messageCount: 2, endedAt: hour + 1_000, evaluation: resolved });
+  let calls = 0;
+  const missing = new UsageFlushService(store, {
+    uploadUsage: async () => ({}),
+    uploadSegmentOutcomes: async () => { calls += 1; throw new ManagerPolicyDeniedError(404, "Manager returned HTTP 404 for /api/manager/usage/segment-outcomes", "not_found"); },
+  } as never);
+  assert.deepEqual(await missing.flush(caller), { sent: [], failed: [] });
+  assert.equal(calls, 1, "one 404 is enough to stop offering the rest of the batch");
+  assert.deepEqual(outcomeRows(store).map((row) => row.status), ["pending", "pending"]);
+  assert.deepEqual(await missing.flush(caller), { sent: [], failed: [] });
+  assert.equal(calls, 1, "retries pause after the endpoint was reported missing");
+  const attempts = store.db.prepare("SELECT attempts FROM usage_summary_outbox WHERE kind = 'segment_outcome'").all() as Array<{ attempts: number }>;
+  assert.deepEqual(attempts.map((row) => row.attempts), [0, 0]);
+
+  const invalid = new UsageFlushService(store, {
+    uploadUsage: async () => ({}),
+    uploadSegmentOutcomes: async () => { throw new ManagerValidationError("Manager returned HTTP 422 for /api/manager/usage/segment-outcomes: validation_error", "validation_error"); },
+  } as never);
+  const result = await invalid.flush(caller);
+  assert.equal(result.failed.length, 2);
+  const errors = store.db.prepare("SELECT status, last_error FROM usage_summary_outbox WHERE kind = 'segment_outcome'").all() as Array<{ status: string; last_error: string }>;
+  assert.ok(errors.every((row) => row.status === "failed" && row.last_error.includes("422")));
+}));
+
+test("group-chat segments count once per employee so totals equal the sum of the groups", () => {
+  const rows = [
+    { employeeIds: ["e1", "e2"], outcome: "resolved" as const, reasons: [] },
+    { employeeIds: ["e1"], outcome: "unresolved" as const, reasons: ["missing_info" as const] },
+  ];
+  const all = outcomeStatistics(rows);
+  assert.equal(all.totals.evaluated_count, 3);
+  assert.equal(all.totals.resolved_count, 2);
+  assert.equal(all.totals.evaluated_count, all.groups.reduce((sum, group) => sum + group.evaluated_count, 0));
+  assert.deepEqual(all.groups.map((group) => [group.employee_id, group.evaluated_count, group.resolved_count]), [["e1", 2, 1], ["e2", 1, 1]]);
+  const one = outcomeStatistics(rows, "e2");
+  assert.deepEqual([one.totals.evaluated_count, one.groups.length], [1, 1]);
+});

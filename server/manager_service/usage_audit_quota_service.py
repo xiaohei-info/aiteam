@@ -110,15 +110,8 @@ class UsageAuditQuotaService:
             raise Forbidden("usage upload tenant_id must match the authenticated tenant")
         usage_items = payload.get("usage") or []
         audit_items = payload.get("audits") or []
-        outcome_items = payload.get("segment_outcomes")
         if not isinstance(usage_items, list) or not isinstance(audit_items, list):
             raise ValidationProblem("usage and audits must be arrays")
-        if outcome_items is not None and not isinstance(outcome_items, list):
-            raise ValidationProblem("segment_outcomes must be an array")
-        # Validate every outcome before any write so a bad item cannot half-apply the upload.
-        outcomes = [self._segment_outcome_payload(item, ctx=ctx) for item in outcome_items or []]
-        if outcomes and self._outcomes is None:
-            raise _SegmentOutcomesUnavailable("segment outcome storage is not configured")
         usage_rows: list[UsageRollupRow] = []
         audit_rows: list[AuditSummaryRow] = []
         for item in usage_items:
@@ -140,15 +133,23 @@ class UsageAuditQuotaService:
         for item in audit_items:
             self._assert_no_conversation_content(item, kind="AuditSummaryEvent")
             audit_rows.append(self._repo.upsert_audit(ctx, payload=self._audit_payload(item, ctx=ctx)))
-        for outcome in outcomes:
-            self._outcomes.upsert(ctx, payload=outcome)
-        result = {
+        return {
             "usage_ingested": len(usage_rows),
             "audits_ingested": len(audit_rows),
         }
-        if outcome_items is not None:
-            result["segment_outcomes_ingested"] = len(outcomes)
-        return result
+
+    def ingest_segment_outcomes(self, ctx: TenantContext, items: list[dict]) -> dict:
+        """Store count-only segment outcome buckets (POST /usage/segment-outcomes)."""
+
+        if not isinstance(items, list):
+            raise ValidationProblem("segment_outcomes must be an array")
+        # Validate every outcome before any write so a bad item cannot half-apply the upload.
+        outcomes = [self._segment_outcome_payload(item, ctx=ctx) for item in items]
+        if outcomes and self._outcomes is None:
+            raise _SegmentOutcomesUnavailable("segment outcome storage is not configured")
+        for outcome in outcomes:
+            self._outcomes.upsert(ctx, payload=outcome)
+        return {"segment_outcomes_ingested": len(outcomes)}
 
     def _segment_outcome_payload(self, item: dict, *, ctx: TenantContext) -> dict:
         """Validate one count-only segment outcome bucket; same attribution rules as current UsageSummary."""

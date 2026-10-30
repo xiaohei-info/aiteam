@@ -49,6 +49,7 @@ export interface AuthorizedConfig {
 export const MARKETPLACE_OUTPUT_TYPES = ["document", "spreadsheet", "code", "presentation", "system_operation"] as const;
 export type MarketplaceOutputType = typeof MARKETPLACE_OUTPUT_TYPES[number];
 export const MARKETPLACE_PRICING_MODES = ["per_call", "per_token", "subscription"] as const;
+export const MARKETPLACE_BILLING_PERIODS = ["month", "year"] as const;
 
 /** 人才市场展示字段（议题 7）；Operator 持有，Manager 原样投影，旧模板为空列表/null。 */
 export interface MarketplaceTemplateProfile {
@@ -62,7 +63,8 @@ export interface MarketplaceTemplateProfile {
   optional_connectors: string[];
   recommended_knowledge: string[];
   required_permissions: { full_access: boolean; local_directories: boolean } | null;
-  pricing: { mode: typeof MARKETPLACE_PRICING_MODES[number]; unit_price: string; currency: "USD" } | null;
+  /** billing_period 只出现在 subscription 上；旧 Manager 未返回周期时省略。 */
+  pricing: { mode: typeof MARKETPLACE_PRICING_MODES[number]; unit_price: string; currency: "USD"; billing_period?: typeof MARKETPLACE_BILLING_PERIODS[number] } | null;
   memory_policy_summary: string | null;
   publisher: string | null;
   version: string | null;
@@ -384,7 +386,7 @@ export class HttpManagerClient implements ManagerClient {
   }
 
   async uploadSegmentOutcomes(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown> {
-    return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [], audits: [], segment_outcomes: [summary] }, undefined, "POST", summary.summary_id));
+    return this.unwrap(await this.request("/api/manager/usage/segment-outcomes", caller, { tenant_id: summary.tenant_id, segment_outcomes: [summary] }, undefined, "POST", summary.summary_id));
   }
 
   private async request(
@@ -623,7 +625,11 @@ function normalizeMarketplaceProfile(raw: Record<string, unknown>): MarketplaceT
     recommended_knowledge: stringArray(raw.recommended_knowledge),
     required_permissions: permissions ? { full_access: permissions.full_access === true, local_directories: permissions.local_directories === true } : null,
     pricing: pricing && (MARKETPLACE_PRICING_MODES as readonly unknown[]).includes(pricing.mode) && typeof pricing.unit_price === "string" && /^\d+(\.\d+)?$/.test(pricing.unit_price) && pricing.currency === "USD"
-      ? { mode: pricing.mode as typeof MARKETPLACE_PRICING_MODES[number], unit_price: pricing.unit_price, currency: "USD" }
+      ? {
+        mode: pricing.mode as typeof MARKETPLACE_PRICING_MODES[number], unit_price: pricing.unit_price, currency: "USD",
+        ...(pricing.mode === "subscription" && (MARKETPLACE_BILLING_PERIODS as readonly unknown[]).includes(pricing.billing_period)
+          ? { billing_period: pricing.billing_period as typeof MARKETPLACE_BILLING_PERIODS[number] } : {}),
+      }
       : null,
     memory_policy_summary: trimmedOrNull(raw.memory_policy_summary),
     publisher: trimmedOrNull(raw.publisher),
