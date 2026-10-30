@@ -108,6 +108,13 @@ export interface MemorySummary {
   truncated: boolean;
 }
 
+/** Member-visible enterprise knowledge base; endpoint and credential_ref stay admin-only in Manager. */
+export interface ManagerKnowledgeSpace {
+  knowledge_space_id: string;
+  display_name: string;
+  deployment_kind: "managed" | "nas";
+}
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -136,6 +143,8 @@ export interface ManagerClient {
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
   memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
+  /** Enterprise knowledge bases the member can read in the current tenant. */
+  listKnowledgeSpaces?(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
 }
 
@@ -328,6 +337,18 @@ export class HttpManagerClient implements ManagerClient {
     }
     if (value.success !== true || typeof value.operation_id !== "string" || !value.operation_id) throw new MemoryRetainUnverifiedError("Manager returned an invalid memory retain acknowledgement");
     return { operationId: value.operation_id };
+  }
+
+  async listKnowledgeSpaces(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]> {
+    const body = objectValue(await this.request("/api/manager/knowledge-spaces", caller));
+    if (!Array.isArray(body?.data)) throw new ManagerUnavailableError("Manager returned an invalid knowledge space list");
+    return body.data.map((item) => {
+      const raw = objectValue(item);
+      if (!raw || typeof raw.knowledge_space_id !== "string" || typeof raw.display_name !== "string") {
+        throw new ManagerUnavailableError("Manager returned an invalid knowledge space item");
+      }
+      return { knowledge_space_id: raw.knowledge_space_id, display_name: raw.display_name, deployment_kind: raw.deployment_kind === "nas" ? "nas" : "managed" };
+    });
   }
 
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
