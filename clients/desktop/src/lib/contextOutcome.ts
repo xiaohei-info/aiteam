@@ -121,6 +121,11 @@ export function contextOutcomeNotice(result: ContextResetResult, outcomeRecorded
   return base
 }
 
+/** 重置结束后的顶部提示:不评估的重置(工具栏入口)只说明记忆状态,不提评估。 */
+export function contextResetFinishedNotice(result: ContextResetResult, evaluated: boolean, outcomeRecorded: boolean): ContextResetNotice | null {
+  return evaluated ? contextOutcomeNotice(result, outcomeRecorded) : contextResetNotice(result)
+}
+
 /** 按 segment_id 合并段落评估;segment_id 等于历史里重置标记的 reset_id。 */
 export function segmentsByResetId(segments: readonly ContextSegment[]): Map<string, ContextSegment> {
   return new Map(segments.map((segment) => [segment.segment_id, segment]))

@@ -25,8 +25,10 @@ import ConversationFiles from '../../components/Chat/ConversationFiles'
 import { ConversationPermissions } from '../../components/Chat/ConversationPermissions'
 import { ConversationStatus } from '../../components/Chat/ConversationStatus'
 import { ContextOutcomePrompt } from '../../components/Chat/ContextOutcomePrompt'
+import { ContextResetFeedback, ContextResetToolButton } from '../../components/Chat/ContextResetControls'
 import { ContextResetDivider } from '../../components/Chat/ContextResetDivider'
 import { useConversationSegments } from '../../hooks/useConversationSegments'
+import { useContextReset } from '../../hooks/useContextReset'
 import { currentSegmentMessages } from '../../lib/contextOutcome'
 import { contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
 import GroupAvatar from '../../components/Chat/GroupAvatar'
@@ -57,6 +59,11 @@ export default function GroupChat() {
   const [contextResetCount, setContextResetCount] = useState(0)
   const segments = useConversationSegments(activeGroupId, contextResetCount)
   const segmentMessages = useMemo(() => currentSegmentMessages(messages, resetDividers), [messages, resetDividers])
+  const contextReset = useContextReset(activeGroupId ?? '', (result) => {
+    if (result.segment) segments.upsert(result.segment)
+    setContextResetCount((count) => count + 1)
+    if (activeGroupId) refreshActiveEntries(activeGroupId).catch(console.error)
+  })
 
   const [memberPopup, setMemberPopup] = useState<{ member: GroupMember; anchor: { x: number; y: number } } | null>(null)
   const [filesConversationId, setFilesConversationId] = useState<string | null>(null)
@@ -355,13 +362,10 @@ export default function GroupChat() {
           conversationId={activeGroupId}
           segment={segmentMessages}
           generating={generatingConvIds.has(activeGroupId)}
-          onReset={(result) => {
-            if (result.segment) segments.upsert(result.segment)
-            setContextResetCount((count) => count + 1)
-            refreshActiveEntries(activeGroupId).catch(console.error)
-          }}
+          reset={contextReset}
         />
       )}
+      <ContextResetFeedback reset={contextReset} generating={generatingConvIds.has(activeGroupId)} />
 
       <ChatInputBar
         onSend={handleSend}
@@ -380,6 +384,9 @@ export default function GroupChat() {
         members={group.members ?? []}
         enableVoiceInput
         enableKnowledgeFiles
+        tools={!activeMessagesLoading && !activeMessagesError && (
+          <ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeGroupId)} hasContext={segmentMessages.length > 0} />
+        )}
         helper={<div className="chat-composer-footer">
           <ConversationPermissions
             conversationId={activeGroupId}

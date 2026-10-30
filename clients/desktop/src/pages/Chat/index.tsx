@@ -22,8 +22,10 @@ import { ChatInputBar } from '../../components/Chat/ChatInputBar'
 import type { ChatInputBarProps } from '../../components/Chat/ChatInputBar'
 import { ConversationStatus } from '../../components/Chat/ConversationStatus'
 import { ContextOutcomePrompt } from '../../components/Chat/ContextOutcomePrompt'
+import { ContextResetFeedback, ContextResetToolButton } from '../../components/Chat/ContextResetControls'
 import { ContextResetDivider } from '../../components/Chat/ContextResetDivider'
 import { useConversationSegments } from '../../hooks/useConversationSegments'
+import { useContextReset } from '../../hooks/useContextReset'
 import { currentSegmentMessages } from '../../lib/contextOutcome'
 import { contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
 import { ConversationPermissions } from '../../components/Chat/ConversationPermissions'
@@ -194,6 +196,11 @@ export default function Chat() {
   const resetDividers = useMemo(() => contextResetDividers(activeConvRawItems), [activeConvRawItems])
   const segments = useConversationSegments(activeConvId, contextResetCount)
   const segmentMessages = useMemo(() => currentSegmentMessages(activeConvMessages, resetDividers), [activeConvMessages, resetDividers])
+  const contextReset = useContextReset(activeConvId ?? '', (result) => {
+    if (result.segment) segments.upsert(result.segment)
+    setContextResetCount((count) => count + 1)
+    if (activeConvId) refreshActiveEntries(activeConvId).catch(console.error)
+  })
   const msgRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const loadedMsgCountRef = useRef(0)
   const loadedConversationRef = useRef<string | null>(null)
@@ -823,13 +830,10 @@ export default function Chat() {
           conversationId={activeConvId}
           segment={segmentMessages}
           generating={generatingConvIds.has(activeConvId)}
-          onReset={(result) => {
-            if (result.segment) segments.upsert(result.segment)
-            setContextResetCount((count) => count + 1)
-            refreshActiveEntries(activeConvId).catch(console.error)
-          }}
+          reset={contextReset}
         />
       )}
+      <ContextResetFeedback reset={contextReset} generating={generatingConvIds.has(activeConvId)} />
 
       {/* Input bar */}
       <ChatInputBar
@@ -849,6 +853,9 @@ export default function Chat() {
         onAbort={() => handleAbort(activeConvId)}
         enableVoiceInput
         enableKnowledgeFiles
+        tools={!activeMessagesLoading && !activeMessagesError && !unavailableMessage && !activeConvId.startsWith('emp_') && (
+          <ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeConvId)} hasContext={segmentMessages.length > 0} />
+        )}
         helper={<>
           {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}
           <div className="chat-composer-footer">
