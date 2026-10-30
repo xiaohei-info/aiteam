@@ -16,7 +16,7 @@ AI Team 正从 **MVP 单体**演进到 **v1 三端微服务**架构——v1 是*
 
 - **正式口径**：v1 概要设计已冻结地基级裁决（D1–D24）。新开发一律按 v1 架构落地。
 - **旧实现状态**：`app/` 是冻结的 MVP 单体基座，仅作**契约/实现参考**（状态机、角色、cursor、timeline 等口径对照），**只读不写、不再扩写**；v1 重建稳定后删除。
-- **新代码落点**：`server/`（后端）+ `web/`（前端），按端分目录（见 §9）。当前尚未创建，由 v1 开发逐步建立。
+- **新代码落点**：`server/`（后端）+ `web/`（三端网页前端）+ `clients/desktop/`（桌面客户端，Tauri + React），按端分目录（见 §9）。
 - **历史文档**：MVP 阶段的业务方案、概要设计与历史详细设计已归档进 `docs/mvp版本/`，仅作历史参照，**不再作为开发口径**。
 
 ---
@@ -123,6 +123,7 @@ runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不�
 | 企业端 | `manager_service/` | `manager/` | `/api/manager/*` + `/api/auth/*` |
 | 用户端 | `agent_service/` | `agent/` | `/api/agent/*` + `/api/auth/*` |
 
+- **桌面客户端**：`clients/desktop/` 内嵌并启动用户端 Agent，业务接口只调本机 `/api/agent/*`（唯一窄通道：企业知识库浏览/上传直连 Manager `/api/manager/knowledge-spaces`，见 `clients/desktop/docs/agent-sidecar.md`）；不是第四个端，不新增接口前缀
 - **用户端运行时**：Node `server/agent_service` 内置 Pi Session；不再有独立 Python Gateway
 - **Hermes Runtime**：`./.hermes/hermes-agent/`（外部独立仓，禁止写入业务逻辑）
 - **历史命名映射**：旧设计文档中的 `Agent Service` ≈ 用户端 `agent_service`；旧 `Team Panel` 已解散按端重分（配置态→Manager、执行态→Agent、开通/治理→Operation）
@@ -153,6 +154,13 @@ runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不�
 | `docs/v1正式版本/技术设计/概要设计/`（00–11 共 11 篇（01 已并入本文），入口 `00-架构总纲与裁决索引.md`） | **v1 架构地基，唯一裁决口径**（D1–D24 已冻结；总纲含「原 § → 新文档」映射与导航） |
 | `docs/部署运维/2026-06-15-AI Team-当前单机部署SOP.md` | 冻结 MVP 历史 SOP；v1 部署以 `deploy/ci/README.md`、`deploy/docker/README.md` 与概要设计 09/11 为准 |
 
+### 桌面客户端
+
+| 文档 | 用途 |
+|------|------|
+| `clients/desktop/docs/README.md` | 桌面端文档索引（本机 Agent 集成、知识来源、办公室、设计基准、方案与归档） |
+| `deploy/agent/CLIENT-INTEGRATION.md` | 客户端内嵌 Agent 的通用集成步骤 |
+
 ### 历史参照（不再作为开发口径）
 
 - `docs/mvp版本/`：MVP 阶段业务解决方案设计、技术概要设计与历史详细设计文档
@@ -163,7 +171,7 @@ runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不�
 
 每次提交前自查：
 
-- ✅ 新能力是否落在正确端（Operation / Manager / Agent）与正确目录（`server/` / `web/`）？
+- ✅ 新能力是否落在正确端（Operation / Manager / Agent）与正确目录（`server/` / `web/` / `clients/desktop/`）？
 - ✅ 是否复用而非自造底层能力？是否采用业界成熟工程实践、未沿用旧 `app/` 代码风格（§3.8）？
 - ✅ 前端是否只调本端服务 + 必要窄通道，未跨端直调、未跨库直写？
 - ✅ 会话/执行内容是否未上传（本地优先）？跨端是否只流转认证/授权/脱敏摘要？
@@ -203,6 +211,8 @@ runtime（含 Hermes）由用户端 Node Agent 的 Pi Session 管理。**v1 不�
 ```
 server/   # 后端：FastAPI operation_service / manager_service + Node agent_service + shared / run.py
 web/      # 前端：operation / manager / agent / shared（按端分离）
+clients/desktop/  # 桌面客户端（Tauri + React），独立 pnpm lockfile，不加入 web/ workspace
+clients/office-map-edit-tool/  # 办公室地图编辑器，独立 npm lockfile，桌面端以 link:../office-map-edit-tool 引用并打包进 dist/office-editor
 deploy/   # docker-compose / Dockerfile / 安装包 / ctl.sh
 app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成后删除
 ./.hermes/hermes-agent/  # Hermes Runtime（外部仓，禁止写入业务逻辑）
@@ -211,6 +221,8 @@ app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成�
 权限角色：企业侧 `owner | enterprise_admin | finance_admin | member`；平台侧 `system_admin | system_operator`（禁用旧 `admin/manager/viewer`）。
 
 **交付物按端精简（D15）**：单仓不拆双仓，控制面启动器 `server/run.py --tier=operation|manager` 仅供 dev；Node Agent 由 `pnpm --dir server/agent_service start` 独立启动。CI 按端产出精简产物，**用户端交付物绝不打包控制面（Operator/Manager）后端与前端代码**；禁止运行时胖产物 / 前端运行时切端。
+
+**桌面客户端隔离**：`clients/desktop/` 自带依赖与 lockfile，CI 走 `.github/workflows/desktop-ci.yml`（只看 `clients/desktop/**` 与 `clients/office-map-edit-tool/**`），与 `ci.yml` / `web-ci.yml` 互不触发。随包 Agent（`clients/desktop/src-tauri/resources/agent`）**不入库**，由 `pnpm --dir clients/desktop agent:build` 从同一提交的 `server/agent_service` 构建导入，前后端版本由提交天然对齐。桌面端不得 import `server/` 或 `web/` 源码，只通过 HTTP 接口交互。
 
 **关键契约一律以 v1 概要设计为准，不在此复制**：事件协议/游标与状态枚举（07）、Pi Session/Resource/Approval 能力适配（06 §7.1–§7.8）、数据所有权与租户隔离（04）、认证（03）、北向 API 与错误模型（02）。
 
