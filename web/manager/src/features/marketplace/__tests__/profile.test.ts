@@ -37,5 +37,9 @@ describe("人才市场展示规则", () => {
     expect([rateTone(0.8), rateTone(0.6), rateTone(0.59)]).toEqual(["success", "primary", "warning"]);
     expect(formatPricing({ mode: "per_token", unit_price: 2, currency: "USD" })).toBe("$2/百万 Token");
     expect(formatPricing({ mode: "subscription", unit_price: "99", currency: "USD" })).toBe("$99 套餐");
+    expect(formatPricing({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" })).toBe("$99/月");
+    expect(formatPricing({ mode: "subscription", unit_price: "999.00", currency: "USD", billing_period: "year" })).toBe("$999/年");
+    // 未知周期值（旧数据或越界）不显示成 undefined。
+    expect(formatPricing({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "week" as never })).toBe("$99 套餐");
   });
 });

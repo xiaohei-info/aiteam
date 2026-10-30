@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filledProfileFields, profileFromItem, profilePayload, validateProfile } from "./profile";
+import { filledProfileFields, formatPricingSummary, profileFromItem, profilePayload, validateProfile } from "./profile";
 
 describe("人才市场展示字段", () => {
   it("旧模板缺字段时补齐默认值", () => {
@@ -52,5 +52,24 @@ describe("人才市场展示字段", () => {
       pricing: { mode: "per_token", unit_price: "0.05", currency: "USD" },
       changelog_url: "https://example.com/changelog",
     }))).toEqual({});
+  });
+
+  it("套餐必须选周期；按次 / 按 Token 提交时不带周期", () => {
+    const subscription = { mode: "subscription", unit_price: "99", currency: "USD" } as const;
+    expect(validateProfile(profilePayload({ ...profileFromItem({}), pricing: subscription }))).toEqual({
+      billing_period: "套餐需选择周期（按月或按年）",
+    });
+    const yearly = profilePayload({ ...profileFromItem({}), pricing: { ...subscription, billing_period: "year" } });
+    expect(validateProfile(yearly)).toEqual({});
+    expect(yearly.pricing).toEqual({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "year" });
+    // 先选了套餐周期再改成按次：周期不随请求发出，服务端不会 422。
+    const switched = profilePayload({ ...profileFromItem({}), pricing: { mode: "per_call", unit_price: " 0.05 ", currency: "USD", billing_period: "month" } });
+    expect(switched.pricing).toEqual({ mode: "per_call", unit_price: "0.05", currency: "USD" });
+  });
+
+  it("计价摘要带单位", () => {
+    expect(formatPricingSummary({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" })).toBe("套餐 · 99 USD/月");
+    expect(formatPricingSummary({ mode: "per_token", unit_price: "0.3", currency: "USD" })).toBe("按 Token · 0.3 USD/百万 Token");
+    expect(formatPricingSummary({ mode: "per_call", unit_price: "0.05", currency: "USD" })).toBe("按次 · 0.05 USD/次");
   });
 });

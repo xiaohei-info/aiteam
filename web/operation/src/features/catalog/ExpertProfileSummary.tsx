@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
 import { Text } from "@astryxdesign/core/Text";
-import { OUTPUT_TYPE_LABELS, PRICING_MODE_LABELS, profileFromItem } from "./profile";
+import { OUTPUT_TYPE_LABELS, formatPricingSummary, profileFromItem } from "./profile";
 import type { CatalogItem } from "./types";
 
 /** 只读展示人才市场字段；未填写的行隐藏，全部未填写时给一句提示。 */
@@ -22,7 +22,7 @@ export function ExpertProfileSummary({ item }: { item: CatalogItem }): ReactNode
     ["可选的外部系统", profile.optional_connectors.join("、")],
     ["推荐知识", profile.recommended_knowledge.join("、")],
     ["需要的权限", permissionText],
-    ["计价", profile.pricing ? `${PRICING_MODE_LABELS[profile.pricing.mode]} · ${profile.pricing.unit_price} ${profile.pricing.currency}` : ""],
+    ["计价", profile.pricing ? formatPricingSummary(profile.pricing) : ""],
     ["记忆策略", profile.memory_policy_summary],
     ["发布者", profile.publisher],
     ["更新说明", profile.changelog_url],

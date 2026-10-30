@@ -16,6 +16,8 @@ export interface TemplatePricing {
   mode: "per_call" | "per_token" | "subscription";
   unit_price: string | number;
   currency: "USD";
+  /** 套餐周期，仅 subscription 带；旧数据缺失时按无周期显示。 */
+  billing_period?: "month" | "year";
 }
 
 /** 本企业内该模板直接招募员工的段落解决率（对齐 TemplateStatsOut，只含计数）。 */

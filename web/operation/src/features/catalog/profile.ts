@@ -23,6 +23,27 @@ export const PRICING_MODE_LABELS: Record<PricingMode, string> = {
   subscription: "套餐",
 };
 
+/** 套餐周期（对齐 shared/contracts/expert_profile.py BillingPeriod）；仅套餐必填。 */
+export const BILLING_PERIODS = ["month", "year"] as const;
+export type BillingPeriod = typeof BILLING_PERIODS[number];
+export const BILLING_PERIOD_LABELS: Record<BillingPeriod, string> = { month: "按月", year: "按年" };
+const BILLING_PERIOD_UNITS: Record<BillingPeriod, string> = { month: "月", year: "年" };
+
+/** 参考单价输入框的单位提示，随计价方式变化。 */
+export const UNIT_PRICE_HINTS: Record<PricingMode, string> = {
+  per_call: "每次调用的价格（USD），例如 0.05",
+  per_token: "每百万 Token 的价格（USD），例如 0.3",
+  subscription: "每个套餐周期的价格（USD），例如 99",
+};
+
+/** 摘要展示：按次 · 0.05 USD/次、按 Token · 0.3 USD/百万 Token、套餐 · 99 USD/月。 */
+export function formatPricingSummary(pricing: TemplatePricing): string {
+  const unit = pricing.mode === "per_call" ? "/次"
+    : pricing.mode === "per_token" ? "/百万 Token"
+      : pricing.billing_period ? `/${BILLING_PERIOD_UNITS[pricing.billing_period]}` : "";
+  return `${PRICING_MODE_LABELS[pricing.mode]} · ${pricing.unit_price} ${pricing.currency}${unit}`;
+}
+
 /** 与后端字段上限保持一致，用于提示文案与提交前校验；服务端仍是最终校验。 */
 export const PROFILE_LIMITS = {
   tagline: 40,
@@ -59,6 +80,8 @@ export interface TemplatePricing {
   /** 十进制字符串，例如 "0.05"。 */
   unit_price: string;
   currency: "USD";
+  /** 套餐周期；subscription 必填，按次 / 按 Token 不带。 */
+  billing_period?: BillingPeriod;
 }
 
 export interface ExpertTemplateProfile {
@@ -115,7 +138,7 @@ export function profilePayload(profile: ExpertTemplateProfile): ExpertTemplatePr
     optional_connectors: list(profile.optional_connectors),
     recommended_knowledge: list(profile.recommended_knowledge),
     required_permissions: permissions && (permissions.full_access || permissions.local_directories) ? permissions : null,
-    pricing: profile.pricing ? { ...profile.pricing, unit_price: profile.pricing.unit_price.trim() } : null,
+    pricing: profile.pricing ? pricingPayload(profile.pricing) : null,
     memory_policy_summary: profile.memory_policy_summary.trim(),
     publisher: profile.publisher.trim(),
     changelog_url: profile.changelog_url.trim(),
@@ -129,7 +152,8 @@ export function filledProfileFields(profile: ExpertTemplateProfile): Partial<Exp
   ) as Partial<ExpertTemplateProfile>;
 }
 
-export type ProfileErrors = Partial<Record<keyof ExpertTemplateProfile, string>>;
+/** billing_period 单独成键，让周期提示落在周期选择框上，和单价提示互不覆盖。 */
+export type ProfileErrors = Partial<Record<keyof ExpertTemplateProfile | "billing_period", string>>;
 
 /** 按 Unicode 码点计长，与服务端 Python len() 一致。 */
 function textLength(value: string): number {
@@ -162,6 +186,13 @@ function sampleOutputsError(outputs: SampleOutput[]): string | undefined {
 }
 
 /** 对 profilePayload 的结果做提交前校验，约束与 shared/contracts/expert_profile.py 一致。 */
+/** 只有套餐带周期；切换到按次 / 按 Token 时丢掉之前选过的周期，避免服务端 422。 */
+function pricingPayload(pricing: TemplatePricing): TemplatePricing {
+  const { billing_period: period, ...rest } = pricing;
+  const base = { ...rest, unit_price: pricing.unit_price.trim() };
+  return pricing.mode === "subscription" && period ? { ...base, billing_period: period } : base;
+}
+
 export function validateProfile(payload: ExpertTemplateProfile): ProfileErrors {
   const errors: ProfileErrors = {};
   const limits = PROFILE_LIMITS;
@@ -182,6 +213,9 @@ export function validateProfile(payload: ExpertTemplateProfile): ProfileErrors {
   if (outputsError) errors.sample_outputs = outputsError;
   if (payload.pricing && !/^\d{1,12}(\.\d{1,6})?$/.test(payload.pricing.unit_price)) {
     errors.pricing = "参考单价需为非负数字，最多 6 位小数";
+  }
+  if (payload.pricing?.mode === "subscription" && !payload.pricing.billing_period) {
+    errors.billing_period = "套餐需选择周期（按月或按年）";
   }
   if (textLength(payload.memory_policy_summary) > limits.memoryPolicySummary) {
     errors.memory_policy_summary = `记忆策略说明不超过 ${limits.memoryPolicySummary} 字`;

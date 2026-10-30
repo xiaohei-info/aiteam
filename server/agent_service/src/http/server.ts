@@ -672,6 +672,7 @@ const MarketplaceTemplate = Type.Object({
     mode: Type.Union([Type.Literal("per_call"), Type.Literal("per_token"), Type.Literal("subscription")], { description: "计费方式。" }),
     unit_price: Type.String({ pattern: "^\\d+(\\.\\d+)?$", description: "单价（十进制字符串）。" }),
     currency: Type.Literal("USD", { description: "币种。" }),
+    billing_period: Type.Optional(Type.Union([Type.Literal("month"), Type.Literal("year")], { description: "套餐周期：month 按月 / year 按年；仅 subscription 带，旧 Manager 未提供时省略。" })),
   }, { additionalProperties: false }), Type.Null()], { description: "模板定价展示；未声明为 null。" }),
   memory_policy_summary: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "记忆策略说明；未填写为 null。" }),
   publisher: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "发布方；未填写为 null。" }),

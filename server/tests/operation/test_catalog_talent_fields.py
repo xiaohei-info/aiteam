@@ -146,6 +146,16 @@ def test_patch_updates_and_clears_profile_fields(client):
     )
     assert response.json()["data"]["pricing"] == {"mode": "per_token", "unit_price": "2.5", "currency": "USD"}
 
+    response = client.patch(
+        "/api/operation/catalog/expert_template/tpl-mkt",
+        json={"pricing": {"mode": "subscription", "unit_price": "999", "billing_period": "year"}}, headers=_auth(),
+    )
+    assert response.json()["data"]["pricing"] == {
+        "mode": "subscription", "unit_price": "999", "currency": "USD", "billing_period": "year",
+    }
+    pulled = profile_from_payload({"pricing": response.json()["data"]["pricing"]})
+    assert pulled.pricing is not None and pulled.pricing.billing_period == "year"
+
 
 @pytest.mark.parametrize("bad", [
     {"tagline": "长" * 41},
@@ -158,6 +168,10 @@ def test_patch_updates_and_clears_profile_fields(client):
     {"sample_outputs": [{"title": "x", "output_type": "document", "preview_url": "data:text/html,x"}]},
     {"pricing": {"mode": "per_call", "unit_price": "-1"}},
     {"pricing": {"mode": "per_call", "unit_price": "1", "currency": "CNY"}},
+    {"pricing": {"mode": "subscription", "unit_price": "99"}},
+    {"pricing": {"mode": "subscription", "unit_price": "99", "billing_period": "week"}},
+    {"pricing": {"mode": "per_call", "unit_price": "1", "billing_period": "month"}},
+    {"pricing": {"mode": "per_token", "unit_price": "1", "billing_period": "year"}},
 ])
 def test_register_rejects_invalid_profile_fields(client, bad):
     response = _register(client, _expert(**bad))

@@ -10,11 +10,15 @@ import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import {
+  BILLING_PERIODS,
+  BILLING_PERIOD_LABELS,
   OUTPUT_TYPES,
   OUTPUT_TYPE_LABELS,
   PRICING_MODES,
   PRICING_MODE_LABELS,
   PROFILE_LIMITS,
+  UNIT_PRICE_HINTS,
+  type BillingPeriod,
   type ExpertTemplateProfile,
   type OutputType,
   type PricingMode,
@@ -38,6 +42,7 @@ const PRICING_OPTIONS = [
   { value: NO_PRICING, label: "不展示计价" },
   ...PRICING_MODES.map((mode) => ({ value: mode, label: PRICING_MODE_LABELS[mode] })),
 ];
+const BILLING_PERIOD_OPTIONS = BILLING_PERIODS.map((period) => ({ value: period, label: BILLING_PERIOD_LABELS[period] }));
 
 /** 每行一条。保存原始行（含空行），提交时由 profilePayload 去空白，避免输入换行时被吞掉。 */
 function LinesField({ label, description, value, rows = 3, disabled, error, onChange }: {
@@ -203,9 +208,21 @@ export function ExpertProfileFields({ value, disabled, errors = {}, onChange }: 
           isDisabled={disabled}
           data-testid="pricing-mode-select"
         />
+        {value.pricing?.mode === "subscription" && (
+          <Selector
+            label="套餐周期 (billing_period)"
+            options={BILLING_PERIOD_OPTIONS}
+            value={value.pricing.billing_period ?? ""}
+            placeholder="请选择"
+            onChange={(period) => value.pricing && set("pricing", { ...value.pricing, billing_period: period as BillingPeriod })}
+            isDisabled={disabled}
+            status={errorStatus(errors.billing_period)}
+            data-testid="billing-period-select"
+          />
+        )}
         <TextInput
           label="参考单价 (USD)"
-          description="十进制数字，例如 0.05"
+          description={value.pricing ? UNIT_PRICE_HINTS[value.pricing.mode] : "先选择计价方式"}
           value={value.pricing?.unit_price ?? ""}
           onChange={(unit_price) => value.pricing && set("pricing", { ...value.pricing, unit_price })}
           isDisabled={disabled || !value.pricing}

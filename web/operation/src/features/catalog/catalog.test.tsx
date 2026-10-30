@@ -1236,7 +1236,7 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
     renderCatalogDetail(makeSystemAdminSession(), "exp-profile", "expert_template");
 
     expect(await screen.findByText("售后问题一站解决")).toBeInTheDocument();
-    expect(screen.getByText("按次 · 0.05 USD")).toBeInTheDocument();
+    expect(screen.getByText("按次 · 0.05 USD/次")).toBeInTheDocument();
     expect(screen.queryByText("不适用场景")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("编辑"));
@@ -1274,6 +1274,36 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
     expect(await screen.findByText("更新说明链接需为 http/https 地址")).toBeInTheDocument();
     expect(screen.getByText("人才市场展示字段有误，请按提示修改")).toBeInTheDocument();
     expect(mockFetch.mock.calls.some((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH")).toBe(false);
+  });
+
+  it("套餐计价必须选周期，保存时带上 billing_period", async () => {
+    const expert = makeCatalogItem({
+      template_id: "exp-profile",
+      system_prompt: "你是客服",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
+    });
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market")) return listPage([]);
+      if (init?.method === "PATCH") return singleResponse({ ...expert, pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" } });
+      return singleResponse(expert);
+    });
+    renderCatalogDetail(makeSystemAdminSession(), "exp-profile", "expert_template");
+    fireEvent.click(await screen.findByText("编辑"));
+    expect(screen.queryByRole("combobox", { name: "套餐周期 (billing_period)" })).not.toBeInTheDocument();
+    await selectAstryxOption("计价方式 (pricing)", "套餐");
+    expect(screen.getByText("每个套餐周期的价格（USD），例如 99")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^参考单价 \(USD\)/), { target: { value: "99" } });
+    fireEvent.click(screen.getByText("保存"));
+    expect(await screen.findByText("套餐需选择周期（按月或按年）")).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH")).toBe(false);
+
+    await selectAstryxOption("套餐周期 (billing_period)", "按月");
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH");
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse((patchCall![1] as { body: string }).body).pricing).toEqual({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" });
+    });
   });
 });
 

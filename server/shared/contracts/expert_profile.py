@@ -11,10 +11,14 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, StringConstraints,
+    field_validator, model_serializer, model_validator,
+)
 
 OutputType = Literal["document", "spreadsheet", "code", "presentation", "system_operation"]
 PricingMode = Literal["per_call", "per_token", "subscription"]
+BillingPeriod = Literal["month", "year"]
 
 TAGLINE_MAX_LENGTH = 40
 USE_CASE_MAX_LENGTH = 30
@@ -84,6 +88,25 @@ class TemplatePricing(BaseModel):
     mode: PricingMode = Field(description="计价方式：per_call 按次 / per_token 按百万 Token / subscription 套餐")
     unit_price: Decimal = Field(ge=0, max_digits=18, decimal_places=6, description="参考单价（USD，最多 6 位小数）")
     currency: Literal["USD"] = Field(default="USD", description="币种，固定 USD")
+    billing_period: BillingPeriod | None = Field(
+        default=None,
+        description="套餐周期：month 按月 / year 按年；subscription 必填，per_call/per_token 不允许，响应中省略。",
+    )
+
+    @model_validator(mode="after")
+    def _billing_period_matches_mode(self) -> "TemplatePricing":
+        if self.mode == "subscription" and self.billing_period is None:
+            raise ValueError("billing_period is required for subscription pricing")
+        if self.mode != "subscription" and self.billing_period is not None:
+            raise ValueError("billing_period applies to subscription pricing only")
+        return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_billing_period(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202 - unannotated keeps the documented schema
+        data = handler(self)
+        if data.get("billing_period") is None:
+            data.pop("billing_period", None)
+        return data
 
 
 class ExpertTemplateProfile(BaseModel):

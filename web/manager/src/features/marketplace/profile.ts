@@ -27,11 +27,15 @@ export function cardTagline(template: ExpertTemplate): string {
     : description.join("");
 }
 
+const BILLING_PERIOD_UNITS: Record<NonNullable<TemplatePricing["billing_period"]>, string> = { month: "月", year: "年" };
+
+/** $0.05/次、$0.3/百万 Token、$99/月、$999/年；套餐没有可识别的周期时显示「$99 套餐」。 */
 export function formatPricing(pricing: TemplatePricing): string {
   const price = `$${Number(pricing.unit_price)}`;
   if (pricing.mode === "per_call") return `${price}/次`;
   if (pricing.mode === "per_token") return `${price}/百万 Token`;
-  return `${price} 套餐`;
+  const unit = pricing.billing_period ? BILLING_PERIOD_UNITS[pricing.billing_period] : undefined;
+  return unit ? `${price}/${unit}` : `${price} 套餐`;
 }
 
 export type RateTone = "success" | "primary" | "warning";
