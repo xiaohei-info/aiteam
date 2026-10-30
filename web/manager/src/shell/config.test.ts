@@ -67,6 +67,7 @@ const ALL_NAV_IDS = [
   "memory",
   "knowledge",
   "connectors",
+  "usage",
   "billing",
   "recharge",
   "settings",
@@ -139,13 +140,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（13 项）", () => {
+  it("导航覆盖企业管理入口（14 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(13);
+    expect(navIds).toHaveLength(14);
   });
 
-  it("owner 可见全部 13 项导航", () => {
+  it("owner 可见全部 14 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -156,7 +157,7 @@ describe("manager shell config", () => {
     expect(vm.activeItemId).toBe("members");
   });
 
-  it("enterprise_admin 可见管理项（费用/充值被 view_billing 过滤）", () => {
+  it("enterprise_admin 可见管理项 + 用量监控（费用/充值被 view_billing 过滤）", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.ENTERPRISE_ADMIN]),
@@ -173,11 +174,12 @@ describe("manager shell config", () => {
       "memory",
       "knowledge",
       "connectors",
+      "usage",
       "settings",
     ]);
   });
 
-  it("finance_admin 只见无角色门控项 + 费用/充值", () => {
+  it("finance_admin 只见无角色门控项 + 用量监控/费用/充值", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.FINANCE_ADMIN]),
@@ -187,6 +189,7 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "knowledge",
+      "usage",
       "billing",
       "recharge",
       "settings",
@@ -194,7 +197,7 @@ describe("manager shell config", () => {
     expect(vm.activeItemId).toBe("billing");
   });
 
-  it("member 只见无角色门控项（员工/技能/人才市场/连接器/费用/充值被过滤）", () => {
+  it("member 只见无角色门控项（员工/技能/人才市场/连接器/用量/费用/充值被过滤）", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.MEMBER]),

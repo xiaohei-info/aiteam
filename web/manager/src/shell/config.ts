@@ -2,7 +2,7 @@
  * Manager 企业端导航与壳配置（page-shell）。
  *
  * 企业后台菜单入口：成员 / 部门 / 方案 / 技能 / 人才市场 / 专家实例 / 授权 /
- * 记忆 / 知识库 / 连接器 / 费用 / 充值 / 设置。
+ * 记忆 / 知识库 / 连接器 / 用量监控 / 费用 / 充值 / 设置。
  * 「协作编排」菜单已清理：对应后端 collaboration_template 表是死数据，Agent 群聊不读它（AITEAM-374）。
  * 角色门控映射旧架构 permission_service 的 manage_employees / manage_connectors / view_billing。
  */
@@ -31,6 +31,8 @@ export const managerShellConfig: PageShellConfig = {
     // manage_connectors 门控
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 无角色门控
+    // 用量只读监控：owner/finance_admin/enterprise_admin（余额/充值仍限 view_billing）
+    { id: "usage", labelKey: "manager.nav.usage", path: "/usage", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN, EnterpriseRole.ENTERPRISE_ADMIN] },
     // view_billing 门控
     { id: "billing", labelKey: "manager.nav.billing", path: "/billing", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN] },
     // view_billing 门控
