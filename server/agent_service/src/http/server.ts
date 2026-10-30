@@ -3,6 +3,7 @@ import { registerLocalDirectoryRoutes, mapLocalDirectoryError, LOCAL_DIRECTORY_O
 import { LocalDirectoryError } from "../storage/local-directories.js";
 import { registerContextSegmentRoutes, mapContextSegmentError, parseSegmentEvaluation, ContextSegmentSchema, SegmentEvaluationProperties, EVALUATION_FIELDS, CONTEXT_SEGMENT_OPERATION_DOCS, CONTEXT_SEGMENT_PARAMETER_EXAMPLES } from "./context-segments.js";
 import { ContextSegmentError } from "../storage/context-segments.js";
+import { registerEmployeeMemoryRoutes, EmployeeMemoryError, EMPLOYEE_MEMORY_OPERATION_DOCS, EMPLOYEE_MEMORY_PARAMETER_EXAMPLES } from "./employee-memories.js";
 import { AutomationTaskService } from "../services/automation-tasks.js";
 import { AutomationError } from "../storage/automation-tasks.js";
 import { Check } from "typebox/value";
@@ -785,12 +786,13 @@ const MANAGER_BACKED_OPERATION_IDS = new Set([
   "resolveTenantByAccount", "login", "resetPassword", "transcribeAudio", "getConversationContext",
   "updateConversationContext", "setConversationThinkingLevel", "resetConversationContext", "promptConversation", "introduceConversation", "syncGrants",
   "flushUsage", "listMarketplaceTemplates", "getMarketplaceTemplate", "orgTree", "createOrgDepartment", "updateOrgDepartment", "promoteOrgDepartment", "deleteOrgDepartment", "assignOrgDepartment",
-  "updateEmployeeAvatar",
+  "updateEmployeeAvatar", "listEmployeeMemories", "getEmployeeMemorySummary", "deleteEmployeeMemory",
 ]);
 const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...AUTOMATION_PARAMETER_EXAMPLES,
   ...LOCAL_DIRECTORY_PARAMETER_EXAMPLES,
   ...CONTEXT_SEGMENT_PARAMETER_EXAMPLES,
+  ...EMPLOYEE_MEMORY_PARAMETER_EXAMPLES,
   conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1", department_id: "department-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
@@ -800,6 +802,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   ...AUTOMATION_OPERATION_DOCS,
   ...LOCAL_DIRECTORY_OPERATION_DOCS,
   ...CONTEXT_SEGMENT_OPERATION_DOCS,
+  ...EMPLOYEE_MEMORY_OPERATION_DOCS,
   ...CONVERSATION_READ_DOCS,
   ...WORK_RECORD_DOCS,
   healthz: { responses: { "200": { description: "Agent 存活时返回就绪状态。", examples: { ok: { summary: "存活", value: { data: { status: "ok" } } } } } } },
@@ -1467,6 +1470,7 @@ export class AgentHttpServer {
     registerAutomationRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.automation);
     registerLocalDirectoryRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, this.options.host.localDirectoryService);
     registerContextSegmentRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request, 4096), send: (response, status, value) => this.writeJson(response, status, value) }, this.options.store.contextSegments, (conversationId, caller) => this.requireOwnedConversation(conversationId, caller));
+    registerEmployeeMemoryRoutes({ register: (method, path, handler, schema) => this.registerRoute(method, path, handler, schema), read: request => this.readJson(request), send: (response, status, value) => this.writeJson(response, status, value) }, () => this.options.managerClient, (employeeId, caller) => this.requireAuthorizedEmployee(employeeId, caller));
     const gone = (_request: IncomingMessage, _response: ServerResponse) => { throw new HttpProblem(410, "gone", "This Agent endpoint was removed; use Manager-authorized read projections or the Pi prompt API"); };
     for (const path of ["/api/agent/conversations/:conversation_id/group-dispatch", "/api/agent/conversations/:conversation_id/terminal/execute", "/api/agent/recruitments", "/api/agent/recruitments/*", "/api/agent/knowledge-bases/*"]) this.registerRoute(["GET", "POST", "PUT", "PATCH", "DELETE"], path, gone, routeSchema("removedAgentEndpoint", { hide: true, response: { 410: problemResponse("Gone") } }));
   }
@@ -2825,6 +2829,7 @@ export class AgentHttpServer {
     else if (error instanceof ConversationReadError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof LocalDirectoryError) problem = mapLocalDirectoryError(error);
     else if (error instanceof ContextSegmentError) problem = mapContextSegmentError(error);
+    else if (error instanceof EmployeeMemoryError) problem = { status: error.status, code: error.code, detail: error.message };
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };

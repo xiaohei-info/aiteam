@@ -686,7 +686,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 80);
+    assert.equal(frontendOperations.length, 83);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

@@ -78,6 +78,36 @@ export interface MemoryRetainAck {
   operationId: string;
 }
 
+export type MemoryScope = "mine" | "all";
+
+export interface MemoryListQuery {
+  scope?: MemoryScope;
+  keyword?: string;
+  limit: number;
+  offset: number;
+}
+
+/** One Manager memory page; Manager has already applied the member scope. */
+export interface MemoryListPage {
+  items: unknown[];
+  total: number;
+  scope: MemoryScope;
+  truncated: boolean;
+}
+
+/** Contributor counts for one employee's memory bank; never contains memory text. */
+export interface MemorySummary {
+  employee_id: string;
+  scope: MemoryScope;
+  total_count: number;
+  own_count: number;
+  others_count: number;
+  unattributed_count: number;
+  recent_count: number;
+  latest_used_at: string | null;
+  truncated: boolean;
+}
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -99,6 +129,10 @@ export interface ManagerClient {
   deleteDepartment?(caller: AuthenticatedCaller, departmentId: string): Promise<void>;
   assignEmployeeDepartment?(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
+  /** Members only receive memories they contributed; Manager enforces the scope. */
+  memoryList?(caller: AuthenticatedCaller, employeeId: string, query: MemoryListQuery): Promise<MemoryListPage>;
+  /** Contributor counts without memory text. */
+  memorySummary?(caller: AuthenticatedCaller, employeeId: string, scope?: MemoryScope): Promise<MemorySummary>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
   memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
@@ -250,6 +284,35 @@ export class HttpManagerClient implements ManagerClient {
     return names;
   }
 
+  async memoryList(caller: AuthenticatedCaller, employeeId: string, query: MemoryListQuery): Promise<MemoryListPage> {
+    const response = await this.request("/api/manager/memories", caller, undefined, {
+      employee_id: employeeId, limit: String(query.limit), offset: String(query.offset),
+      ...(query.scope ? { scope: query.scope } : {}), ...(query.keyword ? { keyword: query.keyword } : {}),
+    });
+    const body = objectValue(response);
+    const meta = objectValue(body?.meta);
+    if (!Array.isArray(body?.data) || typeof meta?.total !== "number" || (meta.scope !== "mine" && meta.scope !== "all")) {
+      throw new ManagerUnavailableError("Manager returned an invalid memory list");
+    }
+    return { items: body.data, total: meta.total, scope: meta.scope, truncated: meta.truncated === true };
+  }
+
+  async memorySummary(caller: AuthenticatedCaller, employeeId: string, scope?: MemoryScope): Promise<MemorySummary> {
+    const raw = objectValue(this.unwrap(await this.request("/api/manager/memories/summary", caller, undefined, { employee_id: employeeId, ...(scope ? { scope } : {}) })));
+    const counts = ["total_count", "own_count", "others_count", "unattributed_count", "recent_count"] as const;
+    if (!raw || typeof raw.employee_id !== "string" || (raw.scope !== "mine" && raw.scope !== "all")
+      || counts.some((key) => !Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0)
+      || (raw.latest_used_at !== null && raw.latest_used_at !== undefined && typeof raw.latest_used_at !== "string")) {
+      throw new ManagerUnavailableError("Manager returned an invalid memory summary");
+    }
+    return {
+      employee_id: raw.employee_id, scope: raw.scope,
+      total_count: raw.total_count as number, own_count: raw.own_count as number, others_count: raw.others_count as number,
+      unattributed_count: raw.unattributed_count as number, recent_count: raw.recent_count as number,
+      latest_used_at: typeof raw.latest_used_at === "string" ? raw.latest_used_at : null, truncated: raw.truncated === true,
+    };
+  }
+
   async memoryDelete(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void> {
     await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, { employee_id: employeeId }, "DELETE", idempotencyKey);
   }
@@ -321,7 +384,7 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerUnavailableError("Manager request failed", { cause: error });
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
+      if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status, (await readManagerProblem(response)).code);
       const { code: problemCode, detail } = await readManagerProblem(response);
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message, problemCode);
@@ -381,8 +444,8 @@ async function readManagerProblem(response: Response): Promise<{ code: string; d
 }
 
 export class ManagerAuthorizationError extends ManagerUnavailableError {
-  constructor(readonly status: 401 | 403) {
-    super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied");
+  constructor(readonly status: 401 | 403, problemCode?: string) {
+    super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied", { problemCode });
     this.name = "ManagerAuthorizationError";
   }
 }
