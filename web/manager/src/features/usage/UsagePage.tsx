@@ -1,5 +1,5 @@
 /** 用量监控页 — 租户内 Agent 上报的脱敏小时摘要：合计 + 按员工 / 按成员（无会话内容）。 */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -55,8 +55,11 @@ export function UsagePage(): ReactNode {
   const [byMember, setByMember] = useState<UsageStatistics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 只采用最近一次请求的结果：切换时间范围后，慢返回的旧范围结果（含失败）一律丢弃。
+  const latestRequest = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     setError(null);
     const window = RANGES.find((item) => item.key === range)!.window();
@@ -65,16 +68,24 @@ export function UsagePage(): ReactNode {
         api.getStatistics("employee", window),
         api.getStatistics("member", window),
       ]);
+      if (requestId !== latestRequest.current) return;
       setByEmployee(employeeStats);
       setByMember(memberStats);
     } catch (err) {
+      if (requestId !== latestRequest.current) return;
       setByEmployee(null);
       setByMember(null);
       setError(err instanceof ApiError ? err.message : "用量数据加载失败");
-    } finally { setLoading(false); }
+    } finally {
+      if (requestId === latestRequest.current) setLoading(false);
+    }
   }, [api, range]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    // 卸载或换范围后作废进行中的请求。
+    return () => { latestRequest.current += 1; };
+  }, [load]);
 
   const columns = useMemo(() => (nameHeader: string): TableColumn<GroupRow>[] => [
     { key: "display_name", header: nameHeader, width: proportional(2), renderCell: (row) => <Text>{row.display_name}</Text> },

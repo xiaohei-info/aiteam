@@ -3,6 +3,7 @@
  * - 渲染合计、按员工、按成员
  * - 未知价格显示「未定价」，部分未定价显示「≥ 已知小计」，从不显示为 0
  * - 切换时间范围重新请求；加载失败展示错误
+ * - 切换后慢返回的旧范围结果（成功或失败）不覆盖新范围
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
@@ -107,6 +108,48 @@ describe("UsagePage 用量监控", () => {
     fireEvent.click(screen.getByText("全部"));
     await waitFor(() => expect(api.getStatistics).toHaveBeenCalledWith("employee", null));
     expect(api.getStatistics).toHaveBeenCalledWith("member", null);
+  });
+
+  it("切换范围后，慢返回的旧范围结果不覆盖新范围", async () => {
+    const allTime = (groupBy: UsageGroupBy): UsageStatistics => ({ ...responses[groupBy], execution_count: 9 });
+    let resolveToday: () => void = () => {};
+    const todayDone = new Promise<void>((resolve) => { resolveToday = resolve; });
+    mockApi({
+      getStatistics: vi.fn(async (groupBy: UsageGroupBy, window) => {
+        if (window === null) return allTime(groupBy);
+        await todayDone;
+        return responses[groupBy];
+      }),
+    });
+    renderPage();
+    fireEvent.click(screen.getByText("全部"));
+    await waitFor(() => expect(screen.getByText("9 次")).toBeInTheDocument());
+    resolveToday();
+    await todayDone;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("9 次")).toBeInTheDocument();
+    expect(screen.queryByText("4 次")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("切换范围后，旧范围请求失败不清空新范围、不报错", async () => {
+    let rejectToday: () => void = () => {};
+    const todayFailed = new Promise<void>((_, reject) => { rejectToday = () => reject(new ApiError("旧请求失败", 503, "manager_unavailable")); });
+    todayFailed.catch(() => {});
+    mockApi({
+      getStatistics: vi.fn(async (groupBy: UsageGroupBy, window) => {
+        if (window === null) return responses[groupBy];
+        await todayFailed;
+        return responses[groupBy];
+      }),
+    });
+    renderPage();
+    fireEvent.click(screen.getByText("全部"));
+    await waitFor(() => expect(screen.getByText("4 次")).toBeInTheDocument());
+    rejectToday();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("4 次")).toBeInTheDocument();
   });
 
   it("无用量时显示空状态", async () => {
