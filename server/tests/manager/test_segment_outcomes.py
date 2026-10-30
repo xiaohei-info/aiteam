@@ -311,8 +311,9 @@ def test_catalog_projects_profile_fields_and_tenant_stats():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=_recruit_svc()):
         client = _catalog_client(repo)
         _seed(client, "tpl-a", tagline="周报助手", output_types=["document"], pricing={"mode": "per_call", "unit_price": "0.05"})
-        _seed(client, "tpl-b")
+        _seed(client, "tpl-b", pricing={"mode": "subscription", "unit_price": "99"})
         _seed(client, "tpl-c")
+        _seed(client, "tpl-d", pricing={"mode": "subscription", "unit_price": "999", "billing_period": "year"})
         response = client.get("/api/manager/recruit/catalog/experts", headers=_headers("member"))
     assert response.status_code == 200, response.text
     items = {item["template_id"]: item for item in response.json()["data"]}
@@ -320,6 +321,9 @@ def test_catalog_projects_profile_fields_and_tenant_stats():
     assert items["tpl-a"]["pricing"] == {"mode": "per_call", "unit_price": "0.05", "currency": "USD"}
     assert items["tpl-a"]["stats"] == {"resolution_rate": 0.75, "evaluated_segments": 12, "resolved_segments": 9, "min_sample": 10}
     assert items["tpl-b"]["stats"]["resolution_rate"] is None
+    # 周期加入前的旧套餐保留原价、不带周期；新套餐带周期。
+    assert items["tpl-b"]["pricing"] == {"mode": "subscription", "unit_price": "99", "currency": "USD"}
+    assert items["tpl-d"]["pricing"] == {"mode": "subscription", "unit_price": "999", "currency": "USD", "billing_period": "year"}
     assert items["tpl-c"]["stats"] is None
     assert items["tpl-c"]["use_cases"] == [] and items["tpl-c"]["updated_at"] is None
 

@@ -118,6 +118,27 @@ def test_legacy_template_without_profile_fields_reads_defaults(client):
     assert detail["output_types"] == [] and detail["updated_at"] is None
 
 
+def test_legacy_subscription_without_period_keeps_its_price(client):
+    # 周期加入前保存的套餐：读取、Operation 详情、Manager 拉取都保留原价，只是不带 billing_period。
+    legacy = {"mode": "subscription", "unit_price": "99", "currency": "USD"}
+    service: CatalogService = client.catalog_service
+    service._repo.create(CatalogEntry(
+        catalog_type=CatalogType.EXPERT_TEMPLATE, template_id="tpl-sub", version="1", display_name="旧套餐",
+        status=CatalogStatus.PUBLISHED,
+        payload={"category": "x", "system_prompt": "p", "platform_model_ref": _MODEL_REF, "description": "d", "pricing": legacy},
+    ))
+    assert profile_from_payload({"pricing": legacy}).model_dump(mode="json")["pricing"] == legacy
+    detail = client.get("/api/operation/catalog/expert_template/tpl-sub", headers=_auth()).json()["data"]
+    assert detail["pricing"] == legacy
+    pulled = service.pull_expert_template_detail(template_id="tpl-sub")
+    assert pulled.model_dump(mode="json")["pricing"] == legacy
+    [listed] = [item for item in service.list_published_expert_templates() if item.template_id == "tpl-sub"]
+    assert listed.model_dump(mode="json")["pricing"] == legacy
+    # Manager 侧按 crosstier 契约解析 Operator 的投影，同样保留。
+    from shared.contracts.crosstier import ExpertTemplateDetail
+    assert ExpertTemplateDetail.model_validate(pulled.model_dump(mode="json")).pricing.billing_period is None
+
+
 def test_dirty_profile_field_falls_back_without_dropping_others():
     profile = profile_from_payload({"tagline": "ok", "pricing": {"mode": "bogus", "unit_price": "1"}, "output_types": ["code"]})
     assert profile.tagline == "ok"

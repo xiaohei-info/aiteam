@@ -25,7 +25,7 @@ from shared.contracts.expert_profile import (
     OutputType,
     RequiredPermissions,
     SampleOutput,
-    TemplatePricing,
+    TemplatePricingInput,
     UseCase,
     validate_http_url,
 )
@@ -67,6 +67,8 @@ class RegisterExpertTemplateRequest(ExpertTemplateProfile):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 写入时套餐必须带周期；读取侧沿用 TemplatePricing，兼容周期加入前保存的套餐。
+    pricing: TemplatePricingInput | None = Field(default=None, description="计价信息；套餐必须带 billing_period；null 表示未提供")
     template_id: str | None = Field(
         default=None,
         min_length=1,
@@ -184,7 +186,7 @@ class UpdateExpertTemplateRequest(BaseModel):
     optional_connectors: list[ConnectorKey] | None = Field(default=None, max_length=10, description="可选的外部系统")
     recommended_knowledge: list[KnowledgeCategory] | None = Field(default=None, max_length=10, description="推荐知识类别")
     required_permissions: RequiredPermissions | None = Field(default=None, description="需要的本机权限；显式 null 清除")
-    pricing: TemplatePricing | None = Field(default=None, description="计价信息；显式 null 清除")
+    pricing: TemplatePricingInput | None = Field(default=None, description="计价信息；套餐必须带 billing_period；显式 null 清除")
     memory_policy_summary: str | None = Field(default=None, max_length=200, description="记忆策略说明")
     publisher: str | None = Field(default=None, max_length=60, description="发布者")
     changelog_url: str | None = Field(default=None, max_length=2048, description="更新说明链接（http/https）")

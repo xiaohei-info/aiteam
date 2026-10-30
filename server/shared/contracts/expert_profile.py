@@ -81,7 +81,11 @@ class RequiredPermissions(BaseModel):
 
 
 class TemplatePricing(BaseModel):
-    """模板计价信息（参考价，非账单）；币种与平台用量一致固定 USD。"""
+    """模板计价信息（参考价，非账单）；币种与平台用量一致固定 USD。
+
+    读取与投影用：周期加入前保存的套餐没有 billing_period，仍按原价读出，前端显示「$99 套餐」。
+    新建与修改走 TemplatePricingInput，套餐必须带周期。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -90,13 +94,11 @@ class TemplatePricing(BaseModel):
     currency: Literal["USD"] = Field(default="USD", description="币种，固定 USD")
     billing_period: BillingPeriod | None = Field(
         default=None,
-        description="套餐周期：month 按月 / year 按年；subscription 必填，per_call/per_token 不允许，响应中省略。",
+        description="套餐周期：month 按月 / year 按年；仅 subscription 可带，旧套餐数据可能没有；缺失时响应中省略。",
     )
 
     @model_validator(mode="after")
-    def _billing_period_matches_mode(self) -> "TemplatePricing":
-        if self.mode == "subscription" and self.billing_period is None:
-            raise ValueError("billing_period is required for subscription pricing")
+    def _billing_period_only_for_subscription(self) -> "TemplatePricing":
         if self.mode != "subscription" and self.billing_period is not None:
             raise ValueError("billing_period applies to subscription pricing only")
         return self
@@ -107,6 +109,21 @@ class TemplatePricing(BaseModel):
         if data.get("billing_period") is None:
             data.pop("billing_period", None)
         return data
+
+
+class TemplatePricingInput(TemplatePricing):
+    """新建 / 修改模板时的计价：套餐必须选 month 或 year。"""
+
+    billing_period: BillingPeriod | None = Field(
+        default=None,
+        description="套餐周期：month 按月 / year 按年；subscription 必填，per_call/per_token 不允许。",
+    )
+
+    @model_validator(mode="after")
+    def _subscription_requires_billing_period(self) -> "TemplatePricingInput":
+        if self.mode == "subscription" and self.billing_period is None:
+            raise ValueError("billing_period is required for subscription pricing")
+        return self
 
 
 class ExpertTemplateProfile(BaseModel):

@@ -184,9 +184,11 @@ test("marketplace profile fields and tenant stats are projected with per-field s
     { template_id: "bad", pricing: { mode: "free", unit_price: "1", currency: "USD" }, changelog_url: "javascript:alert(1)", updated_at: "not a date", stats: { resolution_rate: 2, evaluated_segments: -1 } },
     { template_id: "monthly", pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" } },
     { template_id: "legacy-subscription", pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "week" } },
+    { template_id: "subscription-without-period", pricing: { mode: "subscription", unit_price: "99", currency: "USD" } },
     { template_id: "per-call-with-period", pricing: { mode: "per_call", unit_price: "0.05", currency: "USD", billing_period: "month" } },
   ] }), { status: 200 }));
-  const [full, bad, monthly, legacySubscription, perCallWithPeriod] = await client.listMarketplaceTemplates(caller);
+  const [full, bad, monthly, legacySubscription, subscriptionWithoutPeriod, perCallWithPeriod] = await client.listMarketplaceTemplates(caller);
+  assert.deepEqual(subscriptionWithoutPeriod.pricing, { mode: "subscription", unit_price: "99", currency: "USD" }, "a subscription saved before periods existed keeps its price");
   assert.deepEqual(monthly.pricing, { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" });
   assert.deepEqual(legacySubscription.pricing, { mode: "subscription", unit_price: "99", currency: "USD" }, "an unknown period is dropped, the price stays");
   assert.deepEqual(perCallWithPeriod.pricing, { mode: "per_call", unit_price: "0.05", currency: "USD" }, "only subscription carries billing_period");
