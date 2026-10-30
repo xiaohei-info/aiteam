@@ -17,6 +17,7 @@ from .knowledge_space_repository import (
     BINDING_RESOURCE_TYPES,
     ExpertKnowledgeBinding,
     KnowledgeSpaceBindingRepository,
+    KnowledgeSpaceDeploymentRepository,
     KnowledgeSpaceRepository,
     KnowledgeSpaceRow,
 )
@@ -46,11 +47,21 @@ class KnowledgeSpaceService:
         binding_repo: KnowledgeSpaceBindingRepository,
         expert_binding: ExpertKnowledgeBinding,
         enterprise_only: bool = False,
+        deployment_repo: KnowledgeSpaceDeploymentRepository | None = None,
     ):
         self._repo = repo
         self._binding_repo = binding_repo
         self._expert_binding = expert_binding
         self._enterprise_only = enterprise_only
+        self._deployment_repo = deployment_repo
+
+    def _out(self, ctx: TenantContext, row) -> KnowledgeSpaceOut:
+        """出参只带部署 kind；endpoint/credential_ref 仅走管理员 /deployment 端点。"""
+        kind = "managed"
+        if self._deployment_repo is not None:
+            deployment = self._deployment_repo.get(ctx, knowledge_space_id=row.knowledge_space_id)
+            kind = "managed" if deployment is None else deployment.kind
+        return _to_space_out(row, deployment_kind=kind)
 
     # ---- 知识空间 CRUD ----
     def create(self, ctx: TenantContext, body: KnowledgeSpaceCreate) -> KnowledgeSpaceOut:
@@ -70,19 +81,19 @@ class KnowledgeSpaceService:
             knowledge_space_id=body.knowledge_space_id,
             display_name=body.display_name,
         )
-        return _to_space_out(row)
+        return self._out(ctx, row)
 
     def get(self, ctx: TenantContext, *, knowledge_space_id: str) -> KnowledgeSpaceOut:
         row = self._require(ctx, knowledge_space_id)
-        return _to_space_out(row)
+        return self._out(ctx, row)
 
     def list_all(self, ctx: TenantContext) -> list[KnowledgeSpaceOut]:
         if self._enterprise_only:
             ensured = self._repo.ensure(
                 ctx, knowledge_space_id=enterprise_knowledge_space_id(), display_name="企业知识库",
             )
-            return [_to_space_out(ensured)]
-        return [_to_space_out(r) for r in self._repo.list_all(ctx)]
+            return [self._out(ctx, ensured)]
+        return [self._out(ctx, r) for r in self._repo.list_all(ctx)]
 
     def update(
         self, ctx: TenantContext, knowledge_space_id: str, body: KnowledgeSpaceUpdate
@@ -97,7 +108,7 @@ class KnowledgeSpaceService:
         )
         if row is None:  # 双保险：RLS 下跨 tenant 不可见
             raise NotFound("knowledge space not found in this tenant")
-        return _to_space_out(row)
+        return self._out(ctx, row)
 
     def delete(self, ctx: TenantContext, *, knowledge_space_id: str) -> None:
         _ensure_can_write(ctx)
@@ -255,12 +266,13 @@ def _validate_binding_resource_type(resource_type: str) -> None:
         )
 
 
-def _to_space_out(row) -> KnowledgeSpaceOut:
+def _to_space_out(row, *, deployment_kind: str = "managed") -> KnowledgeSpaceOut:
     return KnowledgeSpaceOut(
         knowledge_space_id=row.knowledge_space_id,
         workspace=row.workspace,
         display_name=row.display_name,
         created_at=row.created_at,
+        deployment_kind=deployment_kind,
     )
 
 
@@ -286,6 +298,7 @@ def build_knowledge_space_service(
         binding_repo=KnowledgeSpaceBindingRepository(router),
         expert_binding=ExpertKnowledgeBinding(router),
         enterprise_only=True,
+        deployment_repo=KnowledgeSpaceDeploymentRepository(router),
     )
 
 

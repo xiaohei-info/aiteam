@@ -7,7 +7,7 @@ callers cannot provide a raw LightRAG workspace or create another one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -363,6 +363,63 @@ class KnowledgeSpaceBindingRepository:
                 (knowledge_space_id,),
             )
             return cur.rowcount
+
+
+@dataclass(frozen=True)
+class KnowledgeSpaceDeploymentRow:
+    """企业知识库部署位置（knowledge_space_deployment 表；无行即 managed）。"""
+
+    knowledge_space_id: str
+    kind: str
+    endpoint: str | None = None
+    credential_ref: str | None = field(default=None, repr=False)
+    updated_at: datetime | None = None
+
+
+def _row_to_deployment(row: Any) -> KnowledgeSpaceDeploymentRow:
+    return KnowledgeSpaceDeploymentRow(
+        knowledge_space_id=row[0], kind=row[1], endpoint=row[2], credential_ref=row[3], updated_at=row[4],
+    )
+
+
+class KnowledgeSpaceDeploymentRepository:
+    """企业知识库部署位置读写（Manager 单写）。tenant_id 取自 ctx（D22），凭据值从不入库。"""
+
+    def __init__(self, router: PgTenantRouter):
+        self._router = router
+
+    def get(self, ctx: TenantContext, *, knowledge_space_id: str) -> KnowledgeSpaceDeploymentRow | None:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT knowledge_space_id, kind, endpoint, credential_ref, updated_at "
+                "FROM knowledge_space_deployment WHERE knowledge_space_id = %s",
+                (knowledge_space_id,),
+            ).fetchone()
+        return None if row is None else _row_to_deployment(row)
+
+    def upsert(
+        self,
+        ctx: TenantContext,
+        *,
+        knowledge_space_id: str,
+        kind: str,
+        endpoint: str | None,
+        credential_ref: str | None,
+    ) -> KnowledgeSpaceDeploymentRow:
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "INSERT INTO knowledge_space_deployment "
+                "  (tenant_id, knowledge_space_id, kind, endpoint, credential_ref, updated_by, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now()) "
+                "ON CONFLICT (tenant_id, knowledge_space_id) DO UPDATE SET "
+                "kind = EXCLUDED.kind, endpoint = EXCLUDED.endpoint, credential_ref = EXCLUDED.credential_ref, "
+                "updated_by = EXCLUDED.updated_by, updated_at = now() "
+                "RETURNING knowledge_space_id, kind, endpoint, credential_ref, updated_at",
+                (ctx.tenant_id, knowledge_space_id, kind, endpoint, credential_ref, ctx.user_id),
+            ).fetchone()
+        if row is None:  # INSERT ... ON CONFLICT DO UPDATE RETURNING 必有行
+            raise ValidationProblem(detail="knowledge deployment write returned no row", errors=None)
+        return _row_to_deployment(row)
 
 
 class ExpertKnowledgeBinding:

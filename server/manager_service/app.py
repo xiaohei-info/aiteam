@@ -25,6 +25,7 @@ from .routes_employee_prompt import build_employee_prompt_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_knowledge_intake import build_knowledge_intake_router
+from .routes_knowledge_nas import build_knowledge_nas_router
 from .active_principal import ActivePrincipalVerifier
 from .repository import TenantAuthRepository
 from .routes_member import router as member_router
@@ -213,6 +214,8 @@ app.include_router(grants_router)
 app.include_router(build_knowledge_space_router(_verifier))
 # 知识文档 intake 生命周期 + 索引绑定（/api/manager/knowledge-spaces/{id}/documents/* 与 /ingestions/*，issue #416）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_intake_router(_verifier))
+# 企业知识库部署位置 + 企业 NAS 只读网关（/api/manager/knowledge-spaces/{id}/deployment|nas/*，议题 6）。
+app.include_router(build_knowledge_nas_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))
 app.include_router(build_skill_market_router(_verifier))

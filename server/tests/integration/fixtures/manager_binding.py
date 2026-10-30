@@ -130,6 +130,7 @@ _FRESH_TENANT_TABLES: tuple[str, ...] = (
     "department",
     "rag_workspace",
     "knowledge_space_binding",
+    "knowledge_space_deployment",
     "auth_identity",
     "app_user",
     "employee",
