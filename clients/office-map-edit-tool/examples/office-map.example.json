@@ -1,0 +1,21 @@
+{
+  "schema": "office-map/v1",
+  "id": "office-example-10",
+  "name": "10 人办公室 · 配置示例",
+  "coordinateSystem": { "unit": "px", "origin": "top-left", "xAxis": "right", "yAxis": "down", "rotation": "clockwise-degrees" },
+  "width": 1254,
+  "height": 1254,
+  "gridSize": 24,
+  "backgroundColor": "#c9c6c0",
+  "background": { "src": "assets/icon_office_10.png", "opacity": 1, "visible": true },
+  "assets": [{ "id": "desk-asset", "name": "办公桌", "src": "assets/desk.png" }],
+  "elements": [
+    { "id": "desk-01", "name": "办公桌 01", "kind": "image", "assetId": "desk-asset", "x": 420, "y": 470, "width": 150, "height": 95, "rotation": 0, "opacity": 1, "color": "#e7e3db", "zIndex": 0, "visible": true, "locked": false, "blocksMovement": true },
+    { "id": "desk-02", "name": "办公桌 02", "kind": "image", "assetId": "desk-asset", "x": 660, "y": 470, "width": 150, "height": 95, "rotation": 0, "opacity": 1, "color": "#e7e3db", "zIndex": 0, "visible": true, "locked": false, "blocksMovement": true }
+  ],
+  "zones": [
+    { "id": "restroom-no-entry", "name": "卫生间 · 员工禁入", "type": "employee-no-entry", "points": [{ "x": 810, "y": 36 }, { "x": 1100, "y": 36 }, { "x": 1130, "y": 270 }, { "x": 810, "y": 270 }], "enabled": true, "visible": true, "locked": false },
+    { "id": "meeting-wall", "name": "会议室玻璃隔断 · 示意", "type": "walk-blocked", "points": [{ "x": 420, "y": 282 }, { "x": 665, "y": 282 }, { "x": 665, "y": 300 }, { "x": 420, "y": 300 }], "enabled": true, "visible": true, "locked": false },
+    { "id": "entry-spawn", "name": "入口出生候选区", "type": "spawn", "points": [{ "x": 470, "y": 945 }, { "x": 620, "y": 945 }, { "x": 620, "y": 1020 }, { "x": 470, "y": 1020 }], "enabled": true, "visible": true, "locked": false }
+  ]
+}

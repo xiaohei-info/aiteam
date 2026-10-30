@@ -1,0 +1,46 @@
+{
+  "name": "office-map-edit-tool",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.html",
+    "index.mjs",
+    "server.mjs",
+    "src",
+    "assets",
+    "examples",
+    "scripts/build-employee-runtime.mjs"
+  ],
+  "scripts": {
+    "prepare": "node scripts/build-employee-runtime.mjs",
+    "prestart": "npm run build:employees",
+    "start": "node server.mjs",
+    "predev": "npm run build:employees",
+    "dev": "node server.mjs",
+    "build:employees": "node scripts/build-employee-runtime.mjs",
+    "sync:aifred": "node scripts/sync-aifred-assets.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "generate:example": "node scripts/generate-office-example.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "sync:aifred-frontend": "node scripts/sync-to-aifred.mjs",
+    "spots:map": "node scripts/add-spots.mjs",
+    "office:anim": "node scripts/build-office-anim.mjs",
+    "extras:topdown": "node scripts/build-topdown-extras.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@esotericsoftware/spine-pixi-v8": "4.2.120",
+    "pixi.js": "8.20.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

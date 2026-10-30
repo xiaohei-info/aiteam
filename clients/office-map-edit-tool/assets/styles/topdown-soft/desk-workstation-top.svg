@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="144px" height="76px" viewBox="0 0 144 76" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>desk-workstation-top</title>
+    <defs>
+        <path d="M144,7 L144,69 C144,72.8659932 140.865993,76 137,76 L7,76 C3.13400675,76 0,72.8659932 0,69 L0,7 C0,3.13400675 3.13400675,0 7,0 L137,0 C140.865993,0 144,3.13400675 144,7 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-desk-workstation-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd">
+        <rect id="桌沿厚度" fill="#C9C1B3" x="0" y="4" width="144" height="72" rx="7"></rect>
+        <rect id="桌面" stroke="#E4DED4" stroke-width="1" fill="#F2EFE9" x="0.5" y="0.5" width="143" height="71" rx="7"></rect>
+        <rect id="便签横线" fill="#B9C6BD" x="50" y="15" width="14" height="1.5"></rect>
+        <rect id="便签横线2" fill="#B9C6BD" x="50" y="19" width="11" height="1.5"></rect>
+        <rect id="顶面高光" fill="#FFFFFF" x="7" y="1.5" width="130" height="1"></rect>
+        <rect id="便签" fill="#DFE7E1" x="46" y="10" width="22" height="16" rx="2"></rect>
+    </g>
+</svg>

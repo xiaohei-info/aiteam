@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="88px" height="88px" viewBox="0 0 88 88" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>door-open-up</title>
+    <defs>
+        <path d="M16,80 L10,80 C10,81.1045695 9.1045695,82 8,82 L8,88 L0,88 L0,71.9999999 L8,72 L8,8 L16,8 Z M88,88 L79.9999999,88 L80,72 L88,72 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-door-open-up" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(0, 8)">
+            <rect id="矩形" fill="#F5F3EF" x="0" y="64" width="8" height="16"></rect>
+            <rect id="矩形" fill="#F5F3EF" x="80" y="64" width="8" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="5" y="64" width="3" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="80" y="64" width="3" height="16"></rect>
+            <rect id="矩形" fill-opacity="0.1" fill="#35423E" x="10" y="0" width="6" height="72"></rect>
+            <rect id="矩形" fill="#AE8E67" x="8" y="0" width="6" height="72"></rect>
+            <rect id="矩形" fill="#CFB18D" x="8" y="0" width="4" height="72"></rect>
+            <line x1="9" y1="0" x2="9" y2="72" id="路径" stroke="#E7D3B7" fill="#000000"></line>
+            <rect id="矩形" fill="#68766F" x="12" y="9" width="3" height="8" rx="1"></rect>
+            <circle id="椭圆形" fill="#718078" cx="8" cy="72" r="2"></circle>
+        </g>
+    </g>
+</svg>

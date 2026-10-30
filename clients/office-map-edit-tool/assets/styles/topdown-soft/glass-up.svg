@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="160px" height="8px" viewBox="0 0 160 8" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>glass-up</title>
+    <defs>
+        <path d="M160,7.99999991 L0,7.99999991 L0,0 L160,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-glass-up" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组">
+            <rect id="矩形" fill-opacity="0.72" fill="#B6D1D6" x="0" y="0" width="160" height="8"></rect>
+            <rect id="矩形" fill="#788F92" x="0" y="0" width="160" height="2"></rect>
+            <rect id="矩形" fill="#9BB5B8" x="0" y="7" width="160" height="1"></rect>
+            <rect id="矩形" fill-opacity="0.7" fill="#FFFFFF" x="0" y="3" width="160" height="1"></rect>
+        </g>
+    </g>
+</svg>

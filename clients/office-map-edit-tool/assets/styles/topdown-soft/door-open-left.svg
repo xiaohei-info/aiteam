@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="88px" height="88px" viewBox="0 0 88 88" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>door-open-left</title>
+    <defs>
+        <path d="M80,78 C81.1045695,78 82,78.8954305 82,80 L88,80 L88,87.9999999 L72,88 L72,80 L8,80 L8,72 L80,72 Z M88,8.00000007 L72,8 L72,-1.42108547e-14 L88,-1.42108547e-14 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-door-open-left" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(48, 44) rotate(-90) translate(-48, -44)translate(4, 4)">
+            <rect id="矩形" fill="#F5F3EF" x="0" y="64" width="8" height="16"></rect>
+            <rect id="矩形" fill="#F5F3EF" x="80" y="64" width="8" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="5" y="64" width="3" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="80" y="64" width="3" height="16"></rect>
+            <rect id="矩形" fill-opacity="0.1" fill="#35423E" x="10" y="0" width="6" height="72"></rect>
+            <rect id="矩形" fill="#AE8E67" x="8" y="8.8817842e-16" width="6" height="72"></rect>
+            <rect id="矩形" fill="#CFB18D" x="8" y="8.8817842e-16" width="4" height="72"></rect>
+            <line x1="9" y1="0" x2="9" y2="72" id="路径" stroke="#E7D3B7" fill="#000000"></line>
+            <rect id="矩形" fill="#68766F" x="12" y="9" width="3" height="8" rx="1"></rect>
+            <circle id="椭圆形" fill="#718078" cx="8" cy="72" r="2"></circle>
+        </g>
+    </g>
+</svg>

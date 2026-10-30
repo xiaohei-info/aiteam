@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="56px" height="56px" viewBox="0 0 56 56" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>water-dispenser-top</title>
+    <defs>
+        <path d="M48,10 L48,48 C48,51.3137085 45.3137085,54 42,54 L14,54 C10.6862915,54 8,51.3137085 8,48 L8,10 C8,6.6862915 10.6862915,4 14,4 L42,4 C45.3137085,4 48,6.6862915 48,10 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-water-dispenser-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(8, 4)">
+            <rect id="矩形" fill="#C4C0B8" x="0" y="2" width="40" height="48" rx="6"></rect>
+            <rect id="矩形" fill="#F5F3EF" x="0" y="0" width="40" height="48" rx="6"></rect>
+            <circle id="椭圆形" stroke="#708780" fill="#B6D1D6" cx="20" cy="20" r="14"></circle>
+            <circle id="椭圆形" fill="#D9E8E8" cx="20" cy="20" r="10"></circle>
+            <circle id="椭圆形" fill="#B6D1D6" cx="20" cy="20" r="4"></circle>
+            <path d="M10,14 C12.6666667,10.6666667 16,9 20,9" id="路径" stroke="#FFFFFF" stroke-width="2"></path>
+            <rect id="矩形" fill="#708780" x="8" y="36" width="24" height="7" rx="2"></rect>
+            <circle id="椭圆形" fill="#CFB18D" cx="15" cy="36" r="2.5"></circle>
+            <circle id="椭圆形" fill="#B6D1D6" cx="25" cy="36" r="2.5"></circle>
+        </g>
+    </g>
+</svg>

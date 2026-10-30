@@ -1,0 +1,127 @@
+{
+  "id": "isometric-3d",
+  "name": "现代立体 3D (Isometric 3D)",
+  "description": "对标 3D 渲染微透视底图：零边距无缝拼接墙体、玻璃隔断与紧凑立面家具",
+  "elements": [
+    {
+      "id": "3d-wall-solid-h",
+      "name": "3D 实体横向墙 (零间距无缝)",
+      "category": "建筑",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/wall-solid-h.png",
+      "width": 160,
+      "height": 70,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-wall-solid-v",
+      "name": "3D 实体纵向墙 (零间距无缝)",
+      "category": "建筑",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/wall-solid-v.png",
+      "width": 36,
+      "height": 160,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-wall-glass-h",
+      "name": "3D 玻璃隔断横向 (零间距无缝)",
+      "category": "建筑",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/wall-glass-h.png",
+      "width": 160,
+      "height": 60,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-wall-glass-v",
+      "name": "3D 玻璃隔断纵向 (零间距无缝)",
+      "category": "建筑",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/wall-glass-v.png",
+      "width": 24,
+      "height": 160,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-wall-corner",
+      "name": "3D 墙体/隔断拐角立柱",
+      "category": "建筑",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/wall-corner.png",
+      "width": 36,
+      "height": 70,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-desk",
+      "name": "3D 办公桌 (带立柱与柜)",
+      "category": "家具",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/desk-3d.png",
+      "width": 160,
+      "height": 142,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-chair",
+      "name": "3D 办公转椅 (高靠背)",
+      "category": "家具",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/chair-3d.png",
+      "width": 60,
+      "height": 120,
+      "blocksMovement": false
+    },
+    {
+      "id": "3d-meeting-table",
+      "name": "3D 实木会议长桌",
+      "category": "家具",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/meeting-table-3d.png",
+      "width": 240,
+      "height": 100,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-sofa",
+      "name": "3D 双人皮质沙发",
+      "category": "家具",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/sofa-3d.png",
+      "width": 142,
+      "height": 80,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-water-dispenser",
+      "name": "3D 桶装立式饮水机",
+      "category": "设施",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/water-dispenser-3d.png",
+      "width": 48,
+      "height": 112,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-coffee-machine",
+      "name": "3D 咖啡吧台与意式机",
+      "category": "设施",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/coffee-machine-3d.png",
+      "width": 98,
+      "height": 90,
+      "blocksMovement": true
+    },
+    {
+      "id": "3d-plant-large",
+      "name": "3D 落地圆盆绿植",
+      "category": "装饰",
+      "kind": "image",
+      "src": "assets/styles/isometric-3d/plant-large-3d.png",
+      "width": 56,
+      "height": 80,
+      "blocksMovement": true
+    }
+  ]
+}

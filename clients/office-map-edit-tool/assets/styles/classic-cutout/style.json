@@ -1,0 +1,6 @@
+{
+  "id": "classic-cutout",
+  "name": "经典原图切片 (Classic Cutout)",
+  "description": "基于现有 10 人办公室底图的 28 款原图参考裁切",
+  "source": "assets/samples.json"
+}
