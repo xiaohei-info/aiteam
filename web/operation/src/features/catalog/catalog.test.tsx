@@ -529,7 +529,8 @@ describe("API 错误展示", () => {
 
 // ---- 6. 注册表单 ----
 
-describe("注册表单", () => {
+// 完整注册表单含人才市场展示字段，CI 覆盖率插桩下单条用例会超过默认 5 秒。
+describe("注册表单", { timeout: 15_000 }, () => {
   it("行业方案注册展示专家团队与协调专家选择器", async () => {
     const expertItems = [makeCatalogItem({ catalog_type: "expert_template", template_id: "exp_a", display_name: "客服专家" })];
     mockFetch.mockResolvedValueOnce(listPage(expertItems)).mockResolvedValueOnce(listPage(expertItems));
@@ -1164,7 +1165,7 @@ describe("详情页编辑模式", () => {
 });
 });
 
-describe("人才市场展示字段", () => {
+describe("人才市场展示字段", { timeout: 15_000 }, () => {
   async function openExpertRegisterForm() {
     renderCatalogPage(makeSystemAdminSession());
     fireEvent.click(await screen.findByText("注册专家模板"));
