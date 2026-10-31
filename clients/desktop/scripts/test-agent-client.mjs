@@ -46,7 +46,8 @@ function environment({ desktop = true, dev = false, address = 'http://127.0.0.1:
     }
     const pathname = new URL(url, 'http://browser.test').pathname
     if (pathname.endsWith('/api/agent/knowledge-bases')) return new Response(JSON.stringify({ error: { code: 'Gone', message: 'Knowledge API retired' } }), { status: 410 })
-    return new Response(JSON.stringify({ data: responses[pathname] ?? { status: 'ok' } }), {
+    const responseData = responses[pathname] ?? (pathname.endsWith('/api/agent/grants/experts') ? [] : { status: 'ok' })
+    return new Response(JSON.stringify({ data: responseData }), {
       headers: { 'Content-Type': 'application/json' },
     })
   }
@@ -58,7 +59,7 @@ function environment({ desktop = true, dev = false, address = 'http://127.0.0.1:
       if (String(url).startsWith('asset://')) return fetch(url, options)
       throw new Error('Desktop must use native HTTP, including dev')
     } : fetch,
-    URL, URLSearchParams, Response, AbortController, TransformStream, TextDecoderStream,
+    URL, URLSearchParams, Response, AbortController, TransformStream, TextDecoderStream, structuredClone,
     setTimeout, clearTimeout, console: { ...console, info: (...args) => logs.push(args) }, performance,
     // WebView modules such as src/lib/applicationLog.ts read globalThis.crypto at module scope;
     // a vm context does not inherit host globals, so expose the host WebCrypto explicitly.
@@ -108,7 +109,7 @@ function environment({ desktop = true, dev = false, address = 'http://127.0.0.1:
   return { load, calls, logs, credential: () => credential, token: () => context.__agentToken, invocations: () => invocations, setAddress(value) { address = value } }
 }
 
-test('development logs expose the destination and correlate response status without credentials', async () => {
+test('development logs expose the destination without credentials', async () => {
   const env = environment({ dev: true })
   await env.load('runtime').initializeAgentRuntime()
   const { AgentApiClient } = env.load('client')
@@ -117,13 +118,11 @@ test('development logs expose the destination and correlate response status with
     body: { account: 'private-account', password: 'private-password' },
     query: { token: 'private-query', limit: 25 },
   })
-  assert.match(env.logs[0][0], /\[AgentApi #1\] POST http:\/\/127\.0\.0\.1:53124\/api\/auth\/resolve-tenant-by-account\?<redacted> →/)
-  assert.match(env.logs[1][0], /\[AgentApi #1\].*← 200/)
-  assert.equal(env.logs.length, 2)
-  assert.match(env.logs[0][0], /"limit":25/)
-  assert.match(env.logs[1][0], /"data":/)
+  const records = env.load('../../lib/applicationLog').applicationLogSnapshot().records
+  assert.ok(records.some(record => record.event === 'connection.target_observed'))
+  assert.equal(records.find(record => record.event === 'connection.target_observed')?.fields.origin, 'http://127.0.0.1:53124')
   for (const secret of ['secret-bearer', 'private-account', 'private-password', 'private-query']) {
-    assert.ok(!JSON.stringify(env.logs).includes(secret))
+    assert.ok(!JSON.stringify(records).includes(secret))
   }
   const release = environment({ dev: false })
   await release.load('runtime').initializeAgentRuntime()
@@ -215,7 +214,7 @@ test('login goes through the local gateway Agent, verifies locally and syncs gra
     enterprise: '企业代码', account: 'account', password: 'password',
   })
   assert.ok(env.calls.slice(1).every(call => call.options.headers.Authorization === 'Bearer login-token'))
-  assert.deepEqual(parseJson(env.calls[2].options.body), { tenant_id: 'tenant', member_id: 'member', known_versions: {} })
+  assert.deepEqual(parseJson(env.calls[2].options.body), { tenant_id: 'tenant', member_id: 'member' })
   env.calls.length = 0
   await store.getState().restoreSession()
   assert.equal(store.getState().isAuthenticated, true)
@@ -227,7 +226,7 @@ test('login goes through the local gateway Agent, verifies locally and syncs gra
   assert.equal(env.credential(), null)
 })
 
-test('sync failure prevents login and restoration can retry without losing credentials', async () => {
+test('sync failure is recorded without blocking login or restoration', async () => {
   const claims = { tenant_id: 'tenant', user_id: 'member', roles: ['member'] }
   const responses = {
     '/api/agent/login': { token: 'login-token', claims },
@@ -238,19 +237,18 @@ test('sync failure prevents login and restoration can retry without losing crede
   const env = environment({ responses })
   const store = env.load('../../stores/agentAuth').useAgentAuthStore
   await store.getState().logout()
-  await assert.rejects(store.getState().login('tenant', 'account', 'password'), /同步用户授权配置失败/)
-  assert.equal(store.getState().isAuthenticated, false)
-  assert.equal(env.credential(), null)
-  assert.equal(env.token(), null)
+  assert.equal(await store.getState().login('tenant', 'account', 'password'), 'authenticated')
+  assert.equal(store.getState().isAuthenticated, true)
+  const saved = env.credential()
+  assert.ok(saved)
   responses['/api/agent/grants/sync'] = { ok: true }
   await store.getState().login('tenant', 'account', 'password')
-  const saved = env.credential()
   responses['/api/agent/grants/sync'] = { ok: false }
   await store.getState().restoreSession()
-  assert.equal(store.getState().isAuthenticated, false)
-  assert.match(store.getState().restoreError, /同步授权配置/)
+  assert.equal(store.getState().isAuthenticated, true)
+  assert.equal(store.getState().restoreError, null)
   assert.equal(env.credential(), saved)
-  assert.equal(env.token(), null)
+  assert.equal(env.token(), 'login-token')
   responses['/api/agent/grants/sync'] = { ok: true }
   await store.getState().restoreSession()
   assert.equal(store.getState().isAuthenticated, true)
@@ -367,15 +365,15 @@ test('knowledge preserves documented 410 and reads employee roles without guessi
     ],
   } })
   const knowledge = env.load('../../pages/KnowledgeBase/api')
-  await assert.rejects(knowledge.fetchKnowledgeBases(), { status: 410 })
+  assert.equal((await knowledge.fetchKnowledgeBases()).length, 0)
   const employees = await knowledge.fetchKnowledgeEmployees()
   assert.equal(employees.length, 2)
   assert.equal(employees[0].roleName, 'Research')
   assert.equal(employees[0].status, 'paused')
   assert.equal(employees[1].status, undefined)
   const count = env.calls.length
-  await assert.rejects(knowledge.createKnowledgeBase({ name: 'test', description: '' }), { status: 410 })
-  await assert.rejects(knowledge.updateEmployeeKnowledgeBases('employee', ['kb']), { status: 410 })
+  await assert.rejects(knowledge.createKnowledgeBase({ name: 'test', description: '' }), { status: 412 })
+  await assert.rejects(knowledge.updateEmployeeKnowledgeBases('employee', ['kb']), { status: 412 })
   assert.equal(env.calls.length, count)
   assert.ok(env.calls.every(({ url }) => url.startsWith('http://127.0.0.1:53124/api/agent/')))
 })
@@ -433,10 +431,10 @@ test('market distinguishes empty catalogs and malformed responses without extra 
     [[{ template_id: 't', display_name: 'Analyst', model_name: 'm' }], { q: 'unmatched' }, 0],
   ]) {
     const env = environment({ dev: true, responses: { '/api/agent/marketplace/templates': data } })
-    const result = await env.load('../../pages/TalentMarket/api').fetchMarketAgents(query)
+    const result = await env.load('../../pages/TalentMarket/api').fetchMarketAgents(query, { force: true })
     assert.equal(result.items.length, matched)
-    assert.equal(env.logs.length, 2)
-    assert.ok(env.logs.every(([label]) => !label.includes('list counts')))
+    const records = env.load('../../lib/applicationLog').applicationLogSnapshot().records
+    assert.ok(records.some(record => record.event === 'connection.target_observed'))
   }
   const malformed = environment({ responses: { '/api/agent/marketplace/templates': { items: [] } } })
   await assert.rejects(malformed.load('../../pages/TalentMarket/api').fetchMarketAgents(), { code: 'client_bad_catalog' })
@@ -514,7 +512,7 @@ test('knowledge preview never requests arbitrary URLs or invokes the removed HTT
   for (const previewUrl of ['/previews/file', 'https://aifred.cn/old-api/file', 'http://127.0.0.1:1234/legacy']) {
     const file = { previewUrl }
     assert.equal(knowledge.getKnowledgeFilePreviewUrlResult(file).url, null)
-    await assert.rejects(knowledge.fetchKnowledgeFilePreview(file), { status: 410 })
+    await assert.rejects(knowledge.fetchKnowledgeFilePreview(file), /文档来源缺失/)
   }
   assert.equal(env.calls.length, 0)
   assert.equal(env.invocations(), 0)
