@@ -1,5 +1,7 @@
 > 本目录是 AI Team 单仓里的桌面客户端（`clients/desktop`），2026-10-30 从原 gitee AITeam 仓库迁入（不含历史，原仓库 `develop` `c95551c9`）。仓库总览见根目录 `README.md`，桌面端文档索引见 [docs/README.md](docs/README.md)。
 >
+> 原 gitee 仓库（`mwj424/ty-aiteam`）已弃用，只读保留用来查历史，不再接受提交，单仓的改动也不会同步回去。那边的 `MIGRATION.md` 列了没有迁移的分支，以及把旧补丁带到这里的方法（`git am --directory=clients/desktop`）。
+>
 > 桌面端只连随包的本机 Agent（本仓库 `server/agent_service`），会话在本机执行，本机 Agent 直接访问 Manager。见 [本机 Agent 集成](docs/agent-sidecar.md)。
 
 # AI Team Desktop

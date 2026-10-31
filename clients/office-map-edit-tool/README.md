@@ -1,10 +1,12 @@
+> 本目录是 AI Team 单仓里的办公室地图编辑器（`clients/office-map-edit-tool`），2026-10-30 从原 gitee 仓库 `YFXSL/office-map-edit-tool` 迁入（不含历史，基于本地 `eca498a` 加当时未提交的改动，比 gitee `main` 的 `7fdc0e8` 新）。原 gitee 仓库已弃用，只读保留。桌面端 `clients/desktop` 通过 `link:../office-map-edit-tool` 引用本目录，打包时拷进 `dist/office-editor/`。
+
 # Office Map Studio
 
 独立的办公室地图编辑工具。Node.js 20+；员工动画使用本地Pixi/Spine运行时，首次需要安装依赖。
 
 ```sh
-cd office-map-edit-tool
-npm install
+cd clients/office-map-edit-tool
+npm ci
 npm start
 ```
 

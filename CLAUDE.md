@@ -222,7 +222,7 @@ app/      # 🔒 冻结的 MVP 单体——只读契约参考，v1 重建完成�
 
 **交付物按端精简（D15）**：单仓不拆双仓，控制面启动器 `server/run.py --tier=operation|manager` 仅供 dev；Node Agent 由 `pnpm --dir server/agent_service start` 独立启动。CI 按端产出精简产物，**用户端交付物绝不打包控制面（Operator/Manager）后端与前端代码**；禁止运行时胖产物 / 前端运行时切端。
 
-**桌面客户端隔离**：`clients/desktop/` 自带依赖与 lockfile，CI 走 `.github/workflows/desktop-ci.yml`（只看 `clients/desktop/**` 与 `clients/office-map-edit-tool/**`），与 `ci.yml` / `web-ci.yml` 互不触发。随包 Agent（`clients/desktop/src-tauri/resources/agent`）**不入库**，由 `pnpm --dir clients/desktop agent:build` 从同一提交的 `server/agent_service` 构建导入，前后端版本由提交天然对齐。桌面端不得 import `server/` 或 `web/` 源码，只通过 HTTP 接口交互。
+**桌面客户端隔离**：`clients/desktop/` 自带依赖与 lockfile，CI 走 `.github/workflows/desktop-ci.yml`（只看 `clients/desktop/**` 与 `clients/office-map-edit-tool/**`），与 `ci.yml` / `web-ci.yml` 互不触发。随包 Agent（`clients/desktop/src-tauri/resources/agent`）**不入库**，由 `pnpm --dir clients/desktop agent:build` 从同一提交的 `server/agent_service` 构建导入，前后端版本由提交天然对齐。桌面端不得 import `server/` 或 `web/` 源码，只通过 HTTP 接口交互。原 gitee 仓库（`mwj424/ty-aiteam`、`YFXSL/office-map-edit-tool`）已弃用、只读保留，桌面端和编辑器的改动只提交到本仓库，不要回写 gitee。
 
 **关键契约一律以 v1 概要设计为准，不在此复制**：事件协议/游标与状态枚举（07）、Pi Session/Resource/Approval 能力适配（06 §7.1–§7.8）、数据所有权与租户隔离（04）、认证（03）、北向 API 与错误模型（02）。
 
