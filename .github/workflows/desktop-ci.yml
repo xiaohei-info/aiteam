@@ -121,7 +121,9 @@ jobs:
         working-directory: clients/desktop/src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: Audit Rust dependencies
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: clients/desktop/src-tauri
+        run: cargo audit --locked
