@@ -37,4 +37,10 @@ export default tseslint.config(
       reportUnusedDisableDirectives: 'warn',
     },
   },
+  {
+    files: ['tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 )
