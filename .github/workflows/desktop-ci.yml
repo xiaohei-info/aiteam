@@ -113,6 +113,16 @@ jobs:
       - name: Prepare resource directory for compile checks
         run: mkdir -p src-tauri/resources/agent
 
+      - name: Refresh Rust lockfile for dependency audit
+        working-directory: clients/desktop/src-tauri
+        run: cargo update
+
+      - name: Upload refreshed Rust lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-rust-lockfile
+          path: clients/desktop/src-tauri/Cargo.lock
+
       - name: Test
         working-directory: clients/desktop/src-tauri
         run: cargo test --locked
