@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="160px" height="16px" viewBox="0 0 160 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>wall-up</title>
+    <defs>
+        <path d="M160,16 L0,16 L0,0 L160,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-wall-up" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd">
+        <rect id="Ground-aligned-wall-top" fill="#F5F3EF" x="0" y="0" width="160" height="16"></rect>
+        <rect id="Visible-side-UP-3px" fill="#C4C0B8" x="0" y="0" width="160" height="3"></rect>
+        <rect id="Top-rim-highlight" fill="#FFFFFF" x="0" y="3" width="160" height="1"></rect>
+    </g>
+</svg>

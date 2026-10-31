@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128px" height="128px" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>floor-oak</title>
+    <defs>
+        <path d="M128,128 L0,128 L0,0 L128,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-floor-oak" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组">
+            <rect id="矩形" fill="#D5BC9B" x="0" y="0" width="128" height="128"></rect>
+            <path d="M0,0 L128,0 L128,32 L0,32 L0,0 Z M0,64 L128,64 L128,96 L0,96 L0,64 Z" id="形状" fill="#DBC3A3" fill-rule="nonzero"></path>
+            <path d="M0,0.5 L128,0.5 M0,32.5 L128,32.5 M0,64.5 L128,64.5 M0,96.5 L128,96.5 M64,0 L64,32 M32,32 L32,64 M96,32 L96,64 M64,64 L64,96 M32,96 L32,128 M96,96 L96,128" id="形状" stroke-opacity="0.4" stroke="#AF9578"></path>
+            <path d="M0,9 L128,9 M0,23 L128,23 M0,44 L128,44 M0,57 L128,57 M0,74 L128,74 M0,88 L128,88 M0,107 L128,107 M0,121 L128,121" id="形状" stroke-opacity="0.27" stroke="#B79A79" stroke-width="0.6"></path>
+        </g>
+    </g>
+</svg>

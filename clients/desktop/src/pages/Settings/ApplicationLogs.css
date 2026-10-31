@@ -1,0 +1,8 @@
+.application-logs p { font-size: 12px; line-height: 1.7; opacity: .8; }
+.application-logs dl { display: grid; grid-template-columns: minmax(100px, 160px) 1fr; gap: 10px; font-size: 12px; }
+.application-logs dd { margin: 0; overflow-wrap: anywhere; }
+.application-log-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0; }
+.application-log-actions button, .application-log-actions select, .application-log-actions input { font: inherit; color: inherit; background: var(--bg-secondary, #222); border: 1px solid var(--border-color, #666); border-radius: 6px; padding: 7px; }
+.application-log-actions label { font-size: 12px; }
+.application-log-actions button:disabled { opacity: .5; }
+.application-log-view { max-height: 340px; overflow: auto; padding: 12px; border: 1px solid var(--border-color, #666); border-radius: 6px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }

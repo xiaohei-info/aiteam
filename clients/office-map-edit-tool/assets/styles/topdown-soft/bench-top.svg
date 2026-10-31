@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="112px" height="36px" viewBox="0 0 112 36" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <title>bench-top</title>
+    <g id="Office-v2-/-bench-top" stroke="none" fill="none" fill-rule="evenodd" stroke-width="1"><defs><linearGradient id="cushion" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#9EAEA5"/><stop offset="100%" stop-color="#82978B"/></linearGradient></defs><rect x="0" y="3" width="112" height="33" rx="6.5" fill="#BDA587"/><rect x="0.5" y="0.5" width="111" height="31" rx="6" fill="#DBC3A3" stroke="#C9AF8D"/><line x1="8" y1="2.6" x2="104" y2="2.6" stroke="#F2E4CF"/><rect x="6" y="5" width="100" height="22" rx="5" fill="url(#cushion)" stroke="#71887A"/><path d="M39,6.5 L39,25.5 M73,6.5 L73,25.5" stroke="#71887A" stroke-opacity=".7"/><path d="M10,7.8 L102,7.8" stroke="#C6D1C6" stroke-opacity=".9"/><path d="M0,30.5 L112,30.5" stroke="#A98F6C" stroke-opacity=".7"/></g>
+</svg>

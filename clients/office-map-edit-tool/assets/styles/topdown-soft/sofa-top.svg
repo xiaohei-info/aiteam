@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="144px" height="72px" viewBox="0 0 144 72" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>sofa-top</title>
+    <defs>
+        <path d="M143.494202,8.19257993 C143.820908,9.0658833 144,10.0120271 144,11 L144,64 C144,68.418278 140.418278,72 136,72 L8,72 C3.581722,72 0,68.418278 0,64 L0,11 C0,10.0120271 0.179091875,9.0658833 0.506582251,8.19226205 C0.667351234,3.91676909 4.18466103,0.5 8.5,0.5 L135.5,0.5 C139.815339,0.5 143.332649,3.91676909 143.494202,8.19257993 Z" id="path-1"></path>
+        <linearGradient x1="0%" y1="0%" x2="0%" y2="100%" id="linearGradient-2">
+            <stop stop-color="#9EAEA5" offset="0%"></stop>
+            <stop stop-color="#82978B" offset="100%"></stop>
+        </linearGradient>
+    </defs>
+    <g id="Office-v2-/-sofa-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(0, 0.5)">
+            <rect id="矩形" fill="#61796C" x="0" y="2.5" width="144" height="69" rx="8"></rect>
+            <rect id="矩形" stroke="#6F8578" fill="#82978B" x="0.5" y="0" width="143" height="68" rx="8"></rect>
+            <rect id="矩形" fill="#A4B4A8" x="2" y="1.5" width="140" height="15" rx="6"></rect>
+            <line x1="10" y1="4.5" x2="134" y2="4.5" id="路径" stroke="#C6D1C6" fill="#000000"></line>
+            <rect id="矩形" stroke="#71887A" fill="url(#linearGradient-2)" x="14" y="21.5" width="56" height="43" rx="6"></rect>
+            <rect id="矩形" stroke="#71887A" fill="url(#linearGradient-2)" x="74" y="21.5" width="56" height="43" rx="6"></rect>
+            <rect id="矩形" fill="#A4B4A8" x="2" y="14.5" width="10" height="49" rx="4"></rect>
+            <rect id="矩形" fill="#A4B4A8" x="132" y="14.5" width="10" height="49" rx="4"></rect>
+            <path d="M5,20.5 L5,56.5 M135,20.5 L135,56.5" id="形状" stroke="#C6D1C6" fill="#000000" fill-rule="nonzero"></path>
+        </g>
+    </g>
+</svg>

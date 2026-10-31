@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="144px" height="80px" viewBox="0 0 144 80" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>desk-top</title>
+    <defs>
+        <path d="M143.496063,4.81003372 C143.818997,5.47183861 144,6.2147815 144,7 L144,75 C144,77.7614237 141.761424,80 139,80 L5,80 C2.23857625,80 0,77.7614237 0,75 L0,7 C0,6.2147815 0.181003441,5.47183861 0.503562681,4.81061899 L0.5,5 C0.5,2.51471863 2.51471863,0.5 5,0.5 L139,0.5 C141.421642,0.5 143.396512,2.41286 143.496063,4.81003372 Z" id="path-1"></path>
+        <linearGradient x1="0%" y1="0%" x2="0%" y2="100%" id="linearGradient-2">
+            <stop stop-color="#FCFAF6" offset="0%"></stop>
+            <stop stop-color="#EAE7E0" offset="100%"></stop>
+        </linearGradient>
+    </defs>
+    <g id="Office-v2-/-desk-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(0, 0.5)">
+            <rect id="矩形" fill="#BDB6AA" x="0" y="1.5" width="144" height="78" rx="5"></rect>
+            <rect id="矩形" stroke="#D3CEC4" fill="url(#linearGradient-2)" x="0.5" y="0" width="143" height="76" rx="4.5"></rect>
+            <line x1="6" y1="1.5" x2="138" y2="1.5" id="路径" stroke="#FFFFFF" fill="#000000"></line>
+            <rect id="矩形" fill="#35423E" x="48" y="8.5" width="48" height="11" rx="2"></rect>
+            <rect id="矩形" fill="#849B95" x="50" y="9.5" width="44" height="2" rx="1"></rect>
+            <rect id="矩形" fill="#A2AAA4" x="63" y="19.5" width="18" height="5" rx="2"></rect>
+            <rect id="矩形" fill="#C1C9C2" x="49" y="42.5" width="43" height="14" rx="2"></rect>
+            <rect id="矩形" fill="#F7F8F4" x="50" y="42.5" width="41" height="12" rx="2"></rect>
+            <path d="M54,46.5 L87,46.5 M54,49.5 L87,49.5 M60,52.5 L81,52.5" id="形状" stroke="#CDD4CD" stroke-width="1.3" fill="#000000" fill-rule="nonzero"></path>
+            <rect id="矩形" stroke="#CDD4CD" fill="#F7F8F4" x="100" y="43.5" width="8" height="12" rx="4"></rect>
+            <rect id="矩形" fill="#D4DFD9" x="14" y="13.5" width="20" height="26" rx="2"></rect>
+            <path d="M18,18.5 L30,18.5 M18,22.5 L28,22.5" id="形状" stroke="#A5B6AB" fill="#000000" fill-rule="nonzero"></path>
+            <circle id="椭圆形" fill="#C9BA9F" cx="126" cy="16.5" r="5"></circle>
+            <circle id="椭圆形" fill="#EEE5D6" cx="126" cy="16.5" r="3.5"></circle>
+        </g>
+    </g>
+</svg>

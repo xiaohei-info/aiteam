@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>2026-10-29 方案效果图 · AIFred</title>
+<link rel="stylesheet" href="mockups.css">
+<link rel="stylesheet" href="office.css">
+</head>
+<body class="index">
+<div class="index-head">
+  <h1>2026-10-29 产品与设计方案 · 效果图</h1>
+  <p>黑金毛玻璃令牌取自 <code>src/styles/globals.css</code>；办公室部分使用 <code>public/assets/office/topdown</code> 的真实素材，员工为示意小人。粉色编号是标注，不属于界面。单独查看某一张：<code>index.html?only=01a</code>。</p>
+</div>
+<div id="boards"></div>
+<script src="boards.js"></script>
+<script src="office.js"></script>
+<script>
+  const only = new URLSearchParams(location.search).get('only')
+  if (only) {
+    document.body.className = 'single'
+    const target = document.querySelector(`[data-board="${only}"]`)
+    if (target) target.classList.add('only')
+  }
+</script>
+</body>
+</html>

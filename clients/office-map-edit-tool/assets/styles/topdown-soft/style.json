@@ -1,0 +1,85 @@
+{
+  "id": "topdown-soft",
+  "name": "俯视 · 轻立体",
+  "description": "地面不倾斜，顶面为主，仅保留短侧边与轻微接触阴影；不包含办公室背景图。",
+  "status": "integrated",
+  "sketch": {
+    "documentId": "6FD5CAAA-9F91-4799-93D6-008B6A661B14",
+    "pageId": "7CBD45E6-675C-40AD-B26C-C353A88CC190",
+    "boardId": "BD128E16-6A68-4725-B2F8-5B7CD75686EE",
+    "symbolPrefix": "Office v2 / "
+  },
+  "geometryContract": {
+    "unit": "px",
+    "origin": "asset-top-left",
+    "dimensions": "1x logical pixels, not meters",
+    "facing": "up/down/left/right is the visible narrow side, not wall location or camera pitch",
+    "footprints": "local ground rectangles; exclude decorative edges, leaves and open-door voids",
+    "connectors": "local exact contact points, independent of image center",
+    "runtimeSupport": "office-map/v1.1 editor consumes local footprints and connectors; door states are separate PNG assets; floors tile at native size",
+    "scaling": "floors tile at native size; walls extend along their length only; do not scale wall thickness",
+    "exports": "each element has <id>.png, <id>@2x.png and <id>.svg"
+  },
+  "elements": [
+    {"id":"floor-carpet","name":"灰绿地毯","category":"地面","kind":"image","src":"assets/styles/topdown-soft/floor-carpet.png","width":128,"height":128,"blocksMovement":false,"zIndex":-100,"tileable":true},
+    {"id":"floor-oak","name":"浅橡木地板","category":"地面","kind":"image","src":"assets/styles/topdown-soft/floor-oak.png","width":128,"height":128,"blocksMovement":false,"zIndex":-100,"tileable":true},
+    {"id":"floor-mineral","name":"浅灰矿物砖","category":"地面","kind":"image","src":"assets/styles/topdown-soft/floor-mineral.png","width":128,"height":128,"blocksMovement":false,"zIndex":-100,"tileable":true},
+
+    {"id":"wall-up","name":"实体墙 · 侧边向上","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/wall-up.png","width":160,"height":16,"blocksMovement":true,"facing":"up","stretchAxis":"x","footprints":[{"x":0,"y":0,"width":160,"height":16}],"connectors":{"left":{"x":0,"y":8},"right":{"x":160,"y":8}}},
+    {"id":"wall-down","name":"实体墙 · 侧边向下","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/wall-down.png","width":160,"height":16,"blocksMovement":true,"facing":"down","stretchAxis":"x","footprints":[{"x":0,"y":0,"width":160,"height":16}],"connectors":{"left":{"x":0,"y":8},"right":{"x":160,"y":8}}},
+    {"id":"wall-left","name":"实体墙 · 侧边向左","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/wall-left.png","width":16,"height":160,"blocksMovement":true,"facing":"left","stretchAxis":"y","footprints":[{"x":0,"y":0,"width":16,"height":160}],"connectors":{"top":{"x":8,"y":0},"bottom":{"x":8,"y":160}}},
+    {"id":"wall-right","name":"实体墙 · 侧边向右","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/wall-right.png","width":16,"height":160,"blocksMovement":true,"facing":"right","stretchAxis":"y","footprints":[{"x":0,"y":0,"width":16,"height":160}],"connectors":{"top":{"x":8,"y":0},"bottom":{"x":8,"y":160}}},
+
+    {"id":"glass-up","name":"玻璃隔断 · 侧轨向上","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/glass-up.png","width":160,"height":8,"blocksMovement":true,"facing":"up","stretchAxis":"x","footprints":[{"x":0,"y":0,"width":160,"height":8}],"connectors":{"left":{"x":0,"y":4},"right":{"x":160,"y":4}}},
+    {"id":"glass-down","name":"玻璃隔断 · 侧轨向下","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/glass-down.png","width":160,"height":8,"blocksMovement":true,"facing":"down","stretchAxis":"x","footprints":[{"x":0,"y":0,"width":160,"height":8}],"connectors":{"left":{"x":0,"y":4},"right":{"x":160,"y":4}}},
+    {"id":"glass-left","name":"玻璃隔断 · 侧轨向左","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/glass-left.png","width":8,"height":160,"blocksMovement":true,"facing":"left","stretchAxis":"y","footprints":[{"x":0,"y":0,"width":8,"height":160}],"connectors":{"top":{"x":4,"y":0},"bottom":{"x":4,"y":160}}},
+    {"id":"glass-right","name":"玻璃隔断 · 侧轨向右","category":"建筑","kind":"image","src":"assets/styles/topdown-soft/glass-right.png","width":8,"height":160,"blocksMovement":true,"facing":"right","stretchAxis":"y","footprints":[{"x":0,"y":0,"width":8,"height":160}],"connectors":{"top":{"x":4,"y":0},"bottom":{"x":4,"y":160}}},
+
+    {"id":"wall-corner-up-left","name":"墙角 · 左上可见侧边","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/wall-corner-up-left.png","width":16,"height":16,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":16,"height":16}],"connectors":{"left":{"x":0,"y":8},"top":{"x":8,"y":0}}},
+    {"id":"wall-corner-up-right","name":"墙角 · 右上可见侧边","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/wall-corner-up-right.png","width":16,"height":16,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":16,"height":16}],"connectors":{"right":{"x":16,"y":8},"top":{"x":8,"y":0}}},
+    {"id":"wall-corner-down-left","name":"墙角 · 左下可见侧边","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/wall-corner-down-left.png","width":16,"height":16,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":16,"height":16}],"connectors":{"left":{"x":0,"y":8},"bottom":{"x":8,"y":16}}},
+    {"id":"wall-corner-down-right","name":"墙角 · 右下可见侧边","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/wall-corner-down-right.png","width":16,"height":16,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":16,"height":16}],"connectors":{"right":{"x":16,"y":8},"bottom":{"x":8,"y":16}}},
+    {"id":"wall-junction","name":"T / 十字连接共用顶盖","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/wall-junction.png","width":16,"height":16,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":16,"height":16}],"connectors":{"left":{"x":0,"y":8},"right":{"x":16,"y":8},"top":{"x":8,"y":0},"bottom":{"x":8,"y":16}}},
+    {"id":"glass-post","name":"玻璃共用立柱","category":"连接件","kind":"image","src":"assets/styles/topdown-soft/glass-post.png","width":8,"height":8,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":8,"height":8}],"connectors":{"left":{"x":0,"y":4},"right":{"x":8,"y":4},"top":{"x":4,"y":0},"bottom":{"x":4,"y":8}}},
+
+    {"id":"desk-top","name":"俯视办公桌","category":"家具","kind":"image","src":"assets/styles/topdown-soft/desk-top.png","width":144,"height":80,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":144,"height":78}]},
+    {"id":"desk-workstation-top","name":"俯视工位桌","category":"家具","kind":"image","src":"assets/styles/topdown-soft/desk-workstation-top.png","width":144,"height":76,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":144,"height":72}],"sketchSymbolId":"252D8490-C4DE-4BD7-A44C-E5B9DADA9ACE","notes":"工位用桌，不含电脑；显示器是独立图元，可按需放到桌面右侧。"},
+    {"id":"computer-top","name":"俯视电脑显示器","category":"家具","kind":"image","src":"assets/styles/topdown-soft/computer-top.png","width":55,"height":50,"blocksMovement":false,"zIndex":6,"screen":{"x":2.5,"y":2.5,"width":50,"height":27.5},"sketchSymbolId":"2A871EDA-C8F1-4B83-BD8B-30D8AC642BA6","notes":"屏幕区域可用于显示工作内容/状态；不阻挡行走。"},
+    {"id":"chair-top","name":"俯视办公椅","category":"家具","kind":"image","src":"assets/styles/topdown-soft/chair-top.png","width":56,"height":60,"blocksMovement":false,"footprints":[{"x":0,"y":0,"width":56,"height":60}],"notes":"默认不阻挡行走；椅后净空应作为编辑辅助范围而不是图片 padding。"},
+    {"id":"sofa-top","name":"俯视双人沙发","category":"家具","kind":"image","src":"assets/styles/topdown-soft/sofa-top.png","width":144,"height":72,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":144,"height":69}]},
+    {"id":"meeting-table-top","name":"俯视橡木会议桌","category":"家具","kind":"image","src":"assets/styles/topdown-soft/meeting-table-top.png","width":224,"height":104,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":224,"height":101}]},
+    {"id":"cabinet-top","name":"俯视储物柜","category":"家具","kind":"image","src":"assets/styles/topdown-soft/cabinet-top.png","width":112,"height":48,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":112,"height":46}]},
+    {"id":"armchair-top","name":"俯视单人沙发","category":"家具","kind":"image","src":"assets/styles/topdown-soft/armchair-top.png","width":72,"height":72,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":72,"height":70}]},
+    {"id":"coffee-table-top","name":"俯视圆茶几","category":"家具","kind":"image","src":"assets/styles/topdown-soft/coffee-table-top.png","width":64,"height":64,"blocksMovement":true,"footprints":[{"x":4,"y":2,"width":56,"height":56}]},
+    {"id":"side-table-top","name":"俯视边几台灯","category":"家具","kind":"image","src":"assets/styles/topdown-soft/side-table-top.png","width":40,"height":40,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":40,"height":37}]},
+    {"id":"sideboard-top","name":"俯视矮柜（带摆件）","category":"家具","kind":"image","src":"assets/styles/topdown-soft/sideboard-top.png","width":128,"height":32,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":128,"height":29}]},
+    {"id":"bench-top","name":"俯视长凳","category":"家具","kind":"image","src":"assets/styles/topdown-soft/bench-top.png","width":112,"height":36,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":112,"height":33}]},
+
+    {"id":"plant-top","name":"俯视盆栽","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-top.png","width":56,"height":56,"blocksMovement":true,"footprints":[{"x":11,"y":11,"width":34,"height":34}],"notes":"地面占地以花盆为准，叶片和接触阴影不扩大占地。"},
+    {"id":"plant-monstera-top","name":"俯视龟背竹","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-monstera-top.png","width":64,"height":64,"blocksMovement":true,"footprints":[{"x":17,"y":16,"width":30,"height":30}],"notes":"地面占地以花盆为准，叶片不扩大占地。"},
+    {"id":"plant-fern-top","name":"俯视蕨类盆栽","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-fern-top.png","width":56,"height":56,"blocksMovement":true,"footprints":[{"x":16,"y":15,"width":24,"height":24}],"notes":"地面占地以花盆为准，叶片不扩大占地。"},
+    {"id":"plant-palm-top","name":"俯视散尾葵","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-palm-top.png","width":64,"height":64,"blocksMovement":true,"footprints":[{"x":20,"y":19,"width":24,"height":24}],"notes":"地面占地以花盆为准，叶片不扩大占地。"},
+    {"id":"plant-bush-top","name":"俯视球形灌木","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-bush-top.png","width":48,"height":48,"blocksMovement":true,"footprints":[{"x":10,"y":9,"width":28,"height":28}],"notes":"地面占地取树冠内圈，外沿叶片不扩大占地。"},
+    {"id":"plant-succulent-top","name":"俯视多肉（桌面）","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-succulent-top.png","width":32,"height":32,"blocksMovement":false,"zIndex":7,"notes":"桌面小摆件：图层高于桌面（0）和电脑（6），不阻挡行走。"},
+    {"id":"plant-cactus-top","name":"俯视仙人掌（桌面）","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/plant-cactus-top.png","width":32,"height":32,"blocksMovement":false,"zIndex":7,"notes":"桌面小摆件：图层高于桌面（0）和电脑（6），不阻挡行走。"},
+    {"id":"planter-hedge-top","name":"俯视绿篱花槽","category":"绿植","kind":"image","src":"assets/styles/topdown-soft/planter-hedge-top.png","width":112,"height":32,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":112,"height":30}],"notes":"长条花槽，可当半高隔断；横向摆放，旋转 90° 作纵向。"},
+
+    {"id":"toilet-top","name":"俯视座便器","category":"设施","kind":"image","src":"assets/styles/topdown-soft/toilet-top.png","width":48,"height":72,"blocksMovement":true,"footprints":[{"x":4,"y":2,"width":40,"height":68}],"sketchSymbolId":"5083F80C-175F-4C87-B9F4-CE1626E3A1E5"},
+    {"id":"basin-top","name":"俯视洗手台","category":"设施","kind":"image","src":"assets/styles/topdown-soft/basin-top.png","width":64,"height":40,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":64,"height":38}],"sketchSymbolId":"E15419F1-7308-4DFC-B793-22073565EC98"},
+    {"id":"coffee-counter-top","name":"俯视咖啡与烧水台","category":"设施","kind":"image","src":"assets/styles/topdown-soft/coffee-counter-top.png","width":112,"height":48,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":112,"height":46}],"sketchSymbolId":"269D2A9E-A88E-4FE0-91E5-CE0C1E2FA112"},
+    {"id":"water-dispenser-top","name":"俯视饮水机","category":"设施","kind":"image","src":"assets/styles/topdown-soft/water-dispenser-top.png","width":56,"height":56,"blocksMovement":true,"footprints":[{"x":8,"y":4,"width":40,"height":48}],"sketchSymbolId":"0A6CEEEB-89F5-4E0D-965F-467A1DC0AA96"},
+    {"id":"printer-top","name":"俯视打印机","category":"设施","kind":"image","src":"assets/styles/topdown-soft/printer-top.png","width":56,"height":48,"blocksMovement":true,"footprints":[{"x":0,"y":0,"width":56,"height":44}]},
+
+    {"id":"rug-rect-top","name":"俯视方形地毯","category":"摆件","kind":"image","src":"assets/styles/topdown-soft/rug-rect-top.png","width":144,"height":96,"blocksMovement":false,"zIndex":-90,"notes":"地面装饰：图层在地面（-100）之上、家具（0）之下，不阻挡行走。"},
+    {"id":"rug-round-top","name":"俯视圆形地毯","category":"摆件","kind":"image","src":"assets/styles/topdown-soft/rug-round-top.png","width":96,"height":96,"blocksMovement":false,"zIndex":-90,"notes":"地面装饰：图层在地面（-100）之上、家具（0）之下，不阻挡行走。"},
+    {"id":"floor-lamp-top","name":"俯视落地灯","category":"摆件","kind":"image","src":"assets/styles/topdown-soft/floor-lamp-top.png","width":32,"height":32,"blocksMovement":true,"footprints":[{"x":9,"y":8,"width":14,"height":14}],"notes":"地面占地取灯杆底座，灯罩不扩大占地。"},
+    {"id":"trash-bin-top","name":"俯视垃圾桶","category":"摆件","kind":"image","src":"assets/styles/topdown-soft/trash-bin-top.png","width":24,"height":24,"blocksMovement":true,"footprints":[{"x":2,"y":1,"width":20,"height":20}]},
+
+    {"id":"door-closed-horizontal","name":"木门 · 横向关闭","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-closed-horizontal.png","width":88,"height":16,"blocksMovement":true,"state":"closed","clearOpening":72,"footprints":[{"x":0,"y":0,"width":8,"height":16},{"x":80,"y":0,"width":8,"height":16},{"x":8,"y":4,"width":72,"height":10}],"connectors":{"left":{"x":0,"y":8},"right":{"x":88,"y":8}}},
+    {"id":"door-closed-vertical","name":"木门 · 纵向关闭","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-closed-vertical.png","width":16,"height":88,"blocksMovement":true,"state":"closed","clearOpening":72,"footprints":[{"x":0,"y":0,"width":16,"height":8},{"x":0,"y":80,"width":16,"height":8},{"x":2,"y":8,"width":10,"height":72}],"connectors":{"top":{"x":8,"y":0},"bottom":{"x":8,"y":88}}},
+    {"id":"door-open-up","name":"木门 · 向上打开","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-open-up.png","width":88,"height":88,"blocksMovement":true,"state":"open","clearOpening":72,"requiresGeometrySupport":true,"hinge":{"x":8,"y":80},"footprints":[{"x":0,"y":72,"width":8,"height":16},{"x":80,"y":72,"width":8,"height":16},{"x":8,"y":8,"width":6,"height":72}],"connectors":{"left":{"x":0,"y":80},"right":{"x":88,"y":80}}},
+    {"id":"door-open-right","name":"木门 · 向右打开","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-open-right.png","width":88,"height":88,"blocksMovement":true,"state":"open","clearOpening":72,"requiresGeometrySupport":true,"hinge":{"x":8,"y":8},"footprints":[{"x":0,"y":0,"width":16,"height":8},{"x":0,"y":80,"width":16,"height":8},{"x":8,"y":8,"width":72,"height":6}],"connectors":{"top":{"x":8,"y":0},"bottom":{"x":8,"y":88}}},
+    {"id":"door-open-down","name":"木门 · 向下打开","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-open-down.png","width":88,"height":88,"blocksMovement":true,"state":"open","clearOpening":72,"requiresGeometrySupport":true,"hinge":{"x":80,"y":8},"footprints":[{"x":80,"y":0,"width":8,"height":16},{"x":0,"y":0,"width":8,"height":16},{"x":74,"y":8,"width":6,"height":72}],"connectors":{"left":{"x":0,"y":8},"right":{"x":88,"y":8}}},
+    {"id":"door-open-left","name":"木门 · 向左打开","category":"门","kind":"image","src":"assets/styles/topdown-soft/door-open-left.png","width":88,"height":88,"blocksMovement":true,"state":"open","clearOpening":72,"requiresGeometrySupport":true,"hinge":{"x":80,"y":80},"footprints":[{"x":72,"y":80,"width":16,"height":8},{"x":72,"y":0,"width":16,"height":8},{"x":8,"y":74,"width":72,"height":6}],"connectors":{"top":{"x":80,"y":0},"bottom":{"x":80,"y":88}}}
+  ]
+}

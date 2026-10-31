@@ -1,0 +1,127 @@
+name: Desktop CI
+
+# 桌面端（clients/desktop，Tauri + React）独立门禁：只看桌面端目录，后端 / web 改动不触发本工作流，
+# 桌面端改动也不触发 ci.yml / web-ci.yml。随包 Agent 不入库，这里只编译宿主代码，不打包 Agent。
+on:
+  push:
+    branches: ["main", "feature/**"]
+    paths:
+      - "clients/desktop/**"
+      - "clients/office-map-edit-tool/**"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    branches: ["main", "feature/**"]
+    paths:
+      - "clients/desktop/**"
+      - "clients/office-map-edit-tool/**"
+      - ".github/workflows/desktop-ci.yml"
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: clients/desktop
+
+jobs:
+  frontend:
+    name: 桌面端前端检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 桌面端有自己的 lockfile，pnpm 版本沿用迁移前的 10.11.0，不跟 web/ 的 workspace 共用。
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: pnpm
+          cache-dependency-path: clients/desktop/pnpm-lock.yaml
+
+      # 桌面端通过 link:../office-map-edit-tool 引用办公室地图编辑器。
+      # 编辑器用自己的 npm lockfile；npm ci 的 prepare 生成
+      # assets/runtime/employees.js，桌面端打包时拷进 dist/office-editor。
+      - name: Install office map editor dependencies
+        working-directory: clients/office-map-edit-tool
+        run: npm ci
+
+      - name: Office map editor tests
+        working-directory: clients/office-map-edit-tool
+        run: npm test
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Security checks
+        run: pnpm check:security
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Documented API contract
+        run: |
+          pnpm check:api-contract
+          pnpm check:service-clients
+
+      - name: Agent transport tests
+        run: pnpm agent:test
+
+      - name: Build
+        run: pnpm build
+
+  rust:
+    name: 桌面端 Rust 检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop/src-tauri -> target
+
+      # Linux 只编译宿主代码；随包 Agent 不入库，给 Tauri 资源配置留一个空目录即可。
+      - name: Prepare resource directory for compile checks
+        run: mkdir -p src-tauri/resources/agent
+
+      - name: Test
+        working-directory: clients/desktop/src-tauri
+        run: cargo test --locked
+
+      - name: Clippy
+        working-directory: clients/desktop/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

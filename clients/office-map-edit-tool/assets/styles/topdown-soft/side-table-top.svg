@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="40px" height="40px" viewBox="0 0 40 40" version="1.1" xmlns="http://www.w3.org/2000/svg">
+    <title>side-table-top</title>
+    <g id="Office-v2-/-side-table-top" stroke="none" fill="none" fill-rule="evenodd" stroke-width="1"><rect x="0" y="2" width="40" height="37" rx="4" fill="#BDA587"/><rect x="0.5" y="0.5" width="39" height="35" rx="3.5" fill="#DBC3A3" stroke="#C9AF8D"/><line x1="4" y1="2.4" x2="36" y2="2.4" stroke="#F2E4CF"/><circle cx="20.6" cy="19.4" r="11.5" fill="#35423E" fill-opacity=".1"/><circle cx="20" cy="18" r="11.5" fill="#E9DDC1" stroke="#D2C29E"/><circle cx="20" cy="18" r="8" fill="#F6EDD6"/><path d="M20,18 L20,7 M20,18 L31,18 M20,18 L20,29 M20,18 L9,18" stroke="#E2D3AF" stroke-width=".6"/><circle cx="20" cy="18" r="2.4" fill="#CFB18D"/><path d="M12.6,12.4 C14.4,9.8 17.2,8.4 20,8.2" stroke="#FFFFFF" stroke-opacity=".85" stroke-width="1" fill="none" stroke-linecap="round"/></g>
+</svg>

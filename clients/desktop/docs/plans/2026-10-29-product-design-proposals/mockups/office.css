@@ -1,0 +1,24 @@
+/* 办公室效果图：地面与家具使用 public/assets/office/topdown 真实素材，员工为示意小人 */
+.scene { position: absolute; overflow: hidden; border-radius: 10px; background: #e9ece6; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 20px 50px rgba(0,0,0,.45); }
+.floor { position: absolute; background-size: 64px 64px; }
+.floor.oak { background-image: url(assets/floor-oak.png); }
+.floor.carpet { background-image: url(assets/floor-carpet.png); }
+.floor.mineral { background-image: url(assets/floor-mineral.png); }
+.wall { position: absolute; background: #c9c3b6; box-shadow: inset 0 -3px 0 #a9a294, 0 2px 3px rgba(0,0,0,.18); }
+.glass { position: absolute; height: 8px; background: linear-gradient(180deg, #d9eef3, #9fc7d1); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.it { position: absolute; transform-origin: center; }
+.emp { position: absolute; width: 40px; height: 64px; margin-left: -20px; margin-top: -60px; }
+.emp.sit { margin-top: -54px; }
+.tag-label { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: 11px; line-height: 16px; padding: 1px 7px; border-radius: 999px; background: rgba(22,22,29,.82); color: #f5f5f7; border: 1px solid rgba(212,175,55,.45); }
+.face-arrow { position: absolute; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 12px solid #ff5aa5; filter: drop-shadow(0 0 2px rgba(0,0,0,.4)); transform-origin: 50% 100%; }
+.emote { position: absolute; transform: translateX(-50%); background: #fff; color: #222; border-radius: 10px; padding: 1px 6px; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,.25); white-space: nowrap; }
+.emote::after { content: ""; position: absolute; left: 50%; bottom: -5px; margin-left: -4px; border: 4px solid transparent; border-top-color: #fff; border-bottom: 0; }
+.room-badge { position: absolute; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 999px; background: rgba(22,22,29,.86); backdrop-filter: blur(8px); color: #f5f5f7; font-size: 11px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.room-badge i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.room-badge .num { color: #d4af37; }
+.meeting-veil { position: absolute; background: rgba(212,175,55,.12); border: 1px solid rgba(212,175,55,.45); pointer-events: none; }
+.door-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #e74c3c; box-shadow: 0 0 0 2px rgba(255,255,255,.55), 0 0 8px rgba(231,76,60,.8); }
+.path { position: absolute; border-top: 2px dashed rgba(212,175,55,.85); transform-origin: 0 0; }
+.stage-title { position: absolute; font-size: 13px; font-weight: 600; color: #f5f5f7; }
+.stage-title small { font-weight: 400; color: #a0a0a8; margin-left: 6px; }
+.door-svg { position: absolute; }

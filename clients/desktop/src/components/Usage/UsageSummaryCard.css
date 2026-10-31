@@ -1,0 +1,239 @@
+/* ─── 用量卡片（员工详情 / 群聊详情） ─── */
+
+.usc {
+  container-type: inline-size;
+}
+
+.usc-ranges {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.usc-ranges button {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.usc-ranges button:hover {
+  color: var(--text-secondary);
+}
+
+.usc-ranges button.active {
+  background: var(--brand-bg-soft);
+  color: var(--text-gold);
+}
+
+.usc-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* 面板不足 320px 时四个数字变成 2×2。 */
+@container (max-width: 292px) {
+  .usc-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.usc-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 4px 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.usc-metric strong {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-gold);
+}
+
+.usc-metric span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.usc-skeleton {
+  display: block;
+  width: 70%;
+  height: 18px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  animation: usc-pulse 1.2s ease-in-out infinite;
+}
+
+.usc-skeleton.short {
+  width: 40%;
+  height: 10px;
+}
+
+@keyframes usc-pulse {
+  50% { opacity: 0.45; }
+}
+
+.usc-detail,
+.usc-state,
+.usc-footnote {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.usc-state {
+  font-size: 12px;
+}
+
+.usc-detail-note {
+  color: var(--text-secondary);
+}
+
+.usc-retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font: inherit;
+  cursor: pointer;
+}
+
+.usc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--chrome-divider-strong);
+}
+
+.usc-section-title {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.usc-resolution {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--chrome-divider-strong);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.usc-resolution strong {
+  color: var(--success);
+}
+
+.usc-resolution span:last-child {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 按成员拆分：行高 32px，头像 20px，占比条 6px。 */
+.usc-member {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) minmax(48px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.usc-member .group-avatar.small {
+  --group-avatar-size: 20px;
+  border-radius: 6px;
+}
+
+.usc-member-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+
+.usc-member-name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usc-member-tag {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.usc-member-tag.planner {
+  color: var(--text-gold);
+  background: var(--brand-bg-soft);
+}
+
+.usc-member-bar {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.usc-member-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+  opacity: 0.45;
+}
+
+.usc-member-bar.planner > span {
+  background: var(--brand-gradient);
+  opacity: 1;
+}
+
+.usc-member-value {
+  font-size: 12px;
+  color: var(--text-gold);
+  text-align: right;
+}
+
+.usc-member-value.muted {
+  color: var(--text-muted);
+}
+
+.usc-more {
+  align-self: flex-start;
+  padding: 4px 0 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.usc-more:hover {
+  color: var(--brand);
+}

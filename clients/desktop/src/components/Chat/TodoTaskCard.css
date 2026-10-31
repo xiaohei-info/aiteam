@@ -1,0 +1,132 @@
+/* ═══════════════════════════════════════════
+   TodoTaskCard — 会话内结构化任务清单
+   ═══════════════════════════════════════════ */
+
+.ttc {
+  position: relative;
+  width: min(440px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--glass-card-border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-card-bg);
+  box-shadow: var(--glass-card-shadow);
+}
+
+.ttc::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--brand);
+  content: '';
+}
+
+/* ─── 标题与进度 ─── */
+
+.ttc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 42px;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.ttc-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ttc-title svg { color: var(--brand); }
+
+.ttc-summary {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-number, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+/* ─── 任务项 ─── */
+
+.ttc-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  margin: 0;
+  padding: var(--space-1) 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.ttc-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 38px;
+  padding: 7px var(--space-4);
+  color: var(--text-secondary);
+}
+
+.ttc-item + .ttc-item { border-top: 1px solid var(--border); }
+.ttc-item.in_progress { color: var(--text-primary); }
+.ttc-item.completed .ttc-item-title { color: var(--text-muted); text-decoration: line-through; }
+/* 终止态：回复已结束但条目未完成，用斜杠圆圈区别于待处理与进行中。 */
+.ttc-item.unfinished .ttc-item-title { color: var(--text-secondary); }
+
+.ttc-status-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.ttc-item.in_progress .ttc-status-icon { color: var(--brand); }
+.ttc-item.completed .ttc-status-icon { color: var(--success, #34d399); }
+.ttc-item.unfinished .ttc-status-icon { color: var(--text-secondary); }
+
+.ttc-status-spinner { animation: ttc-spin 1.1s linear infinite; }
+
+.ttc-item-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.ttc-status-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ttc-item.in_progress .ttc-status-label { color: var(--brand); }
+.ttc-item.unfinished .ttc-status-label { color: var(--text-secondary); }
+
+.ttc-empty {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@keyframes ttc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 历史快照放在执行过程内，主区域只保留当前清单。 */
+.ttc.history {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ttc.history::before { display: none; }
+.ttc.history .ttc-title { font-size: 12px; }
+.ttc.history .ttc-item-title { font-size: 12px; }

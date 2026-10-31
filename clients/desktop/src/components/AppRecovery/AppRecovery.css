@@ -1,0 +1,212 @@
+/* ═══════════════════════════════════════════
+   AppRecovery — 应用启动与全局异常恢复
+   ═══════════════════════════════════════════ */
+
+.app-recovery {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: var(--space-8);
+}
+
+.app-recovery-card {
+  width: min(100%, 760px);
+  padding: var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--glass-card-bg);
+  box-shadow: var(--shadow-lg);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+}
+
+.app-recovery-kicker {
+  margin: 0 0 var(--space-2);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-recovery-card .rs-error {
+  min-height: 150px;
+  margin: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ─── 安全诊断摘要 ─── */
+
+.app-diagnostic {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-glass-faint);
+}
+
+.app-diagnostic-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.app-diagnostic-heading span,
+.app-diagnostic-heading strong {
+  display: block;
+}
+
+.app-diagnostic-heading span {
+  margin-bottom: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.app-diagnostic-heading strong {
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.app-diagnostic-heading button,
+.app-recovery-action {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  transition: background var(--duration-fast), transform 100ms;
+}
+
+.app-diagnostic-heading button:hover,
+.app-recovery-action:hover {
+  background: var(--brand-bg-active);
+}
+
+.app-diagnostic-heading button:active,
+.app-recovery-action:active {
+  transform: translateY(1px);
+}
+
+.app-diagnostic dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+
+.app-diagnostic dl > div {
+  min-width: 0;
+}
+
+.app-diagnostic dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.app-diagnostic dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-diagnostic p {
+  margin: var(--space-3) 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* ─── 恢复操作 ─── */
+
+.app-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.app-recovery-action.secondary {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+}
+
+.app-recovery-action.secondary:hover {
+  background: var(--surface-raised-hover);
+  color: var(--text-primary);
+}
+
+.app-startup-progress {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.app-startup-progress span {
+  width: 26px;
+  height: 26px;
+  border: 2px solid var(--border-active);
+  border-top-color: var(--brand);
+  border-radius: var(--radius-full);
+  animation: app-recovery-spin 0.75s linear infinite;
+}
+
+@keyframes app-recovery-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .app-recovery {
+    padding: var(--space-4);
+  }
+
+  .app-recovery-card {
+    padding: var(--space-4);
+  }
+
+  .app-recovery-card .rs-error-retry {
+    margin-left: 56px;
+  }
+
+  .app-diagnostic-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-diagnostic dl {
+    grid-template-columns: 1fr;
+  }
+
+  .app-recovery-actions {
+    justify-content: stretch;
+  }
+
+  .app-recovery-action {
+    flex: 1;
+  }
+}
