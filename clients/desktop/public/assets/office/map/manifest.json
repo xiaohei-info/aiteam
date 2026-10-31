@@ -1,0 +1,275 @@
+{
+  "generatedAt": "2026-10-26T07:21:16.675Z",
+  "source": "office-editor/office-10-person-business.json",
+  "map": {
+    "target": "assets/office/map/office-10-person-business.json",
+    "bytes": 1867653,
+    "sha256": "bb852f2749af38534c51748148fe199a16d3796760d956c615c932f70b7e1a93"
+  },
+  "schema": "office-map/v1.1",
+  "elements": 157,
+  "seats": 10,
+  "provenance": [
+    {
+      "source": "assets/styles/topdown-soft/floor-mineral.png",
+      "target": "assets/office/topdown/floor-mineral.png",
+      "bytes": 969,
+      "sha256": "c4e107d5fe32b70a65d424135735cd53f70f6e48c45c11b173e196fe1daf0153",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/floor-oak.png",
+      "target": "assets/office/topdown/floor-oak.png",
+      "bytes": 941,
+      "sha256": "6e55178cb4d4964340b6fcd001e2de5e600d39fdf6704b3d253853d25629763d",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/floor-carpet.png",
+      "target": "assets/office/topdown/floor-carpet.png",
+      "bytes": 960,
+      "sha256": "4a093e6cf86bab46a7d62deb1ea198c1664dd1720ade9c3a90edc8c2379b9278",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-down.png",
+      "target": "assets/office/topdown/wall-down.png",
+      "bytes": 246,
+      "sha256": "f07d0dee30c3f075c0fedc64f54e49582e54bf8ccbe26384947e9dd6a3007082",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-right.png",
+      "target": "assets/office/topdown/wall-right.png",
+      "bytes": 301,
+      "sha256": "a6ec9994888e9b2a1eae0de02cbbdca67d489dfb2d0ff15daf99a537c4467fc9",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-left.png",
+      "target": "assets/office/topdown/wall-left.png",
+      "bytes": 308,
+      "sha256": "39e5b857559ee572072f332d3752f490f01d4027c2cefbc6e69c68ec1759ccc5",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-up.png",
+      "target": "assets/office/topdown/wall-up.png",
+      "bytes": 248,
+      "sha256": "fa623aa31de6396997a6a81224095e4d46bf9f8726388126d9e336796d0adf9b",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-corner-down-right.png",
+      "target": "assets/office/topdown/wall-corner-down-right.png",
+      "bytes": 192,
+      "sha256": "b60bca0cbec12ad510385716c698a5919b1311f2c066b803083189e9c809590c",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-corner-down-left.png",
+      "target": "assets/office/topdown/wall-corner-down-left.png",
+      "bytes": 191,
+      "sha256": "279b67e2be4fb44a63f9fa76f1f99e43723f18e6056cdc86170d95caf09a9e5b",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-corner-up-right.png",
+      "target": "assets/office/topdown/wall-corner-up-right.png",
+      "bytes": 196,
+      "sha256": "3ffe3c273f5a3bd38991a93a7500e9e051ec123c9a44613f4bb4294a582bf44a",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-corner-up-left.png",
+      "target": "assets/office/topdown/wall-corner-up-left.png",
+      "bytes": 200,
+      "sha256": "f26be1c6020c528b650a7e84f99d35131fe472512b25788fb4d9fd41bfc59696",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/door-open-up.png",
+      "target": "assets/office/topdown/door-open-up.png",
+      "bytes": 818,
+      "sha256": "908520341d642cf3dae7af075c9f76b2671bbe8d41e267c2ff823b5fa39b81fb",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/wall-junction.png",
+      "target": "assets/office/topdown/wall-junction.png",
+      "bytes": 181,
+      "sha256": "2db7642140338be86c6c88ac6f3924b60c67ded48f47fd7074243a039e8d48bd",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/glass-up.png",
+      "target": "assets/office/topdown/glass-up.png",
+      "bytes": 254,
+      "sha256": "78459c7192da766b316368c83976cb26c62334df929ac71ca6ab709c592179c0",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/meeting-table-top.png",
+      "target": "assets/office/topdown/meeting-table-top.png",
+      "bytes": 10470,
+      "sha256": "de10a41ff79a877efddf14193949a26389ab3d1b0d2e924a30a4f9acc4803761",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/chair-top.png",
+      "target": "assets/office/topdown/chair-top.png",
+      "bytes": 3061,
+      "sha256": "6a1dcbbca0f201020da9c99e383126e66e1594bab32de786d7d216aeb452bc32",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/desk-workstation-top.png",
+      "target": "assets/office/topdown/desk-workstation-top.png",
+      "bytes": 1124,
+      "sha256": "eed4a7a2e78eb26bef8fdb4fda92296b8661859d52d1a1fbb6d7326bbde5309d",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/aifred/office/chair.png",
+      "target": "assets/office/chair.png",
+      "bytes": 124655,
+      "sha256": "30a5302449ac2d9bef3baab73150b8633b35ce1aa4284e269c91e56d9512c0fd",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/aifred/office/office_computer_bg.png",
+      "target": "assets/office/office_computer_bg.png",
+      "bytes": 1680692,
+      "sha256": "6c0f82e8da49e0e066fdf32cad58e717b497c6cf6e20eea93413050f67054f70",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/door-open-down.png",
+      "target": "assets/office/topdown/door-open-down.png",
+      "bytes": 825,
+      "sha256": "5b74423f9deeb1454868a1fdae8fe7a5e89d11b4eefb883b6012d32b97382588",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/door-open-right.png",
+      "target": "assets/office/topdown/door-open-right.png",
+      "bytes": 641,
+      "sha256": "0c845d51eb9f17844c1f0afed86ea8cdd6e32809d2bc27ad0d82bdaf6c1b15ea",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/coffee-counter-top.png",
+      "target": "assets/office/topdown/coffee-counter-top.png",
+      "bytes": 2466,
+      "sha256": "2066c04a033368bcdec98a0868078cb79b2a708573ac3720e4ff41c9350093d2",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/cabinet-top.png",
+      "target": "assets/office/topdown/cabinet-top.png",
+      "bytes": 693,
+      "sha256": "b32115a7f3a1319bf5cb759244611e23c24baaaa163c8841c57051c01fcd0c5e",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/basin-top.png",
+      "target": "assets/office/topdown/basin-top.png",
+      "bytes": 1632,
+      "sha256": "545cf82ad227903e12a7cf3f6b42c3e4f3cd81bca45f5b3b4dc0cbdf475aafd5",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/water-dispenser-top.png",
+      "target": "assets/office/topdown/water-dispenser-top.png",
+      "bytes": 2115,
+      "sha256": "d783b38622af0ab326497e3200b26ff9dcd344e2644931f02306ecf8da52b17c",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/toilet-top.png",
+      "target": "assets/office/topdown/toilet-top.png",
+      "bytes": 3392,
+      "sha256": "43aaf2e196069853df68adb461fac37319a16d794d5fd1ffeab4bb6c9f985e2a",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/sofa-top.png",
+      "target": "assets/office/topdown/sofa-top.png",
+      "bytes": 4507,
+      "sha256": "367e1b497f6e86eeac8bd9e50030cd24a9b0a2e4f89d4eb46c9b34a092c8cf9a",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/plant-top.png",
+      "target": "assets/office/topdown/plant-top.png",
+      "bytes": 3689,
+      "sha256": "9d0ad27b926c15944707141b216172c1c3f5103dd0254c8a069439804bff0473",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/plant-succulent-top.png",
+      "target": "assets/office/topdown/plant-succulent-top.png",
+      "bytes": 2280,
+      "sha256": "a73802f9c6a454ae7402c09ef78d92292130ddfc2008947320ba3119882d1861",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/plant-cactus-top.png",
+      "target": "assets/office/topdown/plant-cactus-top.png",
+      "bytes": 2062,
+      "sha256": "fcebcf4ccd838634123d7d548b117c862d9c01db8243e0c61fa886f4242444f1",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/rug-round-top.png",
+      "target": "assets/office/topdown/rug-round-top.png",
+      "bytes": 10129,
+      "sha256": "8afee5026920b05708b4f1e1cc8364a3b868ac71cd1d22a99022488969594f98",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/coffee-table-top.png",
+      "target": "assets/office/topdown/coffee-table-top.png",
+      "bytes": 5345,
+      "sha256": "6b9ed492913ac32c057f80c2108f80a3120cd370c0775916a7ac1ff11766151d",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/armchair-top.png",
+      "target": "assets/office/topdown/armchair-top.png",
+      "bytes": 2977,
+      "sha256": "11d949d796c9b61e229de64887c5e415a82d4f138993f04f23c6540a26601c39",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/floor-lamp-top.png",
+      "target": "assets/office/topdown/floor-lamp-top.png",
+      "bytes": 1624,
+      "sha256": "a3d652c92319d5eab79ce7bf5d3aaf5eb368ad8c23147cf930a9e4c1134f696c",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/printer-top.png",
+      "target": "assets/office/topdown/printer-top.png",
+      "bytes": 1932,
+      "sha256": "a14d06b1974b369391d2605f55cee1265c0eafd8b80ee4327949f8dc61478b8e",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/trash-bin-top.png",
+      "target": "assets/office/topdown/trash-bin-top.png",
+      "bytes": 1465,
+      "sha256": "afeb82bb71677122904c82248cd8000245ec2b8d1ec42a08d540ebe11af4cf59",
+      "mode": "copied"
+    },
+    {
+      "source": "assets/styles/topdown-soft/plant-fern-top.png",
+      "target": "assets/office/topdown/plant-fern-top.png",
+      "bytes": 6190,
+      "sha256": "ff036c80a616e914ebec9c4a9ebf233672f83328b1521e00daeea2e47eb9c244",
+      "mode": "copied"
+    }
+  ],
+  "updatedAt": "2026-10-26T07:21:16.675Z",
+  "activeMap": "office-10-person-business.json"
+}

@@ -1,0 +1,5176 @@
+{
+  "schema": "office-map/v1.1",
+  "id": "office-10-person-topdown",
+  "name": "10人办公室 · 3会议室 / 茶水间 / 厕所",
+  "coordinateSystem": {
+    "unit": "px",
+    "origin": "top-left",
+    "xAxis": "right",
+    "yAxis": "down",
+    "rotation": "clockwise-degrees"
+  },
+  "width": 1600,
+  "height": 1200,
+  "gridSize": 16,
+  "backgroundColor": "#eeede7",
+  "background": null,
+  "assets": [
+    {
+      "id": "asset-floor-mineral",
+      "name": "浅灰矿物砖",
+      "src": "assets/styles/topdown-soft/floor-mineral.png",
+      "category": "地面",
+      "width": 128,
+      "height": 128,
+      "tileable": true
+    },
+    {
+      "id": "asset-floor-oak",
+      "name": "浅橡木地板",
+      "src": "assets/styles/topdown-soft/floor-oak.png",
+      "category": "地面",
+      "width": 128,
+      "height": 128,
+      "tileable": true
+    },
+    {
+      "id": "asset-floor-carpet",
+      "name": "灰绿地毯",
+      "src": "assets/styles/topdown-soft/floor-carpet.png",
+      "category": "地面",
+      "width": 128,
+      "height": 128,
+      "tileable": true
+    },
+    {
+      "id": "asset-wall-down",
+      "name": "实体墙 · 侧边向下",
+      "src": "assets/styles/topdown-soft/wall-down.png",
+      "category": "建筑",
+      "width": 160,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-right",
+      "name": "实体墙 · 侧边向右",
+      "src": "assets/styles/topdown-soft/wall-right.png",
+      "category": "建筑",
+      "width": 16,
+      "height": 160,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-left",
+      "name": "实体墙 · 侧边向左",
+      "src": "assets/styles/topdown-soft/wall-left.png",
+      "category": "建筑",
+      "width": 16,
+      "height": 160,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-up",
+      "name": "实体墙 · 侧边向上",
+      "src": "assets/styles/topdown-soft/wall-up.png",
+      "category": "建筑",
+      "width": 160,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-corner-down-right",
+      "name": "墙角 · 右下可见侧边",
+      "src": "assets/styles/topdown-soft/wall-corner-down-right.png",
+      "category": "连接件",
+      "width": 16,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-corner-down-left",
+      "name": "墙角 · 左下可见侧边",
+      "src": "assets/styles/topdown-soft/wall-corner-down-left.png",
+      "category": "连接件",
+      "width": 16,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-corner-up-right",
+      "name": "墙角 · 右上可见侧边",
+      "src": "assets/styles/topdown-soft/wall-corner-up-right.png",
+      "category": "连接件",
+      "width": 16,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-corner-up-left",
+      "name": "墙角 · 左上可见侧边",
+      "src": "assets/styles/topdown-soft/wall-corner-up-left.png",
+      "category": "连接件",
+      "width": 16,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-door-open-up",
+      "name": "木门 · 向上打开",
+      "src": "assets/styles/topdown-soft/door-open-up.png",
+      "category": "门",
+      "width": 88,
+      "height": 88,
+      "tileable": false
+    },
+    {
+      "id": "asset-wall-junction",
+      "name": "T / 十字连接共用顶盖",
+      "src": "assets/styles/topdown-soft/wall-junction.png",
+      "category": "连接件",
+      "width": 16,
+      "height": 16,
+      "tileable": false
+    },
+    {
+      "id": "asset-glass-up",
+      "name": "玻璃隔断 · 侧轨向上",
+      "src": "assets/styles/topdown-soft/glass-up.png",
+      "category": "建筑",
+      "width": 160,
+      "height": 8,
+      "tileable": false
+    },
+    {
+      "id": "asset-meeting-table-top",
+      "name": "俯视橡木会议桌",
+      "src": "assets/styles/topdown-soft/meeting-table-top.png",
+      "category": "家具",
+      "width": 224,
+      "height": 104,
+      "tileable": false
+    },
+    {
+      "id": "asset-chair-top",
+      "name": "俯视办公椅",
+      "src": "assets/styles/topdown-soft/chair-top.png",
+      "category": "家具",
+      "width": 56,
+      "height": 60,
+      "tileable": false
+    },
+    {
+      "id": "asset-desk-workstation-top",
+      "name": "俯视工位桌",
+      "src": "assets/styles/topdown-soft/desk-workstation-top.png",
+      "category": "家具",
+      "width": 144,
+      "height": 76,
+      "tileable": false
+    },
+    {
+      "id": "asset-aifred-chair",
+      "name": "AIFred 原有办公椅",
+      "src": "assets/aifred/office/chair.png",
+      "category": "工位 · AIFred",
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "tileable": false
+    },
+    {
+      "id": "asset-aifred-computer",
+      "name": "AIFred 原有电脑显示器",
+      "src": "assets/aifred/office/office_computer_bg.png",
+      "category": "工位 · AIFred",
+      "width": 82.5,
+      "height": 55,
+      "tileable": false
+    },
+    {
+      "id": "asset-door-open-down",
+      "name": "木门 · 向下打开",
+      "src": "assets/styles/topdown-soft/door-open-down.png",
+      "category": "门",
+      "width": 88,
+      "height": 88,
+      "tileable": false
+    },
+    {
+      "id": "asset-door-open-right",
+      "name": "木门 · 向右打开",
+      "src": "assets/styles/topdown-soft/door-open-right.png",
+      "category": "门",
+      "width": 88,
+      "height": 88,
+      "tileable": false
+    },
+    {
+      "id": "asset-coffee-counter-top",
+      "name": "俯视咖啡与烧水台",
+      "src": "assets/styles/topdown-soft/coffee-counter-top.png",
+      "category": "设施",
+      "width": 112,
+      "height": 48,
+      "tileable": false
+    },
+    {
+      "id": "asset-cabinet-top",
+      "name": "俯视储物柜",
+      "src": "assets/styles/topdown-soft/cabinet-top.png",
+      "category": "家具",
+      "width": 112,
+      "height": 48,
+      "tileable": false
+    },
+    {
+      "id": "asset-basin-top",
+      "name": "俯视洗手台",
+      "src": "assets/styles/topdown-soft/basin-top.png",
+      "category": "设施",
+      "width": 64,
+      "height": 40,
+      "tileable": false
+    },
+    {
+      "id": "asset-water-dispenser-top",
+      "name": "俯视饮水机",
+      "src": "assets/styles/topdown-soft/water-dispenser-top.png",
+      "category": "设施",
+      "width": 56,
+      "height": 56,
+      "tileable": false
+    },
+    {
+      "id": "asset-toilet-top",
+      "name": "俯视座便器",
+      "src": "assets/styles/topdown-soft/toilet-top.png",
+      "category": "设施",
+      "width": 48,
+      "height": 72,
+      "tileable": false
+    },
+    {
+      "id": "asset-sofa-top",
+      "name": "俯视双人沙发",
+      "src": "assets/styles/topdown-soft/sofa-top.png",
+      "category": "家具",
+      "width": 144,
+      "height": 72,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-top",
+      "name": "俯视盆栽",
+      "src": "assets/styles/topdown-soft/plant-top.png",
+      "category": "绿植",
+      "width": 56,
+      "height": 56,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-monstera-top",
+      "name": "俯视龟背竹",
+      "src": "assets/styles/topdown-soft/plant-monstera-top.png",
+      "category": "绿植",
+      "width": 64,
+      "height": 64,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-palm-top",
+      "name": "俯视散尾葵",
+      "src": "assets/styles/topdown-soft/plant-palm-top.png",
+      "category": "绿植",
+      "width": 64,
+      "height": 64,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-bush-top",
+      "name": "俯视球形灌木",
+      "src": "assets/styles/topdown-soft/plant-bush-top.png",
+      "category": "绿植",
+      "width": 48,
+      "height": 48,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-fern-top",
+      "name": "俯视蕨类盆栽",
+      "src": "assets/styles/topdown-soft/plant-fern-top.png",
+      "category": "绿植",
+      "width": 56,
+      "height": 56,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-succulent-top",
+      "name": "俯视多肉（桌面）",
+      "src": "assets/styles/topdown-soft/plant-succulent-top.png",
+      "category": "绿植",
+      "width": 32,
+      "height": 32,
+      "tileable": false
+    },
+    {
+      "id": "asset-plant-cactus-top",
+      "name": "俯视仙人掌（桌面）",
+      "src": "assets/styles/topdown-soft/plant-cactus-top.png",
+      "category": "绿植",
+      "width": 32,
+      "height": 32,
+      "tileable": false
+    },
+    {
+      "id": "asset-planter-hedge-top",
+      "name": "俯视绿篱花槽",
+      "src": "assets/styles/topdown-soft/planter-hedge-top.png",
+      "category": "绿植",
+      "width": 112,
+      "height": 32,
+      "tileable": false
+    },
+    {
+      "id": "asset-rug-round-top",
+      "name": "俯视圆形地毯",
+      "src": "assets/styles/topdown-soft/rug-round-top.png",
+      "category": "摆件",
+      "width": 96,
+      "height": 96,
+      "tileable": false
+    },
+    {
+      "id": "asset-coffee-table-top",
+      "name": "俯视圆茶几",
+      "src": "assets/styles/topdown-soft/coffee-table-top.png",
+      "category": "家具",
+      "width": 64,
+      "height": 64,
+      "tileable": false
+    },
+    {
+      "id": "asset-armchair-top",
+      "name": "俯视单人沙发",
+      "src": "assets/styles/topdown-soft/armchair-top.png",
+      "category": "家具",
+      "width": 72,
+      "height": 72,
+      "tileable": false
+    },
+    {
+      "id": "asset-side-table-top",
+      "name": "俯视边几台灯",
+      "src": "assets/styles/topdown-soft/side-table-top.png",
+      "category": "家具",
+      "width": 40,
+      "height": 40,
+      "tileable": false
+    },
+    {
+      "id": "asset-floor-lamp-top",
+      "name": "俯视落地灯",
+      "src": "assets/styles/topdown-soft/floor-lamp-top.png",
+      "category": "摆件",
+      "width": 32,
+      "height": 32,
+      "tileable": false
+    },
+    {
+      "id": "asset-printer-top",
+      "name": "俯视打印机",
+      "src": "assets/styles/topdown-soft/printer-top.png",
+      "category": "设施",
+      "width": 56,
+      "height": 48,
+      "tileable": false
+    },
+    {
+      "id": "asset-trash-bin-top",
+      "name": "俯视垃圾桶",
+      "src": "assets/styles/topdown-soft/trash-bin-top.png",
+      "category": "摆件",
+      "width": 24,
+      "height": 24,
+      "tileable": false
+    },
+    {
+      "id": "asset-bench-top",
+      "name": "俯视长凳",
+      "src": "assets/styles/topdown-soft/bench-top.png",
+      "category": "家具",
+      "width": 112,
+      "height": 36,
+      "tileable": false
+    }
+  ],
+  "elements": [
+    {
+      "id": "element-001",
+      "name": "主通道 / 浅灰矿物砖",
+      "kind": "image",
+      "x": 800,
+      "y": 600,
+      "width": 1504,
+      "height": 1104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-mineral"
+    },
+    {
+      "id": "element-002",
+      "name": "会议室A / 木地板",
+      "kind": "image",
+      "x": 264,
+      "y": 224,
+      "width": 432,
+      "height": 352,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-oak"
+    },
+    {
+      "id": "element-003",
+      "name": "会议室B / 木地板",
+      "kind": "image",
+      "x": 768,
+      "y": 224,
+      "width": 544,
+      "height": 352,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-oak"
+    },
+    {
+      "id": "element-004",
+      "name": "会议室C / 木地板",
+      "kind": "image",
+      "x": 1304,
+      "y": 224,
+      "width": 496,
+      "height": 352,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-oak"
+    },
+    {
+      "id": "element-005",
+      "name": "10人工位区 / 地毯",
+      "kind": "image",
+      "x": 624,
+      "y": 856,
+      "width": 1152,
+      "height": 592,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-carpet"
+    },
+    {
+      "id": "element-006",
+      "name": "茶水间 / 地砖",
+      "kind": "image",
+      "x": 1384,
+      "y": 700,
+      "width": 336,
+      "height": 264,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-mineral"
+    },
+    {
+      "id": "element-007",
+      "name": "厕所 / 地砖",
+      "kind": "image",
+      "x": 1384,
+      "y": 1000,
+      "width": 336,
+      "height": 304,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -100,
+      "visible": true,
+      "locked": true,
+      "blocksMovement": false,
+      "assetId": "asset-floor-mineral"
+    },
+    {
+      "id": "element-008",
+      "name": "实体墙 · 侧边向下",
+      "kind": "image",
+      "x": 800,
+      "y": 40,
+      "width": 1504,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 160,
+            "y": 8
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-wall-down"
+    },
+    {
+      "id": "element-009",
+      "name": "实体墙 · 侧边向右",
+      "kind": "image",
+      "x": 40,
+      "y": 600,
+      "width": 16,
+      "height": 1104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-right"
+    },
+    {
+      "id": "element-010",
+      "name": "实体墙 · 侧边向左",
+      "kind": "image",
+      "x": 1560,
+      "y": 600,
+      "width": 16,
+      "height": 1104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-left"
+    },
+    {
+      "id": "element-011",
+      "name": "实体墙 · 侧边向上",
+      "kind": "image",
+      "x": 384,
+      "y": 1160,
+      "width": 672,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 160,
+            "y": 8
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-wall-up"
+    },
+    {
+      "id": "element-012",
+      "name": "实体墙 · 侧边向上",
+      "kind": "image",
+      "x": 1180,
+      "y": 1160,
+      "width": 744,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 160,
+            "y": 8
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-wall-up"
+    },
+    {
+      "id": "element-013",
+      "name": "墙角 · 右下可见侧边",
+      "kind": "image",
+      "x": 40,
+      "y": 40,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-corner-down-right"
+    },
+    {
+      "id": "element-014",
+      "name": "墙角 · 左下可见侧边",
+      "kind": "image",
+      "x": 1560,
+      "y": 40,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-corner-down-left"
+    },
+    {
+      "id": "element-015",
+      "name": "墙角 · 右上可见侧边",
+      "kind": "image",
+      "x": 40,
+      "y": 1160,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          }
+        }
+      },
+      "assetId": "asset-wall-corner-up-right"
+    },
+    {
+      "id": "element-016",
+      "name": "墙角 · 左上可见侧边",
+      "kind": "image",
+      "x": 1560,
+      "y": 1160,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          }
+        }
+      },
+      "assetId": "asset-wall-corner-up-left"
+    },
+    {
+      "id": "element-017",
+      "name": "办公室入口 · 已打开",
+      "kind": "image",
+      "x": 764,
+      "y": 1124,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 80,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "width": 6,
+            "height": 72
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 80
+          },
+          "right": {
+            "x": 88,
+            "y": 80
+          }
+        }
+      },
+      "assetId": "asset-door-open-up",
+      "label": "入口"
+    },
+    {
+      "id": "element-018",
+      "name": "实体墙 · 侧边向右",
+      "kind": "image",
+      "x": 488,
+      "y": 222,
+      "width": 16,
+      "height": 348,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-right"
+    },
+    {
+      "id": "element-019",
+      "name": "实体墙 · 侧边向右",
+      "kind": "image",
+      "x": 1048,
+      "y": 222,
+      "width": 16,
+      "height": 348,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-right"
+    },
+    {
+      "id": "element-020",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 488,
+      "y": 40,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-021",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1048,
+      "y": 40,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-022",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 40,
+      "y": 404,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-023",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 488,
+      "y": 404,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-024",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1048,
+      "y": 404,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-025",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1560,
+      "y": 404,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-026",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 200,
+      "y": 404,
+      "width": 304,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-027",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 460,
+      "y": 404,
+      "width": 40,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-028",
+      "name": "会议室A入口 · 已打开",
+      "kind": "image",
+      "x": 396,
+      "y": 368,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 80,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "width": 6,
+            "height": 72
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 80
+          },
+          "right": {
+            "x": 88,
+            "y": 80
+          }
+        }
+      },
+      "assetId": "asset-door-open-up"
+    },
+    {
+      "id": "element-029",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 680,
+      "y": 404,
+      "width": 368,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-030",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 996,
+      "y": 404,
+      "width": 88,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-031",
+      "name": "会议室B入口 · 已打开",
+      "kind": "image",
+      "x": 908,
+      "y": 368,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 80,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "width": 6,
+            "height": 72
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 80
+          },
+          "right": {
+            "x": 88,
+            "y": 80
+          }
+        }
+      },
+      "assetId": "asset-door-open-up"
+    },
+    {
+      "id": "element-032",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 1208,
+      "y": 404,
+      "width": 304,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-033",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 1500,
+      "y": 404,
+      "width": 104,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-034",
+      "name": "会议室C入口 · 已打开",
+      "kind": "image",
+      "x": 1404,
+      "y": 368,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 80,
+            "y": 72,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "width": 6,
+            "height": 72
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 80
+          },
+          "right": {
+            "x": 88,
+            "y": 80
+          }
+        }
+      },
+      "assetId": "asset-door-open-up"
+    },
+    {
+      "id": "element-035",
+      "name": "会议室A / 会议桌",
+      "kind": "image",
+      "x": 248,
+      "y": 222,
+      "width": 224,
+      "height": 104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 224,
+        "height": 104,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 224,
+            "height": 101
+          }
+        ]
+      },
+      "assetId": "asset-meeting-table-top"
+    },
+    {
+      "id": "element-036",
+      "name": "会议室A / 北侧座椅",
+      "kind": "image",
+      "x": 180,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-037",
+      "name": "会议室A / 南侧座椅",
+      "kind": "image",
+      "x": 180,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-038",
+      "name": "会议室A / 北侧座椅",
+      "kind": "image",
+      "x": 300,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-039",
+      "name": "会议室A / 南侧座椅",
+      "kind": "image",
+      "x": 300,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-040",
+      "name": "会议室B / 会议桌",
+      "kind": "image",
+      "x": 768,
+      "y": 222,
+      "width": 256,
+      "height": 104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 224,
+        "height": 104,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 224,
+            "height": 101
+          }
+        ]
+      },
+      "assetId": "asset-meeting-table-top"
+    },
+    {
+      "id": "element-041",
+      "name": "会议室B / 北侧座椅",
+      "kind": "image",
+      "x": 684,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-042",
+      "name": "会议室B / 南侧座椅",
+      "kind": "image",
+      "x": 684,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-043",
+      "name": "会议室B / 北侧座椅",
+      "kind": "image",
+      "x": 780,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-044",
+      "name": "会议室B / 南侧座椅",
+      "kind": "image",
+      "x": 780,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-045",
+      "name": "会议室B / 北侧座椅",
+      "kind": "image",
+      "x": 876,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-046",
+      "name": "会议室B / 南侧座椅",
+      "kind": "image",
+      "x": 876,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-047",
+      "name": "会议室C / 会议桌",
+      "kind": "image",
+      "x": 1264,
+      "y": 222,
+      "width": 224,
+      "height": 104,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 224,
+        "height": 104,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 224,
+            "height": 101
+          }
+        ]
+      },
+      "assetId": "asset-meeting-table-top"
+    },
+    {
+      "id": "element-048",
+      "name": "会议室C / 北侧座椅",
+      "kind": "image",
+      "x": 1196,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-049",
+      "name": "会议室C / 南侧座椅",
+      "kind": "image",
+      "x": 1196,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-050",
+      "name": "会议室C / 北侧座椅",
+      "kind": "image",
+      "x": 1316,
+      "y": 120,
+      "width": 56,
+      "height": 60,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-051",
+      "name": "会议室C / 南侧座椅",
+      "kind": "image",
+      "x": 1316,
+      "y": 320,
+      "width": 56,
+      "height": 60,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "geometry": {
+        "width": 56,
+        "height": 60,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 60
+          }
+        ]
+      },
+      "assetId": "asset-chair-top"
+    },
+    {
+      "id": "element-052",
+      "name": "工位01 / 工位桌",
+      "kind": "image",
+      "x": 168,
+      "y": 738,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "01"
+    },
+    {
+      "id": "element-053",
+      "name": "工位01 / AIFred办公椅",
+      "kind": "image",
+      "x": 116.16,
+      "y": 786.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-054",
+      "name": "工位01 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 204,
+      "y": 720.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-055",
+      "name": "工位02 / 工位桌",
+      "kind": "image",
+      "x": 360,
+      "y": 738,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "02"
+    },
+    {
+      "id": "element-056",
+      "name": "工位02 / AIFred办公椅",
+      "kind": "image",
+      "x": 308.16,
+      "y": 786.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-057",
+      "name": "工位02 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 396,
+      "y": 720.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-058",
+      "name": "工位03 / 工位桌",
+      "kind": "image",
+      "x": 552,
+      "y": 738,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "03"
+    },
+    {
+      "id": "element-059",
+      "name": "工位03 / AIFred办公椅",
+      "kind": "image",
+      "x": 500.16,
+      "y": 786.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-060",
+      "name": "工位03 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 588,
+      "y": 720.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-061",
+      "name": "工位04 / 工位桌",
+      "kind": "image",
+      "x": 744,
+      "y": 738,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "04"
+    },
+    {
+      "id": "element-062",
+      "name": "工位04 / AIFred办公椅",
+      "kind": "image",
+      "x": 692.16,
+      "y": 786.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-063",
+      "name": "工位04 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 780,
+      "y": 720.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-064",
+      "name": "工位05 / 工位桌",
+      "kind": "image",
+      "x": 936,
+      "y": 738,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "05"
+    },
+    {
+      "id": "element-065",
+      "name": "工位05 / AIFred办公椅",
+      "kind": "image",
+      "x": 884.16,
+      "y": 786.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-066",
+      "name": "工位05 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 972,
+      "y": 720.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-067",
+      "name": "工位06 / 工位桌",
+      "kind": "image",
+      "x": 168,
+      "y": 914,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "06"
+    },
+    {
+      "id": "element-068",
+      "name": "工位06 / AIFred办公椅",
+      "kind": "image",
+      "x": 116.16,
+      "y": 962.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-069",
+      "name": "工位06 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 204,
+      "y": 896.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-070",
+      "name": "工位07 / 工位桌",
+      "kind": "image",
+      "x": 360,
+      "y": 914,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "07"
+    },
+    {
+      "id": "element-071",
+      "name": "工位07 / AIFred办公椅",
+      "kind": "image",
+      "x": 308.16,
+      "y": 962.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-072",
+      "name": "工位07 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 396,
+      "y": 896.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-073",
+      "name": "工位08 / 工位桌",
+      "kind": "image",
+      "x": 552,
+      "y": 914,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "08"
+    },
+    {
+      "id": "element-074",
+      "name": "工位08 / AIFred办公椅",
+      "kind": "image",
+      "x": 500.16,
+      "y": 962.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-075",
+      "name": "工位08 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 588,
+      "y": 896.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-076",
+      "name": "工位09 / 工位桌",
+      "kind": "image",
+      "x": 744,
+      "y": 914,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "09"
+    },
+    {
+      "id": "element-077",
+      "name": "工位09 / AIFred办公椅",
+      "kind": "image",
+      "x": 692.16,
+      "y": 962.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-078",
+      "name": "工位09 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 780,
+      "y": 896.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-079",
+      "name": "工位10 / 工位桌",
+      "kind": "image",
+      "x": 936,
+      "y": 914,
+      "width": 144,
+      "height": 76,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 76,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 72
+          }
+        ]
+      },
+      "assetId": "asset-desk-workstation-top",
+      "label": "10"
+    },
+    {
+      "id": "element-080",
+      "name": "工位10 / AIFred办公椅",
+      "kind": "image",
+      "x": 884.16,
+      "y": 962.64,
+      "width": 83.52,
+      "height": 86.69164556962025,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 12,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-aifred-chair"
+    },
+    {
+      "id": "element-081",
+      "name": "工位10 / AIFred电脑显示器",
+      "kind": "image",
+      "x": 972,
+      "y": 896.52,
+      "width": 103.125,
+      "height": 68.75,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 6,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "screen": {
+        "x": 13.7,
+        "y": 3.8,
+        "width": 55.1,
+        "height": 35.4
+      },
+      "assetId": "asset-aifred-computer"
+    },
+    {
+      "id": "element-082",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1208,
+      "y": 560,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-083",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1560,
+      "y": 560,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-084",
+      "name": "实体墙 · 侧边向右",
+      "kind": "image",
+      "x": 1208,
+      "y": 756,
+      "width": 16,
+      "height": 376,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-right"
+    },
+    {
+      "id": "element-085",
+      "name": "实体墙 · 侧边向右",
+      "kind": "image",
+      "x": 1208,
+      "y": 1092,
+      "width": 16,
+      "height": 120,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 160,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 160
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 160
+          }
+        },
+        "stretchAxis": "y"
+      },
+      "assetId": "asset-wall-right"
+    },
+    {
+      "id": "element-086",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1208,
+      "y": 840,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-087",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1560,
+      "y": 840,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-088",
+      "name": "T / 十字连接共用顶盖",
+      "kind": "image",
+      "x": 1208,
+      "y": 1160,
+      "width": 16,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 25,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 16,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 16,
+            "y": 8
+          },
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 16
+          }
+        }
+      },
+      "assetId": "asset-wall-junction"
+    },
+    {
+      "id": "element-089",
+      "name": "实体墙 · 侧边向下",
+      "kind": "image",
+      "x": 1384,
+      "y": 840,
+      "width": 336,
+      "height": 16,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 20,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 16,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 16
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 160,
+            "y": 8
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-wall-down"
+    },
+    {
+      "id": "element-090",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 1304,
+      "y": 560,
+      "width": 176,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-091",
+      "name": "玻璃隔断 · 侧轨向上",
+      "kind": "image",
+      "x": 1516,
+      "y": 560,
+      "width": 72,
+      "height": 8,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 21,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 160,
+        "height": 8,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 160,
+            "height": 8
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 4
+          },
+          "right": {
+            "x": 160,
+            "y": 4
+          }
+        },
+        "stretchAxis": "x"
+      },
+      "assetId": "asset-glass-up"
+    },
+    {
+      "id": "element-092",
+      "name": "茶水间入口 · 已打开",
+      "kind": "image",
+      "x": 1436,
+      "y": 596,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 8,
+            "height": 16
+          },
+          {
+            "x": 74,
+            "y": 8,
+            "width": 6,
+            "height": 72
+          }
+        ],
+        "connectors": {
+          "left": {
+            "x": 0,
+            "y": 8
+          },
+          "right": {
+            "x": 88,
+            "y": 8
+          }
+        }
+      },
+      "assetId": "asset-door-open-down"
+    },
+    {
+      "id": "element-093",
+      "name": "厕所入口 · 已打开",
+      "kind": "image",
+      "x": 1244,
+      "y": 988,
+      "width": 88,
+      "height": 88,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 30,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 88,
+        "height": 88,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 16,
+            "height": 8
+          },
+          {
+            "x": 0,
+            "y": 80,
+            "width": 16,
+            "height": 8
+          },
+          {
+            "x": 8,
+            "y": 8,
+            "width": 72,
+            "height": 6
+          }
+        ],
+        "connectors": {
+          "top": {
+            "x": 8,
+            "y": 0
+          },
+          "bottom": {
+            "x": 8,
+            "y": 88
+          }
+        }
+      },
+      "assetId": "asset-door-open-right"
+    },
+    {
+      "id": "element-094",
+      "name": "茶水间 / 咖啡机与烧水壶",
+      "kind": "image",
+      "x": 1304,
+      "y": 648,
+      "width": 112,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 46
+          }
+        ]
+      },
+      "assetId": "asset-coffee-counter-top"
+    },
+    {
+      "id": "element-095",
+      "name": "茶水间 / 储物柜",
+      "kind": "image",
+      "x": 1304,
+      "y": 808,
+      "width": 112,
+      "height": 48,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 46
+          }
+        ]
+      },
+      "assetId": "asset-cabinet-top"
+    },
+    {
+      "id": "element-096",
+      "name": "茶水间 / 清洗台",
+      "kind": "image",
+      "x": 1424,
+      "y": 804,
+      "width": 64,
+      "height": 40,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 40,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 64,
+            "height": 38
+          }
+        ]
+      },
+      "assetId": "asset-basin-top"
+    },
+    {
+      "id": "element-097",
+      "name": "茶水间 / 饮水机",
+      "kind": "image",
+      "x": 1508,
+      "y": 804,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 8,
+            "y": 4,
+            "width": 40,
+            "height": 48
+          }
+        ]
+      },
+      "assetId": "asset-water-dispenser-top"
+    },
+    {
+      "id": "element-098",
+      "name": "厕所 / 座便器",
+      "kind": "image",
+      "x": 1512,
+      "y": 908,
+      "width": 48,
+      "height": 72,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 48,
+        "height": 72,
+        "footprints": [
+          {
+            "x": 4,
+            "y": 2,
+            "width": 40,
+            "height": 68
+          }
+        ]
+      },
+      "assetId": "asset-toilet-top"
+    },
+    {
+      "id": "element-099",
+      "name": "厕所 / 洗手台",
+      "kind": "image",
+      "x": 1280,
+      "y": 1116,
+      "width": 64,
+      "height": 40,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 40,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 64,
+            "height": 38
+          }
+        ]
+      },
+      "assetId": "asset-basin-top"
+    },
+    {
+      "id": "element-100",
+      "name": "公共区 / 等候沙发",
+      "kind": "image",
+      "x": 168,
+      "y": 1076,
+      "width": 144,
+      "height": 72,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 144,
+        "height": 72,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 144,
+            "height": 69
+          }
+        ]
+      },
+      "assetId": "asset-sofa-top"
+    },
+    {
+      "id": "element-101",
+      "name": "公共区 / 盆栽",
+      "kind": "image",
+      "x": 332,
+      "y": 1084,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 11,
+            "y": 11,
+            "width": 34,
+            "height": 34
+          }
+        ]
+      },
+      "assetId": "asset-plant-top"
+    },
+    {
+      "id": "element-102",
+      "name": "工位区 / 资料柜",
+      "kind": "image",
+      "x": 472,
+      "y": 1088,
+      "width": 112,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 46
+          }
+        ]
+      },
+      "assetId": "asset-cabinet-top"
+    },
+    {
+      "id": "element-103",
+      "name": "主通道 / 盆栽",
+      "kind": "image",
+      "x": 1124,
+      "y": 1116,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 11,
+            "y": 11,
+            "width": 34,
+            "height": 34
+          }
+        ]
+      },
+      "assetId": "asset-plant-top"
+    },
+    {
+      "id": "element-104",
+      "name": "主通道 / 盆栽",
+      "kind": "image",
+      "x": 1132,
+      "y": 604,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 11,
+            "y": 11,
+            "width": 34,
+            "height": 34
+          }
+        ]
+      },
+      "assetId": "asset-plant-top"
+    },
+    {
+      "id": "element-105",
+      "name": "会议室A / 角落龟背竹",
+      "kind": "image",
+      "x": 88,
+      "y": 84,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 17,
+            "y": 16,
+            "width": 30,
+            "height": 30
+          }
+        ]
+      },
+      "assetId": "asset-plant-monstera-top"
+    },
+    {
+      "id": "element-106",
+      "name": "会议室A / 角落散尾葵",
+      "kind": "image",
+      "x": 440,
+      "y": 84,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 20,
+            "y": 19,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-palm-top"
+    },
+    {
+      "id": "element-107",
+      "name": "会议室A / 角落灌木",
+      "kind": "image",
+      "x": 84,
+      "y": 368,
+      "width": 48,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 48,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 10,
+            "y": 9,
+            "width": 28,
+            "height": 28
+          }
+        ]
+      },
+      "assetId": "asset-plant-bush-top"
+    },
+    {
+      "id": "element-108",
+      "name": "会议室B / 角落蕨类",
+      "kind": "image",
+      "x": 536,
+      "y": 84,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 16,
+            "y": 15,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-fern-top"
+    },
+    {
+      "id": "element-109",
+      "name": "会议室B / 角落散尾葵",
+      "kind": "image",
+      "x": 1004,
+      "y": 84,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 20,
+            "y": 19,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-palm-top"
+    },
+    {
+      "id": "element-110",
+      "name": "会议室B / 角落灌木",
+      "kind": "image",
+      "x": 532,
+      "y": 368,
+      "width": 48,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 48,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 10,
+            "y": 9,
+            "width": 28,
+            "height": 28
+          }
+        ]
+      },
+      "assetId": "asset-plant-bush-top"
+    },
+    {
+      "id": "element-111",
+      "name": "会议室B / 角落蕨类",
+      "kind": "image",
+      "x": 1012,
+      "y": 364,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 16,
+            "y": 15,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-fern-top"
+    },
+    {
+      "id": "element-112",
+      "name": "会议室C / 角落龟背竹",
+      "kind": "image",
+      "x": 1096,
+      "y": 84,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 17,
+            "y": 16,
+            "width": 30,
+            "height": 30
+          }
+        ]
+      },
+      "assetId": "asset-plant-monstera-top"
+    },
+    {
+      "id": "element-113",
+      "name": "会议室C / 角落蕨类",
+      "kind": "image",
+      "x": 1516,
+      "y": 84,
+      "width": 56,
+      "height": 56,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 56,
+        "footprints": [
+          {
+            "x": 16,
+            "y": 15,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-fern-top"
+    },
+    {
+      "id": "element-114",
+      "name": "会议室C / 角落散尾葵",
+      "kind": "image",
+      "x": 1096,
+      "y": 366,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 20,
+            "y": 19,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-palm-top"
+    },
+    {
+      "id": "element-115",
+      "name": "会议室C / 角落灌木",
+      "kind": "image",
+      "x": 1520,
+      "y": 368,
+      "width": 48,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 48,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 10,
+            "y": 9,
+            "width": 28,
+            "height": 28
+          }
+        ]
+      },
+      "assetId": "asset-plant-bush-top"
+    },
+    {
+      "id": "element-116",
+      "name": "会议室A / 会议桌多肉",
+      "kind": "image",
+      "x": 192,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-succulent-top"
+    },
+    {
+      "id": "element-117",
+      "name": "会议室A / 会议桌仙人掌",
+      "kind": "image",
+      "x": 304,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-cactus-top"
+    },
+    {
+      "id": "element-118",
+      "name": "会议室B / 会议桌多肉",
+      "kind": "image",
+      "x": 706,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-succulent-top"
+    },
+    {
+      "id": "element-119",
+      "name": "会议室B / 会议桌仙人掌",
+      "kind": "image",
+      "x": 830,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-cactus-top"
+    },
+    {
+      "id": "element-120",
+      "name": "会议室C / 会议桌多肉",
+      "kind": "image",
+      "x": 1208,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-succulent-top"
+    },
+    {
+      "id": "element-121",
+      "name": "会议室C / 会议桌仙人掌",
+      "kind": "image",
+      "x": 1318,
+      "y": 222,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 7,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-plant-cactus-top"
+    },
+    {
+      "id": "element-122",
+      "name": "主通道 / 绿篱花槽",
+      "kind": "image",
+      "x": 152,
+      "y": 428,
+      "width": 112,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 32,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 30
+          }
+        ]
+      },
+      "assetId": "asset-planter-hedge-top"
+    },
+    {
+      "id": "element-123",
+      "name": "主通道 / 绿篱花槽",
+      "kind": "image",
+      "x": 640,
+      "y": 428,
+      "width": 112,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 32,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 30
+          }
+        ]
+      },
+      "assetId": "asset-planter-hedge-top"
+    },
+    {
+      "id": "element-124",
+      "name": "主通道 / 绿篱花槽",
+      "kind": "image",
+      "x": 1176,
+      "y": 428,
+      "width": 112,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 32,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 30
+          }
+        ]
+      },
+      "assetId": "asset-planter-hedge-top"
+    },
+    {
+      "id": "element-125",
+      "name": "阅读角 / 圆形地毯",
+      "kind": "image",
+      "x": 1108,
+      "y": 738,
+      "width": 96,
+      "height": 96,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": -90,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": false,
+      "assetId": "asset-rug-round-top"
+    },
+    {
+      "id": "element-126",
+      "name": "阅读角 / 圆茶几",
+      "kind": "image",
+      "x": 1108,
+      "y": 738,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 4,
+            "y": 2,
+            "width": 56,
+            "height": 56
+          }
+        ]
+      },
+      "assetId": "asset-coffee-table-top"
+    },
+    {
+      "id": "element-127",
+      "name": "阅读角 / 单人沙发",
+      "kind": "image",
+      "x": 1108,
+      "y": 836,
+      "width": 72,
+      "height": 72,
+      "rotation": 180,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 72,
+        "height": 72,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 72,
+            "height": 70
+          }
+        ]
+      },
+      "assetId": "asset-armchair-top"
+    },
+    {
+      "id": "element-128",
+      "name": "阅读角 / 边几台灯",
+      "kind": "image",
+      "x": 1168,
+      "y": 832,
+      "width": 40,
+      "height": 40,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 40,
+        "height": 40,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 37
+          }
+        ]
+      },
+      "assetId": "asset-side-table-top"
+    },
+    {
+      "id": "element-129",
+      "name": "公共区 / 落地灯",
+      "kind": "image",
+      "x": 74,
+      "y": 1078,
+      "width": 32,
+      "height": 32,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 32,
+        "height": 32,
+        "footprints": [
+          {
+            "x": 9,
+            "y": 8,
+            "width": 14,
+            "height": 14
+          }
+        ]
+      },
+      "assetId": "asset-floor-lamp-top"
+    },
+    {
+      "id": "element-130",
+      "name": "工位区 / 打印机",
+      "kind": "image",
+      "x": 572,
+      "y": 1088,
+      "width": 56,
+      "height": 48,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 56,
+        "height": 48,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 56,
+            "height": 44
+          }
+        ]
+      },
+      "assetId": "asset-printer-top"
+    },
+    {
+      "id": "element-131",
+      "name": "工位区 / 垃圾桶",
+      "kind": "image",
+      "x": 622,
+      "y": 1098,
+      "width": 24,
+      "height": 24,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 24,
+        "height": 24,
+        "footprints": [
+          {
+            "x": 2,
+            "y": 1,
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "assetId": "asset-trash-bin-top"
+    },
+    {
+      "id": "element-132",
+      "name": "入口大厅 / 长凳",
+      "kind": "image",
+      "x": 928,
+      "y": 1130,
+      "width": 112,
+      "height": 36,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 36,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 33
+          }
+        ]
+      },
+      "assetId": "asset-bench-top"
+    },
+    {
+      "id": "element-133",
+      "name": "茶水间 / 垃圾桶",
+      "kind": "image",
+      "x": 1522,
+      "y": 600,
+      "width": 24,
+      "height": 24,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 24,
+        "height": 24,
+        "footprints": [
+          {
+            "x": 2,
+            "y": 1,
+            "width": 20,
+            "height": 20
+          }
+        ]
+      },
+      "assetId": "asset-trash-bin-top"
+    },
+    {
+      "id": "element-134",
+      "name": "茶水间 / 长凳",
+      "kind": "image",
+      "x": 1530,
+      "y": 700,
+      "width": 112,
+      "height": 36,
+      "rotation": 90,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 112,
+        "height": 36,
+        "footprints": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 112,
+            "height": 33
+          }
+        ]
+      },
+      "assetId": "asset-bench-top"
+    },
+    {
+      "id": "element-135",
+      "name": "厕所 / 散尾葵",
+      "kind": "image",
+      "x": 1512,
+      "y": 1108,
+      "width": 64,
+      "height": 64,
+      "rotation": 0,
+      "opacity": 1,
+      "color": "#e7e3db",
+      "zIndex": 0,
+      "visible": true,
+      "locked": false,
+      "blocksMovement": true,
+      "geometry": {
+        "width": 64,
+        "height": 64,
+        "footprints": [
+          {
+            "x": 20,
+            "y": 19,
+            "width": 24,
+            "height": 24
+          }
+        ]
+      },
+      "assetId": "asset-plant-palm-top"
+    }
+  ],
+  "zones": [
+    {
+      "id": "zone-spawn",
+      "name": "入口内侧 / 员工出生候选区",
+      "type": "spawn",
+      "points": [
+        {
+          "x": 832,
+          "y": 1040
+        },
+        {
+          "x": 1056,
+          "y": 1040
+        },
+        {
+          "x": 1056,
+          "y": 1104
+        },
+        {
+          "x": 832,
+          "y": 1104
+        }
+      ],
+      "enabled": true,
+      "visible": false,
+      "locked": true
+    }
+  ],
+  "spots": [
+    {
+      "id": "spot-meeting-room-meeting-a",
+      "name": "会议室 A",
+      "kind": "meeting",
+      "roomId": "room-meeting-a",
+      "x": 416,
+      "y": 360,
+      "speed": 58,
+      "stay": 8,
+      "enabled": true
+    },
+    {
+      "id": "spot-meeting-room-meeting-b",
+      "name": "会议室 B",
+      "kind": "meeting",
+      "roomId": "room-meeting-b",
+      "x": 928,
+      "y": 360,
+      "speed": 58,
+      "stay": 8,
+      "enabled": true
+    },
+    {
+      "id": "spot-meeting-room-meeting-c",
+      "name": "会议室 C",
+      "kind": "meeting",
+      "roomId": "room-meeting-c",
+      "x": 1424,
+      "y": 360,
+      "speed": 58,
+      "stay": 8,
+      "enabled": true
+    },
+    {
+      "id": "spot-pantry-room-pantry",
+      "name": "茶水间",
+      "kind": "pantry",
+      "roomId": "room-pantry",
+      "x": 1416,
+      "y": 704,
+      "speed": 65,
+      "stay": 8,
+      "enabled": true
+    },
+    {
+      "id": "spot-restroom-room-restroom",
+      "name": "厕所",
+      "kind": "restroom",
+      "roomId": "room-restroom",
+      "x": 1376,
+      "y": 1016,
+      "speed": 85,
+      "stay": 8,
+      "enabled": true
+    },
+    {
+      "id": "spot-corridor-西",
+      "name": "中央走道（西）",
+      "kind": "corridor",
+      "x": 379,
+      "y": 484,
+      "speed": 45,
+      "stay": 6,
+      "enabled": true
+    },
+    {
+      "id": "spot-corridor-中",
+      "name": "中央走道（中）",
+      "kind": "corridor",
+      "x": 800,
+      "y": 484,
+      "speed": 45,
+      "stay": 6,
+      "enabled": true
+    },
+    {
+      "id": "spot-corridor-东",
+      "name": "中央走道（东）",
+      "kind": "corridor",
+      "x": 1221,
+      "y": 484,
+      "speed": 45,
+      "stay": 6,
+      "enabled": true
+    },
+    {
+      "id": "spot-corridor-hall",
+      "name": "大厅通道",
+      "kind": "corridor",
+      "x": 944,
+      "y": 1072,
+      "speed": 45,
+      "stay": 6,
+      "enabled": true
+    }
+  ],
+  "rooms": [
+    {
+      "id": "room-meeting-a",
+      "name": "会议室 A",
+      "type": "meeting",
+      "capacity": 4,
+      "bounds": {
+        "x": 48,
+        "y": 48,
+        "width": 432,
+        "height": 352
+      },
+      "approachPoint": {
+        "x": 416,
+        "y": 360
+      },
+      "occupied": false
+    },
+    {
+      "id": "room-meeting-b",
+      "name": "会议室 B",
+      "type": "meeting",
+      "capacity": 6,
+      "bounds": {
+        "x": 496,
+        "y": 48,
+        "width": 544,
+        "height": 352
+      },
+      "approachPoint": {
+        "x": 928,
+        "y": 360
+      },
+      "occupied": false
+    },
+    {
+      "id": "room-meeting-c",
+      "name": "会议室 C",
+      "type": "meeting",
+      "capacity": 4,
+      "bounds": {
+        "x": 1056,
+        "y": 48,
+        "width": 496,
+        "height": 352
+      },
+      "approachPoint": {
+        "x": 1424,
+        "y": 360
+      },
+      "occupied": false
+    },
+    {
+      "id": "room-work",
+      "name": "独立工位区",
+      "type": "work",
+      "capacity": 10,
+      "bounds": {
+        "x": 48,
+        "y": 560,
+        "width": 1152,
+        "height": 592
+      },
+      "approachPoint": {
+        "x": 1104,
+        "y": 944
+      }
+    },
+    {
+      "id": "room-pantry",
+      "name": "茶水间",
+      "type": "pantry",
+      "capacity": 3,
+      "bounds": {
+        "x": 1216,
+        "y": 568,
+        "width": 336,
+        "height": 264
+      },
+      "approachPoint": {
+        "x": 1416,
+        "y": 704
+      }
+    },
+    {
+      "id": "room-restroom",
+      "name": "厕所",
+      "type": "restroom",
+      "capacity": 1,
+      "bounds": {
+        "x": 1216,
+        "y": 848,
+        "width": 336,
+        "height": 304
+      },
+      "approachPoint": {
+        "x": 1376,
+        "y": 1016
+      }
+    }
+  ],
+  "seats": [
+    {
+      "id": "seat-01",
+      "name": "工位01",
+      "deskElementId": "element-052",
+      "chairElementId": "element-053",
+      "computerElementId": "element-054",
+      "x": 121.92,
+      "y": 790.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "sinisa",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工01"
+      },
+      "approachPoint": {
+        "x": 168,
+        "y": 829.2
+      }
+    },
+    {
+      "id": "seat-02",
+      "name": "工位02",
+      "deskElementId": "element-055",
+      "chairElementId": "element-056",
+      "computerElementId": "element-057",
+      "x": 313.92,
+      "y": 790.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "erikari",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工02"
+      },
+      "approachPoint": {
+        "x": 360,
+        "y": 829.2
+      }
+    },
+    {
+      "id": "seat-03",
+      "name": "工位03",
+      "deskElementId": "element-058",
+      "chairElementId": "element-059",
+      "computerElementId": "element-060",
+      "x": 505.92,
+      "y": 790.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "spineboy",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工03"
+      },
+      "approachPoint": {
+        "x": 552,
+        "y": 829.2
+      }
+    },
+    {
+      "id": "seat-04",
+      "name": "工位04",
+      "deskElementId": "element-061",
+      "chairElementId": "element-062",
+      "computerElementId": "element-063",
+      "x": 697.92,
+      "y": 790.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "nate",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工04"
+      },
+      "approachPoint": {
+        "x": 744,
+        "y": 829.2
+      }
+    },
+    {
+      "id": "seat-05",
+      "name": "工位05",
+      "deskElementId": "element-064",
+      "chairElementId": "element-065",
+      "computerElementId": "element-066",
+      "x": 889.92,
+      "y": 790.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "soeren",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工05"
+      },
+      "approachPoint": {
+        "x": 936,
+        "y": 829.2
+      }
+    },
+    {
+      "id": "seat-06",
+      "name": "工位06",
+      "deskElementId": "element-067",
+      "chairElementId": "element-068",
+      "computerElementId": "element-069",
+      "x": 121.92,
+      "y": 966.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "harri",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工06"
+      },
+      "approachPoint": {
+        "x": 168,
+        "y": 1005.2
+      }
+    },
+    {
+      "id": "seat-07",
+      "name": "工位07",
+      "deskElementId": "element-070",
+      "chairElementId": "element-071",
+      "computerElementId": "element-072",
+      "x": 313.92,
+      "y": 966.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "mario",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工07"
+      },
+      "approachPoint": {
+        "x": 360,
+        "y": 1005.2
+      }
+    },
+    {
+      "id": "seat-08",
+      "name": "工位08",
+      "deskElementId": "element-073",
+      "chairElementId": "element-074",
+      "computerElementId": "element-075",
+      "x": 505.92,
+      "y": 966.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "luke",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工08"
+      },
+      "approachPoint": {
+        "x": 552,
+        "y": 1005.2
+      }
+    },
+    {
+      "id": "seat-09",
+      "name": "工位09",
+      "deskElementId": "element-076",
+      "chairElementId": "element-077",
+      "computerElementId": "element-078",
+      "x": 697.92,
+      "y": 966.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "sinisa",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工09"
+      },
+      "approachPoint": {
+        "x": 744,
+        "y": 1005.2
+      }
+    },
+    {
+      "id": "seat-10",
+      "name": "工位10",
+      "deskElementId": "element-079",
+      "chairElementId": "element-080",
+      "computerElementId": "element-081",
+      "x": 889.92,
+      "y": 966.44,
+      "facing": "back",
+      "seatOffset": {
+        "x": 0.18,
+        "y": 1.19
+      },
+      "chairOffset": {
+        "x": 0.14,
+        "y": 1.14
+      },
+      "computerOffset": {
+        "x": 0.75,
+        "y": 0.27
+      },
+      "approachOffset": {
+        "x": 0.5,
+        "y": 1.7
+      },
+      "employee": {
+        "resourceId": "aifred-chibi-stickers",
+        "skin": "erikari",
+        "animation": "idle",
+        "enabled": true,
+        "name": "员工10"
+      },
+      "approachPoint": {
+        "x": 936,
+        "y": 1005.2
+      }
+    }
+  ],
+  "layout": {
+    "styleId": "topdown-soft",
+    "occupants": 10,
+    "entrance": {
+      "x": 764,
+      "y": 1184
+    },
+    "spawnPoint": {
+      "x": 944,
+      "y": 1072
+    },
+    "mainAisle": {
+      "x": 48,
+      "y": 416,
+      "width": 1504,
+      "height": 136
+    },
+    "notes": [
+      "10个独立工位；会议室容量4/6/4不计入常驻工位。",
+      "全部门为打开态，门洞与门扇占地分离。",
+      "工位桌与电脑是分开的两个图元：员工坐桌左、独立电脑图元在桌右，屏幕区域可供后续显示工作内容；办公椅与员工动画复用AIFred现有资源，会议家具保留俯视素材；角色是演示员工，不连接账号或实时状态。",
+      "像素布局用于软件编辑与寻路演示，未经建筑/消防/无障碍合规审查。"
+    ]
+  }
+}

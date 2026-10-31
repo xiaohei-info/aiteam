@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="112px" height="48px" viewBox="0 0 112 48" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>coffee-counter-top</title>
+    <defs>
+        <path d="M112,3 L112,45 C112,46.6568542 110.656854,48 109,48 L3,48 C1.34314575,48 0,46.6568542 0,45 L0,3 C0,1.34314575 1.34314575,0 3,0 L109,0 C110.656854,0 112,1.34314575 112,3 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-coffee-counter-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组">
+            <rect id="矩形" fill="#B19474" x="0" y="0" width="112" height="48" rx="3"></rect>
+            <rect id="矩形" fill="#CFB18D" x="0" y="0" width="112" height="46" rx="3"></rect>
+            <line x1="4" y1="5" x2="108" y2="5" id="路径" stroke="#F5F3EF" fill="#000000" opacity="0.4"></line>
+            <rect id="矩形" fill="#35423E" x="10" y="8" width="40" height="30" rx="4"></rect>
+            <rect id="矩形" fill="#708780" x="18" y="13" width="24" height="9" rx="2"></rect>
+            <rect id="矩形" fill="#AEB8B2" x="18" y="27" width="24" height="8" rx="2"></rect>
+            <circle id="椭圆形" fill="#F5F3EF" cx="28" cy="31" r="3"></circle>
+            <circle id="椭圆形" fill="#CFB18D" cx="39" cy="31" r="2"></circle>
+            <path d="M98,15 C110,15 110,34 98,34" id="路径" stroke="#708780" stroke-width="3"></path>
+            <polyline id="路径" stroke="#C4C0B8" fill="#F5F3EF" points="79 18 70 14 75 29"></polyline>
+            <circle id="椭圆形" stroke="#C4C0B8" fill="#F5F3EF" cx="87" cy="25" r="13"></circle>
+            <circle id="椭圆形" fill="#E9E7E2" cx="87" cy="25" r="8"></circle>
+            <circle id="椭圆形" fill="#708780" cx="87" cy="25" r="2.5"></circle>
+        </g>
+    </g>
+</svg>

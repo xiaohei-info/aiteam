@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Knowledge create smoke</title></head>
+<body><div id="root"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import '../src/styles/globals.css'
+import KnowledgeBase from '../src/pages/KnowledgeBase/index.tsx'
+import KnowledgeBaseDetail from '../src/pages/KnowledgeBase/Detail.tsx'
+import { createKnowledgeBase, fetchKnowledgeBases, updateEmployeeKnowledgeBases } from '../src/pages/KnowledgeBase/api.ts'
+
+window.__knowledgeApi = { createKnowledgeBase, fetchKnowledgeBases, updateEmployeeKnowledgeBases }
+
+const params = new URLSearchParams(location.search)
+// Isolated Chrome profile; no real account, credentials or service requests. `?keep` reloads with the saved connections.
+if (!params.has('keep')) localStorage.removeItem('aifred:knowledge-source-config:v1')
+window.__requests = []
+// Each prefix is a separate mock NAS; both hold a library with the same server id.
+window.__nasBases = {
+  '/nas': [{ id: 'shared-id', name: '总部资料', files: [] }],
+  '/nas2': [{ id: 'shared-id', name: '分部资料', files: [] }],
+}
+window.__failNas = {}
+let createdCount = 0
+const problem = (detail) => new Response(JSON.stringify({ detail }), { status: 503, headers: { 'content-type': 'application/json' } })
+const originalFetch = window.fetch.bind(window)
+window.fetch = async (input, init) => {
+  const url = new URL(String(input), location.origin)
+  // Behave like an older bundled Agent without the knowledge-source index; the page keeps the connection view.
+  if (url.pathname.startsWith('/api/agent/')) return new Response(JSON.stringify({ code: 'not_found' }), { status: 404, headers: { 'content-type': 'application/problem+json' } })
+  if (url.pathname.includes('/api/')) {
+    const method = init?.method || 'GET'
+    window.__requests.push({ path: url.pathname, method, body: init?.body, auth: new Headers(init?.headers).get('Authorization') })
+    let data = []
+    if (url.pathname === '/api/manager/knowledge-spaces') {
+      if (window.__failManager) return new Response(JSON.stringify({ detail: 'Manager 不可用' }), { status: 503, headers: { 'content-type': 'application/json' } })
+      data = [{ knowledge_space_id: 'enterprise', display_name: '企业共享知识库' }]
+    }
+    const nas = url.pathname.match(/^(\/[^/]+)\/api\/knowledge-bases$/)
+    if (nas && !(nas[1] in window.__nasBases)) return problem('NAS 无法访问')
+    if (nas && window.__failNas[nas[1]]) return problem('NAS 离线')
+    if (nas && method === 'POST') {
+      if (window.__failCreate) return problem('NAS 创建失败')
+      data = { id: `created-${++createdCount}`, ...JSON.parse(init.body), files: [] }
+      window.__nasBases[nas[1]].push(data)
+    } else if (nas) {
+      data = window.__nasBases[nas[1]]
+    }
+    return new Response(JSON.stringify({ data }), { headers: { 'content-type': 'application/json' } })
+  }
+  return originalFetch(input, init)
+}
+function App() {
+  const route = useLocation()
+  return React.createElement(React.Fragment, null,
+    React.createElement('output', { id: 'test-route' }, route.pathname),
+    React.createElement(Routes, null,
+      React.createElement(Route, { path: '/knowledge', element: React.createElement(KnowledgeBase) }),
+      React.createElement(Route, { path: '/knowledge/local-documents', element: React.createElement(KnowledgeBase) }),
+      React.createElement(Route, { path: '/knowledge/:id', element: React.createElement(KnowledgeBaseDetail) })))
+}
+const initialRoute = new URLSearchParams(location.search).get('route') || '/knowledge'
+createRoot(document.getElementById('root')).render(React.createElement(MemoryRouter, { initialEntries: [initialRoute] }, React.createElement(App)))
+</script></body></html>

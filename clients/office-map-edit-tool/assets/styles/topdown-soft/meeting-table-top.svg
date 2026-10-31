@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="224px" height="104px" viewBox="0 0 224 104" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>meeting-table-top</title>
+    <defs>
+        <path d="M223.45837,14.8552708 C223.811521,16.1773105 224,17.5666444 224,19 L224,88 C224,96.836556 216.836556,104 208,104 L16,104 C7.163444,104 0,96.836556 0,88 L0,19 C0,17.5666444 0.188479319,16.1773105 0.542005849,14.8554304 C1.12751368,6.82938934 7.8246028,0.5 16,0.5 L208,0.5 C216.175397,0.5 222.872486,6.82938934 223.45837,14.8552708 Z" id="path-1"></path>
+        <linearGradient x1="0%" y1="0%" x2="0%" y2="100%" id="linearGradient-2">
+            <stop stop-color="#DFC8AB" offset="0%"></stop>
+            <stop stop-color="#CFB18D" offset="100%"></stop>
+        </linearGradient>
+    </defs>
+    <g id="Office-v2-/-meeting-table-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(0, 0.5)">
+            <rect id="矩形" fill="#B69A76" x="0" y="2.5" width="224" height="101" rx="16"></rect>
+            <rect id="矩形" stroke="#BFA27E" fill="url(#linearGradient-2)" x="0.5" y="0" width="223" height="99" rx="15.5"></rect>
+            <line x1="17" y1="6.5" x2="207" y2="6.5" id="路径" stroke="#F3E6D2" fill="#000000" stroke-linecap="round"></line>
+            <path d="M16,25.5 L208,25.5 M8,37.5 L216,37.5 M8,64.5 L216,64.5 M16,78.5 L208,78.5" id="形状" stroke-opacity="0.22" stroke="#B5946F" stroke-width="0.8" fill="#000000" fill-rule="nonzero"></path>
+            <rect id="矩形" fill="#8F806A" x="79" y="42.5" width="66" height="12" rx="4"></rect>
+            <rect id="矩形" fill="#66776B" x="80" y="42.5" width="64" height="10" rx="4"></rect>
+            <line x1="90" y1="46.5" x2="132" y2="46.5" id="路径" stroke="#92A195" fill="#000000"></line>
+            <circle id="椭圆形" fill="#E9DFCF" cx="32" cy="49.5" r="6"></circle>
+            <circle id="椭圆形" fill="#E9DFCF" cx="191" cy="49.5" r="6"></circle>
+        </g>
+    </g>
+</svg>

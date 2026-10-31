@@ -81,6 +81,8 @@
 │   ├── manager/               # Manager 前端
 │   ├── agent/                 # Agent 前端
 │   └── shared/                # 共享 API 基础设施、主题和页面壳
+├── clients/
+│   └── desktop/               # 桌面客户端（Tauri + React），内嵌用户端 Agent；独立 lockfile 与 CI
 ├── deploy/
 │   ├── docker/                # Dockerfile 与 Compose
 │   ├── agent/                 # macOS/Windows Agent sidecar 配置与说明
@@ -274,6 +276,7 @@ node scripts/build-agent-package.mjs --target darwin-arm64 --config deploy/agent
 - **开发环境与贡献指南**：[`CONTRIBUTING.md`](CONTRIBUTING.md)
 - **后端开发说明**：[`server/README.md`](server/README.md)
 - **前端工程规范**：[`web/README.md`](web/README.md)
+- **桌面客户端**：[`clients/desktop/README.md`](clients/desktop/README.md)，文档索引 [`clients/desktop/docs/README.md`](clients/desktop/docs/README.md)
 - **部署与运维**：[`deploy/ci/README.md`](deploy/ci/README.md)、[`deploy/docker/README.md`](deploy/docker/README.md) 和 [`docs/部署运维/`](docs/部署运维/)
 - **管理员操作指南**：[`docs/管理员操作说明/`](docs/管理员操作说明/)
 
@@ -281,7 +284,7 @@ node scripts/build-agent-package.mjs --target darwin-arm64 --config deploy/agent
 
 1. 从 `main` 创建分支：`git checkout -b feat/short-description`。
 2. 按约定式提交编写 commit：`feat(scope): ...`、`fix(scope): ...`、`docs(scope): ...`。
-3. 新代码只进入对应的 `server/`、`web/` 或 `deploy/` 目录，不扩写冻结的 `app/` 和外部 Hermes 仓库。
+3. 新代码只进入对应的 `server/`、`web/`、`clients/desktop/` 或 `deploy/` 目录，不扩写冻结的 `app/` 和外部 Hermes 仓库。
 4. 变更前端交互、API 或状态契约时同步补测试和文档。
 5. 推送并创建 Pull Request；合并前等待相关 GitHub Actions 全部通过。
 

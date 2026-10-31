@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>File access smoke</title></head>
+<body><div id="root"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
+import '../src/styles/globals.css'
+import '../src/pages/Settings/Settings.css'
+import FileAccessGate from '../src/components/FileAccess/FileAccessGate.tsx'
+import FileAccessSettings from '../src/pages/Settings/FileAccessSettings.tsx'
+import { invokeWithFileAccess } from '../src/lib/fileAccess.ts'
+
+window.__bootId = crypto.randomUUID()
+window.__calls = []
+window.__status = JSON.parse(sessionStorage.getItem('access-status') || 'null') || {
+  startup_seen: false, directories: [], platform: 'macos', suggested_root: '/',
+}
+window.__pick = ['/']
+window.__readMode = 'grant'
+window.__TAURI_INTERNALS__ = {
+  invoke: async (command, args) => {
+    window.__calls.push(command)
+    const status = window.__status
+    const save = () => sessionStorage.setItem('access-status', JSON.stringify(status))
+    if (command === 'local_file_access_status') return structuredClone(status)
+    if (command === 'dismiss_file_access_startup') { status.startup_seen = true; save(); return }
+    if (command === 'select_file_access_directories') {
+      if (window.__pick.length) {
+        status.directories = [...window.__pick]
+        status.startup_seen = true
+        save()
+      }
+      return { directories: [...window.__pick], status: structuredClone(status) }
+    }
+    if (command === 'revoke_file_access') {
+      status.directories = args.directory ? status.directories.filter(path => path !== args.directory) : []
+      status.startup_seen = true
+      save()
+      return structuredClone(status)
+    }
+    if (command === 'open_file_privacy_settings') return
+    if (command === 'read_file_as_base64') {
+      if (window.__readMode === 'system') throw 'LOCAL_OS_PERMISSION_DENIED: test'
+      if (!status.directories.length) throw 'LOCAL_ACCESS_REQUIRED: test'
+      return 'YQ=='
+    }
+    throw new Error(`Unexpected command: ${command}`)
+  },
+}
+// @tauri-apps/api isTauri uses this marker, independently of invoke.
+window.isTauri = true
+window.__read = () => {
+  window.__result = 'pending'
+  void invokeWithFileAccess('read_file_as_base64', {path:'/Users/demo/doc.md'}, '/Users/demo/doc.md')
+    .then(value => { window.__result = value }).catch(() => { window.__result = 'denied' })
+}
+createRoot(document.getElementById('root')).render(React.createElement(React.StrictMode, null,
+  React.createElement(MemoryRouter, null, React.createElement('div', {className:'settings-page'},
+    React.createElement(FileAccessSettings), React.createElement(FileAccessGate)))))
+</script></body></html>

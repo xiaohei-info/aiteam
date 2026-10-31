@@ -1,0 +1,45 @@
+/* ═══════════════════════════════════════════
+   ContextMenu — 右键上下文菜单
+   ═══════════════════════════════════════════ */
+
+.cm {
+  position: fixed;
+  z-index: 9999;
+  min-width: 160px;
+  border-radius: 10px;
+  background:
+    var(--surface-card-sheen),
+    var(--surface-2-glass);
+  border: 1px solid var(--glass-card-border);
+  box-shadow: var(--glass-card-shadow);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+  padding: 4px 0;
+  overflow: hidden;
+}
+
+.cm-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.1s;
+}
+
+.cm-item:hover  { background: var(--border); }
+.cm-item:active { background: var(--border-hover); }
+
+.cm-item.danger { color: var(--danger); }
+
+.cm-item-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}

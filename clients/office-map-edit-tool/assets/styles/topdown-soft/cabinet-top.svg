@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="112px" height="48px" viewBox="0 0 112 48" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>cabinet-top</title>
+    <defs>
+        <path d="M111.5,3 L111.501394,3.34320147 C111.816465,3.81793498 112,4.38753407 112,5 L112,45 C112,46.6568542 110.656854,48 109,48 L3,48 C1.34314575,48 0,46.6568542 0,45 L0,5 C0,4.38667022 0.184052887,3.8163283 0.499939593,3.34119329 L0.5,3 C0.5,1.61928813 1.61928813,0.5 3,0.5 L109,0.5 C110.380712,0.5 111.5,1.61928813 111.5,3 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-cabinet-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(0, 0.5)">
+            <rect id="矩形" fill="#BDA587" x="0" y="1.5" width="112" height="46" rx="3"></rect>
+            <rect id="矩形" stroke="#C9AF8D" fill="#DBC3A3" x="0.5" y="0" width="111" height="43" rx="2.5"></rect>
+            <line x1="5" y1="2.5" x2="107" y2="2.5" id="路径" stroke="#F2E4CF" fill="#000000"></line>
+            <path d="M0,43.5 L112,43.5 M56,43.5 L56,47.5" id="形状" stroke="#A98F6C" fill="#000000" fill-rule="nonzero"></path>
+            <path d="M8,15.5 L104,15.5 M8,29.5 L104,29.5" id="形状" stroke-opacity="0.2" stroke="#B79A79" fill="#000000" fill-rule="nonzero"></path>
+        </g>
+    </g>
+</svg>

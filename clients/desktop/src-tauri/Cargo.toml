@@ -1,0 +1,37 @@
+[package]
+name = "ai-team-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-store = "2"
+tauri-plugin-http = "~2.5.9"
+tauri-plugin-notification = "2"
+ring = "0.17"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1.1.9"
+sha2 = "0.10"
+hex = "0.4"
+md5 = "0.7"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["time"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Match the URLPattern engine used by tauri-plugin-http 2.5.9.
+regex = "1"
+urlpattern = "0.3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

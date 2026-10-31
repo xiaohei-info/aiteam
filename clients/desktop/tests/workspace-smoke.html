@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace UI smoke</title></head>
+<body><div id="root" style="height:100vh"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
+import '../src/styles/globals.css'
+import Tasks from '../src/pages/AutoTasks/index.tsx'
+import ImportDocDialog from '../src/pages/KnowledgeBase/ImportDocDialog.tsx'
+import TalentEmployeeWorkspace from '../src/pages/TalentMarket/TalentEmployeeWorkspace.tsx'
+import { agentApi } from '../src/api/agent/index.ts'
+
+const expert = { employee_id:'employee-1', display_name:'数据分析师', source_template_id:'template-1', revoked:false, status:'active', skills:[], tools:[] }
+const tasks = [
+  {task_id:'daily', name:'每日业务简报', category:'report', status:'active', prompt_summary:'汇总昨日销售与关键指标，生成一份团队晨会简报。', schedule:{mode:'daily',time:'09:00:00',timezone:'Asia/Shanghai'}, next_run_at:'2026-10-08T01:00:00Z'},
+  {task_id:'monitor', name:'竞品动态监控', category:'monitor', status:'active', prompt_summary:'整理重点竞品的产品更新，标注值得关注的变化。', schedule:{mode:'interval',interval_seconds:3600,starts_at:'2026-10-07T01:00:00Z',timezone:'Asia/Shanghai'},next_run_at:'2026-10-07T14:00:00Z'},
+  {task_id:'weekly', name:'周五工作复盘', category:'reminder', status:'paused',prompt_summary:'梳理本周进展和待办事项，为下周制定优先级。',schedule:{mode:'weekly',weekday:5,time:'17:00:00',timezone:'Asia/Shanghai'},next_run_at:null},
+].map(task=>({...task,employee:expert,employee_id:expert.employee_id,connector_ids:[],etag:'v1',prompt:task.prompt_summary,conversation_id:'conversation-1',last_run:{status:'succeeded'}}))
+agentApi.listExperts = async()=>({experts:[expert]})
+agentApi.listAutomationTasks = async({q,status,category})=>({data:tasks.filter(task=>(!q||task.name.includes(q))&&(status==='all'||task.status===status)&&(category==='all'||task.category===category)),page:{next_cursor:null}})
+agentApi.getAutomationTask = async id=>tasks.find(task=>task.task_id===id)
+agentApi.listAutomationTaskRuns = async()=>({data:[{run_id:'run-1',status:'succeeded',scheduled_at:'2026-10-07T01:00:00Z',result_summary:'已完成业务汇总，报告可在执行会话中查看。'}],page:{next_cursor:null}})
+agentApi.listConnectors = async()=>({data:[]})
+agentApi.getExpertReadiness = async()=>({available:true,reasons:[]})
+agentApi.createConversation = async()=>{window.__chatCreated=(window.__chatCreated||0)+1;return {id:'created-conversation'}}
+const configKey='aifred:knowledge-source-config:v1'
+const previousConfig=localStorage.getItem(configKey)
+localStorage.setItem(configKey,JSON.stringify({enterpriseUrl:location.origin,enterpriseToken:'smoke-token',localUrl:'',localToken:''}))
+window.__restoreConfig=()=>previousConfig===null?localStorage.removeItem(configKey):localStorage.setItem(configKey,previousConfig)
+const originalFetch=window.fetch.bind(window)
+window.fetch=async(input,init)=>{
+ const url=String(input)
+ if(url.includes('/api/manager/')){
+  let data=[]
+  if(url.endsWith('/recruit/orders')) data=[{status:'succeeded',template_id:'template-1',created_employee_id:'employee-1'}]
+  else if(url.endsWith('/knowledge-spaces')) data=[{knowledge_space_id:'enterprise',display_name:'企业共享知识库'}]
+  else if(url.endsWith('/documents')&&init?.method==='POST') {window.__uploaded=(window.__uploaded||0)+1;data={id:'doc-1',display_name:'smoke.txt',file_name:'smoke.txt',file_size:5,status:'uploaded'}}
+  else if(url.endsWith('/bindings')&&init?.method==='POST') {window.__bound=true;data={}}
+  return new Response(JSON.stringify({data}),{headers:{'content-type':'application/json'}})
+ }
+ return originalFetch(input,init)
+}
+const root=createRoot(document.getElementById('root'))
+window.__show=page=>root.render(React.createElement(MemoryRouter,{key:page},page==='upload'?React.createElement(ImportDocDialog,{onClose:()=>window.__show('tasks')}):page==='talent'?React.createElement(TalentEmployeeWorkspace,{templateId:'template-1',showKnowledge:true}):React.createElement(Tasks)))
+window.__show('tasks')
+</script></body></html>

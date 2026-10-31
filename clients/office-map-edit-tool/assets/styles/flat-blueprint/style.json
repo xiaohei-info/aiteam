@@ -1,0 +1,12 @@
+{
+  "id": "flat-blueprint",
+  "name": "极简平面图",
+  "description": "纯色块和线框，适合快速规划空间。",
+  "elements": [
+    {"id":"wall","name":"白墙模块","category":"建筑","kind":"rect","width":180,"height":20,"color":"#e8e5de","blocksMovement":true},
+    {"id":"floor","name":"地板区域","category":"建筑","kind":"rect","width":240,"height":240,"color":"#bcb8ae","zIndex":-100,"blocksMovement":false},
+    {"id":"glass","name":"玻璃隔断","category":"建筑","kind":"rect","width":160,"height":12,"color":"#a7c8cd","opacity":0.65,"blocksMovement":true},
+    {"id":"desk","name":"办公桌 (平面)","category":"家具","kind":"image","src":"assets/desk.png","width":150,"height":95,"blocksMovement":true},
+    {"id":"chair","name":"办公椅 (平面)","category":"家具","kind":"image","src":"assets/chair.png","width":65,"height":65,"blocksMovement":false}
+  ]
+}

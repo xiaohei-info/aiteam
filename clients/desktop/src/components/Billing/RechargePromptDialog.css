@@ -1,0 +1,94 @@
+.rpd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-bg-heavy);
+  -webkit-backdrop-filter: blur(8px) saturate(135%);
+  backdrop-filter: blur(8px) saturate(135%);
+}
+
+.rpd {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  background:
+    var(--surface-card-sheen),
+    var(--surface-1-glass);
+  border: 1px solid var(--glass-card-border);
+  box-shadow: var(--glass-card-shadow);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+  overflow: hidden;
+}
+
+.rpd-body {
+  padding: 26px 26px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.rpd-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(212, 175, 55, 0.15);
+  color: var(--brand);
+}
+
+.rpd-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rpd-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.rpd-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 22px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.rpd-btn {
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-hover);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.rpd-btn:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
+.rpd-btn--primary {
+  background: var(--brand-gradient);
+  color: var(--text-on-brand);
+  border-color: transparent;
+  font-weight: 500;
+}
+
+.rpd-btn--primary:hover {
+  filter: brightness(1.05);
+  color: var(--text-on-brand);
+}

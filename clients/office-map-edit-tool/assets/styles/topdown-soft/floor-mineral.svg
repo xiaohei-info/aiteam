@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128px" height="128px" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>floor-mineral</title>
+    <defs>
+        <path d="M128,128 L0,128 L0,0 L128,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-floor-mineral" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组">
+            <rect id="矩形" fill="#E4E5E1" x="0" y="0" width="128" height="128"></rect>
+            <path d="M0,0.5 L128,0.5 M0,64.5 L128,64.5 M0.5,0 L0.5,128 M64.5,0 L64.5,128" id="形状" stroke="#CACDC7" fill="#000000" fill-rule="nonzero"></path>
+            <path d="M10,14 L13,14 M39,26 L41,26 M72,19 L75,19 M101,44 L103,44 M21,85 L24,85 M48,110 L50,110 M83,91 L86,91 M112,116 L114,116" id="形状" stroke-opacity="0.35" stroke="#B8BFB7" fill="#000000" fill-rule="nonzero"></path>
+        </g>
+    </g>
+</svg>

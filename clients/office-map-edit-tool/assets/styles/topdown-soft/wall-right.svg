@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="160px" viewBox="0 0 16 160" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>wall-right</title>
+    <defs>
+        <path d="M16,160 L3.00962313e-08,160 L0,0 L16,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-wall-right" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd">
+        <rect id="Wall-top" fill="#F5F3EF" x="0" y="0" width="16" height="160"></rect>
+        <rect id="Visible-side-RIGHT-3px" fill="#C4C0B8" x="13" y="0" width="3" height="160"></rect>
+        <rect id="Rim-highlight" fill="#FFFFFF" x="0" y="0" width="1" height="160"></rect>
+    </g>
+</svg>
