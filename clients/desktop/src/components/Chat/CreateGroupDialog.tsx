@@ -231,7 +231,7 @@ export default function CreateGroupDialog({ onClose, onCreate }: CreateGroupDial
         <div className="cgd-footer">
           <p className={submitError ? 'cgd-submit-error' : 'cgd-hint'} role={submitError ? 'alert' : undefined}>{submitError ?? validationError}</p>
           <button type="button" className="cgd-footer-btn" onClick={onClose} disabled={loading}>取消</button>
-          <button type="button" className="cgd-footer-btn primary" onClick={() => void handleSubmit()} disabled={loading} aria-busy={loading}>{loading ? '创建中…' : '创建群聊'}</button>
+          <button type="button" className="cad-btn-submit" onClick={() => void handleSubmit()} disabled={loading || dataLoading || !supported || Boolean(validationError)}>{loading ? '创建中…' : '创建群聊'}</button>
         </div>
       </div>
     </div>, document.body,

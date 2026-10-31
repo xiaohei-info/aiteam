@@ -33,7 +33,7 @@ test('office request failure has a classified retryable state and cannot present
   assert.match(officeSource, /<RequestErrorState/)
   assert.match(officeSource, /onRetry=\{retry\}/)
   assert.match(storeSource, /loadAttempt: state\.loadAttempt \+ 1/)
-  assert.match(officeSource, /error \? 'ERROR' : 'LIVE'/)
+  assert.match(officeSource, /error\s*\?\s*'员工状态不可用'/)
   assert.match(officeSource, /error\s*\? '员工状态不可用'/)
   assert.doesNotMatch(officeSource, /\.catch\(\(err\) => console\.error/)
   assert.doesNotMatch(hostSource, /\.catch\(\(err\) => console\.error/)

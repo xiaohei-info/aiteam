@@ -46,8 +46,9 @@ test('usage surfaces use explicit B2.1 fields without mining unknown API extensi
     'utf8',
   )
 
-  assert.match(agentPanel, /LocalUsage employeeId=\{employeeId\}/)
-  assert.match(agentPanel, /WorkHistory employeeId=\{employeeId\}/)
+  assert.match(agentPanel, /EmployeeUsageCard employeeId=\{employeeId\}/)
+  assert.doesNotMatch(agentPanel, /LocalUsage employeeId=\{employeeId\}/)
+  assert.doesNotMatch(agentPanel, /WorkHistory employeeId=\{employeeId\}/)
   assert.doesNotMatch(agentPanel, /total_runs:\s*0|total_runs\s*\?\?\s*0/)
 
   // 议题 7：人才计价只读服务端 pricing 字段，没有数据的指标不上卡片。

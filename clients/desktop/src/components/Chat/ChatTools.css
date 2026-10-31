@@ -107,7 +107,7 @@
   transition: background-color .15s, border-color .15s;
 }
 .chat-status-retry:hover:not(:disabled) { border-color: var(--danger); background: var(--surface-1); }
-.chat-status-retry:focus-visible { outline: 2px solid var(--danger); outline-offset: 1px; }
+.chat-status-retry:focus-visible { outline: 2px solid var(--danger); outline-offset: 1px; box-shadow: var(--brand-focus-ring); }
 .chat-status-retry:disabled { cursor: default; opacity: .65; }
 .chat-status-retry .is-spinning { animation: chat-status-spin .8s linear infinite; }
 @keyframes chat-status-spin { to { transform: rotate(360deg); } }

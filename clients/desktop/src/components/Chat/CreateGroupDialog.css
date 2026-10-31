@@ -557,6 +557,44 @@
     transform var(--duration-base);
 }
 
+.cgd-footer .cad-btn-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 120px;
+  height: 40px;
+  padding: 0 20px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  background: var(--brand-gradient);
+  color: var(--text-on-brand);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-base), color var(--duration-base),
+    border-color var(--duration-base), box-shadow var(--duration-base),
+    transform var(--duration-base);
+}
+
+.cgd-footer .cad-btn-submit:hover:not(:disabled) {
+  background: var(--brand-gradient);
+  color: var(--text-on-brand);
+  box-shadow: var(--shadow-gold);
+  transform: translateY(-1px);
+}
+
+.cgd-footer .cad-btn-submit:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  box-shadow: var(--brand-focus-ring);
+}
+
+.cgd-footer .cad-btn-submit:active:not(:disabled) { transform: scale(0.98); }
+.cgd-footer .cad-btn-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .cgd-footer-btn:hover:not(:disabled) {
   background: var(--surface-4);
   border-color: var(--border-active);

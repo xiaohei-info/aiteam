@@ -62,11 +62,12 @@ export function resolveProfile(name, base = root) {
   const { environment, jwksPath, jwksJson } = assertEnterpriseConfig(values, profile.file)
   assert.equal(environment, profile.environment, `${profile.file}：AITEAM_ENV 是 ${environment}，${name} 环境必须是 ${profile.environment}`)
   const managerUrl = values.get('AITEAM_MANAGER_URL')
-  const upstreamUrl = values.get('AITEAM_AGENT_UPSTREAM_URL') ?? ''
+  const upstreamUrl = values.get('AITEAM_AGENT_UPSTREAM_URL') ?? managerUrl
   for (const [key, url] of [['AITEAM_MANAGER_URL', managerUrl], ['AITEAM_AGENT_UPSTREAM_URL', upstreamUrl]]) {
     assert.ok(!isPlaceholderUrl(url), `${profile.file}：${key} 仍是 example 占位地址`)
   }
-  if (values.get('AITEAM_AGENT_DEV_AUTH')?.toLowerCase() !== 'true') {
+  const managerJwksMode = values.get('AITEAM_AGENT_JWKS_MODE')?.toLowerCase() === 'manager'
+  if (!managerJwksMode && values.get('AITEAM_AGENT_DEV_AUTH')?.toLowerCase() !== 'true') {
     assert.ok(jwksPath || jwksJson, `${profile.file}：未启用开发认证时必须配置公钥（AITEAM_AGENT_JWKS_PATH 或 AITEAM_AGENT_JWKS_JSON）`)
   }
   if (jwksJson) assertCanonicalJwks(jwksJson, 'AITEAM_AGENT_JWKS_JSON')

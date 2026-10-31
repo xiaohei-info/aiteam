@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type Ref } from 'react'
 import { CalendarClock, Check, ChevronRight, Clock3, ExternalLink, LoaderCircle, Pause, Play, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { agentApi, AgentApiError, type AutomationTask, type Connector, type TaskCategory, type TaskRun, type TaskSchedule } from '../../api/agent'
 import type { ExpertProjection } from '../../api/agent/types'
 import styles from './index.module.css'
+import { useDialogFocus } from '../../hooks/useDialogFocus'
 
 type Draft = {
   name: string
@@ -251,7 +252,8 @@ export default function Tasks() {
 }
 
 function TaskForm({ draft, experts, connectors, selected, busy, onChange, onSubmit, onCancel }: { draft: Draft; experts: ExpertProjection[]; connectors: Connector[]; selected: AutomationTask | null; busy: boolean; onChange: <K extends keyof Draft>(key: K, value: Draft[K]) => void; onSubmit: (event: FormEvent) => void; onCancel: () => void }) {
-  return <form className={styles.taskForm} onSubmit={onSubmit}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{selected ? '编辑任务' : '新建任务'}</span><h2>{selected ? selected.name : '创建自动化任务'}</h2></div><button type="button" className={styles.iconButton} disabled={busy} onClick={onCancel} aria-label="关闭"><X size={17} /></button></div>
+  const dialogRef = useDialogFocus<HTMLElement>()
+  return <form ref={dialogRef as unknown as Ref<HTMLFormElement>} className={styles.taskForm} onSubmit={onSubmit}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{selected ? '编辑任务' : '新建任务'}</span><h2>{selected ? selected.name : '创建自动化任务'}</h2></div><button type="button" className={styles.iconButton} disabled={busy} onClick={onCancel} aria-label="关闭"><X size={17} /></button></div>
     <fieldset className={styles.formFields} disabled={busy}><legend className={styles.visuallyHidden}>任务配置</legend>
     <label>任务名称<input placeholder="例如：每周销售报告" required maxLength={120} value={draft.name} onChange={event => onChange('name', event.target.value)} /></label>
     <label>执行指令<textarea placeholder="描述要完成的工作、使用的资料和期望的输出…" required maxLength={20_000} rows={6} value={draft.prompt} onChange={event => onChange('prompt', event.target.value)} /></label>
