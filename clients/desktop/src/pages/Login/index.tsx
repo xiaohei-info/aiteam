@@ -57,8 +57,8 @@ export default function Login() {
         setAccount(saved.account)
         setPassword(saved.password)
       })
-      .catch((loadError) => {
-        console.error('[Login] failed to read saved credentials:', loadError)
+      .catch(() => {
+        // Credential loading is best-effort; the form remains usable.
       })
     return () => { cancelled = true }
   }, [])
@@ -135,8 +135,7 @@ export default function Login() {
         } else {
           await deleteSavedLoginCredentials({ enterprise: loginEnterprise, account: loginAccount })
         }
-      } catch (credentialError) {
-        console.error('[Login] failed to save remembered credentials:', credentialError)
+      } catch {
         setError('登录成功，但登录信息未能保存，请下次手动输入')
       }
       setPassword('')
