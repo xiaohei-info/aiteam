@@ -584,11 +584,15 @@ export interface AudioTranscriptionResult {
 export type MarketplaceOutputType = 'document' | 'spreadsheet' | 'code' | 'presentation' | 'system_operation'
 export type MarketplacePricingMode = 'per_call' | 'per_token' | 'subscription'
 
+export type MarketplaceBillingPeriod = 'month' | 'year'
+
 export interface MarketplaceTemplatePricing {
   mode: MarketplacePricingMode
   /** 十进制字符串；per_token 为每百万 Token 单价。 */
   unit_price: string
   currency: 'USD'
+  /** 套餐周期，仅 subscription 有；旧版 Agent / Manager 不返回。 */
+  billing_period?: MarketplaceBillingPeriod
 }
 
 /** Manager 按当前企业段落评估汇总；样本不足 min_sample 时 resolution_rate 为 null，不能当 0%。 */

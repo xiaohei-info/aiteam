@@ -2,6 +2,7 @@
 // 规则：没有数据的字段整行/整块隐藏，不出现「数据未提供」；解决率样本不足时显示「样本不足」，绝不显示 0%。
 import type { Connector } from '../../api/agent/automationTasks'
 import type {
+  MarketplaceBillingPeriod,
   MarketplaceOutputType,
   MarketplacePricingMode,
   MarketplaceTemplate,
@@ -124,7 +125,7 @@ export function toTalentProfile(m: MarketplaceTemplate): TalentProfile {
     required_permissions: m.required_permissions
       ? { full_access: m.required_permissions.full_access === true, local_directories: m.required_permissions.local_directories === true }
       : null,
-    pricing: m.pricing && m.pricing.mode in PRICING_MODE_LABELS && Number.isFinite(Number(m.pricing.unit_price)) ? m.pricing : null,
+    pricing: talentPricing(m.pricing),
     memory_policy_summary: text(m.memory_policy_summary),
     publisher: text(m.publisher),
     version: text(m.version),
@@ -153,11 +154,21 @@ export function talentTagline(tagline: string | null, description: string): stri
 }
 
 /** 计价参考价；per_token 的单价是每百万 Token。 */
+const BILLING_PERIOD_LABELS: Record<MarketplaceBillingPeriod, string> = { month: '月', year: '年' }
+
+/** 计价不合法时按未提供处理；套餐周期只认 month / year，其他值丢弃后按无周期显示。 */
+function talentPricing(pricing: MarketplaceTemplatePricing | null | undefined): MarketplaceTemplatePricing | null {
+  if (!pricing || !(pricing.mode in PRICING_MODE_LABELS) || !Number.isFinite(Number(pricing.unit_price))) return null
+  const { billing_period: period, ...rest } = pricing
+  return pricing.mode === 'subscription' && period && period in BILLING_PERIOD_LABELS ? { ...rest, billing_period: period } : rest
+}
+
+/** $0.05/次、$0.3/百万 Token、$99/月；旧服务端的套餐没有周期时显示「$99 套餐」。 */
 export function formatTemplatePricing(pricing: MarketplaceTemplatePricing): string {
   const price = `$${Number(pricing.unit_price)}`
   if (pricing.mode === 'per_call') return `${price}/次`
   if (pricing.mode === 'per_token') return `${price}/百万 Token`
-  return `${price} 套餐`
+  return pricing.billing_period ? `${price}/${BILLING_PERIOD_LABELS[pricing.billing_period]}` : `${price} 套餐`
 }
 
 export type SolveRateTone = 'success' | 'primary' | 'warning'
