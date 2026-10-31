@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from manager_service.hindsight_credentials import derive_hindsight_bank_id
 from manager_service.memory_protocol_facade import MemoryProtocolFacade
 from shared.contracts.tenancy import TenantContext
 from shared.errors import install_exception_handlers
@@ -75,5 +76,5 @@ def test_profile_authorizes_through_memory_service_and_uses_derived_bank():
         "/memory/employee-1/v1/default/banks/any-bank/profile",
     )
     assert response.status_code == 200
-    assert response.json()["bank_id"] == "aiteam-" + "a" * 32
+    assert response.json()["bank_id"] == derive_hindsight_bank_id("tenant-1", "member-1", "employee-1")
     assert memory.calls == [("runtime", {"employee_id": "employee-1"})]
