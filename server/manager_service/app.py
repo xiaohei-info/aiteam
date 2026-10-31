@@ -25,6 +25,7 @@ from .routes_employee_prompt import build_employee_prompt_router
 from .routes_grants import router as grants_router
 from .routes_knowledge_space import build_knowledge_space_router
 from .routes_knowledge_intake import build_knowledge_intake_router
+from .routes_knowledge_nas import build_knowledge_nas_router
 from .active_principal import ActivePrincipalVerifier
 from .repository import TenantAuthRepository
 from .routes_member import router as member_router
@@ -213,6 +214,8 @@ app.include_router(grants_router)
 app.include_router(build_knowledge_space_router(_verifier))
 # 知识文档 intake 生命周期 + 索引绑定（/api/manager/knowledge-spaces/{id}/documents/* 与 /ingestions/*，issue #416）。verifier 由本端持有闭包注入。
 app.include_router(build_knowledge_intake_router(_verifier))
+# 企业知识库部署位置 + 企业 NAS 只读网关（/api/manager/knowledge-spaces/{id}/deployment|nas/*，议题 6）。
+app.include_router(build_knowledge_nas_router(_verifier))
 # 技能/连接器/记忆策略 目录（/api/manager/skills|connectors|memory-policies/*，M4）。
 app.include_router(build_capability_router(_verifier))
 app.include_router(build_skill_market_router(_verifier))
@@ -237,8 +240,9 @@ app.include_router(build_billing_router(_verifier))
 app.include_router(build_llm_router(_verifier))
 # ---- 功能补全：B07 记忆条目管理 ----
 app.include_router(build_memory_items_router(_verifier))
-# P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
-# Manager-only because Hindsight 0.12.0 has no native bank-scoped token API.
+# Hindsight plugin protocol adapter. The current Agent path uses the
+# Manager JWT + MemoryService; the older lease endpoints remain for backwards
+# compatibility with already deployed Agents.
 app.include_router(build_hindsight_router(_verifier))
 # ---- 功能补全：P07 组织树/部门分配 ----
 app.include_router(build_org_router(_verifier))

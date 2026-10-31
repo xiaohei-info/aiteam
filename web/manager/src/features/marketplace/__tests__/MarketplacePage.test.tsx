@@ -176,6 +176,62 @@ describe("MarketplacePage", () => {
   });
 
 
+  it("卡片显示一句话定位、标签上限与最多 3 项指标；样本不足不显示解决率", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        template_id: "tpl-1", version: "1", display_name: "客服专家", description: "长描述",
+        tagline: "售后问题一站解决", tags: ["客服", "售后", "退款", "物流"], output_types: ["document"],
+        pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" },
+        stats: { resolution_rate: 0.85, evaluated_segments: 40, resolved_segments: 34, min_sample: 10 },
+        platform_skill_refs: [{ skill_id: "s1", version: "1", content_hash: "h" }],
+        platform_model_ref: { provider_id: "p", provider_version: 1, model_id: "gpt-5", model_version: 1 },
+      },
+      {
+        template_id: "tpl-2", version: "1", display_name: "研究专家",
+        stats: { resolution_rate: null, evaluated_segments: 3, resolved_segments: 0, min_sample: 10 },
+      },
+    ]);
+    renderPage(["owner"]);
+    const card = await screen.findByRole("article", { name: "客服专家" });
+    expect(within(card).getByText("售后问题一站解决")).toBeInTheDocument();
+    expect(within(card).getByText("+1")).toBeInTheDocument();
+    expect(within(card).queryByText("物流")).not.toBeInTheDocument();
+    expect(within(card).getByText("85%")).toBeInTheDocument();
+    expect(within(card).getByText("$0.05/次")).toBeInTheDocument();
+    expect(within(card).queryByText("gpt-5")).not.toBeInTheDocument();
+
+    const sparse = screen.getByRole("article", { name: "研究专家" });
+    expect(within(sparse).queryByText("解决率")).not.toBeInTheDocument();
+    expect(within(sparse).queryByText(/0%/)).not.toBeInTheDocument();
+    expect(sparse.querySelectorAll('[data-ui="expert-card-meta"] > span')).toHaveLength(3);
+  });
+
+  it("详情按四个标签页展示字段，样本不足显示说明，接入要求为空显示无需额外配置", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      template_id: "tpl-1", version: "2", display_name: "测试专家",
+      tagline: "售后问题一站解决", use_cases: ["退款处理"], example_prompts: ["帮我写退款话术"],
+      stats: { resolution_rate: null, evaluated_segments: 3, resolved_segments: 0, min_sample: 10 },
+      publisher: "平台运营",
+    }]);
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    const dialog = await screen.findByRole("dialog", { name: "测试专家详情" });
+    expect(within(dialog).getByText("退款处理")).toBeInTheDocument();
+    expect(within(dialog).getByText("帮我写退款话术")).toBeInTheDocument();
+    expect(within(dialog).queryByText("不适用")).not.toBeInTheDocument();
+    expect(within(dialog).getByText("发布者：平台运营")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "接入要求" }));
+    expect(within(dialog).getByText("无需额外配置")).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "数据与成本" }));
+    expect(within(dialog).getByText("样本不足（已评估 3 段，满 10 段后显示）")).toBeInTheDocument();
+    expect(within(dialog).queryByText(/数据未提供/)).not.toBeInTheDocument();
+  });
+
   it("招募成功：显示前往专家实例配置入口", async () => {
     mockApi();
     renderPage(["owner"]);

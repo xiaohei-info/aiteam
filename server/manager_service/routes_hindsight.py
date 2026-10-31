@@ -1,6 +1,8 @@
-"""Manager Hindsight runtime-config, lease rotation/revoke, and bank facade routes."""
+"""Manager Hindsight protocol adapter and legacy runtime-config compatibility routes."""
 
 from __future__ import annotations
+
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request, Response
 
@@ -15,12 +17,15 @@ from .hindsight_client import HindsightClient, HindsightSettings
 from .hindsight_credentials import HindsightRuntimeService
 from .hindsight_facade import HindsightFacade
 from .hindsight_lease_repository import HindsightLeaseRepository
+from .memory_protocol_facade import MemoryProtocolFacade
 from .memory_retention_service import build_memory_retention_service
 from .schemas_hindsight import (
     HindsightLeaseRevocationOut,
+    HindsightMemoryRuntimeConfigOut,
     HindsightRuntimeConfigOut,
     HindsightRuntimeConfigRequest,
 )
+from .routes_memory_items import _service as _memory_service
 
 
 class _ManagerNotConfigured(AppError):
@@ -91,6 +96,14 @@ def _facade(request: Request) -> HindsightFacade:
     return cache
 
 
+def _memory_facade(request: Request) -> MemoryProtocolFacade:
+    cache = getattr(request.app.state, "_hindsight_memory_protocol_facade", None)
+    if cache is None:
+        cache = MemoryProtocolFacade(_memory_service(request))
+        request.app.state._hindsight_memory_protocol_facade = cache
+    return cache
+
+
 def build_hindsight_router(verifier) -> APIRouter:
     router = APIRouter(prefix="/api/manager/hindsight", tags=["manager", "hindsight"])
     require = require_claims(verifier)
@@ -132,6 +145,48 @@ def build_hindsight_router(verifier) -> APIRouter:
             lease_id=lease_id,
         )
         return Envelope[HindsightLeaseRevocationOut](data=data)
+
+    @router.post(
+        "/memory-runtime-config",
+        summary="返回 Pi Hindsight 协议适配所需的 Manager 记忆上下文",
+        operation_id="manager_memory_runtime_config",
+    )
+    async def memory_runtime_config(
+        body: HindsightRuntimeConfigRequest,
+        request: Request,
+        response: Response,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[HindsightMemoryRuntimeConfigOut]:
+        response.headers["Cache-Control"] = "no-store"
+        ctx = tenant_context_from(claims)
+        context = _memory_service(request).runtime_context(ctx, employee_id=body.employee_id)
+        base_url = f"{str(request.base_url).rstrip('/')}/api/manager/hindsight/employees/{quote(body.employee_id, safe='')}"
+        return Envelope[HindsightMemoryRuntimeConfigOut](data=HindsightMemoryRuntimeConfigOut(
+            base_url=base_url,
+            bank_id=context["bank_id"],
+            allowed_operations=context["allowed_operations"],
+            policy_revision=context["policy_revision"],
+            client_protocol="aiteam-memory-v1",
+            retention_mode=context["retention_mode"],
+        ))
+
+    @router.api_route(
+        "/employees/{employee_id}/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def memory_protocol_proxy(
+        employee_id: str,
+        request: Request,
+        path: str,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        return await _memory_facade(request).proxy(
+            request,
+            path,
+            ctx=tenant_context_from(claims),
+            employee_id=employee_id,
+        )
 
     @router.api_route(
         "/{path:path}",

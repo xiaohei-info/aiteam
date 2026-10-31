@@ -15,6 +15,8 @@
  *     expert_bindings / coordinator_template_id / coordinator_instructions / tags
  */
 
+import type { ExpertTemplateProfile } from "./profile";
+
 /** 模板/方案类型（对齐 CatalogType enum）。 */
 export type CatalogItemType = "expert_template" | "solution_template";
 
@@ -44,8 +46,8 @@ export interface ExpertBinding {
   enabled: boolean;
 }
 
-/** 目录项详情（对齐后端 CatalogDetailView）。 */
-export interface CatalogItem {
+/** 目录项详情（对齐后端 CatalogDetailView）；人才市场展示字段仅专家模板有值，旧服务端可能缺省。 */
+export interface CatalogItem extends Partial<ExpertTemplateProfile> {
   catalog_type: CatalogItemType;
   template_id: string;
   version: string;
@@ -66,6 +68,8 @@ export interface CatalogItem {
   description?: string;
   initial_memories?: Record<string, unknown>[];
   sort_order?: number;
+  /** 最近一次注册/编辑/发布时间；旧目录项为 null。 */
+  updated_at?: string | null;
 
   // ---- 行业方案字段 ----
   icon?: string;
@@ -75,8 +79,8 @@ export interface CatalogItem {
   coordinator_instructions?: string;
 }
 
-/** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest, PRD-v2 S02）。 */
-export interface RegisterExpertTemplate {
+/** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest, PRD-v2 S02）；展示字段只带填写过的。 */
+export interface RegisterExpertTemplate extends Partial<ExpertTemplateProfile> {
   /** 可选。不填时服务端按 display_name 自动生成 slug + 随机后缀。 */
   template_id?: string;
   display_name: string;

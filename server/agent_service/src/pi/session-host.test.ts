@@ -77,7 +77,7 @@ test("production SessionHost fails closed when an enabled memory policy has no M
     const host = fixture.createHost(undefined, manager);
     await assert.rejects(
       host.prompt("conversation-1", "must fail", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" }),
-      /Hindsight lease is unavailable/,
+      /Manager (?:memory protocol adapter|Hindsight lease) is unavailable/,
     );
     await host.dispose();
   } finally {

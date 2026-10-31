@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .expert_profile import ExpertTemplateProfile
 from .skill import SignedSkillPackage, SkillSigningKeyMetadata
 from .platform_provider import PlatformModelRef
 from .platform_skill import PlatformSkillRef
@@ -87,10 +89,11 @@ class EnterpriseNotifyRequest(BaseModel):
 
 # ---- Manager → Operator（云侧）----
 
-class ExpertTemplateDetail(BaseModel):
+class ExpertTemplateDetail(ExpertTemplateProfile):
     """F06 招募专家：Manager 向 Operator 拉专家模板详情（响应）。Operator 持模板真相，不写 Manager 库。
 
-    字段对齐 PRD-v2 S02 + 保留 Manager apply 路径消费的 persona/recommended_config。
+    字段对齐 PRD-v2 S02 + 保留 Manager apply 路径消费的 persona/recommended_config；
+    人才市场展示字段（tagline/use_cases/pricing 等）继承自 ExpertTemplateProfile，全部可缺省。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -114,6 +117,7 @@ class ExpertTemplateDetail(BaseModel):
     sort_order: int = Field(default=0, description="人才市场排列顺序（数值越小越靠前）")
     sequence_no: int = Field(default=1, ge=1, description="方案内专家绑定排序号，决定 apply 时专家的创建和编排顺序")
     enabled: bool = Field(default=True, description="单个专家启用开关；false 时方案内该专家不参与 apply")
+    updated_at: datetime | None = Field(default=None, description="模板最近一次注册/编辑/发布时间；旧模板为 null")
 
 
 class SolutionPackage(BaseModel):

@@ -19,7 +19,7 @@ from uuid import UUID
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, Forbidden, NotFound, ValidationProblem
+from shared.errors import AppError, Conflict, Forbidden, NotFound, ValidationProblem
 
 from .schemas import (
     AuditSummaryOut,
@@ -35,6 +35,12 @@ from .usage_audit_quota_repository import (
     UsageAuditQuotaRepository,
     UsageRollupRow,
 )
+from .segment_outcome_repository import (
+    RESOLUTION_RATE_MIN_SAMPLE,
+    SegmentOutcomeRepository,
+    resolution_rate,
+)
+from .usage_analytics_schemas import SegmentOutcomeGroupOut, SegmentOutcomeStatisticsOut
 from .usage_analytics_service import (
     UsageAnalyticsService,
     validate_aligned_window,
@@ -73,8 +79,14 @@ class UsageAuditQuotaService:
         "occurred_at",
     })
 
-    def __init__(self, repo: UsageAuditQuotaRepository):
+    _SEGMENT_OUTCOME_ALLOWED_KEYS = frozenset({
+        "schema_version", "summary_id", "tenant_id", "member_id", "employee_id",
+        "window_start", "window_end", "evaluated_count", "resolved_count",
+    })
+
+    def __init__(self, repo: UsageAuditQuotaRepository, outcomes: SegmentOutcomeRepository | None = None):
         self._repo = repo
+        self._outcomes = outcomes
 
     # ---- 消费 F13 上报的脱敏 UsageSummaryUpload ----
 
@@ -125,6 +137,97 @@ class UsageAuditQuotaService:
             "usage_ingested": len(usage_rows),
             "audits_ingested": len(audit_rows),
         }
+
+    def ingest_segment_outcomes(self, ctx: TenantContext, items: list[dict]) -> dict:
+        """Store count-only segment outcome buckets (POST /usage/segment-outcomes)."""
+
+        if not isinstance(items, list):
+            raise ValidationProblem("segment_outcomes must be an array")
+        # Validate every outcome before any write so a bad item cannot half-apply the upload.
+        outcomes = [self._segment_outcome_payload(item, ctx=ctx) for item in items]
+        if outcomes and self._outcomes is None:
+            raise _SegmentOutcomesUnavailable("segment outcome storage is not configured")
+        for outcome in outcomes:
+            self._outcomes.upsert(ctx, payload=outcome)
+        return {"segment_outcomes_ingested": len(outcomes)}
+
+    def _segment_outcome_payload(self, item: dict, *, ctx: TenantContext) -> dict:
+        """Validate one count-only segment outcome bucket; same attribution rules as current UsageSummary."""
+
+        self._assert_no_conversation_content(item, kind="SegmentOutcomeSummary")
+        self._assert_allowed_keys(item, self._SEGMENT_OUTCOME_ALLOWED_KEYS, kind="SegmentOutcomeSummary")
+        if item.get("schema_version") != "1":
+            raise ValidationProblem("unsupported SegmentOutcomeSummary schema_version")
+        summary_id = item.get("summary_id")
+        if not isinstance(summary_id, str) or not summary_id.strip():
+            raise ValidationProblem("SegmentOutcomeSummary summary_id is required")
+        _validate_opaque(summary_id, "summary_id", max_length=256)
+        tenant_id = item.get("tenant_id")
+        if tenant_id is not None and tenant_id != ctx.tenant_id:
+            raise Forbidden("SegmentOutcomeSummary tenant_id must match the authenticated tenant")
+        member_id = item.get("member_id")
+        employee_id = item.get("employee_id")
+        if not isinstance(member_id, str) or not isinstance(employee_id, str):
+            raise ValidationProblem("SegmentOutcomeSummary member_id and employee_id are required")
+        _validate_opaque(member_id, "member_id", max_length=256)
+        _validate_opaque(employee_id, "employee_id", max_length=256)
+        if member_id != ctx.user_id:
+            raise Forbidden("SegmentOutcomeSummary member_id must match the authenticated member")
+        self._validate_current_employee(
+            ctx, employee_id=employee_id, member_id=member_id, schema_version="1", current_summary=True,
+        )
+        start, end = validate_ingest_window(item.get("window_start"), item.get("window_end"), strict_hour=True)
+        evaluated = self._nonnegative_int(item, "evaluated_count")
+        resolved = self._nonnegative_int(item, "resolved_count")
+        if resolved > evaluated:
+            raise ValidationProblem("resolved_count must not exceed evaluated_count")
+        return {
+            "summary_id": summary_id, "member_id": member_id, "employee_id": employee_id,
+            "window_start": start, "window_end": end,
+            "evaluated_count": evaluated, "resolved_count": resolved,
+        }
+
+    def segment_outcomes(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str | None = None,
+        member_id: str | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+    ) -> SegmentOutcomeStatisticsOut:
+        """Tenant (or member-scoped) solve-rate totals plus per-employee groups."""
+
+        if self._outcomes is None:
+            raise _SegmentOutcomesUnavailable("segment outcome storage is not configured")
+        if employee_id is not None:
+            try:
+                UUID(employee_id)
+            except (ValueError, TypeError) as exc:
+                raise ValidationProblem("employee_id must be a UUID") from exc
+        if member_id is not None:
+            _validate_member_filter(member_id)
+        start, end = validate_aligned_window(window_start, window_end)
+        groups = self._outcomes.counts_by_employee(
+            ctx, employee_id=employee_id, member_id=member_id, window_start=start, window_end=end,
+        )
+        evaluated = sum(group.evaluated_count for group in groups)
+        resolved = sum(group.resolved_count for group in groups)
+        return SegmentOutcomeStatisticsOut(
+            employee_id=employee_id, member_id=member_id, window_start=start, window_end=end,
+            min_sample=RESOLUTION_RATE_MIN_SAMPLE,
+            evaluated_count=evaluated, resolved_count=resolved,
+            unresolved_count=evaluated - resolved, resolution_rate=resolution_rate(evaluated, resolved),
+            groups=[
+                SegmentOutcomeGroupOut(
+                    employee_id=group.group_id, display_name=group.display_name,
+                    evaluated_count=group.evaluated_count, resolved_count=group.resolved_count,
+                    unresolved_count=group.evaluated_count - group.resolved_count,
+                    resolution_rate=resolution_rate(group.evaluated_count, group.resolved_count),
+                )
+                for group in groups
+            ],
+        )
 
     def list_usage(
         self,
@@ -384,13 +487,13 @@ class UsageAuditQuotaService:
             raise Forbidden("usage employee authorization is not configured")
         try:
             if not validator(self._repo, ctx, employee_id=employee_id):
-                raise Forbidden("usage employee is not in the authenticated tenant")
+                raise EmployeeNotGranted("usage employee is not in the authenticated tenant")
             if set(ctx.roles) & {EnterpriseRole.OWNER.value, EnterpriseRole.ENTERPRISE_ADMIN.value}:
                 return
             if member_id is None or not granted(
                 self._repo, ctx, employee_id=employee_id, member_id=member_id,
             ):
-                raise Forbidden("usage employee is not granted to the authenticated member")
+                raise EmployeeNotGranted("usage employee is not granted to the authenticated member")
         except (ValueError, TypeError) as exc:
             raise ValidationProblem("usage employee/member IDs must be UUIDs") from exc
 
@@ -657,5 +760,18 @@ def _to_quota_out(row: QuotaPolicyRow) -> QuotaPolicyOut:
     )
 
 
+class EmployeeNotGranted(Forbidden):
+    """摘要里的员工已不属于本租户或不再授权给该成员。
+
+    只针对这一个员工，不代表成员登录失效：Agent 据 code 终止这条摘要，不作废成员授权。
+    """
+
+    code, title = "employee_not_granted", "Employee Not Granted"
+
+
+class _SegmentOutcomesUnavailable(AppError):
+    status, code, title = 503, "segment_outcomes_unavailable", "Segment outcome storage unavailable"
+
+
 def build_usage_audit_quota_service(router: PgTenantRouter) -> UsageAuditQuotaService:
-    return UsageAuditQuotaService(UsageAuditQuotaRepository(router))
+    return UsageAuditQuotaService(UsageAuditQuotaRepository(router), SegmentOutcomeRepository(router))

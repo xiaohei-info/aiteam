@@ -79,6 +79,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.nav.knowledge": "知识库",
     "manager.nav.capability": "能力目录",
     "manager.nav.billing": "工资管理",
+    "manager.nav.usage": "用量监控",
     "manager.nav.llm": "模型目录（非凭据）",
     "manager.nav.memory": "记忆管理",
     "manager.nav.connectors": "连接器",

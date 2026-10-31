@@ -232,6 +232,110 @@ class KnowledgeSpaceOut(BaseModel):
     workspace: str = Field(description="派生 workspace（ManagerRagService 从 ctx 推导，D21）")
     display_name: str
     created_at: datetime | None = None
+    deployment_kind: Literal["managed", "nas"] = Field(
+        default="managed",
+        description="部署位置：managed=Manager 托管；nas=企业 NAS（经 Manager 只读网关访问）。成员只见此字段。",
+    )
+
+
+# ---- 企业知识库部署位置 + NAS 只读网关（议题 6）----
+# endpoint / credential_ref 仅 owner/enterprise_admin 可读写；credential_ref 是 Manager 进程环境变量名，
+# 凭据值从不入库、从不出参。普通成员只见 KnowledgeSpaceOut.deployment_kind。
+
+KnowledgeDeploymentKind = Literal["managed", "nas"]
+
+
+class KnowledgeSpaceDeploymentUpdate(BaseModel):
+    """设置企业知识库部署位置（仅 owner/enterprise_admin）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: KnowledgeDeploymentKind = Field(description="managed=Manager 托管；nas=企业 NAS", examples=["nas"])
+    endpoint: str | None = Field(
+        default=None, max_length=2048,
+        description="NAS 知识库服务根地址；kind=nas 必填，须 https（本机回环可 http）；kind=managed 必须省略。",
+        examples=["https://nas.example.invalid"],
+    )
+    credential_ref: str | None = Field(
+        default=None, max_length=75,
+        description="Manager 进程环境变量名（MANAGER_NAS_ 前缀）；kind=nas 必填，kind=managed 必须省略。",
+        examples=["MANAGER_NAS_FINANCE"],
+    )
+
+
+class KnowledgeSpaceDeploymentOut(BaseModel):
+    """企业知识库部署位置（管理员视图；不含凭据值）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_space_id: str
+    kind: KnowledgeDeploymentKind
+    endpoint: str | None = None
+    credential_ref: str | None = Field(default=None, description="凭据环境变量名；不是凭据值。")
+    credential_resolvable: bool = Field(
+        description="credential_ref 指向的环境变量在本 Manager 进程中存在、可解析且与本租户和 endpoint 一致。",
+    )
+    updated_at: datetime | None = None
+
+
+class NasKnowledgeFileOut(BaseModel):
+    """NAS 知识库内文件（只读投影）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    type: str | None = None
+    size: int | str | None = None
+    status: str | None = None
+    uploaded_at: str | None = None
+
+
+class NasKnowledgeBaseOut(BaseModel):
+    """NAS 知识库（只读投影；不透传上游 level/权限字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    description: str | None = None
+    directory: str | None = None
+    doc_count: int | None = None
+    updated_at: str | None = None
+    files: list[NasKnowledgeFileOut] = Field(default_factory=list)
+
+
+class NasKnowledgeSearchHit(BaseModel):
+    """NAS 检索命中/引用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    document_id: str | None = None
+    snippet: str | None = None
+
+
+class NasKnowledgeSearchOut(BaseModel):
+    """NAS 知识库检索结果（只读投影）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    answer: str = ""
+    citations: list[NasKnowledgeSearchHit] = Field(default_factory=list)
+    items: list[NasKnowledgeSearchHit] = Field(default_factory=list)
+
+
+class NasKnowledgeDocumentPreviewOut(BaseModel):
+    """NAS 文档预览。仅 text/markdown 透传正文；其余模式返回 unsupported（不转发 NAS 内网 URL）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["text", "markdown", "unsupported"]
+    content_type: str | None = None
+    file_type: str | None = None
+    content: str | None = None
+    truncated: bool = False
 
 
 class KnowledgeSpaceBindingCreate(BaseModel):

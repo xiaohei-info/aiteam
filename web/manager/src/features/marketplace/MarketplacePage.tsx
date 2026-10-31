@@ -25,12 +25,54 @@ import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import type { Department, ExpertTemplate } from "../experts/types";
+import {
+  CARD_METRIC_SLOTS,
+  CARD_OUTPUT_TYPE_LIMIT,
+  CARD_TAG_LIMIT,
+  OUTPUT_TYPE_LABELS,
+  cardMetrics,
+  cardTagline,
+} from "./profile";
+import { TemplateDetailDialog } from "./TemplateDetailDialog";
 import "../experts/experts.css";
+import "./marketplace.css";
 
 type MarketplaceFilter = "all" | "available" | "recruited";
 
 function modelLabel(template: ExpertTemplate): string {
   return template.platform_model_ref?.model_id || "模型待配置";
+}
+
+/** 卡片指标区固定 3 格，缺数据的格子留空，保持卡片等高。 */
+function CardMetrics({ template }: { template: ExpertTemplate }): ReactNode {
+  const metrics = cardMetrics(template);
+  return (
+    <div data-ui="expert-card-meta">
+      {Array.from({ length: CARD_METRIC_SLOTS }, (_, index) => {
+        const metric = metrics[index];
+        return metric ? (
+          <span key={metric.label} data-tone={metric.tone}>
+            <strong>{metric.label}</strong>{metric.value}
+          </span>
+        ) : <span key={`empty-${index}`} aria-hidden="true" />;
+      })}
+    </div>
+  );
+}
+
+function CardTags({ template }: { template: ExpertTemplate }): ReactNode {
+  const tags = template.tags ?? [];
+  const outputTypes = (template.output_types ?? []).slice(0, CARD_OUTPUT_TYPE_LIMIT);
+  if (!tags.length && !outputTypes.length) return <div data-ui="marketplace-card-tags" />;
+  return (
+    <div data-ui="marketplace-card-tags">
+      {tags.slice(0, CARD_TAG_LIMIT).map((tag) => <span key={tag} data-ui="marketplace-tag">{tag}</span>)}
+      {tags.length > CARD_TAG_LIMIT && <span data-ui="marketplace-tag">+{tags.length - CARD_TAG_LIMIT}</span>}
+      {outputTypes.map((type) => (
+        <span key={type} data-ui="marketplace-output-type" title={OUTPUT_TYPE_LABELS[type]}>{OUTPUT_TYPE_LABELS[type]}</span>
+      ))}
+    </div>
+  );
 }
 
 function MarketplaceAvatar({ name, src }: { name: string; src?: string | null }): ReactNode {
@@ -51,6 +93,7 @@ export function MarketplacePage(): ReactNode {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<MarketplaceFilter>("all");
   const [recruitFor, setRecruitFor] = useState<ExpertTemplate | null>(null);
+  const [detailFor, setDetailFor] = useState<ExpertTemplate | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,7 +115,7 @@ export function MarketplacePage(): ReactNode {
       const matchesFilter = filter === "all"
         || (filter === "available" && !template.is_recruited)
         || (filter === "recruited" && template.is_recruited);
-      const searchable = [template.display_name, template.category, template.description, template.persona, modelLabel(template), ...(template.tags ?? [])]
+      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, modelLabel(template), ...(template.tags ?? [])]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase();
@@ -216,16 +259,14 @@ export function MarketplacePage(): ReactNode {
                 </div>
 
                 <p data-ui="expert-card-description">
-                  {t.description || t.persona || "将成熟经验封装为可复用的企业数字员工。"}
+                  {cardTagline(t) || "将成熟经验封装为可复用的企业数字员工。"}
                 </p>
 
-                <div data-ui="expert-card-meta">
-                  <span><strong>模型</strong>{modelLabel(t)}</span>
-                  <span><strong>技能</strong>{t.platform_skill_refs?.length || t.skill_ids?.length || 0} 项</span>
-                  <span><strong>版本</strong>v{t.version}</span>
-                </div>
+                <CardTags template={t} />
+                <CardMetrics template={t} />
 
                 <div data-ui="expert-card-footer">
+                  <Button label="查看详情" size="sm" variant="ghost" clickAction={() => setDetailFor(t)} />
                   {canWrite && (
                     t.is_recruited ? (
                       <Button
@@ -265,6 +306,8 @@ export function MarketplacePage(): ReactNode {
           </div>
         )}
       </VStack>
+
+      {detailFor && <TemplateDetailDialog template={detailFor} onClose={() => setDetailFor(null)} />}
 
       {recruitFor && api.listDepartments && (
         <RecruitDepartmentDialog

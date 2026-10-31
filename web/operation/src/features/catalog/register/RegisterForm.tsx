@@ -8,11 +8,20 @@ import { type FormEvent, useEffect, useState } from "react";
 import { BasicInfoFields } from "./BasicInfoFields";
 import { ExpertTemplateFields } from "./ExpertTemplateFields";
 import { ExpertSkillSelector } from "./ExpertSkillSelector";
+import { ExpertProfileFields } from "./ExpertProfileFields";
 import { SolutionTemplateFields } from "./SolutionTemplateFields";
 import { TeamMemberSelector } from "./TeamMemberSelector";
 import { ApiError } from "@aiteam/shared";
 import { parseList, validateRegistration, type RegistrationErrors } from "./validation";
 import type { CatalogApi } from "../useCatalogApi";
+import {
+  filledProfileFields,
+  profileFromItem,
+  profilePayload,
+  validateProfile,
+  type ExpertTemplateProfile,
+  type ProfileErrors,
+} from "../profile";
 import type { CatalogItem, CatalogItemType, PlatformModelRef, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
 import type { PlatformSkillRef } from "../../skill-market/types";
 import { usePlatformProvidersApi } from "../../providers/usePlatformProvidersApi";
@@ -55,6 +64,8 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilities>>({});
   const [expertDescription, setExpertDescription] = useState("");
   const [platformSkillRefs, setPlatformSkillRefs] = useState<PlatformSkillRef[]>([]);
+  const [profile, setProfile] = useState<ExpertTemplateProfile>(() => profileFromItem({}));
+  const [profileErrors, setProfileErrors] = useState<ProfileErrors>({});
   const [expertOptions, setExpertOptions] = useState<CatalogItem[]>([]);
   const [expertTemplateIds, setExpertTemplateIds] = useState<string[]>([]);
   const [coordinatorTemplateId, setCoordinatorTemplateId] = useState("");
@@ -120,6 +131,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       thinking_level: defaultThinkingLevel,
       platform_skill_refs: platformSkillRefs,
       description: expertDescription.trim(),
+      ...filledProfileFields(profilePayload(profile)),
     };
   }
 
@@ -149,8 +161,10 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       expertTemplateIds,
       coordinatorTemplateId,
     });
+    const nextProfileErrors = catalogType === "expert_template" ? validateProfile(profilePayload(profile)) : {};
     setValidationErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    setProfileErrors(nextProfileErrors);
+    if (Object.keys(errors).length > 0 || Object.keys(nextProfileErrors).length > 0) return;
 
     setIsSubmitting(true);
     try {
@@ -220,6 +234,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
                 onDescriptionChange={setExpertDescription}
               />
               <ExpertSkillSelector value={platformSkillRefs} onChange={setPlatformSkillRefs} disabled={disabled} />
+              <ExpertProfileFields value={profile} disabled={disabled} errors={profileErrors} onChange={setProfile} />
             </>
           ) : (
             <>

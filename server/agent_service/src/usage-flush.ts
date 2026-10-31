@@ -7,11 +7,17 @@ export interface UsageFlushServiceOptions {
   authorization?: ExecutionAuthorizationRegistry;
   intervalMs?: number;
   onAccessDenied?: (caller: AuthenticatedCaller) => void;
+  /** How long to stop offering segment outcomes after Manager answers 404 for their endpoint. */
+  outcomesUnsupportedRetryMs?: number;
 }
+
+const OUTCOMES_UNSUPPORTED_NOTE = "Manager does not support segment outcome upload yet";
 
 export class UsageFlushService {
   private readonly active = new Set<Promise<unknown>>();
   private readonly backoff = new Map<string, { failures: number; nextAttemptAt: number }>();
+  /** Per tenant:member: segment outcomes stay pending until this time after the endpoint returned 404. */
+  private readonly outcomesUnsupportedUntil = new Map<string, number>();
   private timer?: NodeJS.Timeout;
 
   constructor(private readonly store: AgentSqliteStore, private readonly managerClient?: ManagerClient, private readonly options: UsageFlushServiceOptions = {}) {}
@@ -69,27 +75,51 @@ export class UsageFlushService {
   private async flushInternal(caller: AuthenticatedCaller, limit: number): Promise<{ sent: string[]; failed: string[] }> {
     const client = this.managerClient;
     if (!client?.uploadUsage) throw new Error("Manager usage upload is not configured");
-    const rows = this.store.claimUsageOutbox(caller.tenantId!, caller.userId ?? caller.callerId, limit);
+    const scope = `${caller.tenantId}:${caller.userId ?? caller.callerId}`;
+    // Clients without the outcome uploader, or a Manager without the outcome endpoint,
+    // leave segment_outcome rows pending instead of failing them.
+    const outcomesSupported = Boolean(client.uploadSegmentOutcomes) && (this.outcomesUnsupportedUntil.get(scope) ?? 0) <= Date.now();
+    const kinds = outcomesSupported ? ["usage", "segment_outcome"] as const : ["usage"] as const;
+    const rows = this.store.claimUsageOutbox(caller.tenantId!, caller.userId ?? caller.callerId, limit, kinds);
     const sent: string[] = [];
     const failed: string[] = [];
     let denied = false;
+    let outcomesUnsupported = false;
     for (const row of rows) {
+      if (row.kind === "segment_outcome" && outcomesUnsupported) {
+        this.store.releaseUsageClaim(row.summary_id, row.claim_token, OUTCOMES_UNSUPPORTED_NOTE);
+        continue;
+      }
       if (denied) {
         this.store.markUsageFailed(row.summary_id, row.claim_token, "Manager usage authorization was denied");
         failed.push(row.summary_id);
         continue;
       }
       try {
-        await client.uploadUsage(caller, row.payload);
+        if (row.kind === "segment_outcome") await client.uploadSegmentOutcomes!(caller, row.payload);
+        else await client.uploadUsage(caller, row.payload);
         this.store.markUsageSent(row.summary_id, row.claim_token);
         sent.push(row.summary_id);
       } catch (error) {
+        // Only a 404 means "endpoint missing"; 422 and other errors are real failures and keep their reason.
+        if (row.kind === "segment_outcome" && isEndpointMissing(error)) {
+          this.store.releaseUsageClaim(row.summary_id, row.claim_token, OUTCOMES_UNSUPPORTED_NOTE);
+          this.outcomesUnsupportedUntil.set(scope, Date.now() + (this.options.outcomesUnsupportedRetryMs ?? 10 * 60_000));
+          outcomesUnsupported = true;
+          continue;
+        }
+        // The employee was revoked for this member: stop this summary only, keep the member's authorization.
+        // Not a Manager outage either, so it is not reported as failed and does not back off the member.
+        if (isEmployeeNotGranted(error)) {
+          this.store.markUsageRejected(row.summary_id, row.claim_token, safeUsageError(error));
+          continue;
+        }
         this.store.markUsageFailed(row.summary_id, row.claim_token, safeUsageError(error));
         if (isAccessDenial(error)) {
           const authorization = this.options.authorization;
           authorization?.invalidate(caller.tenantId!, caller.userId ?? caller.callerId);
           this.options.onAccessDenied?.(caller);
-          this.noteFailure(`${caller.tenantId}:${caller.userId ?? caller.callerId}`, Date.now());
+          this.noteFailure(scope, Date.now());
           denied = true;
         }
         failed.push(row.summary_id);
@@ -97,6 +127,14 @@ export class UsageFlushService {
     }
     return { sent, failed };
   }
+}
+
+function isEmployeeNotGranted(error: unknown): boolean {
+  return (error as { problemCode?: unknown } | undefined)?.problemCode === "employee_not_granted";
+}
+
+function isEndpointMissing(error: unknown): boolean {
+  return (error as { status?: unknown } | undefined)?.status === 404;
 }
 
 function isAccessDenial(error: unknown): boolean {

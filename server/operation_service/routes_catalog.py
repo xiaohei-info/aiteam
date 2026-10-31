@@ -22,6 +22,7 @@ from .catalog_schemas import (
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
+    CLEARABLE_EXPERT_PROFILE_FIELDS,
     UpdateExpertTemplateRequest,
     UpdateSolutionTemplateRequest,
 )
@@ -160,7 +161,13 @@ async def update_catalog_entry(
     _claims: TokenClaims = Depends(_require_platform_operator),
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[CatalogEntryResponse]:
-    changes = body.model_dump(exclude_none=True)
+    changes = body.model_dump(mode="json", exclude_none=True)
+    if isinstance(body, UpdateExpertTemplateRequest):
+        # 可清除的展示字段：显式 null 落库为 null，省略则不改。
+        changes.update({
+            field: None for field in CLEARABLE_EXPERT_PROFILE_FIELDS
+            if field in body.model_fields_set and getattr(body, field) is None
+        })
     updated = service.update_entry(catalog_type, template_id, changes)
     return Envelope[CatalogEntryResponse](data=updated)
 

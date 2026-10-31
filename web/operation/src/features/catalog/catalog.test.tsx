@@ -529,7 +529,8 @@ describe("API 错误展示", () => {
 
 // ---- 6. 注册表单 ----
 
-describe("注册表单", () => {
+// 完整注册表单含人才市场展示字段，CI 覆盖率插桩下单条用例会超过默认 5 秒。
+describe("注册表单", { timeout: 15_000 }, () => {
   it("行业方案注册展示专家团队与协调专家选择器", async () => {
     const expertItems = [makeCatalogItem({ catalog_type: "expert_template", template_id: "exp_a", display_name: "客服专家" })];
     mockFetch.mockResolvedValueOnce(listPage(expertItems)).mockResolvedValueOnce(listPage(expertItems));
@@ -1162,6 +1163,148 @@ describe("详情页编辑模式", () => {
     expect(patchCalls).toHaveLength(0);
   });
 });
+});
+
+describe("人才市场展示字段", { timeout: 15_000 }, () => {
+  async function openExpertRegisterForm() {
+    renderCatalogPage(makeSystemAdminSession());
+    fireEvent.click(await screen.findByText("注册专家模板"));
+    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
+    fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "新专家" } });
+    fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "电商客服" } });
+    await selectAstryxOption("分类 (category)", "市场营销");
+    fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "淘宝电商客服" } });
+  }
+
+  function captureRegisterBody(): { body: unknown } {
+    const captured: { body: unknown } = { body: null };
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market/internal")) return listPage([]);
+      if (String(url).includes("skill-market/external")) return singleResponse([]);
+      if (String(url).includes("expert-templates") && init?.method === "POST") {
+        captured.body = JSON.parse(String(init.body));
+        return singleResponse(makeCatalogItem({ display_name: "新专家" }));
+      }
+      return envOk();
+    });
+    return captured;
+  }
+
+  it("注册专家模板只提交填写过的展示字段", async () => {
+    const captured = captureRegisterBody();
+    await openExpertRegisterForm();
+    fireEvent.change(screen.getByLabelText(/^一句话定位 \(tagline\)/), { target: { value: " 售后问题一站解决 " } });
+    fireEvent.change(screen.getByLabelText(/^适用场景 \(use_cases\)/), { target: { value: "退款处理\n\n物流查询" } });
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    await waitFor(() => expect(captured.body).toBeTruthy());
+    const body = captured.body as Record<string, unknown>;
+    expect(body.tagline).toBe("售后问题一站解决");
+    expect(body.use_cases).toEqual(["退款处理", "物流查询"]);
+    expect(body).not.toHaveProperty("pricing");
+    expect(body).not.toHaveProperty("limitations");
+    expect(body).not.toHaveProperty("required_permissions");
+  });
+
+  it("展示字段超出服务端约束时前端拦截，不发请求", async () => {
+    const captured = captureRegisterBody();
+    await openExpertRegisterForm();
+    fireEvent.change(screen.getByLabelText(/^一句话定位 \(tagline\)/), { target: { value: "字".repeat(41) } });
+    fireEvent.click(screen.getByRole("button", { name: "注册" }));
+
+    expect(await screen.findByText("一句话定位不超过 40 字")).toBeInTheDocument();
+    expect(captured.body).toBeNull();
+  });
+
+  it("详情只读展示已填写的字段，编辑后全量提交并可清除计价", async () => {
+    const expert = makeCatalogItem({
+      template_id: "exp-profile",
+      display_name: "画像专家",
+      system_prompt: "你是客服",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
+      tagline: "售后问题一站解决",
+      use_cases: ["退款处理"],
+      output_types: ["document"],
+      pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" },
+      publisher: "平台运营",
+    });
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market")) return listPage([]);
+      if (init?.method === "PATCH") return singleResponse({ ...expert, pricing: null });
+      return singleResponse(expert);
+    });
+    renderCatalogDetail(makeSystemAdminSession(), "exp-profile", "expert_template");
+
+    expect(await screen.findByText("售后问题一站解决")).toBeInTheDocument();
+    expect(screen.getByText("按次 · 0.05 USD/次")).toBeInTheDocument();
+    expect(screen.queryByText("不适用场景")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("编辑"));
+    await selectAstryxOption("计价方式 (pricing)", "不展示计价");
+    fireEvent.change(screen.getByLabelText(/^不适用场景 \(limitations\)/), { target: { value: "不处理法律纠纷" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH");
+      expect(patchCall).toBeDefined();
+      const body = JSON.parse((patchCall![1] as { body: string }).body);
+      expect(body.pricing).toBeNull();
+      expect(body.limitations).toEqual(["不处理法律纠纷"]);
+      expect(body.tagline).toBe("售后问题一站解决");
+      expect(body.required_permissions).toBeNull();
+      expect(body.publisher).toBe("平台运营");
+    });
+  });
+
+  it("编辑时展示字段校验失败不发 PATCH", async () => {
+    const expert = makeCatalogItem({
+      template_id: "exp-profile",
+      system_prompt: "你是客服",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
+    });
+    mockFetch.mockImplementation(async (url: unknown) => {
+      if (String(url).includes("skill-market")) return listPage([]);
+      return singleResponse(expert);
+    });
+    renderCatalogDetail(makeSystemAdminSession(), "exp-profile", "expert_template");
+    fireEvent.click(await screen.findByText("编辑"));
+    fireEvent.change(screen.getByLabelText(/^更新说明链接 \(changelog_url\)/), { target: { value: "javascript:alert(1)" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    expect(await screen.findByText("更新说明链接需为 http/https 地址")).toBeInTheDocument();
+    expect(screen.getByText("人才市场展示字段有误，请按提示修改")).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH")).toBe(false);
+  });
+
+  it("套餐计价必须选周期，保存时带上 billing_period", async () => {
+    const expert = makeCatalogItem({
+      template_id: "exp-profile",
+      system_prompt: "你是客服",
+      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
+    });
+    mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes("skill-market")) return listPage([]);
+      if (init?.method === "PATCH") return singleResponse({ ...expert, pricing: { mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" } });
+      return singleResponse(expert);
+    });
+    renderCatalogDetail(makeSystemAdminSession(), "exp-profile", "expert_template");
+    fireEvent.click(await screen.findByText("编辑"));
+    expect(screen.queryByRole("combobox", { name: "套餐周期 (billing_period)" })).not.toBeInTheDocument();
+    await selectAstryxOption("计价方式 (pricing)", "套餐");
+    expect(screen.getByText("每个套餐周期的价格（USD），例如 99")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^参考单价 \(USD\)/), { target: { value: "99" } });
+    fireEvent.click(screen.getByText("保存"));
+    expect(await screen.findByText("套餐需选择周期（按月或按年）")).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH")).toBe(false);
+
+    await selectAstryxOption("套餐周期 (billing_period)", "按月");
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => {
+      const patchCall = mockFetch.mock.calls.find((c: unknown[]) => c[1] && (c[1] as { method?: string }).method === "PATCH");
+      expect(patchCall).toBeDefined();
+      expect(JSON.parse((patchCall![1] as { body: string }).body).pricing).toEqual({ mode: "subscription", unit_price: "99", currency: "USD", billing_period: "month" });
+    });
+  });
 });
 
 // ---- 8. 详情页多 section 渲染 + 编辑 ----

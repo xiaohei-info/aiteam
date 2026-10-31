@@ -686,7 +686,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    assert.equal(frontendOperations.length, 77);
+    assert.equal(frontendOperations.length, 84);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -1001,6 +1001,101 @@ test("Agent context reset route holds on a temporary memory failure, validates i
     assert.equal(repeated.already_reset, true);
     assert.equal(repeated.reset_id, proceeded.reset_id);
     assert.equal(retains, 2);
+  } finally {
+    await http.close();
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("Agent context reset records the segment outcome, tags memory, and segments can be revised, cleared and counted", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const retained: Array<Record<string, unknown>> = [];
+  const manager: ManagerClient = {
+    pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
+    getOrgTree: async () => ({}),
+    memoryRetain: async (_caller, _employee, _content, metadata) => { retained.push(metadata ?? {}); return { operationId: `op-${retained.length}` }; },
+  };
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", memory_policy: { enabled: true, allowed_operations: ["recall", "retain"] }, tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  fixture.store.createConversation({ id: "other-member", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-2" });
+  const host = fixture.createHost(undefined, manager);
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const call = (path: string, method = "GET", body?: unknown) => fetch(`http://127.0.0.1:${address.port}/api/agent${path}`, {
+    method,
+    headers: { Authorization: "Bearer test", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const json = async (response: Response, status = 200): Promise<any> => { assert.equal(response.status, status, await response.clone().text()); return response.json(); };
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  try {
+    for (const invalid of [
+      { outcome: "maybe" }, { outcome: null }, { outcome_reasons: ["other"] }, { outcome: "resolved", outcome_reasons: ["other"] },
+      { outcome: "unresolved", outcome_reasons: ["nope"] }, { outcome: "unresolved", outcome_reasons: ["other", "other"] },
+      { outcome: "unresolved", outcome_note: "字".repeat(501) }, { outcome: "resolved", follow_up: "yes" },
+    ]) await json(await call("/conversations/c1/context/reset", "POST", invalid), 422);
+
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("c1", "hello", undefined, caller);
+    const first = (await json(await call("/conversations/c1/context/reset", "POST", { outcome: "unresolved", outcome_reasons: ["missing_info"], outcome_note: " 缺少报价 ", follow_up: true }))).data;
+    assert.equal(first.reset, true);
+    assert.equal(first.segment_id, first.reset_id);
+    assert.equal(first.outcome, "unresolved");
+    assert.deepEqual(first.segment.outcome_reasons, ["missing_info"]);
+    assert.equal(first.segment.outcome_note, "缺少报价");
+    assert.equal(first.segment.follow_up, true);
+    assert.deepEqual(first.segment.employee_ids, ["employee-1"]);
+    assert.equal(retained[0]?.outcome, "unresolved");
+    assert.equal(retained[0]?.outcome_reasons, "missing_info");
+
+    const replay = (await json(await call("/conversations/c1/context/reset", "POST", { outcome: "resolved" }))).data;
+    assert.equal(replay.already_reset, true);
+    assert.equal(replay.segment_id, first.segment_id);
+    assert.equal(replay.outcome, "unresolved", "a replay never rewrites the earlier verdict");
+
+    fixture.faux.setResponses([fauxAssistantMessage("ok again")]);
+    await host.prompt("c1", "hello again", undefined, caller);
+    const unevaluated = (await json(await call("/conversations/c1/context/reset", "POST"))).data;
+    assert.equal(unevaluated.outcome, null);
+    assert.equal("outcome" in retained[1]!, false, "no verdict keeps the legacy retain metadata");
+
+    const segments = (await json(await call("/conversations/c1/segments"))).data;
+    assert.deepEqual(segments.map((segment: any) => segment.outcome), ["unresolved", null]);
+    await json(await call("/conversations/other-member/segments"), 404);
+
+    const revised = (await json(await call(`/conversations/c1/segments/${first.segment_id}`, "PATCH", { outcome: "resolved", revision: 1 }))).data;
+    assert.equal(revised.outcome, "resolved");
+    assert.deepEqual(revised.outcome_reasons, []);
+    assert.equal(revised.revision, 2);
+    assert.equal((await json(await call(`/conversations/c1/segments/${first.segment_id}`, "PATCH", { outcome: null, revision: 1 }), 409)).code, "segment_revision_conflict");
+    await json(await call(`/conversations/c1/segments/${first.segment_id}`, "PATCH", { revision: 2 }), 422);
+    await json(await call(`/conversations/c1/segments/${first.segment_id}`, "PATCH", { outcome: "resolved", revision: 2, extra: 1 }), 422);
+    await json(await call("/conversations/c1/segments/missing", "PATCH", { outcome: "resolved", revision: 1 }), 404);
+
+    let stats = (await json(await call("/usage/outcomes?group_by=employee"))).data;
+    assert.equal(stats.evaluated_count, 1);
+    assert.equal(stats.resolved_count, 1);
+    assert.equal(stats.resolution_rate, null, "fewer than 10 evaluated segments never publish a rate");
+    assert.equal(stats.min_sample, 10);
+    assert.deepEqual(stats.groups.map((group: any) => [group.employee_id, group.evaluated_count]), [["employee-1", 1]]);
+
+    const cleared = (await json(await call(`/conversations/c1/segments/${first.segment_id}`, "PATCH", { outcome: null, revision: 2 }))).data;
+    assert.equal(cleared.outcome, null);
+    assert.equal(cleared.evaluated_at, null);
+    stats = (await json(await call("/usage/outcomes?employee_id=employee-1"))).data;
+    assert.equal(stats.evaluated_count, 0);
+    for (const query of ["group_by=member", "unknown=1", "window_start=2026-10-01T00:00:00Z"]) await json(await call(`/usage/outcomes?${query}`), 422);
+
+    const doc = await json(await fetch(`http://127.0.0.1:${address.port}/openapi.json`));
+    for (const [path, method] of [["/api/agent/conversations/{conversation_id}/segments", "get"], ["/api/agent/conversations/{conversation_id}/segments/{segment_id}", "patch"], ["/api/agent/usage/outcomes", "get"]] as const) {
+      assert(doc.paths[path]?.[method]?.summary, `${method} ${path} is documented`);
+    }
   } finally {
     await http.close();
     await host.dispose();

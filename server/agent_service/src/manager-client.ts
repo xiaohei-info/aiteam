@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { employeeDisplay } from "./services/employee-display.js";
 import type { FrozenSnapshot, LoadedExpertProjection, LoadedSolutionProjection } from "./storage/sqlite.js";
-import type { UsageSummary } from "./usage.js";
+import type { SegmentOutcomeSummary, UsageSummary } from "./usage.js";
 import { normalizeSkillSigningKeyMetadata as parseSkillSigningKeyMetadata, skillRefsForSnapshot, type SignedSkillPackage, type SkillSigningKeyMetadata } from "./skills.js";
 import type { RuntimeProviderConfig } from "./pi/model-runtime.js";
 
@@ -14,26 +14,31 @@ const MANAGER_REQUEST_TIMEOUT_MS = 10_000;
 const SKILL_MARKET_NAMES_TIMEOUT_MS = 1_500;
 
 export interface HindsightRuntimeConfig {
-  /** Manager facade URL; never a direct Hindsight service URL. */
+  /** Manager protocol adapter URL; includes the fixed employee session scope. */
   base_url: string;
-  /** Bank selected by Manager; never supplied by a Pi model/tool call. */
+  /** Protocol path value only; Manager derives the authoritative bank. */
   bank_id: string;
-  /** Current Manager responses always include this; optional only for legacy read-only responses. */
-  allowed_operations?: ("recall" | "retain")[];
-  /** Positive for a current write lease; legacy read-only responses may omit it. */
-  policy_revision?: number;
-  /** Current negotiated protocol; null/absent means read-only compatibility mode. */
-  client_protocol?: typeof HINDSIGHT_CLIENT_PROTOCOL | null;
-  /** Current Manager consent; absent/false never restores stale auto-retain permission. */
-  explicit_auto_retain?: boolean;
-  /** Fact-only finite/guarded mode versus unrestricted future policy. */
-  retention_mode?: "unlimited" | "fact_only";
-  /** Opaque short-lived Manager facade lease token. Keep in process memory only. */
+  /** The current Agent→Manager JWT used by the Pi plugin HTTP client. */
   token: string;
+  /** Compatibility context id for Pi config scoping; this is not a Manager lease. */
   lease_id: string;
   version: number;
   issued_at: string;
   expires_at: string;
+  allowed_operations?: ("recall" | "retain")[];
+  policy_revision?: number;
+  client_protocol?: typeof HINDSIGHT_CLIENT_PROTOCOL | null;
+  explicit_auto_retain?: boolean;
+  retention_mode?: "unlimited" | "fact_only";
+}
+
+export interface ManagerMemoryRuntimeConfig {
+  base_url: string;
+  bank_id: string;
+  allowed_operations: ("recall" | "retain")[];
+  policy_revision: number;
+  client_protocol: typeof HINDSIGHT_CLIENT_PROTOCOL;
+  retention_mode: "unlimited" | "fact_only";
 }
 
 export interface AuthorizedConfig {
@@ -46,10 +51,38 @@ export interface AuthorizedConfig {
   skill_signing_keys?: SkillSigningKeyMetadata[];
 }
 
-export interface MarketplaceTemplate {
+export const MARKETPLACE_OUTPUT_TYPES = ["document", "spreadsheet", "code", "presentation", "system_operation"] as const;
+export type MarketplaceOutputType = typeof MARKETPLACE_OUTPUT_TYPES[number];
+export const MARKETPLACE_PRICING_MODES = ["per_call", "per_token", "subscription"] as const;
+export const MARKETPLACE_BILLING_PERIODS = ["month", "year"] as const;
+
+/** 人才市场展示字段（议题 7）；Operator 持有，Manager 原样投影，旧模板为空列表/null。 */
+export interface MarketplaceTemplateProfile {
+  tagline: string | null;
+  use_cases: string[];
+  limitations: string[];
+  example_prompts: string[];
+  sample_outputs: Array<{ title: string; output_type: MarketplaceOutputType; preview_url: string | null }>;
+  output_types: MarketplaceOutputType[];
+  required_connectors: string[];
+  optional_connectors: string[];
+  recommended_knowledge: string[];
+  required_permissions: { full_access: boolean; local_directories: boolean } | null;
+  /** billing_period 只出现在 subscription 上；旧 Manager 未返回周期时省略。 */
+  pricing: { mode: typeof MARKETPLACE_PRICING_MODES[number]; unit_price: string; currency: "USD"; billing_period?: typeof MARKETPLACE_BILLING_PERIODS[number] } | null;
+  memory_policy_summary: string | null;
+  publisher: string | null;
+  version: string | null;
+  updated_at: string | null;
+  changelog_url: string | null;
+  /** Manager 按本企业段落评估汇总；样本不足时 resolution_rate 为 null。 */
+  stats: { resolution_rate: number | null; evaluated_segments: number; resolved_segments: number; min_sample: number } | null;
+}
+
+export interface MarketplaceTemplate extends MarketplaceTemplateProfile {
   template_id: string;
   description: string | null;
-  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string; display_name: string | null }> | null;
+  platform_skill_refs: Array<{ skill_id: string; version: string; content_hash: string; display_name: string | null; summary: string | null }> | null;
   display_name: string;
   category: string;
   model_name: string;
@@ -78,6 +111,43 @@ export interface MemoryRetainAck {
   operationId: string;
 }
 
+export type MemoryScope = "mine" | "all";
+
+export interface MemoryListQuery {
+  scope?: MemoryScope;
+  keyword?: string;
+  limit: number;
+  offset: number;
+}
+
+/** One Manager memory page; Manager has already applied the member scope. */
+export interface MemoryListPage {
+  items: unknown[];
+  total: number;
+  scope: MemoryScope;
+  truncated: boolean;
+}
+
+/** Contributor counts for one employee's memory bank; never contains memory text. */
+export interface MemorySummary {
+  employee_id: string;
+  scope: MemoryScope;
+  total_count: number;
+  own_count: number;
+  others_count: number;
+  unattributed_count: number;
+  recent_count: number;
+  latest_used_at: string | null;
+  truncated: boolean;
+}
+
+/** Member-visible enterprise knowledge base; endpoint and credential_ref stay admin-only in Manager. */
+export interface ManagerKnowledgeSpace {
+  knowledge_space_id: string;
+  display_name: string;
+  deployment_kind: "managed" | "nas";
+}
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -89,6 +159,8 @@ export interface ManagerClient {
   /** Member-scoped ASR config; intentionally does not require an employee id. */
   pullSpeechRuntimeConfig?(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig>;
   pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
+  /** Fetches protocol metadata only; the Agent reuses the caller JWT. */
+  pullMemoryRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
@@ -99,10 +171,17 @@ export interface ManagerClient {
   deleteDepartment?(caller: AuthenticatedCaller, departmentId: string): Promise<void>;
   assignEmployeeDepartment?(caller: AuthenticatedCaller, employeeId: string, departmentId: string): Promise<unknown>;
   listMarketplaceTemplates?(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]>;
+  /** Members only receive memories they contributed; Manager enforces the scope. */
+  memoryList?(caller: AuthenticatedCaller, employeeId: string, query: MemoryListQuery): Promise<MemoryListPage>;
+  /** Contributor counts without memory text. */
+  memorySummary?(caller: AuthenticatedCaller, employeeId: string, scope?: MemoryScope): Promise<MemorySummary>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
   memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
+  /** Enterprise knowledge bases the member can read in the current tenant. */
+  listKnowledgeSpaces?(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
+  uploadSegmentOutcomes?(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -179,6 +258,29 @@ export class HttpManagerClient implements ManagerClient {
     return normalizeHindsightRuntimeConfig(this.unwrap(response), this.baseUrl);
   }
 
+  async pullMemoryRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig> {
+    if (!caller.accessToken) throw new ManagerUnavailableError("Agent caller token is unavailable for memory protocol adapter");
+    const response = await this.request(
+      "/api/manager/hindsight/memory-runtime-config",
+      caller,
+      { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL },
+    );
+    const descriptor = normalizeManagerMemoryRuntimeConfig(this.unwrap(response), this.baseUrl);
+    const issuedAt = new Date().toISOString();
+    const expiry = typeof caller.claims?.exp === "number" && Number.isFinite(caller.claims.exp)
+      ? new Date(caller.claims.exp * 1_000).toISOString()
+      : new Date(Date.now() + 300_000).toISOString();
+    return {
+      ...descriptor,
+      token: caller.accessToken,
+      lease_id: "manager-jwt-context",
+      version: 1,
+      issued_at: issuedAt,
+      expires_at: expiry,
+      explicit_auto_retain: descriptor.allowed_operations.includes("retain"),
+    };
+  }
+
   async pullSnapshots(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]> {
     const snapshots: FrozenSnapshot[] = [];
     for (const expert of experts) {
@@ -221,33 +323,63 @@ export class HttpManagerClient implements ManagerClient {
   }
 
   async listMarketplaceTemplates(caller: AuthenticatedCaller): Promise<MarketplaceTemplate[]> {
-    const [response, names] = await Promise.all([
+    const [response, skills] = await Promise.all([
       this.request("/api/manager/recruit/catalog/experts", caller),
-      this.skillMarketNames(caller),
+      this.skillMarketEntries(caller),
     ]);
     const value = this.unwrap(response);
     if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace catalog");
-    return value.map((item) => normalizeMarketplaceTemplate(item, names));
+    return value.map((item) => normalizeMarketplaceTemplate(item, skills));
   }
 
   /**
-   * 平台技能 ID → 展示名，供人才市场显示技能名称；技能市场不可用时返回空表，模板照常列出。
+   * 平台技能 ID → 展示名与一句说明，供人才市场显示技能；技能市场不可用时返回空表，模板照常列出。
    * 与模板目录并行请求，所以单独给一个短超时，避免拖慢整个人才市场列表。
    */
-  private async skillMarketNames(caller: AuthenticatedCaller): Promise<Map<string, string>> {
-    const names = new Map<string, string>();
+  private async skillMarketEntries(caller: AuthenticatedCaller): Promise<Map<string, SkillMarketEntry>> {
+    const names = new Map<string, SkillMarketEntry>();
     try {
       const value = this.unwrap(await this.request("/api/manager/skill-market", caller, undefined, undefined, undefined, undefined, SKILL_MARKET_NAMES_TIMEOUT_MS));
       for (const item of Array.isArray(value) ? value : []) {
         const raw = objectValue(item);
-        const name = typeof raw?.display_name === "string" ? raw.display_name.trim() : "";
-        if (typeof raw?.skill_id === "string" && raw.skill_id && name) names.set(raw.skill_id, name);
+        if (typeof raw?.skill_id !== "string" || !raw.skill_id) continue;
+        const entry = { display_name: trimmedOrNull(raw.display_name), summary: trimmedOrNull(raw.summary) };
+        if (entry.display_name || entry.summary) names.set(raw.skill_id, entry);
       }
     } catch (error) {
       // Names are cosmetic; the catalog itself decides availability. Log so missing names stay diagnosable.
       appLogger.log("warn", "marketplace.skill_names_unavailable", { dependency: "manager", outcome: error instanceof ManagerTimeoutError ? "timeout" : "failed", ...safeError(error) });
     }
     return names;
+  }
+
+  async memoryList(caller: AuthenticatedCaller, employeeId: string, query: MemoryListQuery): Promise<MemoryListPage> {
+    const response = await this.request("/api/manager/memories", caller, undefined, {
+      employee_id: employeeId, limit: String(query.limit), offset: String(query.offset),
+      ...(query.scope ? { scope: query.scope } : {}), ...(query.keyword ? { keyword: query.keyword } : {}),
+    });
+    const body = objectValue(response);
+    const meta = objectValue(body?.meta);
+    if (!Array.isArray(body?.data) || typeof meta?.total !== "number" || (meta.scope !== "mine" && meta.scope !== "all")) {
+      throw new ManagerUnavailableError("Manager returned an invalid memory list");
+    }
+    return { items: body.data, total: meta.total, scope: meta.scope, truncated: meta.truncated === true };
+  }
+
+  async memorySummary(caller: AuthenticatedCaller, employeeId: string, scope?: MemoryScope): Promise<MemorySummary> {
+    const raw = objectValue(this.unwrap(await this.request("/api/manager/memories/summary", caller, undefined, { employee_id: employeeId, ...(scope ? { scope } : {}) })));
+    const counts = ["total_count", "own_count", "others_count", "unattributed_count", "recent_count"] as const;
+    if (!raw || typeof raw.employee_id !== "string" || (raw.scope !== "mine" && raw.scope !== "all")
+      || counts.some((key) => !Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0)
+      || (raw.latest_used_at !== null && raw.latest_used_at !== undefined && typeof raw.latest_used_at !== "string")) {
+      throw new ManagerUnavailableError("Manager returned an invalid memory summary");
+    }
+    return {
+      employee_id: raw.employee_id, scope: raw.scope,
+      total_count: raw.total_count as number, own_count: raw.own_count as number, others_count: raw.others_count as number,
+      unattributed_count: raw.unattributed_count as number, recent_count: raw.recent_count as number,
+      latest_used_at: typeof raw.latest_used_at === "string" ? raw.latest_used_at : null, truncated: raw.truncated === true,
+    };
   }
 
   async memoryDelete(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void> {
@@ -267,8 +399,24 @@ export class HttpManagerClient implements ManagerClient {
     return { operationId: value.operation_id };
   }
 
+  async listKnowledgeSpaces(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]> {
+    const body = objectValue(await this.request("/api/manager/knowledge-spaces", caller));
+    if (!Array.isArray(body?.data)) throw new ManagerUnavailableError("Manager returned an invalid knowledge space list");
+    return body.data.map((item) => {
+      const raw = objectValue(item);
+      if (!raw || typeof raw.knowledge_space_id !== "string" || typeof raw.display_name !== "string") {
+        throw new ManagerUnavailableError("Manager returned an invalid knowledge space item");
+      }
+      return { knowledge_space_id: raw.knowledge_space_id, display_name: raw.display_name, deployment_kind: raw.deployment_kind === "nas" ? "nas" : "managed" };
+    });
+  }
+
   async uploadUsage(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown> {
     return this.unwrap(await this.request("/api/manager/usage/upload", caller, { tenant_id: summary.tenant_id, usage: [summary], audits: [] }, undefined, "POST", summary.summary_id));
+  }
+
+  async uploadSegmentOutcomes(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown> {
+    return this.unwrap(await this.request("/api/manager/usage/segment-outcomes", caller, { tenant_id: summary.tenant_id, segment_outcomes: [summary] }, undefined, "POST", summary.summary_id));
   }
 
   private async request(
@@ -321,7 +469,7 @@ export class HttpManagerClient implements ManagerClient {
       throw new ManagerUnavailableError("Manager request failed", { cause: error });
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status);
+      if (response.status === 401 || response.status === 403) throw new ManagerAuthorizationError(response.status, (await readManagerProblem(response)).code);
       const { code: problemCode, detail } = await readManagerProblem(response);
       const message = `Manager returned HTTP ${response.status} for ${path}${detail ? `: ${detail}` : ""}`;
       if (response.status === 404 || response.status === 409) throw new ManagerPolicyDeniedError(response.status, message, problemCode);
@@ -381,8 +529,8 @@ async function readManagerProblem(response: Response): Promise<{ code: string; d
 }
 
 export class ManagerAuthorizationError extends ManagerUnavailableError {
-  constructor(readonly status: 401 | 403) {
-    super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied");
+  constructor(readonly status: 401 | 403, problemCode?: string) {
+    super(status === 401 ? "Manager authentication is required" : "Manager authorization was denied", { problemCode });
     this.name = "ManagerAuthorizationError";
   }
 }
@@ -474,13 +622,66 @@ function normalizeExpert(value: unknown, tenantId?: string, memberId?: string): 
   };
 }
 
-function normalizeMarketplaceTemplate(value: unknown, skillNames: ReadonlyMap<string, string> = new Map()): MarketplaceTemplate {
+interface SkillMarketEntry { display_name: string | null; summary: string | null }
+
+function trimmedOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isOutputType(value: unknown): value is MarketplaceOutputType {
+  return typeof value === "string" && (MARKETPLACE_OUTPUT_TYPES as readonly string[]).includes(value);
+}
+
+/** Manager 投影的展示字段做形状校验；不合法的单项丢弃，不让单个模板拖垮目录。 */
+function normalizeMarketplaceProfile(raw: Record<string, unknown>): MarketplaceTemplateProfile {
+  const permissions = objectValue(raw.required_permissions);
+  const pricing = objectValue(raw.pricing);
+  const stats = objectValue(raw.stats);
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const rate = stats?.resolution_rate;
+  return {
+    tagline: trimmedOrNull(raw.tagline),
+    use_cases: stringArray(raw.use_cases),
+    limitations: stringArray(raw.limitations),
+    example_prompts: stringArray(raw.example_prompts),
+    sample_outputs: (Array.isArray(raw.sample_outputs) ? raw.sample_outputs : []).flatMap((item) => {
+      const output = objectValue(item);
+      const title = trimmedOrNull(output?.title);
+      return title && isOutputType(output?.output_type) ? [{ title, output_type: output.output_type, preview_url: trimmedOrNull(output.preview_url) }] : [];
+    }),
+    output_types: [...new Set((Array.isArray(raw.output_types) ? raw.output_types : []).filter(isOutputType))],
+    required_connectors: stringArray(raw.required_connectors),
+    optional_connectors: stringArray(raw.optional_connectors),
+    recommended_knowledge: stringArray(raw.recommended_knowledge),
+    required_permissions: permissions ? { full_access: permissions.full_access === true, local_directories: permissions.local_directories === true } : null,
+    pricing: pricing && (MARKETPLACE_PRICING_MODES as readonly unknown[]).includes(pricing.mode) && typeof pricing.unit_price === "string" && /^\d+(\.\d+)?$/.test(pricing.unit_price) && pricing.currency === "USD"
+      ? {
+        mode: pricing.mode as typeof MARKETPLACE_PRICING_MODES[number], unit_price: pricing.unit_price, currency: "USD",
+        ...(pricing.mode === "subscription" && (MARKETPLACE_BILLING_PERIODS as readonly unknown[]).includes(pricing.billing_period)
+          ? { billing_period: pricing.billing_period as typeof MARKETPLACE_BILLING_PERIODS[number] } : {}),
+      }
+      : null,
+    memory_policy_summary: trimmedOrNull(raw.memory_policy_summary),
+    publisher: trimmedOrNull(raw.publisher),
+    version: trimmedOrNull(raw.version),
+    updated_at: typeof raw.updated_at === "string" && Number.isFinite(Date.parse(raw.updated_at)) ? new Date(raw.updated_at).toISOString() : null,
+    changelog_url: typeof raw.changelog_url === "string" && /^https?:\/\/\S+$/u.test(raw.changelog_url.trim()) ? raw.changelog_url.trim() : null,
+    stats: stats ? {
+      resolution_rate: typeof rate === "number" && rate >= 0 && rate <= 1 ? rate : null,
+      evaluated_segments: count(stats.evaluated_segments),
+      resolved_segments: count(stats.resolved_segments),
+      min_sample: count(stats.min_sample) || 1,
+    } : null,
+  };
+}
+
+function normalizeMarketplaceTemplate(value: unknown, skillMarket: ReadonlyMap<string, SkillMarketEntry> = new Map()): MarketplaceTemplate {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const raw = value as Record<string, unknown>;
   if (typeof raw.template_id !== "string" || raw.template_id.length === 0 || raw.template_id.length > 256) throw new ManagerUnavailableError("Manager returned an invalid marketplace template");
   const skills = Array.isArray(raw.platform_skill_refs)
     ? raw.platform_skill_refs.filter((ref) => ref && typeof ref === "object" && !Array.isArray(ref) && ["skill_id", "version", "content_hash"].every((key) => typeof ref[key] === "string" && ref[key].length > 0))
-      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string, display_name: skillNames.get(ref.skill_id as string) ?? null }))
+      .map((ref) => ({ skill_id: ref.skill_id as string, version: ref.version as string, content_hash: ref.content_hash as string, display_name: skillMarket.get(ref.skill_id as string)?.display_name ?? null, summary: skillMarket.get(ref.skill_id as string)?.summary ?? null }))
     : stringArray(raw.skill_ids);
   const tags = stringArray(raw.tags);
   return {
@@ -497,6 +698,7 @@ function normalizeMarketplaceTemplate(value: unknown, skillNames: ReadonlyMap<st
     is_recruited: raw.is_recruited === true,
     tags,
     avatar_url: typeof raw.avatar_url === "string" && raw.avatar_url.length > 0 ? raw.avatar_url : null,
+    ...normalizeMarketplaceProfile(raw),
   };
 }
 
@@ -509,6 +711,41 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
   const version = String(raw.version ?? (raw.solution_version !== undefined && raw.config_version !== undefined ? `${raw.solution_version}:${raw.config_version}` : raw.solution_version ?? raw.config_version ?? ""));
   assertOwnership(raw, tenantId, memberId);
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };
+}
+
+export function normalizeManagerMemoryRuntimeConfig(value: unknown, managerUrl?: string): ManagerMemoryRuntimeConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid memory runtime config");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["base_url", "bank_id", "allowed_operations", "policy_revision", "client_protocol", "retention_mode"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid memory runtime config");
+  if (typeof raw.base_url !== "string" || typeof raw.bank_id !== "string" || !Array.isArray(raw.allowed_operations)
+    || typeof raw.policy_revision !== "number" || !Number.isSafeInteger(raw.policy_revision) || raw.policy_revision < 0
+    || raw.client_protocol !== HINDSIGHT_CLIENT_PROTOCOL
+    || (raw.retention_mode !== "unlimited" && raw.retention_mode !== "fact_only")) {
+    throw new ManagerUnavailableError("Manager returned an incomplete memory runtime config");
+  }
+  if (!/^aiteam-[0-9a-f]{32}$/u.test(raw.bank_id)) throw new ManagerUnavailableError("Manager returned an invalid memory protocol bank scope");
+  if (raw.allowed_operations.some((operation) => operation !== "recall" && operation !== "retain") || raw.allowed_operations.length > 2) {
+    throw new ManagerUnavailableError("Manager returned invalid memory operations");
+  }
+  let baseUrl: string;
+  try {
+    const parsed = new URL(raw.base_url, managerUrl);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash
+      || !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(parsed.pathname.replace(/\/$/u, ""))) throw new Error("invalid memory adapter URL");
+    if (managerUrl && parsed.origin !== new URL(managerUrl).origin) throw new Error("memory adapter URL is not Manager-owned");
+    baseUrl = parsed.toString().replace(/\/$/u, "");
+  } catch {
+    throw new ManagerUnavailableError("Manager returned an invalid memory adapter URL");
+  }
+  return {
+    base_url: baseUrl,
+    bank_id: raw.bank_id,
+    allowed_operations: raw.allowed_operations as ("recall" | "retain")[],
+    policy_revision: raw.policy_revision,
+    client_protocol: HINDSIGHT_CLIENT_PROTOCOL,
+    retention_mode: raw.retention_mode,
+  };
 }
 
 export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: string): HindsightRuntimeConfig {
@@ -532,7 +769,8 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   let baseUrl: string;
   try {
     const parsed = new URL(baseUrlValue as string, managerUrl);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.replace(/\/$/u, "") !== "/api/manager/hindsight") throw new Error("invalid facade URL");
+    const normalizedPath = parsed.pathname.replace(/\/$/u, "");
+    if (normalizedPath !== "/api/manager/hindsight" && !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(normalizedPath)) throw new Error("invalid facade URL");
     if (managerUrl) {
       const manager = new URL(managerUrl);
       if (parsed.origin !== manager.origin) throw new Error("facade URL is not Manager-owned");

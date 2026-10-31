@@ -28,6 +28,40 @@ export interface UsageSummary {
   duration_seconds_total: number;
 }
 
+/**
+ * Absolute per-hour verdict counts for one member + employee; the only outcome data that leaves the machine.
+ * Unlike UsageSummary it is replaced, not added to, because verdicts can be changed or cleared.
+ */
+export interface SegmentOutcomeSummary {
+  schema_version: "1";
+  summary_id: string;
+  tenant_id: string;
+  member_id: string;
+  employee_id: string;
+  /** UTC hour containing the reset that ended the segment. */
+  window_start: string;
+  window_end: string;
+  evaluated_count: number;
+  resolved_count: number;
+}
+
+export function segmentOutcomeSummary(input: { tenantId: string; memberId: string; employeeId: string; hourStart: number; evaluated: number; resolved: number }): SegmentOutcomeSummary {
+  const start = new Date(input.hourStart);
+  start.setUTCMinutes(0, 0, 0);
+  const windowStart = start.toISOString();
+  return {
+    schema_version: "1",
+    summary_id: createHash("sha256").update(`segment_outcome:${input.tenantId}:${input.memberId}:${input.employeeId}:${windowStart}`).digest("hex"),
+    tenant_id: input.tenantId,
+    member_id: input.memberId,
+    employee_id: input.employeeId,
+    window_start: windowStart,
+    window_end: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+    evaluated_count: input.evaluated,
+    resolved_count: input.resolved,
+  };
+}
+
 export interface UsageCapture {
   tenantId: string;
   memberId: string;
@@ -51,6 +85,7 @@ export function aggregateUsage(capture: UsageCapture): UsageSummary {
   let cacheWrite = 0;
   for (const entry of capture.entries) {
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    // SAFETY: assistant messages may carry a provider usage record; every field is read through finite().
     const usage = (entry.message as unknown as { usage?: Record<string, unknown> }).usage;
     if (!usage) continue;
     input += finite(usage.input);
@@ -110,6 +145,7 @@ export function measureWorkUsage(entries: readonly SessionEntry[], pricing?: Run
   if (!assistants.length) return null;
   const totals = [0, 0, 0, 0];
   for (const entry of assistants) {
+    // SAFETY: filtered to assistant message entries above; usage is optional and each field is type-checked below.
     const usage = (entry as unknown as { message: { usage?: Record<string, unknown> } }).message.usage;
     for (const [index, field] of ["input", "output", "cacheRead", "cacheWrite"].entries()) {
       const value = usage?.[field];

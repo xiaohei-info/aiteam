@@ -180,6 +180,90 @@ def _to_uuid(value: str | UUID | None) -> UUID | None:
     return UUID(str(value))
 
 
+# Shared aggregate projection for statistics totals and grouped statistics so
+# both reads keep one execution/pricing definition.
+_USAGE_STATISTICS_COLUMNS = """
+    COUNT(*) AS summary_count,
+    COALESCE(SUM(CASE WHEN u.prompt_count > 0 THEN u.prompt_count ELSE u.run_count END), 0) AS execution_count,
+    COALESCE(SUM(u.run_count), 0) AS run_count,
+    COALESCE(SUM(u.prompt_count), 0) AS prompt_count,
+    COALESCE(SUM(u.settled_count), 0) AS settled_count,
+    COALESCE(SUM(u.error_count), 0) AS error_count,
+    COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+    COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(u.cache_tokens), 0) AS cache_tokens,
+    COALESCE(SUM(u.token_total), 0) AS token_total,
+    COALESCE(SUM(u.duration_ms_total), 0) AS duration_ms_total,
+    COALESCE(SUM(u.duration_seconds_total), 0) AS duration_seconds_total,
+    COALESCE(SUM(u.cost_total) FILTER (WHERE u.pricing_status = 'known'), 0) AS known_cost_total,
+    COALESCE(SUM(u.token_total) FILTER (WHERE u.pricing_status = 'unknown'), 0) AS unknown_pricing_tokens,
+    COALESCE(SUM(CASE WHEN u.prompt_count > 0 THEN u.prompt_count ELSE u.run_count END) FILTER (WHERE u.pricing_status = 'unknown'), 0) AS unknown_pricing_runs,
+    COUNT(*) FILTER (WHERE u.pricing_status = 'unknown') AS unknown_summary_count
+"""
+
+_USAGE_STATISTICS_TOTAL_SQL = "SELECT" + _USAGE_STATISTICS_COLUMNS + "FROM usage_rollup AS u WHERE "
+
+# group_by value -> prebuilt (SELECT ... WHERE, GROUP BY ... ORDER BY) SQL.
+# Fixed allowlist; caller input never reaches SQL identifiers.
+_USAGE_GROUP_SQL = {
+    "employee": (
+        "SELECT u.employee_id, MAX(n.display_name)," + _USAGE_STATISTICS_COLUMNS
+        + "FROM usage_rollup AS u LEFT JOIN employee AS n ON n.id = u.employee_id WHERE ",
+        " GROUP BY u.employee_id ORDER BY SUM(u.token_total) DESC, u.employee_id NULLS LAST",
+    ),
+    "member": (
+        "SELECT u.member_id, MAX(n.display_name)," + _USAGE_STATISTICS_COLUMNS
+        + "FROM usage_rollup AS u LEFT JOIN app_user AS n ON n.id = u.member_id WHERE ",
+        " GROUP BY u.member_id ORDER BY SUM(u.token_total) DESC, u.member_id NULLS LAST",
+    ),
+}
+
+
+def _usage_statistics_values(row: Any) -> dict[str, Any]:
+    return {
+        "summary_count": int(row[0] or 0),
+        "execution_count": int(row[1] or 0),
+        "run_count": int(row[2] or 0),
+        "prompt_count": int(row[3] or 0),
+        "settled_count": int(row[4] or 0),
+        "error_count": int(row[5] or 0),
+        "input_tokens": int(row[6] or 0),
+        "output_tokens": int(row[7] or 0),
+        "cache_tokens": int(row[8] or 0),
+        "token_total": int(row[9] or 0),
+        "duration_ms_total": int(row[10] or 0),
+        "duration_seconds_total": int(row[11] or 0),
+        "known_cost_total": row[12],
+        "unknown_pricing_tokens": int(row[13] or 0),
+        "unknown_pricing_runs": int(row[14] or 0),
+        "unknown_summary_count": int(row[15] or 0),
+    }
+
+
+def _usage_scope_clauses(
+    *,
+    employee_id: str | None,
+    member_id: str | None,
+    window_start: datetime | None,
+    window_end: datetime | None,
+) -> tuple[list[str], list[Any]]:
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    if window_start is not None:
+        clauses.append("u.window_start >= %s")
+        params.append(window_start)
+    if window_end is not None:
+        clauses.append("u.window_end <= %s")
+        params.append(window_end)
+    if employee_id is not None:
+        clauses.append("u.employee_id = %s::uuid")
+        params.append(_to_uuid(employee_id))
+    if member_id is not None:
+        clauses.append("u.member_id = %s::uuid")
+        params.append(_to_uuid(member_id))
+    return clauses, params
+
+
 class UsageAuditQuotaRepository:
     """usage/audit rollup 聚合 + 软配额策略 CRUD 的租户内读写。
 
@@ -383,63 +467,51 @@ class UsageAuditQuotaRepository:
         pending/sending/sent/failed receipts cannot make an aggregate disappear.
         """
 
-        clauses = ["1 = 1"]
-        params: list[Any] = []
-        if window_start is not None:
-            clauses.append("u.window_start >= %s")
-            params.append(window_start)
-        if window_end is not None:
-            clauses.append("u.window_end <= %s")
-            params.append(window_end)
-        if employee_id is not None:
-            clauses.append("u.employee_id = %s::uuid")
-            params.append(_to_uuid(employee_id))
-        if member_id is not None:
-            clauses.append("u.member_id = %s::uuid")
-            params.append(_to_uuid(member_id))
-        where = " AND ".join(clauses)
+        clauses, params = _usage_scope_clauses(
+            employee_id=employee_id, member_id=member_id,
+            window_start=window_start, window_end=window_end,
+        )
         with self._router.session(ctx) as s:
             row = s.execute(
-                """
-                SELECT
-                    COUNT(*) AS summary_count,
-                    COALESCE(SUM(CASE WHEN u.prompt_count > 0 THEN u.prompt_count ELSE u.run_count END), 0) AS execution_count,
-                    COALESCE(SUM(u.run_count), 0) AS run_count,
-                    COALESCE(SUM(u.prompt_count), 0) AS prompt_count,
-                    COALESCE(SUM(u.settled_count), 0) AS settled_count,
-                    COALESCE(SUM(u.error_count), 0) AS error_count,
-                    COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
-                    COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
-                    COALESCE(SUM(u.cache_tokens), 0) AS cache_tokens,
-                    COALESCE(SUM(u.token_total), 0) AS token_total,
-                    COALESCE(SUM(u.duration_ms_total), 0) AS duration_ms_total,
-                    COALESCE(SUM(u.duration_seconds_total), 0) AS duration_seconds_total,
-                    COALESCE(SUM(u.cost_total) FILTER (WHERE u.pricing_status = 'known'), 0) AS known_cost_total,
-                    COALESCE(SUM(u.token_total) FILTER (WHERE u.pricing_status = 'unknown'), 0) AS unknown_pricing_tokens,
-                    COALESCE(SUM(CASE WHEN u.prompt_count > 0 THEN u.prompt_count ELSE u.run_count END) FILTER (WHERE u.pricing_status = 'unknown'), 0) AS unknown_pricing_runs,
-                    COUNT(*) FILTER (WHERE u.pricing_status = 'unknown') AS unknown_summary_count
-                FROM usage_rollup AS u
-                WHERE """ + where,
+                _USAGE_STATISTICS_TOTAL_SQL + " AND ".join(clauses),
                 tuple(params),
             ).fetchone()
-        return {
-            "summary_count": int(row[0] or 0),
-            "execution_count": int(row[1] or 0),
-            "run_count": int(row[2] or 0),
-            "prompt_count": int(row[3] or 0),
-            "settled_count": int(row[4] or 0),
-            "error_count": int(row[5] or 0),
-            "input_tokens": int(row[6] or 0),
-            "output_tokens": int(row[7] or 0),
-            "cache_tokens": int(row[8] or 0),
-            "token_total": int(row[9] or 0),
-            "duration_ms_total": int(row[10] or 0),
-            "duration_seconds_total": int(row[11] or 0),
-            "known_cost_total": row[12],
-            "unknown_pricing_tokens": int(row[13] or 0),
-            "unknown_pricing_runs": int(row[14] or 0),
-            "unknown_summary_count": int(row[15] or 0),
-        }
+        return _usage_statistics_values(row)
+
+    def aggregate_usage_statistics_groups(
+        self,
+        ctx: TenantContext,
+        *,
+        group_by: str,
+        employee_id: str | None = None,
+        member_id: str | None = None,
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Aggregate the same scope as ``aggregate_usage_statistics`` per employee/member.
+
+        Legacy rows without attribution form one ``group_id = None`` group so
+        group sums always equal the totals.  Ordered by token_total desc.
+        """
+
+        select_sql, group_sql = _USAGE_GROUP_SQL[group_by]
+        clauses, params = _usage_scope_clauses(
+            employee_id=employee_id, member_id=member_id,
+            window_start=window_start, window_end=window_end,
+        )
+        with self._router.session(ctx) as s:
+            rows = s.execute(
+                select_sql + " AND ".join(clauses) + group_sql,
+                tuple(params),
+            ).fetchall()
+        return [
+            {
+                "group_id": str(row[0]) if row[0] is not None else None,
+                "display_name": row[1] or None,
+                **_usage_statistics_values(row[2:]),
+            }
+            for row in rows
+        ]
 
     def list_usage_history(
         self,

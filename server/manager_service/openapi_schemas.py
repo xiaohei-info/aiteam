@@ -90,6 +90,13 @@ class UsageUploadDetailedOut(BaseModel):
     audits_ingested: int = Field(ge=0, description="已接收的审计摘要条数。")
 
 
+class SegmentOutcomeUploadOut(BaseModel):
+    """Receipt for POST /api/manager/usage/segment-outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
+    segment_outcomes_ingested: int = Field(ge=0, description="已接收的段落评估小时计数条数。")
+
+
 class UsageRollupItemsOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     items: list[UsageRollupOut] = Field(default_factory=list, description="用量明细列表。")

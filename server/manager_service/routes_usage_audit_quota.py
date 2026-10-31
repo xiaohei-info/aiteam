@@ -2,6 +2,7 @@
 
 路径：
 - /api/manager/usage/upload       接收 A5 上报的脱敏 UsageSummaryUpload（F13，本端消费落库聚合）
+- /api/manager/usage/segment-outcomes 接收 Agent 上报的段落评估小时计数（只含计数）
 - /api/manager/usage/statistics  查保留小时摘要的成员/员工统计
 - /api/manager/usage/work-history 查 Manager 持有的脱敏用量元数据历史
 - /api/manager/usage/rollup       查本租户 usage 聚合 / 明细
@@ -26,7 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import Response
@@ -40,7 +41,9 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden, ValidationProblem
 
 from .usage_analytics_schemas import (
+    SegmentOutcomeStatisticsOut,
     UsageOperatorDeliveryOut,
+    UsageStatisticsGroupedOut,
     UsageStatisticsOut,
     UsageWorkHistoryOut,
 )
@@ -58,7 +61,12 @@ from .schemas import (
     UsageAggregateOut,
     UsageRollupOut,
 )
-from .openapi_schemas import UsageRollupItemsOut, UsageUploadDetailedOut, UsageUploadOut
+from .openapi_schemas import (
+    SegmentOutcomeUploadOut,
+    UsageRollupItemsOut,
+    UsageUploadDetailedOut,
+    UsageUploadOut,
+)
 from .usage_audit_quota_service import (
     UsageAuditQuotaService,
     build_usage_audit_quota_service,
@@ -94,6 +102,33 @@ class UsageSummaryUploadIn(BaseModel):
     tenant_id: str | None = Field(default=None, description="可选租户标识；省略时绑定当前 TenantContext，提供时必须匹配")
     usage: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 UsageSummary 列表")
     audits: list[dict[str, Any]] = Field(default_factory=list, description="脱敏 AuditSummaryEvent 列表")
+
+
+class SegmentOutcomeSummaryIn(BaseModel):
+    """一个成员 + 员工 + UTC 小时的段落评估计数（绝对值，同 summary_id 重传覆盖）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"] = Field(description="计数摘要版本，当前只接受 \"1\"。")
+    summary_id: str = Field(min_length=1, max_length=256, description="Agent 生成的稳定摘要 ID；重传同一 ID 覆盖计数。")
+    tenant_id: str | None = Field(default=None, description="可选租户标识；提供时必须匹配当前 TenantContext。")
+    member_id: str = Field(min_length=1, max_length=256, description="上报成员 ID，必须是当前登录成员。")
+    employee_id: str = Field(min_length=1, max_length=256, description="员工 ID，必须属于本租户且授权给该成员。")
+    window_start: str = Field(description="UTC 整点包含起点（ISO 8601）。")
+    window_end: str = Field(description="UTC 整点不包含终点，必须等于 window_start + 1 小时。")
+    evaluated_count: int = Field(ge=0, description="该小时内已评估段数。")
+    resolved_count: int = Field(ge=0, description="其中标记为已解决的段数，不超过 evaluated_count。")
+
+
+class SegmentOutcomeUploadIn(BaseModel):
+    """段落评估计数上报体。只含计数，不含会话文本、评估备注或原因标签。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: str | None = Field(default=None, description="可选租户标识；省略时绑定当前 TenantContext，提供时必须匹配")
+    segment_outcomes: list[SegmentOutcomeSummaryIn] = Field(
+        min_length=1, max_length=100, description="段落评估小时计数，1–100 条；任一条校验失败则整批不写入。",
+    )
 
 
 def _service(request: Request) -> UsageAuditQuotaService:
@@ -167,7 +202,7 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         body: UsageSummaryUploadIn,
         request: Request,
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageUploadOut | UsageUploadDetailedOut]:
+    ) -> Envelope[UsageUploadDetailedOut | UsageUploadOut]:
         svc = _service(request)
         ctx = tenant_context_from(claims)
         if body.tenant_id is not None and body.tenant_id != ctx.tenant_id:
@@ -186,7 +221,60 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
             data = UsageUploadDetailedOut(**result)
         else:
             data = UsageUploadOut(**result)
-        return Envelope[UsageUploadOut | UsageUploadDetailedOut](data=data)
+        return Envelope[UsageUploadDetailedOut | UsageUploadOut](data=data)
+
+    @router.post(
+        "/usage/segment-outcomes",
+        description=(
+            "接收 Agent 上报的段落结果评估小时计数（成员 + 员工 + UTC 小时的已评估/已解决段数，绝对值）。"
+            "只含计数，不含会话文本、评估备注或原因标签；同一 summary_id 重传覆盖。"
+            "member_id 必须是当前成员，employee_id 必须属于本租户且授权给该成员；任一条失败整批不写入。"
+            "本端点不因业务原因返回 404：Agent 收到 404 即视为 Manager 尚不支持，保留待发送。"
+        ),
+        summary="接收段落评估小时计数",
+        operation_id="manager_usage_segment_outcomes_upload",
+    )
+    async def upload_segment_outcomes(
+        body: SegmentOutcomeUploadIn,
+        request: Request,
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[SegmentOutcomeUploadOut]:
+        ctx = tenant_context_from(claims)
+        if body.tenant_id is not None and body.tenant_id != ctx.tenant_id:
+            raise Forbidden("segment outcome tenant_id must match the authenticated tenant")
+        items = [item.model_dump() for item in body.segment_outcomes]
+        result = _service(request).ingest_segment_outcomes(ctx, items)
+        return Envelope[SegmentOutcomeUploadOut](data=SegmentOutcomeUploadOut(**result))
+
+    @router.get(
+        "/usage/outcomes",
+        description=(
+            "查询本租户段落结果评估（问题已解决/未解决）汇总与按员工分组的解决率。"
+            "解决率 = 已解决 ÷ 已评估；已评估少于 min_sample（10）段时 resolution_rate 为 null。"
+            "时间窗按段落结束所在 UTC 整点 [window_start,window_end) 过滤，必须成对。"
+            "数据归属：评估真相在用户端 Agent 本机；Manager 只持有 Agent 上报的成员+员工+小时计数，"
+            "不含会话内容、备注或原因标签。租户边界：只读当前 TenantContext 租户；"
+            "owner/enterprise_admin/finance_admin 可读全租户，普通成员只能读自己。"
+        ),
+        summary="查询租户段落解决率",
+        operation_id="manager_usage_outcomes",
+        response_model_exclude_none=False,
+    )
+    async def get_usage_outcomes(
+        request: Request,
+        employee_id: str | None = Query(default=None, description="可选员工 ID。"),
+        member_id: str | None = Query(default=None, description="管理员可选成员过滤；普通成员仅可读取自己。"),
+        window_start: datetime | None = Query(default=None, description="UTC 整点包含起点；必须与 window_end 成对。"),
+        window_end: datetime | None = Query(default=None, description="UTC 整点不包含终点；必须与 window_start 成对。"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[SegmentOutcomeStatisticsOut]:
+        member_scope = _usage_member_scope(claims, member_id)
+        data = _service(request).segment_outcomes(
+            tenant_context_from(claims),
+            employee_id=employee_id, member_id=member_scope,
+            window_start=window_start, window_end=window_end,
+        )
+        return Envelope[SegmentOutcomeStatisticsOut](data=data)
 
     # ---- Manager enterprise usage/work statistics ----
 
@@ -195,7 +283,9 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         description=(
             "查询本租户保留的 Agent 小时用量摘要；可按 member_id/employee_id 和 UTC 整点 "
             "[window_start,window_end) 过滤。统计包含已接收的全部 Manager 聚合，不受 Operator delivery 状态影响；"
-            "task_count 在没有可靠任务事件时为 null。"
+            "task_count 在没有可靠任务事件时为 null。group_by=employee|member 时额外返回 groups[]（合计字段不变）。"
+            "数据归属：只读当前 TenantContext 租户内 Agent 上报的脱敏小时摘要，不含会话内容；"
+            "仅 owner/enterprise_admin/finance_admin 可读。"
         ),
         summary="查询租户小时用量统计",
         operation_id="manager_usage_statistics",
@@ -207,18 +297,24 @@ def build_usage_audit_quota_router(verifier) -> APIRouter:
         member_id: str | None = Query(default=None, description="可选成员 ID；旧摘要缺失归属保持 null。"),
         window_start: datetime | None = Query(default=None, description="UTC 整点包含起点；必须与 window_end 成对。"),
         window_end: datetime | None = Query(default=None, description="UTC 整点不包含终点；必须与 window_start 成对。"),
+        group_by: Literal["employee", "member"] | None = Query(
+            default=None,
+            description="可选：employee/member，额外返回按员工或成员分组的 groups[]；缺失归属汇入 group_id=null 分组。",
+        ),
         claims: TokenClaims = Depends(require),
-    ) -> Envelope[UsageStatisticsOut]:
+    ) -> Envelope[UsageStatisticsGroupedOut | UsageStatisticsOut]:
         authorize(claims, _USAGE_ANALYTICS_ROLES)
         svc = _service(request)
-        data = svc.statistics(
-            tenant_context_from(claims),
-            employee_id=employee_id,
-            member_id=member_id,
-            window_start=window_start,
-            window_end=window_end,
-        )
-        return Envelope[UsageStatisticsOut](data=data)
+        filters: dict[str, Any] = {
+            "employee_id": employee_id,
+            "member_id": member_id,
+            "window_start": window_start,
+            "window_end": window_end,
+        }
+        if group_by is not None:
+            filters["group_by"] = group_by
+        data = svc.statistics(tenant_context_from(claims), **filters)
+        return Envelope[UsageStatisticsGroupedOut | UsageStatisticsOut](data=data)
 
     @router.get(
         "/usage/work-history",

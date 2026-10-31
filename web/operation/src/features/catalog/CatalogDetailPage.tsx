@@ -20,6 +20,7 @@ import { TemplateVersionPanel, type DetailTab } from "./TemplateVersionPanel";
 import { useCatalogApi } from "./useCatalogApi";
 import type { CatalogItem, CatalogItemType } from "./types";
 import { isSafeAvatarDataUrl } from "./avatar";
+import { profileFromItem, profilePayload, validateProfile, type ProfileErrors } from "./profile";
 
 export function CatalogDetailPage(): ReactNode {
   const { catalog_type, template_id } = useParams<{ catalog_type: string; template_id: string }>();
@@ -34,6 +35,7 @@ export function CatalogDetailPage(): ReactNode {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
+  const [profileErrors, setProfileErrors] = useState<ProfileErrors>({});
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
   const [pendingHidden, setPendingHidden] = useState(false);
   const [visibilityWorking, setVisibilityWorking] = useState(false);
@@ -49,6 +51,7 @@ export function CatalogDetailPage(): ReactNode {
     setLoading(true);
     setError(null);
     setEditError(null);
+    setProfileErrors({});
     setVisibilityError(null);
     setPendingHidden(false);
     setSaving(false);
@@ -99,6 +102,13 @@ export function CatalogDetailPage(): ReactNode {
 
   const handleSave = useCallback(async () => {
     if (!catalog_type || !template_id || !draft) return;
+    const profile = draft.catalog_type === "expert_template" ? profilePayload(profileFromItem(draft)) : null;
+    const nextProfileErrors = profile ? validateProfile(profile) : {};
+    setProfileErrors(nextProfileErrors);
+    if (Object.keys(nextProfileErrors).length > 0) {
+      setEditError("人才市场展示字段有误，请按提示修改");
+      return;
+    }
     const currentRequest = requestId.current;
     setSaving(true);
     setEditError(null);
@@ -114,6 +124,8 @@ export function CatalogDetailPage(): ReactNode {
         changes.platform_skill_refs = draft.platform_skill_refs ?? [];
         changes.platform_model_ref = draft.platform_model_ref ?? null;
         changes.thinking_level = draft.thinking_level || "off";
+        // 全量提交展示字段：清空的列表/文本落为空值，required_permissions/pricing 为 null 时清除。
+        Object.assign(changes, profile);
       } else {
         changes.description = draft.description ?? "";
         changes.icon = draft.icon ?? "";
@@ -176,6 +188,7 @@ export function CatalogDetailPage(): ReactNode {
           draft={draft}
           editing={editing}
           canWrite={canWrite}
+          profileErrors={profileErrors}
           visibilityChanging={visibilityWorking}
           onChange={setDraft}
           onVisibilityChange={requestVisibilityChange}
@@ -192,6 +205,7 @@ export function CatalogDetailPage(): ReactNode {
                 setDraft({ ...item });
                 setEditing(false);
                 setEditError(null);
+                setProfileErrors({});
               }} />
             </HStack>
           </VStack>
