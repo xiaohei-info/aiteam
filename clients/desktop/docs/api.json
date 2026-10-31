@@ -11755,6 +11755,34 @@
         ]
       }
     },
+    "/api/agent/conversations/{conversation_id}/approvals": {
+      "get": {
+        "operationId": "listConversationApprovals",
+        "summary": "列出会话审批记录",
+        "responses": {"200": {"description": "审批记录"}}
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/approvals/{approval_id}/decision": {
+      "post": {
+        "operationId": "decideConversationApproval",
+        "summary": "提交会话审批决定",
+        "responses": {"200": {"description": "审批决定结果"}}
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/introduction": {
+      "post": {
+        "operationId": "introduceConversationEmployee",
+        "summary": "请求员工自我介绍",
+        "responses": {"202": {"description": "已受理"}}
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/receipts/{idempotency_key}": {
+      "get": {
+        "operationId": "getConversationReceipt",
+        "summary": "读取会话幂等收据",
+        "responses": {"200": {"description": "收据"}}
+      }
+    },
     "/api/agent/conversations/{conversation_id}/attachments": {
       "get": {
         "operationId": "listAttachments",
