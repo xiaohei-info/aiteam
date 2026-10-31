@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="8px" height="160px" viewBox="0 0 8 160" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>glass-right</title>
+    <defs>
+        <path d="M7.99999991,160 L9.02886925e-08,160 L0,0 L8,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-glass-right" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组">
+            <rect id="矩形" fill-opacity="0.72" fill="#B6D1D6" x="0" y="0" width="8" height="160"></rect>
+            <rect id="矩形" fill="#788F92" x="6" y="0" width="2" height="160"></rect>
+            <rect id="矩形" fill="#9BB5B8" x="0" y="0" width="1" height="160"></rect>
+            <rect id="矩形" fill-opacity="0.7" fill="#FFFFFF" x="2" y="0" width="1" height="160"></rect>
+        </g>
+    </g>
+</svg>

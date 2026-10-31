@@ -1,0 +1,85 @@
+/* ═══════════════════════════════════════════
+   FileMessage — 文件 / 图片消息
+   ═══════════════════════════════════════════ */
+
+/* ─── 图片预览 ─── */
+
+.fm-image-wrap {
+  overflow: hidden;
+  border-radius: 10px;
+  max-width: 280px;
+}
+
+.fm-image {
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  max-height: 200px;
+}
+
+.fm-image-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 0 4px 2px;
+}
+
+.fm-image-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-image-size {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ─── 文件卡片 ─── */
+
+.fm-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 200px;
+  max-width: 280px;
+}
+
+.fm-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--glass-card-bg);
+  border: 1px solid var(--glass-card-border);
+  font-size: 18px;
+}
+
+.fm-card-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.fm-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.fm-card-size {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+}

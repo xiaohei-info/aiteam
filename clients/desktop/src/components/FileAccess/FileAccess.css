@@ -1,0 +1,165 @@
+/* Uses the shared black/gold and light-theme tokens used by settings and dialogs. */
+.file-access-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 24px;
+  background: var(--overlay-bg-heavy);
+  -webkit-backdrop-filter: blur(8px) saturate(135%);
+  backdrop-filter: blur(8px) saturate(135%);
+  animation: file-access-fade-in var(--duration-base) var(--ease-out);
+}
+
+.file-access-dialog {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(100%, 560px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  border: 1px solid var(--glass-card-border);
+  border-radius: var(--radius-xl);
+  background: var(--surface-card-sheen), var(--surface-1-glass);
+  box-shadow: var(--glass-card-shadow);
+  -webkit-backdrop-filter: var(--glass-card-filter);
+  backdrop-filter: var(--glass-card-filter);
+  color: var(--text-primary);
+  animation: file-access-enter var(--duration-panel) var(--ease-out);
+}
+
+.file-access-header { display: flex; align-items: flex-start; gap: 12px; padding: 24px 24px 20px; }
+.file-access-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 40px;
+  height: 40px;
+  border-radius: var(--radius-lg);
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+}
+.file-access-icon.warning { background: var(--warning-bg); color: var(--warning); }
+.file-access-heading { flex: 1; min-width: 0; }
+.file-access-heading h2 { margin: 0; color: var(--text-primary); font-family: inherit; font-size: 16px; font-weight: 600; line-height: 1.5; }
+.file-access-heading p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.file-access-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.file-access-close:hover:not(:disabled) { background: var(--surface-glass-subtle); color: var(--text-primary); }
+.file-access-body { min-height: 0; overflow-y: auto; padding: 0 24px 24px; }
+.file-access-scope { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
+.file-access-scope > svg { flex-shrink: 0; margin-top: 2px; color: var(--brand); }
+.file-access-scope > div { min-width: 0; }
+.file-access-scope span { color: var(--text-primary); font-size: 12px; font-weight: 600; }
+.file-access-scope p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.file-access-path { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+.file-access-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.file-access-actions button, .file-access-revoke {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  background: var(--surface-glass-subtle);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast), filter var(--duration-fast), transform var(--duration-fast);
+}
+.file-access-actions button:hover:not(:disabled) { border-color: var(--border-active); color: var(--text-primary); }
+.file-access-actions button.primary { border-color: transparent; background: var(--brand-gradient); color: var(--text-on-brand); font-weight: 600; }
+.file-access-actions button.primary:hover:not(:disabled) { filter: brightness(1.05); color: var(--text-on-brand); }
+.file-access-actions button.danger { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
+.file-access-actions button.danger:hover:not(:disabled), .file-access-revoke:hover:not(:disabled) { border-color: var(--danger-border-strong); background: var(--danger-bg); color: var(--danger); }
+.file-access-actions button:active:not(:disabled), .file-access-revoke:active:not(:disabled) { transform: scale(.98); }
+.file-access-actions button:disabled, .file-access-revoke:disabled, .file-access-link:disabled, .file-access-close:disabled { opacity: .4; cursor: not-allowed; }
+.file-access-actions button:focus-visible, .file-access-revoke:focus-visible, .file-access-link:focus-visible, .file-access-help summary:focus-visible, .file-access-close:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+.file-access-footer { flex-shrink: 0; justify-content: flex-end; padding: 16px 24px; border-top: 1px solid var(--border); }
+.file-access-settings-actions { margin-top: 16px; }
+.file-access-settings-actions button { font-size: 11px; }
+.file-access-status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-glass-subtle);
+  color: var(--text-muted);
+  padding: 3px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.file-access-status.granted { border-color: var(--border-active); color: var(--brand); }
+
+.file-access-note { display: flex; align-items: flex-start; gap: 6px; margin: 12px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.file-access-note > svg { flex-shrink: 0; margin-top: 2px; }
+.file-access-help { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.file-access-help summary { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 12px; line-height: 1.5; cursor: pointer; list-style: none; }
+.file-access-help summary::-webkit-details-marker { display: none; }
+.file-access-help summary:hover { color: var(--text-primary); }
+.file-access-help-chevron { margin-left: auto; transition: transform var(--duration-base); }
+.file-access-help[open] .file-access-help-chevron { transform: rotate(180deg); }
+.file-access-instructions { margin-top: 12px; padding: 16px; border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
+.file-access-instructions ol { margin: 0; padding-left: 20px; }
+.file-access-instructions li { color: var(--brand); font-size: 12px; padding-left: 4px; }
+.file-access-instructions li + li { margin-top: 12px; }
+.file-access-instructions strong { color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.file-access-instructions p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.file-access-instructions p.file-access-help-note { margin-top: 12px; color: var(--text-muted); font-size: 11px; }
+.file-access-instructions kbd, .file-access-instructions code { color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.file-access-instructions kbd { padding: 1px 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.file-access-link { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--brand); font-family: inherit; font-size: 12px; cursor: pointer; }
+.file-access-link:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+.file-access-instructions .file-access-link { margin-top: 12px; }
+.file-access-retry { margin-top: 12px; }
+
+.file-access-grants { list-style: none; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
+.file-access-grants li { display: flex; gap: 12px; align-items: center; padding: 12px; }
+.file-access-grants li + li { border-top: 1px solid var(--border); }
+.file-access-directory-icon { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: var(--radius-md); background: var(--brand-bg-soft); color: var(--brand); }
+.file-access-directory-path { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
+.file-access-revoke { flex-shrink: 0; min-height: 32px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 11px; }
+.file-access-empty { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
+.file-access-empty > svg { flex-shrink: 0; color: var(--text-muted); }
+.file-access-empty strong { color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.file-access-empty p { margin: 4px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.file-access-error { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; padding: 12px; border: 1px solid var(--danger-border-soft); border-radius: var(--radius-md); background: var(--danger-bg); color: var(--danger); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.file-access-error > svg { flex-shrink: 0; margin-top: 2px; }
+.file-access-spinner { animation: file-access-spin 1s linear infinite; }
+
+@keyframes file-access-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes file-access-enter { from { opacity: 0; transform: translateY(10px) scale(.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes file-access-spin { to { transform: rotate(360deg); } }
+@media (max-width: 480px) {
+  .file-access-overlay { padding: 16px; }
+  .file-access-dialog { max-height: calc(100dvh - 32px); }
+  .file-access-header { padding: 20px 16px 16px; gap: 8px; }
+  .file-access-icon { flex-basis: 32px; height: 32px; }
+  .file-access-body { padding: 0 16px 16px; }
+  .file-access-footer { padding: 12px 16px; }
+  .file-access-footer button { flex: 1; padding: 0 8px; }
+  #file-access .settings-section-heading { flex-wrap: wrap; }
+  #file-access .file-access-status { margin-left: 26px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-access-overlay, .file-access-dialog, .file-access-spinner { animation: none; }
+  .file-access-actions button, .file-access-revoke, .file-access-help-chevron, .file-access-close { transition: none; }
+}

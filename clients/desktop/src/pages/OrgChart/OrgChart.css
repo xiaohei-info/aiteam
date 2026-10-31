@@ -1,0 +1,861 @@
+/* ═══════════════════════════════════════════
+   OrgChart — 组织架构页
+   ═══════════════════════════════════════════ */
+
+.oc {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ─── 页面说明 ─── */
+
+.oc-intro {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 20px 24px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ─── 统计卡片行 + 操作按钮 ─── */
+
+.oc-stats-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 24px 0;
+}
+
+.oc-stats {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.oc-stat-card {
+  flex: 1;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.oc-stat-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.oc-stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--brand, #e89a2e);
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+}
+
+.oc-stat-desc {
+  font-size: 11px;
+  color: var(--text-muted, #5a5c62);
+  margin-top: 2px;
+  line-height: 1.3;
+}
+
+.oc-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.oc-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.oc-btn--brand {
+  background: var(--brand, #e89a2e);
+  border: 1px solid transparent;
+  color: #000;
+}
+
+.oc-btn--brand:hover {
+  background: rgba(232, 154, 46, 0.85);
+}
+
+.oc-btn:disabled {
+  cursor: not-allowed;
+  filter: none;
+  opacity: 0.46;
+}
+
+.oc-btn:disabled:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.oc-service-notice {
+  flex-shrink: 0;
+  margin: 12px 24px 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(212, 175, 55, 0.22);
+  border-radius: 10px;
+  background: rgba(212, 175, 55, 0.07);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ─── 画布区 header ─── */
+
+.oc-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 0;
+}
+
+.oc-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.2px;
+}
+
+.oc-subtitle {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.oc-drag-hint {
+  color: var(--text-muted);
+}
+
+.oc-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.oc-zoom-value {
+  min-width: 36px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.oc-ctrl {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.oc-ctrl:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.oc-ctrl:active {
+  transform: scale(0.9);
+}
+
+/* ─── 画布区域（可滚动、可缩放） ─── */
+
+.oc-canvas-wrap {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 32px;
+}
+
+.oc-canvas {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  transform-origin: top left;
+  transition: transform 0.2s ease;
+  min-width: max-content;
+}
+
+/* ─── 根节点（企业卡片） ─── */
+
+.oc-root {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  min-width: 260px;
+}
+
+.oc-root-icon {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid rgba(232, 154, 46, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+.oc-root-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.oc-root-sub {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+
+.oc-root-badge {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(232, 154, 46, 0.12);
+  border: 1px solid rgba(232, 154, 46, 0.3);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ─── 根节点到部门行的竖线 ─── */
+
+.oc-stem {
+  width: 1px;
+  height: 20px;
+  margin-left: 56px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── 部门列行 ─── */
+
+.oc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* ─── 单个部门列 ─── */
+
+.oc-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  gap: 8px;
+}
+
+.oc-col::before {
+  content: '—';
+  position: absolute;
+  left: -16px;
+  top: 18px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* ─── 部门卡片 ─── */
+
+.oc-dept {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.oc-dept-bar {
+  width: 3px;
+  min-height: 36px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.oc-dept-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-dept-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* ─── 成员卡片 ─── */
+
+.oc-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  cursor: default;
+  transition: background 0.15s, border-color 0.15s;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.oc-member:hover {
+  background: var(--surface-2);
+  border-color: rgba(232, 154, 46, 0.18);
+}
+
+.oc-member-avatar {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  border: 1px solid rgba(232, 154, 46, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand);
+  flex-shrink: 0;
+}
+
+.oc-member-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.oc-member-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-member-role {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-member-chat {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* ok=可对话；warn=暂停、模板未上架等可恢复的阻塞；off=下架、未授权、招募失败等需后台处理；muted 用默认灰 */
+.oc-member-chat--ok {
+  color: var(--success);
+}
+
+.oc-member-chat--warn {
+  color: var(--warning);
+}
+
+.oc-member-chat--off {
+  color: var(--danger);
+}
+
+/* ─── 成员卡片可点击变体 ─── */
+
+.oc-member--clickable {
+  cursor: pointer;
+}
+
+.oc-member--clickable:hover {
+  background: var(--surface-2);
+  border-color: rgba(232, 154, 46, 0.25);
+}
+
+/* ─── 子部门块(递归子部门) ─── */
+/* 子部门渲染在顶层列内部,以稍细的头部 + 更小的缩进呈现层级(设计文档 6.x - 多级部门)。 */
+.oc-subdept {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 1px dashed rgba(255, 255, 255, 0.10);
+}
+
+.oc-subdept-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+
+.oc-subdept-bar {
+  width: 2px;
+  height: 20px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.oc-subdept-info {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oc-subdept-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-subdept-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* ─── 成员操作弹出菜单 ─── */
+
+.map-popup {
+  min-width: 120px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--surface-3, #2a2b30);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.map-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s;
+  text-align: left;
+}
+
+.map-popup-item:hover {
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+}
+
+.map-popup-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.map-popup-item:disabled:hover {
+  background: transparent;
+}
+
+.map-popup-notice {
+  max-width: 220px;
+  margin: 5px 8px 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.map-popup-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 4px;
+}
+
+/* ─── 空 / 加载 / 错误状态 ─── */
+
+.oc-empty {
+  padding: 60px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted, #5a5c62);
+}
+
+/* ─── 拖拽调整部门层级 ─── */
+/* 拖动时页面里不插入任何占位或提示块：只给目标卡片描边、给落点部门铺底色，布局始终不动。 */
+
+.oc-dept,
+.oc-subdept-header {
+  position: relative;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+
+.oc-draggable { cursor: grab; }
+
+.oc-dept-grip {
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.oc-subdept-header .oc-dept-grip { left: 1px; }
+.oc-draggable:hover .oc-dept-grip,
+.oc-draggable:focus-visible .oc-dept-grip { opacity: 0.7; }
+
+/* 拖动中：成员卡片不接收指针（指针下直接命中所属部门），卡片上的按钮先藏起来。 */
+.oc-canvas.is-dragging .oc-member { pointer-events: none; }
+.oc-canvas.is-dragging .oc-dept-rename,
+.oc-canvas.is-dragging .oc-dept-grip { visibility: hidden; }
+
+/* 卡片下面那条空隙也算“下沿”，指针从卡片往下滑时不会突然跳成“放入”。 */
+.oc-canvas.is-dragging [data-org-drop="head"]::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 8px;
+}
+.oc-canvas.is-dragging .oc-subdept-header[data-org-drop="head"]::after { height: 6px; }
+
+/* 目标卡片：放入 / 同级 / 互换 / 不允许 */
+.oc-root { transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s; }
+
+[data-drop="into"] {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 12%, var(--surface-2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+[data-drop="beside"] {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
+}
+/* 同级：在卡片下沿画一条插入线，表示“放在它旁边”。 */
+[data-drop="beside"]::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -5px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent);
+  pointer-events: none;
+}
+
+[data-drop="swap"] {
+  border-color: var(--warning);
+  border-style: dashed;
+  background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--surface-2);
+}
+
+[data-drop="blocked"] {
+  border-color: var(--danger-border-strong);
+  background: linear-gradient(var(--danger-bg), var(--danger-bg)), var(--surface-2);
+}
+
+/* 键盘拖动时当前选中的目标 */
+[data-aim] { outline: 2px dashed var(--text-secondary); outline-offset: 3px; }
+
+/* 落点：松手后被拖部门将归属的部门整块铺底色。只改颜色和阴影，不改尺寸。 */
+.oc-col,
+.oc-subdept { transition: background-color 0.15s, box-shadow 0.15s, border-color 0.15s; }
+
+.oc-col.is-landing {
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--brand) 6%, transparent);
+}
+
+.oc-subdept.is-landing {
+  border-left-color: var(--brand);
+  border-left-style: solid;
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+}
+
+/* 指针正指着公司卡片时以 data-drop 的高亮为准，这里只管“放在别处、但结果是顶级”的情况。 */
+.oc-root.is-landing:not([data-drop]) {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--border));
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface-2));
+}
+
+/* 被拖的部门留在原位：卡片变虚线、直属成员变淡；下级部门的卡片保持清晰，可以作为“升为上级”的目标。 */
+.oc-dept.is-drag-origin,
+.oc-subdept-header.is-drag-origin {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--brand) 50%, var(--border));
+  opacity: 0.55;
+}
+.oc-col.is-drag-origin > .oc-member,
+.oc-subdept.is-drag-origin > .oc-member { opacity: 0.45; }
+
+/* 保存中与刚落位 */
+.is-saving { animation: oc-saving 1.2s ease-in-out infinite; }
+.is-just-moved { animation: oc-landed 1.6s ease-out; }
+
+@keyframes oc-saving {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 25%, transparent); }
+}
+
+@keyframes oc-landed {
+  0% {
+    border-color: var(--brand);
+    background-color: color-mix(in srgb, var(--brand) 28%, var(--surface-2));
+  }
+}
+
+/* 拖动中整个窗口保持“抓取”光标；不允许放的目标上显示禁止光标。 */
+body.oc-body-dragging,
+body.oc-body-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+body.oc-body-dragging [data-drop="blocked"],
+body.oc-body-dragging [data-drop="blocked"] * { cursor: not-allowed !important; }
+
+/* 跟随指针的拖动卡片（挂在 body 上，位置由脚本写 transform） */
+.oc-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  width: 252px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.oc-ghost-card {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--brand);
+  box-shadow: var(--shadow-lg);
+  transform: rotate(-1.5deg);
+}
+.oc-ghost--blocked .oc-ghost-card { border-color: var(--danger-border-strong); }
+
+.oc-ghost-bar {
+  width: 3px;
+  min-height: 28px;
+  align-self: stretch;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.oc-ghost-text { min-width: 0; }
+
+.oc-ghost-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oc-ghost-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.oc-ghost-intent {
+  box-sizing: border-box;
+  max-width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-md);
+}
+.oc-ghost-intent svg { flex-shrink: 0; margin-top: 2px; }
+
+.oc-ghost--ok .oc-ghost-intent { border-color: var(--brand); color: var(--text-primary); }
+.oc-ghost--ok .oc-ghost-intent svg { color: var(--brand); }
+
+.oc-ghost--swap .oc-ghost-intent {
+  border-color: var(--warning);
+  background: linear-gradient(var(--warning-bg), var(--warning-bg)), var(--surface-3);
+  color: var(--text-primary);
+}
+.oc-ghost--swap .oc-ghost-intent svg { color: var(--warning); }
+
+.oc-ghost--blocked .oc-ghost-intent {
+  border-color: var(--danger-border-strong);
+  background: linear-gradient(var(--danger-bg), var(--danger-bg)), var(--surface-3);
+  color: var(--text-primary);
+}
+.oc-ghost--blocked .oc-ghost-intent svg { color: var(--danger); }
+
+.oc-ghost-keys {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* 操作结果提示：浮在页面底部，不占布局 */
+.oc-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  z-index: 30;
+  box-sizing: border-box;
+  max-width: min(560px, calc(100% - 48px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+  animation: oc-toast-in 0.18s ease-out;
+}
+.oc-toast--saving { padding-right: 14px; }
+.oc-toast-icon { flex-shrink: 0; }
+.oc-toast--ok .oc-toast-icon { color: var(--success); }
+.oc-toast--error { border-color: var(--danger-border-strong); }
+.oc-toast--error .oc-toast-icon { color: var(--danger); }
+.oc-toast--saving .oc-toast-icon { color: var(--brand); animation: oc-spin 0.9s linear infinite; }
+
+.oc-toast-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.oc-toast-close:hover,
+.oc-toast-close:focus-visible { background: var(--surface-2); color: var(--text-primary); }
+
+@keyframes oc-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes oc-spin { to { transform: rotate(360deg); } }
+
+.oc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-saving,
+  .is-just-moved,
+  .oc-toast,
+  .oc-toast--saving .oc-toast-icon { animation: none; }
+  .oc-ghost-card { transform: none; }
+}
+
+.oc-dept-rename {
+  margin-left: auto;
+  align-self: flex-start;
+  display: inline-flex;
+  padding: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0.6;
+}
+.oc-dept-delete { margin-left: 0; }
+.oc-dept-delete:hover { color: #f87171; }
+.oc-dept-rename:hover, .oc-dept-rename:focus-visible { opacity: 1; background: var(--surface-1); }

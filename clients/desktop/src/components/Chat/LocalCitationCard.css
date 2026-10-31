@@ -1,0 +1,155 @@
+/* 本地目录引用卡片：对齐 TodoTaskCard 的聊天内嵌卡片视觉。 */
+.lcc {
+  border: 1px solid var(--kb-border, #e3e6ec);
+  border-radius: 12px;
+  background: var(--kb-surface, #fbfcfe);
+  padding: 10px 12px;
+  margin: 6px 0;
+  max-width: 560px;
+}
+
+.lcc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.lcc-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--kb-text, #23272f);
+}
+
+.lcc-summary {
+  font-size: 11px;
+  color: var(--kb-text-muted, #7a8194);
+}
+
+.lcc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lcc-item {
+  border: 1px solid var(--kb-border-soft, #eef0f5);
+  border-radius: 9px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.lcc-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lcc-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lcc-item-text strong {
+  font-size: 12.5px;
+  color: var(--kb-text, #23272f);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lcc-item-text small {
+  font-size: 11.5px;
+  color: var(--kb-text-secondary, #4b5262);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lcc-open {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--kb-border, #dde1e9);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--kb-text, #23272f);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.lcc-open:hover:not(:disabled) {
+  border-color: var(--kb-primary, #3a6ff1);
+  color: var(--kb-primary, #3a6ff1);
+}
+
+.lcc-open:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.lcc-spinner {
+  animation: lcc-spin 1s linear infinite;
+}
+
+@keyframes lcc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.lcc-original {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--kb-code-bg, #f5f7fb);
+  border: 1px solid var(--kb-border-soft, #eef0f5);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  font-family: inherit;
+  color: var(--kb-text, #23272f);
+}
+
+.lcc-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--kb-danger, #c0392b);
+}
+
+.lcc-notice {
+  margin: 8px 0 0;
+  font-size: 10.5px;
+  color: var(--kb-text-muted, #98a0b3);
+}
+
+/* 用户消息上的“已附带授权目录内容”标记。 */
+.lcc-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--kb-border, #e3e6ec);
+  background: var(--kb-surface, #fbfcfe);
+  font-size: 11px;
+  color: var(--kb-text-muted, #7a8194);
+}

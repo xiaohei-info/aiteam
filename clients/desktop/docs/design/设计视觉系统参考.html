@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIFred 设计系统视觉参考</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-primary: #0A0A0F;
+    --bg-panel: #16161D;
+    --bg-elevated: #1E1E28;
+    --gold-primary: #D4AF37;
+    --gold-light: #F4E4BC;
+    --gold-dark: #B8860B;
+    --gold-gradient: linear-gradient(135deg, #F4E4BC, #D4AF37);
+    --text-primary: #F5F5F7;
+    --text-secondary: #A0A0A8;
+    --text-muted: #6B6B73;
+    --glass-bg: rgba(255,255,255,0.05);
+    --glass-border: rgba(255,255,255,0.08);
+    --glass-gold-border: rgba(212,175,55,0.2);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+    --shadow-gold: 0 0 20px rgba(212,175,55,0.15);
+    --color-success: #2ECC71;
+    --color-warning: #F39C12;
+    --color-error: #E74C3C;
+    --color-info: #3498DB;
+  }
+
+  body {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: 'PingFang SC', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ===== 全局背景光球 — 毛玻璃模糊的底层素材 ===== */
+  .bg-orbs {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden;
+  }
+  .bg-orb {
+    position: absolute; border-radius: 50%;
+    filter: blur(80px);
+  }
+  .bg-orb--gold   { width: 700px; height:700px; top:-15%; right:-10%; background: radial-gradient(circle, rgba(212,175,55,0.18) 0%, transparent 70%); }
+  .bg-orb--blue   { width: 550px; height:550px; bottom:-20%; left:-8%;   background: radial-gradient(circle, rgba(52,152,219,0.14) 0%, transparent 70%); }
+  .bg-orb--purple { width: 500px; height:500px; top:40%; left:45%;    background: radial-gradient(circle, rgba(155,89,182,0.10) 0%, transparent 70%); }
+  .bg-orb--green  { width: 450px; height:450px; bottom:30%; right:15%;  background: radial-gradient(circle, rgba(46,204,113,0.09) 0%, transparent 70%); }
+  .bg-orb--amber  { width: 400px; height:400px; top:70%; left:20%;   background: radial-gradient(circle, rgba(243,156,18,0.08) 0%, transparent 70%); }
+
+  /* 网格纹理 — 增加质感 */
+  .bg-grid {
+    position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: 0.03;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.3) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.3) 1px, transparent 1px);
+    background-size: 60px 60px;
+  }
+
+  .container {
+    max-width: 1200px; margin: 0 auto; padding: 48px 32px; position: relative; z-index: 1;
+  }
+
+  /* ===== SVG 图标统一样式 ===== */
+  .svg-icon { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .svg-icon--sm { width: 16px; height: 16px; }
+  .svg-icon--lg { width: 24px; height: 24px; }
+
+  /* ===== 页头 ===== */
+  .page-header { text-align: center; margin-bottom: 64px; }
+  .logo-hex {
+    width: 72px; height: 72px; background: var(--gold-gradient);
+    border-radius: 16px; display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 24px; box-shadow: var(--shadow-gold);
+  }
+  .logo-hex svg { width: 36px; height: 36px; stroke: #0A0A0F; fill: none; stroke-width: 2; }
+  .page-header h1 {
+    font-size: 32px; font-weight: 700; letter-spacing: 1px;
+    background: var(--gold-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    margin-bottom: 8px;
+  }
+  .page-header .subtitle { font-size: 16px; color: var(--text-secondary); }
+  .page-header .meta {
+    margin-top: 16px; font-size: 12px; color: var(--text-muted); display: flex; justify-content: center; gap: 24px;
+  }
+  .page-header .meta span {
+    padding: 4px 12px; background: var(--glass-bg); border: 1px solid var(--glass-border);
+    border-radius: 100px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+
+  /* ===== 区块标题 ===== */
+  .section { margin-bottom: 64px; position: relative; }
+  .section-title {
+    font-size: 20px; font-weight: 600; color: var(--text-primary); margin-bottom: 24px;
+    padding-left: 16px; border-left: 3px solid var(--gold-primary);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-title .num {
+    font-size: 12px; color: var(--gold-primary); background: rgba(212,175,55,0.1); padding: 2px 8px; border-radius: 4px;
+  }
+
+  /* ===== 毛玻璃面板（核心组件） ===== */
+  .glass-panel {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 24px;
+    box-shadow:
+      0 4px 12px rgba(0,0,0,0.4),
+      inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+
+  /* 毛玻璃演示区 — 背后有明确彩色光球 */
+  .glass-demo-area {
+    position: relative; border-radius: 16px; padding: 40px 24px; overflow: hidden;
+    background: var(--bg-primary);
+  }
+  .glass-demo-area::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(212,175,55,0.20) 0%, transparent 55%),
+      radial-gradient(circle at 70% 60%, rgba(52,152,219,0.16) 0%, transparent 55%),
+      radial-gradient(circle at 50% 80%, rgba(155,89,182,0.12) 0%, transparent 55%);
+  }
+  .glass-demo-area > * { position: relative; z-index: 1; }
+
+  /* ===== 色彩系统 ===== */
+  .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+  .color-card {
+    background: rgba(255,255,255,0.04); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; overflow: hidden;
+    transition: all 0.3s ease;
+  }
+  .color-card:hover { transform: translateY(-4px); border-color: var(--glass-gold-border); box-shadow: var(--shadow-gold); }
+  .color-swatch { height: 80px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; }
+  .color-info { padding: 12px 16px; }
+  .color-info .name { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+  .color-info .hex { font-size: 12px; color: var(--text-muted); font-family: 'SF Mono', 'Fira Code', monospace; }
+
+  /* ===== 字体展示 ===== */
+  .typography-list { display: flex; flex-direction: column; gap: 16px; }
+  .type-item { display: flex; align-items: baseline; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--glass-border); }
+  .type-item:last-child { border-bottom: none; }
+  .type-label { width: 130px; flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
+  .type-sample { flex: 1; color: var(--text-primary); }
+  .type-spec { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono', monospace; margin-top: 4px; }
+
+  /* ===== 按钮 ===== */
+  .btn-grid { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    border: none; cursor: pointer; transition: all 0.2s ease; user-select: none;
+    padding: 0 20px; height: 40px; border-radius: 8px; text-decoration: none;
+  }
+  .btn-primary    { background: var(--gold-gradient); color: var(--bg-primary); font-weight: 600; }
+  .btn-primary:hover   { transform: translateY(-1px); box-shadow: var(--shadow-gold); }
+  .btn-secondary  { background: transparent; color: var(--gold-primary); border: 1px solid rgba(212,175,55,0.4); }
+  .btn-secondary:hover { background: rgba(212,175,55,0.08); border-color: var(--gold-primary); }
+  .btn-ghost      { background: rgba(255,255,255,0.04); color: var(--text-primary); border: 1px solid rgba(255,255,255,0.1); }
+  .btn-ghost:hover     { background: rgba(255,255,255,0.08); }
+  .btn-danger     { background: rgba(231,76,60,0.15); color: var(--color-error); border: 1px solid rgba(231,76,60,0.3); }
+  .btn-danger:hover    { background: rgba(231,76,60,0.25); }
+  .btn-icon {
+    width: 36px; height: 36px; padding: 0; background: rgba(255,255,255,0.04);
+    color: var(--text-secondary); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+  }
+  .btn-icon:hover { color: var(--gold-primary); border-color: rgba(212,175,55,0.3); }
+  .btn:active { transform: scale(0.98); }
+
+  /* ===== 卡片（带毛玻璃） ===== */
+  .card-demo {
+    background: rgba(255,255,255,0.05); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px;
+    transition: all 0.3s ease; position: relative; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .card-demo:hover {
+    transform: translateY(-2px); border-color: var(--glass-gold-border); box-shadow: var(--shadow-gold);
+  }
+  .card-demo .card-status { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--color-success); }
+  .card-demo .card-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+  .card-demo .card-desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; }
+  .card-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tag { font-size: 12px; padding: 4px 12px; background: rgba(255,255,255,0.06); color: var(--text-secondary); border-radius: 100px; }
+  .tag-gold { background: var(--gold-gradient); color: var(--bg-primary); font-weight: 600; font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+
+  /* ===== 侧边栏 ===== */
+  .sidebar-demo {
+    width: 240px; background: rgba(22,22,29,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-right: 1px solid rgba(255,255,255,0.06); border-radius: 12px 0 0 12px;
+    padding: 16px 0; display: flex; flex-direction: column;
+  }
+  .sidebar-demo .logo-area { padding: 0 16px 24px; display: flex; align-items: center; gap: 10px; }
+  .sidebar-demo .logo-icon {
+    width: 36px; height: 36px; background: var(--gold-gradient); border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sidebar-demo .logo-text { font-size: 16px; font-weight: 600; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 44px;
+    font-size: 14px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s ease;
+    position: relative; border-radius: 8px; margin: 2px 8px;
+  }
+  .nav-item:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+  .nav-item.active { color: var(--gold-primary); background: rgba(212,175,55,0.1); }
+  .nav-item.active::before {
+    content: ''; position: absolute; left: -8px; top: 50%; transform: translateY(-50%);
+    width: 3px; height: 24px; background: var(--gold-primary); border-radius: 0 3px 3px 0;
+  }
+
+  /* ===== 整体布局 ===== */
+  .layout-demo {
+    display: flex; background: var(--bg-primary); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; overflow: hidden; height: 480px;
+    position: relative;
+  }
+  .layout-demo::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 70% 20%, rgba(52,152,219,0.10) 0%, transparent 50%),
+      radial-gradient(circle at 30% 80%, rgba(212,175,55,0.10) 0%, transparent 50%),
+      radial-gradient(circle at 80% 70%, rgba(155,89,182,0.08) 0%, transparent 50%);
+  }
+  .layout-demo > * { position: relative; z-index: 1; }
+  .main-area { flex: 1; display: flex; flex-direction: column; }
+  .top-bar {
+    height: 56px; background: rgba(22,22,29,0.75); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 24px;
+  }
+  .top-bar .page-title { font-size: 18px; font-weight: 600; }
+  .search-mock {
+    width: 260px; height: 34px; background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+    display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .content-area { flex: 1; padding: 24px; overflow: hidden; }
+
+  /* ===== 人才卡片 ===== */
+  .talent-card {
+    width: 220px; background: rgba(255,255,255,0.05); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 24px 16px;
+    text-align: center; transition: all 0.3s ease; position: relative;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .talent-card:hover {
+    transform: translateY(-4px); border-color: var(--glass-gold-border); box-shadow: var(--shadow-gold);
+  }
+  .talent-card .level-badge {
+    position: absolute; top: 12px; right: 12px; background: var(--gold-gradient);
+    color: var(--bg-primary); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+  }
+  .talent-card .avatar {
+    width: 64px; height: 64px; border-radius: 50%; background: linear-gradient(135deg, #2a2a35, #1a1a25);
+    border: 2px solid rgba(212,175,55,0.3); display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 12px;
+  }
+  .talent-card .position { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .talent-card .intro { font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; }
+  .talent-card .stats {
+    display: flex; justify-content: space-around; padding: 12px 0;
+    border-top: 1px solid rgba(255,255,255,0.06); margin-top: 12px;
+  }
+  .talent-card .stat-item { text-align: center; }
+  .talent-card .stat-value { font-size: 16px; font-weight: 600; color: var(--gold-primary); }
+  .talent-card .stat-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ===== 输入框 ===== */
+  .input-demo {
+    width: 100%; height: 40px; background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+    padding: 0 16px; color: var(--text-primary); font-size: 14px; font-family: inherit;
+    display: flex; align-items: center; gap: 8px; transition: all 0.2s ease;
+  }
+  .input-demo.focused { border-color: rgba(212,175,55,0.5); box-shadow: 0 0 0 3px rgba(212,175,55,0.08); }
+
+  /* ===== 徽标/标签 ===== */
+  .badge-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .badge-level {
+    background: var(--gold-gradient); color: var(--bg-primary); font-size: 12px; font-weight: 700;
+    padding: 2px 10px; border-radius: 4px;
+  }
+  .badge-status {
+    font-size: 12px; padding: 4px 12px; border-radius: 100px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .badge-status .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .badge-online  { background: rgba(46,204,113,0.15); color: var(--color-success); }
+  .badge-online .dot  { background: var(--color-success); }
+  .badge-busy    { background: rgba(243,156,18,0.15); color: var(--color-warning); }
+  .badge-busy .dot    { background: var(--color-warning); }
+  .badge-offline { background: rgba(160,160,168,0.15); color: var(--text-secondary); }
+  .badge-offline .dot { background: var(--text-secondary); }
+
+  /* ===== 效果展示 ===== */
+  .effect-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .effect-card { text-align: center; }
+  .effect-card .effect-label { font-size: 12px; color: var(--text-muted); margin-top: 12px; font-family: 'SF Mono', monospace; }
+
+  .glass-demo-box {
+    height: 100px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+    font-size: 13px; color: var(--text-secondary);
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .glass-demo-box--gold  { border-color: var(--glass-gold-border); box-shadow: var(--shadow-gold); color: var(--gold-primary); }
+  .glass-demo-box--hover { background: rgba(255,255,255,0.08); border-color: rgba(212,175,55,0.3); box-shadow: 0 4px 20px rgba(0,0,0,0.4), 0 0 24px rgba(212,175,55,0.12); }
+
+  /* ===== 动效 ===== */
+  @keyframes pulse-gold {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(212,175,55,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(212,175,55,0); }
+  }
+  @keyframes bounce-dot {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+    40% { transform: translateY(-6px); opacity: 1; }
+  }
+  .typing-dots { display: inline-flex; gap: 4px; }
+  .typing-dots span {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--gold-primary);
+    animation: bounce-dot 1.4s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(1) { animation-delay: 0s; }
+  .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+  .pulse-demo {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: var(--gold-gradient); animation: pulse-gold 2s infinite;
+    margin: 16px auto 0;
+  }
+
+  /* ===== 页脚 ===== */
+  .page-footer { text-align: center; padding: 48px 0 16px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--glass-border); margin-top: 64px; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.2); border-radius: 3px; }
+
+  /* 色彩区背景光球 */
+  .color-section-bg {
+    position: relative; border-radius: 16px; padding: 32px 24px; overflow: hidden;
+  }
+  .color-section-bg::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 15% 40%, rgba(212,175,55,0.12) 0%, transparent 50%),
+      radial-gradient(circle at 85% 60%, rgba(52,152,219,0.10) 0%, transparent 50%);
+  }
+  .color-section-bg > * { position: relative; z-index: 1; }
+
+  /* 按钮区域背景 */
+  .btn-section-bg {
+    position: relative; border-radius: 16px; padding: 32px 24px; overflow: hidden;
+  }
+  .btn-section-bg::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 30% 70%, rgba(212,175,55,0.14) 0%, transparent 55%),
+      radial-gradient(circle at 70% 30%, rgba(155,89,182,0.10) 0%, transparent 55%);
+  }
+  .btn-section-bg > * { position: relative; z-index: 1; }
+
+  /* 人才卡片区域背景 */
+  .talent-section-bg {
+    position: relative; border-radius: 16px; padding: 32px 24px; overflow: hidden;
+  }
+  .talent-section-bg::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background:
+      radial-gradient(circle at 20% 50%, rgba(212,175,55,0.16) 0%, transparent 55%),
+      radial-gradient(circle at 80% 30%, rgba(52,152,219,0.10) 0%, transparent 55%),
+      radial-gradient(circle at 60% 80%, rgba(46,204,113,0.08) 0%, transparent 55%);
+  }
+  .talent-section-bg > * { position: relative; z-index: 1; }
+</style>
+</head>
+<body>
+
+  <!-- 全局背景光球 + 网格 -->
+  <div class="bg-orbs">
+    <div class="bg-orb bg-orb--gold"></div>
+    <div class="bg-orb bg-orb--blue"></div>
+    <div class="bg-orb bg-orb--purple"></div>
+    <div class="bg-orb bg-orb--green"></div>
+    <div class="bg-orb bg-orb--amber"></div>
+  </div>
+  <div class="bg-grid"></div>
+
+<div class="container">
+
+  <!-- 页头 -->
+  <div class="page-header">
+    <div class="logo-hex">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    </div>
+    <h1>AIFred Design System</h1>
+    <div class="subtitle">AI 原生组织客户端 · 视觉风格参考</div>
+    <div class="meta">
+      <span>V1.0</span>
+      <span>2026-06-27</span>
+      <span>Black &amp; Gold · Glassmorphism</span>
+    </div>
+  </div>
+
+  <!-- ========== 01 色彩系统 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">01</span> 色彩系统</div>
+    <div class="color-section-bg">
+      <div class="color-grid">
+        <div class="color-card"><div class="color-swatch" style="background:#0A0A0F; color:#A0A0A8;">极夜黑</div><div class="color-info"><div class="name">极夜黑 · Background</div><div class="hex">#0A0A0F</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#16161D; color:#A0A0A8;">深空灰</div><div class="color-info"><div class="name">深空灰 · Panel</div><div class="hex">#16161D</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#1E1E28; color:#A0A0A8;">曜石灰</div><div class="color-info"><div class="name">曜石灰 · Elevated</div><div class="hex">#1E1E28</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#D4AF37; color:#0A0A0F;">流光金</div><div class="color-info"><div class="name">流光金 · Primary</div><div class="hex">#D4AF37</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#F4E4BC; color:#0A0A0F;">香槟金</div><div class="color-info"><div class="name">香槟金 · Light Gold</div><div class="hex">#F4E4BC</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#B8860B; color:#F5F5F7;">暗金</div><div class="color-info"><div class="name">暗金 · Dark Gold</div><div class="hex">#B8860B</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#2ECC71; color:#0A0A0F;">成功</div><div class="color-info"><div class="name">成功 · Success</div><div class="hex">#2ECC71</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#F39C12; color:#0A0A0F;">警告</div><div class="color-info"><div class="name">警告 · Warning</div><div class="hex">#F39C12</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#E74C3C; color:#F5F5F7;">错误</div><div class="color-info"><div class="name">错误 · Error</div><div class="hex">#E74C3C</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#3498DB; color:#0A0A0F;">信息</div><div class="color-info"><div class="name">信息 · Info</div><div class="hex">#3498DB</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#F5F5F7; color:#0A0A0F;">主文字</div><div class="color-info"><div class="name">主文字 · Text Primary</div><div class="hex">#F5F5F7</div></div></div>
+        <div class="color-card"><div class="color-swatch" style="background:#A0A0A8; color:#0A0A0F;">次文字</div><div class="color-info"><div class="name">次文字 · Text Secondary</div><div class="hex">#A0A0A8</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 02 字体系统 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">02</span> 字体系统</div>
+    <div class="glass-panel">
+      <div class="typography-list">
+        <div class="type-item"><div class="type-label">Display 32px</div><div class="type-sample"><div style="font-size:32px;font-weight:700;">AIFred 智能组织</div><div class="type-spec">PingFang SC · 700 · 32/38px</div></div></div>
+        <div class="type-item"><div class="type-label">H1 24px</div><div class="type-sample"><div style="font-size:24px;font-weight:600;">人才市场</div><div class="type-spec">PingFang SC · 600 · 24/31px</div></div></div>
+        <div class="type-item"><div class="type-label">H2 20px</div><div class="type-sample"><div style="font-size:20px;font-weight:600;">自动化任务列表</div><div class="type-spec">PingFang SC · 600 · 20/28px</div></div></div>
+        <div class="type-item"><div class="type-label">H3 16px</div><div class="type-sample"><div style="font-size:16px;font-weight:600;">每日销售数据汇总</div><div class="type-spec">PingFang SC · 600 · 16/24px</div></div></div>
+        <div class="type-item"><div class="type-label">Body 14px</div><div class="type-sample"><div style="font-size:14px;">自动汇总各渠道销售数据并生成报表，支持定时触发和事件触发两种方式。</div><div class="type-spec">PingFang SC · 400 · 14/22px</div></div></div>
+        <div class="type-item"><div class="type-label">Caption 12px</div><div class="type-sample"><div style="font-size:12px;color:var(--text-secondary);">上次执行：2026-06-27 09:00 · 成功</div><div class="type-spec">PingFang SC · 400 · 12/18px</div></div></div>
+        <div class="type-item"><div class="type-label">Micro 10px</div><div class="type-sample"><div style="font-size:10px;font-weight:500;color:var(--text-muted);">L3</div><div class="type-spec">PingFang SC · 500 · 10/14px</div></div></div>
+        <div class="type-item"><div class="type-label">数字高亮</div><div class="type-sample"><div style="font-size:24px;font-weight:600;color:var(--gold-primary);font-family:'SF Mono',monospace;">¥2,034.50</div><div class="type-spec">SF Mono · 600 · 金色高亮</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 03 毛玻璃效果（核心演示） ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">03</span> 毛玻璃效果 · 背后光球可模糊</div>
+    <div class="glass-demo-area">
+      <div class="effect-grid">
+        <div class="effect-card">
+          <div class="glass-demo-box">标准毛玻璃面板</div>
+          <div class="effect-label">rgba(255,255,255,.05) + blur(20px)</div>
+        </div>
+        <div class="effect-card">
+          <div class="glass-demo-box glass-demo-box--gold">金色边框毛玻璃</div>
+          <div class="effect-label">border: rgba(212,175,55,.2) + shadow-gold</div>
+        </div>
+        <div class="effect-card">
+          <div class="glass-demo-box glass-demo-box--hover">悬浮态毛玻璃</div>
+          <div class="effect-label">bg 8% · gold-border 30% · 强化阴影</div>
+        </div>
+        <div class="effect-card">
+          <div class="glass-demo-box" style="display:flex;justify-content:center;align-items:center;">
+            <span style="background:rgba(255,255,255,0.06);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 16px;font-size:12px;">嵌套毛玻璃</span>
+          </div>
+          <div class="effect-label">面板内嵌套 · 二次模糊叠加</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 04 按钮系统 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">04</span> 按钮系统</div>
+    <div class="btn-section-bg">
+      <div class="glass-panel" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);">
+        <div class="btn-grid" style="margin-bottom:24px;">
+          <button class="btn btn-primary">
+            <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+            招募到组织
+          </button>
+          <button class="btn btn-primary">创建群聊</button>
+          <button class="btn btn-secondary">查看详情</button>
+          <button class="btn btn-secondary">取消</button>
+          <button class="btn btn-ghost">更多</button>
+          <button class="btn btn-ghost">展开</button>
+          <button class="btn btn-danger">移除员工</button>
+        </div>
+        <div class="btn-grid">
+          <button class="btn btn-icon">
+            <svg class="svg-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          </button>
+          <button class="btn btn-icon">
+            <svg class="svg-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+          </button>
+          <button class="btn btn-icon">
+            <svg class="svg-icon" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+          <button class="btn btn-icon">
+            <svg class="svg-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <button class="btn btn-icon" style="color:var(--gold-primary);border-color:rgba(212,175,55,0.3);">
+            <svg class="svg-icon" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 05 徽标与标签 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">05</span> 徽标与标签</div>
+    <div class="glass-panel">
+      <div class="badge-row" style="margin-bottom:16px;">
+        <span class="badge-level">L1</span><span class="badge-level">L3</span><span class="badge-level">L5</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:8px;">职级徽标 · 金色渐变 + 黑色文字</span>
+      </div>
+      <div class="badge-row" style="margin-bottom:16px;">
+        <span class="badge-status badge-online"><span class="dot"></span>在线</span>
+        <span class="badge-status badge-busy"><span class="dot"></span>忙碌</span>
+        <span class="badge-status badge-offline"><span class="dot"></span>离线</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:8px;">状态标签</span>
+      </div>
+      <div class="badge-row">
+        <span class="tag">Python</span><span class="tag">SQL</span><span class="tag">数据分析</span><span class="tag">Excel</span><span class="tag">NLP</span>
+        <span style="font-size:12px;color:var(--text-muted);margin-left:8px;">技能标签 · 半透深色底色</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 06 输入框 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">06</span> 输入框</div>
+    <div class="glass-panel" style="display:flex;flex-direction:column;gap:16px;max-width:480px;">
+      <div class="input-demo">
+        <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--text-muted)"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        搜索岗位名称、技能...
+      </div>
+      <div class="input-demo focused">
+        <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--gold-primary)"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        数据分析师
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 07 整体布局参考 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">07</span> 整体布局参考 · 毛玻璃顶栏 + 左侧导航</div>
+    <div class="layout-demo">
+      <div class="sidebar-demo">
+        <div class="logo-area">
+          <div class="logo-icon">
+            <svg class="svg-icon svg-icon--lg" viewBox="0 0 24 24" style="stroke:#0A0A0F;fill:none;stroke-width:2;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <div class="logo-text">AIFred</div>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          <span>单聊</span>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+          <span>群聊</span>
+        </div>
+        <div class="nav-item active">
+          <svg class="svg-icon" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>自动化</span>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+          <span>知识库</span>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span>人才市场</span>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><line x1="21" y1="8" x2="21" y2="21"/><line x1="3" y1="8" x2="3" y2="21"/><line x1="21" y1="8" x2="15" y2="4"/><line x1="3" y1="8" x2="9" y2="4"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+          <span>组织架构</span>
+        </div>
+        <div class="nav-item">
+          <svg class="svg-icon" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="9" y1="6" x2="15" y2="6"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="12" y1="14" x2="15" y2="14"/></svg>
+          <span>办公室</span>
+        </div>
+      </div>
+      <div class="main-area">
+        <div class="top-bar">
+          <div class="page-title">
+            <svg class="svg-icon" viewBox="0 0 24 24" style="margin-right:8px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            自动化
+          </div>
+          <div class="search-mock">
+            <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            搜索任务...
+          </div>
+        </div>
+        <div class="content-area" style="display:flex;gap:16px;">
+          <div class="card-demo" style="flex:1;">
+            <div class="card-status"></div>
+            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
+              <span class="tag-gold">● 运行中</span>
+              <button class="btn-icon" style="width:24px;height:24px;border:none;background:none;">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--text-muted)"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+              </button>
+            </div>
+            <div class="card-title">
+              <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--gold-primary);vertical-align:-2px;margin-right:6px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+              每日销售数据汇总
+            </div>
+            <div class="card-desc">自动汇总各渠道销售数据并生成报表</div>
+            <div class="card-tags">
+              <span class="tag">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:currentColor"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                定时触发
+              </span>
+              <span class="tag">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:currentColor"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                每日 09:00
+              </span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+              <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--color-success)"><polyline points="20 6 9 17 4 12"/></svg>
+              上次执行：2026-06-27 09:00 · 成功
+            </div>
+          </div>
+          <div class="card-demo" style="flex:1;">
+            <div class="card-status" style="background:var(--color-warning);"></div>
+            <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
+              <span class="tag-gold" style="background:rgba(243,156,18,0.2);color:var(--color-warning);">⏸ 已暂停</span>
+              <button class="btn-icon" style="width:24px;height:24px;border:none;background:none;">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--text-muted)"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+              </button>
+            </div>
+            <div class="card-title">
+              <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--gold-primary);vertical-align:-2px;margin-right:6px;"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+              客户反馈自动分类
+            </div>
+            <div class="card-desc">按情感倾向自动分类客户反馈邮件</div>
+            <div class="card-tags">
+              <span class="tag">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                事件触发
+              </span>
+              <span class="tag">
+                <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:currentColor"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+                实时
+              </span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:4px;">
+              <svg class="svg-icon svg-icon--sm" viewBox="0 0 24 24" style="stroke:var(--color-success)"><polyline points="20 6 9 17 4 12"/></svg>
+              上次执行：2026-06-26 14:30 · 成功
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 08 人才卡片（毛玻璃悬浮卡片） ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">08</span> 人才卡片 · 毛玻璃质感 + 金色描边悬浮</div>
+    <div class="talent-section-bg">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:center;">
+        <div class="talent-card">
+          <span class="level-badge">L3</span>
+          <div class="avatar">
+            <svg class="svg-icon svg-icon--lg" viewBox="0 0 24 24" style="stroke:var(--gold-primary)"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <div class="position">数据分析师</div>
+          <div class="intro">专业数据分析与可视化</div>
+          <div class="card-tags" style="justify-content:center;">
+            <span class="tag">Python</span><span class="tag">SQL</span><span class="tag">Excel</span>
+          </div>
+          <div class="stats">
+            <div class="stat-item"><div class="stat-value">1,234</div><div class="stat-label">召唤次数</div></div>
+            <div class="stat-item"><div class="stat-value">¥0.5</div><div class="stat-label">每次</div></div>
+          </div>
+        </div>
+        <div class="talent-card" style="transform:translateY(-4px);border-color:var(--glass-gold-border);box-shadow:var(--shadow-gold);">
+          <span class="level-badge">L5</span>
+          <div class="avatar">
+            <svg class="svg-icon svg-icon--lg" viewBox="0 0 24 24" style="stroke:var(--gold-primary)"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          </div>
+          <div class="position" style="color:var(--gold-primary);">内容创作者</div>
+          <div class="intro">高质量内容创作与编辑</div>
+          <div class="card-tags" style="justify-content:center;">
+            <span class="tag">文案</span><span class="tag">SEO</span><span class="tag">编辑</span>
+          </div>
+          <div class="stats">
+            <div class="stat-item"><div class="stat-value">3,567</div><div class="stat-label">召唤次数</div></div>
+            <div class="stat-item"><div class="stat-value">¥1.2</div><div class="stat-label">每次</div></div>
+          </div>
+          <div style="font-size:10px;color:var(--gold-primary);margin-top:8px;opacity:0.6;">← 这是悬浮态效果（已固定）</div>
+        </div>
+        <div class="talent-card">
+          <span class="level-badge">L2</span>
+          <div class="avatar">
+            <svg class="svg-icon svg-icon--lg" viewBox="0 0 24 24" style="stroke:var(--gold-primary)"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/></svg>
+          </div>
+          <div class="position">客服专员</div>
+          <div class="intro">7×24小时智能客服应答</div>
+          <div class="card-tags" style="justify-content:center;">
+            <span class="tag">NLP</span><span class="tag">FAQ</span><span class="tag">工单</span>
+          </div>
+          <div class="stats">
+            <div class="stat-item"><div class="stat-value">8,901</div><div class="stat-label">召唤次数</div></div>
+            <div class="stat-item"><div class="stat-value">¥0.2</div><div class="stat-label">每次</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 09 动效展示 ========== -->
+  <div class="section">
+    <div class="section-title"><span class="num">09</span> 动效展示</div>
+    <div class="glass-demo-area">
+      <div class="effect-grid">
+        <div class="effect-card">
+          <div style="height:60px;display:flex;align-items:center;justify-content:center;">
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+          </div>
+          <div class="effect-label">AI 正在输入 · 金色三点跳动</div>
+        </div>
+        <div class="effect-card">
+          <div class="pulse-demo"></div>
+          <div class="effect-label">金色脉冲扩散 · 成功反馈</div>
+        </div>
+        <div class="effect-card">
+          <div style="height:60px;display:flex;align-items:center;justify-content:center;">
+            <button class="btn btn-primary" style="animation:none;">Hover Me ↑</button>
+          </div>
+          <div class="effect-label">金色主按钮 · 悬浮上移 + 光晕</div>
+        </div>
+        <div class="effect-card">
+          <div style="height:60px;display:flex;align-items:center;justify-content:center;">
+            <div class="talent-card" style="width:auto;padding:12px 20px;transform:translateY(-4px);border-color:var(--glass-gold-border);box-shadow:var(--shadow-gold);">
+              <span style="font-size:13px;color:var(--gold-primary);">毛玻璃卡片 Hover ↑</span>
+            </div>
+          </div>
+          <div class="effect-label">毛玻璃卡片 · 悬浮动效</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 页脚 -->
+  <div class="page-footer">
+    AIFred Design System · Black &amp; Gold Glassmorphism<br>
+    杭州太乙知行人工智能科技有限公司 · 2026
+  </div>
+
+</div>
+</body>
+</html>

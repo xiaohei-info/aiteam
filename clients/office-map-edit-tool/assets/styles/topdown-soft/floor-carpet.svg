@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128px" height="128px" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>floor-carpet</title>
+    <defs>
+        <path d="M128,128 L0,128 L0,0 L128,0 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-floor-carpet" stroke="none" fill="none" xlink:href="#path-1">
+        <rect id="Carpet-base" fill="#D9DDD7" fill-rule="evenodd" x="0" y="0" width="128" height="128"></rect>
+        <g id="Explicit-seamless-weave" stroke="#BCC4BB" stroke-opacity="0.3" stroke-width="0.5">
+            <path d="M0,2 L128,2 M2,0 L2,128 M0,10 L128,10 M10,0 L10,128 M0,18 L128,18 M18,0 L18,128 M0,26 L128,26 M26,0 L26,128 M0,34 L128,34 M34,0 L34,128 M0,42 L128,42 M42,0 L42,128 M0,50 L128,50 M50,0 L50,128 M0,58 L128,58 M58,0 L58,128 M0,66 L128,66 M66,0 L66,128 M0,74 L128,74 M74,0 L74,128 M0,82 L128,82 M82,0 L82,128 M0,90 L128,90 M90,0 L90,128 M0,98 L128,98 M98,0 L98,128 M0,106 L128,106 M106,0 L106,128 M0,114 L128,114 M114,0 L114,128 M0,122 L128,122 M122,0 L122,128" id="形状"></path>
+        </g>
+    </g>
+</svg>

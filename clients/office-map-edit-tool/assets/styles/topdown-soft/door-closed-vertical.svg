@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="88px" viewBox="0 0 16 88" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>door-closed-vertical</title>
+    <defs>
+        <path d="M16,5.45494245e-08 L16,8.00000007 L11.9999999,8.00000007 L12,66 C12.5522847,66 13,66.4477153 13,67 L13,74 C13,74.5522847 12.5522847,75 12,75 L12,80 L16,80 L16,88 L3.85607972e-08,88 L3.85607972e-08,80 L2,80 L2,8 L3.85607972e-08,8.00000007 L0,-1.28649812e-15 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-door-closed-vertical" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd" stroke-width="1">
+        <g id="编组" transform="translate(8, 44) rotate(90) translate(-8, -44)translate(-36, 36)">
+            <rect id="矩形" fill="#F5F3EF" x="-1.77635684e-15" y="-3.55271368e-15" width="8" height="16"></rect>
+            <rect id="矩形" fill="#F5F3EF" x="80" y="-1.77635684e-15" width="8" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="5" y="-3.55271368e-15" width="3" height="16"></rect>
+            <rect id="矩形" fill="#BFA889" x="80" y="-1.77635684e-15" width="3" height="16"></rect>
+            <rect id="矩形" fill="#AE8E67" x="8" y="6" width="72" height="8"></rect>
+            <rect id="矩形" fill="#CFB18D" x="8" y="4" width="72" height="7"></rect>
+            <line x1="8" y1="5" x2="80" y2="5" id="路径" stroke="#E7D3B7" fill="#000000"></line>
+            <rect id="矩形" fill="#68766F" x="66" y="3" width="9" height="2" rx="1"></rect>
+        </g>
+    </g>
+</svg>

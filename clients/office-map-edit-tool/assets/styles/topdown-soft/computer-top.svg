@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="55px" height="50px" viewBox="0 0 55 50" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>computer-top</title>
+    <defs>
+        <path d="M55,3 L55,29.5 C55,31.1568542 53.6568542,32.5 52,32.5 L32.5,32.5 L32.5,41.25 L40.5,41.25 C41.6045695,41.25 42.5,42.1454305 42.5,43.25 L42.5013601,43.9999965 C44.8552017,44.6267425 46.25,45.405794 46.25,46.25 C46.25,48.3210678 37.8553391,50 27.5,50 C17.1446609,50 8.75,48.3210678 8.75,46.25 C8.75,45.4056746 10.1451927,44.6265222 12.4996383,43.9997307 L12.5,43.25 C12.5,42.1454305 13.3954305,41.25 14.5,41.25 L22.5,41.25 L22.5,32.5 L3,32.5 C1.34314575,32.5 0,31.1568542 0,29.5 L0,3 C0,1.34314575 1.34314575,0 3,0 L52,0 C53.6568542,0 55,1.34314575 55,3 Z" id="path-1"></path>
+    </defs>
+    <g id="Office-v2-/-computer-top" stroke="none" fill="none" xlink:href="#path-1" fill-rule="evenodd">
+        <ellipse id="接触阴影" fill="#8D8577" cx="27.5" cy="46.25" rx="18.75" ry="3.75"></ellipse>
+        <rect id="显示器外框" fill="#3B4744" x="0" y="0" width="55" height="32.5" rx="3"></rect>
+        <rect id="屏幕" fill="#22302B" x="2.5" y="2.5" width="50" height="27.5" rx="2"></rect>
+        <rect id="屏幕高光" fill="#7F9A92" x="6.25" y="4.375" width="42.5" height="2.5"></rect>
+        <rect id="支架" fill="#B6B0A2" x="22.5" y="32.5" width="10" height="8.75"></rect>
+        <rect id="底座" fill="#CDC6B8" x="12.5" y="41.25" width="30" height="5" rx="2"></rect>
+    </g>
+</svg>

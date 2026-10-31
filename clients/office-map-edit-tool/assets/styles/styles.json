@@ -1,0 +1,27 @@
+[
+  {
+    "id": "topdown-soft",
+    "name": "俯视 · 轻立体",
+    "description": "顶面为主、微弱厚度，地面平铺与独立地面占地，不使用办公室底图",
+    "path": "assets/styles/topdown-soft/style.json",
+    "default": true
+  },
+  {
+    "id": "isometric-3d",
+    "name": "现代立体 3D (Isometric 3D)",
+    "description": "对标 3D 渲染微透视底图，具备垂直厚度与接触软阴影",
+    "path": "assets/styles/isometric-3d/style.json"
+  },
+  {
+    "id": "classic-cutout",
+    "name": "经典原图切片 (Classic Cutout)",
+    "description": "基于现有 10 人底图的 28 款原图参考裁切",
+    "path": "assets/styles/classic-cutout/style.json"
+  },
+  {
+    "id": "flat-blueprint",
+    "name": "极简平面图 (Flat Blueprint)",
+    "description": "高对比度平面设计几何色块与标准桌椅",
+    "path": "assets/styles/flat-blueprint/style.json"
+  }
+]

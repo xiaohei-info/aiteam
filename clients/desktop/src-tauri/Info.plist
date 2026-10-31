@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>AIFred 需要使用麦克风将您的语音转换为文字消息</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>aifred.cn</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionRequiresForwardSecrecy</key>
+        <false/>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
