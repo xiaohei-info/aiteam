@@ -60,6 +60,8 @@ export interface ChatInputBarProps {
   placeholder?: string
   autoFocus?: boolean
   helper?: ReactNode
+  /** 追加在附件、知识库按钮之后的工具按钮（如开启新上下文）。 */
+  tools?: ReactNode
   isGenerating?: boolean
   /** 本轮生成已结束、正在拉历史对齐；期间发送的消息排队，对齐完成后再发。 */
   isSyncing?: boolean
@@ -73,7 +75,7 @@ export interface ChatInputBarProps {
 export const ChatInputBar = memo(({
   onSend, onPickFile, onUploadFile, onDeleteUploadedFile,
   disabled, convId, conversationUpgradeFrom, draft, draftFiles, onDraftChange,
-  variant = 'dock', placeholder = '输入消息…', autoFocus, helper,
+  variant = 'dock', placeholder = '输入消息…', autoFocus, helper, tools,
   employees = [], members, isGenerating, isSyncing, onAbort, onHeightChange, enableVoiceInput, enableKnowledgeFiles,
 }: ChatInputBarProps) => {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false)
@@ -774,6 +776,7 @@ export const ChatInputBar = memo(({
                 {isPickingFile ? <span className="chat-tool-btn-spinner" aria-hidden="true" /> : isHero ? <Plus size={17} strokeWidth={1.8} aria-hidden="true" /> : <Paperclip size={15} strokeWidth={1.8} aria-hidden="true" />}
               </button>
               {enableKnowledgeFiles && <button type="button" className="chat-tool-btn" title="从知识库选择文件" aria-label="从知识库选择文件" disabled={isInteractionDisabled} onClick={() => setKnowledgeOpen(true)}><BookOpen size={16} /></button>}
+              {tools}
               {isHero && (
                 <div className="chat-role-picker" ref={roleRef} onKeyDown={handleRolePickerKeyDown}>
                   <button ref={roleTriggerRef} type="button" className={`chat-approval-btn${selectedRoles.length > 0 ? ' selected' : ''}`} disabled={isInteractionDisabled || pendingFiles.length > 0} onClick={() => setRoleOpen(o => !o)} aria-haspopup="menu" aria-expanded={roleOpen} aria-controls={roleOpen ? roleMenuId : undefined}>

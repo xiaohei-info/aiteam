@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  canEditSegment, contextOutcomeNotice, contextResetRequest, currentSegmentMessages, dividerOutcome, emptyOutcomeDraft,
+  canEditSegment, contextOutcomeNotice, contextResetFinishedNotice, contextResetRequest, currentSegmentMessages, dividerOutcome, emptyOutcomeDraft,
   isOutcomeUnsupportedError, outcomeEvaluation, segmentsByResetId, segmentUpdateRequest, shouldShowOutcomePrompt, upsertSegment,
 } from '../src/lib/contextOutcome.ts'
 import { contextResetDividers } from '../src/lib/piConverters.ts'
+import { readFileSync } from 'node:fs'
 import type { ContextResetResult, ContextSegment, ConversationEntry } from '../src/api/agent/types.ts'
 
 const entry = (id: string, role: 'user' | 'assistant'): ConversationEntry => ({
@@ -101,4 +102,20 @@ test('reset notice names the recorded verdict and explains old agents', () => {
   assert.deepEqual(contextOutcomeNotice(result({ outcome: 'unresolved' }), true), { tone: 'ok', text: '已记为未解决，已开启新上下文。' })
   assert.deepEqual(contextOutcomeNotice(result(), false), { tone: 'ok', text: '已开启新上下文，当前版本暂不记录评估。' })
   assert.deepEqual(contextOutcomeNotice(result({ already_reset: true }), true), { tone: 'ok', text: '已经是新上下文，无需重复开启。' })
+})
+
+test('reset without evaluation only reports memory status, even on agents without verdict support', () => {
+  assert.deepEqual(contextResetFinishedNotice(result(), false, false), { tone: 'ok', text: '已开启新上下文，关键记忆已提交保存。' })
+  assert.deepEqual(contextResetFinishedNotice(result({ outcome: 'resolved' }), true, true), { tone: 'ok', text: '已记为已解决，已开启新上下文。' })
+  assert.deepEqual(contextResetRequest(null, false), {})
+})
+
+test('chat and group chat offer a reset that skips evaluation next to the outcome prompt', () => {
+  const button = readFileSync(new URL('../src/components/Chat/ContextResetControls.tsx', import.meta.url), 'utf8')
+  assert.ok(button.includes("reset.run('plain', null, false)"), 'toolbar reset must not send an evaluation')
+  for (const page of ['../src/pages/Chat/index.tsx', '../src/pages/GroupChat/index.tsx']) {
+    const source = readFileSync(new URL(page, import.meta.url), 'utf8')
+    assert.ok(source.includes('<ContextResetToolButton'), `${page} must render the toolbar reset`)
+    assert.ok(source.includes('reset={contextReset}'), `${page} must share one reset flow with the outcome prompt`)
+  }
 })
