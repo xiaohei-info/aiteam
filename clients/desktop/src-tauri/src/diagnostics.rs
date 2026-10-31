@@ -158,6 +158,7 @@ fn append(path: &Path, record: &Value) -> std::io::Result<()> {
     }
     options.open(path)?.write_all(line.as_bytes())
 }
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn host_event(root: &Path, event: &str, level: &str) {
     host_event_fields(root, event, level, json!({}));
 }
@@ -170,6 +171,7 @@ pub fn host_event_fields(root: &Path, event: &str, level: &str, fields: Value) {
     );
 }
 /// Consume child pipes in bounded chunks. Raw output is never persisted or exported.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn capture_child(reader: impl Read + Send + 'static, path: PathBuf) {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(reader);

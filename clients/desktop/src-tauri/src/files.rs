@@ -259,6 +259,7 @@ pub fn resolve_cached_file(app: tauri::AppHandle, rel_path: String) -> Result<St
 #[tauri::command]
 pub fn show_in_folder(app: tauri::AppHandle, rel_path: String) -> Result<(), String> {
     let abs = resolve_cached_file_path(&app, &rel_path)?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let abs_str = abs.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]
@@ -313,6 +314,7 @@ pub fn open_local_file(app: tauri::AppHandle, path: String) -> Result<(), String
 #[tauri::command]
 pub fn reveal_local_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let file_path = canonicalize_scoped_path(&app, &path, false)?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let path = file_path.to_string_lossy().to_string();
 
     #[cfg(target_os = "macos")]

@@ -662,7 +662,7 @@ pub fn credentials_list_in_dir(
             updated_at: record.updated_at,
         })
         .collect();
-    list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    list.sort_by_key(|a| std::cmp::Reverse(a.updated_at));
     Ok(list)
 }
 
