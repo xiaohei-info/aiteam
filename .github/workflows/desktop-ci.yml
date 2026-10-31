@@ -126,4 +126,4 @@ jobs:
 
       - name: Audit Rust dependencies
         working-directory: clients/desktop/src-tauri
-        run: cargo audit --locked
+        run: cargo audit
