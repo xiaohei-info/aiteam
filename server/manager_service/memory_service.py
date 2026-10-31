@@ -77,6 +77,37 @@ class MemoryService:
         self._retention = retention_service
         self._member_reader = member_reader
 
+    def runtime_context(self, ctx: TenantContext, *, employee_id: str) -> dict[str, Any]:
+        """Return only protocol metadata after canonical memory authorization.
+
+        The bank is derived here for the Hindsight-compatible profile response;
+        callers cannot select it and the protocol adapter never uses a bank URL as
+        an authorization input.
+        """
+        policy = self._authorize_runtime(ctx, employee_id)
+        normalized = normalize_policy(policy)
+        return {
+            "bank_id": self._bank(ctx, employee_id),
+            "allowed_operations": list(normalized["allowed_operations"]),
+            "policy_revision": policy.get("revision") if isinstance(policy.get("revision"), int) else 0,
+            "retention_mode": "fact_only" if is_retention_guarded(policy) else "unlimited",
+        }
+
+    def _authorize_runtime(self, ctx: TenantContext, employee_id: str) -> dict:
+        """Authorize a runtime context using whichever memory operation is enabled."""
+        snapshot = self._snapshot.generate(ctx, member_id=ctx.user_id, employee_id=employee_id)
+        policy = snapshot.memory_policy
+        if not isinstance(policy, dict):
+            raise Forbidden("memory policy is unavailable")
+        allowed = normalize_policy(policy)["allowed_operations"]
+        if not allowed:
+            raise Forbidden("memory policy does not authorize this operation")
+        if "recall" in allowed:
+            self._authorize(ctx, employee_id=employee_id, operation="recall")
+        else:
+            self._authorize(ctx, employee_id=employee_id, operation="retain")
+        return policy
+
     def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
         snapshot = self._authorize(ctx, employee_id=employee_id, operation="recall")
         policy = snapshot.memory_policy

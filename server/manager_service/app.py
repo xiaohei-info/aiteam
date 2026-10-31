@@ -240,8 +240,9 @@ app.include_router(build_billing_router(_verifier))
 app.include_router(build_llm_router(_verifier))
 # ---- 功能补全：B07 记忆条目管理 ----
 app.include_router(build_memory_items_router(_verifier))
-# P1.1 Hindsight runtime lease + Manager facade. The upstream service key stays
-# Manager-only because Hindsight 0.12.0 has no native bank-scoped token API.
+# Hindsight plugin protocol adapter. The current Agent path uses the
+# Manager JWT + MemoryService; the older lease endpoints remain for backwards
+# compatibility with already deployed Agents.
 app.include_router(build_hindsight_router(_verifier))
 # ---- 功能补全：P07 组织树/部门分配 ----
 app.include_router(build_org_router(_verifier))

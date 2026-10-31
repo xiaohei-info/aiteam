@@ -339,6 +339,29 @@ test("HttpManagerClient pulls an opaque bank-scoped Hindsight lease without bank
   assert.doesNotMatch(String(request?.init.body), /opaque-lease-secret|bank_id/);
 });
 
+test("HttpManagerClient pulls memory protocol metadata and reuses the caller JWT", async () => {
+  let request: { url: string; init: RequestInit } | undefined;
+  const client = new HttpManagerClient("https://manager.test", async (input, init) => {
+    request = { url: String(input), init: init ?? {} };
+    return new Response(JSON.stringify({ data: {
+      base_url: "https://manager.test/api/manager/hindsight/employees/employee-1",
+      bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      allowed_operations: ["recall", "retain"],
+      policy_revision: 3,
+      client_protocol: HINDSIGHT_CLIENT_PROTOCOL,
+      retention_mode: "unlimited",
+    } }), { status: 200 });
+  });
+  const config = await client.pullMemoryRuntimeConfig(caller, "employee-1");
+  assert.equal(config.base_url, "https://manager.test/api/manager/hindsight/employees/employee-1");
+  assert.equal(config.token, "jwt");
+  assert.equal(config.lease_id, "manager-jwt-context");
+  assert.equal(config.allowed_operations?.join(","), "recall,retain");
+  assert.equal(request?.url, "https://manager.test/api/manager/hindsight/memory-runtime-config");
+  assert.equal(new Headers(request?.init.headers).get("Authorization"), "Bearer jwt");
+  assert.doesNotMatch(String(request?.init.body), /bank_id|token|lease/);
+});
+
 test("Hindsight lease normalization rejects direct upstream URLs, extra fields, and expiry", () => {
   const valid = {
     base_url: "/api/manager/hindsight", bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token: "opaque", lease_id: "lease-1", version: 1,

@@ -1,9 +1,8 @@
-"""Hindsight Agent lease wire contract.
+"""Hindsight plugin protocol contracts.
 
-The upstream Hindsight 0.12 API accepts one bearer API key for the service and
-has no bank-scoped token primitive. These schemas therefore describe the
-Manager-issued, short-lived *facade lease*, not a native Hindsight credential.
-The lease token is returned only by the protected runtime-config endpoint.
+The current runtime config is a protocol descriptor; it does not issue a
+bank-scoped Manager lease or expose a Hindsight service credential. The legacy
+lease schemas below remain only for backward-compatible endpoints.
 """
 
 from __future__ import annotations
@@ -74,6 +73,19 @@ class HindsightRuntimeConfigOut(BaseModel):
         description="Finite policy uses provenance-verified facts only; fact_only is not hard erasure.",
         examples=["unlimited", "fact_only"],
     )
+
+
+class HindsightMemoryRuntimeConfigOut(BaseModel):
+    """Protocol-only runtime context; no lease or Hindsight credential."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_url: str = Field(min_length=1, description="Manager Hindsight protocol adapter URL")
+    bank_id: str = Field(min_length=1, max_length=128, description="Protocol path value; Manager does not trust it for authorization")
+    allowed_operations: list[Literal["recall", "retain"]] = Field(max_length=2)
+    policy_revision: int = Field(ge=0)
+    client_protocol: Literal["aiteam-memory-v1"]
+    retention_mode: Literal["unlimited", "fact_only"]
 
 
 class HindsightLeaseRevocationOut(BaseModel):

@@ -1743,42 +1743,41 @@ export class SessionHost {
 
   private async resolveHindsightRuntimeConfig(authorization?: SessionAuthorization): Promise<HindsightRuntimeConfig | undefined> {
     if (!authorization || !isMemoryPolicyEnabled(authorization.snapshot)) return undefined;
-    if (authorization.managerClient?.pullHindsightRuntimeConfig) {
-      const key = materialKey("hindsight", authorization);
-      const load = () => authorization.managerClient!.pullHindsightRuntimeConfig!(authorization.caller, authorization.employeeId);
-      let config: HindsightRuntimeConfig;
+    if (authorization.managerClient?.pullMemoryRuntimeConfig) {
       try {
-        config = await this.hindsightLeaseCache.getOrLoad(
-          key,
-          load,
-          (value, loadedAt) => ({
-          now: loadedAt,
-          userJwtExpiresAt: jwtExpiry(authorization.caller),
-            upstreamExpiresAt: expiryMillis(value.expires_at),
-          }),
-          { forceRefresh: true, allowReuseOnFailure: true, isDenial: isManagerAccessDenial, isRetryableFailure: isDegradableManagerFailure },
+        const config = await authorization.managerClient.pullMemoryRuntimeConfig(
+          authorization.caller,
+          authorization.employeeId,
         );
+        authorization.hindsightExpiresAt = jwtExpiry(authorization.caller);
+        return config;
       } catch (error) {
         this.invalidateExecutionMaterial(authorization, error);
         throw error;
       }
-      if (!config || expiryMillis(config.expires_at) === undefined || expiryMillis(config.expires_at)! <= Date.now()) {
-        this.hindsightLeaseCache.clear(key);
-        this.clearRuntimeMaterials(authorization.caller.tenantId ?? "", authorization.caller.userId ?? authorization.caller.callerId);
-        throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
-      }
-      authorization.hindsightExpiresAt = expiryMillis(config.expires_at);
-      return config;
     }
-    // Managerless fixtures/development sessions cannot obtain the default
-    // memory lease; keep them local and avoid turning the platform default into
-    // an unexpected production dependency.
+    // Older ManagerClient implementations remain readable while the desktop
+    // package rolls forward. The production HttpManagerClient above always uses
+    // the JWT-backed protocol adapter.
+    if (authorization.managerClient?.pullHindsightRuntimeConfig) {
+      try {
+        const config = await authorization.managerClient.pullHindsightRuntimeConfig(
+          authorization.caller,
+          authorization.employeeId,
+        );
+        authorization.hindsightExpiresAt = expiryMillis(config.expires_at);
+        return config;
+      } catch (error) {
+        this.invalidateExecutionMaterial(authorization, error);
+        throw error;
+      }
+    }
+    // Managerless fixtures/development sessions cannot construct the protocol
+    // adapter because the plugin must use a real Manager JWT.  Keep them local.
     if (authorization.snapshot.memory_policy === undefined || authorization.snapshot.memory_policy === null) return undefined;
     if (process.env.AITEAM_ENV === "production") {
-      throw new SessionAuthorizationError("Manager Hindsight lease is unavailable");
+      throw new SessionAuthorizationError("Manager memory protocol adapter is unavailable");
     }
-    // Development/faux sessions may omit the external memory lease; no Hindsight
-    // tools or local bank are created in that case.
     return undefined;
   }
 

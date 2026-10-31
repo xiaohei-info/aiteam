@@ -14,26 +14,31 @@ const MANAGER_REQUEST_TIMEOUT_MS = 10_000;
 const SKILL_MARKET_NAMES_TIMEOUT_MS = 1_500;
 
 export interface HindsightRuntimeConfig {
-  /** Manager facade URL; never a direct Hindsight service URL. */
+  /** Manager protocol adapter URL; includes the fixed employee session scope. */
   base_url: string;
-  /** Bank selected by Manager; never supplied by a Pi model/tool call. */
+  /** Protocol path value only; Manager derives the authoritative bank. */
   bank_id: string;
-  /** Current Manager responses always include this; optional only for legacy read-only responses. */
-  allowed_operations?: ("recall" | "retain")[];
-  /** Positive for a current write lease; legacy read-only responses may omit it. */
-  policy_revision?: number;
-  /** Current negotiated protocol; null/absent means read-only compatibility mode. */
-  client_protocol?: typeof HINDSIGHT_CLIENT_PROTOCOL | null;
-  /** Current Manager consent; absent/false never restores stale auto-retain permission. */
-  explicit_auto_retain?: boolean;
-  /** Fact-only finite/guarded mode versus unrestricted future policy. */
-  retention_mode?: "unlimited" | "fact_only";
-  /** Opaque short-lived Manager facade lease token. Keep in process memory only. */
+  /** The current Agent→Manager JWT used by the Pi plugin HTTP client. */
   token: string;
+  /** Compatibility context id for Pi config scoping; this is not a Manager lease. */
   lease_id: string;
   version: number;
   issued_at: string;
   expires_at: string;
+  allowed_operations?: ("recall" | "retain")[];
+  policy_revision?: number;
+  client_protocol?: typeof HINDSIGHT_CLIENT_PROTOCOL | null;
+  explicit_auto_retain?: boolean;
+  retention_mode?: "unlimited" | "fact_only";
+}
+
+export interface ManagerMemoryRuntimeConfig {
+  base_url: string;
+  bank_id: string;
+  allowed_operations: ("recall" | "retain")[];
+  policy_revision: number;
+  client_protocol: typeof HINDSIGHT_CLIENT_PROTOCOL;
+  retention_mode: "unlimited" | "fact_only";
 }
 
 export interface AuthorizedConfig {
@@ -154,6 +159,8 @@ export interface ManagerClient {
   /** Member-scoped ASR config; intentionally does not require an employee id. */
   pullSpeechRuntimeConfig?(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig>;
   pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
+  /** Fetches protocol metadata only; the Agent reuses the caller JWT. */
+  pullMemoryRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
@@ -249,6 +256,29 @@ export class HttpManagerClient implements ManagerClient {
       { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL, ...(rotate ? { rotate: true } : {}) },
     );
     return normalizeHindsightRuntimeConfig(this.unwrap(response), this.baseUrl);
+  }
+
+  async pullMemoryRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig> {
+    if (!caller.accessToken) throw new ManagerUnavailableError("Agent caller token is unavailable for memory protocol adapter");
+    const response = await this.request(
+      "/api/manager/hindsight/memory-runtime-config",
+      caller,
+      { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL },
+    );
+    const descriptor = normalizeManagerMemoryRuntimeConfig(this.unwrap(response), this.baseUrl);
+    const issuedAt = new Date().toISOString();
+    const expiry = typeof caller.claims?.exp === "number" && Number.isFinite(caller.claims.exp)
+      ? new Date(caller.claims.exp * 1_000).toISOString()
+      : new Date(Date.now() + 300_000).toISOString();
+    return {
+      ...descriptor,
+      token: caller.accessToken,
+      lease_id: "manager-jwt-context",
+      version: 1,
+      issued_at: issuedAt,
+      expires_at: expiry,
+      explicit_auto_retain: descriptor.allowed_operations.includes("retain"),
+    };
   }
 
   async pullSnapshots(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]> {
@@ -683,6 +713,41 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };
 }
 
+export function normalizeManagerMemoryRuntimeConfig(value: unknown, managerUrl?: string): ManagerMemoryRuntimeConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid memory runtime config");
+  const raw = value as Record<string, unknown>;
+  const allowed = new Set(["base_url", "bank_id", "allowed_operations", "policy_revision", "client_protocol", "retention_mode"]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) throw new ManagerUnavailableError("Manager returned an invalid memory runtime config");
+  if (typeof raw.base_url !== "string" || typeof raw.bank_id !== "string" || !Array.isArray(raw.allowed_operations)
+    || typeof raw.policy_revision !== "number" || !Number.isSafeInteger(raw.policy_revision) || raw.policy_revision < 0
+    || raw.client_protocol !== HINDSIGHT_CLIENT_PROTOCOL
+    || (raw.retention_mode !== "unlimited" && raw.retention_mode !== "fact_only")) {
+    throw new ManagerUnavailableError("Manager returned an incomplete memory runtime config");
+  }
+  if (!/^aiteam-[0-9a-f]{32}$/u.test(raw.bank_id)) throw new ManagerUnavailableError("Manager returned an invalid memory protocol bank scope");
+  if (raw.allowed_operations.some((operation) => operation !== "recall" && operation !== "retain") || raw.allowed_operations.length > 2) {
+    throw new ManagerUnavailableError("Manager returned invalid memory operations");
+  }
+  let baseUrl: string;
+  try {
+    const parsed = new URL(raw.base_url, managerUrl);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash
+      || !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(parsed.pathname.replace(/\/$/u, ""))) throw new Error("invalid memory adapter URL");
+    if (managerUrl && parsed.origin !== new URL(managerUrl).origin) throw new Error("memory adapter URL is not Manager-owned");
+    baseUrl = parsed.toString().replace(/\/$/u, "");
+  } catch {
+    throw new ManagerUnavailableError("Manager returned an invalid memory adapter URL");
+  }
+  return {
+    base_url: baseUrl,
+    bank_id: raw.bank_id,
+    allowed_operations: raw.allowed_operations as ("recall" | "retain")[],
+    policy_revision: raw.policy_revision,
+    client_protocol: HINDSIGHT_CLIENT_PROTOCOL,
+    retention_mode: raw.retention_mode,
+  };
+}
+
 export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: string): HindsightRuntimeConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid Hindsight runtime config");
   const raw = value as Record<string, unknown>;
@@ -704,7 +769,8 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   let baseUrl: string;
   try {
     const parsed = new URL(baseUrlValue as string, managerUrl);
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname.replace(/\/$/u, "") !== "/api/manager/hindsight") throw new Error("invalid facade URL");
+    const normalizedPath = parsed.pathname.replace(/\/$/u, "");
+    if (normalizedPath !== "/api/manager/hindsight" && !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(normalizedPath)) throw new Error("invalid facade URL");
     if (managerUrl) {
       const manager = new URL(managerUrl);
       if (parsed.origin !== manager.origin) throw new Error("facade URL is not Manager-owned");
