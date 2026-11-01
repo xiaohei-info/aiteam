@@ -90,6 +90,8 @@ export interface ConversationItem {
   unread?: number
   lastMessageAt?: number
   summaryAvailability?: ConversationSummaryAvailability
+  // 自动化任务的执行会话,列表上标「自动化」。
+  automationTaskId?: string | null
   _employeeId?: string  // 内部字段:始终为 entry_employee_id,发消息时使用
 }
 
@@ -227,6 +229,7 @@ function buildConversationItems(
         unread: applyUnread(summary.unreadCount),
         lastMessageAt: summary.lastMessageAt,
         summaryAvailability: summary.availability,
+        automationTaskId: c.automation_task_id ?? null,
         _employeeId: employeeId,
       }
       // 刚建、还没消息的会话按更新时间排，不沉到列表底部。
