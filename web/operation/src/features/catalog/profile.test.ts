@@ -6,7 +6,7 @@ describe("人才市场展示字段", () => {
     expect(profileFromItem({})).toMatchObject({ tagline: "", use_cases: [], pricing: null, required_permissions: null });
   });
 
-  it("提交前去掉空行与空白，未勾选的权限按未声明提交", () => {
+  it("提交前去掉空行与空白，「无需额外权限」与未声明分开提交", () => {
     const payload = profilePayload({
       ...profileFromItem({}),
       tagline: "  客服专家  ",
@@ -17,7 +17,17 @@ describe("人才市场展示字段", () => {
     expect(payload.tagline).toBe("客服专家");
     expect(payload.use_cases).toEqual(["处理售后", "退款"]);
     expect(payload.sample_outputs).toEqual([]);
-    expect(payload.required_permissions).toBeNull();
+    expect(payload.required_permissions).toEqual({ full_access: false, local_directories: false });
+    expect(profilePayload({ ...profileFromItem({}), required_permissions: null }).required_permissions).toBeNull();
+  });
+
+  it("有预览链接没标题的示例产出不被丢掉，而是提示补标题", () => {
+    const payload = profilePayload({
+      ...profileFromItem({}),
+      sample_outputs: [{ title: " ", output_type: "document", preview_url: " https://example.com/a " }],
+    });
+    expect(payload.sample_outputs).toEqual([{ title: "", output_type: "document", preview_url: "https://example.com/a" }]);
+    expect(validateProfile(payload).sample_outputs).toBe("填了预览链接的示例产出也需要填写标题");
   });
 
   it("注册只带填写过的字段", () => {

@@ -176,6 +176,23 @@ describe("UsagePage 用量监控", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
+  it("多个已删除员工按 ID 前缀区分，未知员工保持原样", async () => {
+    const employee: UsageStatistics = {
+      ...responses.employee,
+      groups: [
+        group({ group_id: "aaaaaaaa-1111", display_name: "已删除员工" }),
+        group({ group_id: "bbbbbbbb-2222", display_name: "已删除员工" }),
+        group({ group_id: null, display_name: "未知员工" }),
+      ],
+    };
+    mockApi({ getStatistics: vi.fn((groupBy: UsageGroupBy) => Promise.resolve(groupBy === "employee" ? employee : responses.member)) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "员工用量" });
+    expect(within(table).getByText("已删除员工（aaaaaaaa）")).toBeInTheDocument();
+    expect(within(table).getByText("已删除员工（bbbbbbbb）")).toBeInTheDocument();
+    expect(within(table).getByText("未知员工")).toBeInTheDocument();
+  });
+
   it("加载失败展示错误信息", async () => {
     mockApi({ getStatistics: vi.fn().mockRejectedValue(new ApiError("用量服务暂不可用", 503, "manager_db_unconfigured")) });
     renderPage();

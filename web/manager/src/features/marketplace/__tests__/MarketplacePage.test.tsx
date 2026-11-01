@@ -9,6 +9,8 @@ import { MarketplacePage } from "../MarketplacePage";
 import { useExpertsApi } from "../../experts/useExpertsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
+const skillMarketList = vi.fn().mockResolvedValue([]);
+vi.mock("../../skill-market/useSkillMarketApi", () => ({ useSkillMarketApi: () => ({ list: skillMarketList, install: vi.fn() }) }));
 
 import type { ExpertsApi } from "../../experts/useExpertsApi";
 
@@ -230,6 +232,45 @@ describe("MarketplacePage", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "数据与成本" }));
     expect(within(dialog).getByText("样本不足（已评估 3 段，满 10 段后显示）")).toBeInTheDocument();
     expect(within(dialog).queryByText(/数据未提供/)).not.toBeInTheDocument();
+  });
+
+  it("详情里的技能显示名称，查不到名称时显示 ID", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      template_id: "tpl-1", version: "1", display_name: "测试专家",
+      platform_skill_refs: [{ skill_id: "sk-1", version: "1.0.0", content_hash: "h1" }, { skill_id: "sk-gone", version: "2.0.0", content_hash: "h2" }],
+    }]);
+    skillMarketList.mockResolvedValueOnce([{ skill_id: "sk-1", display_name: "合同审查" }]);
+    renderPage(["member"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    const dialog = await screen.findByRole("dialog", { name: "测试专家详情" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "能力" }));
+    expect(await within(dialog).findByText("合同审查 · v1.0.0")).toBeInTheDocument();
+    expect(within(dialog).getByText("sk-gone · v2.0.0")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "招募" })).not.toBeInTheDocument();
+  });
+
+  it("详情里可直接招募，先关详情再进部门设置；已招募时按钮不可点", async () => {
+    const api = mockApi();
+    api.listDepartments = vi.fn().mockResolvedValue([]);
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { template_id: "tpl-1", version: "1", display_name: "测试专家" },
+      { template_id: "tpl-2", version: "1", display_name: "老专家", is_recruited: true },
+    ]);
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    fireEvent.click(within(screen.getByRole("article", { name: "老专家" })).getByRole("button", { name: "查看详情" }));
+    const recruited = await screen.findByRole("dialog", { name: "老专家详情" });
+    expect(within(recruited).getByRole("button", { name: "已招募" })).toBeDisabled();
+    fireEvent.click(within(recruited).getByRole("button", { name: /关闭|Close/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "老专家详情" })).not.toBeInTheDocument());
+
+    fireEvent.click(within(screen.getByRole("article", { name: "测试专家" })).getByRole("button", { name: "查看详情" }));
+    const detail = await screen.findByRole("dialog", { name: "测试专家详情" });
+    fireEvent.click(within(detail).getByRole("button", { name: "招募" }));
+    expect(await screen.findByRole("dialog", { name: "招募测试专家" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "测试专家详情" })).not.toBeInTheDocument();
   });
 
   it("招募成功：显示前往专家实例配置入口", async () => {

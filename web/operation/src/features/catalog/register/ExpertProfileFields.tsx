@@ -1,6 +1,5 @@
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
-import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { HStack } from "@astryxdesign/core/HStack";
 import { MultiSelector } from "@astryxdesign/core/MultiSelector";
@@ -23,6 +22,7 @@ import {
   type OutputType,
   type PricingMode,
   type ProfileErrors,
+  type RequiredPermissions,
 } from "../profile";
 
 export interface ExpertProfileFieldsProps {
@@ -43,6 +43,21 @@ const PRICING_OPTIONS = [
   ...PRICING_MODES.map((mode) => ({ value: mode, label: PRICING_MODE_LABELS[mode] })),
 ];
 const BILLING_PERIOD_OPTIONS = BILLING_PERIODS.map((period) => ({ value: period, label: BILLING_PERIOD_LABELS[period] }));
+
+/** 权限字段有三种状态：未声明（null）、无需额外权限、需要某些权限；单选覆盖全部组合。 */
+const PERMISSION_CHOICES: Array<{ value: string; label: string; permissions: RequiredPermissions | null }> = [
+  { value: "undeclared", label: "未声明", permissions: null },
+  { value: "none", label: "无需额外权限", permissions: { full_access: false, local_directories: false } },
+  { value: "full_access", label: "需要完全访问", permissions: { full_access: true, local_directories: false } },
+  { value: "local_directories", label: "需要本机目录", permissions: { full_access: false, local_directories: true } },
+  { value: "both", label: "需要完全访问和本机目录", permissions: { full_access: true, local_directories: true } },
+];
+const PERMISSION_OPTIONS = PERMISSION_CHOICES.map(({ value, label }) => ({ value, label }));
+
+function permissionChoice(permissions: RequiredPermissions | null): string {
+  return PERMISSION_CHOICES.find((choice) => choice.permissions?.full_access === permissions?.full_access
+    && choice.permissions?.local_directories === permissions?.local_directories)!.value;
+}
 
 /** 每行一条。保存原始行（含空行），提交时由 profilePayload 去空白，避免输入换行时被吞掉。 */
 function LinesField({ label, description, value, rows = 3, disabled, error, onChange }: {
@@ -71,7 +86,6 @@ function LinesField({ label, description, value, rows = 3, disabled, error, onCh
 /** 专家模板的人才市场展示字段；所有字段可选，旧模板不填也有效。 */
 export function ExpertProfileFields({ value, disabled, errors = {}, onChange }: ExpertProfileFieldsProps) {
   const set = <K extends keyof ExpertTemplateProfile>(key: K, next: ExpertTemplateProfile[K]) => onChange({ ...value, [key]: next });
-  const permissions = value.required_permissions ?? { full_access: false, local_directories: false };
   const outputs = value.sample_outputs;
   const updateOutput = (index: number, patch: Partial<(typeof outputs)[number]>) =>
     set("sample_outputs", outputs.map((output, i) => (i === index ? { ...output, ...patch } : output)));
@@ -183,21 +197,17 @@ export function ExpertProfileFields({ value, disabled, errors = {}, onChange }: 
         />
       </FormLayout>
 
-      <VStack gap={2}>
-        <Text type="supporting" color="secondary">需要的权限 (required_permissions)；都不勾选表示无需额外权限</Text>
-        <CheckboxInput
-          label="需要完全访问"
-          value={permissions.full_access}
-          onChange={(full_access) => set("required_permissions", { ...permissions, full_access })}
+      <FormLayout>
+        <Selector
+          label="需要的权限 (required_permissions)"
+          description="「未声明」时人才市场不展示权限；「无需额外权限」会明确告诉用户不需要授权"
+          options={PERMISSION_OPTIONS}
+          value={permissionChoice(value.required_permissions)}
+          onChange={(choice) => set("required_permissions", PERMISSION_CHOICES.find((item) => item.value === choice)!.permissions)}
           isDisabled={disabled}
+          data-testid="required-permissions-select"
         />
-        <CheckboxInput
-          label="需要本机目录"
-          value={permissions.local_directories}
-          onChange={(local_directories) => set("required_permissions", { ...permissions, local_directories })}
-          isDisabled={disabled}
-        />
-      </VStack>
+      </FormLayout>
 
       <FormLayout direction="horizontal">
         <Selector

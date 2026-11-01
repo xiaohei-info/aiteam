@@ -44,8 +44,19 @@ function successRate(succeeded: number, executions: number): string {
   return executions > 0 ? `${Math.round((succeeded / executions) * 100)}%` : "—";
 }
 
+/**
+ * 名称重复的行（常见于多个「已删除员工 / 已删除成员」，也可能是同名员工）在名称后补 ID 前 8 位，
+ * 让管理员分得清是哪一个；「未知员工 / 未知成员」没有 ID，保持原样。
+ */
 function withRowKeys(groups: UsageStatisticsGroup[] | undefined): GroupRow[] {
-  return (groups ?? []).map((group) => ({ ...group, row_key: group.group_id ?? "unattributed" }));
+  const rows = groups ?? [];
+  const nameCounts = new Map<string, number>();
+  for (const group of rows) nameCounts.set(group.display_name, (nameCounts.get(group.display_name) ?? 0) + 1);
+  return rows.map((group) => ({
+    ...group,
+    display_name: group.group_id && (nameCounts.get(group.display_name) ?? 0) > 1 ? `${group.display_name}（${group.group_id.slice(0, 8)}）` : group.display_name,
+    row_key: group.group_id ?? "unattributed",
+  }));
 }
 
 export function UsagePage(): ReactNode {

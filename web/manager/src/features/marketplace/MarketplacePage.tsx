@@ -24,6 +24,7 @@ import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
+import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
 import type { Department, ExpertTemplate } from "../experts/types";
 import {
   CARD_METRIC_SLOTS,
@@ -84,6 +85,7 @@ export function MarketplacePage(): ReactNode {
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useExpertsApi();
+  const skillMarketApi = useSkillMarketApi();
 
   const [templates, setTemplates] = useState<ExpertTemplate[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,6 +96,9 @@ export function MarketplacePage(): ReactNode {
   const [filter, setFilter] = useState<MarketplaceFilter>("all");
   const [recruitFor, setRecruitFor] = useState<ExpertTemplate | null>(null);
   const [detailFor, setDetailFor] = useState<ExpertTemplate | null>(null);
+  // 模板只带技能 ID；第一次打开带技能的详情时查一次技能市场拿名称，失败就显示 ID。
+  const [skillNames, setSkillNames] = useState<ReadonlyMap<string, string> | null>(null);
+  const needsSkillNames = Boolean(detailFor?.platform_skill_refs?.length) && skillNames === null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,6 +113,16 @@ export function MarketplacePage(): ReactNode {
   }, [api, i18n]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!needsSkillNames) return;
+    let active = true;
+    skillMarketApi.list().then(
+      (items) => { if (active) setSkillNames(new Map(items.filter((item) => item.display_name).map((item) => [item.skill_id, item.display_name]))); },
+      () => { if (active) setSkillNames(new Map()); },
+    );
+    return () => { active = false; };
+  }, [needsSkillNames, skillMarketApi]);
 
   const filteredTemplates = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -145,6 +160,19 @@ export function MarketplacePage(): ReactNode {
     },
     [i18n, load],
   );
+
+  function startRecruit(template: ExpertTemplate): void {
+    if (api.listDepartments) {
+      setRecruitFor(template);
+      return;
+    }
+    // Older injected clients do not expose department lookup;
+    // preserve their original direct-recruit contract.
+    void runAction(
+      () => api.recruitExpert({ template_id: template.template_id }),
+      "manager.experts.recruit_ok",
+    );
+  }
 
   async function recruitWithDepartments(departmentIds: string[]): Promise<void> {
     if (!recruitFor) return;
@@ -280,18 +308,7 @@ export function MarketplacePage(): ReactNode {
                         label={i18n.t("manager.experts.recruit")}
                         size="sm"
                         variant="primary"
-                        clickAction={() => {
-                          if (api.listDepartments) {
-                            setRecruitFor(t);
-                            return;
-                          }
-                          // Older injected clients do not expose department lookup;
-                          // preserve their original direct-recruit contract.
-                          void runAction(
-                            () => api.recruitExpert({ template_id: t.template_id }),
-                            "manager.experts.recruit_ok",
-                          );
-                        }}
+                        clickAction={() => startRecruit(t)}
                       />
                     )
                   )}
@@ -307,7 +324,15 @@ export function MarketplacePage(): ReactNode {
         )}
       </VStack>
 
-      {detailFor && <TemplateDetailDialog template={detailFor} onClose={() => setDetailFor(null)} />}
+      {detailFor && (
+        <TemplateDetailDialog
+          template={detailFor}
+          skillNames={skillNames}
+          // 先关详情再进招募，避免两个弹窗叠在一起。
+          onRecruit={canWrite ? () => { setDetailFor(null); startRecruit(detailFor); } : undefined}
+          onClose={() => setDetailFor(null)}
+        />
+      )}
 
       {recruitFor && api.listDepartments && (
         <RecruitDepartmentDialog

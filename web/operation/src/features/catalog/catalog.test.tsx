@@ -1241,6 +1241,7 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
 
     fireEvent.click(screen.getByText("编辑"));
     await selectAstryxOption("计价方式 (pricing)", "不展示计价");
+    await selectAstryxOption("需要的权限 (required_permissions)", "无需额外权限");
     fireEvent.change(screen.getByLabelText(/^不适用场景 \(limitations\)/), { target: { value: "不处理法律纠纷" } });
     fireEvent.click(screen.getByText("保存"));
 
@@ -1251,7 +1252,7 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
       expect(body.pricing).toBeNull();
       expect(body.limitations).toEqual(["不处理法律纠纷"]);
       expect(body.tagline).toBe("售后问题一站解决");
-      expect(body.required_permissions).toBeNull();
+      expect(body.required_permissions).toEqual({ full_access: false, local_directories: false });
       expect(body.publisher).toBe("平台运营");
     });
   });
