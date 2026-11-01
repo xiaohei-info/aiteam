@@ -4,7 +4,7 @@ import type { ContextResetResult, ContextSegmentEvaluation } from '../api/agent/
 import { contextResetFinishedNotice, contextResetRequest, isOutcomeUnsupportedError } from '../lib/contextOutcome'
 import type { ContextResetNotice } from '../lib/contextResetMemory'
 
-/** 'outcome' 来自「解决了吗」提示条(带评估);'plain' 来自工具栏(不评估)。 */
+/** 'outcome' 来自「解决了吗」气泡(带评估);'plain' 来自工具栏(不评估)。 */
 export type ContextResetSource = 'outcome' | 'plain'
 
 export interface ContextResetNoticeState extends ContextResetNotice {
@@ -27,9 +27,9 @@ function resetErrorText(err: unknown): string {
 }
 
 /**
- * 开启新上下文的请求流程,提示条和工具栏共用一份状态,避免两处同时重置:
+ * 开启新上下文的请求流程,气泡和工具栏共用一份状态,避免两处同时重置:
  * 记忆保存失败时等用户确认、旧版 Agent 不认识评估字段时去掉评估重发、结束后的顶部提示。
- * completedCount 在每次重置完成后递增,提示条据此收起。
+ * completedCount 在每次重置完成后递增,气泡据此收起。
  */
 export function useContextReset(conversationId: string, onReset: (result: ContextResetResult) => void) {
   const [resetting, setResetting] = useState<ContextResetSource | null>(null)

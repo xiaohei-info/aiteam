@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bot, Building2, ChevronRight, ExternalLink, Globe, LogOut, RefreshCw, Wrench, type LucideIcon } from 'lucide-react'
+import { Bell, Bot, Building2, ChevronRight, ExternalLink, Globe, LogOut, MessageSquarePlus, RefreshCw, Wrench, type LucideIcon } from 'lucide-react'
 import './Settings.css'
 import ApplicationLogs from './ApplicationLogs'
 import FileAccessSettings from './FileAccessSettings'
@@ -16,6 +16,7 @@ import {
   requestSystemNotificationPermission,
   type SystemNotificationPermissionResult,
 } from '../../lib/systemNotifications'
+import { isOutcomeBubbleMuted, setOutcomeBubbleMuted } from '../../lib/contextOutcomeBubble'
 import { openPortal, PORTALS } from '../../lib/portals'
 
 // 暂不在设置里展示的入口（仍保留在 PORTALS 中，与 external_links.rs 保持一致）。
@@ -46,6 +47,12 @@ export default function Settings() {
   const [notificationBusy, setNotificationBusy] = useState(false)
   const [notificationPreferenceError, setNotificationPreferenceError] = useState<string | null>(null)
   const [notificationStorageError, setNotificationStorageError] = useState<string | null>(null)
+  const [outcomeBubbleMuted, setOutcomeBubbleMutedState] = useState(isOutcomeBubbleMuted)
+  const [outcomeBubbleError, setOutcomeBubbleError] = useState<string | null>(null)
+  const toggleOutcomeBubble = (muted: boolean) => {
+    if (setOutcomeBubbleMuted(muted)) { setOutcomeBubbleMutedState(muted); setOutcomeBubbleError(null) }
+    else setOutcomeBubbleError('无法保存本地偏好，提示设置未改变。')
+  }
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [portalError, setPortalError] = useState<string | null>(null)
 
@@ -209,6 +216,31 @@ export default function Settings() {
           <p className="settings-notification-note">
             通知偏好仅保存在此设备的当前账号下，不会同步到其他设备。{DESKTOP_NOTIFICATION_CLICK_MESSAGE}
           </p>
+        </section>
+
+        <section className="settings-card glass-panel" aria-labelledby="settings-outcome-title">
+          <div className="settings-section-heading">
+            <MessageSquarePlus size={16} strokeWidth={1.7} aria-hidden="true" />
+            <div>
+              <h2 id="settings-outcome-title">对话</h2>
+              <p>回复结束后，在「开启新上下文」按钮旁询问这个问题是否解决。</p>
+            </div>
+            <span className={`settings-notification-status ${outcomeBubbleMuted ? '' : 'granted'}`}>
+              {outcomeBubbleMuted ? '已关闭' : '已开启'}
+            </span>
+          </div>
+          <div className="settings-notification-panel">
+            <div className="settings-notification-copy">
+              <span>「解决了吗」提示</span>
+              <p>关闭后仍可在对话里的「新上下文」分隔线上补评，7 天内有效。</p>
+            </div>
+            <div className="settings-notification-actions">
+              <button type="button" onClick={() => toggleOutcomeBubble(!outcomeBubbleMuted)}>
+                {outcomeBubbleMuted ? '重新开启' : '关闭提示'}
+              </button>
+            </div>
+          </div>
+          {outcomeBubbleError && <p className="settings-notification-error" role="alert">{outcomeBubbleError}</p>}
         </section>
 
         <FileAccessSettings />

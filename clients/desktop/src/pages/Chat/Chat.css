@@ -305,38 +305,72 @@
 .chat-context-outcome-edit:focus-visible { opacity: 1; }
 .chat-context-outcome-edit:hover { color: var(--brand); }
 
-/* ─── 「解决了吗」提示条：回复结束后出现在输入框上方，是开启新上下文的唯一入口 ─── */
+/* ─── 「解决了吗」气泡：回复结束后贴在工具栏「开启新上下文」按钮右侧，纵向居中在工具栏这一行，不遮输入框 ─── */
+.chat-outcome-anchor { position: relative; display: inline-flex; align-items: center; }
 .chat-outcome-prompt {
-  margin: 0 24px 8px;
-  padding: 8px 10px 8px 14px;
-  border-radius: 14px;
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  z-index: 20;
+  width: max-content;
+  transform: translateY(-50%);
+  padding: 4px 4px 4px 12px;
+  border-radius: 12px;
   border: 1px solid var(--glass-gold-border);
   background: var(--surface-2-glass);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: var(--shadow-sm);
-  animation: fade-up 0.25s var(--ease-out);
-  /* 打开详情面板后聊天列会变窄，提示语按提示条自身宽度换排，不看窗口宽度。 */
-  container-type: inline-size;
+  animation: fade-in 0.2s var(--ease-out);
 }
-.chat-outcome-prompt-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+/* 指向按钮的小三角；用同色方块旋转，边框只画朝外的两条。 */
+.chat-outcome-prompt::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -5px;
+  width: 8px;
+  height: 8px;
+  border-left: 1px solid var(--glass-gold-border);
+  border-bottom: 1px solid var(--glass-gold-border);
+  background: var(--surface-2-glass);
+  transform: translateY(-50%) rotate(45deg);
 }
-.chat-outcome-prompt-question { flex: none; color: var(--text-primary); font-size: 13px; font-weight: 600; white-space: nowrap; }
-/* 宽时单行省略；不能只靠 flex:1 + min-width:0，否则窄列里会被压成一字一行，把提示条撑高。 */
-.chat-outcome-prompt-hint-group { display: flex; flex: 1 1 0; align-items: center; gap: 2px; min-width: 0; }
-.chat-outcome-prompt-hint { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.chat-outcome-prompt-row .chat-outcome-btn { flex: none; white-space: nowrap; }
-.chat-outcome-prompt-info { flex: none; }
-.chat-outcome-prompt-row .chat-outcome-prompt-close { flex: none; margin-left: auto; }
-/* 窄时提示语连同感叹号单独占第二行，关闭按钮留在第一行末尾。 */
-@container (max-width: 520px) {
-  .chat-outcome-prompt-row { gap: 6px; }
-  .chat-outcome-prompt-hint-group { order: 1; flex-basis: 100%; }
-  .chat-outcome-prompt-hint { white-space: normal; }
+.chat-outcome-prompt-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.chat-outcome-prompt-question { color: var(--text-primary); font-size: 12px; font-weight: 600; margin-right: 2px; }
+.chat-outcome-prompt-row .chat-outcome-btn { height: 26px; padding: 0 10px; }
+.chat-outcome-prompt-mute {
+  height: 24px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-outcome-prompt-mute:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
+/* 未解决的原因面板从气泡上方展开，宽度跟气泡走。 */
+.chat-outcome-prompt .chat-outcome-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-gold-border);
+  border-radius: 12px;
+  background: var(--surface-2-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-sm);
+  white-space: normal;
+}
+/* 聊天列窄（打开员工详情等）时工具栏右侧放不下，气泡改到按钮正上方，小三角朝下。 */
+@container chat-input (max-width: 600px) {
+  .chat-outcome-prompt { top: auto; bottom: calc(100% + 10px); left: -8px; transform: none; }
+  .chat-outcome-prompt::before { top: auto; bottom: -5px; left: 19px; border-left: none; border-right: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
 }
 .chat-outcome-btn {
   display: inline-flex;
@@ -363,8 +397,7 @@
 .chat-outcome-btn.unresolved:hover:not(:disabled),
 .chat-outcome-btn.unresolved[aria-expanded=true] { background: var(--brand-bg-soft); color: var(--brand); }
 .chat-outcome-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-.chat-outcome-prompt-info,
-.chat-outcome-prompt-close {
+.chat-outcome-prompt-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -376,8 +409,7 @@
   color: var(--text-muted);
   cursor: pointer;
 }
-.chat-outcome-prompt-close:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
-.chat-outcome-prompt-info:hover { color: var(--brand); background: var(--brand-bg-soft); }
+.chat-outcome-prompt-icon:hover:not(:disabled) { color: var(--text-primary); background: rgba(255, 255, 255, 0.06); }
 /* 「开启新上下文是什么意思」说明弹窗：图标 + 标题 + 一句说明的列表。 */
 .chat-outcome-explain-dialog { width: min(480px, 100%); }
 .chat-outcome-explain-list { display: flex; flex-direction: column; gap: 14px; margin: 20px 0 0; padding: 0; list-style: none; }
@@ -411,7 +443,6 @@
   box-shadow: 0 4px 14px var(--brand-glow), inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 .chat-tools-dialog.chat-outcome-explain-dialog footer .chat-outcome-explain-ok:hover { filter: brightness(1.06); }
-.chat-outcome-panel { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .chat-outcome-panel-title { margin: 0 0 8px; color: var(--text-primary); font-size: 13px; font-weight: 600; }
 .chat-outcome-panel-title span { color: var(--text-muted); font-weight: 400; }
 .chat-outcome-panel footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 10px; }
@@ -828,6 +859,8 @@
 
 .chat-input-box {
   position: relative;
+  /* 「解决了吗」气泡按输入框宽度决定放在按钮右侧还是上方。 */
+  container: chat-input / inline-size;
   border-radius: 14px;
   border: 1px solid var(--chrome-divider-strong);
   background: rgba(18, 18, 26, 0.42);

@@ -28,7 +28,7 @@ export function outcomeReasonLabel(reason: ContextOutcomeReason): string {
   return OUTCOME_REASONS.find((item) => item.value === reason)?.label ?? reason
 }
 
-/** 用户在提示条或修改评估里填的结果;原因、备注和待跟进只属于「未解决」。 */
+/** 用户在气泡或修改评估里填的结果;原因、备注和待跟进只属于「未解决」。 */
 export interface ContextOutcomeDraft {
   outcome: ContextSegmentOutcome
   reasons: ContextOutcomeReason[]
@@ -59,7 +59,7 @@ export function currentSegmentMessages<T extends Pick<Message, 'id' | 'entryRefs
 }
 
 /**
- * 「解决了吗」提示条:本段有用户消息、最后一条是已结束的员工回复、当前没在生成时出现。
+ * 「解决了吗」气泡:本段有用户消息、最后一条是已结束的员工回复、当前没在生成时出现。
  * 关掉后到下一次回复结束前不再出现(dismissed 由调用方在新一轮生成开始时清除)。
  */
 export function shouldShowOutcomePrompt(input: {

@@ -31,7 +31,7 @@ export function ContextResetToolButton({ reset, generating, hasContext }: {
   )
 }
 
-/** 重置结束后的顶部提示,以及记忆保存失败时的确认框;提示条和工具栏共用。 */
+/** 重置结束后的顶部提示,以及记忆保存失败时的确认框;气泡和工具栏共用。 */
 export function ContextResetFeedback({ reset, generating }: { reset: ContextResetController; generating: boolean }) {
   const { notice, pending, resetting } = reset
   return (

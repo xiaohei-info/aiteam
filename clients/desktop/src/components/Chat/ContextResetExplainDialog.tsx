@@ -42,7 +42,7 @@ const ITEMS: ReadonlyArray<ExplainItem> = [
   },
 ]
 
-/** 「解决了吗」提示条右侧感叹号打开的说明：开启新上下文意味着什么。 */
+/** 「解决了吗」气泡右侧感叹号打开的说明：开启新上下文意味着什么。 */
 export function ContextResetExplainDialog({ onClose }: { onClose: () => void }) {
   return (
     <ChatDialog
@@ -63,7 +63,7 @@ export function ContextResetExplainDialog({ onClose }: { onClose: () => void }) 
           </li>
         ))}
       </ul>
-      <p className="chat-outcome-explain-note">暂时不想开启？点提示条上的 ✕ 关闭，下次回复结束后会再提示。只想换个话题、不评估？点输入框工具栏里的「开启新上下文」按钮。</p>
+      <p className="chat-outcome-explain-note">暂时不想开启？点气泡上的 ✕ 关闭，下次回复结束后会再提示；不想再被询问就点「不再提示」，可在设置里重新打开。只想换个话题、不评估？点输入框工具栏里的「开启新上下文」按钮。</p>
       <footer>
         <button type="button" className="chat-outcome-explain-ok" onClick={onClose}>知道了</button>
       </footer>
