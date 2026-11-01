@@ -13,7 +13,7 @@ import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
-import { UsagePage, formatResolutionRate, formatUsageCost } from "../UsagePage";
+import { UsagePage, distinctLabels, formatResolutionRate, formatUsageCost } from "../UsagePage";
 import * as apiModule from "../useUsageApi";
 import type { SegmentOutcomeStatistics, UsageGroupBy, UsageStatistics, UsageStatisticsGroup } from "../types";
 
@@ -208,6 +208,27 @@ describe("UsagePage 用量监控", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("多个已删除员工在用量表和解决情况表里都能区分", async () => {
+    const employee: UsageStatistics = {
+      ...responses.employee,
+      groups: [group({ group_id: "aaaaaaaa-1111", display_name: "已删除员工" }), group({ group_id: "bbbbbbbb-2222", display_name: "已删除员工" })],
+    };
+    mockApi({
+      getStatistics: vi.fn((groupBy: UsageGroupBy) => Promise.resolve(groupBy === "employee" ? employee : responses.member)),
+      getOutcomes: vi.fn(() => Promise.resolve({ ...outcomes, groups: [
+        { ...outcomes.groups[1]!, employee_id: "dddddddd-4444" },
+        { ...outcomes.groups[1]!, employee_id: "eeeeeeee-5555" },
+      ] })),
+    });
+    renderPage();
+    const usage = await screen.findByRole("table", { name: "员工用量" });
+    expect(within(usage).getByText("已删除员工（aaaaaaaa）")).toBeInTheDocument();
+    expect(within(usage).getByText("已删除员工（bbbbbbbb）")).toBeInTheDocument();
+    const solved = await screen.findByRole("table", { name: "员工解决情况" });
+    expect(within(solved).getByText("已删除员工（dddddddd）")).toBeInTheDocument();
+    expect(within(solved).getByText("已删除员工（eeeeeeee）")).toBeInTheDocument();
+  });
+
   it("加载失败展示错误信息", async () => {
     mockApi({ getStatistics: vi.fn().mockRejectedValue(new ApiError("用量服务暂不可用", 503, "manager_db_unconfigured")) });
     renderPage();
@@ -220,6 +241,17 @@ describe("formatUsageCost", () => {
     expect(formatUsageCost({ pricing_status: "known", cost_total: "1.5", known_cost_total: "1.5" })).toBe("$1.50");
     expect(formatUsageCost({ pricing_status: "partial", cost_total: null, known_cost_total: "0.4" })).toBe("≥ $0.40");
     expect(formatUsageCost({ pricing_status: "unknown", cost_total: null, known_cost_total: null })).toBe("未定价");
+  });
+});
+
+describe("distinctLabels", () => {
+  it("重名的行补 ID 前 8 位，没有 ID 或不重名的保持原样", () => {
+    expect(distinctLabels([
+      { name: "已删除员工", id: "aaaaaaaa-1111" },
+      { name: "已删除员工", id: "bbbbbbbb-2222" },
+      { name: "未知员工", id: null },
+      { name: "研究员", id: "cccccccc-3333" },
+    ])).toEqual(["已删除员工（aaaaaaaa）", "已删除员工（bbbbbbbb）", "未知员工", "研究员"]);
   });
 });
 

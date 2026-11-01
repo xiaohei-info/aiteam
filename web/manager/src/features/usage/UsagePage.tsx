@@ -26,7 +26,7 @@ const RANGES: Array<{ key: RangeKey; label: string; window: () => UsageWindow | 
 
 interface CostFields { cost_total: string | number | null; known_cost_total: string | number | null; pricing_status: UsagePricingStatus }
 type GroupRow = UsageStatisticsGroup & { row_key: string } & Record<string, unknown>;
-type OutcomeRow = SegmentOutcomeGroup & Record<string, unknown>;
+type OutcomeRow = SegmentOutcomeGroup & { label: string } & Record<string, unknown>;
 
 function fmtUsd(value: string | number): string {
   const amount = Number(value);
@@ -51,15 +51,32 @@ export function formatResolutionRate(rate: number | null): string {
 }
 
 const OUTCOME_COLUMNS: TableColumn<OutcomeRow>[] = [
-  { key: "display_name", header: "员工", width: proportional(2), renderCell: (row) => <Text>{row.display_name ?? "已删除员工"}</Text> },
+  { key: "display_name", header: "员工", width: proportional(2), renderCell: (row) => <Text>{row.label}</Text> },
   { key: "evaluated_count", header: "已评估", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.evaluated_count.toLocaleString()}</Text> },
   { key: "resolved_count", header: "已解决", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.resolved_count.toLocaleString()}</Text> },
   { key: "unresolved_count", header: "未解决", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.unresolved_count.toLocaleString()}</Text> },
   { key: "resolution_rate", header: "解决率", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{formatResolutionRate(row.resolution_rate)}</Text> },
 ];
 
+/**
+ * 名称重复时（常见于多个「已删除员工 / 已删除成员」，也可能是同名员工）在名称后补 ID 前 8 位，
+ * 让管理员分得清是哪一个；没有 ID 的「未知员工 / 未知成员」保持原样。
+ */
+export function distinctLabels(rows: Array<{ name: string; id: string | null }>): string[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.name, (counts.get(row.name) ?? 0) + 1);
+  return rows.map((row) => (row.id && (counts.get(row.name) ?? 0) > 1 ? `${row.name}（${row.id.slice(0, 8)}）` : row.name));
+}
+
 function withRowKeys(groups: UsageStatisticsGroup[] | undefined): GroupRow[] {
-  return (groups ?? []).map((group) => ({ ...group, row_key: group.group_id ?? "unattributed" }));
+  const rows = groups ?? [];
+  const labels = distinctLabels(rows.map((group) => ({ name: group.display_name, id: group.group_id })));
+  return rows.map((group, index) => ({ ...group, display_name: labels[index]!, row_key: group.group_id ?? "unattributed" }));
+}
+
+function outcomeRows(groups: SegmentOutcomeGroup[]): OutcomeRow[] {
+  const labels = distinctLabels(groups.map((group) => ({ name: group.display_name ?? "已删除员工", id: group.employee_id })));
+  return groups.map((group, index) => ({ ...group, label: labels[index]! }));
 }
 
 export function UsagePage(): ReactNode {
@@ -173,7 +190,7 @@ function OutcomeSection({ outcomes }: { outcomes: SegmentOutcomeStatistics | nul
           <Table
             aria-label="员工解决情况"
             tableProps={{ "aria-label": "员工解决情况" }}
-            data={outcomes.groups as OutcomeRow[]}
+            data={outcomeRows(outcomes.groups)}
             columns={OUTCOME_COLUMNS}
             idKey="employee_id"
             hasHover
