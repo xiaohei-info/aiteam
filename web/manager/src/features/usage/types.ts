@@ -34,5 +34,26 @@ export interface UsageStatistics {
   groups?: UsageStatisticsGroup[];
 }
 
+/** Manager /api/manager/usage/outcomes：成员对段落的「已解决 / 未解决」计数，不含原因、备注和会话内容。 */
+export interface SegmentOutcomeGroup {
+  employee_id: string;
+  // 员工已删除时为 null。
+  display_name: string | null;
+  evaluated_count: number;
+  resolved_count: number;
+  unresolved_count: number;
+  // 已评估少于 min_sample 段时为 null，不能当成 0%。
+  resolution_rate: number | null;
+}
+
+export interface SegmentOutcomeStatistics {
+  min_sample: number;
+  evaluated_count: number;
+  resolved_count: number;
+  unresolved_count: number;
+  resolution_rate: number | null;
+  groups: SegmentOutcomeGroup[];
+}
+
 /** UTC 整点 [window_start, window_end)；全部时间为 null。 */
 export interface UsageWindow { window_start: string; window_end: string }

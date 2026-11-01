@@ -1,4 +1,4 @@
-/** 用量监控页 — 租户内 Agent 上报的脱敏小时摘要：合计 + 按员工 / 按成员（无会话内容）。 */
+/** 用量监控页 — 租户内 Agent 上报的脱敏小时摘要：合计 + 按员工 / 按成员 + 解决情况（无会话内容）。 */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -14,7 +14,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useUsageApi } from "./useUsageApi";
 import { lastLocalDaysWindow } from "./usageWindow";
-import type { UsagePricingStatus, UsageStatistics, UsageStatisticsGroup, UsageWindow } from "./types";
+import type { SegmentOutcomeGroup, SegmentOutcomeStatistics, UsagePricingStatus, UsageStatistics, UsageStatisticsGroup, UsageWindow } from "./types";
 
 type RangeKey = "today" | "last_7_days" | "all";
 
@@ -26,6 +26,7 @@ const RANGES: Array<{ key: RangeKey; label: string; window: () => UsageWindow | 
 
 interface CostFields { cost_total: string | number | null; known_cost_total: string | number | null; pricing_status: UsagePricingStatus }
 type GroupRow = UsageStatisticsGroup & { row_key: string } & Record<string, unknown>;
+type OutcomeRow = SegmentOutcomeGroup & Record<string, unknown>;
 
 function fmtUsd(value: string | number): string {
   const amount = Number(value);
@@ -44,6 +45,19 @@ function successRate(succeeded: number, executions: number): string {
   return executions > 0 ? `${Math.round((succeeded / executions) * 100)}%` : "—";
 }
 
+/** 样本不足时解决率为 null，显示「样本不足」，不能显示为 0%。 */
+export function formatResolutionRate(rate: number | null): string {
+  return rate === null ? "样本不足" : `${Math.round(rate * 100)}%`;
+}
+
+const OUTCOME_COLUMNS: TableColumn<OutcomeRow>[] = [
+  { key: "display_name", header: "员工", width: proportional(2), renderCell: (row) => <Text>{row.display_name ?? "已删除员工"}</Text> },
+  { key: "evaluated_count", header: "已评估", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.evaluated_count.toLocaleString()}</Text> },
+  { key: "resolved_count", header: "已解决", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.resolved_count.toLocaleString()}</Text> },
+  { key: "unresolved_count", header: "未解决", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{row.unresolved_count.toLocaleString()}</Text> },
+  { key: "resolution_rate", header: "解决率", width: proportional(1), renderCell: (row) => <Text hasTabularNumbers>{formatResolutionRate(row.resolution_rate)}</Text> },
+];
+
 function withRowKeys(groups: UsageStatisticsGroup[] | undefined): GroupRow[] {
   return (groups ?? []).map((group) => ({ ...group, row_key: group.group_id ?? "unattributed" }));
 }
@@ -53,6 +67,9 @@ export function UsagePage(): ReactNode {
   const [range, setRange] = useState<RangeKey>("today");
   const [byEmployee, setByEmployee] = useState<UsageStatistics | null>(null);
   const [byMember, setByMember] = useState<UsageStatistics | null>(null);
+  // 解决情况单独容错：读取失败只影响这一块，不影响用量。
+  const [outcomes, setOutcomes] = useState<SegmentOutcomeStatistics | null>(null);
+  const [outcomesFailed, setOutcomesFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // 只采用最近一次请求的结果：切换时间范围或离开页面时取消旧请求；
@@ -65,17 +82,22 @@ export function UsagePage(): ReactNode {
     setError(null);
     const window = RANGES.find((item) => item.key === range)!.window();
     try {
-      const [employeeStats, memberStats] = await Promise.all([
+      const [employeeStats, memberStats, outcomeResult] = await Promise.all([
         api.getStatistics("employee", window, signal),
         api.getStatistics("member", window, signal),
+        api.getOutcomes(window, signal).then((value) => ({ value }), () => null),
       ]);
       if (requestId !== latestRequest.current) return;
       setByEmployee(employeeStats);
       setByMember(memberStats);
+      setOutcomes(outcomeResult?.value ?? null);
+      setOutcomesFailed(outcomeResult === null);
     } catch (err) {
       if (requestId !== latestRequest.current) return;
       setByEmployee(null);
       setByMember(null);
+      setOutcomes(null);
+      setOutcomesFailed(false);
       setError(err instanceof ApiError ? err.message : "用量数据加载失败");
     } finally {
       if (requestId === latestRequest.current) setLoading(false);
@@ -130,6 +152,35 @@ export function UsagePage(): ReactNode {
           <GroupTable title="按成员" nameHeader="成员" rows={withRowKeys(byMember?.groups)} columns={columns("成员")} />
         </> : <Card padding={4}><EmptyState title="该时间范围内暂无用量" isCompact /></Card>}
       </>}
+
+      {!loading && (outcomes || outcomesFailed) && <OutcomeSection outcomes={outcomes} />}
+    </VStack>
+  );
+}
+
+function OutcomeSection({ outcomes }: { outcomes: SegmentOutcomeStatistics | null }): ReactNode {
+  return (
+    <VStack gap={2}>
+      <Heading level={2}>解决情况</Heading>
+      {outcomes ? <>
+        <Text type="supporting">
+          成员在对话结束时标记的「已解决 / 未解决」；群聊里的一段对话计入其中每位员工。已评估少于 {outcomes.min_sample} 段时不计算解决率。
+        </Text>
+        <Text hasTabularNumbers>
+          全企业：已评估 {outcomes.evaluated_count.toLocaleString()} 段 · 已解决 {outcomes.resolved_count.toLocaleString()} · 未解决 {outcomes.unresolved_count.toLocaleString()} · 解决率 {formatResolutionRate(outcomes.resolution_rate)}
+        </Text>
+        <Card padding={0}>
+          <Table
+            aria-label="员工解决情况"
+            tableProps={{ "aria-label": "员工解决情况" }}
+            data={outcomes.groups as OutcomeRow[]}
+            columns={OUTCOME_COLUMNS}
+            idKey="employee_id"
+            hasHover
+            emptyState={<EmptyState title="该时间范围内暂无评估" isCompact />}
+          />
+        </Card>
+      </> : <Text type="supporting">解决情况读取失败，请稍后刷新。</Text>}
     </VStack>
   );
 }

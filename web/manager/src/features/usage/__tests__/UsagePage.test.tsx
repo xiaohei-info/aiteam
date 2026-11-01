@@ -4,6 +4,7 @@
  * - 未知价格显示「未定价」，部分未定价显示「≥ 已知小计」，从不显示为 0
  * - 切换时间范围重新请求；加载失败展示错误
  * - 切换后慢返回的旧范围结果（成功或失败）不覆盖新范围；切换时取消旧请求
+ * - 解决情况：全企业合计 + 按员工；样本不足不显示 0%，读取失败只影响这一块
  */
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
@@ -12,9 +13,9 @@ import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
-import { UsagePage, formatUsageCost } from "../UsagePage";
+import { UsagePage, formatResolutionRate, formatUsageCost } from "../UsagePage";
 import * as apiModule from "../useUsageApi";
-import type { UsageGroupBy, UsageStatistics, UsageStatisticsGroup } from "../types";
+import type { SegmentOutcomeStatistics, UsageGroupBy, UsageStatistics, UsageStatisticsGroup } from "../types";
 
 function makeI18n() {
   const i18n = createI18n({ locale: "zh-CN", catalog: sharedMessages });
@@ -55,9 +56,18 @@ const responses: Record<UsageGroupBy, UsageStatistics> = {
   member: { ...totals, group_by: "member", groups: [group({ group_id: "m1", display_name: "成员甲", token_total: 1500, execution_count: 4, succeeded_count: 3, cost_total: null, pricing_status: "partial" })] },
 };
 
+const outcomes: SegmentOutcomeStatistics = {
+  min_sample: 10, evaluated_count: 23, resolved_count: 19, unresolved_count: 4, resolution_rate: 19 / 23,
+  groups: [
+    { employee_id: "e1", display_name: "财务专家", evaluated_count: 20, resolved_count: 17, unresolved_count: 3, resolution_rate: 0.85 },
+    { employee_id: "e2", display_name: null, evaluated_count: 3, resolved_count: 2, unresolved_count: 1, resolution_rate: null },
+  ],
+};
+
 function mockApi(overrides: Partial<apiModule.UsageApi> = {}) {
   const api: apiModule.UsageApi = {
     getStatistics: vi.fn((groupBy: UsageGroupBy) => Promise.resolve(responses[groupBy])),
+    getOutcomes: vi.fn(() => Promise.resolve(outcomes)),
     ...overrides,
   };
   vi.spyOn(apiModule, "useUsageApi").mockReturnValue(api);
@@ -176,6 +186,28 @@ describe("UsagePage 用量监控", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
+  it("解决情况：全企业合计与按员工，样本不足和已删除员工不显示为 0% 或空白", async () => {
+    const api = mockApi();
+    renderPage();
+    const table = await screen.findByRole("table", { name: "员工解决情况" });
+    expect(screen.getByText("全企业：已评估 23 段 · 已解决 19 · 未解决 4 · 解决率 83%")).toBeInTheDocument();
+    expect(within(table).getByText("财务专家")).toBeInTheDocument();
+    expect(within(table).getByText("85%")).toBeInTheDocument();
+    expect(within(table).getByText("已删除员工")).toBeInTheDocument();
+    expect(within(table).getByText("样本不足")).toBeInTheDocument();
+    expect(api.getOutcomes).toHaveBeenCalledWith(expect.objectContaining({ window_start: expect.any(String) }), expect.any(AbortSignal));
+    fireEvent.click(screen.getByText("全部"));
+    await waitFor(() => expect(api.getOutcomes).toHaveBeenCalledWith(null, expect.any(AbortSignal)));
+  });
+
+  it("解决情况读取失败只影响这一块，用量照常显示", async () => {
+    mockApi({ getOutcomes: vi.fn().mockRejectedValue(new ApiError("not found", 404, "not_found")) });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("解决情况读取失败，请稍后刷新。")).toBeInTheDocument());
+    expect(screen.getByText("4 次")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("加载失败展示错误信息", async () => {
     mockApi({ getStatistics: vi.fn().mockRejectedValue(new ApiError("用量服务暂不可用", 503, "manager_db_unconfigured")) });
     renderPage();
@@ -188,5 +220,13 @@ describe("formatUsageCost", () => {
     expect(formatUsageCost({ pricing_status: "known", cost_total: "1.5", known_cost_total: "1.5" })).toBe("$1.50");
     expect(formatUsageCost({ pricing_status: "partial", cost_total: null, known_cost_total: "0.4" })).toBe("≥ $0.40");
     expect(formatUsageCost({ pricing_status: "unknown", cost_total: null, known_cost_total: null })).toBe("未定价");
+  });
+});
+
+describe("formatResolutionRate", () => {
+  it("样本不足显示文字，有数据时四舍五入到整数百分比", () => {
+    expect(formatResolutionRate(null)).toBe("样本不足");
+    expect(formatResolutionRate(0)).toBe("0%");
+    expect(formatResolutionRate(0.875)).toBe("88%");
   });
 });
