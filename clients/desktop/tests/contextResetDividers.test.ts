@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { contextResetDividers, contextResetMemoryText, contextResetPlacement, entriesToMessages } from '../src/lib/piConverters.ts'
+import { anchorTrailingDivider, contextResetDividers, contextResetMemoryText, contextResetPlacement, entriesToMessages } from '../src/lib/piConverters.ts'
+import { currentSegmentMessages } from '../src/lib/contextOutcome.ts'
 import { confirmationReasonText, contextResetNotice, dividerMemoryText, isMemoryFailure } from '../src/lib/contextResetMemory.ts'
 import type { ContextResetMemoryReason, ContextResetResult, ConversationEntry } from '../src/api/agent/types.ts'
 
@@ -30,7 +31,7 @@ test('group participants sharing one reset_id and resets with no new messages yi
   const entries = [message('m1', 'user', 'hi'), reset('a:r1', 'reset-1'), reset('b:r1', 'reset-1')]
   const dividers = contextResetDividers(entries)
   assert.deepEqual(dividers.before, new Map())
-  assert.deepEqual(dividers.trailing, { resetId: 'reset-1', afterEntryRef: 'm1' })
+  assert.deepEqual(dividers.trailing, { resetId: 'reset-1', afterEntryRef: 'm1', historyRefs: new Set(['m1']) })
   assert.deepEqual(dividers.memory.get('reset-1'), ['saved', 'saved'])
 })
 
@@ -42,7 +43,7 @@ test('consecutive resets with different reset_ids collapse to the latest one', (
 test('markers without data fall back to entry_ref, and a reset before any message anchors to the top', () => {
   const entries: ConversationEntry[] = [{ id: 'r1', entry_ref: 'conv:r1', type: 'custom', customType: 'aiteam_context_reset' }]
   const dividers = contextResetDividers(entries)
-  assert.deepEqual(dividers.trailing, { resetId: 'conv:r1', afterEntryRef: null })
+  assert.deepEqual(dividers.trailing, { resetId: 'conv:r1', afterEntryRef: null, historyRefs: new Set() })
   assert.deepEqual(contextResetPlacement({ id: 'live-1' }, 0, dividers), { before: 'conv:r1', after: null })
   assert.deepEqual(contextResetPlacement({ id: 'live-2' }, 1, dividers), { before: null, after: null })
   assert.equal(contextResetMemoryText('conv:r1', dividers), null, 'old markers without memory_reason show no memory status')
@@ -54,6 +55,26 @@ test('placement matches merged entryRefs and keeps live messages below a trailin
   assert.deepEqual(contextResetPlacement({ id: 'm1' }, 0, dividers), { before: null, after: null })
   assert.deepEqual(contextResetPlacement({ id: 'merged', entryRefs: ['m2'] }, 1, dividers), { before: null, after: 'reset-1' })
   assert.deepEqual(contextResetPlacement({ id: 'live' }, 2, dividers), { before: null, after: null })
+})
+
+test('group chat: a trailing divider follows the last displayed history message, not the work message holding the last entry', () => {
+  const entries = [message('u1', 'user', 'ask'), message('c1', 'assistant', '@member'), message('b1', 'assistant', 'member reply'), message('c2', 'assistant', 'summary'), reset('r1', 'reset-1')]
+  const dividers = contextResetDividers(entries)
+  // 协调员整轮(c1、c2)合并为一条排在本轮开头,成员回复排在后面。
+  const displayed = [{ id: 'u1' }, { id: 'work', entryRefs: ['c1', 'c2'] }, { id: 'b1' }]
+  assert.deepEqual(contextResetPlacement(displayed[1], 1, dividers).after, 'reset-1', 'entry anchoring alone lands mid-list')
+  const anchored = anchorTrailingDivider(dividers, displayed)
+  assert.deepEqual(displayed.map((msg, index) => contextResetPlacement(msg, index, anchored).after), [null, null, 'reset-1'])
+  assert.deepEqual(currentSegmentMessages(displayed, anchored), [], 'the reset button has no context left to clear')
+  const live = [...displayed, { id: 'pending-user' }]
+  assert.deepEqual(currentSegmentMessages(live, anchorTrailingDivider(dividers, live)), [{ id: 'pending-user' }])
+})
+
+test('anchorTrailingDivider keeps the same object when the anchor already matches', () => {
+  const dividers = contextResetDividers([message('m1', 'user', 'hi'), message('m2', 'assistant', 'hello'), reset('r1', 'reset-1')])
+  assert.equal(anchorTrailingDivider(dividers, [{ id: 'm1' }, { id: 'merged', entryRefs: ['m2'] }, { id: 'live' }]), dividers)
+  const top = contextResetDividers([reset('r1', 'reset-1')])
+  assert.equal(anchorTrailingDivider(top, [{ id: 'live' }]), top)
 })
 
 test('other custom entries are ignored', () => {

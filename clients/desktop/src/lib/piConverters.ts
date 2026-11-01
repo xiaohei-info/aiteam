@@ -336,7 +336,8 @@ export interface ContextResetDividers {
   before: Map<string, string>
   // 重置后历史里还没有新消息:画在 afterEntryRef 所在消息之后(null 表示列表开头)。
   // 锚定到具体消息而不是列表末尾,实时流入的新消息才会排在分隔线下方。
-  trailing: { resetId: string; afterEntryRef: string | null } | null
+  // historyRefs 是重置前全部消息 entry,供 anchorTrailingDivider 在展示列表里重新定位。
+  trailing: { resetId: string; afterEntryRef: string | null; historyRefs: ReadonlySet<string> } | null
   // reset_id → 各参与者标记里的 memory_reason;旧标记没有该字段时不记录。
   memory: Map<string, ContextResetMemoryReason[]>
 }
@@ -351,6 +352,7 @@ export function contextResetDividers(entries: ConversationEntry[]): ContextReset
   const seen = new Set<string>()
   let pending: string[] = []
   let lastMessageRef: string | null = null
+  let historyRefs = new Set<string>()
   for (const entry of entries) {
     if (!entry?.id) continue
     if (entry.type === 'custom' && entry.customType === CONTEXT_RESET_ENTRY_TYPE) {
@@ -369,13 +371,36 @@ export function contextResetDividers(entries: ConversationEntry[]): ContextReset
     if (role !== 'user' && role !== 'assistant') continue
     const ref = entry.entry_ref ?? entry.id
     lastMessageRef = ref
+    historyRefs.add(ref)
     if (pending.length === 0) continue
     // 连续多次重置之间没有消息时只画一条。
     before.set(ref, pending[pending.length - 1])
     pending = []
+    historyRefs = new Set()
   }
   const resetId = pending[pending.length - 1]
-  return { before, trailing: resetId ? { resetId, afterEntryRef: lastMessageRef } : null, memory }
+  return { before, trailing: resetId ? { resetId, afterEntryRef: lastMessageRef, historyRefs } : null, memory }
+}
+
+/**
+ * 尾部分隔线改锚到展示列表里最后一条重置前的消息。群聊协调员整轮合并成一条 work 消息、排在本轮开头,
+ * 历史最后一条 entry 可能落在它里面,按 entry 锚定会把分隔线画在成员回复之前。
+ * 实时流入的新消息不含历史 entry,仍排在分隔线下方;锚点不变时原样返回,保持 useMemo 引用稳定。
+ */
+export function anchorTrailingDivider(
+  dividers: ContextResetDividers,
+  messages: ReadonlyArray<Pick<Message, 'id' | 'entryRefs'>>,
+): ContextResetDividers {
+  const trailing = dividers.trailing
+  if (trailing === null || trailing.afterEntryRef === null) return dividers
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const msg = messages[index]
+    const refs = [msg.id, ...(msg.entryRefs ?? [])]
+    if (!refs.some((ref) => trailing.historyRefs.has(ref))) continue
+    if (refs.includes(trailing.afterEntryRef)) return dividers
+    return { ...dividers, trailing: { ...trailing, afterEntryRef: msg.id } }
+  }
+  return dividers
 }
 
 /** 按消息自身 id 和合并后的 entryRefs 判断该消息前后要画的"新上下文"分隔线;值为 reset_id,null 表示不画。 */

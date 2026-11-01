@@ -30,7 +30,7 @@ import { ContextResetDivider } from '../../components/Chat/ContextResetDivider'
 import { useConversationSegments } from '../../hooks/useConversationSegments'
 import { useContextReset } from '../../hooks/useContextReset'
 import { currentSegmentMessages } from '../../lib/contextOutcome'
-import { contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
+import { anchorTrailingDivider, contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
 import GroupAvatar from '../../components/Chat/GroupAvatar'
 import { MemberInfoPopup } from '../../components/Chat/MemberInfoPopup'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
@@ -54,7 +54,8 @@ export default function GroupChat() {
   const userId = useAgentAuthStore((s) => s.account) ?? 'guest'
   const group = groups.find((g) => g.id === activeGroupId)
   const messages = activeConvMessages
-  const resetDividers = useMemo(() => contextResetDividers(activeConvRawItems), [activeConvRawItems])
+  const entryDividers = useMemo(() => contextResetDividers(activeConvRawItems), [activeConvRawItems])
+  const resetDividers = useMemo(() => anchorTrailingDivider(entryDividers, messages), [entryDividers, messages])
   // 开启新上下文后递增,让 ConversationStatus 重新挂载并重新读取上下文用量。
   const [contextResetCount, setContextResetCount] = useState(0)
   const segments = useConversationSegments(activeGroupId, contextResetCount)
