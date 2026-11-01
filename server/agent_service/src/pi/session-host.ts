@@ -258,6 +258,8 @@ interface SessionRecord {
   capabilitySignature?: string;
   hindsightWorkspaces: Set<string>;
   contextOperation?: Promise<void>;
+  // 无活跃会话时上一次读到的上下文状态；会话记录末条和授权不变时复用，轮询不必重建会话。
+  contextCache?: { key: string; leafId: string | null; value: ConversationContext };
   disposing?: Promise<void>;
 }
 
@@ -553,8 +555,19 @@ export class SessionHost {
       let ownedSession: AgentSession | undefined;
       try {
         const existing = record.session ?? (record.sessionReady ? await record.sessionReady : undefined);
-        ownedSession = existing ?? await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
-        return this.contextValue(record, ownedSession);
+        if (existing) {
+          ownedSession = existing;
+          return this.contextValue(record, existing);
+        }
+        // 临时建会话有代价：重置后分支里还没有消息时，SDK 每次都会写一条模型和一条思考强度初始化记录。
+        // 会话记录末条和授权都没变时结果不会变，直接复用；所有写入都经过 record.sessionManager，末条 ID 可靠。
+        const key = `${authorization?.snapshot.version ?? "anonymous"}:${record.permissionMode}`;
+        const cached = record.contextCache;
+        if (cached && cached.key === key && cached.leafId === record.sessionManager.getLeafId()) return { ...cached.value, prompting: record.prompting };
+        ownedSession = await this.ensureSession(record, authorization, { skipHindsight: true, skipSandbox: true });
+        const value = this.contextValue(record, ownedSession);
+        record.contextCache = { key, leafId: record.sessionManager.getLeafId(), value };
+        return value;
       } finally {
         if (!active && !record.prompting && ownedSession && record.session === ownedSession) await this.disposeSession(record);
       }

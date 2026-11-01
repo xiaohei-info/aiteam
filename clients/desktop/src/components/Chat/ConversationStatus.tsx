@@ -76,8 +76,11 @@ export function ConversationStatus({ conversationId, generating, unavailable = f
       pending = false
     }
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 15000)
-    return () => { cancelled = true; controller.abort(); window.clearInterval(timer) }
+    // 窗口不可见时跳过定时读取，回到前台立即补读一次；发送、完成、重试仍由依赖变化触发。
+    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') void refresh() }, 15000)
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { cancelled = true; controller.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
   }, [conversationId, generating, attempt, unavailable])
   const hasContextUsage = context?.used_tokens != null && context.context_window > 0
   const percentage = hasContextUsage
