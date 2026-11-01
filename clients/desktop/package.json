@@ -20,6 +20,7 @@
     "check:sensitive-logs": "node --experimental-strip-types scripts/check-sensitive-request-logs.mjs",
     "check:service-clients": "node scripts/check-service-clients.mjs",
     "check:tauri-security": "node scripts/check-tauri-security.mjs",
+    "check:tauri-versions": "node scripts/check-tauri-versions.mjs",
     "dev": "vite",
     "dev:prod": "node scripts/dev-env.mjs prod",
     "dev:status": "node scripts/dev-env.mjs status",

@@ -61,6 +61,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # tauri build 要求 npm 侧 Tauri 包与 Cargo.lock 的 crate major.minor 一致；
+      # 本工作流不打包，这里提前拦下，避免 main 打不出安装包。
+      - name: Tauri npm / crate version alignment
+        run: pnpm check:tauri-versions
+
       - name: Security checks
         run: pnpm check:security
 
