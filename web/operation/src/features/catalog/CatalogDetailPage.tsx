@@ -1,6 +1,6 @@
 /** 运营端目录详情：路由加载、编辑保存与工作台容器。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError, PlatformRole, hasRole } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -18,12 +18,14 @@ import { useI18n } from "../../i18n/context";
 import { TemplateOverview, visibilityScopeFor } from "./TemplateOverview";
 import { TemplateVersionPanel, type DetailTab } from "./TemplateVersionPanel";
 import { useCatalogApi } from "./useCatalogApi";
-import type { CatalogItem, CatalogItemType } from "./types";
+import type { CatalogDetailLocationState, CatalogItem, CatalogItemType } from "./types";
 import { isSafeAvatarDataUrl } from "./avatar";
 import { profileFromItem, profilePayload, validateProfile, type ProfileErrors } from "./profile";
 
 export function CatalogDetailPage(): ReactNode {
   const { catalog_type, template_id } = useParams<{ catalog_type: string; template_id: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { session } = useSession();
   const i18n = useI18n();
   const api = useCatalogApi();
@@ -163,13 +165,19 @@ export function CatalogDetailPage(): ReactNode {
 
   const listPath = item.catalog_type === "expert_template" ? "/experts" : "/industry-solutions";
   const listName = item.catalog_type === "expert_template" ? "专家目录" : "行业方案目录";
+  // 从列表进来时带回原来的搜索和筛选；直接打开详情时回到完整列表。
+  const listHref = `${listPath}${(location.state as CatalogDetailLocationState | null)?.listSearch ?? ""}`;
 
   return (
     <VStack as="section" gap={6}>
-      <Breadcrumbs label="面包屑" variant="supporting">
-        <BreadcrumbItem href={listPath}>{listName}</BreadcrumbItem>
-        <BreadcrumbItem isCurrent>{item.template_id}</BreadcrumbItem>
-      </Breadcrumbs>
+      <HStack gap={3} align="center" wrap="wrap">
+        {/* 编辑中不提供返回，避免一点就丢掉未保存的修改；退出编辑走「取消」。 */}
+        {!editing && <Button label={`返回${listName}`} variant="ghost" size="sm" onClick={() => navigate(listHref)} />}
+        <Breadcrumbs label="面包屑" variant="supporting">
+          <BreadcrumbItem href={listHref}>{listName}</BreadcrumbItem>
+          <BreadcrumbItem isCurrent>{item.template_id}</BreadcrumbItem>
+        </Breadcrumbs>
+      </HStack>
 
       <HStack justify="between" align="center" wrap="wrap">
         <VStack gap={1}>
