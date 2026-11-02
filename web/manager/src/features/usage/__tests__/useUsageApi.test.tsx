@@ -1,7 +1,7 @@
 import React from "react";
 /**
  * useUsageApi / lastLocalDaysWindow 测试：
- * - 统计请求固定带 group_by，可选 UTC 整点窗口
+ * - 统计请求固定带 group_by，可选 UTC 整点窗口；解决情况请求只带可选时间窗
  * - 时间窗起止均对齐 UTC 整点
  */
 import { describe, expect, it, vi } from "vitest";
@@ -53,6 +53,17 @@ describe("useUsageApi", () => {
     const controller = new AbortController();
     await result.current.getStatistics("member", null, controller.signal);
     expect(client.get).toHaveBeenCalledWith("/api/manager/usage/statistics?group_by=member", { signal: controller.signal });
+  });
+  it("getOutcomes 带时间窗；全部时间不带查询参数", async () => {
+    const { client, wrapper } = setup();
+    const { result } = renderHook(() => useUsageApi(), { wrapper });
+    await result.current.getOutcomes({ window_start: "2026-10-29T16:00:00Z", window_end: "2026-10-30T03:00:00Z" });
+    expect(client.get).toHaveBeenCalledWith(
+      "/api/manager/usage/outcomes?window_start=2026-10-29T16%3A00%3A00Z&window_end=2026-10-30T03%3A00%3A00Z",
+      { signal: undefined },
+    );
+    await result.current.getOutcomes(null);
+    expect(client.get).toHaveBeenLastCalledWith("/api/manager/usage/outcomes", { signal: undefined });
   });
 });
 
