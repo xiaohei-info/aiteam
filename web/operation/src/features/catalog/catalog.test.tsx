@@ -1718,6 +1718,72 @@ describe("AstryX 目录工作台", () => {
     expect(await screen.findByRole("heading", { name: "卡片专家", level: 1 })).toBeInTheDocument();
   });
 
+  it("从详情返回后保留列表的搜索和状态筛选", async () => {
+    const target = makeCatalogItem({ template_id: "keep-filter", display_name: "下架专家", description: "目标描述", status: "unpublished" });
+    const other = makeCatalogItem({ template_id: "other-filter", display_name: "发布专家", status: "published" });
+    mockFetch.mockImplementation(async (url: string) =>
+      url.includes("keep-filter") ? singleResponse(target) : listPage([target, other]));
+
+    render(
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={makeSystemAdminSession()}>
+          <MemoryRouter initialEntries={["/experts"]}>
+            <Routes>
+              <Route path="/experts" element={
+                <CatalogPage catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />
+              } />
+              <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
+            </Routes>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>,
+    );
+
+    await screen.findByText("目标描述");
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索目录" }), { target: { value: "专家" } });
+    await selectAstryxOption("目录状态", "已下架");
+    expect(screen.queryByRole("link", { name: "发布专家" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("目标描述"));
+    fireEvent.click(await screen.findByRole("button", { name: "返回专家目录" }));
+
+    await screen.findByText("目标描述");
+    expect(screen.getByRole("textbox", { name: "搜索目录" })).toHaveValue("专家");
+    expect(screen.getByRole("combobox", { name: "目录状态" })).toHaveTextContent("已下架");
+    expect(screen.queryByRole("link", { name: "发布专家" })).not.toBeInTheDocument();
+  });
+
+  it("行业方案表格进入详情再返回，同样保留状态筛选", async () => {
+    const target = makeCatalogItem({ catalog_type: "solution_template", template_id: "keep-solution", display_name: "下架方案", status: "unpublished" });
+    const other = makeCatalogItem({ catalog_type: "solution_template", template_id: "other-solution", display_name: "发布方案", status: "published" });
+    mockFetch.mockImplementation(async (url: string) =>
+      url.includes("keep-solution") ? singleResponse(target) : listPage([target, other]));
+
+    render(
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={makeSystemAdminSession()}>
+          <MemoryRouter initialEntries={["/industry-solutions"]}>
+            <Routes>
+              <Route path="/industry-solutions" element={
+                <CatalogPage catalogType="solution_template" titleKey="operation.nav.industrySolutions" registerKey="operation.catalog.registerSolution" />
+              } />
+              <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
+            </Routes>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>,
+    );
+
+    await screen.findByRole("link", { name: "发布方案" });
+    await selectAstryxOption("目录状态", "已下架");
+    fireEvent.click(await screen.findByRole("link", { name: "下架方案" }));
+    fireEvent.click(await screen.findByRole("button", { name: "返回行业方案目录" }));
+
+    await screen.findByRole("link", { name: "下架方案" });
+    expect(screen.getByRole("combobox", { name: "目录状态" })).toHaveTextContent("已下架");
+    expect(screen.queryByRole("link", { name: "发布方案" })).not.toBeInTheDocument();
+  });
+
   it("详情页的返回按钮回到对应目录，编辑中不显示", async () => {
     mockFetch.mockResolvedValue(singleResponse(makeCatalogItem({ template_id: "back-detail", display_name: "待返回模板" })));
 

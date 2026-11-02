@@ -1,6 +1,6 @@
 /** 运营端目录治理列表。 */
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, DigitalEmployeeAvatar, PlatformRole, hasRole } from "@aiteam/shared";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -20,7 +20,7 @@ import { useI18n } from "../../i18n/context";
 import { RegisterForm } from "./register/RegisterForm";
 import { TemplateLifecycleActions, type TemplateLifecycleAction } from "./TemplateLifecycleActions";
 import { useCatalogApi } from "./useCatalogApi";
-import type { CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";
+import type { CatalogDetailLocationState, CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import { isSafeAvatarDataUrl } from "./avatar";
 import "./catalog.css";
@@ -70,18 +70,20 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
   const tags = [item.category, ...(item.tags ?? [])].filter(Boolean).slice(0, 3) as string[];
   const displayName = item.display_name || "未命名专家";
   const navigate = useNavigate();
+  const { search } = useLocation();
   const detailPath = `/catalog/${item.catalog_type}/${item.template_id}`;
+  const detailState: CatalogDetailLocationState = { listSearch: search };
   // 点卡片任意位置进详情。名称链接保留给键盘和新标签打开；选中文字时不跳转。
   const openDetail = (event: MouseEvent<HTMLElement>) => {
     if ((event.target as Element).closest("a") || window.getSelection()?.toString()) return;
-    navigate(detailPath);
+    navigate(detailPath, { state: detailState });
   };
   return (
     <article data-ui="catalog-expert-card" aria-label={displayName} onClick={openDetail}>
       <div data-ui="catalog-expert-card-hero">
         <CatalogAvatar name={displayName} src={item.avatar_url} />
         <div data-ui="catalog-expert-card-identity">
-          <Link data-ui="catalog-expert-card-name" to={detailPath}>
+          <Link data-ui="catalog-expert-card-name" to={detailPath} state={detailState}>
             {displayName}
           </Link>
           <span data-ui="catalog-expert-card-role">{item.category || "数字员工"}</span>
@@ -130,8 +132,22 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRegister, setShowRegister] = useState(false);
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
+  // 搜索和筛选放在网址里，从详情返回、浏览器后退、刷新时都能保留。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { search } = useLocation();
+  const query = searchParams.get("q") ?? "";
+  const statusParam = searchParams.get("status");
+  const status = STATUS_OPTIONS.some((option) => option.value === statusParam) ? statusParam as string : "all";
+  const setFilter = useCallback((key: "q" | "status", value: string, emptyValue: string) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value === emptyValue) next.delete(key);
+      else next.set(key, value);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  const setQuery = useCallback((value: string) => setFilter("q", value, ""), [setFilter]);
+  const setStatus = useCallback((value: string) => setFilter("status", value, "all"), [setFilter]);
 
   const loadFirst = useCallback(async () => {
     setLoading(true);
@@ -210,7 +226,12 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
         width: proportional(2),
         renderCell: (item) => (
           <VStack gap={0}>
-            <Link to={`/catalog/${item.catalog_type}/${item.template_id}`}>{item.display_name}</Link>
+            <Link
+              to={`/catalog/${item.catalog_type}/${item.template_id}`}
+              state={{ listSearch: search } satisfies CatalogDetailLocationState}
+            >
+              {item.display_name}
+            </Link>
             <span>{item.template_id}</span>
           </VStack>
         ),
@@ -249,7 +270,7 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
       });
     }
     return base;
-  }, [canWrite, runLifecycle]);
+  }, [canWrite, runLifecycle, search]);
 
   if (!session || !canWrite) {
     return (

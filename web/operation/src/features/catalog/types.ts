@@ -129,3 +129,8 @@ export function labelToVisibleScope(label: VisibilityLabel): Record<string, unkn
   if (label === "hidden") return { hidden: true };
   return {};
 }
+
+/** 从目录列表进入详情时携带的路由状态：列表网址上的搜索和筛选参数。 */
+export interface CatalogDetailLocationState {
+  listSearch?: string;
+}
