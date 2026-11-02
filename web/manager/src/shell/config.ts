@@ -25,12 +25,12 @@ export const managerShellConfig: PageShellConfig = {
     { id: "marketplace", labelKey: "manager.nav.marketplace", path: "/marketplace", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "experts", labelKey: "manager.nav.experts", path: "/experts", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "grants", labelKey: "manager.nav.grants", path: "/grants", icon: "key", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    // 无角色门控
+    // 记忆管理：owner/enterprise_admin 门控
     { id: "memory", labelKey: "manager.nav.memory", path: "/memory", icon: "dashboard", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 无角色门控
     { id: "knowledge", labelKey: "manager.nav.knowledge", path: "/knowledge", icon: "catalog" },
     // manage_connectors 门控
     { id: "connectors", labelKey: "manager.nav.connectors", path: "/connectors", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
-    // 无角色门控
     // 用量只读监控：owner/finance_admin/enterprise_admin（余额/充值仍限 view_billing）
     { id: "usage", labelKey: "manager.nav.usage", path: "/usage", icon: "board", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.FINANCE_ADMIN, EnterpriseRole.ENTERPRISE_ADMIN] },
     // view_billing 门控

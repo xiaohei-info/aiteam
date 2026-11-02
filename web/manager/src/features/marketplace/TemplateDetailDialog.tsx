@@ -2,12 +2,16 @@
  * 人才市场模板详情（议题 7）：概览 / 能力 / 接入要求 / 数据与成本 四个标签页 + 底部发布信息。
  *
  * 区块整体无数据时隐藏；「接入要求」为空时显示「无需额外配置」。不出现「数据未提供」类开发文案。
+ * 技能按名称展示，查不到名称（未加载完、已下架或读取失败）时退回技能 ID。
+ * 有招募权限时底部带招募按钮，和卡片上的招募走同一流程。
  */
 import { useState, type ReactNode } from "react";
+import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
+import { useI18n } from "../../i18n/context";
 import type { ExpertTemplate } from "../experts/types";
 import { OUTPUT_TYPE_LABELS, formatPricing, rateTone, resolutionRateText } from "./profile";
 
@@ -80,14 +84,14 @@ function OverviewTab({ template }: { template: ExpertTemplate }): ReactNode {
   );
 }
 
-function CapabilitiesTab({ template }: { template: ExpertTemplate }): ReactNode {
+function CapabilitiesTab({ template, skillNames }: { template: ExpertTemplate; skillNames?: ReadonlyMap<string, string> | null }): ReactNode {
   const skills = template.platform_skill_refs ?? [];
   const outputTypes = template.output_types ?? [];
   return (
     <>
       {skills.length > 0 && (
         <Section title="技能清单">
-          <List items={skills.map((skill) => `${skill.skill_id} · v${skill.version}`)} />
+          <List items={skills.map((skill) => `${skillNames?.get(skill.skill_id) ?? skill.skill_id} · v${skill.version}`)} />
         </Section>
       )}
       {outputTypes.length > 0 && (
@@ -151,7 +155,8 @@ function DataTab({ template }: { template: ExpertTemplate }): ReactNode {
   );
 }
 
-function PublishInfo({ template }: { template: ExpertTemplate }): ReactNode {
+function PublishInfo({ template, onRecruit }: { template: ExpertTemplate; onRecruit?: () => void }): ReactNode {
+  const i18n = useI18n();
   const parts: ReactNode[] = [];
   if (template.publisher) parts.push(<span key="publisher">发布者：{template.publisher}</span>);
   parts.push(<span key="version">版本 v{template.version}</span>);
@@ -159,10 +164,26 @@ function PublishInfo({ template }: { template: ExpertTemplate }): ReactNode {
   if (template.changelog_url) {
     parts.push(<a key="changelog" href={template.changelog_url} target="_blank" rel="noopener noreferrer">更新说明</a>);
   }
+  if (onRecruit) {
+    parts.push(
+      <span key="recruit" data-ui="marketplace-detail-action">
+        {template.is_recruited
+          ? <Button label={i18n.t("manager.experts.recruited")} size="sm" variant="secondary" isDisabled />
+          : <Button label={i18n.t("manager.experts.recruit")} size="sm" variant="primary" clickAction={onRecruit} />}
+      </span>,
+    );
+  }
   return <footer data-ui="marketplace-detail-footer">{parts}</footer>;
 }
 
-export function TemplateDetailDialog({ template, onClose }: { template: ExpertTemplate; onClose: () => void }): ReactNode {
+export function TemplateDetailDialog({ template, skillNames, onRecruit, onClose }: {
+  template: ExpertTemplate;
+  /** 技能 ID → 名称；null 表示还没加载完。 */
+  skillNames?: ReadonlyMap<string, string> | null;
+  /** 没有招募权限时不传，底部不显示招募按钮。 */
+  onRecruit?: () => void;
+  onClose: () => void;
+}): ReactNode {
   const [tab, setTab] = useState<DetailTab>("overview");
   return (
     <Dialog
@@ -182,11 +203,11 @@ export function TemplateDetailDialog({ template, onClose }: { template: ExpertTe
         </TabList>
         <div data-ui="marketplace-detail-body">
           {tab === "overview" && <OverviewTab template={template} />}
-          {tab === "capabilities" && <CapabilitiesTab template={template} />}
+          {tab === "capabilities" && <CapabilitiesTab template={template} skillNames={skillNames} />}
           {tab === "requirements" && <RequirementsTab template={template} />}
           {tab === "data" && <DataTab template={template} />}
         </div>
-        <PublishInfo template={template} />
+        <PublishInfo template={template} onRecruit={onRecruit} />
       </VStack>
     </Dialog>
   );

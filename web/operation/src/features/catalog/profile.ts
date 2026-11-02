@@ -132,12 +132,14 @@ export function profilePayload(profile: ExpertTemplateProfile): ExpertTemplatePr
     example_prompts: list(profile.example_prompts),
     sample_outputs: profile.sample_outputs
       .map((output) => ({ ...output, title: output.title.trim(), preview_url: output.preview_url.trim() }))
-      .filter((output) => output.title),
+      // 只丢掉整行空白；有链接没标题的行留给校验提示，不能悄悄丢掉。
+      .filter((output) => output.title || output.preview_url),
     output_types: profile.output_types,
     required_connectors: list(profile.required_connectors),
     optional_connectors: list(profile.optional_connectors),
     recommended_knowledge: list(profile.recommended_knowledge),
-    required_permissions: permissions && (permissions.full_access || permissions.local_directories) ? permissions : null,
+    // null 为未声明，两项都为 false 为明确声明「无需额外权限」，两者含义不同。
+    required_permissions: permissions,
     pricing: profile.pricing ? pricingPayload(profile.pricing) : null,
     memory_policy_summary: profile.memory_policy_summary.trim(),
     publisher: profile.publisher.trim(),
@@ -181,11 +183,11 @@ function sampleOutputsError(outputs: SampleOutput[]): string | undefined {
   if (outputs.some((output) => textLength(output.title) > limits.sampleOutputTitleLength)) {
     return `示例产出标题不超过 ${limits.sampleOutputTitleLength} 字`;
   }
+  if (outputs.some((output) => !output.title)) return "填了预览链接的示例产出也需要填写标题";
   if (outputs.some((output) => output.preview_url && !isHttpUrl(output.preview_url))) return "示例产出预览链接需为 http/https 地址";
   return undefined;
 }
 
-/** 对 profilePayload 的结果做提交前校验，约束与 shared/contracts/expert_profile.py 一致。 */
 /** 只有套餐带周期；切换到按次 / 按 Token 时丢掉之前选过的周期，避免服务端 422。 */
 function pricingPayload(pricing: TemplatePricing): TemplatePricing {
   const { billing_period: period, ...rest } = pricing;
@@ -193,6 +195,7 @@ function pricingPayload(pricing: TemplatePricing): TemplatePricing {
   return pricing.mode === "subscription" && period ? { ...base, billing_period: period } : base;
 }
 
+/** 对 profilePayload 的结果做提交前校验，约束与 shared/contracts/expert_profile.py 一致。 */
 export function validateProfile(payload: ExpertTemplateProfile): ProfileErrors {
   const errors: ProfileErrors = {};
   const limits = PROFILE_LIMITS;
