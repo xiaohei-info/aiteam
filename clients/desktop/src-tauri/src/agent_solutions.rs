@@ -1622,10 +1622,8 @@ fn parse_claude<R: BufRead>(reader: R, outputs: Option<&Path>) -> Option<ParsedS
                 }
             }
             // Older Claude Code versions summarise the session instead.
-            Some("summary") => {
-                if summary.is_none() {
-                    summary = str_field(&value, "summary");
-                }
+            Some("summary") if summary.is_none() => {
+                summary = str_field(&value, "summary");
             }
             Some("assistant") => {
                 if let Some(model) =
