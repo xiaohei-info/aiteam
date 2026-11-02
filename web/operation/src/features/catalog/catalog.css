@@ -77,6 +77,7 @@
 }
 
 [data-ui="catalog-expert-card"] {
+  cursor: pointer;
   display: flex;
   min-width: 0;
   min-height: 282px;
@@ -210,6 +211,7 @@
 }
 
 [data-ui="catalog-expert-card-footer"] {
+  cursor: default;
   display: flex;
   align-items: center;
   justify-content: space-between;

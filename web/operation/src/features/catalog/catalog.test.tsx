@@ -1703,6 +1703,46 @@ describe("AstryX 目录工作台", () => {
     expect(screen.getByText('"2.0.0"')).toBeInTheDocument();
   });
 
+  it("点专家卡片空白处进详情；操作按钮和确认弹窗不跳转", async () => {
+    const item = makeCatalogItem({ template_id: "card-nav", display_name: "卡片专家", description: "卡片描述", status: "published" });
+    mockFetch.mockResolvedValueOnce(listPage([item])).mockResolvedValue(singleResponse(item));
+
+    renderCatalogPage(makeSystemAdminSession());
+
+    fireEvent.click(await screen.findByRole("button", { name: "下架" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("heading", { name: "卡片专家", level: 1 })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "卡片专家" })).toHaveAttribute("href", "/catalog/expert_template/card-nav");
+
+    fireEvent.click(screen.getByText("卡片描述"));
+    expect(await screen.findByRole("heading", { name: "卡片专家", level: 1 })).toBeInTheDocument();
+  });
+
+  it("详情页的返回按钮回到对应目录，编辑中不显示", async () => {
+    mockFetch.mockResolvedValue(singleResponse(makeCatalogItem({ template_id: "back-detail", display_name: "待返回模板" })));
+
+    render(
+      <I18nContext.Provider value={makeI18n()}>
+        <SessionContext.Provider value={makeSystemAdminSession()}>
+          <MemoryRouter initialEntries={["/catalog/expert_template/back-detail"]}>
+            <Routes>
+              <Route path="/experts" element={<div>专家列表页</div>} />
+              <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
+            </Routes>
+          </MemoryRouter>
+        </SessionContext.Provider>
+      </I18nContext.Provider>,
+    );
+
+    await screen.findByRole("button", { name: "返回专家目录" });
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.queryByRole("button", { name: "返回专家目录" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.click(await screen.findByRole("button", { name: "返回专家目录" }));
+    expect(await screen.findByText("专家列表页")).toBeInTheDocument();
+  });
+
   it("详情页隐藏模板必须先经过确认", async () => {
     const item = makeCatalogItem({ template_id: "hide-detail", display_name: "待隐藏模板", visible_scope: { public: true } });
     mockFetch

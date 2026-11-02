@@ -1,6 +1,6 @@
 /** 运营端目录治理列表。 */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { ApiError, DigitalEmployeeAvatar, PlatformRole, hasRole } from "@aiteam/shared";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -69,12 +69,19 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
   const skillCount = item.platform_skill_refs?.length || item.skill_ids?.length || 0;
   const tags = [item.category, ...(item.tags ?? [])].filter(Boolean).slice(0, 3) as string[];
   const displayName = item.display_name || "未命名专家";
+  const navigate = useNavigate();
+  const detailPath = `/catalog/${item.catalog_type}/${item.template_id}`;
+  // 点卡片任意位置进详情。名称链接保留给键盘和新标签打开；选中文字时不跳转。
+  const openDetail = (event: MouseEvent<HTMLElement>) => {
+    if ((event.target as Element).closest("a") || window.getSelection()?.toString()) return;
+    navigate(detailPath);
+  };
   return (
-    <article data-ui="catalog-expert-card" aria-label={displayName}>
+    <article data-ui="catalog-expert-card" aria-label={displayName} onClick={openDetail}>
       <div data-ui="catalog-expert-card-hero">
         <CatalogAvatar name={displayName} src={item.avatar_url} />
         <div data-ui="catalog-expert-card-identity">
-          <Link data-ui="catalog-expert-card-name" to={`/catalog/${item.catalog_type}/${item.template_id}`}>
+          <Link data-ui="catalog-expert-card-name" to={detailPath}>
             {displayName}
           </Link>
           <span data-ui="catalog-expert-card-role">{item.category || "数字员工"}</span>
@@ -96,7 +103,8 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
         <div><dt>可见范围</dt><dd>{visibilityText(visibilityLabel(item.visible_scope))}</dd></div>
       </dl>
 
-      <div data-ui="catalog-expert-card-footer">
+      {/* 确认弹窗渲染在卡片 DOM 之外，但 React 事件仍会冒泡到卡片，所以在这里拦住。 */}
+      <div data-ui="catalog-expert-card-footer" onClick={(event) => event.stopPropagation()}>
         <span data-ui="catalog-version">v{item.version}</span>
         {canWrite && <TemplateLifecycleActions item={item} onAction={onAction} />}
       </div>
