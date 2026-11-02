@@ -41,6 +41,8 @@ export function wanderDestinations(map: OfficeMap, occupiedRooms: ReadonlySet<st
         speed: spot.speed ?? DESTINATION_SPEEDS[spot.kind] ?? DESTINATION_SPEEDS.custom,
         stay: spot.stay,
         roomId: spot.roomId,
+        facing: spot.facing === 'auto' ? undefined : spot.facing,
+        action: spot.action,
       }))
   }
 

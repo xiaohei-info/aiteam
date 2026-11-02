@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-10-26T07:21:16.675Z",
+  "generatedAt": "2026-11-02T14:33:02.323Z",
   "source": "office-editor/office-10-person-business.json",
   "map": {
     "target": "assets/office/map/office-10-person-business.json",
-    "bytes": 1867653,
-    "sha256": "bb852f2749af38534c51748148fe199a16d3796760d956c615c932f70b7e1a93"
+    "bytes": 1868516,
+    "sha256": "29744afe1fdcc8088a4d0786e91874b09781fc83f371fbaccb481dd8c6d3bd2e"
   },
   "schema": "office-map/v1.1",
   "elements": 157,
@@ -270,6 +270,6 @@
       "mode": "copied"
     }
   ],
-  "updatedAt": "2026-10-26T07:21:16.675Z",
+  "updatedAt": "2026-11-02T14:33:02.323Z",
   "activeMap": "office-10-person-business.json"
 }

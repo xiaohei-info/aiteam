@@ -5645,7 +5645,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "left",
+      "action": "coffee"
     },
     {
       "id": "cf02acb8-ff38-4dcb-8a40-43cb7d973ad0",
@@ -5656,7 +5658,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "left",
+      "action": "rest"
     },
     {
       "id": "7dfab607-dc67-41ef-8b79-5ea0d02b68a8",
@@ -5667,7 +5671,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "action": "tea",
+      "facing": "right"
     },
     {
       "id": "45da7087-6f5d-4e07-afc1-3ed03cc1ce2e",
@@ -5678,7 +5684,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "right",
+      "action": "think"
     },
     {
       "id": "44eaa1b1-0edf-4ddb-9113-6206b0fea0de",
@@ -5700,7 +5708,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-a"
+      "roomId": "room-meeting-a",
+      "facing": "back",
+      "action": "sit"
     },
     {
       "id": "88665695-29b5-4a2f-9962-7ea6ffdc1ac9",
@@ -5711,7 +5721,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-a"
+      "roomId": "room-meeting-a",
+      "facing": "front",
+      "action": "sit"
     },
     {
       "id": "a75f0500-eae1-41a2-97d0-04b0b0bb0bdb",
@@ -5755,7 +5767,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-b"
+      "roomId": "room-meeting-b",
+      "facing": "back",
+      "action": "sit"
     },
     {
       "id": "07bc46ae-bd44-45d4-ae35-93c220d7d6b3",
@@ -5766,7 +5780,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-c"
+      "roomId": "room-meeting-c",
+      "facing": "back",
+      "action": "sit"
     },
     {
       "id": "db22c42b-48df-4fb6-8284-90c66a3c9760",
@@ -5777,7 +5793,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-b"
+      "roomId": "room-meeting-b",
+      "facing": "front",
+      "action": "sit"
     },
     {
       "id": "7775cdbd-9c27-4da3-9410-60817cc6e045",
@@ -5788,7 +5806,9 @@
       "speed": 58,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-meeting-c"
+      "roomId": "room-meeting-c",
+      "facing": "front",
+      "action": "sit"
     },
     {
       "id": "86642f23-075e-4659-99bf-5e364e42cafc",
@@ -5922,7 +5942,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "action": "sit",
+      "facing": "front"
     },
     {
       "id": "021c41d4-3966-4b3e-978a-1ffc0e57f0df",
@@ -5933,7 +5955,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "action": "sit",
+      "facing": "back"
     },
     {
       "id": "fe07eb65-5457-452e-ae17-ed51cb1fa225",
@@ -5944,7 +5968,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "action": "sit",
+      "facing": "front"
     },
     {
       "id": "8dddf97b-54c3-4d23-997b-c06eb170cf53",
@@ -5955,7 +5981,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "action": "sit",
+      "facing": "back"
     },
     {
       "id": "c9753d14-b1c2-40a0-84f3-def60c30c666",
@@ -5966,7 +5994,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "left",
+      "action": "sit"
     },
     {
       "id": "288be372-60b7-437c-8349-bfa87399ee5d",
@@ -5977,7 +6007,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "left",
+      "action": "sit"
     },
     {
       "id": "f68f684c-8708-4294-be06-b5b1f75eb3ae",
@@ -5988,7 +6020,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "right",
+      "action": "sit"
     },
     {
       "id": "e72ffe9a-d457-42fb-9e46-3cb4aab5d0af",
@@ -5999,7 +6033,9 @@
       "speed": 65,
       "stay": 8,
       "enabled": true,
-      "roomId": "room-pantry"
+      "roomId": "room-pantry",
+      "facing": "front",
+      "action": "think"
     }
   ]
 }

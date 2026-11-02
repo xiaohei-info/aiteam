@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 办公室动作道具：茶杯、马克杯、热气。区域坐标见 src/office-actions.js 的 OFFICE_PROP_REGIONS -->
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="110" viewBox="0 0 300 110">
+  <!-- 茶杯 + 茶碟：区域 0,0,124,96 -->
+  <g id="teacup" stroke="#3b2a24" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="62" cy="80" rx="54" ry="11" fill="#eef1f4" stroke-width="4"/>
+    <ellipse cx="62" cy="78" rx="30" ry="5" fill="#d9dfe6" stroke="none"/>
+    <path d="M22 38 Q22 74 50 78 L74 78 Q102 74 102 38 Z" fill="#fffdf8" stroke-width="4"/>
+    <path d="M27 54 Q62 64 97 54" fill="none" stroke="#6f9fd8" stroke-width="5"/>
+    <path d="M100 46 q16 -2 14 12 q-2 12 -16 10" fill="none" stroke-width="4"/>
+    <ellipse cx="62" cy="38" rx="40" ry="9" fill="#9cc46e" stroke-width="4"/>
+    <ellipse cx="54" cy="36" rx="14" ry="3" fill="#c6e09b" stroke="none"/>
+  </g>
+  <!-- 马克杯：区域 128,0,104,104 -->
+  <g id="mug" transform="translate(128 0)" stroke="#3b2a24" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M74 34 q24 0 22 22 q-2 20 -24 20" fill="none" stroke-width="9"/>
+    <path d="M74 34 q24 0 22 22 q-2 20 -24 20" fill="none" stroke="#c9733c" stroke-width="3"/>
+    <path d="M12 22 L12 86 Q12 98 26 98 L64 98 Q78 98 78 86 L78 22 Z" fill="#c9733c" stroke-width="4"/>
+    <path d="M18 30 L18 84" stroke="#e8a06a" stroke-width="5" fill="none"/>
+    <path d="M45 52 c-8 -10 -20 -2 -12 8 l12 12 l12 -12 c8 -10 -4 -18 -12 -8 z" fill="#fff3e6" stroke-width="3"/>
+    <ellipse cx="45" cy="22" rx="33" ry="8" fill="#5a3420" stroke-width="4"/>
+    <ellipse cx="38" cy="21" rx="12" ry="2.5" fill="#8a5a3a" stroke="none"/>
+  </g>
+  <!-- 热气：区域 236,0,60,96 -->
+  <g id="steam" transform="translate(236 0)" fill="none" stroke-linecap="round">
+    <g stroke="#9aa6b2" stroke-width="9" opacity="0.55">
+      <path d="M14 90 q-10 -14 0 -28 q10 -14 0 -28"/><path d="M30 80 q-10 -16 0 -32 q10 -16 0 -32"/><path d="M46 90 q-10 -14 0 -28 q10 -14 0 -28"/>
+    </g>
+    <g stroke="#ffffff" stroke-width="4.5">
+      <path d="M14 90 q-10 -14 0 -28 q10 -14 0 -28"/><path d="M30 80 q-10 -16 0 -32 q10 -16 0 -32"/><path d="M46 90 q-10 -14 0 -28 q10 -14 0 -28"/>
+    </g>
+  </g>
+</svg>

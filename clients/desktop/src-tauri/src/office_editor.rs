@@ -9,10 +9,19 @@ use std::sync::{Mutex, Once};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
-const DEFAULT_ACTIVE_MAP: &str = "office-10-person.json";
+/// The office map the app shows by default (business style); the editor's dropdown can select another one.
+const DEFAULT_ACTIVE_MAP: &str = "office-10-person-business.json";
+/// Maps shipped with the app and seeded into the app data directory, so the editor can open and switch between them.
+const BUNDLED_MAPS: [&str; 2] = [DEFAULT_ACTIVE_MAP, LEGACY_BUNDLED_MAP];
+/// Earlier builds seeded only this map and recorded it in a single marker file.
+const LEGACY_BUNDLED_MAP: &str = "office-10-person.json";
+const LEGACY_BUNDLED_MAP_MARKER: &str = ".bundled-map.sha256";
 const MAX_BODY_BYTES: usize = 45 * 1024 * 1024;
-/// Records the hash of the bundled map last applied to the app data directory.
-const BUNDLED_MAP_MARKER: &str = ".bundled-map.sha256";
+
+/// Records the hash of the bundled copy of `file` last applied to the app data directory.
+fn bundled_map_marker(file: &str) -> String {
+    format!(".bundled-map.{file}.sha256")
+}
 
 #[derive(Default)]
 pub struct OfficeEditorState {
@@ -450,44 +459,74 @@ enum BundledMapSync {
     Replaced,
 }
 
-/// A packaged build shows the map that ships with it, i.e. the one the dev build serves from `public/`.
-/// The copy in the app data directory is only the editor's working copy, so it follows the shipped map: edits made in the
-/// packaged editor survive until a build ships a different map, which then replaces them (the old file is backed up).
-/// The marker is written last, so an interrupted sync is retried on the next launch.
-fn sync_bundled_map(
-    map_dir: &Path,
-    bundled_map: &[u8],
-    bundled_manifest: Option<&[u8]>,
-) -> Result<BundledMapSync, String> {
+/// A packaged build shows the maps that ship with it, i.e. the ones the dev build serves from `public/`.
+/// The copies in the app data directory are the editor's working copies, so each follows its shipped map: edits made in
+/// the packaged editor survive until a build ships a different map, which then replaces them (the old file is backed up).
+/// Each map has its own marker, written last, so an interrupted sync is retried on the next launch.
+fn sync_bundled_map(map_dir: &Path, file: &str, bundled_map: &[u8]) -> Result<BundledMapSync, String> {
     let hash = hex::encode(Sha256::digest(bundled_map));
-    let map_path = map_dir.join(DEFAULT_ACTIVE_MAP);
-    let marker_path = map_dir.join(BUNDLED_MAP_MARKER);
+    let map_path = map_dir.join(file);
+    let marker_path = map_dir.join(bundled_map_marker(file));
     let existing = fs::read(&map_path).ok();
-    let applied = fs::read_to_string(&marker_path).ok();
+    let applied = fs::read_to_string(&marker_path).ok().or_else(|| {
+        if file == LEGACY_BUNDLED_MAP {
+            fs::read_to_string(map_dir.join(LEGACY_BUNDLED_MAP_MARKER)).ok()
+        } else {
+            None
+        }
+    });
     if existing.is_some() && applied.as_deref().map(str::trim) == Some(hash.as_str()) {
+        fs::write(&marker_path, format!("{hash}\n")).map_err(|e| format!("写入地图标记失败: {e}"))?;
         return Ok(BundledMapSync::Unchanged);
     }
     let outcome = match &existing {
         None => BundledMapSync::Seeded,
         Some(current) if current.as_slice() == bundled_map => BundledMapSync::Unchanged,
         Some(current) => {
-            fs::write(map_dir.join(format!("{DEFAULT_ACTIVE_MAP}.bak")), current)
+            fs::write(map_dir.join(format!("{file}.bak")), current)
                 .map_err(|e| format!("备份旧地图失败: {e}"))?;
             BundledMapSync::Replaced
         }
     };
     if outcome != BundledMapSync::Unchanged {
         fs::write(&map_path, bundled_map).map_err(|e| format!("写入内置地图失败: {e}"))?;
-        match bundled_manifest {
-            Some(bytes) => fs::write(map_dir.join("manifest.json"), bytes)
-                .map_err(|e| format!("写入 manifest.json 失败: {e}"))?,
-            None => {
-                write_manifest(map_dir, DEFAULT_ACTIVE_MAP, now_epoch_ms())?;
-            }
-        }
     }
     fs::write(&marker_path, format!("{hash}\n")).map_err(|e| format!("写入地图标记失败: {e}"))?;
     Ok(outcome)
+}
+
+/// Seeds every bundled map. The manifest (which map is active) belongs to the user's editor selection and is only
+/// (re)written when it is missing or when the default map first appears in this directory — a fresh install, or an
+/// upgrade from a build that shipped only the legacy map, whose manifest may still point at it.
+fn sync_bundled_maps(
+    map_dir: &Path,
+    maps: &[(&str, Vec<u8>)],
+    bundled_manifest: Option<&[u8]>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    let mut default_seeded = false;
+    for (file, bytes) in maps {
+        match sync_bundled_map(map_dir, file, bytes) {
+            Ok(BundledMapSync::Seeded) if *file == DEFAULT_ACTIVE_MAP => default_seeded = true,
+            Ok(_) => {}
+            Err(reason) => errors.push(format!("{file}: {reason}")),
+        }
+    }
+    let manifest_path = map_dir.join("manifest.json");
+    if default_seeded || !manifest_path.is_file() {
+        let result = match bundled_manifest {
+            Some(bytes) => fs::write(&manifest_path, bytes).map_err(|e| format!("写入 manifest.json 失败: {e}")),
+            None => write_manifest(map_dir, DEFAULT_ACTIVE_MAP, now_epoch_ms()).map(|_| ()),
+        };
+        if let Err(reason) = result {
+            errors.push(reason);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 fn resolve_map_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -500,13 +539,14 @@ fn resolve_map_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
     static BUNDLED_MAP_SYNC: Once = Once::new();
     BUNDLED_MAP_SYNC.call_once(|| {
-        let Some(map) =
-            read_embedded_asset(app, &format!("assets/office/map/{DEFAULT_ACTIVE_MAP}"))
-        else {
-            return;
-        };
+        let maps: Vec<(&str, Vec<u8>)> = BUNDLED_MAPS
+            .iter()
+            .filter_map(|file| {
+                read_embedded_asset(app, &format!("assets/office/map/{file}")).map(|bytes| (*file, bytes))
+            })
+            .collect();
         let manifest = read_embedded_asset(app, "assets/office/map/manifest.json");
-        if let Err(reason) = sync_bundled_map(&dir, &map, manifest.as_deref()) {
+        if let Err(reason) = sync_bundled_maps(&dir, &maps, manifest.as_deref()) {
             if let Some(root) = dir.parent() {
                 crate::diagnostics::host_event_fields(
                     root,
@@ -517,16 +557,6 @@ fn resolve_map_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             }
         }
     });
-
-    let default_map_path = dir.join(DEFAULT_ACTIVE_MAP);
-    let manifest_path = dir.join("manifest.json");
-    if !manifest_path.is_file() {
-        if let Some(bytes) = read_embedded_asset(app, "assets/office/map/manifest.json") {
-            let _ = fs::write(&manifest_path, bytes);
-        } else if default_map_path.is_file() {
-            let _ = write_manifest(&dir, DEFAULT_ACTIVE_MAP, now_epoch_ms());
-        }
-    }
 
     Ok(dir)
 }
@@ -1021,82 +1051,121 @@ mod tests {
         dir
     }
 
-    fn marker_of(dir: &Path) -> String {
-        fs::read_to_string(dir.join(BUNDLED_MAP_MARKER))
+    fn marker_of(dir: &Path, file: &str) -> String {
+        fs::read_to_string(dir.join(bundled_map_marker(file)))
             .unwrap()
             .trim()
             .to_string()
     }
 
+    fn active_of(dir: &Path) -> Value {
+        list_shared_maps_in_dir(dir).unwrap()["activeFile"].clone()
+    }
+
+    const BIZ: &str = DEFAULT_ACTIVE_MAP;
+    const OLD: &str = LEGACY_BUNDLED_MAP;
+
+    fn valid_map(name: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema": "office-map/1.1", "name": name, "width": 100, "height": 100,
+            "assets": [], "elements": [], "zones": []
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn bundled_map_is_seeded_into_an_empty_directory() {
         let dir = temp_map_dir();
-        let manifest = br#"{"activeMap":"office-10-person.json","elements":160}"#;
-        let outcome = sync_bundled_map(&dir, b"map-v2", Some(manifest)).unwrap();
+        let outcome = sync_bundled_map(&dir, BIZ, b"map-v2").unwrap();
         assert_eq!(outcome, BundledMapSync::Seeded);
-        assert_eq!(fs::read(dir.join(DEFAULT_ACTIVE_MAP)).unwrap(), b"map-v2");
-        assert_eq!(fs::read(dir.join("manifest.json")).unwrap(), manifest);
-        assert_eq!(marker_of(&dir), hex::encode(Sha256::digest(b"map-v2")));
-        assert!(!dir.join(format!("{DEFAULT_ACTIVE_MAP}.bak")).exists());
+        assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"map-v2");
+        assert_eq!(marker_of(&dir, BIZ), hex::encode(Sha256::digest(b"map-v2")));
+        assert!(!dir.join(format!("{BIZ}.bak")).exists());
     }
 
     #[test]
     fn a_stale_copy_without_marker_is_replaced_and_backed_up() {
         // An app data copy written by an older build: no marker, different content.
         let dir = temp_map_dir();
-        fs::write(dir.join(DEFAULT_ACTIVE_MAP), b"map-v1").unwrap();
-        let outcome = sync_bundled_map(&dir, b"map-v2", Some(b"{}")).unwrap();
+        fs::write(dir.join(BIZ), b"map-v1").unwrap();
+        let outcome = sync_bundled_map(&dir, BIZ, b"map-v2").unwrap();
         assert_eq!(outcome, BundledMapSync::Replaced);
-        assert_eq!(fs::read(dir.join(DEFAULT_ACTIVE_MAP)).unwrap(), b"map-v2");
-        assert_eq!(
-            fs::read(dir.join(format!("{DEFAULT_ACTIVE_MAP}.bak"))).unwrap(),
-            b"map-v1"
-        );
-        assert_eq!(marker_of(&dir), hex::encode(Sha256::digest(b"map-v2")));
+        assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"map-v2");
+        assert_eq!(fs::read(dir.join(format!("{BIZ}.bak"))).unwrap(), b"map-v1");
+        assert_eq!(marker_of(&dir, BIZ), hex::encode(Sha256::digest(b"map-v2")));
     }
 
     #[test]
     fn local_edits_survive_until_the_bundled_map_changes() {
         let dir = temp_map_dir();
-        sync_bundled_map(&dir, b"map-v2", None).unwrap();
-        fs::write(dir.join(DEFAULT_ACTIVE_MAP), b"edited").unwrap();
+        sync_bundled_map(&dir, BIZ, b"map-v2").unwrap();
+        fs::write(dir.join(BIZ), b"edited").unwrap();
         // Same bundled map on the next launch: the edit is kept.
-        assert_eq!(
-            sync_bundled_map(&dir, b"map-v2", None).unwrap(),
-            BundledMapSync::Unchanged
-        );
-        assert_eq!(fs::read(dir.join(DEFAULT_ACTIVE_MAP)).unwrap(), b"edited");
+        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(), BundledMapSync::Unchanged);
+        assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"edited");
         // A new build ships a different map: it wins and the edit is backed up.
-        assert_eq!(
-            sync_bundled_map(&dir, b"map-v3", None).unwrap(),
-            BundledMapSync::Replaced
-        );
-        assert_eq!(fs::read(dir.join(DEFAULT_ACTIVE_MAP)).unwrap(), b"map-v3");
-        assert_eq!(
-            fs::read(dir.join(format!("{DEFAULT_ACTIVE_MAP}.bak"))).unwrap(),
-            b"edited"
-        );
+        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v3").unwrap(), BundledMapSync::Replaced);
+        assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"map-v3");
+        assert_eq!(fs::read(dir.join(format!("{BIZ}.bak"))).unwrap(), b"edited");
     }
 
     #[test]
     fn an_identical_copy_only_gets_a_marker() {
         let dir = temp_map_dir();
-        fs::write(dir.join(DEFAULT_ACTIVE_MAP), b"map-v2").unwrap();
-        assert_eq!(
-            sync_bundled_map(&dir, b"map-v2", None).unwrap(),
-            BundledMapSync::Unchanged
-        );
-        assert!(!dir.join(format!("{DEFAULT_ACTIVE_MAP}.bak")).exists());
-        assert_eq!(marker_of(&dir), hex::encode(Sha256::digest(b"map-v2")));
+        fs::write(dir.join(BIZ), b"map-v2").unwrap();
+        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(), BundledMapSync::Unchanged);
+        assert!(!dir.join(format!("{BIZ}.bak")).exists());
+        assert_eq!(marker_of(&dir, BIZ), hex::encode(Sha256::digest(b"map-v2")));
     }
 
     #[test]
     fn a_missing_bundled_manifest_falls_back_to_a_generated_one() {
         let dir = temp_map_dir();
-        sync_bundled_map(&dir, b"map-v2", None).unwrap();
+        sync_bundled_maps(&dir, &[(BIZ, valid_map("商务"))], None).unwrap();
         let manifest: Value =
             serde_json::from_slice(&fs::read(dir.join("manifest.json")).unwrap()).unwrap();
-        assert_eq!(manifest["activeMap"], DEFAULT_ACTIVE_MAP);
+        assert_eq!(manifest["activeMap"], BIZ);
+    }
+
+    #[test]
+    fn a_fresh_install_lists_both_bundled_maps_with_business_active() {
+        let dir = temp_map_dir();
+        let manifest = format!(r#"{{"activeMap":"{BIZ}"}}"#);
+        let maps = [(BIZ, valid_map("商务")), (OLD, valid_map("旧版"))];
+        sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
+        let listed = list_shared_maps_in_dir(&dir).unwrap();
+        let files: Vec<&str> = listed["files"].as_array().unwrap().iter().map(|f| f["file"].as_str().unwrap()).collect();
+        assert_eq!(files, vec![BIZ, OLD]);
+        assert_eq!(listed["activeFile"], BIZ);
+    }
+
+    #[test]
+    fn an_upgrade_from_a_legacy_only_install_seeds_business_and_keeps_old_edits() {
+        // An older build seeded only the legacy map with the single marker, and the user edited it.
+        let dir = temp_map_dir();
+        let old_bundled = valid_map("旧版");
+        fs::write(dir.join(OLD), valid_map("旧版-已编辑")).unwrap();
+        fs::write(dir.join(LEGACY_BUNDLED_MAP_MARKER), format!("{}\n", hex::encode(Sha256::digest(&old_bundled)))).unwrap();
+        write_manifest(&dir, OLD, 1).unwrap();
+
+        let manifest = format!(r#"{{"activeMap":"{BIZ}"}}"#);
+        let maps = [(BIZ, valid_map("商务")), (OLD, old_bundled)];
+        sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
+
+        assert_eq!(fs::read(dir.join(OLD)).unwrap(), valid_map("旧版-已编辑"), "legacy marker still protects the edit");
+        assert!(!dir.join(format!("{OLD}.bak")).exists());
+        assert_eq!(active_of(&dir), BIZ, "the business map becomes active once it is seeded");
+    }
+
+    #[test]
+    fn the_users_map_selection_survives_later_launches() {
+        let dir = temp_map_dir();
+        let manifest = format!(r#"{{"activeMap":"{BIZ}"}}"#);
+        let maps = [(BIZ, valid_map("商务")), (OLD, valid_map("旧版"))];
+        sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
+        set_active_shared_map_in_dir(&dir, OLD).unwrap();
+        sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
+        assert_eq!(active_of(&dir), OLD);
     }
 
     #[test]

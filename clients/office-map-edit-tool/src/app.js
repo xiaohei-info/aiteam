@@ -1,7 +1,7 @@
-import { SCHEMA, uid, clone, makeMap, validateMap, makeElement, elementPolygon, elementFootprints, templateOptions, snapToConnectors, syncSeats, syncSpots, pointInPolygon, isSimplePolygon, zoneLabels, SPOT_KINDS, SPOT_SPEEDS, SPOT_STAY, spotSpeed, mapWarnings, History } from './model.js'
+import { SCHEMA, uid, clone, makeMap, validateMap, makeElement, elementPolygon, elementFootprints, templateOptions, snapToConnectors, syncSeats, syncSpots, pointInPolygon, isSimplePolygon, zoneLabels, SPOT_KINDS, SPOT_SPEEDS, SPOT_STAY, SPOT_FACINGS, SPOT_ACTIONS, spotSpeed, mapWarnings, History } from './model.js'
 import { loadStyles } from './library.js'
 import { canSelect, rectHitsItem, groupRanges, moveLimits, clampDelta, normalizeRect } from './selection.js'
-import { AIFRED_TEMPLATES, AIFRED_RESOURCE_ID, AIFRED_SKINS, AIFRED_COMPUTER_OFFSET, EMPLOYEE_ANIMATIONS, pickEmployeeSkin } from './aifred-resources.js'
+import { AIFRED_TEMPLATES, AIFRED_RESOURCE_ID, AIFRED_SKINS, AIFRED_COMPUTER_OFFSET, EMPLOYEE_ANIMATIONS, SPOT_ACTION_ANIMATION, pickEmployeeSkin } from './aifred-resources.js'
 
 const $ = id => document.getElementById(id)
 const canvas = $('canvas'), ctx = canvas.getContext('2d'), wrap = $('canvas-wrap')
@@ -31,9 +31,18 @@ const setHTML = (el, str) => {
 const styleStore = Object.create(null)
 
 let employeeRuntime = null, employeeLoading = null, employeeFailed = false
+/** 设了朝向或动作的活动点：在锚点上放一个演示员工，方便和椅子、沙发对位 */
+const SPOT_ACTOR_DESK = { width: 144, opacity: 0.92 }
+function spotActors() {
+  return (map.spots || []).filter(spot => spot.facing || spot.action).map((spot, index) => ({
+    id: `spot:${spot.id}`, x: spot.x, y: spot.y, spot,
+    facing: spot.facing && spot.facing !== 'auto' ? spot.facing : 'front',
+    employee: { resourceId: AIFRED_RESOURCE_ID, skin: pickEmployeeSkin(index), enabled: true, animation: SPOT_ACTION_ANIMATION[spot.action ?? 'idle'] },
+  }))
+}
 function updateEmployees() {
   if (map.seats?.some(s => s.employee)) syncSeats(map)
-  const visibleSeats = (map.seats || []).filter(s => s.employee?.enabled && map.elements.some(e => e.id === s.deskElementId && e.visible))
+  const visibleSeats = (map.seats || []).filter(s => s.employee?.enabled && map.elements.some(e => e.id === s.deskElementId && e.visible)).concat(spotActors())
   if (!employeeRuntime && visibleSeats.length && !employeeLoading && !employeeFailed) {
     $('employee-status').textContent = '员工角色加载中…'
     employeeLoading = import(new URL('../assets/runtime/employees.js', import.meta.url).href).then(module => module.createEmployeeRuntime(draw)).then(runtime => { employeeRuntime = runtime; draw() }).catch(error => {
@@ -219,6 +228,8 @@ function draw() {
     const desk = map.elements.find(e => e.id === seat.deskElementId)
     if (desk?.visible && seat.employee?.enabled) renderItems.push({ employee: seat, element: desk, z: desk.zIndex + 2 })
   }
+  // 活动点演示员工与桌面端走动中的员工同层（z 40），压在椅子、沙发上面
+  for (const actor of spotActors()) renderItems.push({ employee: actor, element: SPOT_ACTOR_DESK, z: 40 })
   for (const entry of renderItems.sort((a, b) => a.z - b.z)) {
     if (entry.employee) employeeRuntime?.draw(ctx, entry.employee, entry.element)
     else drawElement(entry.element)
@@ -244,6 +255,7 @@ function draw() {
     const radius = Math.max(6, 5 / camera.scale)
     ctx.beginPath(); ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill(); ctx.lineWidth = 2 / camera.scale; ctx.strokeStyle = '#fff'; ctx.stroke()
     ctx.beginPath(); ctx.arc(spot.x, spot.y, radius * 2.1, 0, Math.PI * 2); ctx.strokeStyle = color + 'aa'; ctx.lineWidth = 1.2 / camera.scale; ctx.stroke()
+    drawSpotFacing(spot, radius, color)
     if (!preview) {
       ctx.textAlign = 'center'; ctx.font = `${Math.max(11, 9 / camera.scale)}px sans-serif`
       const label = usable ? spot.name : `${spot.name}${spot.enabled === false ? '（已禁用）' : '（使用中）'}`
@@ -454,6 +466,18 @@ function renderProperties() {
   $('duplicate').onclick = duplicate; $('delete').onclick = removeSelected
   if (!zone) renderEmployeeProperties(item)
 }
+/** 活动点设置了朝向时，在外圈画一个指向该方向的小三角 */
+const SPOT_FACING_VECTORS = { front: [0, 1], back: [0, -1], left: [-1, 0], right: [1, 0] }
+function drawSpotFacing(spot, radius, color) {
+  const vector = SPOT_FACING_VECTORS[spot.facing]
+  if (!vector) return
+  const [dx, dy] = vector, tip = radius * 3.3, base = radius * 2.2, half = radius * 0.9
+  ctx.beginPath()
+  ctx.moveTo(spot.x + dx * tip, spot.y + dy * tip)
+  ctx.lineTo(spot.x + dx * base - dy * half, spot.y + dy * base + dx * half)
+  ctx.lineTo(spot.x + dx * base + dy * half, spot.y + dy * base - dx * half)
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill(); ctx.lineWidth = 1.5 / camera.scale; ctx.strokeStyle = '#fff'; ctx.stroke()
+}
 /** 活动点（自由活动目的地锚点）属性面板 */
 function renderSpotProperties(item) {
   const room = item.roomId ? map.rooms?.find(r => r.id === item.roomId) : null
@@ -463,15 +487,18 @@ function renderSpotProperties(item) {
     <label>类型<select data-spot="kind">${options(SPOT_KINDS, item.kind)}</select></label>
     <div class="field-pair"><label>坐标 X<input data-spot="x" type="number" value="${Math.round(item.x)}" min="0" max="${map.width}"></label><label>坐标 Y<input data-spot="y" type="number" value="${Math.round(item.y)}" min="0" max="${map.height}"></label></div>
     <div class="field-pair"><label>步速 / px·s⁻¹<input data-spot="speed" type="number" value="${spotSpeed(item)}" min="5" max="300"></label><label>停留 / 秒<input data-spot="stay" type="number" value="${item.stay ?? SPOT_STAY}" min="0" max="600"></label></div>
+    <div class="field-pair"><label>到达后朝向<select data-spot="facing">${options(SPOT_FACINGS, item.facing ?? 'auto')}</select></label><label>到达后动作<select data-spot="action">${options(SPOT_ACTIONS, item.action ?? 'idle')}</select></label></div>
     <label>绑定房间<select data-spot="roomId"><option value="">不绑定</option>${(map.rooms || []).map(r => `<option value="${escape(r.id)}" ${item.roomId === r.id ? 'selected' : ''}>${escape(r.name)}</option>`).join('')}</select></label>
     <label class="check-label"><input data-spot="enabled" type="checkbox" ${item.enabled ? 'checked' : ''}>启用（员工可以来这里自由活动）</label>
     ${room ? `<label class="check-label"><input id="spot-room-occupied" type="checkbox" ${room.occupied ? 'checked' : ''}>房间正在使用（使用中时员工不会进入）</label>` : ''}
-    <p class="muted">踱步目的地：闲置员工每隔 30 秒左右会挑一个启用的活动点走过去，停留后返回工位。步速按目的地区分：厕所 &gt; 茶水间 &gt; 会议室 &gt; 过道。拖动标记可直接改位置。</p>
+    <p class="muted">踱步目的地：闲置员工每隔 30 秒左右会挑一个启用的活动点走过去，按设置的朝向和动作停留，之后返回工位。设了朝向或动作时画布上会放一个演示员工；「坐下」要把标记拖到座位中心。步速按目的地区分：厕所 &gt; 茶水间 &gt; 会议室 &gt; 过道。拖动标记可直接改位置。</p>
     <div class="button-row"><button id="duplicate">复制</button><button id="delete" class="danger">删除</button></div><div class="selection-id">ID ${escape(item.id)}</div>`)
   for (const input of $('properties-panel').querySelectorAll('[data-spot]')) input.onchange = () => {
     const key = input.dataset.spot, before = clone(item)
     const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value
-    if (key === 'roomId') { if (value) item.roomId = value; else delete item.roomId } else item[key] = value
+    // 朝向、动作取默认值时不写字段，旧地图和未设置的活动点保持原样
+    const isDefault = (key === 'roomId' && !value) || (key === 'facing' && value === 'auto') || (key === 'action' && value === 'idle')
+    if (isDefault) delete item[key]; else item[key] = value
     try { validateMap(map); commit(); renderPanels() } catch (error) { Object.assign(item, before); renderProperties(); toast(error.message) }
   }
   const occupied = $('spot-room-occupied')
@@ -1146,7 +1173,7 @@ async function start() {
   const sharedInfo = await refreshSharedMaps(urlFile || currentFile)
   let restored = false
   if (urlFile || inAifred) {
-    const targetFile = urlFile || sharedInfo?.activeFile || 'office-10-person.json'
+    const targetFile = urlFile || sharedInfo?.activeFile || 'office-10-person-business.json'
     try {
       const result = await fetchJSON(`/__office-editor/api/maps/${encodeURIComponent(targetFile)}`)
       if (revision === 0) {

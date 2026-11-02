@@ -1381,7 +1381,9 @@ export class MapOfficeScene {
           // 到达目的地，按锚点配置的停留时长休息（缺省 8 秒）
           node.wander.phase = 'staying'
           node.wander.stayDuration = node.wander.destination?.stay ?? 8
-          node.character.playIdle()
+          // 坐下要严格对准座位中心：寻路终点可能差几像素，到达后贴回锚点
+          if (node.wander.destination?.action === 'sit' && node.wander.stand) node.character.position.set(node.wander.stand.x, node.wander.stand.y)
+          this.playArrival(node.character, node.wander.destination)
         }
         break
       }
@@ -1414,9 +1416,24 @@ export class MapOfficeScene {
     }
   }
 
+  /**
+   * 到达活动点：按锚点配置转向并播放对应方向的动作。只改角色动画，不改 node.status，
+   * 员工被派活时照常打断返回工位。
+   */
+  private playArrival(character: SpineCharacter, destination: DestinationConfig | null | undefined): void {
+    if (destination?.facing) character.setFacing(destination.facing)
+    const action = destination?.action
+    if (action && action !== 'idle') character.playAction(action)
+    else character.playIdle()
+  }
+
   private triggerWander(node: SeatNode): void {
     if (!node.wander || !node.character || !this.map) return
-    const destinations = this.getWanderDestinations()
+    const others = this.occupiedPoints(node.seat.id)
+    // 坐下的锚点只能一个人坐，有人坐着或正往那儿走就不选（挪到旁边会悬空）
+    const destinations = this.getWanderDestinations().filter(
+      (d) => d.action !== 'sit' || (!this.spotBlocked(d.point) && isPointFree(d.point, others)),
+    )
     if (destinations.length === 0) {
       node.wander.timer = this.wanderInterval
       return
@@ -1435,7 +1452,7 @@ export class MapOfficeScene {
     const start = this.currentPoint(node)
 
     // 目的地已经有人（站着或正往那儿走）就挪到旁边的空位，不然两个人会叠在同一个点上
-    const stand = findFreePoint(dest.point, this.occupiedPoints(node.seat.id), this.spotBlocked, 28, 96, 16)
+    const stand = dest.action === 'sit' ? { ...dest.point } : findFreePoint(dest.point, others, this.spotBlocked, 28, 96, 16)
     const plan = stand ? this.planPath(node.seat.id, start, stand, 12, 'employee') : null
     if (stand && plan) {
       node.wander.phase = 'walking_to'

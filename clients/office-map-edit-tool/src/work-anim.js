@@ -9,11 +9,14 @@
 //     用「抬起—落回」的等价往返关键帧模拟双手交替敲键盘；
 //   - 关键帧首尾取值一致，循环播放不会跳变。
 // 原骨架 chibi-stickers.json 保持 byte-exact 不动，结果输出到派生文件
-// chibi-stickers-walk.json（文件名沿用历史命名，现在只多一个打字动画）。
+// chibi-stickers-walk.json（文件名沿用历史命名）。派生骨骼还追加了方向动作与杯子道具，
+// 见 src/office-actions.js。
 //
 // 走路动画不做任何改动：曾经的「左右行走膝盖取反」补丁与 left/right 朝向对调是同一问题的
 // 两种修法，两者叠加后膝盖又反了。现在只保留朝向对调（名为 left 的动画在屏幕上朝右），
 // 原骨架在这个映射下两条腿的膝盖都朝行进方向弯，由 tests/aifred-assets.test.mjs 用 spine-core 实算校验。
+
+import { addOfficeActions, hasOfficeActions } from './office-actions.js'
 
 export const TYPING_ANIMATION = 'emotes/typing'
 export const TYPING_SOURCE_ANIMATION = 'movement/idle-back'
@@ -95,11 +98,13 @@ export function patchOfficeAnimation(skeleton) {
   }
   const typing = buildTypingAnimation(patched)
   patched.animations[TYPING_ANIMATION] = typing
+  const officeActions = addOfficeActions(patched)
   return {
     patched,
     stats: {
       typingTracks: Object.keys(typing.bones).length,
       typingKeys: Object.values(typing.bones).reduce((sum, tracks) => sum + (tracks.rotate?.length ?? 0), 0),
+      officeActions,
     },
   }
 }
@@ -113,12 +118,13 @@ export function hasTypingAnimation(skeleton) {
 
 /** 是否已经整体打过办公室补丁 */
 export function hasOfficeAnimationPatch(skeleton) {
-  return hasTypingAnimation(skeleton)
+  return hasTypingAnimation(skeleton) && hasOfficeActions(skeleton)
 }
 
 /**
  * 结构对比：返回相对原骨架有差异的动画名与顶层字段。
- * 正确的派生骨骼只应多出 emotes/typing，其它动画与骨架结构必须逐字节一致。
+ * 正确的派生骨骼只多出 emotes/typing 与 office/* 方向动作，bones / slots / skins 只在末尾追加道具，
+ * 原有动画逐字节一致。
  */
 export function officeAnimationDiff(original, patched) {
   const changed = []

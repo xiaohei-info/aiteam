@@ -41,13 +41,21 @@ export const CHIBI_ANIM = {
 export const CHIBI_SPINE_ASSETS = {
   id: 'chibi-stickers',
   /**
-   * 渲染用骨骼：AIFred 原骨架 + 左右行走膝盖方向修正（chibi-stickers-walk.json，派生文件）。
-   * 修正只动 movement/trot-left|right：小腿旋转取反 + 去掉单腿反向的 IK bendPositive，
-   * 使膝盖朝行进方向弯曲。原文件 chibi-stickers.json 保持 byte-exact 不动。
+   * 渲染用骨骼与图集都是编辑器生成的派生文件（office-map-edit-tool: npm run office:anim）：
+   * 骨骼 = 原骨架 + 打字动画 + 方向动作（office/<动作>-<屏幕朝向>）与杯子道具骨骼；
+   * 图集 = 原图集 + 杯子 / 热气道具页。原文件 chibi-stickers.json / .atlas 保持 byte-exact 不动。
    */
   skeleton: '/assets/characters/chibi-stickers/chibi-stickers-walk.json',
-  atlas: '/assets/characters/chibi-stickers/chibi-stickers.atlas',
+  atlas: '/assets/characters/chibi-stickers/chibi-stickers-office.atlas',
 } as const
+
+/** 派生骨骼里的方向动作：思考、挥手、闭目养神、坐下、喝茶、喝咖啡 */
+export type OfficeAction = 'think' | 'talk' | 'rest' | 'sit' | 'tea' | 'coffee'
+
+/** 方向动作的动画名；与原骨架不同，facing 直接是屏幕朝向，不需要左右对调 */
+export function officeActionAnim(action: OfficeAction, facing: ChibiFacing): string {
+  return `office/${action}-${facing}`
+}
 
 /** 默认座位朝向：背对镜头（专注工作） */
 export const DEFAULT_SEAT_FACING: ChibiFacing = 'back'

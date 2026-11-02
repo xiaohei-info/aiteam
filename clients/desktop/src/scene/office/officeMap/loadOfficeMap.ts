@@ -53,7 +53,7 @@ export interface SharedOfficeMapList {
   files: SharedOfficeMapEntry[]
 }
 
-const DEFAULT_MAP_FILE = 'office-10-person.json'
+const DEFAULT_MAP_FILE = 'office-10-person-business.json'
 
 export function buildOfficeEditorUrl(file = DEFAULT_MAP_FILE): string {
   const safeFile = (file || DEFAULT_MAP_FILE).trim() || DEFAULT_MAP_FILE

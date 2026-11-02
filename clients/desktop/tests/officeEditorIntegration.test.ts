@@ -27,15 +27,21 @@ test('OfficeStatus 页面已移除右上角 LIVE 标，并替换为打开浏览�
   assert.match(source, /编辑办公室/, '入口按钮文案应清晰标识编辑办公室')
 })
 
-test('办公室风格固定为商务风：页面不提供地图/风格切换入口，也不跟随共用配置的 activeFile', async () => {
+test('办公室地图默认商务风，并跟随编辑器里选中的共用配置（activeFile）', async () => {
   const source = await readFile(path.join(root, 'src/pages/OfficeStatus/index.tsx'), 'utf8')
   const roster = await readFile(path.join(root, 'src/pages/OfficeStatus/officeRoster.ts'), 'utf8')
-  assert.match(roster, /export const OFFICE_MAP_FILE = 'office-10-person-business\.json'/)
-  assert.match(roster, /\/assets\/office\/map\/\$\{encodeURIComponent\(OFFICE_MAP_FILE\)\}/, '常驻场景只加载商务风地图')
-  assert.match(source, /import \{ OFFICE_MAP_FILE \} from '\.\/officeRoster'/)
-  assert.doesNotMatch(source, /选择办公室地图配置|<select|setActiveOfficeMap|setActiveMapFile/, '不应再有切换地图的下拉框')
   const host = await readFile(path.join(root, 'src/components/OfficeRuntimeHost.tsx'), 'utf8')
-  assert.doesNotMatch(host, /\.activeFile/, '只跟随共用配置的更新时间，不跟随 activeFile')
+  const loader = await readFile(path.join(root, 'src/scene/office/officeMap/loadOfficeMap.ts'), 'utf8')
+  const rust = await readFile(path.join(root, 'src-tauri/src/office_editor.rs'), 'utf8')
+  assert.match(roster, /export const OFFICE_MAP_FILE = 'office-10-person-business\.json'/)
+  assert.match(roster, /encodeURIComponent\(file \|\| OFFICE_MAP_FILE\)/, '地图地址按当前地图文件生成')
+  assert.match(host, /info\.activeFile/, '常驻场景跟随共用配置的 activeFile')
+  assert.match(source, /const activeMapFile = useOfficeRuntimeStore\(\(s\) => s\.mapFile\)/, '「编辑办公室」打开当前使用的地图')
+  assert.doesNotMatch(source, /<select/, '办公室页面本身不提供切换下拉框，切换在编辑器里完成')
+  assert.match(loader, /const DEFAULT_MAP_FILE = 'office-10-person-business\.json'/)
+  // 安装包把两份内置地图都放进应用数据目录，编辑器才能打开当前地图并切换到另一份。
+  assert.match(rust, /const DEFAULT_ACTIVE_MAP: &str = "office-10-person-business\.json"/)
+  assert.match(rust, /const BUNDLED_MAPS: \[&str; 2\] = \[DEFAULT_ACTIVE_MAP, LEGACY_BUNDLED_MAP\]/)
   assert.ok(existsSync(path.join(root, 'public/assets/office/map/office-10-person-business.json')), '商务风地图必须存在')
 })
 

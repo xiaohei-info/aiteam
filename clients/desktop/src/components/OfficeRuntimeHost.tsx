@@ -12,7 +12,7 @@ import { classifyRequestError } from '../lib/requestError'
 import { fetchSharedOfficeMaps } from '../scene/office/officeMap/loadOfficeMap'
 import { officeRuntime } from '../scene/office/officeRuntime'
 import { useOfficeRuntimeStore } from '../stores/officeRuntime'
-import { loadOfficeRoster, officeMapUrl } from '../pages/OfficeStatus/officeRoster'
+import { loadOfficeRoster, OFFICE_MAP_FILE, officeMapUrl } from '../pages/OfficeStatus/officeRoster'
 
 export default function OfficeRuntimeHost() {
   const agents = useOfficeRuntimeStore((s) => s.agents)
@@ -20,8 +20,9 @@ export default function OfficeRuntimeHost() {
   const { runningTasks } = useOfficeMilestones()
   const collaborations = useOfficeCollaboration(runningTasks, agents)
   const [mapVersion, setMapVersion] = useState('')
+  const mapFile = useOfficeRuntimeStore((s) => s.mapFile)
   const lastUpdatedAtRef = useRef<string | null>(null)
-  const mapUrl = officeMapUrl(mapVersion)
+  const mapUrl = officeMapUrl(mapFile, mapVersion)
 
   useEffect(() => {
     useOfficeRuntimeStore.setState({ runningTasks })
@@ -46,12 +47,14 @@ export default function OfficeRuntimeHost() {
     return () => { cancelled = true }
   }, [loadAttempt])
 
-  // 只跟随共用配置的更新时间热刷新（编辑器保存后），忽略其中的 activeFile，地图固定为商务风
+  // 跟随共用配置：编辑器里选中（activeFile）并保存的地图就是办公室地图；更新时间变化时热刷新
   useEffect(() => {
     let cancelled = false
     const syncSharedMaps = async () => {
       const info = await fetchSharedOfficeMaps()
       if (cancelled) return
+      const nextFile = info.activeFile || OFFICE_MAP_FILE
+      if (nextFile !== useOfficeRuntimeStore.getState().mapFile) useOfficeRuntimeStore.setState({ mapFile: nextFile })
       if (lastUpdatedAtRef.current === null) {
         lastUpdatedAtRef.current = info.updatedAt
         return

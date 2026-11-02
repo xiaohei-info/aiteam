@@ -9,6 +9,13 @@ export const zoneLabels = { 'employee-no-entry': '员工禁入区', 'walk-blocke
 export const SPOT_KINDS = { pantry: '茶水间', restroom: '厕所', meeting: '会议室', corridor: '过道', custom: '自定义' }
 /** 各类型默认步速（px/s），可被 spot.speed 覆盖 */
 export const SPOT_SPEEDS = { pantry: 65, restroom: 85, meeting: 58, corridor: 45, custom: 60 }
+/** 到达活动点后员工的朝向（屏幕方向）；auto 保持走过来时的方向 */
+export const SPOT_FACINGS = { auto: '保持行走方向', front: '正面', back: '背面', left: '向左', right: '向右' }
+/**
+ * 到达活动点后员工的动作，每个动作都有前后左右 4 个方向（见 src/office-actions.js）。
+ * 坐下按地图上的椅子 / 沙发对位：锚点要放在座位中心。
+ */
+export const SPOT_ACTIONS = { idle: '站立休息', think: '思考', sit: '坐下', rest: '闭目养神', tea: '喝茶', coffee: '喝咖啡' }
 /** 到达目的地后的默认停留时长（秒） */
 export const SPOT_STAY = 8
 export const spotSpeed = spot => typeof spot?.speed === 'number' ? spot.speed : (SPOT_SPEEDS[spot?.kind] ?? SPOT_SPEEDS.custom)
@@ -104,6 +111,8 @@ export function validateMap(input) {
     if (spot.speed !== undefined && !finite(spot.speed, 5, 300)) fail('活动点步速必须在 5–300 px/s')
     if (spot.stay !== undefined && !finite(spot.stay, 0, 600)) fail('活动点停留时长必须在 0–600 秒')
     if (typeof spot.enabled !== 'boolean') fail('活动点启用状态无效')
+    if (spot.facing !== undefined && !Object.hasOwn(SPOT_FACINGS, spot.facing)) fail('活动点朝向无效')
+    if (spot.action !== undefined && !Object.hasOwn(SPOT_ACTIONS, spot.action)) fail('活动点动作无效')
     if (spot.roomId !== undefined && !roomIds.has(spot.roomId)) fail('活动点引用的房间不存在')
   }
   const elementIds = new Set(input.elements.map(e => e.id)), occupiedDesks = new Set()

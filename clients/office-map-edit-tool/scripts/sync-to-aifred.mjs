@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { syncOfficeActionsToDesktop } from './sync-office-actions.mjs'
 
 // 把编辑器样板地图与它引用的俯视素材同步到同级 clients/desktop 桌面端，供办公室页面 1:1 复刻渲染。
 // AIFred 自有素材（chair.png / office_computer_bg.png）不复制，直接指向桌面端已有的 assets/office 文件。
@@ -12,9 +13,6 @@ const sourceMap = path.join(here, 'examples/office-10-person.json')
 const targetRoot = path.join(aifredRoot, 'public/assets/office')
 const targetTopdown = path.join(targetRoot, 'topdown')
 const targetMap = path.join(targetRoot, 'map')
-// 办公室渲染派生骨骼（原骨架 + 打字动画）：编辑器生成后同步给前端，两边渲染必须一致
-const walkSkeleton = path.join(here, 'assets/aifred/characters/chibi-stickers/chibi-stickers-walk.json')
-const targetWalkSkeleton = path.join(aifredRoot, 'public/assets/characters/chibi-stickers/chibi-stickers-walk.json')
 
 const REWRITES = [
   [/^assets\/styles\/topdown-soft\//, 'assets/office/topdown/'],
@@ -41,9 +39,9 @@ async function readJson(file) {
 async function main() {
   const map = await readJson(sourceMap)
   await mkdir(targetTopdown, { recursive: true })
-  await mkdir(path.dirname(targetWalkSkeleton), { recursive: true })
-  await copyFile(walkSkeleton, targetWalkSkeleton)
-  console.log('已同步行走骨骼 chibi-stickers-walk.json（原骨架 + 打字动画）')
+  // 桌面端骨骼有自己的正装皮肤，不能整份覆盖；只在它上面重新追加方向动作（见 sync-office-actions.mjs）
+  const actions = await syncOfficeActionsToDesktop(aifredRoot)
+  console.log(`已在桌面端骨骼上追加 ${actions} 个方向动作，并写入派生图集与道具图`)
   await mkdir(targetMap, { recursive: true })
 
   const provenance = []
