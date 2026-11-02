@@ -153,7 +153,7 @@ test('notification integration keeps permissions minimal and requests access onl
   const notificationSource = readFileSync(new URL('../src/lib/systemNotifications.ts', import.meta.url), 'utf8')
   const chatSource = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
 
-  assert.equal(packageJson.dependencies['@tauri-apps/plugin-notification'], '^2.4.0')
+  assert.equal(packageJson.dependencies['@tauri-apps/plugin-notification'], '^2.8.0')
   assert.match(cargoToml, /^tauri-plugin-notification = "2"$/m)
   assert.match(rustSource, /\.plugin\(tauri_plugin_notification::init\(\)\)/)
   assert.deepEqual(
