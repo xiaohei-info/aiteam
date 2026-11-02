@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CircleAlert, RotateCw } from 'lucide-react'
+import { CircleAlert, Coins, RotateCw } from 'lucide-react'
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
 import { readConversationUsage, type ConversationUsage } from '../../lib/conversationUsage'
@@ -86,9 +86,13 @@ export function ConversationStatus({ conversationId, generating, unavailable = f
   const percentage = hasContextUsage
     ? context.percentage ?? (context.used_tokens! / context.context_window * 100)
     : null
-  const usageLabel = hasContextUsage
-    ? `上下文: ${percentage!.toFixed(0)}%\u00a0\u00a0${(context.used_tokens! / 1000).toFixed(1)}K/${(context.context_window / 1000).toFixed(1)}K`
-    : '上下文: 0%\u00a0\u00a00/0'
+  const contextPercent = percentage === null ? 0 : Math.min(100, Math.max(0, percentage))
+  const contextDetail = hasContextUsage
+    ? `${(context.used_tokens! / 1000).toFixed(1)}K/${(context.context_window / 1000).toFixed(1)}K`
+    : '0/0'
+  const usageLabel = `上下文 ${contextPercent.toFixed(0)}%，${contextDetail}`
+  // 上下文快满时进度条变色，提醒开启新上下文。
+  const contextLevel = contextPercent >= 90 ? 'critical' : contextPercent >= 70 ? 'high' : 'normal'
 
   // A running work record may not have usage yet, even just after completion.
   const displayedTokens = usage.tokens ?? (
@@ -112,11 +116,26 @@ export function ConversationStatus({ conversationId, generating, unavailable = f
         {retrying ? '重试中' : '重试'}
       </button>
     </div>}
+    {/* 执行状态、上下文用量、累计消耗合并为一行胶囊，分段之间用细分隔线。 */}
     <div className="chat-status-line chat-status-footer">
-      <span className="chat-context-usage" title={hasContextUsage ? `已使用 ${context.used_tokens!.toLocaleString()} / ${context.context_window.toLocaleString()} Token` : undefined} aria-label={usageLabel}>{usageLabel}</span>
-      <div className="chat-execution-usage" role="status">
-        <span className={`chat-execution-state ${displayedState.key}`}>{displayedState.label}</span>
-        <span className="chat-context-usage">累计消耗: {displayedTokens === null ? '0 tokens' : `${formatTokenCount(displayedTokens)} tokens`}</span>
+      <div className="chat-usage-meter" role="status">
+        <span className={`chat-execution-state ${displayedState.key}`}>
+          <i className="chat-execution-dot" aria-hidden="true" />{displayedState.label}
+        </span>
+        <span className="chat-usage-sep" aria-hidden="true" />
+        <span
+          className={`chat-context-usage ${contextLevel}`}
+          title={hasContextUsage ? `已使用 ${context.used_tokens!.toLocaleString()} / ${context.context_window.toLocaleString()} Token` : undefined}
+          aria-label={usageLabel}
+        >
+          <span className="chat-context-bar" aria-hidden="true"><span style={{ width: `${contextPercent}%` }} /></span>
+          <span aria-hidden="true">上下文 <b>{contextPercent.toFixed(0)}%</b> <small>{contextDetail}</small></span>
+        </span>
+        <span className="chat-usage-sep" aria-hidden="true" />
+        <span className="chat-token-usage" title="本会话累计消耗">
+          <Coins size={12} strokeWidth={2} aria-hidden="true" />
+          累计 <b>{`${displayedTokens === null ? '0' : formatTokenCount(displayedTokens)} tokens`}</b>
+        </span>
       </div>
     </div>
   </div>

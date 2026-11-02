@@ -68,9 +68,9 @@ test('critical dialogs and organization controls use modal focus and native cont
   assert.match(createGroupSource, /aria-pressed=\{selected\}/)
 
   assert.match(talentDetailSource, /useDialogFocus<HTMLElement>/)
-  assert.match(talentDetailSource, /role="tablist"/)
-  assert.match(talentDetailSource, /role="tabpanel"/)
-  assert.match(talentDetailSource, /'ArrowLeft', 'ArrowRight', 'Home', 'End'/)
+  // 员工详情改为单列依次展示，不再分标签页。
+  assert.doesNotMatch(talentDetailSource, /role="tablist"/)
+  assert.match(talentDetailSource, /renderSections\(\)/)
 
   assert.match(knowledgeDetailSource, /bindDialogRef = useDialogFocus/)
   assert.match(knowledgeDetailSource, /previewDialogRef = useDialogFocus/)

@@ -48,4 +48,3 @@ export const ORG_EMPLOYEE_TRANSFER_AVAILABILITY: ServiceWriteAvailability = {
   status: 'not_implemented',
   reason: '当前服务未开放员工调动。',
 }
-export const EMPLOYEE_SERVICE_CONTROL_AVAILABILITY = getServiceWriteAvailability('integration_incomplete')

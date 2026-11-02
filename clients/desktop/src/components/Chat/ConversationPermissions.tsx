@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ShieldCheck, Zap } from 'lucide-react'
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
@@ -16,6 +17,21 @@ interface ConversationPermissionsProps {
   ensureConversation: () => Promise<{ id: string }>
 }
 const grants = ['读取和修改工作区外的文件', '执行本机命令', '访问网络']
+const PANEL_GAP = 8
+const VIEWPORT_MARGIN = 12
+
+/** 面板贴在触发按钮上方、左对齐，并收在视口内。 */
+function panelPosition(trigger: HTMLElement): CSSProperties {
+  const rect = trigger.getBoundingClientRect()
+  const width = Math.min(400, window.innerWidth - VIEWPORT_MARGIN * 2)
+  const left = Math.max(VIEWPORT_MARGIN, Math.min(rect.left, window.innerWidth - width - VIEWPORT_MARGIN))
+  return {
+    left,
+    bottom: window.innerHeight - rect.top + PANEL_GAP,
+    width,
+    maxHeight: Math.max(160, Math.min(560, rect.top - PANEL_GAP - VIEWPORT_MARGIN)),
+  }
+}
 
 /**
  * 聊天输入框下方的「权限」入口：一个按钮汇总状态，面板内分「本会话的权限」「员工可检索的目录」「系统层」三段。
@@ -77,16 +93,28 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     window.requestAnimationFrame(() => triggerRef.current?.focus())
   }, [directoriesBusy, cancelRemove])
   const panelRef = useDialogFocus<HTMLDivElement>({ active: open })
+  // 面板渲染到 body：输入栏自身带 backdrop-filter，留在原处时面板的毛玻璃只能模糊输入栏内部，
+  // 背后的消息会原样透出来，看不清内容。
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({})
+  useLayoutEffect(() => {
+    if (!open) return
+    const update = () => { if (triggerRef.current) setPanelStyle(panelPosition(triggerRef.current)) }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [open])
   // 确认弹窗打开时由弹窗接管关闭快捷键和点击，面板保持展开，弹窗关闭后焦点回到面板。
   useGlobalShortcutClose({ active: open && !confirm, onClose: closePanel })
   useEffect(() => {
     if (!open || confirm) return
     const handler = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) closePanel()
+      const target = event.target as Node
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      closePanel()
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [open, confirm, closePanel])
+  }, [open, confirm, closePanel, panelRef])
 
   const togglePanel = () => {
     if (open) { closePanel(); return }
@@ -115,10 +143,11 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
           <span>{permissionSummary(full, directories.enabledCount)}</span>
           <ChevronDown size={13} className="cperm-chevron" aria-hidden="true" />
         </button>
-        {open && <div
+        {open && createPortal(<div
           ref={panelRef}
           id={panelId}
           className="cperm-panel"
+          style={panelStyle}
           role="dialog"
           aria-label="权限"
           tabIndex={-1}
@@ -143,7 +172,7 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
             <span>系统层：桌面、文稿等受保护位置被系统拦截时，需为 AIFred 开启「完全磁盘访问权限」。</span>
             <button type="button" className="chat-link-button" onClick={openSystemSettings}>打开系统设置</button>
           </div>
-        </div>}
+        </div>, document.body)}
       </div>
     </div>
     {error && <p role="alert">{error} <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}

@@ -317,10 +317,10 @@
   padding: 4px 4px 4px 12px;
   border-radius: 12px;
   border: 1px solid var(--glass-gold-border);
-  background: var(--surface-2-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-sm);
+  background: var(--popover-glass-bg);
+  backdrop-filter: var(--popover-glass-filter);
+  -webkit-backdrop-filter: var(--popover-glass-filter);
+  box-shadow: var(--popover-glass-shadow);
   animation: fade-in 0.2s var(--ease-out);
 }
 /* 指向按钮的小三角；用同色方块旋转，边框只画朝外的两条。 */
@@ -333,7 +333,7 @@
   height: 8px;
   border-left: 1px solid var(--glass-gold-border);
   border-bottom: 1px solid var(--glass-gold-border);
-  background: var(--surface-2-glass);
+  background: var(--popover-glass-bg);
   transform: translateY(-50%) rotate(45deg);
 }
 .chat-outcome-prompt-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -361,10 +361,9 @@
   padding: 12px 14px;
   border: 1px solid var(--glass-gold-border);
   border-radius: 12px;
-  background: var(--surface-2-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: var(--shadow-sm);
+  /* 实色底：面板嵌在气泡、输入框、输入栏三层 backdrop-filter 里，自身的模糊取不到背后的消息，半透明会直接透字。 */
+  background: linear-gradient(180deg, var(--popover-glass-sheen), transparent 64px), var(--surface-2);
+  box-shadow: var(--popover-glass-shadow);
   white-space: normal;
 }
 /* 聊天列窄（打开员工详情等）时工具栏右侧放不下，气泡改到按钮正上方，小三角朝下。 */
@@ -830,9 +829,10 @@
   flex-shrink: 0;
 }
 
-/* 消息列表 z-index: 2 会盖住输入栏向上展开的 @ 成员、角色下拉和权限面板；只在下拉打开时把输入栏提到上层，
-   平时保持原层级，避免输入栏顶部阴影压到消息上。 */
-.chat > .chat-input-bar:has(.mention-dropdown, .chat-role-dropdown, .cperm-panel) {
+/* 消息列表 z-index: 2 会盖住输入栏向上展开的 @ 成员、角色下拉、「解决了吗」气泡和未解决原因面板，
+   盖住时点击全落在消息列表上（原因选不了、备注输不进）；只在这些浮层打开时把输入栏提到上层，
+   平时保持原层级，避免输入栏顶部阴影压到消息上。权限面板已渲染到 body，不在此列。 */
+.chat > .chat-input-bar:has(.mention-dropdown, .chat-role-dropdown, .chat-outcome-prompt) {
   z-index: 3;
 }
 

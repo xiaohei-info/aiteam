@@ -144,88 +144,19 @@
 
 .titleBlock h2 {
   margin: 0;
-  overflow: hidden;
   color: var(--text-primary);
   font-family: inherit;
   font-size: 24px;
   font-weight: 720;
   letter-spacing: 0;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .titleBlock p {
   margin: 7px 0 0;
   color: var(--text-secondary);
   font-size: 13px;
-}
-
-.tabs {
-  display: flex;
-  gap: 6px;
-  width: min(100%, 1040px);
-  margin: 2px auto 18px;
-  padding: 4px;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-glass-subtle);
-}
-
-.tabs button {
-  display: inline-flex;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  flex: 1;
-  min-width: max-content;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
-  padding: 0 12px;
-  transition: background var(--duration-fast), color var(--duration-fast), transform 100ms;
-}
-
-.tabs button span {
-  white-space: nowrap;
-}
-
-.tabs button:hover {
-  background: var(--surface-glass-soft);
-  color: var(--text-primary);
-}
-
-.tabs button:active {
-  transform: scale(0.98);
-}
-
-.tabs button.active {
-  background: var(--brand-bg-active);
-  color: var(--brand);
-}
-
-.tabs button.disabled,
-.tabs button:disabled {
-  cursor: not-allowed;
-  color: var(--text-muted);
-  opacity: 0.78;
-}
-
-.tabs button.disabled:hover,
-.tabs button:disabled:hover {
-  background: transparent;
-  color: var(--text-muted);
-}
-
-.tabs button.disabled:active,
-.tabs button:disabled:active {
-  transform: none;
 }
 
 /* Summary */
@@ -321,7 +252,9 @@
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 560;
-  padding: 0 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  padding: 4px 10px;
 }
 
 .specList {
@@ -333,7 +266,7 @@
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr);
   gap: 12px;
-  align-items: center;
+  align-items: start;
   min-height: 34px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -349,13 +282,13 @@
   font-size: 12px;
 }
 
+/* 长文本（记忆策略、模型名等）换行展示，不截断。 */
 .specList strong {
-  overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .usageGrid {
@@ -399,7 +332,7 @@
   /* 第三列放「已开通 / 预览」等尾部标记，没有时为空。 */
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 10px;
-  align-items: center;
+  align-items: start;
   min-height: 56px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -423,11 +356,11 @@
   gap: 4px;
 }
 
+/* 技能介绍等长文本换行展示，不截断。 */
 .itemRow strong,
 .itemRow span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .itemRow strong {
@@ -461,8 +394,7 @@
 
 .fitGroup ul {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 4px 16px;
+  gap: 4px;
   margin: 6px 0 0;
   padding-left: 18px;
   color: var(--text-secondary);
@@ -480,10 +412,11 @@
   display: block;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   background: var(--surface-glass-subtle);
   color: var(--text-secondary);
   font: inherit;
+  overflow-wrap: anywhere;
   font-size: 12.5px;
   line-height: 1.5;
   padding: 6px 14px;
@@ -503,12 +436,6 @@
 
 .promptPillAction:focus-visible,
 .previewLink:focus-visible,
-.publishInfo a:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-  box-shadow: var(--brand-focus-ring);
-}
-
 .previewLink {
   color: var(--brand);
   font-size: 12px;
@@ -550,20 +477,6 @@
 .specList strong.rateWarning { color: var(--warning); }
 .specList strong.rateMuted { color: var(--text-secondary); font-weight: 560; }
 
-.publishInfo {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 16px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.publishInfo a {
-  color: var(--brand);
-  text-decoration: none;
-}
-
 /* Recruit confirmation */
 
 .confirmCard {
@@ -585,51 +498,6 @@
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.65;
-}
-
-.modelField {
-  display: grid;
-  gap: 7px;
-}
-
-.modelField > span {
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.selectWrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.selectWrap select {
-  width: 100%;
-  height: 38px;
-  appearance: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  outline: 0;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 12.5px;
-  padding: 0 36px 0 12px;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background var(--duration-fast);
-}
-
-.selectWrap select:focus {
-  border-color: var(--border-active);
-  background: var(--input-bg-focus);
-  box-shadow: var(--brand-focus-ring);
-}
-
-.selectWrap svg {
-  position: absolute;
-  right: 12px;
-  color: var(--text-muted);
-  pointer-events: none;
 }
 
 /* Floating actions */
@@ -778,10 +646,6 @@
 
   .titleBlock h2 {
     font-size: 21px;
-  }
-
-  .tabs button {
-    flex: 0 0 auto;
   }
 
   .contentGrid {
