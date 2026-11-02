@@ -825,14 +825,6 @@ export default function Chat() {
         )}
       </div>
 
-      {!activeMessagesLoading && !activeMessagesError && !unavailableMessage && !activeConvId.startsWith('emp_') && (
-        <ContextOutcomePrompt
-          conversationId={activeConvId}
-          segment={segmentMessages}
-          generating={generatingConvIds.has(activeConvId)}
-          reset={contextReset}
-        />
-      )}
       <ContextResetFeedback reset={contextReset} generating={generatingConvIds.has(activeConvId)} />
 
       {/* Input bar */}
@@ -854,7 +846,13 @@ export default function Chat() {
         enableVoiceInput
         enableKnowledgeFiles
         tools={!activeMessagesLoading && !activeMessagesError && !unavailableMessage && !activeConvId.startsWith('emp_') && (
-          <ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeConvId)} hasContext={segmentMessages.length > 0} />
+          <ContextOutcomePrompt
+            conversationId={activeConvId}
+            segment={segmentMessages}
+            generating={generatingConvIds.has(activeConvId)}
+            reset={contextReset}
+            anchor={<ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeConvId)} hasContext={segmentMessages.length > 0} />}
+          />
         )}
         helper={<>
           {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}

@@ -357,14 +357,6 @@ export default function GroupChat() {
         </div>
       </div>
 
-      {!activeMessagesLoading && !activeMessagesError && (
-        <ContextOutcomePrompt
-          conversationId={activeGroupId}
-          segment={segmentMessages}
-          generating={generatingConvIds.has(activeGroupId)}
-          reset={contextReset}
-        />
-      )}
       <ContextResetFeedback reset={contextReset} generating={generatingConvIds.has(activeGroupId)} />
 
       <ChatInputBar
@@ -385,7 +377,13 @@ export default function GroupChat() {
         enableVoiceInput
         enableKnowledgeFiles
         tools={!activeMessagesLoading && !activeMessagesError && (
-          <ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeGroupId)} hasContext={segmentMessages.length > 0} />
+          <ContextOutcomePrompt
+            conversationId={activeGroupId}
+            segment={segmentMessages}
+            generating={generatingConvIds.has(activeGroupId)}
+            reset={contextReset}
+            anchor={<ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeGroupId)} hasContext={segmentMessages.length > 0} />}
+          />
         )}
         helper={<div className="chat-composer-footer">
           <ConversationPermissions
