@@ -14,6 +14,13 @@ function createStatusHarness() {
   let fail = false
   let requests = 0
   const deferred: (() => void)[] = []
+  const ticks: (() => void)[] = []
+  const visibilityListeners = new Set<() => void>()
+  const document = {
+    visibilityState: 'visible',
+    addEventListener: (_type: string, listener: () => void) => visibilityListeners.add(listener),
+    removeEventListener: (_type: string, listener: () => void) => visibilityListeners.delete(listener),
+  }
   const react = {
     useState(initial: any) {
       const index = cursor++
@@ -46,8 +53,8 @@ function createStatusHarness() {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText
   runInNewContext(compiled, {
-    exports, AbortController,
-    window: { setInterval: () => 1, clearInterval: () => {} },
+    exports, AbortController, document,
+    window: { setInterval: (tick: () => void) => ticks.push(tick), clearInterval: () => {} },
     require(name: string) {
       if (name === 'react') return react
       if (name === 'react/jsx-runtime') return { jsx: (type: any, props: any) => ({ type, props }), jsxs: (type: any, props: any) => ({ type, props }) }
@@ -68,6 +75,8 @@ function createStatusHarness() {
     update(nextContext: any, nextUsage: any) { context = nextContext; usage = nextUsage },
     fail() { fail = true },
     requests: () => requests,
+    tick() { ticks.at(-1)?.() },
+    setVisibility(state: 'visible' | 'hidden') { document.visibilityState = state; visibilityListeners.forEach(listener => listener()) },
   }
 }
 
@@ -120,4 +129,17 @@ test('missing usage after completion retains known tokens; switching conversatio
   harness.render(false, 'conv_2')
   const tree = harness.render(false, 'conv_2')
   assert.doesNotMatch(tree, /34K tokens|12\.0K\/100\.0K/)
+})
+
+test('timed refreshes pause while the window is hidden and catch up when it is shown', async () => {
+  const harness = createStatusHarness()
+  harness.render(); await harness.resolve()
+  const initial = harness.requests()
+  harness.setVisibility('hidden')
+  harness.tick(); await harness.resolve()
+  assert.equal(harness.requests(), initial, 'hidden ticks read nothing')
+  harness.setVisibility('visible'); await harness.resolve()
+  assert.equal(harness.requests(), initial + 2, 'showing the window reads context and usage once')
+  harness.tick(); await harness.resolve()
+  assert.equal(harness.requests(), initial + 4)
 })

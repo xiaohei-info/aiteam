@@ -1045,6 +1045,44 @@ test("resetContext keeps the chosen thinking level and rejects while a prompt is
   }
 });
 
+test("context polls after a reset reuse the last result instead of rebuilding and writing init entries", async () => {
+  const fixture = await createFixture();
+  const reasoning = fauxProvider({
+    api: "aiteam-poll-api",
+    provider: "aiteam-poll",
+    models: [{ id: "aiteam-poll-1", name: "Poll Test", reasoning: true, contextWindow: 1_000 }],
+  });
+  fixture.modelRuntime.registerNativeProvider(reasoning.provider);
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const host = fixture.createHost(reasoning.getModel());
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: reasoning.getModel().id } },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    reasoning.setResponses([fauxAssistantMessage("first")]);
+    await host.prompt("conversation-1", "one", undefined, caller);
+    await host.resetContext("conversation-1", caller);
+    const file = fixture.store.getConversation("conversation-1")!.sessionFile;
+    const lines = () => readFileSync(file, "utf8").trim().split("\n").length;
+
+    const first = await host.getConversationContext("conversation-1", caller);
+    const settled = lines();
+    for (let poll = 0; poll < 3; poll += 1) assert.deepEqual(await host.getConversationContext("conversation-1", caller), first);
+    assert.equal(lines(), settled, "repeated polls on an unchanged session write nothing");
+
+    const changed = await host.setThinkingLevel("conversation-1", "high", caller);
+    assert.equal((await host.getConversationContext("conversation-1", caller)).thinking_level, changed.thinking_level, "a new entry invalidates the reuse");
+    reasoning.setResponses([fauxAssistantMessage("second")]);
+    await host.prompt("conversation-1", "two", undefined, caller);
+    assert.notEqual((await host.getConversationContext("conversation-1", caller)).used_tokens, first.used_tokens);
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
 test("group resetContext resets only participants with a Session and shares one reset id", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
