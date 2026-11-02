@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState, type AnimationEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, Zap, UserRound, Camera, Maximize2, LoaderCircle } from 'lucide-react'
+import { X, Zap, UserRound, Camera, Maximize2, LoaderCircle, ChevronLeft } from 'lucide-react'
 import './AgentDetailPanel.css'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { EMPLOYEE_SERVICE_CONTROL_AVAILABILITY } from '../../lib/serviceWriteAvailability'
@@ -297,7 +297,7 @@ export default function AgentDetailPanel() {
         {automationOpen && (
           <div className="adp-nested-view" role="dialog" aria-label="员工自动化任务列表">
             <div className="adp-nested-header">
-              <button type="button" className="adp-nested-back" aria-label="返回员工详情" title="返回员工详情" onClick={() => { setAutomationOpen(false); setEditingAutomationTask(null) }}>‹</button>
+              <button type="button" className="adp-nested-back" aria-label="返回员工详情" title="返回员工详情" onClick={() => { setAutomationOpen(false); setEditingAutomationTask(null) }}><ChevronLeft size={18} aria-hidden="true" /></button>
               <strong>{editingAutomationTask ? '编辑自动化任务' : '自动化任务'}</strong>
               <span>{editingAutomationTask ? '' : `${employeeAutomationTasks.length} 项`}</span>
             </div>

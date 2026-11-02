@@ -392,8 +392,9 @@
 }
 .adp-nested-header strong { flex: 1; font-size: 14px; color: var(--text-primary); }
 .adp-nested-header > span { color: var(--text-muted); font-size: 11px; }
-.adp-nested-back { border: 0; padding: 0; background: transparent; color: var(--brand); cursor: pointer; font-size: 12px; }
-.adp-nested-back:hover { color: var(--text-primary); }
+.adp-nested-back { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin-left: -6px; border: 0; border-radius: 8px; padding: 0; background: transparent; color: var(--brand); cursor: pointer; }
+.adp-nested-back:hover { background: var(--navigation-item-hover); color: var(--text-primary); }
+.adp-nested-back:focus-visible { outline: none; box-shadow: var(--brand-focus-ring); }
 .adp-nested-body { flex: 1; overflow: auto; padding: 12px; }
 .adp-nested-state { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 120px; color: var(--text-muted); font-size: 12px; text-align: center; }
 .adp-nested-error { flex-direction: column; color: var(--danger, #ef8b8b); }
@@ -422,7 +423,6 @@
 
 /* ─── 记忆二级视图 ─── */
 
-.adp-memory-scope { flex: none; border: 1px solid var(--border-subtle); border-radius: 999px; padding: 3px 9px; }
 .adp-memory-body { display: flex; flex-direction: column; gap: 8px; }
 .adp-memory-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: var(--text-secondary); font-size: 12px; }
 .adp-memory-summary b { color: var(--brand); font-size: 14px; }

@@ -693,6 +693,8 @@ export default function Panel() {
                           aria-label="已置顶"
                         />
                       )}
+                      {/* 自动化任务每个任务一个执行会话，标出来源，避免看成多出来的普通对话。 */}
+                      {conv.automationTaskId && <span className="panel-conv-tag" title="自动化任务的执行记录">自动化</span>}
                       <span className="panel-conv-time">
                         {conv.summaryAvailability?.lastMessageAt === false ? '时间未提供' : conv.time}
                       </span>

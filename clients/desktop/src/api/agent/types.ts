@@ -78,6 +78,8 @@ export interface ConversationMetadata {
   // B1 服务端摘要字段；字段缺失与显式 null 语义不同，前端必须保留“未提供”状态。
   last_preview?: string | null
   unread_count?: number
+  // 会话属于自动化任务时为任务 ID（任务可能已删除）；旧版 Agent 不返回。
+  automation_task_id?: string | null
   // 最新可见 user/assistant 消息时间；null 也可能是旧消息时间缺失，不代表一定为空会话。
   // 保留 optional 以兼容旧 Agent；不能用 updated_at（改名/已读时间）兜底。
   last_message_at?: string | null

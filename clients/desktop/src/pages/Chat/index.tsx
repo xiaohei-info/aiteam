@@ -27,7 +27,7 @@ import { ContextResetDivider } from '../../components/Chat/ContextResetDivider'
 import { useConversationSegments } from '../../hooks/useConversationSegments'
 import { useContextReset } from '../../hooks/useContextReset'
 import { currentSegmentMessages } from '../../lib/contextOutcome'
-import { contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
+import { anchorTrailingDivider, contextResetDividers, contextResetMemoryText, contextResetPlacement } from '../../lib/piConverters'
 import { ConversationPermissions } from '../../components/Chat/ConversationPermissions'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import ConversationFiles from '../../components/Chat/ConversationFiles'
@@ -193,7 +193,8 @@ export default function Chat() {
     activeMessagesLoading, activeMessagesError,
   } = useChatStore()
   const userId = useAgentAuthStore((state) => state.account) ?? 'guest'
-  const resetDividers = useMemo(() => contextResetDividers(activeConvRawItems), [activeConvRawItems])
+  const entryDividers = useMemo(() => contextResetDividers(activeConvRawItems), [activeConvRawItems])
+  const resetDividers = useMemo(() => anchorTrailingDivider(entryDividers, activeConvMessages), [entryDividers, activeConvMessages])
   const segments = useConversationSegments(activeConvId, contextResetCount)
   const segmentMessages = useMemo(() => currentSegmentMessages(activeConvMessages, resetDividers), [activeConvMessages, resetDividers])
   const contextReset = useContextReset(activeConvId ?? '', (result) => {

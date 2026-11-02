@@ -59,6 +59,20 @@ test("employee edit switches execution binding without rewriting old participant
     assert.equal((await f.call("automation-tasks")).data.length, 1);
   } finally { await f.finish(); }
 });
+test("conversation list marks automation execution conversations, including retired bindings and legacy schedules", async () => {
+  const f = await start();
+  try {
+    const marks = async () => Object.fromEntries((await f.call("conversations")).data.map((c: any) => [c.id, c.automation_task_id]));
+    assert.equal((await marks()).c1, null);
+    const { data: task } = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "mark" });
+    const { data: changed } = await f.call(`automation-tasks/${task.task_id}`, "PATCH", { employee_id: "e2" }, { "If-Match": task.etag });
+    const switched = await marks();
+    assert.equal(switched[task.conversation_id], task.task_id, "the retired execution conversation keeps its mark");
+    assert.equal(switched[changed.conversation_id], task.task_id);
+    f.store.updateConversation("c1", { schedule: { ...validateSchedule({ schedule_id: "old", interval_seconds: 60, prompt_template: "old" }) } });
+    assert.equal((await f.call("conversations/c1")).data.automation_task_id, "c1");
+  } finally { await f.finish(); }
+});
 test("legacy schedule appears once, supports edits, and cursor cannot cross owners", async () => {
   const f = await start();
   try {

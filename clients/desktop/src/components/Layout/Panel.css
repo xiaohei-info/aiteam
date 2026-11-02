@@ -318,6 +318,18 @@
 
 .panel-conv-draft { color: var(--warning); }
 
+/* 名称后的来源标签（自动化）：不抢名称和时间的视觉层级。 */
+.panel-conv-tag {
+  flex-shrink: 0;
+  margin-right: auto;
+  padding: 0 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 15px;
+}
+
 /* ─── Search results ─── */
 
 .panel-search-results {

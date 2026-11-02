@@ -196,6 +196,7 @@ const ConversationMetadata = Type.Object({
   last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的 entry_ref；旧存储可能是 raw Pi ID，歧义/失效时按未读处理。" }),
   last_preview: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "最新可见 user/assistant 的脱敏短文本；排除 thinking/tool/internal，图片为占位符，无消息为 null。" }),
   last_message_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "最新可见 user/assistant 消息时间；无可见消息或旧消息时间缺失为 null。改名、已读、工具事件不改变此值。" }),
+  automation_task_id: Type.Optional(Type.Union([Type.String(), Type.Null()], { description: "会话属于自动化任务时为任务 ID（任务可能已删除，仅用于标记来源）；普通会话为 null。" })),
   unread_count: Type.Integer({ minimum: 0, description: "已读位置之后的可见 assistant 消息数；输入和 transient delta 不计数。" }),
   created_at: Type.String({ format: "date-time", description: "创建时间。" }),
   updated_at: Type.String({ format: "date-time", description: "最后更新时间。" }),

@@ -59,7 +59,9 @@ export class ConversationReadService {
       lastMessageAt = item.order[0] > 0 && Number.isFinite(messageDate.getTime()) ? messageDate.toISOString() : null;
       if (item.entry.type === "message" && item.entry.message.role === "assistant" && (!read || compareReadOrder(item.order, read.order) > 0)) unreadCount += 1;
     }
-    return { ...metadata, last_preview: lastPreview, last_message_at: lastMessageAt, unread_count: unreadCount };
+    // 与自动化任务列表同口径：绑定过任务的会话（含已换绑、已删除任务）用任务 ID，旧版定时会话本身就是任务。
+    const automationTaskId = this.store.automation.forConversation(conversationId)?.id ?? (metadata.schedule ? conversationId : null);
+    return { ...metadata, last_preview: lastPreview, last_message_at: lastMessageAt, unread_count: unreadCount, automation_task_id: automationTaskId };
   }
 
   readPointer(conversationId: string, caller: AuthenticatedCaller, value: unknown): string | null {

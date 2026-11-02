@@ -3,7 +3,7 @@
  * 普通成员只看到自己对话产生的记忆并可删除;其他成员贡献的只显示数量。
  */
 import { useEffect, useRef, useState } from 'react'
-import { LoaderCircle, MoreHorizontal, Search } from 'lucide-react'
+import { ChevronLeft, LoaderCircle, MoreHorizontal, Search } from 'lucide-react'
 import { agentApi } from '../../api/agent'
 import type { EmployeeMemory } from '../../api/agent/employeeMemories'
 import type { MemorySummaryState } from '../../hooks/useEmployeeMemorySummary'
@@ -186,15 +186,15 @@ export default function EmployeeMemoryView({ employeeId, employeeName, summary, 
   return (
     <div className="adp-nested-view" role="dialog" aria-label={`${employeeName}的记忆`}>
       <div className="adp-nested-header">
-        <button type="button" className="adp-nested-back" aria-label="返回员工详情" title="返回员工详情" onClick={onClose}>‹</button>
+        <button type="button" className="adp-nested-back" aria-label="返回员工详情" title="返回员工详情" onClick={onClose}><ChevronLeft size={18} aria-hidden="true" /></button>
         <strong>{employeeName}的记忆</strong>
-        <span className="adp-memory-scope" title="只显示由你的对话产生的记忆">只看我的</span>
       </div>
       <div className="adp-nested-body adp-memory-body" aria-busy={list.status === 'loading' || loadingMore}>
         <div className="adp-memory-summary">
           {count !== null && <><b className="font-number">{count}</b><span>条</span></>}
           {summaryData && <span className="muted">· {describeMemorySummary(summaryData)}</span>}
         </div>
+        <p className="adp-memory-note">只显示由你的对话产生的记忆。</p>
         {truncated && <p className="adp-memory-note">记忆较多，统计只覆盖已扫描的部分。</p>}
         <label className="adp-memory-search">
           <Search size={13} aria-hidden="true" />
