@@ -21,6 +21,8 @@ export default function OfficeRuntimeHost() {
   const collaborations = useOfficeCollaboration(runningTasks, agents)
   const [mapVersion, setMapVersion] = useState('')
   const mapFile = useOfficeRuntimeStore((s) => s.mapFile)
+  // 第一次读到共用配置前不建场景：否则先按默认地图建一次，读到编辑器选中的另一张后再重建，启动时画面会闪一下
+  const [mapResolved, setMapResolved] = useState(false)
   const lastUpdatedAtRef = useRef<string | null>(null)
   const mapUrl = officeMapUrl(mapFile, mapVersion)
 
@@ -55,6 +57,7 @@ export default function OfficeRuntimeHost() {
       if (cancelled) return
       const nextFile = info.activeFile || OFFICE_MAP_FILE
       if (nextFile !== useOfficeRuntimeStore.getState().mapFile) useOfficeRuntimeStore.setState({ mapFile: nextFile })
+      setMapResolved(true)
       if (lastUpdatedAtRef.current === null) {
         lastUpdatedAtRef.current = info.updatedAt
         return
@@ -83,8 +86,9 @@ export default function OfficeRuntimeHost() {
 
   // 花名册不变只更新状态（员工位置不动）；换人或地图更新才重建场景
   useEffect(() => {
+    if (!mapResolved) return
     officeRuntime.sync(mapUrl, agents)
-  }, [mapUrl, agents])
+  }, [mapResolved, mapUrl, agents])
 
   useEffect(() => {
     officeRuntime.setCollaborations(collaborations)

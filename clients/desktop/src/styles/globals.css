@@ -77,6 +77,9 @@
   --glass-card-shadow-hover: none;
   --glass-card-filter: blur(18px) saturate(132%);
 
+  /* 渲染到 body 的锚定浮层（下拉、气泡、权限面板）：高于页面内容，低于模态弹窗（.chat-tools-overlay 1100）。 */
+  --z-popover: 1050;
+
   /* 浮层毛玻璃（输入栏上方弹出的权限面板、「解决了吗」气泡等）：底色不透明度够高，背后有消息时仍清晰可读。 */
   --popover-glass-bg: rgba(24, 24, 32, 0.8);
   --popover-glass-sheen: rgba(255, 255, 255, 0.06);

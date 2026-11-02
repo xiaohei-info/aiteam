@@ -305,15 +305,12 @@
 .chat-context-outcome-edit:focus-visible { opacity: 1; }
 .chat-context-outcome-edit:hover { color: var(--brand); }
 
-/* ─── 「解决了吗」气泡：回复结束后贴在工具栏「开启新上下文」按钮右侧，纵向居中在工具栏这一行，不遮输入框 ─── */
-.chat-outcome-anchor { position: relative; display: inline-flex; align-items: center; }
+/* ─── 「解决了吗」气泡：回复结束后贴在工具栏「开启新上下文」按钮右侧，纵向居中在工具栏这一行，不遮输入框。
+   渲染到 body，位置由 useAnchoredPopover 计算；输入框窄时放到按钮正上方（data-side="top"）。 ─── */
+.chat-outcome-anchor { display: inline-flex; align-items: center; }
 .chat-outcome-prompt {
-  position: absolute;
-  top: 50%;
-  left: calc(100% + 10px);
-  z-index: 20;
+  z-index: var(--z-popover);
   width: max-content;
-  transform: translateY(-50%);
   padding: 4px 4px 4px 12px;
   border-radius: 12px;
   border: 1px solid var(--glass-gold-border);
@@ -366,11 +363,9 @@
   box-shadow: var(--popover-glass-shadow);
   white-space: normal;
 }
-/* 聊天列窄（打开员工详情等）时工具栏右侧放不下，气泡改到按钮正上方，小三角朝下。 */
-@container chat-input (max-width: 600px) {
-  .chat-outcome-prompt { top: auto; bottom: calc(100% + 10px); left: -8px; transform: none; }
-  .chat-outcome-prompt::before { top: auto; bottom: -5px; left: 19px; border-left: none; border-right: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
-}
+/* 气泡在按钮上方时（输入框窄，打开员工详情等）小三角朝下。 */
+.chat-outcome-prompt[data-side="top"]::before { top: auto; bottom: -5px; left: 19px; border-left: none; border-right: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
+.chat-outcome-prompt[data-side="bottom"]::before { top: -5px; left: 19px; border-bottom: none; border-top: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
 .chat-outcome-btn {
   display: inline-flex;
   align-items: center;
@@ -829,12 +824,6 @@
   flex-shrink: 0;
 }
 
-/* 消息列表 z-index: 2 会盖住输入栏向上展开的 @ 成员、角色下拉、「解决了吗」气泡和未解决原因面板，
-   盖住时点击全落在消息列表上（原因选不了、备注输不进）；只在这些浮层打开时把输入栏提到上层，
-   平时保持原层级，避免输入栏顶部阴影压到消息上。权限面板已渲染到 body，不在此列。 */
-.chat > .chat-input-bar:has(.mention-dropdown, .chat-role-dropdown, .chat-outcome-prompt) {
-  z-index: 3;
-}
 
 .chat-resize-handle {
   height: 16px;
@@ -859,8 +848,6 @@
 
 .chat-input-box {
   position: relative;
-  /* 「解决了吗」气泡按输入框宽度决定放在按钮右侧还是上方。 */
-  container: chat-input / inline-size;
   border-radius: 14px;
   border: 1px solid var(--chrome-divider-strong);
   background: rgba(18, 18, 26, 0.42);
@@ -978,10 +965,8 @@
   position: relative;
 }
 
+/* 渲染到 body，位置由 useAnchoredPopover 按「人才角色」按钮计算。 */
 .chat-role-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
   background: var(--surface-2-glass);
   border: 1px solid var(--glass-card-border);
   border-radius: 10px;
@@ -995,7 +980,7 @@
   box-shadow: var(--glass-card-shadow);
   -webkit-backdrop-filter: var(--glass-card-filter);
   backdrop-filter: var(--glass-card-filter);
-  z-index: 100;
+  z-index: var(--z-popover);
 }
 
 .chat-input-bar-disabled textarea,

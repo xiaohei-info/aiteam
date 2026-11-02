@@ -291,6 +291,19 @@
   overflow-wrap: anywhere;
 }
 
+.specLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  color: var(--brand);
+  font-size: 13px;
+  line-height: 1.6;
+  text-decoration: none;
+}
+
+.specLink:hover { text-decoration: underline; }
+
 .usageGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

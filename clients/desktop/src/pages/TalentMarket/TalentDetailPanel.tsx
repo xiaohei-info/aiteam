@@ -7,6 +7,7 @@ import {
   Brain,
   BriefcaseBusiness,
   Cable,
+  ExternalLink,
   ChevronLeft,
   CircleCheck,
   Gauge,
@@ -14,6 +15,7 @@ import {
   Lightbulb,
   MessageCircle,
   Package,
+  ScrollText,
   ShieldCheck,
   Tag,
   UserPlus,
@@ -188,7 +190,8 @@ export default function TalentDetailPanel({
   const hasOverview = Boolean(profile.tagline || description || profile.use_cases.length || profile.limitations.length
     || profile.example_prompts.length || profile.sample_outputs.length)
   const hasCapabilities = skillsCount > 0 || skills.length > 0 || profile.output_types.length > 0 || tags.length > 0
-  const hasData = Boolean(profile.stats || typeof recruitCount === 'number' || profile.pricing || modelName || profile.memory_policy_summary)
+  const hasPublishInfo = Boolean(profile.publisher || releaseLabel || profile.changelog_url)
+  const hasData = Boolean(profile.stats || typeof recruitCount === 'number' || profile.pricing || modelName || profile.memory_policy_summary || hasPublishInfo)
   const handlePanelKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Escape') return
     event.preventDefault()
@@ -464,6 +467,35 @@ export default function TalentDetailPanel({
             </div>
           </section>
         )}
+
+        {/* 发布信息：招募前判断来源与版本变化用，放在本组末尾。 */}
+        {hasPublishInfo && (
+          <section className={styles.infoCard}>
+            {renderSectionHeader('发布信息', '来源与版本', <ScrollText size={17} strokeWidth={1.8} />)}
+            <div className={styles.specList}>
+              {profile.publisher && (
+                <div>
+                  <span>发布者</span>
+                  <strong>{profile.publisher}</strong>
+                </div>
+              )}
+              {releaseLabel && (
+                <div>
+                  <span>版本</span>
+                  <strong>{releaseLabel}</strong>
+                </div>
+              )}
+              {profile.changelog_url && (
+                <div>
+                  <span>更新说明</span>
+                  <a className={styles.specLink} href={profile.changelog_url} target="_blank" rel="noopener noreferrer">
+                    查看更新说明<ExternalLink size={12} strokeWidth={1.8} aria-hidden="true" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
       </div>
     )
   }
@@ -473,6 +505,8 @@ export default function TalentDetailPanel({
       {hasOverview && renderOverview()}
       {hasCapabilities && renderCapabilities()}
       {renderRequirements()}
+      {/* 员工授权与关联知识库属于接入环节，紧跟「接入要求」，不压在概览前面。 */}
+      <TalentEmployeeWorkspace key={agent.template_id} templateId={agent.template_id} showKnowledge />
       {hasData && renderData()}
     </div>
   )
@@ -552,7 +586,6 @@ export default function TalentDetailPanel({
           </div>
         </div>
 
-
         <div className={styles.contentGrid}>
           <div className={styles.mainColumn}>
             {loading ? (
@@ -567,7 +600,6 @@ export default function TalentDetailPanel({
               />
             ) : (
               <>
-                <TalentEmployeeWorkspace key={agent.template_id} templateId={agent.template_id} showKnowledge />
                 {renderSections()}
 
                 {!recruited && (
