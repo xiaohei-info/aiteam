@@ -8,7 +8,7 @@ import { MapOfficeScene, type EmployeeStatus, type ScreenContent } from './MapOf
 const host = document.querySelector<HTMLElement>('#host')
 const status = document.querySelector<HTMLElement>('#status')
 const params = new URLSearchParams(location.search)
-const mapUrl = params.get('map') ?? '/assets/office/map/office-10-person.json'
+const mapUrl = params.get('map') ?? '/assets/office/map/office-10-person-business.json'
 
 if (!host) throw new Error('预览页缺少 #host 容器')
 

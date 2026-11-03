@@ -87,3 +87,13 @@ test('undo/redo snapshots are isolated, divergent edits discard redo history', (
   assert.equal(history.redo().name, 'third')
   history.undo(); history.push({ ...map, name: 'new branch' }); assert.equal(history.redo().name, 'new branch')
 })
+test('spots accept optional facing and action, and reject unknown values', () => {
+  const map = { ...smallMap(), spots: [{ id: 'spot-1', name: '茶水间', kind: 'pantry', x: 50, y: 50, enabled: true }] }
+  assert.deepEqual(validateMap(structuredClone(map)).spots[0], map.spots[0], '旧地图没有朝向和动作也能导入')
+  map.spots[0].facing = 'left'; map.spots[0].action = 'coffee'
+  const loaded = validateMap(JSON.parse(JSON.stringify(map)))
+  assert.equal(loaded.spots[0].facing, 'left')
+  assert.equal(loaded.spots[0].action, 'coffee')
+  assert.throws(() => validateMap({ ...map, spots: [{ ...map.spots[0], facing: 'up' }] }), /朝向/)
+  assert.throws(() => validateMap({ ...map, spots: [{ ...map.spots[0], action: 'dance' }] }), /动作/)
+})

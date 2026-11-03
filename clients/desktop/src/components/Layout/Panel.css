@@ -318,16 +318,19 @@
 
 .panel-conv-draft { color: var(--warning); }
 
-/* 名称后的来源标签（自动化）：不抢名称和时间的视觉层级。 */
-.panel-conv-tag {
-  flex-shrink: 0;
-  margin-right: auto;
-  padding: 0 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 15px;
+/* 头像右下角的闪电角标：圆形蓝底，描一圈面板底色把它和头像分开。 */
+.panel-conv-auto-mark {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 2px solid var(--surface-1);
+  border-radius: 50%;
+  background: var(--info);
+  color: #fff;
 }
 
 /* ─── Search results ─── */

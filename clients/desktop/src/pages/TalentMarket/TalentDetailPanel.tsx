@@ -7,14 +7,15 @@ import {
   Brain,
   BriefcaseBusiness,
   Cable,
+  ExternalLink,
   ChevronLeft,
-  ChevronDown,
   CircleCheck,
   Gauge,
   KeyRound,
   Lightbulb,
   MessageCircle,
   Package,
+  ScrollText,
   ShieldCheck,
   Tag,
   UserPlus,
@@ -44,14 +45,8 @@ import { useDialogFocus } from '../../hooks/useDialogFocus'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { RequestErrorInfo } from '../../lib/requestError'
 
-// 议题 7：概览 / 能力 / 接入要求 / 数据与成本；没有内容的标签页整页隐藏，「接入要求」始终保留。
-type DetailTab = 'overview' | 'capabilities' | 'requirements' | 'data'
-
-interface DetailTabItem {
-  key: DetailTab
-  label: string
-}
-
+// 议题 7 的四组内容（概览 / 能力 / 接入要求 / 数据与成本）按单列依次展示，不再分标签页；
+// 没有内容的分组整组隐藏，「接入要求」始终保留。
 interface TalentDetailPanelProps {
   agent: MarketTemplate | null
   detail: MarketTemplateDetail | null
@@ -76,13 +71,6 @@ interface TextItem {
   title: string
   meta: string
 }
-
-const DETAIL_TABS: DetailTabItem[] = [
-  { key: 'overview', label: '概览' },
-  { key: 'capabilities', label: '能力' },
-  { key: 'requirements', label: '接入要求' },
-  { key: 'data', label: '数据与成本' },
-]
 
 const CATEGORY_LABELS: Record<string, string> = {
   business: '业务运营',
@@ -159,7 +147,6 @@ export default function TalentDetailPanel({
   onClose,
 }: TalentDetailPanelProps) {
   const permission = useEnterpriseWrite()
-  const [activeTab, setActiveTab] = useState<DetailTab>('overview')
   const panelRef = useDialogFocus<HTMLElement>({ active: agent !== null })
   const profile = detail?.profile ?? agent?.profile
   const hasConnectors = Boolean(profile && (profile.required_connectors.length || profile.optional_connectors.length))
@@ -203,34 +190,8 @@ export default function TalentDetailPanel({
   const hasOverview = Boolean(profile.tagline || description || profile.use_cases.length || profile.limitations.length
     || profile.example_prompts.length || profile.sample_outputs.length)
   const hasCapabilities = skillsCount > 0 || skills.length > 0 || profile.output_types.length > 0 || tags.length > 0
-  const hasData = Boolean(profile.stats || typeof recruitCount === 'number' || profile.pricing || modelName || profile.memory_policy_summary)
-  const tabContent: Record<DetailTab, boolean> = { overview: hasOverview, capabilities: hasCapabilities, requirements: true, data: hasData }
-  const visibleTabs = DETAIL_TABS.filter(tab => tabContent[tab.key])
-  const currentTab = tabContent[activeTab] ? activeTab : visibleTabs[0].key
-
-  const handleTab = (tab: DetailTab) => {
-    if (!tabContent[tab]) return
-    setActiveTab(tab)
-  }
-
-  const handleTabsKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-    const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'))
-    if (tabs.length === 0) return
-    event.preventDefault()
-    const currentIndex = tabs.indexOf(document.activeElement as HTMLButtonElement)
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? tabs.length - 1
-        : event.key === 'ArrowRight'
-          ? (currentIndex + 1 + tabs.length) % tabs.length
-          : (currentIndex - 1 + tabs.length) % tabs.length
-    const nextTab = tabs[nextIndex]
-    handleTab(nextTab.dataset.tabKey as DetailTab)
-    nextTab.focus()
-  }
-
+  const hasPublishInfo = Boolean(profile.publisher || releaseLabel || profile.changelog_url)
+  const hasData = Boolean(profile.stats || typeof recruitCount === 'number' || profile.pricing || modelName || profile.memory_policy_summary || hasPublishInfo)
   const handlePanelKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== 'Escape') return
     event.preventDefault()
@@ -263,7 +224,7 @@ export default function TalentDetailPanel({
     </div>
   ))
 
-  const renderOverviewTab = () => (
+  const renderOverview = () => (
     <div className={styles.detailStack}>
       {(profile.tagline || description) && (
         <section className={styles.infoCard}>
@@ -334,7 +295,7 @@ export default function TalentDetailPanel({
     </div>
   )
 
-  const renderCapabilitiesTab = () => (
+  const renderCapabilities = () => (
     <div className={styles.detailStack}>
       {(skillsCount > 0 || skills.length > 0) && (
         <section className={styles.infoCard}>
@@ -381,7 +342,7 @@ export default function TalentDetailPanel({
     </div>
   )
 
-  const renderRequirementsTab = () => {
+  const renderRequirements = () => {
     if (!hasTalentRequirements(profile) && !profile.required_permissions && !memoryItems.length) {
       return (
         <section className={styles.infoCard}>
@@ -445,7 +406,7 @@ export default function TalentDetailPanel({
     )
   }
 
-  const renderDataTab = () => {
+  const renderData = () => {
     const stats = profile.stats
     return (
       <div className={styles.detailStack}>
@@ -506,27 +467,49 @@ export default function TalentDetailPanel({
             </div>
           </section>
         )}
+
+        {/* 发布信息：招募前判断来源与版本变化用，放在本组末尾。 */}
+        {hasPublishInfo && (
+          <section className={styles.infoCard}>
+            {renderSectionHeader('发布信息', '来源与版本', <ScrollText size={17} strokeWidth={1.8} />)}
+            <div className={styles.specList}>
+              {profile.publisher && (
+                <div>
+                  <span>发布者</span>
+                  <strong>{profile.publisher}</strong>
+                </div>
+              )}
+              {releaseLabel && (
+                <div>
+                  <span>版本</span>
+                  <strong>{releaseLabel}</strong>
+                </div>
+              )}
+              {profile.changelog_url && (
+                <div>
+                  <span>更新说明</span>
+                  <a className={styles.specLink} href={profile.changelog_url} target="_blank" rel="noopener noreferrer">
+                    查看更新说明<ExternalLink size={12} strokeWidth={1.8} aria-hidden="true" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
       </div>
     )
   }
 
-  const renderActiveTab = () => {
-    if (currentTab === 'capabilities') return renderCapabilitiesTab()
-    if (currentTab === 'requirements') return renderRequirementsTab()
-    if (currentTab === 'data') return renderDataTab()
-    return renderOverviewTab()
-  }
-
-  const renderPublishInfo = () => {
-    if (!profile.publisher && !releaseLabel && !profile.changelog_url) return null
-    return (
-      <footer className={styles.publishInfo}>
-        {profile.publisher && <span>发布者：{profile.publisher}</span>}
-        {releaseLabel && <span>{releaseLabel}</span>}
-        {profile.changelog_url && <a href={profile.changelog_url} target="_blank" rel="noopener noreferrer">更新说明</a>}
-      </footer>
-    )
-  }
+  const renderSections = () => (
+    <div className={styles.detailStack}>
+      {hasOverview && renderOverview()}
+      {hasCapabilities && renderCapabilities()}
+      {renderRequirements()}
+      {/* 员工授权与关联知识库属于接入环节，紧跟「接入要求」，不压在概览前面。 */}
+      <TalentEmployeeWorkspace key={agent.template_id} templateId={agent.template_id} showKnowledge />
+      {hasData && renderData()}
+    </div>
+  )
 
   const renderActions = () => (
     <div className={styles.actionBar}>
@@ -603,32 +586,8 @@ export default function TalentDetailPanel({
           </div>
         </div>
 
-        <nav className={styles.tabs} aria-label="详情分区" role="tablist" onKeyDown={handleTabsKeyDown}>
-          {visibleTabs.map(tab => (
-            <button
-              key={tab.key}
-              className={currentTab === tab.key ? styles.active : ''}
-              onClick={() => handleTab(tab.key)}
-              type="button"
-              id={`talent-detail-tab-${tab.key}`}
-              data-tab-key={tab.key}
-              role="tab"
-              aria-selected={currentTab === tab.key}
-              aria-controls="talent-detail-tabpanel"
-              tabIndex={currentTab === tab.key ? 0 : -1}
-            >
-              <span>{tab.label}</span>
-            </button>
-          ))}
-        </nav>
-
         <div className={styles.contentGrid}>
-          <div
-            className={styles.mainColumn}
-            id="talent-detail-tabpanel"
-            role="tabpanel"
-            aria-labelledby={`talent-detail-tab-${currentTab}`}
-          >
+          <div className={styles.mainColumn}>
             {loading ? (
               <div className={styles.detailLoading}>
                 <GoldenDotsLoading label="详情加载中" />
@@ -641,8 +600,7 @@ export default function TalentDetailPanel({
               />
             ) : (
               <>
-                <TalentEmployeeWorkspace key={agent.template_id} templateId={agent.template_id} showKnowledge={currentTab === 'requirements'} />
-                {renderActiveTab()}
+                {renderSections()}
 
                 {!recruited && (
                   <section className={styles.confirmCard}>
@@ -651,20 +609,15 @@ export default function TalentDetailPanel({
                       <p>招募后需在企业管理端完成实例配置、生命周期和成员授权，再同步本机授权。</p>
                     </div>
                     {modelName && (
-                      <label className={styles.modelField}>
-                        <span>模板模型</span>
-                        <div className={styles.selectWrap}>
-                          <select value="default" disabled aria-label="模板模型">
-                            <option value="default">{modelName}</option>
-                          </select>
-                          <ChevronDown size={15} strokeWidth={1.8} />
+                      <div className={styles.specList}>
+                        <div>
+                          <span>模板模型</span>
+                          <strong>{modelName}</strong>
                         </div>
-                      </label>
+                      </div>
                     )}
                   </section>
                 )}
-
-                {renderPublishInfo()}
               </>
             )}
           </div>

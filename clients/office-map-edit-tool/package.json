@@ -31,6 +31,7 @@
     "sync:aifred-frontend": "node scripts/sync-to-aifred.mjs",
     "spots:map": "node scripts/add-spots.mjs",
     "office:anim": "node scripts/build-office-anim.mjs",
+    "office:anim:desktop": "node scripts/sync-office-actions.mjs",
     "extras:topdown": "node scripts/build-topdown-extras.mjs"
   },
   "engines": {

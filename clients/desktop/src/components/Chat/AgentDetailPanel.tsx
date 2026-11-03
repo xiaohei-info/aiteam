@@ -8,7 +8,6 @@ import { useNavigate } from 'react-router-dom'
 import { X, Zap, UserRound, Camera, Maximize2, LoaderCircle, ChevronLeft } from 'lucide-react'
 import './AgentDetailPanel.css'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
-import { EMPLOYEE_SERVICE_CONTROL_AVAILABILITY } from '../../lib/serviceWriteAvailability'
 import { useChatStore } from '../../stores/chat'
 import RequestErrorState from '../RequestState/RequestErrorState'
 import { backendApi } from '../../api/backend'
@@ -326,25 +325,6 @@ export default function AgentDetailPanel() {
             </div>
           </div>
         )}
-        <div className="adp-footer">
-          <p id="employee-service-control-reason" className="adp-action-note" role="note">
-            {EMPLOYEE_SERVICE_CONTROL_AVAILABILITY.reason}
-          </p>
-          <div className="adp-footer-actions">
-            <button className="adp-btn-secondary" onClick={() => navigate('/talents')}>
-              查看完整资料
-            </button>
-            <button
-              className="adp-btn-primary"
-              type="button"
-              disabled={!EMPLOYEE_SERVICE_CONTROL_AVAILABILITY.enabled}
-              aria-describedby="employee-service-control-reason"
-              title={EMPLOYEE_SERVICE_CONTROL_AVAILABILITY.reason}
-            >
-              暂停 / 恢复服务
-            </button>
-          </div>
-        </div>
       </div>
       {avatarViewer && (
         <div className="adp-avatar-modal" role="dialog" aria-modal="true" aria-label={`${name}头像预览`} onClick={() => setAvatarViewer(false)}>

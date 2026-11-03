@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { patchOfficeAnimation, officeAnimationDiff, hasOfficeAnimationPatch, TYPING_ANIMATION } from '../src/work-anim.js'
+import { OFFICE_ACTIONS, OFFICE_FACINGS, officeActionAnimation, deriveOfficeAtlas } from '../src/office-actions.js'
 
 // 生成「办公室渲染派生骨骼」：AIFred 原骨架保持 byte-exact 不动，这里输出派生文件
 // chibi-stickers-walk.json（沿用历史文件名），内容 = 原骨架 + 工作打字动画 emotes/typing
@@ -11,6 +12,8 @@ import { patchOfficeAnimation, officeAnimationDiff, hasOfficeAnimationPatch, TYP
 
 const source = new URL('../assets/aifred/characters/chibi-stickers/chibi-stickers.json', import.meta.url)
 const output = new URL('../assets/aifred/characters/chibi-stickers/chibi-stickers-walk.json', import.meta.url)
+const atlasSource = new URL('../assets/aifred/characters/chibi-stickers/chibi-stickers.atlas', import.meta.url)
+const atlasOutput = new URL('../assets/aifred/characters/chibi-stickers/chibi-stickers-office.atlas', import.meta.url)
 
 let original
 {
@@ -37,10 +40,11 @@ try {
   process.exit(1)
 }
 
-const expected = [TYPING_ANIMATION]
+// 新增：打字 + 24 个方向动作；bones / slots / skins 在末尾追加杯子道具
+const expected = [TYPING_ANIMATION, 'bones', 'slots', 'skins', ...OFFICE_ACTIONS.flatMap((action) => OFFICE_FACINGS.map((facing) => officeActionAnimation(action, facing)))].sort()
 const changed = [...new Set(officeAnimationDiff(original, patched))].sort()
 if (JSON.stringify(changed) !== JSON.stringify(expected)) {
-  console.error(`只应新增 ${TYPING_ANIMATION}，实际改动：${changed.join(', ') || '无'}`)
+  console.error(`派生改动与预期不符，实际改动：${changed.join(', ') || '无'}`)
   process.exit(1)
 }
 if (!hasOfficeAnimationPatch(patched)) {
@@ -50,9 +54,15 @@ if (!hasOfficeAnimationPatch(patched)) {
 
 const serialized = `${JSON.stringify(patched)}\n`
 await writeFile(output, serialized)
+try {
+  await writeFile(atlasOutput, deriveOfficeAtlas(await readFile(atlasSource, 'utf8')))
+} catch (error) {
+  console.error(`派生图集写入失败：${error.message}`)
+  process.exit(1)
+}
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 console.log(`原骨架 chibi-stickers.json sha256=${sha(JSON.stringify(original)).slice(0, 16)}…（保持原样）`)
 console.log(`派生骨骼 chibi-stickers-walk.json sha256=${sha(serialized).slice(0, 16)}… bytes=${serialized.length}`)
 console.log(
-  `新增 ${TYPING_ANIMATION}（${stats.typingTracks} 条骨骼轨道 / ${stats.typingKeys} 个关键帧）；其余动画与骨架结构逐字节一致`,
+  `新增 ${TYPING_ANIMATION}（${stats.typingTracks} 条骨骼轨道 / ${stats.typingKeys} 个关键帧）与 ${stats.officeActions} 个方向动作；原有动画逐字节一致`,
 )

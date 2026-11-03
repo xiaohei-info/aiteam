@@ -6,7 +6,7 @@
  */
 import { useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { CheckCheck, ChevronRight, MessageSquare, Pin, PinOff, Plus, Search, Trash2, Users } from 'lucide-react'
+import { CheckCheck, ChevronRight, MessageSquare, Pin, PinOff, Plus, Search, Trash2, Users, Zap } from 'lucide-react'
 import './Panel.css'
 import { useChatStore } from '../../stores/chat'
 // Phase 2 起本地 SQLite 已经不再被业务侧读写(见 docs/archive/api-agent-migration.md §3.6)。
@@ -680,6 +680,9 @@ export default function Panel() {
                     {/* 员工头像:优先使用 ExpertProjection.avatar_url,回退到员工名首字符。 */}
                     {renderAvatar(getEmployeeAvatar(conv.agentName, conv.agentAvatarUrl), getAvatarFallback(conv.agentName))}
                     <ConversationUnreadBadge conversation={conv} />
+                    {/* 自动化任务每个任务一个执行会话：头像右下角的闪电角标标出来源（和侧栏「自动化」入口同一图标），
+                        避免看成多出来的普通对话。只用角标、不在名称行再加文字标签，名称行留给名称和时间。 */}
+                    {conv.automationTaskId && <span className="panel-conv-auto-mark" role="img" aria-label="自动化任务的执行记录" title="自动化任务的执行记录"><Zap size={9} strokeWidth={2.6} fill="currentColor" aria-hidden="true" /></span>}
                   </div>
                   <div className="panel-conv-body">
                     <div className="panel-conv-row">
@@ -693,8 +696,6 @@ export default function Panel() {
                           aria-label="已置顶"
                         />
                       )}
-                      {/* 自动化任务每个任务一个执行会话，标出来源，避免看成多出来的普通对话。 */}
-                      {conv.automationTaskId && <span className="panel-conv-tag" title="自动化任务的执行记录">自动化</span>}
                       <span className="panel-conv-time">
                         {conv.summaryAvailability?.lastMessageAt === false ? '时间未提供' : conv.time}
                       </span>

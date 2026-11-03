@@ -15,7 +15,9 @@
 .cperm-trigger[aria-expanded=true] .cperm-chevron { transform: none; }
 
 /* ─── 面板外壳 ─── */
-.cperm-panel { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 100; width: min(400px, calc(100vw - 48px)); max-height: min(70vh, 560px); overflow: auto; border: 1px solid var(--glass-card-border); border-radius: var(--radius-xl); background: var(--surface-2-glass); box-shadow: var(--glass-card-shadow); -webkit-backdrop-filter: var(--glass-card-filter); backdrop-filter: var(--glass-card-filter); color: var(--text-secondary); font-size: 12px; text-align: left; animation: cperm-in var(--duration-panel) var(--ease-out); }
+/* 面板渲染到 body，位置和可用宽高由 useAnchoredPopover 按触发按钮计算。 */
+.cperm-panel { z-index: var(--z-popover); width: 400px; overflow: auto; border: 1px solid var(--popover-glass-border); border-radius: var(--radius-xl); background: linear-gradient(180deg, var(--popover-glass-sheen), transparent 72px), var(--popover-glass-bg); box-shadow: var(--popover-glass-shadow); -webkit-backdrop-filter: var(--popover-glass-filter); backdrop-filter: var(--popover-glass-filter); color: var(--text-secondary); font-size: 12px; text-align: left; animation: cperm-in var(--duration-panel) var(--ease-out); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .cperm-panel { background: var(--surface-2); } }
 @keyframes cperm-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .cperm-section { padding: 12px 14px; }
 .cperm-section + .cperm-section { border-top: 1px solid var(--border); }

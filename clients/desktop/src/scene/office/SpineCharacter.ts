@@ -4,8 +4,10 @@ import {
   CHIBI_ANIM,
   DEFAULT_SEAT_FACING,
   idleAnimByFacing,
+  officeActionAnim,
   type ChibiCharacterSkin,
   type ChibiFacing,
+  type OfficeAction,
 } from '@/config/office/characters'
 import {
   getSpineAtlasAlias,
@@ -86,7 +88,9 @@ export class SpineCharacter extends Container {
    * 关键：朝向变化时不能无脑回到 idle，否则走动中一旦转向就会变成
    * “身体在滑行、双脚不动”（idle 动画里根本没有腿骨轨道）。
    */
-  private motion: 'idle' | 'walking' | 'thinking' | 'talking' = 'idle'
+  private motion: 'idle' | 'walking' | 'thinking' | 'talking' | 'action' = 'idle'
+  /** motion 为 action 时播放的方向动作（到达活动点后的坐下、喝茶等） */
+  private action: OfficeAction | null = null
   /** 手扶椅子等动作的手臂姿势（朝当前面向的方向抬手）；null = 不干预手臂 */
   private hands: HandPose | null = null
   private clickHandler: (() => void) | null = null
@@ -170,6 +174,13 @@ export class SpineCharacter extends Container {
       case 'talking':
         this.playTalking()
         break
+      case 'action':
+        if (this.action) {
+          this.playAction(this.action)
+          break
+        }
+        this.setBase(idleAnimByFacing(this.facing), 0.15)
+        break
       default:
         // walking 与 idle 的底层都是对应朝向的站姿；腿部步态在 tick 的 IK 阶段叠加
         this.setBase(idleAnimByFacing(this.facing), 0.15)
@@ -197,20 +208,37 @@ export class SpineCharacter extends Container {
     if (entry) entry.mixDuration = mixDuration
   }
 
+  /** 切换运动语义；除坐下外都显示脚下阴影（坐下时阴影会落在椅面上） */
+  private enterMotion(motion: SpineCharacter['motion'], action: OfficeAction | null = null) {
+    this.motion = motion
+    this.action = action
+    this.shadow.visible = action !== 'sit'
+  }
+
+  /**
+   * 播放派生骨骼里的方向动作（按当前屏幕朝向）。换向时由 reapplyMotion 重放对应方向的版本。
+   * 坐下的骨架原点在髋部，角色位置要对准座位中心。
+   */
+  playAction(action: OfficeAction) {
+    this.enterMotion('action', action)
+    this.gaitSpeed = 0
+    this.playAnimation(officeActionAnim(action, this.facing), true)
+  }
+
   playIdle() {
-    this.motion = 'idle'
+    this.enterMotion('idle')
     this.gaitSpeed = 0
     this.playAnimation(idleAnimByFacing(this.facing), true)
   }
 
   playThinking() {
-    this.motion = 'thinking'
+    this.enterMotion('thinking')
     this.gaitSpeed = 0
     this.playAnimation(CHIBI_ANIM.thinking, true)
   }
 
   playTalking() {
-    this.motion = 'talking'
+    this.enterMotion('talking')
     this.gaitSpeed = 0
     this.playAnimation(CHIBI_ANIM.wave, true)
   }
@@ -220,7 +248,7 @@ export class SpineCharacter extends Container {
    * 传入速度时按速度换算步幅与步频；不传则用默认步速（旧版场景没有逐帧速度）。
    */
   playWalking(speed: number = DEFAULT_WALK_SPEED) {
-    this.motion = 'walking'
+    this.enterMotion('walking')
     this.gaitSpeed = Math.max(0, speed)
     this.setBase(idleAnimByFacing(this.facing), 0.15)
   }

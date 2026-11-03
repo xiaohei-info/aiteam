@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, useId, memo, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { ArrowUp, BookOpen, ChevronDown, Mic, Paperclip, Plus, Square, X } from 'lucide-react'
+import { useMergeRefs } from '@floating-ui/react'
 import type { CachedFile } from '../../lib/fileCache'
 import {
   attachmentErrorMessage,
@@ -21,6 +22,8 @@ import type { GroupMember } from '../../stores/chat'
 import { backendApi } from '../../api/backend'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { useVoiceInput, type VoiceRecording } from '../../hooks/useVoiceInput'
+import { PopoverPortal, PopoverTabOrder } from '../Popover/PopoverLayer'
+import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
 import MentionInput, { type MentionInputHandle, type MentionInputSnapshot } from './MentionInput'
 import { ChatSendQueue } from './ChatSendQueue'
 import {
@@ -94,7 +97,12 @@ export const ChatInputBar = memo(({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const roleRef = useRef<HTMLDivElement>(null)
   const roleTriggerRef = useRef<HTMLButtonElement>(null)
+  const roleMenuRef = useRef<HTMLDivElement>(null)
   const roleMenuId = useId()
+  // 角色菜单渲染到 body（见 useAnchoredPopover）：默认在按钮下方，放不下时翻到上方。
+  const rolePopover = useAnchoredPopover({ open: roleOpen, placement: 'bottom-start', fallbackPlacements: ['top-start'], offset: 6, fit: { maxHeight: 240 } })
+  const roleTriggerRefs = useMergeRefs([roleTriggerRef, rolePopover.refs.setReference])
+  const roleMenuRefs = useMergeRefs([roleMenuRef, rolePopover.refs.setFloating])
   const inputRef = useRef(input)
   inputRef.current = input
   const filesRef = useRef(pendingFiles)
@@ -206,7 +214,9 @@ export const ChatInputBar = memo(({
   useEffect(() => {
     if (!roleOpen) return
     const handler = (e: MouseEvent) => {
-      if (roleRef.current && !roleRef.current.contains(e.target as Node)) setRoleOpen(false)
+      const target = e.target as Node
+      if (roleRef.current?.contains(target) || roleMenuRef.current?.contains(target)) return
+      setRoleOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -215,7 +225,7 @@ export const ChatInputBar = memo(({
   useEffect(() => {
     if (!roleOpen) return
     const frame = window.requestAnimationFrame(() => {
-      const options = roleRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')
+      const options = roleMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')
       const selected = Array.from(options ?? []).find((option) => option.getAttribute('aria-checked') === 'true')
       ;(selected ?? options?.[0])?.focus()
     })
@@ -257,7 +267,8 @@ export const ChatInputBar = memo(({
       return
     }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
-    const options = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]:not(:disabled)'))
+    // 菜单渲染在 body 里，不在 picker 的 DOM 子树内；键盘事件仍沿 React 树冒泡到这里。
+    const options = Array.from(roleMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]:not(:disabled)') ?? [])
     if (options.length === 0) return
     e.preventDefault()
     const currentIndex = options.indexOf(document.activeElement as HTMLButtonElement)
@@ -779,12 +790,12 @@ export const ChatInputBar = memo(({
               {tools}
               {isHero && (
                 <div className="chat-role-picker" ref={roleRef} onKeyDown={handleRolePickerKeyDown}>
-                  <button ref={roleTriggerRef} type="button" className={`chat-approval-btn${selectedRoles.length > 0 ? ' selected' : ''}`} disabled={isInteractionDisabled || pendingFiles.length > 0} onClick={() => setRoleOpen(o => !o)} aria-haspopup="menu" aria-expanded={roleOpen} aria-controls={roleOpen ? roleMenuId : undefined}>
+                  <button ref={roleTriggerRefs} type="button" className={`chat-approval-btn${selectedRoles.length > 0 ? ' selected' : ''}`} disabled={isInteractionDisabled || pendingFiles.length > 0} onClick={() => setRoleOpen(o => !o)} aria-haspopup="menu" aria-expanded={roleOpen} aria-controls={roleOpen ? roleMenuId : undefined}>
                     人才角色{selectedRoles.length > 0 && <span className="chat-role-count">{selectedRoles.length}</span>}
                     <ChevronDown size={14} strokeWidth={1.8} aria-hidden="true" />
                   </button>
-                  {roleOpen && (
-                    <div className="chat-role-dropdown" id={roleMenuId} role="menu" aria-label="选择人才角色">
+                  {roleOpen && <PopoverPortal><PopoverTabOrder context={rolePopover.context}>
+                    <div ref={roleMenuRefs} className="chat-role-dropdown" id={roleMenuId} role="menu" aria-label="选择人才角色" style={rolePopover.floatingStyles}>
                       {employees.map(emp => (
                         <button key={emp.employeeId} type="button"
                           role="menuitemcheckbox"
@@ -795,7 +806,7 @@ export const ChatInputBar = memo(({
                         </button>
                       ))}
                     </div>
-                  )}
+                  </PopoverTabOrder></PopoverPortal>}
                 </div>
               )}
             </div>

@@ -2,7 +2,7 @@
  * office-map/v1.1 地图契约（编辑器导出的子集）。
  * 只声明前端渲染与寻路需要的字段，未列出的字段会被忽略而不是报错。
  */
-import type { ChibiCharacterSkin, ChibiFacing } from '@/config/office/characters'
+import type { ChibiCharacterSkin, ChibiFacing, OfficeAction } from '@/config/office/characters'
 
 export interface MapPoint {
   x: number
@@ -141,7 +141,17 @@ export interface DestinationConfig {
   stay?: number
   /** 绑定房间 id（用于「使用中」的房间禁止进入） */
   roomId?: string
+  /** 到达后的朝向，来自地图 spot.facing；缺省保持行走方向 */
+  facing?: ChibiFacing
+  /** 到达后的动作，来自地图 spot.action；缺省站立休息 */
+  action?: SpotAction
 }
+
+/**
+ * 活动点到达后的动作（编辑器「到达后动作」）：idle 站立休息，其余按朝向播放派生骨骼里的方向动作。
+ * sit 要求锚点在椅子 / 沙发的座位中心，员工髋部落在锚点上。
+ */
+export type SpotAction = 'idle' | Exclude<OfficeAction, 'talk'>
 
 /** 地图中的自由活动目的地锚点（编辑器可自定义） */
 export interface MapSpot {
@@ -154,6 +164,9 @@ export interface MapSpot {
   stay?: number
   enabled?: boolean
   roomId?: string
+  /** 到达后的屏幕朝向；auto 或缺省保持行走方向 */
+  facing?: ChibiFacing | 'auto'
+  action?: SpotAction
 }
 
 /**

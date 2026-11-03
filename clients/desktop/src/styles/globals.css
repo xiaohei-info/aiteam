@@ -77,6 +77,16 @@
   --glass-card-shadow-hover: none;
   --glass-card-filter: blur(18px) saturate(132%);
 
+  /* 渲染到 body 的锚定浮层（下拉、气泡、权限面板）：高于页面内容，低于模态弹窗（.chat-tools-overlay 1100）。 */
+  --z-popover: 1050;
+
+  /* 浮层毛玻璃（输入栏上方弹出的权限面板、「解决了吗」气泡等）：底色不透明度够高，背后有消息时仍清晰可读。 */
+  --popover-glass-bg: rgba(24, 24, 32, 0.8);
+  --popover-glass-sheen: rgba(255, 255, 255, 0.06);
+  --popover-glass-border: rgba(255, 255, 255, 0.14);
+  --popover-glass-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --popover-glass-filter: blur(28px) saturate(170%);
+
   --surface-glass-faint: rgba(255, 255, 255, 0.035);
   --surface-glass-subtle: rgba(255, 255, 255, 0.045);
   --surface-glass-soft: rgba(255, 255, 255, 0.06);
@@ -348,6 +358,11 @@
   --glass-card-highlight: rgba(255, 255, 255, 0.9);
   --glass-card-shadow: 0 8px 24px rgba(36, 48, 60, 0.06);
   --glass-card-shadow-hover: 0 10px 26px rgba(36, 48, 60, 0.09);
+
+  --popover-glass-bg: rgba(250, 251, 252, 0.82);
+  --popover-glass-sheen: rgba(255, 255, 255, 0.7);
+  --popover-glass-border: rgba(26, 34, 43, 0.12);
+  --popover-glass-shadow: 0 18px 44px rgba(36, 48, 60, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 
   --surface-glass-faint: rgba(36, 48, 60, 0.035);
   --surface-glass-subtle: rgba(255, 255, 255, 0.42);

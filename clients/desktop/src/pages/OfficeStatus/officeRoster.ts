@@ -5,12 +5,12 @@ import { fetchMarketAgents } from '../TalentMarket/api'
 import { loadMarketEmployeeIds } from '../TalentMarket/talentEmployeeChat'
 import { chatReadyOfficeScene, loadChatReadyEmployeeIds } from './officeEmployees'
 
-/** 办公室风格固定为商务风，不再提供地图/风格切换入口 */
+/** 默认办公室地图（商务风）；共用配置里选了别的地图（编辑器下拉框）时以选中的为准 */
 export const OFFICE_MAP_FILE = 'office-10-person-business.json'
 
 /** 地图地址；version 是共用配置的更新时间，编辑器保存后变化，用来绕过缓存并触发场景重建 */
-export function officeMapUrl(version: string): string {
-  return `/assets/office/map/${encodeURIComponent(OFFICE_MAP_FILE)}${version ? `?v=${encodeURIComponent(version)}` : ''}`
+export function officeMapUrl(file: string, version: string): string {
+  return `/assets/office/map/${encodeURIComponent(file || OFFICE_MAP_FILE)}${version ? `?v=${encodeURIComponent(version)}` : ''}`
 }
 
 export interface OfficeAgentConf { id: number | string; name: string; dept?: string; role?: string; status?: string }

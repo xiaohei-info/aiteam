@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useMergeRefs } from '@floating-ui/react'
 import { ChevronDown, ShieldCheck, Zap } from 'lucide-react'
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
@@ -7,6 +8,8 @@ import { directoryEmployeeIdOf, permissionSummary } from '../../lib/conversation
 import type { ConversationMetadata } from '../../api/agent/types'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
+import { PopoverPortal } from '../Popover/PopoverLayer'
+import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
 import { ChatDialog } from './ChatDialog'
 import { ConversationDirectories, useConversationDirectories } from './ConversationDirectories'
 
@@ -77,16 +80,22 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     window.requestAnimationFrame(() => triggerRef.current?.focus())
   }, [directoriesBusy, cancelRemove])
   const panelRef = useDialogFocus<HTMLDivElement>({ active: open })
+  // 面板贴在按钮上方左对齐，渲染到 body 并跟随按钮位置（见 useAnchoredPopover）；焦点仍由 useDialogFocus 管。
+  const popover = useAnchoredPopover({ open, placement: 'top-start', fit: { maxWidth: 400, maxHeight: 560 } })
+  const triggerRefs = useMergeRefs([triggerRef, popover.refs.setReference])
+  const panelRefs = useMergeRefs([panelRef, popover.refs.setFloating])
   // 确认弹窗打开时由弹窗接管关闭快捷键和点击，面板保持展开，弹窗关闭后焦点回到面板。
   useGlobalShortcutClose({ active: open && !confirm, onClose: closePanel })
   useEffect(() => {
     if (!open || confirm) return
     const handler = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) closePanel()
+      const target = event.target as Node
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      closePanel()
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [open, confirm, closePanel])
+  }, [open, confirm, closePanel, panelRef])
 
   const togglePanel = () => {
     if (open) { closePanel(); return }
@@ -102,7 +111,7 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     <div className="chat-status-line">
       <div className="chat-status-actions cperm" ref={rootRef}>
         <button
-          ref={triggerRef}
+          ref={triggerRefs}
           type="button"
           className={`cperm-trigger${full ? ' full' : ''}`}
           aria-haspopup="dialog"
@@ -115,10 +124,11 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
           <span>{permissionSummary(full, directories.enabledCount)}</span>
           <ChevronDown size={13} className="cperm-chevron" aria-hidden="true" />
         </button>
-        {open && <div
-          ref={panelRef}
+        {open && <PopoverPortal><div
+          ref={panelRefs}
           id={panelId}
           className="cperm-panel"
+          style={popover.floatingStyles}
           role="dialog"
           aria-label="权限"
           tabIndex={-1}
@@ -143,7 +153,7 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
             <span>系统层：桌面、文稿等受保护位置被系统拦截时，需为 AIFred 开启「完全磁盘访问权限」。</span>
             <button type="button" className="chat-link-button" onClick={openSystemSettings}>打开系统设置</button>
           </div>
-        </div>}
+        </div></PopoverPortal>}
       </div>
     </div>
     {error && <p role="alert">{error} <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}

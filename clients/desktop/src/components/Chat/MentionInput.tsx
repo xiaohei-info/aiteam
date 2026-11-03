@@ -1,5 +1,7 @@
-import { useRef, useState, useEffect, forwardRef, useImperativeHandle, useCallback, useId, useMemo } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, forwardRef, useImperativeHandle, useCallback, useId, useMemo } from 'react'
 import './MentionInput.css'
+import { PopoverPortal } from '../Popover/PopoverLayer'
+import { useAnchoredPopover } from '../Popover/useAnchoredPopover'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import type { GroupMember } from '../../stores/chat'
 import { isImeKeyboardEvent } from '../../lib/imeKeyboard'
@@ -47,7 +49,9 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
 }, ref) => {
   const editRef = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState<string | null>(null)
-  const [menuBottom, setMenuBottom] = useState(0)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  // @ 所在行相对输入框的位置；成员菜单左对齐输入框、贴在这一行上方。
+  const [caret, setCaret] = useState({ top: 0, height: 0 })
   const [selectedIdx, setSelectedIdx] = useState(0)
   const isComposingRef = useRef(false)
   const menuId = useId()
@@ -55,6 +59,22 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   const filtered = useMemo(() => query !== null
     ? members.filter(m => m.can_mention !== false && m.display_name.toLowerCase().includes(query.toLowerCase()))
     : [], [members, query])
+  const menuOpen = query !== null && filtered.length > 0
+  const popover = useAnchoredPopover({ open: menuOpen, placement: 'top-start', fallbackPlacements: ['bottom-start'], offset: 4, fit: { maxHeight: 200 } })
+  const { setPositionReference } = popover.refs
+  useLayoutEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!menuOpen || !wrapper) return
+    // 虚拟锚点：输入框左边缘 + @ 所在行，按输入框的实时位置算，输入栏移动时菜单跟着走。
+    setPositionReference({
+      contextElement: wrapper,
+      getBoundingClientRect: () => {
+        const box = wrapper.getBoundingClientRect()
+        const top = box.top + caret.top
+        return { x: box.left, y: top, left: box.left, top, right: box.left, bottom: top + caret.height, width: 0, height: caret.height }
+      },
+    })
+  }, [menuOpen, caret, setPositionReference])
 
   const closeMenu = useCallback(() => {
     setQuery(null)
@@ -119,8 +139,8 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         setQuery(before.slice(atIdx + 1))
         setSelectedIdx(0)
         const rect = range.getBoundingClientRect()
-        const boxRect = el.parentElement?.getBoundingClientRect()
-        setMenuBottom(boxRect ? boxRect.bottom - rect.top + 4 : 44)
+        const boxRect = wrapperRef.current?.getBoundingClientRect()
+        setCaret(boxRect ? { top: rect.top - boxRect.top, height: rect.height } : { top: 0, height: 0 })
       } else {
         closeMenu()
       }
@@ -246,7 +266,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   }, [autoFocus])
 
   return (
-    <div className="mention-input-wrapper">
+    <div className="mention-input-wrapper" ref={wrapperRef}>
       <div
         ref={editRef}
         contentEditable={!disabled}
@@ -264,12 +284,12 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
         aria-multiline="true"
         aria-disabled={disabled || undefined}
         aria-autocomplete="list"
-        aria-expanded={query !== null && filtered.length > 0}
-        aria-controls={query !== null && filtered.length > 0 ? menuId : undefined}
-        aria-activedescendant={query !== null && filtered.length > 0 ? `${menuId}-option-${selectedIdx}` : undefined}
+        aria-expanded={menuOpen}
+        aria-controls={menuOpen ? menuId : undefined}
+        aria-activedescendant={menuOpen ? `${menuId}-option-${selectedIdx}` : undefined}
       />
-      {query !== null && filtered.length > 0 && (
-        <div className="mention-dropdown" id={menuId} role="listbox" aria-label="可提及的群成员" style={{ bottom: menuBottom }}>
+      {menuOpen && <PopoverPortal>
+        <div ref={popover.refs.setFloating} className="mention-dropdown" id={menuId} role="listbox" aria-label="可提及的群成员" style={popover.floatingStyles}>
           {filtered.map((m, i) => (
             <button
               key={m.employee_id}
@@ -285,7 +305,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
             </button>
           ))}
         </div>
-      )}
+      </PopoverPortal>}
     </div>
   )
 })

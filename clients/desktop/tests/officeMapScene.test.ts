@@ -11,7 +11,7 @@ import {
   isBlocked,
   seatAnchors,
 } from '../src/scene/office/officeMap/geometry.ts'
-import { CHIBI_ANIM, CHIBI_SPINE_ASSETS, idleAnimByFacing, trotAnimByFacing } from '../src/config/office/characters.ts'
+import { CHIBI_ANIM, CHIBI_SPINE_ASSETS, idleAnimByFacing, officeActionAnim, trotAnimByFacing, type OfficeAction } from '../src/config/office/characters.ts'
 import {
   deriveDestinationsFromRooms,
   isRoomOccupied,
@@ -22,6 +22,7 @@ import {
   type MapElement,
   type MapSeat,
   type OfficeMap,
+  type SpotAction,
 } from '../src/scene/office/officeMap/types.ts'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
@@ -311,12 +312,16 @@ test('前端渲染用骨骼带左右行走膝盖修正，且与编辑器派生�
     assert.deepEqual(walk.animations[name].bones['leg-l'], original.animations[name].bones['leg-l'])
     assert.deepEqual(walk.animations[name].bones['body-up'], original.animations[name].bones['body-up'])
   }
-  // 骨架结构（骨骼/皮肤/IK 约束/其它动画）保持原样
-  assert.deepEqual(walk.bones, original.bones)
+  // 骨架结构（骨骼/皮肤/IK 约束/其它动画）保持原样；方向动作的杯子骨骼、插槽只追加在末尾
+  const bones = walk.bones as unknown[]
+  assert.deepEqual(bones.slice(0, (original.bones as unknown[]).length), original.bones)
   // 正装改造：男士皮肤的 body-decoration 插槽换成衬衫领带（biz/shirt-tie-*），比对时跳过该插槽，其余皮肤内容不变
   type Skin = { name: string; attachments?: Record<string, Record<string, { name?: string }>> }
   const walkSkins = structuredClone(walk.skins) as Skin[]
   const originalSkins = structuredClone(original.skins) as Skin[]
+  // 杯子 / 热气贴图挂在 default 皮肤的 office-* 插槽上
+  const defaultSkin = walkSkins.find((skin) => skin.name === 'default')
+  for (const slot of Object.keys(defaultSkin?.attachments ?? {})) if (slot.startsWith('office-')) delete defaultSkin!.attachments![slot]
   for (const skin of walkSkins) {
     if (!skin.attachments?.['body-decoration']?.['body-decoration']?.name?.startsWith('biz/shirt-tie-')) continue
     delete skin.attachments['body-decoration']
@@ -332,7 +337,36 @@ test('前端渲染用骨骼带左右行走膝盖修正，且与编辑器派生�
 
   // 前端资源指向修正版
   assert.match(CHIBI_SPINE_ASSETS.skeleton, /chibi-stickers-walk\.json$/)
-  assert.match(CHIBI_SPINE_ASSETS.atlas, /chibi-stickers\.atlas$/)
+  assert.match(CHIBI_SPINE_ASSETS.atlas, /chibi-stickers-office\.atlas$/)
+})
+
+test('方向动作：每个动作 4 个方向都在桌面端骨骼里，派生图集保留正装页并追加道具页', () => {
+  const dir = path.join(root, 'public/assets/characters/chibi-stickers')
+  const walk = JSON.parse(readFileSync(path.join(dir, 'chibi-stickers-walk.json'), 'utf8')) as {
+    animations: Record<string, { slots?: Record<string, { attachment?: { name: string | null }[] }> }>
+  }
+  const actions: OfficeAction[] = ['think', 'talk', 'rest', 'sit', 'tea', 'coffee']
+  for (const action of actions) {
+    for (const facing of ['front', 'back', 'left', 'right'] as const) {
+      assert.ok(walk.animations[officeActionAnim(action, facing)], `缺少 ${officeActionAnim(action, facing)}`)
+    }
+  }
+  // 编辑器里能选的活动点动作（idle 除外）都要有对应动画
+  const spotActions: SpotAction[] = ['think', 'sit', 'rest', 'tea', 'coffee']
+  for (const action of spotActions) assert.ok(walk.animations[officeActionAnim(action, 'front')])
+
+  const base = readFileSync(path.join(dir, 'chibi-stickers.atlas'), 'utf8')
+  const atlas = readFileSync(path.join(dir, 'chibi-stickers-office.atlas'), 'utf8')
+  assert.ok(atlas.startsWith(base.trimEnd()), '派生图集应以桌面端原图集开头（含正装 chibi-biz.png 页）')
+  assert.match(atlas, /^chibi-biz\.png$/m)
+  for (const page of ['chibi-office-props.png']) {
+    assert.match(atlas, new RegExp(`^${page.replace('.', '\\.')}$`, 'm'))
+    assert.ok(existsSync(path.join(dir, page)), `${page} 应已同步`)
+  }
+  for (const region of ['office/teacup', 'office/mug', 'office/steam']) assert.match(atlas, new RegExp(`^${region}$`, 'm'))
+  // 喝咖啡（正面）拿着马克杯
+  const cup = walk.animations[officeActionAnim('coffee', 'front')].slots?.['office-cup-l']?.attachment?.[0]?.name
+  assert.equal(cup, 'office/mug')
 })
 
 test('左右朝向映射到名字相反的动画（chibi-stickers 的 left/right 与屏幕相反）', () => {
@@ -356,4 +390,24 @@ test('左右朝向映射到名字相反的动画（chibi-stickers 的 left/right
     assert.ok(skeleton.animations[trotAnimByFacing(facing)], `${trotAnimByFacing(facing)} 应存在于骨架`)
     assert.ok(skeleton.animations[idleAnimByFacing(facing)], `${idleAnimByFacing(facing)} 应存在于骨架`)
   }
+})
+
+test('活动点的朝向与动作传到自由活动目的地；auto 和缺省都不强制转向', () => {
+  const map = readJson(mapFile)
+  const base = { name: '茶水间', kind: 'pantry' as const, x: 100, y: 100, enabled: true }
+  const withSpots: OfficeMap = {
+    ...map,
+    spots: [
+      { ...base, id: 'spot-a', facing: 'left', action: 'think' },
+      { ...base, id: 'spot-b', name: '过道', kind: 'corridor', facing: 'auto', action: 'coffee' },
+      { ...base, id: 'spot-c', name: '厕所', kind: 'restroom' },
+    ],
+  }
+  const [a, b, c] = wanderDestinations(withSpots)
+  assert.equal(a.facing, 'left')
+  assert.equal(a.action, 'think')
+  assert.equal(b.facing, undefined, 'auto 保持行走方向')
+  assert.equal(b.action, 'coffee', '动画未上线的动作也原样保留，由场景回退为站立')
+  assert.equal(c.facing, undefined)
+  assert.equal(c.action, undefined)
 })

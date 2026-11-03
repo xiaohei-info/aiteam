@@ -12,7 +12,6 @@ import { agentApi } from '../../api/agent'
 import { isTauri } from '../../api/agent/runtime'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { buildOfficeEditorUrl, openOfficeMapEditor } from '../../scene/office/officeMap/loadOfficeMap'
-import { OFFICE_MAP_FILE } from './officeRoster'
 
 export default function OfficeStatus() {
   const navigate = useNavigate()
@@ -29,7 +28,7 @@ export default function OfficeStatus() {
   // 今日关键节点（SSE 实时，localStorage 当日持久化）与实时状态
   const milestones = useOfficeMilestoneStore((s) => s.items)
   const liveStatus = useOfficeMilestoneStore((s) => s.liveStatus)
-  const activeMapFile = OFFICE_MAP_FILE
+  const activeMapFile = useOfficeRuntimeStore((s) => s.mapFile)
   const { workbenchEmployees } = useChatStore()
 
   // 页面展示时静默刷新一次（首次加载还在进行时不打断）；花名册不变时员工位置不受影响

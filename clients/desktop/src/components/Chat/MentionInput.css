@@ -51,10 +51,9 @@
 
 /* ─── 成员选择下拉 ─── */
 
+/* 渲染到 body，位置由 useAnchoredPopover 按 @ 所在行计算。 */
 .mention-dropdown {
-  position: absolute;
-  left: 0;
-  z-index: 100;
+  z-index: var(--z-popover);
   background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: 8px;

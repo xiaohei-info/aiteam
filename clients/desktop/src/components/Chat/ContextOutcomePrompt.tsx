@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { useMergeRefs, type OffsetOptions } from '@floating-ui/react'
 import { CircleAlert, CircleCheck, RotateCcw, X } from 'lucide-react'
 import type { Message } from '../../stores/chat'
 import type { ContextResetController } from '../../hooks/useContextReset'
@@ -7,6 +8,28 @@ import {
 } from '../../lib/contextOutcome'
 import { isOutcomeBubbleMuted, setOutcomeBubbleMuted } from '../../lib/contextOutcomeBubble'
 import { ContextResetExplainDialog } from './ContextResetExplainDialog'
+import { PopoverPortal, PopoverTabOrder } from '../Popover/PopoverLayer'
+import { placementSide, useAnchoredPopover } from '../Popover/useAnchoredPopover'
+
+/** 输入框窄于这个宽度（打开员工详情等）时，按钮右侧放不下气泡，改放到按钮正上方 */
+const NARROW_INPUT_WIDTH = 600
+/** 与按钮间距 10px；放在上方时左移 8px，让小三角对准按钮中心 */
+const BUBBLE_OFFSET: OffsetOptions = ({ placement }) => (placementSide(placement) === 'top' ? { mainAxis: 10, crossAxis: -8 } : 10)
+
+/** 跟踪锚点所在输入框是否偏窄；按输入框而不是视口判断，否则气泡会压到右侧的详情面板上 */
+function useNarrowInput(anchor: HTMLElement | null): boolean {
+  const [narrow, setNarrow] = useState(false)
+  useLayoutEffect(() => {
+    const box = anchor?.closest<HTMLElement>('.chat-input-box')
+    if (!box) return
+    const update = () => setNarrow(box.clientWidth < NARROW_INPUT_WIDTH)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(box)
+    return () => observer.disconnect()
+  }, [anchor])
+  return narrow
+}
 
 interface ContextOutcomePromptProps {
   conversationId: string
@@ -102,12 +125,26 @@ export function ContextOutcomePrompt({ conversationId, segment, generating, rese
   const visible = resetting || shouldShowOutcomePrompt({ segment, generating, dismissed: dismissed || muted })
   const busy = reset.resetting !== null || generating
 
+  // 气泡渲染到 body（见 useAnchoredPopover），不再被消息列表盖住；默认贴在按钮右侧，输入框窄时放到按钮正上方。
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
+  const narrow = useNarrowInput(anchorEl)
+  const popover = useAnchoredPopover({
+    open: visible,
+    placement: narrow ? 'top-start' : 'right',
+    fallbackPlacements: narrow ? ['bottom-start'] : ['top-start'],
+    offset: BUBBLE_OFFSET,
+  })
+  const anchorRefs = useMergeRefs<HTMLSpanElement>([setAnchorEl, popover.refs.setReference])
+
   return (
-    <span className="chat-outcome-anchor">
+    <span className="chat-outcome-anchor" ref={anchorRefs}>
       {anchor}
-      {visible && (
+      {visible && <PopoverPortal><PopoverTabOrder context={popover.context}>
         <div
+          ref={popover.refs.setFloating}
           className="chat-outcome-prompt"
+          data-side={placementSide(popover.placement)}
+          style={popover.floatingStyles}
           role="region"
           aria-label="这个问题解决了吗"
           onKeyDown={(event) => {
@@ -187,7 +224,7 @@ export function ContextOutcomePrompt({ conversationId, segment, generating, rese
             </div>
           )}
         </div>
-      )}
+      </PopoverTabOrder></PopoverPortal>}
       {explaining && <ContextResetExplainDialog onClose={() => setExplaining(false)} />}
     </span>
   )

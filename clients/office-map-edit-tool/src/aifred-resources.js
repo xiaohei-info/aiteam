@@ -1,12 +1,15 @@
 // Snapshot of AIFred's src/config/office/characters.ts and DeskChairEntity.ts.
 // Original artwork is synced byte-for-byte; this module contains only bindings.
+import { OFFICE_FACINGS, officeActionAnimation } from './office-actions.js'
+
 export const AIFRED_RESOURCE_ID = 'aifred-chibi-stickers'
 export const AIFRED_SKINS = ['misaki', 'erikari', 'nate', 'harri', 'luke', 'soeren', 'mario', 'sinisa', 'spineboy']
-export const EMPLOYEE_ANIMATIONS = { idle: '待机', thinking: '思考', talking: '挥手 / 说话', walking: '原地走动预览' }
+export const EMPLOYEE_ANIMATIONS = { idle: '待机', thinking: '思考', talking: '挥手 / 说话', walking: '原地走动预览', rest: '闭目养神', sit: '坐下', tea: '喝茶', coffee: '喝咖啡' }
 export const AIFRED_SKELETON_ORIGINAL = 'assets/aifred/characters/chibi-stickers/chibi-stickers.json'
 // 渲染用骨架：原骨架 byte-exact 快照 + 工作打字动画（派生文件，见 src/work-anim.js；走路动画保持原样）
 export const AIFRED_SKELETON = 'assets/aifred/characters/chibi-stickers/chibi-stickers-walk.json'
-export const AIFRED_ATLAS = 'assets/aifred/characters/chibi-stickers/chibi-stickers.atlas'
+// 渲染用图集：原图集 + 杯子/热气道具页（派生文件，见 src/office-actions.js）
+export const AIFRED_ATLAS = 'assets/aifred/characters/chibi-stickers/chibi-stickers-office.atlas'
 export const WORKSTATION_WIDTH = 144
 export const AIFRED_DESK_HEIGHT = WORKSTATION_WIDTH * 582 / 920
 export const AIFRED_CHAIR_WIDTH = WORKSTATION_WIDTH * 0.58
@@ -25,9 +28,14 @@ export function pickEmployeeSkin(index) {
 // 否则预览/前端里员工的动作会和移动方向相反。
 const SCREEN_SIDE_TO_ANIM_SIDE = { left: 'right', right: 'left' }
 
+// 员工预览动画 → 派生骨骼里按屏幕朝向命名的方向动作（office/<action>-<facing>）
+const OFFICE_ACTION_OF = { thinking: 'think', talking: 'talk', rest: 'rest', sit: 'sit', tea: 'tea', coffee: 'coffee' }
+/** 活动点「到达后动作」→ 员工预览动画 */
+export const SPOT_ACTION_ANIMATION = { idle: 'idle', think: 'thinking', sit: 'sit', rest: 'rest', tea: 'tea', coffee: 'coffee' }
+
 export function employeeAnimation(employee, facing) {
-  if (employee.animation === 'thinking') return 'emotes/thinking'
-  if (employee.animation === 'talking') return 'emotes/wave'
+  const action = OFFICE_ACTION_OF[employee.animation]
+  if (action) return officeActionAnimation(action, OFFICE_FACINGS.includes(facing) ? facing : 'front')
   const side = SCREEN_SIDE_TO_ANIM_SIDE[facing] ?? facing
   return `movement/${employee.animation === 'walking' ? 'trot' : 'idle'}-${side}`
 }

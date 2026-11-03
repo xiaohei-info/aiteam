@@ -5,6 +5,9 @@ import { copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/pro
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
+/** 默认办公室地图（商务风），与 src-tauri office_editor.rs 的 DEFAULT_ACTIVE_MAP 一致 */
+const DEFAULT_ACTIVE_MAP = 'office-10-person-business.json'
+
 const ASSET_REWRITES = [
   [/^assets\/styles\/topdown-soft\//, 'assets/office/topdown/'],
   [/^assets\/aifred\/office\//, 'assets/office/'],
@@ -188,15 +191,15 @@ export async function listSharedMaps(mapDir) {
   }
 
   files.sort((a, b) => {
-    if (a.file === 'office-10-person.json') return -1
-    if (b.file === 'office-10-person.json') return 1
+    if (a.file === DEFAULT_ACTIVE_MAP) return -1
+    if (b.file === DEFAULT_ACTIVE_MAP) return 1
     return a.file.localeCompare(b.file, 'zh-CN')
   })
 
-  const configuredActive = typeof manifest.activeMap === 'string' ? manifest.activeMap : 'office-10-person.json'
+  const configuredActive = typeof manifest.activeMap === 'string' ? manifest.activeMap : DEFAULT_ACTIVE_MAP
   const activeFile = files.some((item) => item.file === configuredActive)
     ? configuredActive
-    : (files[0]?.file ?? 'office-10-person.json')
+    : (files[0]?.file ?? DEFAULT_ACTIVE_MAP)
 
   const activeEntry = files.find((item) => item.file === activeFile)
   const updatedAt = manifest.updatedAt || activeEntry?.updatedAt || new Date(0).toISOString()

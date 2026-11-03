@@ -8,7 +8,7 @@ import { create } from 'zustand'
 import type { OfficeSceneSummary } from '../api/agent/types'
 import type { RunningTask } from '../hooks/useOfficeMilestones'
 import type { RequestErrorInfo } from '../lib/requestError'
-import type { OfficeAgentConf } from '../pages/OfficeStatus/officeRoster'
+import { OFFICE_MAP_FILE, type OfficeAgentConf } from '../pages/OfficeStatus/officeRoster'
 
 interface OfficeRuntimeState {
   agents: OfficeAgentConf[]
@@ -17,6 +17,8 @@ interface OfficeRuntimeState {
   loading: boolean
   error: RequestErrorInfo | null
   runningTasks: RunningTask[]
+  /** 当前办公室地图文件（编辑器里选中并保存的那张，默认商务风）；「编辑办公室」打开的也是它 */
+  mapFile: string
   /** 自增即触发一次重新加载花名册 */
   loadAttempt: number
   /** 页面重试（出错后）：清掉错误并显示加载态 */
@@ -31,6 +33,7 @@ export const useOfficeRuntimeStore = create<OfficeRuntimeState>((set) => ({
   loading: true,
   error: null,
   runningTasks: [],
+  mapFile: OFFICE_MAP_FILE,
   loadAttempt: 0,
   retry: () => set((state) => ({ loading: true, error: null, loadAttempt: state.loadAttempt + 1 })),
   refresh: () => set((state) => ({ loadAttempt: state.loadAttempt + 1 })),
