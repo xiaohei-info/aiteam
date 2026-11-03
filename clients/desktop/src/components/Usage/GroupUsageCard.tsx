@@ -55,7 +55,7 @@ export default function GroupUsageCard({ groupId, members, memberCount }: GroupU
           title: '时间范围内有执行记录的当前群成员 / 当前群成员数',
         }
       }}
-      footnote="一条群消息可能触发多位员工各执行一次 · 仅统计你在这台设备上的使用"
+      footnote="仅统计你在这台设备上的使用"
     >
       {(data) => {
         const rows = groupUsageRows(data.groups ?? [], members, employees)

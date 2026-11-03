@@ -364,8 +364,12 @@
   white-space: normal;
 }
 /* 气泡在按钮上方时（输入框窄，打开员工详情等）小三角朝下。 */
-.chat-outcome-prompt[data-side="top"]::before { top: auto; bottom: -5px; left: 19px; border-left: none; border-right: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
-.chat-outcome-prompt[data-side="bottom"]::before { top: -5px; left: 19px; border-bottom: none; border-top: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
+.chat-outcome-prompt[data-side="top"]::before { top: auto; bottom: -5px; left: var(--outcome-arrow-x, 19px); border-left: none; border-right: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
+.chat-outcome-prompt[data-side="bottom"]::before { top: -5px; left: var(--outcome-arrow-x, 19px); border-bottom: none; border-top: 1px solid var(--glass-gold-border); transform: rotate(45deg); }
+/* 输入框窄时气泡收在输入框内：最宽不超过输入框，按钮放不下就整颗换到下一行；原因面板与气泡同宽。 */
+.chat-outcome-prompt[data-narrow] { max-width: var(--outcome-max-width); }
+.chat-outcome-prompt[data-narrow] .chat-outcome-prompt-row { flex-wrap: wrap; row-gap: 4px; }
+.chat-outcome-prompt[data-narrow] .chat-outcome-panel { width: 100%; max-width: none; box-sizing: border-box; }
 .chat-outcome-btn {
   display: inline-flex;
   align-items: center;

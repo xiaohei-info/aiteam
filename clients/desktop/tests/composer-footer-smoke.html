@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Composer footer UI smoke</title></head>
+<body style="margin:0"><div id="root"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import '../src/styles/globals.css'
+import '../src/pages/Chat/Chat.css'
+import { ChatInputBar } from '../src/components/Chat/ChatInputBar.tsx'
+import { ContextOutcomePrompt } from '../src/components/Chat/ContextOutcomePrompt.tsx'
+import { ContextResetToolButton } from '../src/components/Chat/ContextResetControls.tsx'
+import { ConversationPermissions } from '../src/components/Chat/ConversationPermissions.tsx'
+import { ConversationStatus } from '../src/components/Chat/ConversationStatus.tsx'
+import { agentApi } from '../src/api/agent/index.ts'
+
+const params = new URLSearchParams(location.search)
+const width = Number(params.get('width') ?? 700)
+document.documentElement.setAttribute('data-theme', params.get('theme') ?? 'dark')
+localStorage.clear()
+
+const conversationId = 'c-1'
+agentApi.getConversation = async () => ({ id: conversationId, kind: 'direct', title: '高级全栈开发', permission_mode: params.get('mode') ?? 'full-access', entry_employee_id: 'e-1' })
+agentApi.supportsLocalDirectories = async () => true
+agentApi.listLocalDirectories = async () => ({ directories: [{ directory_id: 'd-1', display_name: '项目', path: '/Users/demo/project', revision: 1, status: 'ready', bindings: [{ employee_id: 'e-1', enabled: true, revision: 1 }] }] })
+agentApi.getConversationContext = async () => ({ model: 'demo', used_tokens: 32200, context_window: 128000, percentage: 25 })
+agentApi.getWorkRecords = async () => ({ data: [], page: { next_cursor: null } })
+
+const reset = { resetting: null, notice: null, pending: null, completedCount: 0, run: async () => {}, confirmPending: async () => {}, cancelPending: () => {} }
+const segment = [{ id: 'u', role: 'user', content: 'hi' }, { id: 'a', role: 'assistant', content: 'hello' }]
+
+createRoot(document.getElementById('root')).render(
+  React.createElement('div', { style: { display: 'flex', height: '100vh', alignItems: 'stretch' } },
+    React.createElement('div', { className: 'chat', style: { width: `${width}px`, flex: 'none', justifyContent: 'flex-end' } },
+      React.createElement(ChatInputBar, {
+        convId: conversationId,
+        onSend: () => true,
+        onPickFile: async () => null,
+        onDraftChange: () => {},
+        enableKnowledgeFiles: true,
+        enableVoiceInput: true,
+        tools: React.createElement(ContextOutcomePrompt, {
+          conversationId, segment, generating: false, reset,
+          anchor: React.createElement(ContextResetToolButton, { reset, generating: false, hasContext: true }),
+        }),
+        helper: React.createElement('div', { className: 'chat-composer-footer' },
+          React.createElement(ConversationPermissions, { conversationId, generating: false, ensureConversation: async () => conversationId }),
+          React.createElement(ConversationStatus, { conversationId, generating: false, unavailable: false })),
+      })),
+    React.createElement('main', { style: { flex: 1 } })),
+)
+</script></body></html>

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { useMergeRefs, type OffsetOptions } from '@floating-ui/react'
 import { CircleAlert, CircleCheck, RotateCcw, X } from 'lucide-react'
 import type { Message } from '../../stores/chat'
@@ -9,20 +9,32 @@ import {
 import { isOutcomeBubbleMuted, setOutcomeBubbleMuted } from '../../lib/contextOutcomeBubble'
 import { ContextResetExplainDialog } from './ContextResetExplainDialog'
 import { PopoverPortal, PopoverTabOrder } from '../Popover/PopoverLayer'
-import { placementSide, useAnchoredPopover } from '../Popover/useAnchoredPopover'
+import { placementSide, POPOVER_VIEWPORT_MARGIN, useAnchoredPopover } from '../Popover/useAnchoredPopover'
 
 /** 输入框窄于这个宽度（打开员工详情等）时，按钮右侧放不下气泡，改放到按钮正上方 */
 const NARROW_INPUT_WIDTH = 600
 /** 与按钮间距 10px；放在上方时左移 8px，让小三角对准按钮中心 */
 const BUBBLE_OFFSET: OffsetOptions = ({ placement }) => (placementSide(placement) === 'top' ? { mainAxis: 10, crossAxis: -8 } : 10)
 
-/** 跟踪锚点所在输入框是否偏窄；按输入框而不是视口判断，否则气泡会压到右侧的详情面板上 */
-function useNarrowInput(anchor: HTMLElement | null): boolean {
-  const [narrow, setNarrow] = useState(false)
+/** 小三角在气泡内的默认横坐标（放在上方 / 下方时），与 BUBBLE_OFFSET 的左移配套 */
+const ARROW_X = 19
+
+/** 偏窄的输入框及其宽度；气泡要收在它里面 */
+interface NarrowInput { box: HTMLElement; width: number }
+
+/**
+ * 跟踪锚点所在输入框，偏窄时返回它，否则返回 null。
+ * 按输入框而不是视口判断，否则气泡会压到右侧的详情面板上。
+ */
+function useNarrowInput(anchor: HTMLElement | null): NarrowInput | null {
+  const [narrow, setNarrow] = useState<NarrowInput | null>(null)
   useLayoutEffect(() => {
     const box = anchor?.closest<HTMLElement>('.chat-input-box')
     if (!box) return
-    const update = () => setNarrow(box.clientWidth < NARROW_INPUT_WIDTH)
+    const update = () => {
+      const width = box.getBoundingClientRect().width
+      setNarrow(width < NARROW_INPUT_WIDTH ? { box, width } : null)
+    }
     update()
     const observer = new ResizeObserver(update)
     observer.observe(box)
@@ -128,12 +140,21 @@ export function ContextOutcomePrompt({ conversationId, segment, generating, rese
   // 气泡渲染到 body（见 useAnchoredPopover），不再被消息列表盖住；默认贴在按钮右侧，输入框窄时放到按钮正上方。
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
   const narrow = useNarrowInput(anchorEl)
+  // 输入框窄时气泡横向收在输入框内，最宽不超过输入框，放不下的按钮换行；被推回来的距离由小三角补上，仍指着按钮。
   const popover = useAnchoredPopover({
     open: visible,
     placement: narrow ? 'top-start' : 'right',
     fallbackPlacements: narrow ? ['bottom-start'] : ['top-start'],
     offset: BUBBLE_OFFSET,
+    boundary: narrow?.box,
   })
+  const bubbleStyle = narrow
+    ? {
+        ...popover.floatingStyles,
+        '--outcome-max-width': `${Math.max(0, narrow.width - POPOVER_VIEWPORT_MARGIN * 2)}px`,
+        '--outcome-arrow-x': `${ARROW_X - (popover.middlewareData.shift?.x ?? 0)}px`,
+      } as CSSProperties
+    : popover.floatingStyles
   const anchorRefs = useMergeRefs<HTMLSpanElement>([setAnchorEl, popover.refs.setReference])
 
   return (
@@ -144,7 +165,8 @@ export function ContextOutcomePrompt({ conversationId, segment, generating, rese
           ref={popover.refs.setFloating}
           className="chat-outcome-prompt"
           data-side={placementSide(popover.placement)}
-          style={popover.floatingStyles}
+          data-narrow={narrow ? '' : undefined}
+          style={bubbleStyle}
           role="region"
           aria-label="这个问题解决了吗"
           onKeyDown={(event) => {

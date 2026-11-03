@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import type { SolutionProjection } from '../src/api/agent/types.ts'
-import { GROUP_TITLE_EDIT_OWNERSHIP_NOTE, resolveGroupDetails } from '../src/lib/groupDetails.ts'
+import { memberSubtitle } from '../src/lib/groupRoster.ts'
+import { resolveGroupDetails } from '../src/lib/groupDetails.ts'
 
 function solution(overrides: Partial<SolutionProjection> = {}): SolutionProjection {
   return {
@@ -26,7 +27,9 @@ test('group details read the real solution description and coordinator instructi
   assert.equal(details.orchestrationMessage, null)
   assert.equal(details.orchestrationMode, 'fixed')
   assert.equal(details.orchestrationModeLabel, '固定流程')
-  assert.match(details.orchestrationModeMessage, /workflow_skill_ref/)
+  assert.match(details.orchestrationModeMessage, /方案固定/)
+  // Internal field names never reach the UI.
+  assert.doesNotMatch(details.orchestrationModeMessage, /workflow_skill_ref/)
 })
 
 test('group details distinguish missing fields and unavailable projections', () => {
@@ -80,8 +83,10 @@ test('a group that is not a custom group says so once per card and does not offe
     'utf8',
   )
   // The server answers 422 invalid_group_configuration to a description change on such a group.
-  assert.match(source, /disabled=\{!isCustomGroup\} onClick=\{handleStartDescriptionEdit\}/)
-  assert.match(source, /isCustomGroup\s*\?\s*'群简介通过会话详情接口保存[^']*'\s*:\s*'该群不是自选成员群[^']*'/)
+  assert.match(source, /isCustomGroup && !editingDescription && \([\s\S]{0,120}onClick=\{handleStartDescriptionEdit\}/)
+  assert.match(source, /!isCustomGroup && <p className="gdp-note" role="note">该群不是自选成员群/)
+  // Implementation details stay out of the panel copy.
+  assert.doesNotMatch(source, /会话详情接口|查看扩展信息/)
   // A rejected description save reports the real reason instead of "retry".
   assert.match(source, /describeGroupEditError\(error, '群简介保存失败，请重试。'\)/)
 })
@@ -98,9 +103,6 @@ test('member management is gated on the service capability and custom groups', (
 })
 
 test('group title and description use the owned conversation PATCH', () => {
-  assert.match(GROUP_TITLE_EDIT_OWNERSHIP_NOTE, /自有本地会话/)
-  assert.match(GROUP_TITLE_EDIT_OWNERSHIP_NOTE, /owner 校验/)
-
   const source = readFileSync(
     new URL('../src/components/Chat/GroupDetailPanel.tsx', import.meta.url),
     'utf8',
@@ -162,4 +164,17 @@ test('custom group details restore persisted description and employee references
   assert.equal(details.orchestrationMode, 'custom')
   assert.equal(details.coordinatorInstructions, '1. @销售顾问：交付')
   assert.equal(resolveGroupDetails(null, [], { description: '自动群', orchestration: { mode: 'auto' } }).orchestrationMode, 'auto')
+})
+
+test('member rows show only the department and role the member actually has', () => {
+  assert.equal(memberSubtitle({ department_name: '市场部', role_name: '增长顾问' }), '市场部 · 增长顾问')
+  assert.equal(memberSubtitle({ role_name: '增长顾问' }), '增长顾问')
+  assert.equal(memberSubtitle({ department_name: '市场部', role_name: '岗位未设置' }), '市场部')
+  assert.equal(memberSubtitle({ role_name: '岗位未设置' }), '')
+})
+
+test('the orchestration badge does not use a class name that collides with a Tailwind utility', () => {
+  const card = readFileSync(new URL('../src/components/Chat/GroupOrchestrationCard.tsx', import.meta.url), 'utf8')
+  // A bare `fixed` class resolved to Tailwind's position: fixed and stacked the badge on top of the note.
+  assert.match(card, /gdp-mode-badge is-\$\{details\.orchestrationMode\}/)
 })

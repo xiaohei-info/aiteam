@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Group detail UI smoke</title></head>
+<body style="margin:0"><div id="root"></div><script type="module">
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import '../src/styles/globals.css'
+import GroupDetailPanel from '../src/components/Chat/GroupDetailPanel.tsx'
+import { agentApi } from '../src/api/agent/index.ts'
+import { useChatStore } from '../src/stores/chat.ts'
+
+const params = new URLSearchParams(location.search)
+const scenario = params.get('scenario') ?? 'custom'
+document.documentElement.setAttribute('data-theme', params.get('theme') ?? 'dark')
+
+const member = (id, name, role, department, extra = {}) => ({ employee_id: id, member_ref_id: id, member_id: id, display_name: name, role_name: role, department_name: department, can_mention: true, ...extra })
+const roster = [
+  member('planner', '协调人', '群聊主持', undefined, { is_system_planner: true }),
+  member('a', '林知夏', '资深数据分析师', '商业分析部'),
+  member('b', '顾行舟', '增长策略顾问', '市场部'),
+  member('c', '沈清辞', '内容主编', '品牌部'),
+  member('d', '陆鸣', '财务分析师', '财务部'),
+  member('e', '许星河', '客户成功经理', '客户成功部'),
+  member('f', '叶南星', '前端工程师', '研发部', { can_mention: false, role_name: '授权已撤销或配置缺失' }),
+  member('g', '周未', undefined, undefined),
+]
+const longName = '二〇二六年第四季度华东区域重点客户续约与增购专项协作攻坚小组（第二期）'
+const longDescription = '负责第四季度华东区重点客户的续约与增购。汇总合同到期名单、客户健康度和历史工单，每周输出风险清单与跟进建议；财务核对折扣边界，内容组准备方案材料，所有对外承诺须经负责人确认后再发出。'.repeat(2)
+const groups = {
+  custom: { id: 'g-custom', name: '华东重点客户续约组', description: '汇总到期名单与客户健康度，每周输出风险清单和跟进建议。', orchestration: { mode: 'custom', format: 'collaboration-markdown-v1', prompt: '1. @{a}：整理到期名单与健康度\n2. @{d}：核对折扣边界\n3. @{c}：产出最终简报' }, solutionInstanceId: null, members: roster, memberCount: roster.length },
+  auto: { id: 'g-auto', name: '品牌内容周报', description: '每周汇总内容数据。', orchestration: { mode: 'auto' }, solutionInstanceId: null, members: roster.slice(0, 4), memberCount: 4 },
+  solution: { id: 'g-solution', name: '行业方案协作群', description: null, orchestration: null, solutionInstanceId: 'sol-1', members: roster.slice(0, 3), memberCount: 3 },
+  long: { id: 'g-long', name: longName, description: longDescription, orchestration: { mode: 'auto' }, solutionInstanceId: null, members: roster, memberCount: roster.length },
+}
+const group = { lastMessage: '', time: '', rosterStatus: 'loaded', ...groups[scenario] }
+const usageRow = (employee_id, token_total, execution_count, cost_total) => ({ employee_id, token_total, input_tokens: token_total * 0.6, output_tokens: token_total * 0.3, cache_tokens: token_total * 0.1, execution_count, succeeded_count: execution_count, pricing_status: 'known', cost_total: String(cost_total), known_cost_total: String(cost_total), unpriced_execution_count: 0 })
+
+agentApi.supportsGroupEditing = async () => ({ members: true, orchestration: true })
+agentApi.listConversationSegments = async () => []
+agentApi.getUsageStatistics = async () => (params.get('usage') === 'empty'
+  ? { ...usageRow('x', 0, 0, 0), excluded_summary_count: 0, groups: [] }
+  : { ...usageRow('x', 1284600, 26, 3.42), excluded_summary_count: 0, groups: [usageRow('a', 512000, 9, 1.38), usageRow('planner', 348000, 8, 0.94), usageRow('d', 226600, 5, 0.61), usageRow('c', 198000, 4, 0.49)] })
+
+useChatStore.setState({ activeGroupId: group.id, groups: [group], groupDetailOpen: true, groupSolutions: [{ solution_instance_id: 'sol-1', description: '方案提供的协作流程，负责人可在企业端调整。', coordinator_instructions: '按方案步骤依次推进。', workflow_skill_ref: { id: 'wf', version: '1' } }], workbenchEmployees: [] })
+
+createRoot(document.getElementById('root')).render(
+  React.createElement('div', { style: { display: 'flex', height: '100vh', background: 'var(--app-page-background, var(--surface-0))' } },
+    React.createElement('main', { style: { flex: 1 } }),
+    React.createElement(GroupDetailPanel)),
+)
+window.__ready = true
+</script></body></html>

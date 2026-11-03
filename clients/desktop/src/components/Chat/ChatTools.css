@@ -49,7 +49,7 @@
 .chat-context-usage.high b { color: var(--warning); }
 .chat-context-usage.critical b { color: var(--danger); }
 /* 一行胶囊：状态 | 上下文 | 累计消耗。 */
-.chat-usage-meter { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; min-height: 28px; padding: 0 12px; border: 1px solid var(--border-hover); border-radius: var(--radius-full); background: var(--surface-glass-subtle); color: var(--text-secondary); font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chat-usage-meter { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; box-sizing: border-box; overflow: hidden; min-height: 28px; padding: 0 12px; border: 1px solid var(--border-hover); border-radius: var(--radius-full); background: var(--surface-glass-subtle); color: var(--text-secondary); font-size: 11.5px; line-height: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chat-usage-meter b { color: var(--text-primary); font-weight: 600; }
 .chat-usage-meter small { color: var(--text-muted); font-size: 11px; }
 .chat-usage-sep { flex: none; width: 1px; height: 12px; background: var(--border-hover); }
@@ -67,7 +67,8 @@
 .chat-execution-state.error { color: var(--danger); }
 .chat-execution-state.aborted { color: var(--warning); }
 .chat-execution-state.unknown { color: var(--text-secondary); }
-.chat-composer-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; padding-top: 8px; }
+/* 底栏不在输入框容器里，单独按自身宽度判断：聊天列被详情面板挤窄时，用量胶囊换到第二行，不再把权限按钮挤成竖排。 */
+.chat-composer-footer { container: chat-footer / inline-size; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 16px; padding-top: 8px; }
 .chat-composer-footer > .chat-conversation-status:not(.chat-usage-status) { grid-column: 1; grid-row: 1; padding-top: 0; }
 .chat-composer-footer .chat-conversation-status .chat-status-line { margin-bottom: 0; }
 .chat-composer-footer .chat-usage-status,
@@ -114,11 +115,18 @@
 .chat-status-retry .is-spinning { animation: chat-status-spin .8s linear infinite; }
 @keyframes chat-status-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .chat-status-retry { transition: none; } .chat-status-retry .is-spinning { animation: none; } }
-@media (max-width: 480px) {
+@container chat-footer (max-width: 600px) {
   .chat-composer-footer { grid-template-columns: minmax(0, 1fr); }
-  .chat-composer-footer .chat-usage-meter { grid-column: 1; grid-row: 2; }
-  .chat-composer-footer .chat-usage-status > [role=alert] { grid-row: 3; }
+  .chat-composer-footer .chat-usage-meter { grid-column: 1; grid-row: 2; justify-self: start; }
+  .chat-composer-footer .chat-usage-status > [role=alert] { grid-row: 3; justify-self: start; }
 }
+/* 再窄就省掉「32.2K/128.0K」明细（悬停仍可看）和进度条，百分比保留。 */
+@container chat-footer (max-width: 400px) {
+  .chat-composer-footer .chat-context-usage small,
+  .chat-composer-footer .chat-context-bar { display: none; }
+}
+/* 各段不压缩：宽度不够时由上面的容器查询删减内容，而不是让文字互相叠在一起。 */
+.chat-usage-meter > * { flex: none; }
 @media (prefers-reduced-motion: reduce) { .chat-execution-dot { animation: none !important; } .chat-context-bar > span { transition: none; } }
 .chat-permission-grant { display: flex; gap: 12px; align-items: center; padding: 12px 0; font-size: 14px; }
 .chat-link-button { background: none; border: 0; padding: 0 4px; color: var(--brand); cursor: pointer; font: inherit; text-decoration: underline; }

@@ -1,18 +1,30 @@
 import { useCallback, useEffect, useState, type AnimationEvent } from 'react'
-import { Check, LoaderCircle, Pencil, UserPlus, Users, X } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, Pencil, UserPlus, X } from 'lucide-react'
 import './AgentDetailPanel.css'
+import './GroupDetailPanel.css'
 import { agentApi } from '../../api/agent'
 import { NO_GROUP_EDITING, type GroupEditCapabilities, type GroupMembersUpdateResult } from '../../api/agent/customGroups'
 import type { ConversationMetadata, ExpertProjection } from '../../api/agent/types'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
-import { GROUP_TITLE_EDIT_OWNERSHIP_NOTE, resolveGroupDetails } from '../../lib/groupDetails'
+import { resolveGroupDetails, type ResolvedGroupDetails } from '../../lib/groupDetails'
 import { describeGroupEditError, memberEditAvailability } from '../../lib/groupMemberChange'
-import { participantRoster } from '../../lib/groupRoster'
+import { memberSubtitle, participantRoster } from '../../lib/groupRoster'
 import { useChatStore } from '../../stores/chat'
 import GroupAvatar from './GroupAvatar'
 import GroupMembersDialog from './GroupMembersDialog'
 import GroupOrchestrationCard from './GroupOrchestrationCard'
 import GroupUsageCard from '../Usage/GroupUsageCard'
+
+// 成员多于此数时先折叠，避免把编排规则和用量挤到很远的位置。
+const COLLAPSED_MEMBER_COUNT = 6
+// 约等于面板宽度下三行简介能放下的字数。
+const DESCRIPTION_CLAMP_LENGTH = 60
+
+const MODE_SUMMARY: Partial<Record<ResolvedGroupDetails['orchestrationMode'], string>> = {
+  auto: '自动编排',
+  custom: '自定义编排',
+  fixed: '固定流程',
+}
 
 export default function GroupDetailPanel() {
   const { activeGroupId, groups, groupDetailOpen, groupSolutions } = useChatStore()
@@ -31,6 +43,7 @@ export default function GroupDetailPanel() {
   const [editCaps, setEditCaps] = useState<GroupEditCapabilities | null>(null)
   const [membersDialogOpen, setMembersDialogOpen] = useState(false)
   const [memberStatus, setMemberStatus] = useState('')
+  const [membersExpanded, setMembersExpanded] = useState(false)
   const group = groups.find((g) => g.id === activeGroupId)
   const isCustomGroup = Boolean(group?.orchestration)
   const handleClose = useCallback(() => {
@@ -63,6 +76,7 @@ export default function GroupDetailPanel() {
   useEffect(() => {
     setMembersDialogOpen(false)
     setMemberStatus('')
+    setMembersExpanded(false)
   }, [group?.id])
 
   // 成员与编排的写接口只在较新的 Agent 服务上存在，按 /openapi.json 探测，探测失败按不支持处理。
@@ -84,7 +98,15 @@ export default function GroupDetailPanel() {
 
   const members = group.members ?? []
   const details = resolveGroupDetails(group.solutionInstanceId, groupSolutions, group)
-  const description = details.description?.trim() ?? ''
+  const rawDescription = details.description?.trim() ?? ''
+  const description = rawDescription === group.name ? '' : rawDescription
+  const descriptionClamps = description.length > DESCRIPTION_CLAMP_LENGTH || description.split('\n').length > 3
+  const heroMeta = [
+    group.memberCount === null ? null : `${group.memberCount} 位成员`,
+    MODE_SUMMARY[details.orchestrationMode],
+  ].filter(Boolean).join(' · ')
+  const visibleMembers = membersExpanded ? members : members.slice(0, COLLAPSED_MEMBER_COUNT)
+  const hiddenMemberCount = members.length - visibleMembers.length
   const memberEdit = memberEditAvailability({
     isCustomGroup: Boolean(group.orchestration),
     rosterLoaded: group.rosterStatus === 'loaded',
@@ -197,13 +219,10 @@ export default function GroupDetailPanel() {
   }
 
   return (
-    <aside className={`adp${closing ? ' closing' : ''}`} onAnimationEnd={handleAnimationEnd}>
+    <aside className={`adp gdp${closing ? ' closing' : ''}`} aria-label="群聊详情" onAnimationEnd={handleAnimationEnd}>
       <div className="adp-inner">
         <div className="adp-header">
-          <div className="adp-header-text">
-            <span className="adp-title">详情</span>
-            <span className="adp-subtitle">查看扩展信息。</span>
-          </div>
+          <span className="adp-title">群聊详情</span>
           <button
             className="adp-close"
             onClick={handleClose}
@@ -211,160 +230,168 @@ export default function GroupDetailPanel() {
             aria-keyshortcuts="Meta+W Control+W"
             title="关闭群聊详情（⌘W / Ctrl+W）"
           >
-            <X size={13} strokeWidth={1.8} />
+            <X size={14} strokeWidth={1.8} />
           </button>
         </div>
 
         <div className="adp-body">
-          {/* 群名 + 职责 */}
-          <div className="adp-card adp-identity-card gdp-identity-card">
+          <header className="gdp-hero">
             <GroupAvatar
               members={members}
               label={`${group.name}群头像`}
               size="large"
               rosterDescription={group.rosterMessage}
             />
-            <div className="adp-identity-info">
-              {editingName ? (
-                <form
-                  className="gdp-name-form"
-                  onSubmit={(event) => {
-                    event.preventDefault()
-                    void handleSaveName()
-                  }}
-                >
-                  <input
-                    autoFocus
-                    className="gdp-name-input"
-                    value={nameDraft}
-                    maxLength={200}
-                    onChange={(event) => setNameDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
-                      event.preventDefault()
-                      handleCancelNameEdit()
-                    }}
-                    aria-label="群名称"
-                    disabled={nameSaving}
-                  />
-                  <button
-                    type="submit"
-                    className="gdp-name-action save"
-                    aria-label="保存群名称"
-                    disabled={!nameDraft.trim() || nameSaving}
-                    title="保存群名称"
-                  >
-                    {nameSaving
-                      ? <LoaderCircle className="gdp-name-spinner" size={14} aria-hidden="true" />
-                      : <Check size={14} aria-hidden="true" />}
-                  </button>
-                  <button
-                    type="button"
-                    className="gdp-name-action"
-                    onClick={handleCancelNameEdit}
-                    aria-label="取消修改群名称"
-                    disabled={nameSaving}
-                    title="取消"
-                  >
-                    <X size={14} aria-hidden="true" />
-                  </button>
-                </form>
-              ) : (
-                <div className="gdp-name-row">
-                  <span className="adp-user-name">{group.name}</span>
-                  <button
-                    type="button"
-                    className="gdp-name-action"
-                    onClick={handleStartNameEdit}
-                    aria-label="修改群名称"
-                    title="修改群名称"
-                  >
-                    <Pencil size={13} aria-hidden="true" />
-                  </button>
-                </div>
-              )}
-              <span className="gdp-name-ownership" title={GROUP_TITLE_EDIT_OWNERSHIP_NOTE}>仅当前会话所有者可修改名称</span>
-              {editingDescription ? (
-                <form className="gdp-description-editor" onSubmit={(event) => { event.preventDefault(); void handleSaveDescription() }}>
-                  <textarea value={descriptionDraft} maxLength={4000} onChange={(event) => setDescriptionDraft(event.target.value)} aria-label="群简介" autoFocus disabled={descriptionSaving} />
-                  <div className="gdp-rule-actions">
-                    <button type="button" onClick={handleCancelDescriptionEdit} disabled={descriptionSaving}>取消</button>
-                    <button type="submit" className="primary" disabled={descriptionSaving}>{descriptionSaving ? '保存中…' : '保存'}</button>
-                  </div>
-                </form>
-              ) : (
-                <>
-                  {description && description !== group.name && (
-                    <div className={`gdp-description-wrap${descriptionExpanded ? ' expanded' : ''}`}>
-                      <span className="adp-user-role gdp-description">{description}</span>
-                      {description.length > 120 && <button type="button" className="gdp-expand-button" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? '收起' : '查看更多'}</button>}
-                    </div>
-                  )}
-                  <button type="button" className="gdp-inline-edit" disabled={!isCustomGroup} onClick={handleStartDescriptionEdit}><Pencil size={12} />编辑简介</button>
-                </>
-              )}
-              <p className="gdp-field-note" role="note">
-                {isCustomGroup
-                  ? '群简介通过会话详情接口保存；成员和编排规则的修改在下一轮对话生效。'
-                  : '该群不是自选成员群，简介、成员和编排规则暂不支持修改。'}
-              </p>
-              {descriptionStatus && <p className="gdp-name-status" role="status">{descriptionStatus}</p>}
-              {nameStatus && <p className="gdp-name-status" role="status">{nameStatus}</p>}
-            </div>
-          </div>
-
-          <GroupUsageCard groupId={group.id} members={members} memberCount={group.memberCount} />
-
-          {/* 群成员 */}
-          <div className="adp-card">
-            <div className="adp-card-header">
-              <Users size={13} strokeWidth={1.8} className="adp-card-icon" />
-              <span className="adp-card-title">
-                群成员{group.memberCount === null ? '' : ` · ${group.memberCount}`}
-              </span>
-              <button
-                type="button"
-                className="gdp-inline-edit gdp-card-action"
-                disabled={!memberEdit.enabled}
-                title={memberEdit.enabled ? undefined : memberEdit.reason ?? '正在检测 Agent 能力…'}
-                onClick={() => { setMemberStatus(''); setMembersDialogOpen(true) }}
+            {editingName ? (
+              <form
+                className="gdp-name-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void handleSaveName()
+                }}
               >
-                <UserPlus size={12} aria-hidden="true" />管理成员
-              </button>
+                <input
+                  autoFocus
+                  className="gdp-name-input"
+                  value={nameDraft}
+                  maxLength={200}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
+                    event.preventDefault()
+                    handleCancelNameEdit()
+                  }}
+                  aria-label="群名称"
+                  disabled={nameSaving}
+                />
+                <button
+                  type="submit"
+                  className="gdp-icon-action save"
+                  aria-label="保存群名称"
+                  disabled={!nameDraft.trim() || nameSaving}
+                  title="保存群名称"
+                >
+                  {nameSaving
+                    ? <LoaderCircle className="gdp-spinner" size={14} aria-hidden="true" />
+                    : <Check size={14} aria-hidden="true" />}
+                </button>
+                <button
+                  type="button"
+                  className="gdp-icon-action"
+                  onClick={handleCancelNameEdit}
+                  aria-label="取消修改群名称"
+                  disabled={nameSaving}
+                  title="取消"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </form>
+            ) : (
+              <h2 className="gdp-name">
+                <span>{group.name}</span>
+                <button
+                  type="button"
+                  className="gdp-icon-action gdp-name-edit"
+                  onClick={handleStartNameEdit}
+                  aria-label="修改群名称"
+                  title="修改群名称"
+                >
+                  <Pencil size={12} aria-hidden="true" />
+                </button>
+              </h2>
+            )}
+            {heroMeta && <p className="gdp-hero-meta">{heroMeta}</p>}
+            {nameStatus && <p className="gdp-status" role="status">{nameStatus}</p>}
+          </header>
+
+          <section className="gdp-section" aria-label="群简介">
+            <div className="gdp-section-header">
+              <h3 className="gdp-section-title">群简介</h3>
+              {isCustomGroup && !editingDescription && (
+                <button type="button" className="gdp-action" onClick={handleStartDescriptionEdit}>
+                  <Pencil size={12} aria-hidden="true" />编辑
+                </button>
+              )}
             </div>
-            {/* 成员来自后端 participants 接口；增减成员仅自选成员群且服务带 PATCH /participants 时可用，其余情况入口置灰并说明原因。 */}
-            {!memberEdit.enabled && memberEdit.reason && <p className="gdp-field-note" role="note">{memberEdit.reason}</p>}
-            {members.length > 0 ? (
-              <div className="gdp-member-list">
-                {members.map((m) => (
-                  <div key={m.member_id} className="gdp-member-row">
-                    <GroupAvatar members={[m]} label={`${m.display_name}头像`} size="small" />
-                    <div className="gdp-member-info">
-                      <span className="gdp-member-name">{m.display_name}</span>
-                      <span className="gdp-member-role">{m.department_name ?? (m.department_ids?.join(' / ') || '部门未设置')} · {m.role_name ?? '岗位未设置'}</span>
-                    </div>
-                    {m.is_system_planner && (
-                      <span className="gdp-status-badge gdp-status-planner">主持人</span>
-                    )}
-                    {m.can_mention === false && (
-                      <span className="gdp-status-badge gdp-status-unavailable">不可用</span>
-                    )}
-                  </div>
-                ))}
+            {editingDescription ? (
+              <form className="gdp-editor" onSubmit={(event) => { event.preventDefault(); void handleSaveDescription() }}>
+                <textarea value={descriptionDraft} maxLength={4000} onChange={(event) => setDescriptionDraft(event.target.value)} aria-label="群简介" autoFocus disabled={descriptionSaving} />
+                <div className="gdp-editor-actions">
+                  <button type="button" onClick={handleCancelDescriptionEdit} disabled={descriptionSaving}>取消</button>
+                  <button type="submit" className="primary" disabled={descriptionSaving}>{descriptionSaving ? '保存中…' : '保存简介'}</button>
+                </div>
+              </form>
+            ) : description ? (
+              <div className={`gdp-description${descriptionExpanded ? ' expanded' : ''}`}>
+                <p>{description}</p>
+                {descriptionClamps && (
+                  <button type="button" className="gdp-more" onClick={() => setDescriptionExpanded(value => !value)}>
+                    {descriptionExpanded ? '收起' : '查看更多'}
+                  </button>
+                )}
               </div>
             ) : (
-              <span className="adp-empty-text">当前没有可读取的群成员。</span>
+              <p className="gdp-placeholder">暂无群简介</p>
             )}
-            {memberStatus && <p className="gdp-name-status" role="status">{memberStatus}</p>}
-          </div>
+            {!isCustomGroup && <p className="gdp-note" role="note">该群不是自选成员群，简介、成员和编排规则暂不支持修改。</p>}
+            {descriptionStatus && <p className="gdp-status" role="status">{descriptionStatus}</p>}
+          </section>
 
-          {/* 编排规则 */}
+          <section className="gdp-section" aria-label="群成员">
+            <div className="gdp-section-header">
+              <h3 className="gdp-section-title">
+                群成员{group.memberCount !== null && <span className="gdp-section-count font-number">{group.memberCount}</span>}
+              </h3>
+              {isCustomGroup && (
+                <button
+                  type="button"
+                  className="gdp-action"
+                  disabled={!memberEdit.enabled}
+                  title={memberEdit.enabled ? undefined : memberEdit.reason ?? '正在检测 Agent 能力…'}
+                  onClick={() => { setMemberStatus(''); setMembersDialogOpen(true) }}
+                >
+                  <UserPlus size={12} aria-hidden="true" />管理
+                </button>
+              )}
+            </div>
+            {/* 成员来自后端 participants 接口；增减成员仅自选成员群且服务带 PATCH /participants 时可用。非自选成员群的原因已在群简介区说明，这里不重复。 */}
+            {isCustomGroup && !memberEdit.enabled && memberEdit.reason && <p className="gdp-note" role="note">{memberEdit.reason}</p>}
+            {members.length > 0 ? (
+              <div className="gdp-member-list">
+                {visibleMembers.map((m) => {
+                  const subtitle = memberSubtitle(m)
+                  return (
+                    <div key={m.member_id} className="gdp-member-row">
+                      <GroupAvatar members={[m]} label={`${m.display_name}头像`} size="small" />
+                      <div className="gdp-member-info">
+                        <span className="gdp-member-name">{m.display_name}</span>
+                        {subtitle && <span className="gdp-member-role" title={subtitle}>{subtitle}</span>}
+                      </div>
+                      {m.is_system_planner && <span className="gdp-badge planner">主持人</span>}
+                      {m.can_mention === false && <span className="gdp-badge unavailable">不可用</span>}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="gdp-placeholder">当前没有可读取的群成员。</p>
+            )}
+            {hiddenMemberCount > 0 && (
+              <button type="button" className="gdp-more" onClick={() => setMembersExpanded(true)}>
+                查看全部 {members.length} 位<ChevronDown size={12} aria-hidden="true" />
+              </button>
+            )}
+            {memberStatus && <p className="gdp-status" role="status">{memberStatus}</p>}
+          </section>
+
           <GroupOrchestrationCard
             group={group}
             details={details}
             dedicatedEndpoint={editCaps?.orchestration ?? false}
             onSaved={handleOrchestrationSaved}
           />
+
+          <GroupUsageCard groupId={group.id} members={members} memberCount={group.memberCount} />
         </div>
       </div>
       {membersDialogOpen && group.orchestration && (

@@ -31,6 +31,8 @@ export interface AnchoredPopoverOptions {
   offset?: OffsetOptions
   /** 按可用空间限制宽高（可滚动的面板用）；同时给出上限 */
   fit?: { maxWidth?: number; maxHeight?: number }
+  /** 横向贴边时要收进的元素（如输入框）；缺省按视口 */
+  boundary?: Element | null
 }
 
 export function useAnchoredPopover<R extends ReferenceType = Element>({
@@ -39,6 +41,7 @@ export function useAnchoredPopover<R extends ReferenceType = Element>({
   fallbackPlacements,
   offset: offsetOptions = 8,
   fit,
+  boundary,
 }: AnchoredPopoverOptions) {
   const maxWidth = fit?.maxWidth
   const maxHeight = fit?.maxHeight
@@ -52,7 +55,7 @@ export function useAnchoredPopover<R extends ReferenceType = Element>({
     middleware: [
       offset(offsetOptions),
       flip({ fallbackPlacements, padding: POPOVER_VIEWPORT_MARGIN }),
-      shift({ padding: POPOVER_VIEWPORT_MARGIN }),
+      shift({ padding: POPOVER_VIEWPORT_MARGIN, boundary: boundary ?? 'clippingAncestors' }),
       fit && size({
         padding: POPOVER_VIEWPORT_MARGIN,
         apply({ availableWidth, availableHeight, elements }) {
