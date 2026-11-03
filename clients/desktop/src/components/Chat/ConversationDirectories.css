@@ -3,7 +3,7 @@
 /* ─── 触发按钮 ───
    只读：描边 + ShieldCheck；完全访问：金色底 + Zap，提醒风险级别更高。 */
 .cperm { position: relative; }
-.cperm-trigger { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--border-hover); border-radius: var(--radius-full); background: var(--surface-glass-subtle); color: var(--text-secondary); font-size: 12px; line-height: 1; cursor: pointer; transition: border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+.cperm-trigger { display: inline-flex; flex: none; align-items: center; gap: 6px; white-space: nowrap; height: 28px; padding: 0 10px; border: 1px solid var(--border-hover); border-radius: var(--radius-full); background: var(--surface-glass-subtle); color: var(--text-secondary); font-size: 12px; line-height: 1; cursor: pointer; transition: border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
 .cperm-trigger svg { flex: none; }
 .cperm-trigger > svg:first-child { color: var(--brand); }
 .cperm-trigger:hover { border-color: var(--border-active); background: var(--brand-bg-soft); color: var(--text-primary); }
