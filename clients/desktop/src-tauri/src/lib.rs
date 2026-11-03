@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 mod agent;
+mod agent_projects;
 mod agent_solutions;
 mod diagnostics;
 mod external_links;
@@ -23,6 +24,7 @@ pub fn run() {
         .manage(file_access::FileAccessState::default())
         .manage(office_editor::OfficeEditorState::default())
         .manage(agent_solutions::AgentSolutionsState::default())
+        .manage(agent_projects::AgentProjectsState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -65,6 +67,10 @@ pub fn run() {
             agent_solutions::list_agent_solutions,
             agent_solutions::read_agent_solution_file,
             agent_solutions::open_agent_solution_file,
+            agent_projects::list_agent_projects,
+            agent_projects::list_fred_workspace_files,
+            agent_projects::read_project_file,
+            agent_projects::open_project_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
