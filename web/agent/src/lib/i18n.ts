@@ -61,7 +61,7 @@ const agentMessages = {
     "agent.settings.security.token_status": "登录票据",
     "agent.settings.security.token_valid": "有效",
     "agent.settings.security.token_expired": "已过期",
-    "agent.settings.security.logout_hint": "退出后将清除本机登录态，下次使用需重新登录。",
+    "agent.settings.security.logout_hint": "退出会撤销服务端会话并清除本机登录态，下次使用需重新登录。",
     "agent.settings.security.logout": "退出登录",
     "agent.settings.sync.title": "同步",
     "agent.settings.sync.hint": "将企业端最新授权快照同步到本机。",

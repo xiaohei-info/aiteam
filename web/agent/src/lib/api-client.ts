@@ -100,6 +100,11 @@ export class AgentApiClient extends ApiClient {
     return result;
   }
 
+  /** 注销当前 Agent 会话并让 Manager 撤销对应服务端会话。 */
+  async logout(): Promise<void> {
+    await this.post<{ signed_out: boolean }>("/api/agent/logout");
+  }
+
   /** 解出当前身份（对齐 server /api/agent/whoami，受保护）。 */
   async whoami(): Promise<TokenClaims | null> {
     return this.get<TokenClaims>("/api/agent/whoami");

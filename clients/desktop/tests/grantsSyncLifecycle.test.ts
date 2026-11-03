@@ -24,7 +24,7 @@ async function fixture() {
       builder.onResolve({ filter: /^\.\.\/api\/(agent|backend)$/ }, () => ({ path: 'api', namespace: 'fake' }))
       builder.onResolve({ filter: /^@tauri-apps\/api\/core$/ }, () => ({ path: 'vault', namespace: 'fake' }))
       builder.onLoad({ filter: /.*/, namespace: 'fake' }, ({ path }: { path: string }) => ({ contents: path === 'api'
-        ? `export class AgentApiClient { constructor(o) { this.o=o } request(r) { return globalThis.__grantsTest.request(r,this.o.getToken()) } }; export const backendApi = {};`
+        ? `export class AgentApiClient { constructor(o) { this.o=o } request(r) { return globalThis.__grantsTest.request(r,this.o.getToken()) } logout() { return this.request({ method: 'POST', path: '/api/agent/logout' }) } }; export const backendApi = {};`
         : `export const invoke = (...args) => globalThis.__grantsTest.invoke(...args);` }))
     } }],
   })

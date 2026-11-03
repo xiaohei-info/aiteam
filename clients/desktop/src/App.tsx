@@ -180,7 +180,7 @@ function ProtectedRoutes() {
 
 export default function App() {
   // 新栈 auth(agent JWT + tenant_id + account)是登录鉴权的事实源。
-  // Agent Bearer 会话恢复必须独立于后端健康检查启动，确保离线启动时也会
+  // Agent Bearer 会话恢复独立于后端健康检查启动；恢复时由服务端会话入口复核，离线不授权业务请求
   // 立即迁移并清理 WebView 中的旧 JWT。
   const isAuthenticated = useAgentAuthStore((s) => s.isAuthenticated)
   const isRestoring = useAgentAuthStore((s) => s.isRestoring)

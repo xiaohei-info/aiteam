@@ -12,10 +12,10 @@ from operation_service.manager_gateway import ManagerGateway
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.service import ProvisioningService
 from run import get_app
-from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.enums import EnterpriseRole, PlatformRole
 from shared.config import Settings
+from tests.operation.auth_helpers import operation_test_token
 
 
 def test_operation_production_startup_guards(monkeypatch):
@@ -75,7 +75,7 @@ def _token(role: str) -> str:
     # 用 Operation app 的真实系统 RS256 key 签发（与 app._verifier 闭环，D23）。
     from operation_service.app import _auth
 
-    return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+    return operation_test_token(_auth, user_id="op1", role=role)
 
 
 def _auth(role: str) -> dict:

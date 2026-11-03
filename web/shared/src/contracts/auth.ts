@@ -14,6 +14,7 @@ export interface TokenClaims {
   user_id: string;
   roles: string[];
   exp: number;
+  jti?: string;
 }
 
 /** 规范账号 user（principal）。前端展示与 role-state 的输入。 */

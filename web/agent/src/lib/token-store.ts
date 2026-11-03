@@ -1,7 +1,7 @@
 /**
  * 本地 token 存储（03 §9.4C / §9.8）。
  *
- * 用户端登录后缓存 token + 解出的 claims；离线时凭缓存 token 继续工作。
+ * 用户端登录后缓存 token + 解出的 claims；缓存只用于恢复界面，受保护请求仍由 Agent/Manager 服务端会话校验。
  * 仅本机 localStorage，绝不上传（本地优先，02 §12.2）。错误体/日志禁含 token。
  */
 

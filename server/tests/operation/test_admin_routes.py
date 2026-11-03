@@ -14,8 +14,8 @@ from operation_service.catalog_repository import CatalogRepository
 from operation_service.repository import InMemoryEnterpriseRepository
 from operation_service.rollup_repository import CrossEnterpriseRollupRepository
 from run import get_app
-from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import EnterpriseRole, PlatformRole
+from tests.operation.auth_helpers import operation_test_token
 
 
 @pytest.fixture
@@ -49,7 +49,7 @@ def client(admin_repo, enterprise_repo, catalog_repo, rollup_repo):
 
 def _token(role: str) -> str:
     from operation_service.app import _auth
-    return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+    return operation_test_token(_auth, user_id="op1", role=role)
 
 
 def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:

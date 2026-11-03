@@ -3,7 +3,7 @@
  *
  * - Account：派生自当前 session（whoami 投影，无独立端点）；tokenExp 只读展示。
  * - Preferences：客户端本地状态（localStorage），不上传控制面（本地优先 / D3）。
- * - Security：退出登录走 useApp().logout；重新同步走本端 /api/agent/grants/sync（同 tier，红线内）。
+ * - Security：退出登录走 useApp().logout 并撤销 Manager 会话；重新同步走本端 /api/agent/grants/sync（同 tier，红线内）。
  */
 
 import { useCallback, useState } from "react";

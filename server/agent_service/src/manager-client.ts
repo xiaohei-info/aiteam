@@ -154,6 +154,7 @@ export interface ManagerClient {
   resolveTenantByAccount?(account: string, enterprise?: string | null): Promise<unknown>;
   login?(input: ManagerAuthInput): Promise<unknown>;
   ownerReset?(input: ManagerOwnerResetInput): Promise<unknown>;
+  logout?(caller: AuthenticatedCaller): Promise<void>;
   pullAuthorizedConfig(caller: AuthenticatedCaller, knownVersions: Record<string, string>): Promise<AuthorizedConfig>;
   pullRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<RuntimeProviderConfig>;
   /** Member-scoped ASR config; intentionally does not require an employee id. */
@@ -211,6 +212,10 @@ export class HttpManagerClient implements ManagerClient {
 
   async ownerReset(input: ManagerOwnerResetInput): Promise<unknown> {
     return this.authRequest("/api/auth/owner-reset", input);
+  }
+
+  async logout(caller: AuthenticatedCaller): Promise<void> {
+    await this.request("/api/auth/logout", caller);
   }
 
   private async authRequest(path: string, body: unknown): Promise<unknown> {

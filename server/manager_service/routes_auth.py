@@ -9,6 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from shared.auth import require_claims
+from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 from shared.errors import AppError
 
@@ -94,7 +96,20 @@ async def login(body: LoginInput, svc: AuthService = Depends(_auth_service)) -> 
     return Envelope[AuthResult](data=svc.login(body))
 
 
-@router.post("/owner-reset", description="active账号以旧密码重置。请求携带企业标识或已解析 tenant。password_reset_required/password_expired提示重置；principal_inactive拒绝重置和签发。已签发离线JWT的expiry不变。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
+@router.get("/session", description="验证当前 JWT 对应的服务端认证会话仍处于 active。", summary="验证认证会话", operation_id="manager_auth_session")
+async def session(request: Request) -> Envelope[TokenClaims]:
+    claims = require_claims(request.app.state._token_verifier)(request)
+    return Envelope[TokenClaims](data=claims)
+
+
+@router.post("/logout", description="撤销当前 JWT 对应的服务端认证会话。", summary="注销当前认证会话", operation_id="manager_logout")
+async def logout(request: Request, svc: AuthService = Depends(_auth_service)) -> Envelope[dict[str, bool]]:
+    claims = require_claims(request.app.state._token_verifier)(request)
+    svc.revoke(claims, reason="user_logout")
+    return Envelope[dict[str, bool]](data={"signed_out": True})
+
+
+@router.post("/owner-reset", description="active账号以旧密码重置。请求携带企业标识或已解析 tenant。password_reset_required/password_expired提示重置；principal_inactive拒绝重置和签发。已签发 JWT 会话会撤销。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
 async def owner_reset(body: OwnerResetInput, svc: AuthService = Depends(_auth_service)) -> Envelope[AuthResult]:
     return Envelope[AuthResult](data=svc.owner_reset(body))
 

@@ -9,10 +9,10 @@ from operation_service.repository import EnterpriseAccount, InMemoryEnterpriseRe
 from operation_service.service import ProvisioningService
 from operation_service.schemas import ProvisionEnterpriseRequest
 from run import get_app
-from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import OwnerBootstrapSync, TenantProvisionRequest
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.errors import Conflict, NotFound
+from tests.operation.auth_helpers import operation_test_token
 
 
 REF = PlatformModelRef(
@@ -30,7 +30,7 @@ class _Manager:
 
 def _token(role: str = "system_admin") -> str:
     from operation_service.app import _auth
-    return _auth.signer.sign(TokenClaims(user_id="op-1", roles=[role], exp=9999999999))
+    return operation_test_token(_auth, user_id="op-1", role=role)
 
 
 def test_f01_same_key_and_body_replays_original_result_without_second_fanout():

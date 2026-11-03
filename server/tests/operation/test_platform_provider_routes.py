@@ -7,8 +7,8 @@ from starlette.requests import Request
 
 from operation_service import routes_platform_provider
 from run import get_app
-from shared.contracts.auth import TokenClaims
 from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
+from tests.operation.auth_helpers import operation_test_token
 
 
 class FakePlatformProviders:
@@ -48,7 +48,7 @@ def client():
 
 def auth() -> dict[str, str]:
     from operation_service.app import _auth
-    token = _auth.signer.sign(TokenClaims(user_id="op1", roles=["system_admin"], exp=9999999999))
+    token = operation_test_token(_auth, user_id="op1", role="system_admin")
     return {"Authorization": f"Bearer {token}"}
 
 

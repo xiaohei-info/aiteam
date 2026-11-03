@@ -9,11 +9,13 @@ from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
+from shared.auth.session import SessionAwareTokenVerifier
 from shared.config import load_settings, service_client_kwargs
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 
 from .keys import TenantKeyStore
+from .auth_sessions import ManagerAuthSessionRepository
 from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
 from .routes_catalog_notify import router as catalog_notify_router
@@ -102,7 +104,8 @@ def _build_verifier():
     """构造受保护端点验签器（D23 RS256）。
 
     有 admin_db_url → DynamicRS256TokenVerifier：从 token header kid 解析 tenant_id，
-    经 TenantKeyStore（admin 连接）查公钥验签。无 admin_db_url → RejectingTokenVerifier
+    经 TenantKeyStore（admin 连接）查公钥验签，再由 auth_session 检查服务端会话是否 active。
+    无 admin_db_url → RejectingTokenVerifier
     恒 401（密钥库未配置不静默放行；dev 无 DB 时受保护端点本就需要 DB 才有意义）。
     """
     settings = load_settings("manager")
@@ -110,15 +113,19 @@ def _build_verifier():
         raise RuntimeError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
     admin_dsn = settings.admin_db_url
     if not admin_dsn or not settings.db_url:
-        return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)")
+        return RejectingTokenVerifier("manager signing key store unconfigured (ADMIN_DB_URL)"), None
     key_store = TenantKeyStore(admin_dsn)
+    sessions = ManagerAuthSessionRepository(settings.db_url)
     return ActivePrincipalVerifier(
-        DynamicRS256TokenVerifier(key_store.resolved_public_key_for_kid),
+        SessionAwareTokenVerifier(
+            DynamicRS256TokenVerifier(key_store.resolved_public_key_for_kid),
+            sessions,
+        ),
         TenantAuthRepository(PgTenantRouter(settings.db_url)),
-    )
+    ), sessions
 
 
-_verifier = _build_verifier()
+_verifier, _auth_sessions = _build_verifier()
 
 class PingOut(BaseModel):
     """企业端存活探针结果。"""
@@ -193,6 +200,7 @@ if settings.db_url and settings.admin_db_url:
     app.state._hindsight_lease_store = _hindsight_lease_store
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
+app.state._auth_sessions = _auth_sessions
 # Operator 目录拉取端口（05 F06/F07，#176）。OPERATOR_URL 必填，否则 fail-closed（AITEAM-331 C1）。
 app.state._operator_catalog = _build_operator_catalog()
 # 认证面（/api/auth/*）：登录/重置/JWKS（03 §9）。与业务路由分前缀挂载。

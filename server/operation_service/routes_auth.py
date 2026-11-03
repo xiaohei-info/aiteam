@@ -9,6 +9,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
+from shared.auth import require_claims
+from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
 from shared.errors import Unauthorized
 
@@ -48,3 +50,26 @@ async def login(body: SystemLoginInput, request: Request) -> Response:
     result: SystemAuthResult = _service(request).login(body)
     envelope = Envelope[SystemAuthResult].model_validate({"data": result})
     return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
+
+
+@router.get(
+    "/session",
+    description="验证当前 JWT 对应的服务端认证会话仍处于 active。",
+    summary="验证认证会话",
+    operation_id="operation_auth_session",
+)
+async def session(request: Request) -> Envelope[TokenClaims]:
+    claims = require_claims(request.app.state._token_verifier)(request)
+    return Envelope[TokenClaims](data=claims)
+
+
+@router.post(
+    "/logout",
+    description="撤销当前 JWT 对应的服务端认证会话。",
+    summary="注销当前认证会话",
+    operation_id="operation_logout",
+)
+async def logout(request: Request) -> Envelope[dict[str, bool]]:
+    claims = require_claims(request.app.state._token_verifier)(request)
+    _service(request).revoke(claims, reason="user_logout")
+    return Envelope[dict[str, bool]](data={"signed_out": True})

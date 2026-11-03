@@ -57,8 +57,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
-  const logout = useCallback(() => persist(null), [persist]);
-
   const client = useMemo<AgentApiClient>(() => {
     return new AgentApiClient({
       getToken: () => state?.token ?? null,
@@ -68,6 +66,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
     });
   }, [state, persist]);
+
+  const logout = useCallback(() => {
+    if (state) void client.logout().catch(() => undefined);
+    persist(null);
+  }, [client, persist, state]);
 
   const value = useMemo<AppContextValue>(
     () => ({

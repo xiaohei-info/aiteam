@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
 from shared.auth import RS256TokenVerifier, require_claims
+from shared.auth.session import SessionAwareTokenVerifier
 from shared.config import load_settings
 from shared.contracts.auth import TokenClaims
 from shared.contracts.envelope import Envelope
@@ -29,6 +30,8 @@ from .platform_provider_service import install_relay_token_lifecycle_lifespan, n
 def _validate_production_startup(current_settings) -> None:
     if not current_settings.is_production:
         return
+    if not current_settings.admin_db_url:
+        raise ValueError("ADMIN_DB_URL is required in production for durable authentication sessions")
     if os.getenv("AITEAM_COMPOSE_MODE") == "1":
         raise RuntimeError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
     _, public_relay_url = newapi_urls(production=True)
@@ -44,10 +47,13 @@ if settings.admin_db_url:
     _apply_oper_migrations(settings.admin_db_url, settings.app_rw_password)
 
 # 系统账号认证（§9.2）：Operation 自持系统级 RSA key，自签自验系统 token（D23 RS256）。
-# 密钥来源优先级：env 显式配置 > DB 持久化（自动生成并固定，重启/多实例稳定）> 临时（无 DB）。
+# 密钥来源优先级：env 显式配置 > DB 持久化（自动生成并固定，重启/多实例稳定）；开发/测试无 DB 时才允许临时。
 _auth = build_operation_auth_service(admin_db_url=settings.admin_db_url)
 # 静态 RS256 验签器（Operation 单 key，无需 kid 动态解析）。
-_verifier = RS256TokenVerifier.from_public_pems({_auth.kid: _auth.signer.public_pem()})
+_verifier = SessionAwareTokenVerifier(
+    RS256TokenVerifier.from_public_pems({_auth.kid: _auth.signer.public_pem()}),
+    _auth.sessions,
+)
 
 class PingOut(BaseModel):
     """运营端存活探针结果。"""

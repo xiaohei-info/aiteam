@@ -19,8 +19,8 @@
 from __future__ import annotations
 
 import os
-import time
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,8 +29,10 @@ from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, NotFound, ServiceUnavailable, Unauthorized, ValidationProblem
+from shared.auth.constants import AUTH_SESSION_TTL_SECONDS
 
 from .active_principal import require_active
+from .auth_sessions import ManagerAuthSessionRepository
 from .auth_password_policy import (
     PasswordResetRequired,
     assert_password_not_expired,
@@ -41,7 +43,7 @@ from .login_audit import LoginAuditRepository
 from .repository import TenantAuthRepository
 from .security import hash_password, verify_password
 
-_ACCESS_TTL_SECONDS = 3600  # 短期 access token；过期需重新联网登录（9.5）。
+_ACCESS_TTL_SECONDS = AUTH_SESSION_TTL_SECONDS
 
 
 class TenantSelectionRequired(Conflict):
@@ -93,12 +95,14 @@ class AuthService:
         keys,
         audit=None,
         admin_dsn=None,
+        sessions=None,
     ):
         # dsn：业务连接串（app_rw 身份，跑租户 RLS SQL）。管理连接（签名私钥读写）在 keys 内。
         self.dsn = dsn
         self._repo = repo
         self._keys = keys
         self._audit = audit
+        self._sessions = sessions
         # admin_dsn：管理连接串（超管/BYPASSRLS）——仅在跨租户账号解析时需要；未给定时回落 dsn。
         self._admin_dsn = admin_dsn or dsn
 
@@ -249,6 +253,11 @@ class AuthService:
             ctx, provider=AuthProvider.PHONE, external_id=req.account,
             secret=hash_password(req.new_password), must_reset=False,
         )
+        if self._sessions is not None:
+            self._sessions.revoke_user(
+                TenantContext(tenant_id=tenant_id, user_id=identity.user_id, roles=identity.roles),
+                reason="password_reset",
+            )
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail="owner reset")
         return self._issue(tenant_id, identity.user_id, identity.roles)
@@ -259,7 +268,14 @@ class AuthService:
         principal = require_active(self._repo.find_user(ctx, user_id=user_id))
         roles = list(principal.roles)
         enterprise_id = self._enterprise_id_for_tenant(tenant_id)
-        now = int(time.time())
+        issued_at = datetime.now(UTC)
+        expires_at = issued_at + timedelta(seconds=_ACCESS_TTL_SECONDS)
+        jti = (
+            self._sessions.create(ctx, issued_at=issued_at, expires_at=expires_at)
+            if self._sessions is not None
+            else str(uuid.uuid4())
+        )
+        now = int(issued_at.timestamp())
         claims = TokenClaims(
             tenant_id=tenant_id,
             enterprise_id=enterprise_id,
@@ -268,10 +284,15 @@ class AuthService:
             iss=os.getenv("AITEAM_JWT_ISSUER", "aiteam-manager"),
             aud=os.getenv("AITEAM_JWT_AUDIENCE", "aiteam-agent"),
             iat=now,
-            exp=now + _ACCESS_TTL_SECONDS,
+            exp=int(expires_at.timestamp()),
+            jti=jti,
         )
         token = self._keys.signer(tenant_id).sign(claims)
         return AuthResult(token=token, claims=claims)
+
+    def revoke(self, claims: TokenClaims, *, reason: str) -> None:
+        if self._sessions is not None:
+            self._sessions.revoke(claims, reason=reason)
 
     def _enterprise_id_for_tenant(self, tenant_id: str) -> str | None:
         """Resolve the persisted Operator enterprise binding for token claims."""
@@ -392,4 +413,5 @@ def build_auth_service(
         keys=keys,
         audit=audit,
         admin_dsn=admin_dsn or dsn,
+        sessions=ManagerAuthSessionRepository(dsn),
     )

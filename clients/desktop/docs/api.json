@@ -4158,6 +4158,11 @@
             "type": "integer",
             "minimum": 0,
             "description": "过期时间（Unix 秒）。"
+          },
+          "jti": {
+            "type": "string",
+            "minLength": 1,
+            "description": "服务端认证会话标识。"
           }
         },
         "additionalProperties": false,
@@ -4174,7 +4179,7 @@
             "type": "string",
             "minLength": 1,
             "readOnly": true,
-            "description": "短期 access token；用于后续 Authorization: Bearer 请求。"
+            "description": "30 天 access token；对应服务端 auth_session，用于后续 Authorization: Bearer ***"
           },
           "claims": {
             "$ref": "#/components/schemas/AuthClaims"
@@ -8123,7 +8128,7 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "返回本地短期 access token 和身份声明。",
+            "description": "返回受服务端会话控制的 30 天 access token 和身份声明。",
             "content": {
               "application/json": {
                 "schema": {
@@ -8141,7 +8146,8 @@
                           "roles": [
                             "member"
                           ],
-                          "exp": 1790000000
+                          "exp": 1790000000,
+                          "jti": "session-1"
                         }
                       }
                     }
@@ -8180,6 +8186,46 @@
         "tags": [
           "agent"
         ]
+      }
+    },
+    "/api/agent/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "注销本地执行身份",
+        "description": "请求 Manager 撤销服务端会话，同时清理当前进程的执行身份和运行材料。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "服务端会话已撤销，本地执行身份已清理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["data"],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["signed_out"],
+                      "properties": {
+                        "signed_out": { "type": "boolean", "const": true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "tags": ["agent"]
       }
     },
     "/api/agent/reset-password": {

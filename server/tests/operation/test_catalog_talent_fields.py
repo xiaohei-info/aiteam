@@ -11,9 +11,9 @@ from operation_service.catalog_gateway import CatalogManagerGateway
 from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
-from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import CatalogStatus, CatalogType, PlatformRole
 from shared.contracts.expert_profile import profile_from_payload
+from tests.operation.auth_helpers import operation_test_token
 
 _MODEL_REF = {"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-5", "model_version": 1}
 _PROFILE = {
@@ -58,7 +58,7 @@ def client():
 def _auth() -> dict:
     from operation_service.app import _auth as auth
 
-    token = auth.signer.sign(TokenClaims(user_id="op1", roles=[PlatformRole.SYSTEM_OPERATOR.value], exp=9999999999))
+    token = operation_test_token(auth, user_id="op1", role=PlatformRole.SYSTEM_OPERATOR.value)
     return {"Authorization": f"Bearer {token}"}
 
 

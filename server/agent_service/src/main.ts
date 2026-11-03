@@ -2,7 +2,7 @@ import { accessSync, chmodSync, constants, mkdirSync, readFileSync, realpathSync
 import { dirname, join, resolve } from "node:path";
 import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, parsePublicJwks } from "./http/auth.js";
-import { ManagerJwksAuthenticator } from "./http/manager-jwks.js";
+import { ManagerJwksAuthenticator, ManagerSessionAuthenticator } from "./http/manager-jwks.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
@@ -88,9 +88,13 @@ if (managerJwksMode && (useDevAuth || process.env.AITEAM_AGENT_JWKS_JSON?.trim()
 const managerAuth = managerJwksMode ? new ManagerJwksAuthenticator(
   managerUrl ?? "", process.env.AITEAM_AGENT_JWT_ISSUER ?? "", process.env.AITEAM_AGENT_JWT_AUDIENCE ?? "",
 ) : undefined;
+const staticAuth = !useDevAuth && !managerJwksMode ? createJwtAuthenticator(loadJwtOptions()) : undefined;
+const serverSessionAuth = staticAuth && managerUrl
+  ? new ManagerSessionAuthenticator(staticAuth, managerUrl)
+  : undefined;
 const authenticate = useDevAuth
   ? (request: import("node:http").IncomingMessage) => authenticateDevelopment(request)
-  : managerAuth?.authenticate ?? createJwtAuthenticator(loadJwtOptions());
+  : managerAuth?.authenticate ?? serverSessionAuth?.authenticate ?? staticAuth!;
 
 const schedule = new ScheduleService(store, sessionHost, { authorization: executionAuthorization });
 const http = new AgentHttpServer({
