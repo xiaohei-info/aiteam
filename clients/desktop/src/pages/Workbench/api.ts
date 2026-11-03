@@ -1,183 +1,154 @@
 import { invoke } from '@tauri-apps/api/core'
 import { agentApi } from '../../api/agent'
 import { isTauri } from '../../api/agent/runtime'
-import type { ConversationMetadata, ExpertProjection } from '../../api/agent/types'
-import type { CachedFile } from '../../lib/fileCache'
+import type { ExpertProjection } from '../../api/agent/types'
 import { classifyRequestError } from '../../lib/requestError'
 import {
-  fredSolutionsFromArtifacts,
-  fromLocalFileContent,
-  fromLocalSummary,
-  hasConversationActivity,
-  LOCAL_SOLUTION_SOURCES,
-  localErrorMessage,
+  fredProjects,
+  fredWorkspaceKeys,
+  fromLocalProject,
+  hostErrorMessage,
+  LOCAL_PROJECT_SOURCES,
   localSourceStates,
-  type FredConversationArtifacts,
-  type LocalSolutionFileContentWire,
-  type LocalSolutionListWire,
-  type SolutionFile,
-  type SolutionFileContent,
-  type SolutionSummary,
+  type FredWorkspaceWire,
+  type LocalProjectListWire,
+  type ProjectFile,
+  type ProjectFileContentWire,
+  type ProjectPart,
+  type ProjectSummary,
+  type Runner,
+  type RunStatus,
   type SourceState,
-} from './solutions'
+  type StartOutcome,
+} from './projects'
 
 export interface SourceLoadResult {
-  solutions: SolutionSummary[]
+  projects: ProjectSummary[]
   states: SourceState[]
 }
 
-const FRED_FILE_LIST_CONCURRENCY = 6
+/** 与宿主 MAX_FRED_KEYS 一致。 */
+const MAX_FRED_WORKSPACES = 1000
 
-async function mapLimited<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let next = 0
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next
-      next += 1
-      results[index] = await task(items[index])
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return results
-}
+const hostError = (error: unknown, fallback?: string) => Object.assign(new Error(hostErrorMessage(error, fallback)), { cause: error })
 
-const fredError = (message: string): SourceLoadResult => ({
-  solutions: [],
-  states: [{ source: 'fred', status: 'error', count: 0, truncated: false, message }],
+const fredState = (status: SourceState['status'], count: number, message?: string): SourceState => ({
+  source: 'fred', status, count, truncated: false, message,
 })
 
-/** 逐个会话读取产物列表；单个会话失败不影响其他会话。 */
-export async function loadFredSolutions(): Promise<SourceLoadResult> {
+/** Fred：接口给出每个会话的工作目录名，宿主按目录名列文件。 */
+export async function loadFredProjects(): Promise<SourceLoadResult> {
+  if (!isTauri()) return { projects: [], states: [fredState('desktop_only', 0)] }
   let experts: ExpertProjection[]
-  let conversations: ConversationMetadata[]
+  let conversations
   try {
-    const [expertsRes, convsRes] = await Promise.all([agentApi.listExperts(), agentApi.listAllConversations()])
-    experts = expertsRes.experts.filter(expert => !expert.revoked)
-    conversations = convsRes.conversations.filter(hasConversationActivity)
+    const [expertsRes, workspacesRes] = await Promise.all([agentApi.listExperts(), agentApi.listWorkspaces()])
+    experts = expertsRes.experts
+    conversations = workspacesRes.conversations
   } catch (error) {
-    return fredError(classifyRequestError(error, 'Fred 会话读取失败，请稍后重试。').message)
+    return { projects: [], states: [fredState('error', 0, classifyRequestError(error, 'Fred 会话读取失败，请稍后重试。').message)] }
   }
-  const results = await mapLimited(conversations, FRED_FILE_LIST_CONCURRENCY, async (conversation): Promise<FredConversationArtifacts | null> => {
-    try {
-      const { files } = await agentApi.listFiles(conversation.id, 'artifact')
-      return { conversation, artifacts: files }
-    } catch {
-      return null
-    }
-  })
-  const loaded = results.filter((result): result is FredConversationArtifacts => result !== null)
-  const failed = results.length - loaded.length
-  if (failed > 0 && loaded.length === 0) return fredError('会话文件读取失败，请稍后重试。')
-  const solutions = fredSolutionsFromArtifacts(loaded, experts)
-  return {
-    solutions,
-    states: [{
-      source: 'fred',
-      status: 'ready',
-      count: solutions.length,
-      truncated: false,
-      message: failed > 0 ? `${failed} 个会话的文件读取失败` : undefined,
-    }],
+  try {
+    const keys = fredWorkspaceKeys(conversations, MAX_FRED_WORKSPACES)
+    const workspaces = keys.length
+      ? await invoke<FredWorkspaceWire[]>('list_fred_workspace_files', { workspaceKeys: keys })
+      : []
+    const projects = fredProjects(conversations, workspaces, experts)
+    return { projects, states: [fredState('ready', projects.length)] }
+  } catch (error) {
+    return { projects: [], states: [fredState('error', 0, hostErrorMessage(error))] }
   }
 }
 
-/** 本机 Agent 记录只能由桌面宿主读取；浏览器开发模式下标记为仅桌面可用。 */
-export async function loadLocalSolutions(): Promise<SourceLoadResult> {
+/** 本机其他 Agent 只能由桌面宿主扫描；浏览器开发模式下标记为仅桌面可用。 */
+export async function loadLocalProjects(): Promise<SourceLoadResult> {
   if (!isTauri()) {
     return {
-      solutions: [],
-      states: LOCAL_SOLUTION_SOURCES.map(source => ({ source, status: 'desktop_only', count: 0, truncated: false })),
+      projects: [],
+      states: LOCAL_PROJECT_SOURCES.map(source => ({ source, status: 'desktop_only', count: 0, truncated: false })),
     }
   }
   try {
-    const list = await invoke<LocalSolutionListWire>('list_agent_solutions')
-    return { solutions: list.solutions.map(fromLocalSummary), states: localSourceStates(list) }
+    const list = await invoke<LocalProjectListWire>('list_agent_projects')
+    return { projects: list.projects.map(fromLocalProject), states: localSourceStates(list) }
   } catch (error) {
-    const message = localErrorMessage(error)
+    const message = hostErrorMessage(error)
     return {
-      solutions: [],
-      states: LOCAL_SOLUTION_SOURCES.map(source => ({ source, status: 'error', count: 0, truncated: false, message })),
+      projects: [],
+      states: LOCAL_PROJECT_SOURCES.map(source => ({ source, status: 'error', count: 0, truncated: false, message })),
     }
   }
 }
 
-const localTarget = (solution: SolutionSummary, file: SolutionFile) => ({ source: solution.source, id: solution.id, fileId: file.id })
+const target = (part: Pick<ProjectPart, 'source' | 'id'>) => ({ source: part.source, projectId: part.id })
 
-/** 读取方案文件的最终内容。失败时抛出带中文提示的 Error，页面可直接展示 message。 */
-export async function readSolutionFile(solution: SolutionSummary, file: SolutionFile): Promise<SolutionFileContent> {
-  if (solution.source === 'fred') {
-    if (file.format === 'document') return { text: null, fromRecord: false }
-    try {
-      const blob = await agentApi.downloadFile(solution.id, 'artifact', file.id)
-      return { text: await blob.text(), fromRecord: false }
-    } catch (error) {
-      throw Object.assign(new Error(classifyRequestError(error, '文件读取失败，请稍后重试。').message), { cause: error })
-    }
-  }
+/** 文件的文本内容；图片、文档和二进制文件为 null。失败时抛出带中文提示的 Error。 */
+export async function readProjectFile(part: ProjectPart, file: ProjectFile): Promise<string | null> {
   try {
-    return fromLocalFileContent(await invoke<LocalSolutionFileContentWire>('read_agent_solution_file', localTarget(solution, file)))
+    const result = await invoke<ProjectFileContentWire>('read_project_file', { ...target(part), fileId: file.id })
+    return result.content
   } catch (error) {
-    throw Object.assign(new Error(localErrorMessage(error)), { cause: error })
+    throw hostError(error, '文件读取失败，请重试')
   }
 }
 
-// Fred 产物 id 对应不可变内容（新版本会生成新 id），缓存路径可以长期复用。
-const cachedFredFiles = new Map<string, string>()
-
-async function cacheFredFile(solution: SolutionSummary, file: SolutionFile): Promise<string> {
-  const key = `${solution.id}:${file.id}`
-  const existing = cachedFredFiles.get(key)
-  if (existing) return existing
-  const blob = await agentApi.downloadFile(solution.id, 'artifact', file.id)
-  const cached = await invoke<CachedFile>('cache_conversation_file', {
-    userId: 'conversation-files',
-    chatId: solution.id,
-    filename: file.name,
-    mimeType: file.mimeType ?? blob.type,
-    data: Array.from(new Uint8Array(await blob.arrayBuffer())),
-  })
-  cachedFredFiles.set(key, cached.rel_path)
-  return cached.rel_path
-}
-
-/** 浏览器开发模式下没有本机文件，只能在新标签页打开下载内容。 */
-async function openFredFileInBrowser(solution: SolutionSummary, file: SolutionFile): Promise<void> {
-  const blob = await agentApi.downloadFile(solution.id, 'artifact', file.id)
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.target = '_blank'
-  link.rel = 'noopener noreferrer'
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
-export function canRevealSolutionFile(solution: SolutionSummary, file: SolutionFile): boolean {
-  return isTauri() && file.exists && (solution.source === 'fred' || file.path !== null)
-}
-
-/** 用系统默认应用打开，或在 Finder / 资源管理器中显示。 */
-export async function openSolutionFile(solution: SolutionSummary, file: SolutionFile, reveal: boolean): Promise<void> {
-  const failure = reveal ? '无法在 Finder 中显示文件，请重试' : '文件打开失败，请重试'
-  if (solution.source === 'fred') {
-    try {
-      if (!isTauri()) {
-        await openFredFileInBrowser(solution, file)
-        return
-      }
-      const relPath = await cacheFredFile(solution, file)
-      await invoke(reveal ? 'show_in_folder' : 'open_cached_file', { relPath })
-    } catch (error) {
-      throw Object.assign(new Error(failure), { cause: error })
-    }
-    return
-  }
+/** 用系统默认应用打开文件（不传 file 时打开项目目录），或在 Finder / 资源管理器中显示。 */
+export async function openProjectFile(part: ProjectPart, file: ProjectFile | null, reveal: boolean): Promise<void> {
   try {
-    await invoke('open_agent_solution_file', { ...localTarget(solution, file), reveal })
+    await invoke('open_project_file', { ...target(part), fileId: file?.id ?? null, reveal })
   } catch (error) {
-    throw Object.assign(new Error(localErrorMessage(error)), { cause: error })
+    throw hostError(error, reveal ? '无法在文件夹中显示，请重试' : '无法用系统应用打开，请重试')
   }
+}
+
+export async function detectRunner(part: ProjectPart): Promise<Runner> {
+  try {
+    return await invoke<Runner>('detect_project_runner', target(part))
+  } catch (error) {
+    throw hostError(error)
+  }
+}
+
+/** 运行并在系统浏览器打开；代码项目第一次（或命令、依赖变化后）先返回待确认的命令。 */
+export async function startProject(part: ProjectPart, options: { fileId?: string | null; consent?: string | null } = {}): Promise<StartOutcome> {
+  try {
+    return await invoke<StartOutcome>('start_project', { ...target(part), fileId: options.fileId ?? null, consent: options.consent ?? null })
+  } catch (error) {
+    throw hostError(error, '运行失败，请重试')
+  }
+}
+
+export async function stopProject(part: ProjectPart): Promise<RunStatus> {
+  try {
+    return await invoke<RunStatus>('stop_project', target(part))
+  } catch (error) {
+    throw hostError(error, '停止失败，请重试')
+  }
+}
+
+export async function projectRunStatus(part: ProjectPart): Promise<RunStatus> {
+  return invoke<RunStatus>('project_run_status', target(part))
+}
+
+const DETECT_CONCURRENCY = 4
+const NOT_RUNNABLE: Runner = { kind: 'none' }
+
+/** 逐个识别运行方式并取当前运行状态（应用内可能已在运行）；单个失败按不可运行处理。 */
+export async function detectRunners(
+  parts: ProjectPart[],
+  onResult: (part: ProjectPart, runner: Runner, status: RunStatus | null) => void,
+): Promise<void> {
+  let next = 0
+  const worker = async () => {
+    while (next < parts.length) {
+      const part = parts[next]
+      next += 1
+      const [runner, status] = await Promise.all([
+        detectRunner(part).catch(() => NOT_RUNNABLE),
+        projectRunStatus(part).catch(() => null),
+      ])
+      onResult(part, runner, status)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(DETECT_CONCURRENCY, parts.length) }, worker))
 }
