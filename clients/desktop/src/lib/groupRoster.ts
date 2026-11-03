@@ -22,6 +22,14 @@ export interface GroupMember {
   unavailable_reason?: string
 }
 
+const ROLE_NOT_SET = '岗位未设置'
+
+/** Department and role for a member row. Fields the member does not have are left out rather than shown as placeholders. */
+export function memberSubtitle(member: Pick<GroupMember, 'department_name' | 'role_name'>): string {
+  const role = member.role_name === ROLE_NOT_SET ? undefined : member.role_name
+  return [member.department_name, role].filter(Boolean).join(' · ')
+}
+
 export interface ResolvedGroupRoster {
   status: 'loaded' | 'unavailable'
   members: GroupMember[]
@@ -133,7 +141,7 @@ export function participantRoster(
     members: response.participants.map(participant => ({
       employee_id: participant.employee_id, member_id: participant.employee_id, member_ref_id: participant.employee_id,
       display_name: participant.display_name, handle: participant.handle ?? undefined,
-      role_name: participant.role_title ?? '岗位未设置',
+      role_name: participant.role_title ?? ROLE_NOT_SET,
       department_name: participant.department_name ?? undefined,
       department_ids: participant.department_ids,
       is_system_planner: participant.role === 'coordinator',

@@ -1,8 +1,5 @@
 import type { SolutionProjection } from '../api/agent/types'
 
-export const GROUP_TITLE_EDIT_OWNERSHIP_NOTE =
-  '当前群聊是服务端按登录成员返回的自有本地会话，群名称修改仍由服务端 owner 校验。'
-
 export interface ResolvedGroupDetails {
   description: string | null
   descriptionMessage: string | null
@@ -79,7 +76,7 @@ export function resolveGroupDetails(
     orchestrationMode: fixedWorkflow ? 'fixed' : 'unavailable',
     orchestrationModeLabel: fixedWorkflow ? '固定流程' : '编排模式不可用',
     orchestrationModeMessage: fixedWorkflow
-      ? '方案提供了 workflow_skill_ref 固定版本引用。'
-      : '关联方案未提供 workflow_skill_ref，无法确认编排模式。',
+      ? '协作流程由方案固定，按方案版本执行。'
+      : '关联方案未提供固定流程，无法确认编排模式。',
   }
 }

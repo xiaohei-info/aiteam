@@ -33,6 +33,8 @@ src-tauri/gen/schemas/
 # 浏览器 smoke 测试截图输出（tests/*-browser-smoke.mjs 生成）
 /output/file-access-smoke/
 /output/knowledge-create-smoke/
+/output/group-detail-smoke/
+/output/composer-footer-smoke/
 
 # 本地代码索引
 .codegraph/

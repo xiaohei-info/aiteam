@@ -1,0 +1,732 @@
+/* 群聊详情：一张连续的面板，不再用卡片分块。
+   每个区块同一套版式——标题在左、操作在右、内容在下，区块之间只用细分割线。
+   金色只留给选中态和关键数值。共用的 .adp / .usc 只在 .gdp 作用域内覆盖，员工详情不受影响。 */
+
+/* ─── 面板外壳 ─── */
+
+.gdp {
+  border-color: var(--panel-inset-border);
+  background:
+    radial-gradient(120% 220px at 50% 0, var(--brand-glow-soft), transparent 72%),
+    var(--panel-inset-bg);
+}
+
+.gdp::before {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel-inset-highlight) 35%, transparent), transparent 96px);
+  opacity: 1;
+}
+
+.gdp .adp-header {
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 10px 8px 20px;
+  border-bottom: 1px solid var(--chrome-divider);
+  background: none;
+}
+
+.gdp .adp-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.gdp .adp-close {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+.gdp .adp-body {
+  gap: 0;
+  padding: 0 0 8px;
+}
+
+
+/* ─── 顶部：头像 + 群名 + 概要 ─── */
+
+.gdp-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 28px 22px;
+  text-align: center;
+}
+
+/* 全面板唯一的金色装饰线，把身份信息和下面的内容分开。 */
+.gdp-hero::after {
+  content: "";
+  position: absolute;
+  right: 20px;
+  bottom: 0;
+  left: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(var(--brand-rgb) / 0.42), transparent);
+}
+
+.gdp-hero .group-avatar.large {
+  --group-avatar-size: 72px;
+  margin-bottom: 8px;
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgb(var(--brand-rgb) / 0.2), rgb(var(--brand-rgb) / 0.1)),
+    var(--surface-3);
+  box-shadow:
+    0 0 0 4px rgb(var(--brand-rgb) / 0.07),
+    0 10px 24px rgb(0 0 0 / 0.18);
+}
+
+/* 底色统一放在容器上：3 人群第一行两侧的空位不再露出另一种颜色。 */
+.gdp-hero .group-avatar-cell {
+  background: none;
+}
+
+/* 不满四人时格子排不满，分隔线会把单个字围成小方块。 */
+.gdp-hero .group-avatar.count-1 .group-avatar-cell,
+.gdp-hero .group-avatar.count-2 .group-avatar-cell,
+.gdp-hero .group-avatar.count-3 .group-avatar-cell {
+  border-color: transparent;
+}
+
+.gdp-name {
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.gdp-name > span {
+  display: inline;
+}
+
+/* 负外边距让铅笔不参与居中计算，出现和隐藏时群名都不会跳动。 */
+.gdp-name-edit {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  margin: 0 -26px 0 4px;
+  vertical-align: -4px;
+  opacity: 0;
+}
+
+.gdp-hero:hover .gdp-name-edit,
+.gdp-name-edit:focus-visible {
+  opacity: 1;
+}
+
+.gdp-hero-meta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gdp-name-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.gdp-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: var(--input-bg-focus);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.gdp-name-input:focus-visible {
+  box-shadow: var(--brand-focus-ring);
+}
+
+/* ─── 区块 ─── */
+
+.gdp-section,
+.gdp .adp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 18px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* 写在 .adp-card 的 border: 0 之后。紧跟顶部区的第一块不画线，那里已有金色装饰线。 */
+.gdp .adp-body > * + * {
+  border-top: 1px solid var(--chrome-divider);
+}
+
+.gdp .adp-body > .gdp-hero + * {
+  border-top: 0;
+}
+
+.gdp-section-header,
+.gdp .adp-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+}
+
+.gdp .adp-card-icon {
+  display: none;
+}
+
+.gdp-section-title,
+.gdp .adp-card-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.gdp-section-count {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.gdp-body-text,
+.gdp-description p,
+.gdp-rule p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.gdp-placeholder {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.gdp-note,
+.gdp-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gdp-status {
+  color: var(--text-secondary);
+}
+
+/* ─── 操作 ─── */
+
+.gdp-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  margin-right: -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.gdp-action:hover:not(:disabled) {
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+}
+
+.gdp-action:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.gdp-more {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: color var(--duration-fast);
+}
+
+.gdp-more:hover {
+  color: var(--brand);
+}
+
+.gdp-icon-action {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast), opacity var(--duration-fast);
+}
+
+.gdp-icon-action:hover:not(:disabled) {
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+}
+
+.gdp-icon-action.save {
+  color: var(--brand);
+}
+
+.gdp-icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.gdp-spinner {
+  animation: gdp-spin 1s linear infinite;
+}
+
+@keyframes gdp-spin {
+  to { transform: rotate(360deg); }
+}
+
+.gdp-action:focus-visible,
+.gdp-more:focus-visible,
+.gdp-icon-action:focus-visible,
+.gdp-mode-toggle button:focus-visible,
+.gdp .usc-ranges button:focus-visible,
+.gdp-editor-actions button:focus-visible {
+  outline: none;
+  box-shadow: var(--brand-focus-ring);
+}
+
+/* ─── 群简介 ─── */
+
+.gdp-description {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.gdp-description:not(.expanded) p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* ─── 编辑态（群简介 / 编排规则） ─── */
+
+.gdp-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gdp-editor textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  resize: vertical;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.gdp-editor textarea:focus-visible {
+  border-color: var(--border-active);
+  background: var(--input-bg-focus);
+  box-shadow: var(--brand-focus-ring);
+}
+
+.gdp-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gdp-editor-actions button {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+.gdp-editor-actions button:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.gdp-editor-actions button.primary {
+  border-color: transparent;
+  background: var(--brand-gradient);
+  color: var(--text-on-brand);
+  font-weight: 600;
+}
+
+.gdp-editor-actions button.primary:hover:not(:disabled) {
+  color: var(--text-on-brand);
+  box-shadow: var(--shadow-gold);
+}
+
+.gdp-editor-actions button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.gdp-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ─── 群成员 ─── */
+
+.gdp-member-list {
+  display: flex;
+  flex-direction: column;
+  margin: -2px -8px;
+}
+
+.gdp-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  transition: background var(--duration-fast);
+}
+
+.gdp-member-row:hover {
+  background: var(--chrome-item-hover);
+}
+
+.gdp-member-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.gdp-member-name,
+.gdp-member-role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gdp-member-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.gdp-member-role {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* 单人头像占满整个圆，圆形也和群的方形头像区分开。只作用于成员行和用量行，不影响面板内的弹窗。 */
+.gdp-member-row .group-avatar.small.count-1,
+.gdp .usc-member .group-avatar.small.count-1 {
+  --group-avatar-size: 32px;
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  border-color: rgb(var(--brand-rgb) / 0.28);
+  border-radius: var(--radius-full);
+}
+
+.gdp-member-row .group-avatar.small.count-1 .group-avatar-cell:first-child,
+.gdp .usc-member .group-avatar.small.count-1 .group-avatar-cell:first-child {
+  grid-column: 1;
+  border: 0;
+  font-size: calc(var(--group-avatar-size) * 0.4);
+  font-weight: 600;
+}
+
+.gdp-badge {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.gdp-badge.planner {
+  border-color: var(--border-active);
+  background: var(--brand-bg-soft);
+  color: var(--text-gold);
+}
+
+.gdp-badge.unavailable {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ─── 分段切换（编排方式 / 用量时间范围） ─── */
+
+.gdp-mode-toggle,
+.gdp .usc-ranges {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  border: 1px solid var(--chrome-divider);
+  border-radius: var(--radius-md);
+  background: var(--surface-glass-faint);
+}
+
+.gdp-mode-toggle button,
+.gdp .usc-ranges button {
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+
+.gdp-mode-toggle button:hover:not(:disabled),
+.gdp .usc-ranges button:hover {
+  color: var(--text-primary);
+}
+
+.gdp-mode-toggle button[aria-pressed='true'],
+.gdp .usc-ranges button.active {
+  background: var(--brand-bg-soft);
+  color: var(--text-gold);
+  font-weight: 600;
+}
+
+.gdp-mode-toggle button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ─── 编排规则 ─── */
+
+.gdp-mode-badge {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--chrome-divider-strong);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.gdp-mode-badge.is-fixed,
+.gdp-mode-badge.is-auto,
+.gdp-mode-badge.is-custom {
+  border-color: var(--border-active);
+  background: var(--brand-bg-soft);
+  color: var(--text-gold);
+}
+
+.gdp-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 2px solid rgb(var(--brand-rgb) / 0.36);
+}
+
+.gdp-rule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ─── 用量（共用卡片在群聊详情里的排版） ─── */
+
+/* Token 是这一区的主角，单独一行放大；其余三项在下面排成一行。 */
+.gdp .usc-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 0;
+}
+
+.gdp .usc-metric {
+  align-items: flex-start;
+  gap: 2px;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--chrome-divider-strong);
+  border-radius: 0;
+  background: none;
+}
+
+.gdp .usc-metric strong {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.gdp .usc-metric span {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.gdp .usc-metric:first-child {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.gdp .usc-metric:first-child strong {
+  color: var(--text-gold);
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 36px;
+}
+
+.gdp .usc-metric:nth-child(2) {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.gdp .usc-section,
+.gdp .usc-resolution {
+  padding-top: 12px;
+  border-top-color: var(--chrome-divider);
+}
+
+.gdp .usc-section {
+  gap: 4px;
+}
+
+.gdp .usc-section-title {
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+
+.gdp .usc-detail,
+.gdp .usc-footnote {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* 占比条放到名字下方，名字不再被数字挤成「协…」。 */
+.gdp .usc-member {
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "avatar name tokens cost"
+    "avatar bar bar bar";
+  gap: 4px 8px;
+  height: auto;
+  padding: 6px 0;
+}
+
+.gdp .usc-member .group-avatar.small.count-1 {
+  --group-avatar-size: 24px;
+  grid-area: avatar;
+  align-self: center;
+}
+
+.gdp .usc-member-name {
+  grid-area: name;
+  line-height: 18px;
+}
+
+.gdp .usc-member-bar {
+  grid-area: bar;
+  height: 2px;
+  background: var(--chrome-divider-strong);
+}
+
+.gdp .usc-member-bar > span {
+  opacity: 0.6;
+}
+
+.gdp .usc-member-value {
+  grid-area: tokens;
+  color: var(--text-primary);
+  line-height: 18px;
+}
+
+.gdp .usc-member-value.muted {
+  grid-area: cost;
+  min-width: 44px;
+  color: var(--text-muted);
+}
+
+.gdp .usc-member-tag {
+  border-radius: var(--radius-full);
+  background: none;
+  padding: 0;
+  font-size: 11px;
+}
+
+.gdp .usc-member-tag.planner {
+  background: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .gdp {
+    background: var(--surface-1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gdp-spinner {
+    animation: none;
+  }
+}
