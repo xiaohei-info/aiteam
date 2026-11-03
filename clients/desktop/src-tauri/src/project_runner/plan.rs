@@ -3,6 +3,7 @@
 use super::detect::Runner;
 use super::process::Step;
 use crate::agent_projects::read_small;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +13,100 @@ const MAX_CONSENT_BYTES: u64 = 4 * 1024 * 1024;
 /// Dependency files larger than this are not run.
 const MAX_DEPENDENCY_BYTES: u64 = 1024 * 1024;
 const MARKER_FILE: &str = "dependencies.sha256";
+const SOURCE_FILE: &str = "workbench-dependency-source.json";
+const MAX_SOURCE_URL_CHARS: usize = 512;
+pub const PYPI_MIRROR: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
+pub const NPM_MIRROR: &str = "https://registry.npmmirror.com";
+/// Installs retry a flaky network instead of giving up on the first slow response.
+const NPM_NETWORK_ARGS: &[&str] = &["--fetch-retries=5", "--fetch-timeout=120000"];
+/// `--disable-pip-version-check` skips pip's own call to pypi.org, slow where it is far away.
+const PIP_NETWORK_ARGS: &[&str] = &["--disable-pip-version-check", "--timeout=60", "--retries=5"];
+
+/// Where project dependencies download from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum DependencySource {
+    /// Mirrors in China: Tsinghua PyPI and npmmirror.
+    #[default]
+    Mirror,
+    /// Whatever the user's pip and npm configuration says.
+    System,
+    /// The user's own index addresses; one left out follows the system configuration.
+    Custom {
+        pypi: Option<String>,
+        npm: Option<String>,
+    },
+}
+
+/// An index address without credentials (those belong in the user's own pip/npm config).
+fn valid_source_url(url: &str) -> bool {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"));
+    let host = rest.map(|rest| rest.split('/').next().unwrap_or_default());
+    url.chars().count() <= MAX_SOURCE_URL_CHARS
+        && host.is_some_and(|host| !host.is_empty() && !host.contains('@'))
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+impl DependencySource {
+    fn pypi(&self) -> Option<&str> {
+        match self {
+            Self::Mirror => Some(PYPI_MIRROR),
+            Self::System => None,
+            Self::Custom { pypi, .. } => pypi.as_deref(),
+        }
+    }
+
+    fn npm(&self) -> Option<&str> {
+        match self {
+            Self::Mirror => Some(NPM_MIRROR),
+            Self::System => None,
+            Self::Custom { npm, .. } => npm.as_deref(),
+        }
+    }
+
+    /// Trims custom addresses and drops empty ones; `None` if an address is not acceptable.
+    fn normalized(self) -> Option<Self> {
+        let Self::Custom { pypi, npm } = self else {
+            return Some(self);
+        };
+        let clean = |url: Option<String>| -> Option<Option<String>> {
+            match url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty())
+            {
+                Some(url) if valid_source_url(&url) => Some(Some(url)),
+                Some(_) => None,
+                None => Some(None),
+            }
+        };
+        Some(Self::Custom {
+            pypi: clean(pypi)?,
+            npm: clean(npm)?,
+        })
+    }
+}
+
+/// The saved download source; the mirrors when none is saved or the file is unreadable.
+pub fn load_source(data_dir: &Path) -> DependencySource {
+    read_small(&data_dir.join(SOURCE_FILE), MAX_CONSENT_BYTES)
+        .and_then(|text| serde_json::from_str::<DependencySource>(&text).ok())
+        .and_then(DependencySource::normalized)
+        .unwrap_or_default()
+}
+
+/// Saves the download source and returns it as stored.
+pub fn save_source(data_dir: &Path, source: DependencySource) -> Result<DependencySource, String> {
+    let source = source.normalized().ok_or("invalid_download_source")?;
+    let text = serde_json::to_string_pretty(&source).map_err(|_| "download_source_failed")?;
+    std::fs::create_dir_all(data_dir).map_err(|_| "download_source_failed")?;
+    let temporary = data_dir.join(format!("{SOURCE_FILE}.tmp"));
+    std::fs::write(&temporary, text).map_err(|_| "download_source_failed")?;
+    std::fs::rename(&temporary, data_dir.join(SOURCE_FILE))
+        .map_err(|_| "download_source_failed")?;
+    Ok(source)
+}
 /// Host variables a project keeps; everything else, `AITEAM_*` and credentials included, is
 /// dropped. `PYTHONUNBUFFERED` and `BROWSER` are set so output arrives line by line and dev
 /// servers do not open a second browser tab.
@@ -42,6 +137,7 @@ pub struct RunContext {
     pub npm_cli: PathBuf,
     /// The system `python3`, if any.
     pub python: Option<PathBuf>,
+    pub source: DependencySource,
 }
 
 /// What the consent dialog shows, and the fingerprint the consent is stored under.
@@ -92,8 +188,24 @@ fn dependencies(runner: &Runner, root: &Path) -> Result<(String, Vec<u8>), Strin
     Ok((name.to_string(), bytes))
 }
 
-fn pip_install(dependencies: &str) -> Vec<String> {
-    let mut args = vec!["-m".to_string(), "pip".into(), "install".into()];
+fn npm_install(source: &DependencySource) -> Vec<String> {
+    let mut args: Vec<String> = ["install", "--no-audit", "--no-fund"]
+        .iter()
+        .chain(NPM_NETWORK_ARGS)
+        .map(|arg| arg.to_string())
+        .collect();
+    // npm also points the registry.npmjs.org addresses of a package-lock.json at this one.
+    args.extend(source.npm().map(|url| format!("--registry={url}")));
+    args
+}
+
+fn pip_install(dependencies: &str, source: &DependencySource) -> Vec<String> {
+    let mut args: Vec<String> = ["-m", "pip", "install"]
+        .iter()
+        .chain(PIP_NETWORK_ARGS)
+        .map(|arg| arg.to_string())
+        .collect();
+    args.extend(source.pypi().map(|url| format!("--index-url={url}")));
     if dependencies == "requirements.txt" {
         args.extend(["-r".into(), dependencies.into()]);
     } else {
@@ -123,10 +235,10 @@ fn python_start(entry: &str, streamlit: bool, port: &str) -> Vec<String> {
 }
 
 /// The commands as the user confirms them; the port shows as `$PORT`.
-fn commands(runner: &Runner, venv: &Path) -> Vec<String> {
+fn commands(runner: &Runner, venv: &Path, source: &DependencySource) -> Vec<String> {
     match runner {
         Runner::Node { script } => vec![
-            "npm install --no-audit --no-fund".into(),
+            format!("npm {}", npm_install(source).join(" ")),
             format!("npm run {script}"),
         ],
         Runner::Python {
@@ -137,7 +249,7 @@ fn commands(runner: &Runner, venv: &Path) -> Vec<String> {
             let python = venv_python(venv).display().to_string();
             vec![
                 format!("python3 -m venv {}", venv.display()),
-                format!("{python} {}", pip_install(dependencies).join(" ")),
+                format!("{python} {}", pip_install(dependencies, source).join(" ")),
                 format!(
                     "{python} {}",
                     python_start(entry, *streamlit, "$PORT").join(" ")
@@ -149,15 +261,17 @@ fn commands(runner: &Runner, venv: &Path) -> Vec<String> {
 }
 
 /// The commands of a code project and the fingerprint its consent is stored under: a change of
-/// the project, its folder, the commands or the dependency file asks again.
+/// the project, its folder, the commands (download source included) or the dependency file
+/// asks again.
 pub fn describe(
     runner: &Runner,
     root: &Path,
     run_dir: &Path,
     key: &str,
+    source: &DependencySource,
 ) -> Result<CodePlan, String> {
     let (name, contents) = dependencies(runner, root)?;
-    let commands = commands(runner, &run_dir.join("venv"));
+    let commands = commands(runner, &run_dir.join("venv"), source);
     let joined = commands.join("\n");
     let folder = root.display().to_string();
     let fingerprint = sha256(&[
@@ -187,16 +301,16 @@ pub fn steps(
     let installed_hash = sha256(&[&contents]);
     let marker = run_dir.join(MARKER_FILE);
     let installed = std::fs::read_to_string(&marker).is_ok_and(|hash| hash == installed_hash);
-    let labels = commands(runner, &run_dir.join("venv"));
+    let labels = commands(runner, &run_dir.join("venv"), &context.source);
     let port_text = port.to_string();
     match runner {
         Runner::Node { script } => {
             if !context.node.is_file() || !context.npm_cli.is_file() {
                 return Err("node_unavailable".into());
             }
-            let npm = |args: &[&str]| {
+            let npm = |args: Vec<String>| {
                 let mut all = vec![context.npm_cli.display().to_string()];
-                all.extend(args.iter().map(|arg| arg.to_string()));
+                all.extend(args);
                 all
             };
             let mut steps = Vec::new();
@@ -205,14 +319,14 @@ pub fn steps(
             if !(installed && modules) {
                 steps.push(Step {
                     program: context.node.clone(),
-                    args: npm(&["install", "--no-audit", "--no-fund"]),
+                    args: npm(npm_install(&context.source)),
                     label: labels[0].clone(),
                     marker: Some((marker, installed_hash)),
                 });
             }
             steps.push(Step {
                 program: context.node.clone(),
-                args: npm(&["run", script]),
+                args: npm(vec!["run".into(), script.clone()]),
                 label: labels[1].clone(),
                 marker: None,
             });
@@ -245,7 +359,7 @@ pub fn steps(
             if !(installed && has_venv) {
                 steps.push(Step {
                     program: python.clone(),
-                    args: pip_install(dependencies),
+                    args: pip_install(dependencies, &context.source),
                     label: labels[1].clone(),
                     marker: Some((marker, installed_hash)),
                 });
@@ -368,7 +482,82 @@ mod tests {
             node: data.join("runtime/node"),
             npm_cli: data.join("runtime/npm/bin/npm-cli.js"),
             python: Some(data.join("python3")),
+            source: DependencySource::Mirror,
         }
+    }
+
+    const NPM_INSTALL: &str = "npm install --no-audit --no-fund --fetch-retries=5 \
+        --fetch-timeout=120000 --registry=https://registry.npmmirror.com";
+    const PIP_MIRROR_ARGS: [&str; 7] = [
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--timeout=60",
+        "--retries=5",
+        "--index-url=https://pypi.tuna.tsinghua.edu.cn/simple",
+    ];
+
+    #[test]
+    fn dependency_sources_pick_the_index_and_reject_bad_addresses() {
+        let node = Runner::Node {
+            script: "dev".into(),
+        };
+        let venv = Path::new("/v");
+        assert_eq!(
+            commands(&node, venv, &DependencySource::Mirror)[0],
+            NPM_INSTALL
+        );
+        assert_eq!(
+            commands(&node, venv, &DependencySource::System)[0],
+            "npm install --no-audit --no-fund --fetch-retries=5 --fetch-timeout=120000"
+        );
+        let custom = DependencySource::Custom {
+            pypi: Some("https://pip.example.com/simple".into()),
+            npm: None,
+        };
+        assert_eq!(custom.npm(), None);
+        assert!(pip_install("requirements.txt", &custom)
+            .contains(&"--index-url=https://pip.example.com/simple".to_string()));
+        assert!(!pip_install("requirements.txt", &DependencySource::System)
+            .iter()
+            .any(|arg| arg.starts_with("--index-url")));
+
+        let data = temp("source", &[]);
+        assert_eq!(load_source(&data), DependencySource::Mirror);
+        let saved = save_source(
+            &data,
+            DependencySource::Custom {
+                pypi: Some("  https://pip.example.com/simple ".into()),
+                npm: Some("".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved, custom);
+        assert_eq!(load_source(&data), custom);
+        for bad in [
+            "ftp://x",
+            "https://",
+            "https://user:secret@pip.example.com/simple",
+            "https://a b",
+            "pip.example.com",
+        ] {
+            let source = DependencySource::Custom {
+                pypi: Some(bad.into()),
+                npm: None,
+            };
+            assert_eq!(
+                save_source(&data, source).unwrap_err(),
+                "invalid_download_source",
+                "{bad}"
+            );
+        }
+        assert_eq!(load_source(&data), custom);
+        save_source(&data, DependencySource::System).unwrap();
+        assert_eq!(load_source(&data), DependencySource::System);
+        std::fs::write(data.join(SOURCE_FILE), "{broken").unwrap();
+        assert_eq!(load_source(&data), DependencySource::Mirror);
+        std::fs::remove_dir_all(&data).unwrap();
     }
 
     fn labels(steps: &[Step]) -> Vec<&str> {
@@ -389,9 +578,10 @@ mod tests {
         let ctx = context(&data);
 
         let (steps, prefix) = steps(&runner, &root, &runs, &ctx, 4000).unwrap();
+        assert_eq!(labels(&steps), [NPM_INSTALL, "npm run dev"]);
         assert_eq!(
-            labels(&steps),
-            ["npm install --no-audit --no-fund", "npm run dev"]
+            steps[0].args[1..],
+            NPM_INSTALL.split(' ').collect::<Vec<_>>()[1..]
         );
         assert_eq!(steps[1].program, ctx.node);
         assert_eq!(steps[1].args[1..], ["run", "dev"]);
@@ -459,10 +649,8 @@ mod tests {
         let venv_arg = venv.display().to_string();
         assert_eq!(all[0].args, ["-m", "venv", venv_arg.as_str()]);
         assert_eq!(all[1].program, python);
-        assert_eq!(
-            all[1].args,
-            ["-m", "pip", "install", "-r", "requirements.txt"]
-        );
+        assert_eq!(all[1].args[..7], PIP_MIRROR_ARGS);
+        assert_eq!(all[1].args[7..], ["-r", "requirements.txt"]);
         assert!(all[2]
             .args
             .windows(2)
@@ -494,7 +682,8 @@ mod tests {
         std::fs::write(root.join("pyproject.toml"), "[project]\n").unwrap();
         ctx.python = Some(data.join("python3"));
         let plain = steps(&flask, &root, &runs, &ctx, 5000).unwrap().0;
-        assert_eq!(plain[1].args, ["-m", "pip", "install", "."]);
+        assert_eq!(plain[1].args[..7], PIP_MIRROR_ARGS);
+        assert_eq!(plain[1].args[7..], ["."]);
         assert_eq!(plain[2].args, ["main.py"]);
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&data).unwrap();
@@ -511,28 +700,36 @@ mod tests {
         let dev = Runner::Node {
             script: "dev".into(),
         };
-        let plan = describe(&dev, &root, &runs, "codex:abc").unwrap();
-        assert_eq!(
-            plan.commands,
-            ["npm install --no-audit --no-fund", "npm run dev"]
+        let mirror = DependencySource::Mirror;
+        let plan = describe(&dev, &root, &runs, "codex:abc", &mirror).unwrap();
+        assert_eq!(plan.commands, [NPM_INSTALL, "npm run dev"]);
+        // Another download source is another command: confirmed again.
+        assert_ne!(
+            describe(&dev, &root, &runs, "codex:abc", &DependencySource::System)
+                .unwrap()
+                .fingerprint,
+            plan.fingerprint
         );
         assert!(!consented(&data, "codex:abc", &plan.fingerprint));
         grant(&data, "codex:abc", &plan.fingerprint).unwrap();
         assert!(consented(&data, "codex:abc", &plan.fingerprint));
         assert!(!consented(&data, "codex:other", &plan.fingerprint));
-        assert_eq!(describe(&dev, &root, &runs, "codex:abc").unwrap(), plan);
+        assert_eq!(
+            describe(&dev, &root, &runs, "codex:abc", &mirror).unwrap(),
+            plan
+        );
 
         let start = Runner::Node {
             script: "start".into(),
         };
         assert_ne!(
-            describe(&start, &root, &runs, "codex:abc")
+            describe(&start, &root, &runs, "codex:abc", &mirror)
                 .unwrap()
                 .fingerprint,
             plan.fingerprint
         );
         assert_ne!(
-            describe(&dev, &root, &runs, "claude:abc")
+            describe(&dev, &root, &runs, "claude:abc", &mirror)
                 .unwrap()
                 .fingerprint,
             plan.fingerprint
@@ -542,12 +739,12 @@ mod tests {
             r#"{"scripts":{"dev":"vite","postinstall":"curl x"}}"#,
         )
         .unwrap();
-        let changed = describe(&dev, &root, &runs, "codex:abc").unwrap();
+        let changed = describe(&dev, &root, &runs, "codex:abc", &mirror).unwrap();
         assert_ne!(changed.fingerprint, plan.fingerprint);
         assert!(!consented(&data, "codex:abc", &changed.fingerprint));
         std::fs::remove_file(root.join("package.json")).unwrap();
         assert_eq!(
-            describe(&dev, &root, &runs, "codex:abc").unwrap_err(),
+            describe(&dev, &root, &runs, "codex:abc", &mirror).unwrap_err(),
             "dependencies_unreadable"
         );
         std::fs::remove_dir_all(&root).unwrap();

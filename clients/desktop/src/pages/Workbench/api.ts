@@ -4,12 +4,14 @@ import { isTauri } from '../../api/agent/runtime'
 import type { ExpertProjection } from '../../api/agent/types'
 import { classifyRequestError } from '../../lib/requestError'
 import {
+  DEFAULT_DEPENDENCY_SOURCE,
   fredProjects,
   fredWorkspaceKeys,
   fromLocalProject,
   hostErrorMessage,
   LOCAL_PROJECT_SOURCES,
   localSourceStates,
+  type DependencySource,
   type FredWorkspaceWire,
   type LocalProjectListWire,
   type ProjectFile,
@@ -129,6 +131,21 @@ export async function stopProject(part: ProjectPart, dir: string): Promise<RunSt
 
 export async function projectRunStatus(part: ProjectPart, dir: string): Promise<RunStatus> {
   return invoke<RunStatus>('project_run_status', { ...target(part), dir })
+}
+
+/** 代码项目安装依赖的下载源；浏览器开发模式或读取失败时按默认（国内镜像）。 */
+export async function getDependencySource(): Promise<DependencySource> {
+  if (!isTauri()) return DEFAULT_DEPENDENCY_SOURCE
+  return invoke<DependencySource>('get_dependency_source').catch(() => DEFAULT_DEPENDENCY_SOURCE)
+}
+
+/** 保存下载源，返回宿主实际存下的值（地址已去除首尾空白）。 */
+export async function setDependencySource(source: DependencySource): Promise<DependencySource> {
+  try {
+    return await invoke<DependencySource>('set_dependency_source', { source })
+  } catch (error) {
+    throw hostError(error, '保存下载源失败，请重试')
+  }
 }
 
 const DETECT_CONCURRENCY = 4

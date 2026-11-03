@@ -313,6 +313,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   consent_failed: '保存运行确认失败，请重试',
   server_failed: '本地服务启动失败，请重试',
   run_failed: '运行失败，请重试',
+  invalid_download_source: '下载源地址无效：需以 http:// 或 https:// 开头，不能包含空格或账号密码',
+  download_source_failed: '保存下载源失败，请重试',
 }
 
 export function hostErrorMessage(error: unknown, fallback = '读取本机 Agent 记录失败'): string {
@@ -590,6 +592,39 @@ export function runPhaseText(status: RunStatus | undefined): string | null {
     case 'failed': return status.exit_code === null ? '运行失败，请查看日志' : `运行失败（退出码 ${status.exit_code}），请查看日志`
     case 'stopped': return '已停止'
   }
+}
+
+// -------------------- 依赖下载源 --------------------
+
+/** 与 Rust 侧 project_runner::plan::DependencySource 一致；默认国内镜像。 */
+export type DependencySource =
+  | { mode: 'mirror' }
+  | { mode: 'system' }
+  | { mode: 'custom'; pypi: string | null; npm: string | null }
+
+export const DEFAULT_DEPENDENCY_SOURCE: DependencySource = { mode: 'mirror' }
+
+export const PYPI_MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple'
+export const NPM_MIRROR = 'https://registry.npmmirror.com'
+
+export function dependencySourceLabel(source: DependencySource): string {
+  switch (source.mode) {
+    case 'mirror': return '国内镜像'
+    case 'system': return '跟随系统配置'
+    case 'custom': return '自定义'
+  }
+}
+
+/** 自定义地址的前端校验（宿主会再校验一次）；合法返回 null。 */
+export function sourceUrlError(value: string): string | null {
+  const url = value.trim()
+  if (!url) return null
+  const match = /^https?:\/\/([^/]*)/i.exec(url)
+  if (!match || !match[1]) return '需以 http:// 或 https:// 开头'
+  if (match[1].includes('@')) return '不要在地址里写账号密码，请写在 pip / npm 自己的配置中'
+  if (/\s/.test(url)) return '地址不能包含空格'
+  if (url.length > 512) return '地址过长'
+  return null
 }
 
 export function runStatusFromOutcome(outcome: StartOutcome): RunStatus | null {

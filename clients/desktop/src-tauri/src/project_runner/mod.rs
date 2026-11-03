@@ -10,7 +10,7 @@ pub mod static_server;
 
 use crate::agent_projects::{file_id, resolve_project_dir, AgentProjectsState};
 use detect::{RunUnit, Runner};
-use plan::RunContext;
+use plan::{DependencySource, RunContext};
 use process::{Phase, ProcessRun, Ready};
 use serde::Serialize;
 use static_server::{encode_path, StaticServer};
@@ -208,7 +208,7 @@ impl ProjectRunnerState {
     ) -> Result<StartOutcome, String> {
         let (run_name, consent_key) = unit_names(&key);
         let run_dir = plan::run_dir(&context.data_dir, &key.0, &run_name);
-        let described = plan::describe(runner, root, &run_dir, &consent_key)?;
+        let described = plan::describe(runner, root, &run_dir, &consent_key, &context.source)?;
         // Held to the end: one start per project at a time, and consent writes are serialized.
         let mut runs = self.runs();
         if let Some(status) = runs
@@ -299,11 +299,34 @@ fn run_context(app: &tauri::AppHandle) -> Result<RunContext, String> {
     };
     let runtime = agent.join("runtime");
     Ok(RunContext {
-        data_dir,
         node: runtime.join(if cfg!(windows) { "node.exe" } else { "node" }),
         npm_cli: runtime.join("npm").join("bin").join("npm-cli.js"),
         python: plan::find_python(),
+        source: plan::load_source(&data_dir),
+        data_dir,
     })
+}
+
+fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|_| "data_dir_unavailable".into())
+}
+
+/// Where code projects download their dependencies from; the China mirrors by default.
+#[tauri::command]
+pub fn get_dependency_source(app: tauri::AppHandle) -> Result<DependencySource, String> {
+    Ok(plan::load_source(&app_data_dir(&app)?))
+}
+
+/// Saves the download source. A changed source changes the install commands, so each code
+/// project asks for consent again.
+#[tauri::command]
+pub fn set_dependency_source(
+    app: tauri::AppHandle,
+    source: DependencySource,
+) -> Result<DependencySource, String> {
+    plan::save_source(&app_data_dir(&app)?, source)
 }
 
 /// Opens a loopback address of a running project in the system browser.
@@ -625,6 +648,7 @@ esac
             node: "/bin/sh".into(),
             npm_cli: data.join("runtime/npm/bin/npm-cli.js"),
             python: None,
+            source: DependencySource::System,
         };
         let runner = detect::detect(&root);
         let runs = ProjectRunnerState::default();
@@ -648,7 +672,10 @@ esac
         };
         assert_eq!(
             commands,
-            ["npm install --no-audit --no-fund", "npm run dev"]
+            [
+                "npm install --no-audit --no-fund --fetch-retries=5 --fetch-timeout=120000",
+                "npm run dev"
+            ]
         );
         assert_eq!(cwd, root.display().to_string());
         assert!(matches!(

@@ -72,6 +72,8 @@ pub fn run() {
             project_runner::start_project,
             project_runner::stop_project,
             project_runner::project_run_status,
+            project_runner::get_dependency_source,
+            project_runner::set_dependency_source,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

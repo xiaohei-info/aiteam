@@ -4,6 +4,8 @@ import {
   buildFileTree,
   DEEPSEEK,
   defaultFile,
+  dependencySourceLabel,
+  sourceUrlError,
   employeeOptions,
   fileTypeLabel,
   filterProjects,
@@ -296,4 +298,17 @@ test('HTML and SVG previews cannot load external resources', () => {
   const withDoctype = sandboxedHtml('<!DOCTYPE html><html><body>x</body></html>')
   assert.ok(withDoctype.startsWith('<!DOCTYPE html><meta'))
   assert.equal(svgDataUrl('<svg a="1"/>'), 'data:image/svg+xml;charset=utf-8,%3Csvg%20a%3D%221%22%2F%3E')
+})
+
+test('download sources: labels and custom address checks match the host', () => {
+  assert.equal(dependencySourceLabel({ mode: 'mirror' }), '国内镜像')
+  assert.equal(dependencySourceLabel({ mode: 'system' }), '跟随系统配置')
+  assert.equal(dependencySourceLabel({ mode: 'custom', pypi: null, npm: null }), '自定义')
+  assert.equal(sourceUrlError(''), null)
+  assert.equal(sourceUrlError('  https://pip.example.com/simple '), null)
+  assert.equal(sourceUrlError('http://10.0.0.2:3141/root/pypi/+simple/'), null)
+  for (const bad of ['ftp://x', 'https://', 'pip.example.com', 'https://a b', `https://x/${'a'.repeat(600)}`]) {
+    assert.ok(sourceUrlError(bad), bad)
+  }
+  assert.match(sourceUrlError('https://user:secret@pip.example.com/simple') ?? '', /账号密码/)
 })

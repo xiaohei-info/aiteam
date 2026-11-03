@@ -2,16 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Check, ChevronDown, ChevronRight, Code, Copy, Cpu, ExternalLink, FileImage, FileSpreadsheet, FileText, Folder, FolderOpen, FolderSearch, Inbox, LayoutDashboard, LoaderCircle, MessageSquare, MonitorOff, Play, Presentation, RefreshCw, Search, ShieldAlert, Square, Terminal, TriangleAlert } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Code, Copy, Cpu, Download, ExternalLink, FileImage, FileSpreadsheet, FileText, Folder, FolderOpen, FolderSearch, Inbox, LayoutDashboard, LoaderCircle, MessageSquare, MonitorOff, Play, Presentation, RefreshCw, Search, ShieldAlert, Square, Terminal, TriangleAlert } from 'lucide-react'
 import { isTauri } from '../../api/agent/runtime'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { formatConversationTime } from '../../lib/conversationSummary'
 import { useChatStore } from '../../stores/chat'
-import { detectRunners, loadFredProjects, loadLocalProjects, openProjectFile, projectRunStatus, readProjectFile, startProject, stopProject } from './api'
+import { detectRunners, getDependencySource, loadFredProjects, loadLocalProjects, openProjectFile, projectRunStatus, readProjectFile, setDependencySource, startProject, stopProject } from './api'
 import { parseCsv, sandboxedHtml, svgDataUrl } from './preview'
 import {
   buildFileTree,
   DEEPSEEK,
+  DEFAULT_DEPENDENCY_SOURCE,
+  dependencySourceLabel,
+  NPM_MIRROR,
+  PYPI_MIRROR,
+  sourceUrlError,
   defaultFile,
   employeeOptions,
   extensionOf,
@@ -36,6 +41,7 @@ import {
   unitKey,
   unitRevealFile,
   visibleTreeRows,
+  type DependencySource,
   type ProjectFile,
   type ProjectPart,
   type ProjectSource,
@@ -186,6 +192,12 @@ export default function Workbench() {
   const [pendingRun, setPendingRun] = useState<string | null>(null)
   const [runError, setRunError] = useState<{ key: string; message: string } | null>(null)
   const [consent, setConsent] = useState<ConsentRequest | null>(null)
+  const [downloadSource, setDownloadSource] = useState<DependencySource>(DEFAULT_DEPENDENCY_SOURCE)
+  const [sourceDialog, setSourceDialog] = useState(false)
+
+  useEffect(() => {
+    if (desktop) void getDependencySource().then(setDownloadSource)
+  }, [desktop])
   const loadSequence = useRef(0)
   const contentSequence = useRef(0)
   const detectGeneration = useRef(0)
@@ -442,9 +454,14 @@ export default function Workbench() {
         <div className={styles.titleRow}><h1>工作台</h1><span className={styles.liveBadge}>本机项目</span></div>
         <p className={styles.subtitle}>汇总 AI 员工在 Fred、Codex、Claude、WorkBuddy 中做出的项目，可查看文件并一键运行；DeepSeek 按做出项目的模型筛选。只识别 Agent 新建的目录，不含你自己的代码仓库；项目内容不离开本机。</p>
       </div>
-      <button className={styles.secondaryButton} type="button" onClick={load} disabled={isLoading}>
-        <RefreshCw size={14} className={isLoading ? styles.spinner : undefined} />刷新
-      </button>
+      <div className={styles.toolbarActions}>
+        {desktop && <button className={styles.secondaryButton} type="button" onClick={() => setSourceDialog(true)} title="运行 Node / Python 项目时安装依赖用的下载源">
+          <Download size={14} />下载源：{dependencySourceLabel(downloadSource)}
+        </button>}
+        <button className={styles.secondaryButton} type="button" onClick={load} disabled={isLoading}>
+          <RefreshCw size={14} className={isLoading ? styles.spinner : undefined} />刷新
+        </button>
+      </div>
     </header>
 
     <section className={styles.sources} aria-label="项目来源">
@@ -614,13 +631,87 @@ export default function Workbench() {
       <p className="chat-tools-note">首次运行（或命令、依赖文件变化后）需要你确认。将在项目目录中依次执行：</p>
       <pre className={styles.consentCommands}>{consent.commands.join('\n')}</pre>
       <p className={styles.consentCwd}><span>工作目录</span>{consent.cwd}</p>
+      <p className={styles.consentCwd}><span>依赖下载源</span>{dependencySourceLabel(downloadSource)}（可在工作台右上角「下载源」中更改）</p>
       <p className={styles.consentWarning}><TriangleAlert size={15} /><span>项目代码会以你的用户权限运行，可能访问网络和本机文件；安装依赖时会联网下载，并可能执行依赖包的安装脚本。只运行你信任的项目。</span></p>
       <footer>
         <button type="button" onClick={() => setConsent(null)}>取消</button>
         <button type="button" className={styles.consentConfirm} onClick={confirmConsent}><Play size={14} />确认并运行</button>
       </footer>
     </ChatDialog>}
+
+    {sourceDialog && <DependencySourceDialog
+      value={downloadSource}
+      onClose={() => setSourceDialog(false)}
+      onSaved={saved => {
+        setDownloadSource(saved)
+        setSourceDialog(false)
+      }}
+    />}
   </div>
+}
+
+const SOURCE_OPTIONS: { mode: DependencySource['mode']; title: string; detail: string }[] = [
+  { mode: 'mirror', title: '国内镜像（推荐）', detail: 'Python 用清华 PyPI 镜像，Node 用 npmmirror' },
+  { mode: 'system', title: '跟随系统配置', detail: '使用本机 pip.conf、.npmrc 中的设置，未设置时为官方源' },
+  { mode: 'custom', title: '自定义', detail: '填写公司内部或其他镜像地址；留空的一项跟随系统配置' },
+]
+
+function DependencySourceDialog({ value, onClose, onSaved }: {
+  value: DependencySource
+  onClose: () => void
+  onSaved: (source: DependencySource) => void
+}) {
+  const [mode, setMode] = useState<DependencySource['mode']>(value.mode)
+  const [pypi, setPypi] = useState(value.mode === 'custom' ? value.pypi ?? '' : '')
+  const [npm, setNpm] = useState(value.mode === 'custom' ? value.npm ?? '' : '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const pypiError = mode === 'custom' ? sourceUrlError(pypi) : null
+  const npmError = mode === 'custom' ? sourceUrlError(npm) : null
+
+  const save = async () => {
+    if (saving || pypiError || npmError) return
+    const next: DependencySource = mode === 'custom'
+      ? { mode, pypi: pypi.trim() || null, npm: npm.trim() || null }
+      : { mode }
+    setSaving(true)
+    setError('')
+    try {
+      onSaved(await setDependencySource(next))
+    } catch (failure) {
+      setError(errorText(failure, '保存下载源失败，请重试'))
+      setSaving(false)
+    }
+  }
+
+  return <ChatDialog title="依赖下载源" icon={<Download size={18} />} description="运行 Node / Python 项目时安装依赖用的地址" onClose={onClose}>
+    <div className={styles.sourceOptions} role="radiogroup" aria-label="下载源">
+      {SOURCE_OPTIONS.map(option => <label key={option.mode} className={`${styles.sourceOption} ${mode === option.mode ? styles.sourceOptionActive : ''}`}>
+        <input type="radio" name="dependency-source" checked={mode === option.mode} onChange={() => setMode(option.mode)} />
+        <span><strong>{option.title}</strong><small>{option.detail}</small></span>
+      </label>)}
+    </div>
+    {mode === 'custom' && <div className={styles.sourceFields}>
+      <label>
+        <span>Python（PyPI 索引地址）</span>
+        <input value={pypi} maxLength={512} placeholder={PYPI_MIRROR} aria-invalid={Boolean(pypiError)} onChange={event => setPypi(event.target.value)} />
+        {pypiError && <small className={styles.fieldError}>{pypiError}</small>}
+      </label>
+      <label>
+        <span>Node（npm registry）</span>
+        <input value={npm} maxLength={512} placeholder={NPM_MIRROR} aria-invalid={Boolean(npmError)} onChange={event => setNpm(event.target.value)} />
+        {npmError && <small className={styles.fieldError}>{npmError}</small>}
+      </label>
+    </div>}
+    <p className="chat-tools-note">更换下载源会改变安装命令，每个代码项目下次运行前需要重新确认；已安装的依赖不会重新下载。</p>
+    {error && <div className={styles.errorBanner} role="alert"><TriangleAlert size={15} /><span>{error}</span></div>}
+    <footer>
+      <button type="button" onClick={onClose}>取消</button>
+      <button type="button" className={styles.consentConfirm} disabled={saving || Boolean(pypiError || npmError)} onClick={() => void save()}>
+        {saving && <LoaderCircle size={14} className={styles.spinner} />}保存
+      </button>
+    </footer>
+  </ChatDialog>
 }
 
 function RunControls({ label, removed, runner, status, pending, busy, error, onRun, onStop, onReveal }: {
