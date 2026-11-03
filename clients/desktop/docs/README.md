@@ -19,7 +19,7 @@
 | [knowledge-base-provider.md](knowledge-base-provider.md) | 个人知识库服务需要实现的接口 |
 | [local-file-access.md](local-file-access.md) | 本机文件访问授权 |
 | [work-reply-grouping.md](work-reply-grouping.md) | 员工回复归并 |
-| [workbench-agent-solutions.md](workbench-agent-solutions.md) | 工作台：汇总员工生成的方案文件 |
+| [workbench-projects.md](workbench-projects.md) | 工作台：AI Agent 做出的项目——来源与判定、一键运行、首次确认、依赖下载源 |
 | [automation-tasks-api.md](automation-tasks-api.md) | 自动化任务页面对应的 API 契约 |
 | [2026-09-27-application-logging-plan.md](2026-09-27-application-logging-plan.md) | 应用日志：范围、隐私边界与排查指南 |
 | [api-audit.md](api-audit.md)、[api.json](api.json) | `pnpm check:api-contract` 的契约副本与生成的核对表；`api.json` 已过期，见 agent-sidecar.md「接口与登录」 |

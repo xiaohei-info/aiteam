@@ -2,7 +2,7 @@
 
 > 状态：待评审，未开始编码
 > 分支：`feat/workbench-projects`（从 `main` b323d2d6 切出）
-> 取代：`2026-10-29-product-design-proposals/08-workbench-solutions.md`（「解决方案确认」已作废）、`docs/workbench-agent-solutions.md` 的判定口径
+> 取代：`2026-10-29-product-design-proposals/08-workbench-solutions.md`（「解决方案确认」已作废）、`docs/workbench-agent-solutions.md`（已改写为 `docs/workbench-projects.md`）的判定口径
 
 ## 1. 目标与边界
 
