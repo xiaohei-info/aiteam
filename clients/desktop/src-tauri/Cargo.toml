@@ -23,7 +23,8 @@ md5 = "0.7"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["time"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# Ends the Agent's and workbench projects' process groups.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

@@ -81,6 +81,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if matches!(_event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                // Workbench projects must not outlive the app.
+                _app.state::<project_runner::ProjectRunnerState>()
+                    .stop_all();
+            }
             #[cfg(target_os = "macos")]
             if matches!(
                 _event,
