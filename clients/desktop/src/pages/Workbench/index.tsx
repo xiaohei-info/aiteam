@@ -29,16 +29,19 @@ import {
   projectRunnerKind,
   RUNNER_LABELS,
   runnerDetail,
+  runnableUnitCount,
   runPhaseText,
   runStatusFromOutcome,
   sortProjects,
+  unitKey,
+  unitRevealFile,
   visibleTreeRows,
   type ProjectFile,
   type ProjectPart,
   type ProjectSource,
   type ProjectSummary,
-  type Runner,
   type RunStatus,
+  type RunUnit,
   type SourceFilter,
   type SourceState,
   type StartOutcome,
@@ -89,6 +92,7 @@ interface SelectedFile {
 
 interface ConsentRequest {
   part: ProjectPart
+  unit: RunUnit
   projectName: string
   commands: string[]
   cwd: string
@@ -176,7 +180,8 @@ export default function Workbench() {
   const [copied, setCopied] = useState(false)
   const [pendingAction, setPendingAction] = useState<FileAction | null>(null)
   const [actionError, setActionError] = useState('')
-  const [runners, setRunners] = useState<Record<string, Runner>>({})
+  /** 每个目录（partKey）能单独运行的单元；运行状态、进行中操作和错误按 unitKey 区分。 */
+  const [units, setUnits] = useState<Record<string, RunUnit[]>>({})
   const [runs, setRuns] = useState<Record<string, RunStatus>>({})
   const [pendingRun, setPendingRun] = useState<string | null>(null)
   const [runError, setRunError] = useState<{ key: string; message: string } | null>(null)
@@ -192,7 +197,7 @@ export default function Workbench() {
     // 文件可能已变化：重新识别运行方式；正在运行的状态由宿主保留，不清空。
     detectGeneration.current += 1
     detecting.current.clear()
-    setRunners({})
+    setUnits({})
     const mergeStates = (next: SourceState[]) => setStates(previous => ({
       ...previous,
       ...Object.fromEntries(next.map(state => [state.source, state])),
@@ -240,41 +245,45 @@ export default function Workbench() {
   const isLoading = loading.fred || loading.local
   const hasFilters = Boolean(query.trim() || employee || source !== 'all')
 
-  // 识别每个目录的运行方式，顺带取应用内已有的运行状态。
+  // 识别每个目录里能单独运行的单元，顺带取应用内已有的运行状态。
   useEffect(() => {
     if (!desktop) return
     const parts = [...partsByKey.entries()]
-      .filter(([key]) => !(key in runners) && !detecting.current.has(key))
+      .filter(([key]) => !(key in units) && !detecting.current.has(key))
       .map(([, part]) => part)
     if (parts.length === 0) return
     const generation = detectGeneration.current
     for (const part of parts) detecting.current.add(partKey(part))
-    void detectRunners(parts, (part, runner, status) => {
+    void detectRunners(parts, (part, found, statuses) => {
       if (generation !== detectGeneration.current) return
-      setRunners(previous => ({ ...previous, [partKey(part)]: runner }))
-      if (status?.phase) setRuns(previous => ({ ...previous, [partKey(part)]: status }))
+      setUnits(previous => ({ ...previous, [partKey(part)]: found }))
+      const known = Object.entries(statuses)
+      if (known.length) setRuns(previous => ({ ...previous, ...Object.fromEntries(known.map(([dir, status]) => [unitKey(part, dir), status])) }))
     })
-  }, [desktop, partsByKey, runners])
+  }, [desktop, partsByKey, units])
+
+  const unitsByKey = useMemo(() => new Map([...partsByKey.values()].flatMap(part =>
+    (units[partKey(part)] ?? []).map(unit => [unitKey(part, unit.dir), { part, unit }] as const))), [partsByKey, units])
 
   // 代码项目运行时轮询状态与日志；地址由宿主识别后自动在浏览器打开。
   const pollSignature = useMemo(
-    () => Object.keys(runs).filter(key => needsPolling(runners[key], runs[key])).sort().join('\n'),
-    [runs, runners],
+    () => Object.keys(runs).filter(key => needsPolling(unitsByKey.get(key)?.unit.runner, runs[key])).sort().join('\n'),
+    [runs, unitsByKey],
   )
   useEffect(() => {
     if (!pollSignature) return
     const keys = pollSignature.split('\n')
     const timer = window.setInterval(() => {
       for (const key of keys) {
-        const part = partsByKey.get(key)
-        if (!part) continue
-        void projectRunStatus(part)
+        const entry = unitsByKey.get(key)
+        if (!entry) continue
+        void projectRunStatus(entry.part, entry.unit.dir)
           .then(status => setRuns(previous => ({ ...previous, [key]: status })))
           .catch(() => undefined)
       }
     }, RUN_POLL_MS)
     return () => window.clearInterval(timer)
-  }, [pollSignature, partsByKey])
+  }, [pollSignature, unitsByKey])
 
   const selectSource = (next: SourceFilter) => {
     setSource(next)
@@ -367,25 +376,24 @@ export default function Workbench() {
 
   const selectedFileIdIn = (part: ProjectPart) => (selectedPart && partKey(selectedPart) === partKey(part) ? selectedFile?.fileId ?? null : null)
 
-  const applyOutcome = (part: ProjectPart, outcome: StartOutcome, projectName: string) => {
+  const applyOutcome = (part: ProjectPart, unit: RunUnit, outcome: StartOutcome, projectName: string) => {
     if (outcome.outcome === 'needs_consent') {
-      setConsent({ part, projectName, commands: outcome.commands, cwd: outcome.cwd, fingerprint: outcome.fingerprint })
+      setConsent({ part, unit, projectName, commands: outcome.commands, cwd: outcome.cwd, fingerprint: outcome.fingerprint })
       return
     }
     const status = runStatusFromOutcome(outcome)
-    if (status) setRuns(previous => ({ ...previous, [partKey(part)]: status }))
+    if (status) setRuns(previous => ({ ...previous, [unitKey(part, unit.dir)]: status }))
   }
 
   /** 运行；已在运行时宿主复用进程或服务，并在浏览器重新打开。 */
-  const runPart = async (part: ProjectPart, projectName: string, fingerprint?: string) => {
-    const key = partKey(part)
-    const runner = runners[key]
-    if (!runner || runner.kind === 'none' || pendingRun) return
+  const runUnit = async (part: ProjectPart, unit: RunUnit, projectName: string, fingerprint?: string) => {
+    const key = unitKey(part, unit.dir)
+    if (unit.runner.kind === 'none' || pendingRun) return
     setPendingRun(key)
     setRunError(null)
     try {
-      const outcome = await startProject(part, { fileId: htmlPageToRun(runner, selectedFileIdIn(part)), consent: fingerprint })
-      applyOutcome(part, outcome, projectName)
+      const outcome = await startProject(part, unit.dir, { fileId: htmlPageToRun(unit.runner, selectedFileIdIn(part)), consent: fingerprint })
+      applyOutcome(part, unit, outcome, projectName)
     } catch (error) {
       setRunError({ key, message: errorText(error, '运行失败，请重试') })
     } finally {
@@ -393,13 +401,13 @@ export default function Workbench() {
     }
   }
 
-  const stopPart = async (part: ProjectPart) => {
-    const key = partKey(part)
+  const stopUnit = async (part: ProjectPart, unit: RunUnit) => {
+    const key = unitKey(part, unit.dir)
     if (pendingRun) return
     setPendingRun(key)
     setRunError(null)
     try {
-      const status = await stopProject(part)
+      const status = await stopProject(part, unit.dir)
       setRuns(previous => ({ ...previous, [key]: status }))
     } catch (error) {
       setRunError({ key, message: errorText(error, '停止失败，请重试') })
@@ -408,13 +416,12 @@ export default function Workbench() {
     }
   }
 
-  const revealPart = async (part: ProjectPart) => {
-    const key = partKey(part)
+  const revealUnit = async (part: ProjectPart, dir: string) => {
     setRunError(null)
     try {
-      await openProjectFile(part, null, true)
+      await openProjectFile(part, unitRevealFile(part, dir), true)
     } catch (error) {
-      setRunError({ key, message: errorText(error, '无法在文件夹中显示，请重试') })
+      setRunError({ key: unitKey(part, dir), message: errorText(error, '无法在文件夹中显示，请重试') })
     }
   }
 
@@ -422,7 +429,7 @@ export default function Workbench() {
     if (!consent) return
     const request = consent
     setConsent(null)
-    void runPart(request.part, request.projectName, request.fingerprint)
+    void runUnit(request.part, request.unit, request.projectName, request.fingerprint)
   }
 
   const sourceCount = (key: SourceKey) => allProjects.filter(project => matchesSource(project, key)).length
@@ -490,8 +497,10 @@ export default function Workbench() {
           {hasFilters && <button type="button" onClick={clearFilters}>清除筛选</button>}
         </div>}
         {visible.map(project => {
-          const kind = desktop ? projectRunnerKind(project.parts.map(part => runners[partKey(part)])) : null
-          const running = project.parts.some(part => runs[partKey(part)]?.running)
+          const partUnits = project.parts.map(part => units[partKey(part)])
+          const kind = desktop ? projectRunnerKind(partUnits) : null
+          const apps = runnableUnitCount(partUnits)
+          const running = project.parts.some(part => (units[partKey(part)] ?? []).some(unit => runs[unitKey(part, unit.dir)]?.running))
           const chips = recentFiles(project, CARD_FILE_CHIPS)
           return <button type="button" key={project.key} className={`${styles.card} ${selectedKey === project.key ? styles.cardSelected : ''}`} aria-pressed={selectedKey === project.key} onClick={() => selectProject(project)}>
             <span className={styles.cardTop}>
@@ -509,6 +518,7 @@ export default function Workbench() {
             <span className={styles.cardMeta}>
               {running && <span className={styles.runningTag}><span className={styles.runningDot} aria-hidden="true" />运行中</span>}
               {kind && <span className={`${styles.runnerBadge} ${kind === 'none' ? styles.runnerBadgeMuted : ''}`}>{RUNNER_LABELS[kind]}</span>}
+              {apps > 1 && <span>{apps} 个应用</span>}
               <span>{formatTime(project.updatedAt)}</span>
               <span>{project.fileCount} 个文件</span>
               {project.isGroup && <span>群聊</span>}
@@ -530,24 +540,29 @@ export default function Workbench() {
             {selected.conversationId && <button className={styles.secondaryButton} type="button" onClick={() => openInChat(selected)}><MessageSquare size={14} />回到会话</button>}
           </div>
 
-          <div className={styles.sectionHeading}><h3>运行</h3>{selected.isGroup && <span>每位员工的目录单独运行</span>}</div>
+          <div className={styles.sectionHeading}><h3>运行</h3>{(selected.isGroup || runnableUnitCount(selected.parts.map(part => units[partKey(part)])) > 1) && <span>每个应用单独运行</span>}</div>
           {!desktop
             ? <p className={styles.hint}>仅桌面端可运行项目。</p>
             : <div className={styles.runList}>
-              {selected.parts.map(part => {
-                const key = partKey(part)
-                return <RunControls
-                  key={key}
-                  part={part}
-                  runner={runners[key]}
-                  status={runs[key]}
-                  pending={pendingRun === key}
-                  busy={pendingRun !== null}
-                  error={runError?.key === key ? runError.message : ''}
-                  onRun={() => void runPart(part, selected.name)}
-                  onStop={() => void stopPart(part)}
-                  onReveal={() => void revealPart(part)}
-                />
+              {selected.parts.flatMap(part => {
+                const found: (RunUnit | undefined)[] = units[partKey(part)] ?? [undefined]
+                return found.map(unit => {
+                  const dir = unit?.dir ?? ''
+                  const key = unitKey(part, dir)
+                  return <RunControls
+                    key={key}
+                    label={[part.label, dir].filter(Boolean).join(' / ') || null}
+                    removed={part.removed}
+                    runner={unit?.runner}
+                    status={runs[key]}
+                    pending={pendingRun === key}
+                    busy={pendingRun !== null}
+                    error={runError?.key === key ? runError.message : ''}
+                    onRun={() => unit && void runUnit(part, unit, selected.name)}
+                    onStop={() => unit && void stopUnit(part, unit)}
+                    onReveal={() => void revealUnit(part, dir)}
+                  />
+                })
               })}
             </div>}
 
@@ -595,7 +610,7 @@ export default function Workbench() {
       </section>
     </div>
 
-    {consent && <ChatDialog title="确认运行项目" icon={<ShieldAlert size={18} />} description={consent.projectName} onClose={() => setConsent(null)}>
+    {consent && <ChatDialog title="确认运行项目" icon={<ShieldAlert size={18} />} description={consent.unit.dir ? `${consent.projectName} / ${consent.unit.dir}` : consent.projectName} onClose={() => setConsent(null)}>
       <p className="chat-tools-note">首次运行（或命令、依赖文件变化后）需要你确认。将在项目目录中依次执行：</p>
       <pre className={styles.consentCommands}>{consent.commands.join('\n')}</pre>
       <p className={styles.consentCwd}><span>工作目录</span>{consent.cwd}</p>
@@ -608,9 +623,11 @@ export default function Workbench() {
   </div>
 }
 
-function RunControls({ part, runner, status, pending, busy, error, onRun, onStop, onReveal }: {
-  part: ProjectPart
-  runner: Runner | undefined
+function RunControls({ label, removed, runner, status, pending, busy, error, onRun, onStop, onReveal }: {
+  /** 群聊员工名和 / 或子文件夹名；单个目录本身为 null。 */
+  label: string | null
+  removed: boolean
+  runner: RunUnit['runner'] | undefined
   status: RunStatus | undefined
   pending: boolean
   busy: boolean
@@ -626,7 +643,7 @@ function RunControls({ part, runner, status, pending, busy, error, onRun, onStop
   return <div className={styles.runRow}>
     <div className={styles.runHead}>
       <div className={styles.runInfo}>
-        {part.label && <strong className={part.removed ? styles.removedLabel : undefined}>{part.label}{part.removed ? '（已移出）' : ''}</strong>}
+        {label && <strong className={removed ? styles.removedLabel : undefined}>{label}{removed ? '（已移出）' : ''}</strong>}
         {runner
           ? <span className={styles.runDetail}><span className={`${styles.runnerBadge} ${runner.kind === 'none' ? styles.runnerBadgeMuted : ''}`}>{RUNNER_LABELS[runner.kind]}</span>{runnerDetail(runner)}</span>
           : <span className={styles.runDetail}><LoaderCircle size={12} className={styles.spinner} />正在识别运行方式…</span>}

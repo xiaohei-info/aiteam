@@ -66,7 +66,10 @@ const CLAUDE_NON_PROMPTS: &[&str] = &[
 const PROJECT_MARKERS: &[&str] = &[".git", "package.json", "pyproject.toml"];
 
 /// Dependency and build-cache folders: installed, not written by the agent.
-const IGNORED_DIRS: &[&str] = &["node_modules", "__pycache__", "venv"];
+pub(crate) const IGNORED_DIRS: &[&str] = &["node_modules", "__pycache__", "venv"];
+
+/// Build output next to a `package.json`: generated from the sources, not written by the agent.
+const BUILD_OUTPUT_DIR: &str = "dist";
 
 /// Name parts that suggest credentials, matching the Agent's artifact capture rules.
 const SENSITIVE_NAME_PARTS: &[&str] = &[
@@ -542,7 +545,7 @@ fn absolute_path(path: &str, cwd: Option<&str>) -> Option<String> {
 }
 
 /// Opaque, stable id for a path (64-bit FNV-1a), so the WebView never sends paths.
-fn file_id(path: &str) -> String {
+pub(crate) fn file_id(path: &str) -> String {
     let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
     });
@@ -1176,7 +1179,9 @@ fn list_project(root: &Path, limit: usize) -> Listing {
                 continue;
             };
             if kind.is_dir() {
-                if IGNORED_DIRS.contains(&name) {
+                if IGNORED_DIRS.contains(&name)
+                    || (name == BUILD_OUTPUT_DIR && dir.join("package.json").is_file())
+                {
                     continue;
                 }
                 if depth >= MAX_PROJECT_DEPTH {

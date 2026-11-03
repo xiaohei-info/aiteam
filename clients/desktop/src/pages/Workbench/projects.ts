@@ -503,6 +503,23 @@ export type Runner =
 
 export type RunnerKind = Runner['kind']
 
+/** 与 Rust 侧 project_runner::detect::RunUnit 一致：dir 为空表示目录本身，否则是其中一个子文件夹。 */
+export interface RunUnit {
+  dir: string
+  runner: Runner
+}
+
+/** 运行状态、进行中操作和错误按「目录 + 单元」区分。 */
+export const unitKey = (part: Pick<ProjectPart, 'source' | 'id'>, dir: string) => `${partKey(part)}#${dir}`
+
+/** 在文件夹中显示子文件夹单元时定位到的文件（定位到它即打开该子文件夹）；目录本身为 null。 */
+export function unitRevealFile(part: Pick<ProjectPart, 'files'>, dir: string): ProjectFile | null {
+  if (!dir) return null
+  const prefix = `${dir}/`
+  const inside = part.files.filter(file => file.path.startsWith(prefix))
+  return inside.find(file => file.path.indexOf('/', prefix.length) === -1) ?? inside[0] ?? null
+}
+
 export type RunPhase = 'preparing' | 'starting' | 'running' | 'exited' | 'failed' | 'stopped'
 
 export interface RunStatus {
@@ -528,10 +545,17 @@ export const RUNNER_LABELS: Record<RunnerKind, string> = {
 
 const RUNNER_RANK: Record<RunnerKind, number> = { node: 4, python: 3, static: 2, html: 1, none: 0 }
 
-/** 列表徽标：多个部分（群聊）取最「强」的运行方式；还没识别完返回 null。 */
-export function projectRunnerKind(runners: (Runner | undefined)[]): RunnerKind | null {
-  if (runners.some(runner => runner === undefined)) return null
-  return runners.reduce<RunnerKind>((best, runner) => (runner && RUNNER_RANK[runner.kind] > RUNNER_RANK[best] ? runner.kind : best), 'none')
+/** 列表徽标：多个部分（群聊）或多个子文件夹应用取最「强」的运行方式；还没识别完返回 null。 */
+export function projectRunnerKind(parts: (RunUnit[] | undefined)[]): RunnerKind | null {
+  if (parts.some(units => units === undefined)) return null
+  return parts
+    .flatMap(units => units ?? [])
+    .reduce<RunnerKind>((best, unit) => (RUNNER_RANK[unit.runner.kind] > RUNNER_RANK[best] ? unit.runner.kind : best), 'none')
+}
+
+/** 项目里可运行的单元数（列表卡片显示「3 个应用」）。 */
+export function runnableUnitCount(parts: (RunUnit[] | undefined)[]): number {
+  return parts.flatMap(units => units ?? []).filter(unit => unit.runner.kind !== 'none').length
 }
 
 /** 只由多个 HTML 组成的项目运行哪个页面：选中的是 HTML 就用它，否则第一个。 */

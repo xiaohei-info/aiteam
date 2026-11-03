@@ -8,8 +8,8 @@ pub mod plan;
 pub mod process;
 pub mod static_server;
 
-use crate::agent_projects::{resolve_project_dir, AgentProjectsState};
-use detect::Runner;
+use crate::agent_projects::{file_id, resolve_project_dir, AgentProjectsState};
+use detect::{RunUnit, Runner};
 use plan::RunContext;
 use process::{Phase, ProcessRun, Ready};
 use serde::Serialize;
@@ -21,8 +21,33 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::Manager;
 
-/// (source, project id) as the WebView names the project.
-type RunKey = (String, String);
+/// (source, project id, unit folder) as the WebView names what runs; the folder is empty for
+/// the project folder itself.
+type RunKey = (String, String, String);
+
+/// The folder and runner of the unit `dir` of the project at `root`. Only a folder the host
+/// itself detected as a unit is accepted, so `dir` cannot point anywhere else.
+fn unit_at(root: &Path, dir: &str) -> Result<(PathBuf, Runner), String> {
+    let unit = detect::detect_units(root)
+        .into_iter()
+        .find(|unit| unit.dir == dir)
+        .ok_or("not_runnable")?;
+    Ok((root.join(&unit.dir), unit.runner))
+}
+
+/// Run state folder name and consent key of a unit; a project's own unit keeps the names it
+/// had before units existed.
+fn unit_names(key: &RunKey) -> (String, String) {
+    let (source, id, dir) = key;
+    if dir.is_empty() {
+        (id.clone(), format!("{source}:{id}"))
+    } else {
+        (
+            format!("{id}-{}", file_id(dir)),
+            format!("{source}:{id}/{dir}"),
+        )
+    }
+}
 
 enum Run {
     Static {
@@ -181,8 +206,8 @@ impl ProjectRunnerState {
         consent: Option<&str>,
         ready: Ready,
     ) -> Result<StartOutcome, String> {
-        let run_dir = plan::run_dir(&context.data_dir, &key.0, &key.1);
-        let consent_key = format!("{}:{}", key.0, key.1);
+        let (run_name, consent_key) = unit_names(&key);
+        let run_dir = plan::run_dir(&context.data_dir, &key.0, &run_name);
         let described = plan::describe(runner, root, &run_dir, &consent_key)?;
         // Held to the end: one start per project at a time, and consent writes are serialized.
         let mut runs = self.runs();
@@ -316,19 +341,21 @@ pub async fn detect_project_runner(
     projects: tauri::State<'_, AgentProjectsState>,
     source: String,
     project_id: String,
-) -> Result<Runner, String> {
+) -> Result<Vec<RunUnit>, String> {
     let projects = projects.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let root = resolve_project_dir(&app, &projects, &source, &project_id)?;
-        Ok(detect::detect(&root))
+        Ok(detect::detect_units(&root))
     })
     .await
     .map_err(|_| "scan_failed".to_string())?
 }
 
-/// Runs the project and opens it in the system browser. `file_id` picks the page of a project
-/// made of single HTML pages; `consent` is the fingerprint of the confirmed commands of a code
-/// project.
+/// Runs a unit of the project (`dir`, empty or absent for the project folder) and opens it in
+/// the system browser. `file_id` picks the page of a unit made of single HTML pages; `consent`
+/// is the fingerprint of the confirmed commands of a code project.
+// Each argument is one field of the WebView's invoke payload; a struct would only nest them.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn start_project(
     app: tauri::AppHandle,
@@ -336,14 +363,16 @@ pub async fn start_project(
     runs: tauri::State<'_, ProjectRunnerState>,
     source: String,
     project_id: String,
+    dir: Option<String>,
     file_id: Option<String>,
     consent: Option<String>,
 ) -> Result<StartOutcome, String> {
     let (projects, runs) = (projects.inner().clone(), runs.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
-        let root = resolve_project_dir(&app, &projects, &source, &project_id)?;
-        let runner = detect::detect(&root);
-        let key = (source, project_id);
+        let dir = dir.unwrap_or_default();
+        let project = resolve_project_dir(&app, &projects, &source, &project_id)?;
+        let (root, runner) = unit_at(&project, &dir)?;
+        let key = (source, project_id, dir);
         let outcome = match runner {
             Runner::Node { .. } | Runner::Python { .. } => {
                 let opener: Ready = Box::new(|url| {
@@ -383,9 +412,11 @@ pub async fn stop_project(
     runs: tauri::State<'_, ProjectRunnerState>,
     source: String,
     project_id: String,
+    dir: Option<String>,
 ) -> Result<RunStatus, String> {
     let runs = runs.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || runs.stop(&(source, project_id)))
+    let key = (source, project_id, dir.unwrap_or_default());
+    tauri::async_runtime::spawn_blocking(move || runs.stop(&key))
         .await
         .map_err(|_| "run_failed".to_string())
 }
@@ -395,8 +426,9 @@ pub fn project_run_status(
     runs: tauri::State<'_, ProjectRunnerState>,
     source: String,
     project_id: String,
+    dir: Option<String>,
 ) -> RunStatus {
-    runs.status(&(source, project_id))
+    runs.status(&(source, project_id, dir.unwrap_or_default()))
 }
 
 #[cfg(test)]
@@ -438,7 +470,52 @@ mod tests {
     }
 
     fn key(id: &str) -> RunKey {
-        ("codex".into(), id.into())
+        ("codex".into(), id.into(), String::new())
+    }
+
+    #[test]
+    fn units_are_found_only_where_the_host_detected_them() {
+        let root = project(
+            "units",
+            &[
+                ("game/index.html", "<p>g</p>"),
+                ("site/dist/index.html", "<p>s</p>"),
+                ("notes.md", "x"),
+            ],
+        );
+        let (folder, runner) = unit_at(&root, "site").unwrap();
+        assert_eq!(folder, root.join("site"));
+        assert_eq!(runner, Runner::Static { dir: "dist".into() });
+        for dir in ["", "..", "../units", "game/..", "notes.md", "missing"] {
+            assert_eq!(unit_at(&root, dir).unwrap_err(), "not_runnable", "{dir}");
+        }
+        // Each unit runs on its own and keeps its own run state.
+        let runs = ProjectRunnerState::default();
+        let unit = |dir: &str| {
+            (
+                "fred".to_string(),
+                "conversation-1".to_string(),
+                dir.to_string(),
+            )
+        };
+        for dir in ["game", "site"] {
+            let (folder, runner) = unit_at(&root, dir).unwrap();
+            runs.start_static(unit(dir), &folder, &runner, None)
+                .unwrap();
+        }
+        let game = runs.status(&unit("game")).url.unwrap();
+        assert!(get(&game).ends_with("<p>g</p>"));
+        assert!(get(&runs.status(&unit("site")).url.unwrap()).ends_with("<p>s</p>"));
+        runs.stop(&unit("game"));
+        assert!(!runs.status(&unit("game")).running);
+        assert!(runs.status(&unit("site")).running);
+        runs.stop_all();
+        // A project's own unit keeps the names it had before units.
+        assert_eq!(unit_names(&key("p")), ("p".into(), "codex:p".into()));
+        let (name, consent) = unit_names(&unit("site"));
+        assert!(name.starts_with("conversation-1-") && name.len() == "conversation-1-".len() + 16);
+        assert_eq!(consent, "fred:conversation-1/site");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn serve(

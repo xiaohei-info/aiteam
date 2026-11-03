@@ -18,9 +18,12 @@ import {
   needsPolling,
   projectRunnerKind,
   PROJECT_SOURCES,
+  runnableUnitCount,
   runPhaseText,
   runStatusFromOutcome,
   sortProjects,
+  unitKey,
+  unitRevealFile,
   usesDeepSeek,
   visibleTreeRows,
   type FredWorkspaceWire,
@@ -225,9 +228,23 @@ const status = (overrides: Partial<RunStatus>): RunStatus => ({
 })
 
 test('run state: badges, page choice, phase text and polling', () => {
-  assert.equal(projectRunnerKind([{ kind: 'html', files: [] }, { kind: 'node', script: 'dev' }]), 'node')
-  assert.equal(projectRunnerKind([{ kind: 'none' }]), 'none')
-  assert.equal(projectRunnerKind([{ kind: 'static', dir: '' }, undefined]), null)
+  const demos = [
+    { dir: '', runner: { kind: 'html' as const, files: [] } },
+    { dir: 'vite-demo', runner: { kind: 'node' as const, script: 'dev' } },
+    { dir: 'game', runner: { kind: 'static' as const, dir: '' } },
+  ]
+  assert.equal(projectRunnerKind([demos]), 'node')
+  assert.equal(runnableUnitCount([demos, [{ dir: '', runner: { kind: 'none' } }]]), 3)
+  assert.equal(projectRunnerKind([[{ dir: '', runner: { kind: 'none' } }]]), 'none')
+  assert.equal(projectRunnerKind([demos, undefined]), null)
+  assert.notEqual(unitKey({ source: 'fred', id: KEY_A }, ''), unitKey({ source: 'fred', id: KEY_A }, 'game'))
+
+  // Showing a subfolder app selects a file directly in it, which opens that folder.
+  const part = { files: [file('1', 'vite-demo/src/main.js'), file('2', 'vite-demo/package.json'), file('3', 'game/index.html')].map(wire => fromLocalProject(localProject({ files: [wire] })).parts[0].files[0]) }
+  assert.equal(unitRevealFile(part, 'vite-demo')?.path, 'vite-demo/package.json')
+  assert.equal(unitRevealFile(part, 'game')?.path, 'game/index.html')
+  assert.equal(unitRevealFile(part, ''), null)
+  assert.equal(unitRevealFile(part, 'missing'), null)
 
   const pages = { kind: 'html' as const, files: [{ id: 'p1', path: 'a.html' }, { id: 'p2', path: 'b.html' }] }
   assert.equal(htmlPageToRun(pages, 'p2'), 'p2')

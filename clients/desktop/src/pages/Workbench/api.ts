@@ -16,8 +16,8 @@ import {
   type ProjectFileContentWire,
   type ProjectPart,
   type ProjectSummary,
-  type Runner,
   type RunStatus,
+  type RunUnit,
   type SourceState,
   type StartOutcome,
 } from './projects'
@@ -101,53 +101,55 @@ export async function openProjectFile(part: ProjectPart, file: ProjectFile | nul
   }
 }
 
-export async function detectRunner(part: ProjectPart): Promise<Runner> {
+/** 目录里能单独运行的单元：目录本身是一个应用时只有它，否则每个子文件夹应用各一个。 */
+export async function detectUnits(part: ProjectPart): Promise<RunUnit[]> {
   try {
-    return await invoke<Runner>('detect_project_runner', target(part))
+    return await invoke<RunUnit[]>('detect_project_runner', target(part))
   } catch (error) {
     throw hostError(error)
   }
 }
 
 /** 运行并在系统浏览器打开；代码项目第一次（或命令、依赖变化后）先返回待确认的命令。 */
-export async function startProject(part: ProjectPart, options: { fileId?: string | null; consent?: string | null } = {}): Promise<StartOutcome> {
+export async function startProject(part: ProjectPart, dir: string, options: { fileId?: string | null; consent?: string | null } = {}): Promise<StartOutcome> {
   try {
-    return await invoke<StartOutcome>('start_project', { ...target(part), fileId: options.fileId ?? null, consent: options.consent ?? null })
+    return await invoke<StartOutcome>('start_project', { ...target(part), dir, fileId: options.fileId ?? null, consent: options.consent ?? null })
   } catch (error) {
     throw hostError(error, '运行失败，请重试')
   }
 }
 
-export async function stopProject(part: ProjectPart): Promise<RunStatus> {
+export async function stopProject(part: ProjectPart, dir: string): Promise<RunStatus> {
   try {
-    return await invoke<RunStatus>('stop_project', target(part))
+    return await invoke<RunStatus>('stop_project', { ...target(part), dir })
   } catch (error) {
     throw hostError(error, '停止失败，请重试')
   }
 }
 
-export async function projectRunStatus(part: ProjectPart): Promise<RunStatus> {
-  return invoke<RunStatus>('project_run_status', target(part))
+export async function projectRunStatus(part: ProjectPart, dir: string): Promise<RunStatus> {
+  return invoke<RunStatus>('project_run_status', { ...target(part), dir })
 }
 
 const DETECT_CONCURRENCY = 4
-const NOT_RUNNABLE: Runner = { kind: 'none' }
+const NOT_RUNNABLE: RunUnit[] = [{ dir: '', runner: { kind: 'none' } }]
 
-/** 逐个识别运行方式并取当前运行状态（应用内可能已在运行）；单个失败按不可运行处理。 */
+/** 逐个识别运行单元并取各单元当前运行状态（应用内可能已在运行）；单个失败按不可运行处理。 */
 export async function detectRunners(
   parts: ProjectPart[],
-  onResult: (part: ProjectPart, runner: Runner, status: RunStatus | null) => void,
+  onResult: (part: ProjectPart, units: RunUnit[], statuses: Record<string, RunStatus>) => void,
 ): Promise<void> {
   let next = 0
   const worker = async () => {
     while (next < parts.length) {
       const part = parts[next]
       next += 1
-      const [runner, status] = await Promise.all([
-        detectRunner(part).catch(() => NOT_RUNNABLE),
-        projectRunStatus(part).catch(() => null),
-      ])
-      onResult(part, runner, status)
+      const units = await detectUnits(part).catch(() => NOT_RUNNABLE)
+      const statuses = await Promise.all(units.map(unit => projectRunStatus(part, unit.dir).catch(() => null)))
+      onResult(part, units, Object.fromEntries(units.flatMap((unit, index) => {
+        const status = statuses[index]
+        return status?.phase ? [[unit.dir, status] as const] : []
+      })))
     }
   }
   await Promise.all(Array.from({ length: Math.min(DETECT_CONCURRENCY, parts.length) }, worker))
