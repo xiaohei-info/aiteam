@@ -30,6 +30,7 @@ function fixture(config: string = TEMPLATE) {
   const directory = mkdtempSync(path.join(tmpdir(), 'aiteam-package-test-'))
   const files = [
     entry(directory, 'runtime/node', 'node executable bytes'),
+    entry(directory, 'runtime/npm/bin/npm-cli.js', 'npm cli'),
     entry(directory, 'bin/start-agent.mjs', 'launcher'),
     entry(directory, 'dist/main.js', 'runtime'),
     entry(directory, 'node_modules/tsx/dist/esm/index.mjs', 'tsx'),
@@ -59,6 +60,14 @@ test('template packages are reported as unconfigured instead of passing silently
       hasJwks: false,
       hasSkillKey: false,
     })
+  } finally { rmSync(f.directory, { recursive: true, force: true }) }
+})
+
+test('a package without the bundled npm is rejected so the workbench can run Node projects', () => {
+  const f = fixture()
+  try {
+    rmSync(path.join(f.directory, 'runtime/npm'), { recursive: true, force: true })
+    assert.throws(() => checkAgentPackage(f.directory), /bundled npm.*pnpm agent:build/)
   } finally { rmSync(f.directory, { recursive: true, force: true }) }
 })
 
