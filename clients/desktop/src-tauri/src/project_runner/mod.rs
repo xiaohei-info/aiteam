@@ -234,7 +234,7 @@ impl ProjectRunnerState {
             steps,
             root.to_path_buf(),
             plan::child_env(&prefix, port),
-            &run_dir.join("run.log"),
+            &run_dir,
             ready,
         )?));
         let status = run.status();
@@ -305,6 +305,15 @@ fn run_context(app: &tauri::AppHandle) -> Result<RunContext, String> {
         source: plan::load_source(&data_dir),
         data_dir,
     })
+}
+
+/// Ends, in the background, the projects an earlier instance left running when it was killed.
+/// Only macOS takes the single-instance lock (in `agent::setup`) that makes this safe.
+#[cfg(target_os = "macos")]
+pub fn end_leftovers(app: &tauri::AppHandle) {
+    if let Ok(data_dir) = app_data_dir(app) {
+        std::thread::spawn(move || process::end_leftovers(&plan::runs_root(&data_dir)));
+    }
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {

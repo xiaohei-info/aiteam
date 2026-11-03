@@ -147,11 +147,15 @@ pub struct CodePlan {
     pub fingerprint: String,
 }
 
-/// `<app data>/workbench-runs/<source>-<project id>`: venv, dependency marker and log.
+/// `<app data>/workbench-runs`: one folder per run.
+pub fn runs_root(data_dir: &Path) -> PathBuf {
+    data_dir.join("workbench-runs")
+}
+
+/// `<app data>/workbench-runs/<source>-<project id>`: venv, dependency marker, log and the
+/// record of the running step.
 pub fn run_dir(data_dir: &Path, source: &str, project_id: &str) -> PathBuf {
-    data_dir
-        .join("workbench-runs")
-        .join(format!("{source}-{project_id}"))
+    runs_root(data_dir).join(format!("{source}-{project_id}"))
 }
 
 fn venv_python(venv: &Path) -> PathBuf {

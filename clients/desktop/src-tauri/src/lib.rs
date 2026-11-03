@@ -18,7 +18,13 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder
         .manage(agent::AgentState::default())
-        .setup(agent::setup);
+        .setup(|app| {
+            agent::setup(app)?;
+            // After `agent::setup` takes the single-instance lock: any recorded run is a
+            // leftover of a killed instance, not of one still running.
+            project_runner::end_leftovers(app.handle());
+            Ok(())
+        });
 
     builder
         .manage(file_access::FileAccessState::default())

@@ -1,7 +1,10 @@
 //! Node and Python projects run as child processes (workbench plan §4.3). Each run is one
 //! process group running its steps in order (install, then start). Output is kept as the last
 //! 500 lines and in a log file, and the first loopback address the start step prints is opened.
-use serde::Serialize;
+//! The running step is recorded in the run folder so a later instance can end it if the app was
+//! killed before it could (see `end_leftovers`).
+use crate::agent_projects::read_small;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,6 +22,88 @@ const MAX_READ_BYTES: u64 = 64 * 1024;
 pub const URL_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(unix)]
 const STOP_GRACE: Duration = Duration::from_secs(3);
+const LOG_FILE: &str = "run.log";
+const RECORD_FILE: &str = "process.json";
+const MAX_RECORD_BYTES: u64 = 1024;
+
+/// The running step: its process group and when its leader started. The start time tells the
+/// recorded process apart from an unrelated one that got the pid later.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Record {
+    pid: u32,
+    started: u64,
+}
+
+/// When the process started, as the OS records it; `None` if it is gone or unknown here.
+#[cfg(target_os = "macos")]
+fn start_time(pid: u32) -> Option<u64> {
+    let pid = i32::try_from(pid).ok()?;
+    let size = i32::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
+    // SAFETY: all-zero is a valid `proc_bsdinfo` (integers and byte arrays only).
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: the buffer is a `proc_bsdinfo` of exactly `size` bytes.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (written == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+}
+
+#[cfg(target_os = "linux")]
+fn start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name in parentheses may hold spaces; field 22, the start time, is the 20th
+    // after it.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+/// Windows records nothing, so its leftovers are not ended (release builds are macOS only).
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn start_time(_pid: u32) -> Option<u64> {
+    None
+}
+
+fn write_record(path: &Path, pid: u32) {
+    let Some(started) = start_time(pid) else {
+        return;
+    };
+    if let Ok(text) = serde_json::to_string(&Record { pid, started }) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Ends the runs an earlier instance left behind when it was killed (force quit, crash) before it
+/// could stop them, and clears their records. Call only while holding the single-instance lock,
+/// so no live instance owns them. A record whose process is gone or now a different process is
+/// only cleared.
+// Only macOS takes the single-instance lock, so only it calls this outside tests.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn end_leftovers(runs_root: &Path) {
+    let Ok(entries) = std::fs::read_dir(runs_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path().join(RECORD_FILE);
+        let record = read_small(&path, MAX_RECORD_BYTES)
+            .and_then(|text| serde_json::from_str::<Record>(&text).ok());
+        if let Some(record) = record {
+            if start_time(record.pid) == Some(record.started) {
+                terminate_group(record.pid);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+}
 
 /// One command of a run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +148,7 @@ struct Shared {
     logs: VecDeque<String>,
     log_file: Option<File>,
     ready: Option<Ready>,
+    record: PathBuf,
 }
 
 impl Shared {
@@ -97,20 +183,19 @@ pub struct Snapshot {
 pub struct ProcessRun(Arc<Mutex<Shared>>);
 
 impl ProcessRun {
+    /// `run_dir` keeps the log and the record of the running step.
     pub fn start(
         steps: Vec<Step>,
         cwd: PathBuf,
         env: Vec<(String, String)>,
-        log_path: &Path,
+        run_dir: &Path,
         ready: Ready,
     ) -> Result<Self, String> {
         if steps.is_empty() {
             return Err("not_runnable".into());
         }
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| "run_failed")?;
-        }
-        let log_file = File::create(log_path).map_err(|_| "run_failed")?;
+        std::fs::create_dir_all(run_dir).map_err(|_| "run_failed")?;
+        let log_file = File::create(run_dir.join(LOG_FILE)).map_err(|_| "run_failed")?;
         let shared = Arc::new(Mutex::new(Shared {
             phase: Phase::Preparing,
             url: None,
@@ -121,6 +206,7 @@ impl ProcessRun {
             logs: VecDeque::new(),
             log_file: Some(log_file),
             ready: Some(ready),
+            record: run_dir.join(RECORD_FILE),
         }));
         let supervised = shared.clone();
         std::thread::Builder::new()
@@ -146,17 +232,18 @@ impl ProcessRun {
 
     /// Ends the current step and its descendants; later steps do not start.
     pub fn stop(&self) {
-        let pid = {
+        let (pid, record) = {
             let mut state = lock(&self.0);
             state.stopping = true;
             if state.phase.active() {
                 state.phase = Phase::Stopped;
                 state.log("已停止");
             }
-            state.pid
+            (state.pid, state.record.clone())
         };
         if let Some(pid) = pid {
             terminate_group(pid);
+            let _ = std::fs::remove_file(record);
         }
     }
 }
@@ -168,6 +255,7 @@ impl Drop for ProcessRun {
 }
 
 fn supervise(shared: &Arc<Mutex<Shared>>, steps: &[Step], cwd: &Path, env: &[(String, String)]) {
+    let record = lock(shared).record.clone();
     for (index, step) in steps.iter().enumerate() {
         let starting = index + 1 == steps.len();
         // Spawn under the lock so a concurrent stop either prevents the step or sees its pid.
@@ -184,6 +272,7 @@ fn supervise(shared: &Arc<Mutex<Shared>>, steps: &[Step], cwd: &Path, env: &[(St
             match spawn(step, cwd, env) {
                 Ok(child) => {
                     state.pid = Some(child.id());
+                    write_record(&record, child.id());
                     child
                 }
                 Err(error) => {
@@ -215,6 +304,7 @@ fn supervise(shared: &Arc<Mutex<Shared>>, steps: &[Step], cwd: &Path, env: &[(St
         let status = child.wait();
         // Background processes the step left behind would keep the output open; end them.
         terminate_group(pid);
+        let _ = std::fs::remove_file(&record);
         for reader in readers {
             let _ = reader.join();
         }
@@ -451,10 +541,81 @@ mod tests {
                 steps,
                 dir.to_path_buf(),
                 env(),
-                &dir.join("logs/run.log"),
+                &dir.join("logs"),
                 Box::new(|_| {}),
             )
             .unwrap()
+        }
+
+        fn alive(pid: i32) -> bool {
+            // SAFETY: signal 0 only checks whether the process exists.
+            unsafe { libc::kill(pid, 0) == 0 }
+        }
+
+        /// `sleep 30` leading its own process group, as a run's step does.
+        fn sleeper() -> std::process::Child {
+            use std::os::unix::process::CommandExt;
+            Command::new("/bin/sleep")
+                .arg("30")
+                .process_group(0)
+                .spawn()
+                .unwrap()
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[test]
+        fn the_running_step_is_recorded_until_it_is_stopped() {
+            let dir = temp("record");
+            let run = start(&dir, vec![sh("echo up; sleep 30")]);
+            wait(&run, |snapshot| {
+                snapshot.logs.iter().any(|line| line == "up")
+            });
+            let path = dir.join("logs").join(RECORD_FILE);
+            let record: Record =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(Some(record.pid), lock(&run.0).pid);
+            assert_eq!(start_time(record.pid), Some(record.started));
+            run.stop();
+            assert!(!path.exists());
+            assert!(dir.join("logs").join(LOG_FILE).is_file());
+            drop(run);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[test]
+        fn leftovers_are_ended_only_when_the_record_still_matches() {
+            let root = temp("leftovers");
+            let mut leftover = sleeper();
+            let mut unrelated = sleeper();
+            let write = |name: &str, text: String| {
+                std::fs::create_dir_all(root.join(name)).unwrap();
+                std::fs::write(root.join(name).join(RECORD_FILE), text).unwrap();
+            };
+            let record =
+                |pid: u32, started: u64| serde_json::to_string(&Record { pid, started }).unwrap();
+            write(
+                "left",
+                record(leftover.id(), start_time(leftover.id()).unwrap()),
+            );
+            // Same pid, another start time: the pid now belongs to an unrelated process.
+            let reused = record(unrelated.id(), start_time(unrelated.id()).unwrap() + 1);
+            write("reused", reused);
+            write("broken", "{".into());
+            std::fs::create_dir_all(root.join("idle")).unwrap();
+
+            end_leftovers(&root);
+            assert!(leftover.wait().is_ok());
+            assert!(alive(unrelated.id() as i32));
+            for name in ["left", "reused", "broken", "idle"] {
+                assert!(!root.join(name).join(RECORD_FILE).exists(), "{name}");
+            }
+            assert!(root.join("idle").is_dir());
+            end_leftovers(&root.join("missing"));
+
+            unrelated.kill().unwrap();
+            unrelated.wait().unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
         }
 
         fn wait(run: &ProcessRun, done: impl Fn(&Snapshot) -> bool) -> Snapshot {
@@ -499,7 +660,7 @@ mod tests {
                 )],
                 dir.clone(),
                 env(),
-                &dir.join("run.log"),
+                &dir,
                 Box::new(move |url| sender.send(url).unwrap()),
             )
             .unwrap();
@@ -556,10 +717,9 @@ mod tests {
                 .unwrap();
             run.stop();
             assert_eq!(run.snapshot().phase, Phase::Stopped);
-            // SAFETY: signal 0 only checks whether the background child still exists.
             let gone = (0..100).any(|_| {
                 std::thread::sleep(Duration::from_millis(20));
-                unsafe { libc::kill(child, 0) != 0 }
+                !alive(child)
             });
             assert!(gone, "the background child should be ended with its group");
             std::thread::sleep(Duration::from_millis(200));

@@ -60,8 +60,9 @@
 
 - 子进程先清空所有环境变量，只保留白名单中的变量：`HOME`、`USER`、`LOGNAME`、`LANG`、`TMPDIR`。Windows 上另外保留 `USERPROFILE`、`TEMP`、`TMP`、`SYSTEMROOT`、`COMSPEC`、`PATHEXT`、`APPDATA`、`LOCALAPPDATA`。同时设置 `PYTHONUNBUFFERED=1` 和 `BROWSER=none`。`AITEAM_*` 和各种凭据都不会传给子进程。
 - 进程状态分为 `preparing`、`starting`、`running`、`exited`、`failed`、`stopped`。访问地址从进程输出中识别：输出里第一个 loopback 地址就是访问地址，30 秒内没有识别到就提示用户查看日志。日志最多保留 500 行。
-- 停止时，macOS 和 Linux 先向进程组发 SIGTERM，3 秒后仍未退出就发 SIGKILL；Windows 用 `taskkill /PID <pid> /T /F` 结束整个进程树。退出应用时会停止所有运行中的项目。
-- 运行状态放在 `<应用数据目录>/workbench-runs/<来源>-<项目 id>[-<子文件夹 id>]/`，包括 `venv/`、`dependencies.sha256` 和 `run.log`。Node 的 `node_modules` 装在项目目录里。
+- 停止时，macOS 和 Linux 先向进程组发 SIGTERM，3 秒后仍未退出就发 SIGKILL；Windows 用 `taskkill /PID <pid> /T /F` 结束整个进程树。正常退出应用时会停止所有运行中的项目。
+- 应用被强制结束（强制退出、崩溃、开发时重新编译）时来不及停止项目。为此，每个步骤运行期间会在运行目录写一个 `process.json`，记下进程号和该进程的启动时间，步骤结束或停止后删除。下次启动时，桌面端先拿到单实例锁，再在后台检查这些记录：进程号还在、启动时间也一致，就结束整个进程组；否则（进程已退出，或进程号已被其他程序占用）只删除记录。仅 macOS 生效；在那之前，遗留的进程会一直占用端口。
+- 运行状态放在 `<应用数据目录>/workbench-runs/<来源>-<项目 id>[-<子文件夹 id>]/`，包括 `venv/`、`dependencies.sha256`、`run.log` 和 `process.json`。Node 的 `node_modules` 装在项目目录里。
 
 ### 3.4 首次运行确认
 
