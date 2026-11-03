@@ -11,6 +11,7 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+mod project_runner;
 mod secure_session;
 
 pub fn run() {
@@ -25,6 +26,7 @@ pub fn run() {
         .manage(office_editor::OfficeEditorState::default())
         .manage(agent_solutions::AgentSolutionsState::default())
         .manage(agent_projects::AgentProjectsState::default())
+        .manage(project_runner::ProjectRunnerState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -71,6 +73,10 @@ pub fn run() {
             agent_projects::list_fred_workspace_files,
             agent_projects::read_project_file,
             agent_projects::open_project_file,
+            project_runner::detect_project_runner,
+            project_runner::start_project,
+            project_runner::stop_project,
+            project_runner::project_run_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

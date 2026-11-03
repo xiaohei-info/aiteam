@@ -35,7 +35,7 @@ const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_ID_LEN: usize = 128;
 /// Claude desktop session records also hold system prompts and tool settings.
 const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
+pub(crate) const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_FRED_KEYS: usize = 1_000;
 /// Folders created shortly before a session's first record still belong to it.
 const CREATION_GRACE_MS: i64 = 2 * 60 * 1000;
@@ -433,7 +433,7 @@ fn cowork_storage(transcript: &Path) -> Option<&Path> {
 }
 
 /// A small regular file as text; symlinks are not followed.
-fn read_small(path: &Path, max: u64) -> Option<String> {
+pub(crate) fn read_small(path: &Path, max: u64) -> Option<String> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() || meta.len() > max {
         return None;
@@ -517,7 +517,7 @@ fn is_sensitive_stem(stem: &str) -> bool {
         .any(|part| SENSITIVE_NAME_PARTS.contains(&part))
 }
 
-fn is_sensitive_file(name: &str) -> bool {
+pub(crate) fn is_sensitive_file(name: &str) -> bool {
     let path = Path::new(name);
     let lower = |part: Option<&std::ffi::OsStr>| {
         part.and_then(|part| part.to_str())
@@ -1144,6 +1144,11 @@ fn relative_path(root: &Path, path: &Path) -> Option<String> {
 
 /// The project's files in path order: non-empty regular files outside hidden, dependency and
 /// cache folders, without credential-like names. Symlinks are not followed.
+/// The project's listed files, as the workbench shows them.
+pub(crate) fn project_files(root: &Path) -> Vec<ProjectFile> {
+    list_project(root, MAX_PROJECT_FILES).files
+}
+
 fn list_project(root: &Path, limit: usize) -> Listing {
     let mut files = Vec::new();
     let mut truncated = false;
@@ -1731,6 +1736,18 @@ impl AgentProjectsState {
         }
         Ok(dir)
     }
+}
+
+/// The folder of a listed project, resolved again by the host from the WebView's source and
+/// opaque id. Blocking: it may rescan the sessions.
+pub(crate) fn resolve_project_dir(
+    app: &tauri::AppHandle,
+    state: &AgentProjectsState,
+    source: &str,
+    project_id: &str,
+) -> Result<PathBuf, String> {
+    let source = parse_target(source, project_id, None)?;
+    state.resolve(source, project_id, &fred_workspace_root(app)?)
 }
 
 fn parse_target(
