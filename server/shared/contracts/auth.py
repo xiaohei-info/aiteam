@@ -30,7 +30,8 @@ class TokenClaims(BaseModel):
     iss: str | None = Field(default=None, description="JWT issuer；Agent 生产验签必填")
     aud: str | list[str] | None = Field(default=None, description="JWT audience；Agent 生产验签必填")
     iat: int | None = Field(default=None, description="JWT issued-at Unix 秒")
-    exp: int = Field(description="过期时间（Unix 秒）。短期 access token，过期需重新联网登录")
+    exp: int = Field(description="过期时间（Unix 秒）。统一登录会话 TTL 到期后需重新登录")
+    jti: str | None = Field(default=None, description="服务端认证会话标识；受保护入口必须对应 active session")
 
 
 class UserPrincipal(BaseModel):

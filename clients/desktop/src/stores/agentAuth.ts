@@ -441,7 +441,11 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
 
   logout: async (reason = { reason: 'user_logout', source: 'user' }) => {
     const generation = beginSessionOperation()
+    const token = get().token
     recordAuthDiagnostic({ ...reason, expiresInSeconds: reason.expiresInSeconds ?? sessionRemainingSeconds(get().claims?.exp) })
+    if (token) {
+      await new AgentApiClient({ getToken: () => token }).logout().catch(() => undefined)
+    }
     // Revoke runtime access synchronously; serialize the keychain deletion
     // behind any in-flight migration/write so a stale token cannot win.
     removeLegacySession()

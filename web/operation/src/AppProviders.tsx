@@ -107,6 +107,9 @@ export function AppProviders({ children }: { children: ReactNode }): ReactNode {
         setToken(newToken);
       },
       signOut: () => {
+        if (token) {
+          void fetch("/api/operation/auth/logout", { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined);
+        }
         writeStoredToken(null);
         setToken(null);
       },

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { parsePublicJwks, verifyJwt, type AuthenticatedCaller, type JwtJwk } from "./auth.js";
+import { parsePublicJwks, verifyJwt, type AuthenticatedCaller, type AuthenticateRequest, type JwtJwk } from "./auth.js";
 
 const TENANT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TTL_MS = 60_000;
@@ -33,7 +33,9 @@ export class ManagerJwksAuthenticator {
     if (!entry) throw new Error("Tenant requires Manager login");
     if (entry.expires <= Date.now() || !entry.keys.has(kid)) await this.refresh(tenant, entry);
     if (entry.expires <= Date.now()) throw new Error("Manager public keys expired");
-    return verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience, clockSkewSeconds: 0 });
+    const caller = verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience, clockSkewSeconds: 0 });
+    await verifyManagerSession(this.origin, token);
+    return caller;
   };
 
   async verifyLoginToken(token: string, expectedTenant: string): Promise<AuthenticatedCaller> {
@@ -111,4 +113,39 @@ export class ManagerJwksAuthenticator {
     if (jwks.keys.length > 32 || jwks.keys.some((key) => !this.scopedKid(key.kid, tenant))) throw new Error("Manager public key tenant scope invalid");
     return new Map(jwks.keys.map((key) => [key.kid, key]));
   }
+}
+
+export async function verifyManagerSession(origin: string, token: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${origin}/api/auth/session`, {
+      redirect: "error",
+      signal: AbortSignal.timeout(3000),
+      headers: { accept: "application/json", authorization: `Bearer ${token}` },
+    });
+  } catch (cause) {
+    throw new Error("Manager authentication session is unavailable", { cause });
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 401 || response.status === 403) throw new Error("Manager authentication session is revoked");
+    throw new Error("Manager authentication session check failed");
+  }
+  await response.body?.cancel();
+}
+
+/** Apply the same Manager session authority to static-JWKS Agent packages. */
+export class ManagerSessionAuthenticator {
+  private readonly origin: string;
+
+  constructor(private readonly local: AuthenticateRequest, managerUrl: string) {
+    this.origin = new URL(managerUrl).origin;
+  }
+
+  readonly authenticate = async (request: IncomingMessage): Promise<AuthenticatedCaller> => {
+    const caller = await this.local(request);
+    if (!caller.accessToken) throw new Error("Manager bearer token is unavailable");
+    await verifyManagerSession(this.origin, caller.accessToken);
+    return caller;
+  };
 }

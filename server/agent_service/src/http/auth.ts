@@ -11,6 +11,7 @@ export interface JwtClaims {
   exp?: number;
   nbf?: number;
   iat?: number;
+  jti?: string;
   enterprise_id?: string;
   [key: string]: unknown;
 }

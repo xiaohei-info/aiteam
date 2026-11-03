@@ -284,4 +284,8 @@ export class AgentApiClient extends ServiceApiClient {
   constructor(options: AgentClientOptions = {}) {
     super(options, 'agent')
   }
+
+  async logout(): Promise<void> {
+    await this.request<{ signed_out: boolean }>({ method: 'POST', path: '/api/agent/logout' })
+  }
 }

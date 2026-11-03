@@ -58,8 +58,8 @@ def _register_and_publish_expert(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -84,8 +84,8 @@ def _register_and_publish_solution(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -157,8 +157,8 @@ def test_pull_expert_template_not_published(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -185,8 +185,8 @@ def _register_solution_with_bindings(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -300,8 +300,8 @@ def _register_solution_with_orchestration(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -364,8 +364,8 @@ def _register_expert_with_full_config(client):
 
     def _token(role: str) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}
@@ -443,8 +443,8 @@ def test_pull_expert_template_prd_required_rejected(client):
 
     def _token(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> str:
         from operation_service.app import _auth
-        from shared.contracts.auth import TokenClaims
-        return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+        from tests.operation.auth_helpers import operation_test_token
+        return operation_test_token(_auth, user_id="op1", role=role)
 
     def _auth_header(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:
         return {"Authorization": f"Bearer {_token(role)}"}

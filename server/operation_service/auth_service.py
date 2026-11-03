@@ -9,19 +9,21 @@ Operation 自持系统级 RSA 密钥（启动生成或 env 注入），自签自
 from __future__ import annotations
 
 import os
-import time
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict
 
 from shared.auth import RS256TokenSigner, generate_rsa_keypair
+from shared.auth.constants import AUTH_SESSION_TTL_SECONDS
 from shared.contracts.auth import TokenClaims
 from shared.errors import Unauthorized
 from shared.security import verify_password
 
 from .system_repository import SystemAccount, SystemAccountRepository, build_system_account_repository
+from .auth_sessions import OperationAuthSessionRepository
 
 KID = "operation:1"
-_ACCESS_TTL_SECONDS = 3600
+_ACCESS_TTL_SECONDS = AUTH_SESSION_TTL_SECONDS
 
 
 class SystemLoginInput(BaseModel):
@@ -45,15 +47,21 @@ class SystemAuthResult(BaseModel):
 class OperationAuthService:
     """运营端系统账号认证：本地校验凭据 + RS256 签发系统 token。"""
 
-    def __init__(self, *, repo: SystemAccountRepository, signer: RS256TokenSigner, kid: str = KID):
+    def __init__(self, *, repo: SystemAccountRepository, signer: RS256TokenSigner,
+                 sessions: OperationAuthSessionRepository | None = None, kid: str = KID):
         self._repo = repo
         self._signer = signer
+        self._sessions = sessions or OperationAuthSessionRepository()
         self.kid = kid
 
     @property
     def signer(self) -> RS256TokenSigner:
         """签发器（供 app 构造验签器取公钥；内部 login 用）。"""
         return self._signer
+
+    @property
+    def sessions(self) -> OperationAuthSessionRepository:
+        return self._sessions
 
     def login(self, req: SystemLoginInput) -> SystemAuthResult:
         account = self._repo.find(req.username)
@@ -62,13 +70,25 @@ class OperationAuthService:
         return self._issue(account)
 
     def _issue(self, account: SystemAccount) -> SystemAuthResult:
+        issued_at = datetime.now(UTC)
+        expires_at = issued_at + timedelta(seconds=_ACCESS_TTL_SECONDS)
+        jti = self._sessions.create(
+            user_id=account.username,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
         claims = TokenClaims(
             tenant_id=None,  # 平台级系统账号，无 tenant
             user_id=account.username,
             roles=account.roles,
-            exp=int(time.time()) + _ACCESS_TTL_SECONDS,
+            iat=int(issued_at.timestamp()),
+            exp=int(expires_at.timestamp()),
+            jti=jti,
         )
         return SystemAuthResult(token=self._signer.sign(claims), claims=claims)
+
+    def revoke(self, claims: TokenClaims, *, reason: str) -> None:
+        self._sessions.revoke(claims, reason=reason)
 
 
 def _load_or_create_db_signing_key(admin_db_url: str, kid: str) -> str:
@@ -116,4 +136,9 @@ def build_operation_auth_service(admin_db_url: str | None = None) -> OperationAu
         priv_pem, _ = generate_rsa_keypair()
         signer = RS256TokenSigner(priv_pem, kid=KID)
     repo = build_system_account_repository()
-    return OperationAuthService(repo=repo, signer=signer, kid=KID)
+    return OperationAuthService(
+        repo=repo,
+        signer=signer,
+        sessions=OperationAuthSessionRepository(admin_db_url),
+        kid=KID,
+    )

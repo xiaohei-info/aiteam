@@ -13,9 +13,9 @@ from operation_service.catalog_repository import CatalogEntry, CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
 from shared.auth import DevTokenService
-from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.enums import CatalogStatus, CatalogType, EnterpriseRole, PlatformRole
+from tests.operation.auth_helpers import operation_test_token
 
 
 class FakeCatalogGateway(CatalogManagerGateway):
@@ -47,7 +47,7 @@ def _token(role: str) -> str:
     # 用 Operation app 的真实系统 RS256 key 签发（与 app._verifier 闭环，D23）。
     from operation_service.app import _auth
 
-    return _auth.signer.sign(TokenClaims(user_id="op1", roles=[role], exp=9999999999))
+    return operation_test_token(_auth, user_id="op1", role=role)
 
 
 def _auth(role: str = PlatformRole.SYSTEM_OPERATOR.value) -> dict:

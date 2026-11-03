@@ -41,6 +41,10 @@ async function mockManager() {
     }
     if (state.mode === "auth-disconnect") { req.socket.destroy(); return; }
     if (state.mode === "auth-redirect") { res.writeHead(307, { location: "http://127.0.0.1:1/forbidden" }); res.end(); return; }
+    if (req.url?.endsWith("/api/auth/session")) {
+      if (state.failAuth) { res.writeHead(401); res.end(JSON.stringify({ code: "unauthorized" })); return; }
+      res.end(JSON.stringify({ data: { active: true } })); return;
+    }
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);

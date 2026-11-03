@@ -16,6 +16,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['POST', '/api/auth/resolve-tenant-by-account'],
   ['POST', '/api/agent/login'],
   ['POST', '/api/agent/reset-password'],
+  ['POST', '/api/agent/logout'],
   ['POST', '/api/agent/audio/transcriptions'],
   ['GET', '/api/agent/ping'],
   ['GET', '/api/agent/whoami'],
