@@ -24,7 +24,7 @@ class OperationAuthSessionRepository:
 
             with psycopg.connect(self._dsn, autocommit=True) as conn:
                 conn.execute(
-                    "INSERT INTO auth_session (jti, user_id, issued_at, expires_at) "
+                    "INSERT INTO operation_auth_session (jti, user_id, issued_at, expires_at) "
                     "VALUES (%s, %s, %s, %s)",
                     (jti, user_id, issued_at, expires_at),
                 )
@@ -45,7 +45,7 @@ class OperationAuthSessionRepository:
 
             with psycopg.connect(self._dsn, autocommit=True) as conn:
                 row = conn.execute(
-                    "SELECT user_id, expires_at, revoked_at FROM auth_session WHERE jti = %s",
+                    "SELECT user_id, expires_at, revoked_at FROM operation_auth_session WHERE jti = %s",
                     (claims.jti,),
                 ).fetchone()
         else:
@@ -69,7 +69,7 @@ class OperationAuthSessionRepository:
 
             with psycopg.connect(self._dsn, autocommit=True) as conn:
                 conn.execute(
-                    "UPDATE auth_session SET revoked_at = COALESCE(revoked_at, now()), "
+                    "UPDATE operation_auth_session SET revoked_at = COALESCE(revoked_at, now()), "
                     "revoke_reason = COALESCE(revoke_reason, %s) "
                     "WHERE jti = %s AND user_id = %s",
                     (reason, claims.jti, claims.user_id),
@@ -86,7 +86,7 @@ class OperationAuthSessionRepository:
 
             with psycopg.connect(self._dsn, autocommit=True) as conn:
                 conn.execute(
-                    "UPDATE auth_session SET revoked_at = COALESCE(revoked_at, now()), "
+                    "UPDATE operation_auth_session SET revoked_at = COALESCE(revoked_at, now()), "
                     "revoke_reason = COALESCE(revoke_reason, %s) "
                     "WHERE user_id = %s AND revoked_at IS NULL",
                     (reason, user_id),

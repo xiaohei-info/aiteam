@@ -22,7 +22,7 @@ class ManagerAuthSessionRepository:
         jti = str(uuid4())
         with self._router.session(ctx) as session:
             session.execute(
-                "INSERT INTO auth_session "
+                "INSERT INTO manager_auth_session "
                 "(tenant_id, jti, user_id, issued_at, expires_at) "
                 "VALUES (%s, %s, %s, %s, %s)",
                 (ctx.tenant_id, jti, ctx.user_id, issued_at, expires_at),
@@ -35,7 +35,7 @@ class ManagerAuthSessionRepository:
         ctx = TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id, roles=claims.roles)
         with self._router.session(ctx) as session:
             row = session.execute(
-                "SELECT user_id, expires_at, revoked_at FROM auth_session "
+                "SELECT user_id, expires_at, revoked_at FROM manager_auth_session "
                 "WHERE jti = %s",
                 (claims.jti,),
             ).fetchone()
@@ -52,7 +52,7 @@ class ManagerAuthSessionRepository:
         ctx = TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id, roles=claims.roles)
         with self._router.session(ctx) as session:
             session.execute(
-                "UPDATE auth_session SET revoked_at = COALESCE(revoked_at, now()), "
+                "UPDATE manager_auth_session SET revoked_at = COALESCE(revoked_at, now()), "
                 "revoke_reason = COALESCE(revoke_reason, %s) "
                 "WHERE jti = %s AND user_id = %s",
                 (reason, claims.jti, claims.user_id),
@@ -61,7 +61,7 @@ class ManagerAuthSessionRepository:
     def revoke_user(self, ctx: TenantContext, *, reason: str) -> None:
         with self._router.session(ctx) as session:
             session.execute(
-                "UPDATE auth_session SET revoked_at = COALESCE(revoked_at, now()), "
+                "UPDATE manager_auth_session SET revoked_at = COALESCE(revoked_at, now()), "
                 "revoke_reason = COALESCE(revoke_reason, %s) "
                 "WHERE user_id = %s AND revoked_at IS NULL",
                 (reason, ctx.user_id),
