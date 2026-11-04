@@ -281,10 +281,11 @@ test("SessionHost publishes a terminal event when Manager runtime setup fails", 
       { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now, model_policy: { model: "model-1", provider_ref: "provider-1" } },
     ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "Helper", model_policy: { model: "model-1", provider_ref: "provider-1" } }]);
     fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    let runtimeError = "Manager returned HTTP 404";
     const manager: ManagerClient = {
       pullAuthorizedConfig: async () => ({ experts: [], solutions: [] }),
       getOrgTree: async () => ({}),
-      pullRuntimeConfig: async () => { throw new Error("Manager returned HTTP 404"); },
+      pullRuntimeConfig: async () => { throw new Error(runtimeError); },
     };
     const host = fixture.createHost(undefined, manager);
     const events: string[] = [];
@@ -296,6 +297,17 @@ test("SessionHost publishes a terminal event when Manager runtime setup fails", 
     );
     assert(events.includes("agent_settled"));
     assert.equal(host.isPrompting("conversation-1"), false);
+    // Pi wrote nothing for the run, so the reason is kept for a restarted app.
+    const [failure, ...others] = fixture.store.conversationFailures.list("conversation-1");
+    assert.deepEqual(others, []);
+    assert.equal(failure?.error_message, "Manager returned HTTP 404");
+    assert.ok(failure?.error_code);
+    assert.ok(failure?.work_id);
+
+    // The next run replaces it.
+    runtimeError = "Manager returned HTTP 503";
+    await assert.rejects(host.prompt("conversation-1", "again", undefined, caller), /HTTP 503/);
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1").map((item) => item.error_message), ["Manager returned HTTP 503"]);
     await host.dispose();
   } finally {
     await fixture.close();
