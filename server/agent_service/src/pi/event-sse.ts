@@ -27,6 +27,8 @@ const MAX_SOURCE_NAME_CHARS = 256;
 const MAX_OBJECT_KEYS = 24;
 const MAX_ARRAY_ITEMS = 32;
 const MAX_JSON_DEPTH = 4;
+const MAX_ERROR_MESSAGE_CHARS = 240;
+const STOP_REASONS = new Set(["stop", "length", "toolUse", "deferred", "aborted", "error"]);
 
 /** Session custom entry marking where a new model context starts; never sent to the LLM. */
 export const CONTEXT_RESET_ENTRY_TYPE = "aiteam_context_reset";
@@ -186,6 +188,11 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) result.timestamp = raw.timestamp;
   const content = serializeContent(raw.content, raw.role !== "toolResult");
   if (content !== undefined) result.content = content;
+  if (raw.role === "assistant") {
+    // A failed model call ends with an empty message whose only explanation is errorMessage.
+    if (typeof raw.stopReason === "string" && STOP_REASONS.has(raw.stopReason)) result.stopReason = raw.stopReason;
+    if (raw.stopReason === "error" && typeof raw.errorMessage === "string") result.errorMessage = safeText(raw.errorMessage, MAX_ERROR_MESSAGE_CHARS);
+  }
   if (raw.role === "toolResult") {
     copyIdentifier(result, raw, "toolCallId");
     copyToolName(result, raw);
