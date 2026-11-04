@@ -128,6 +128,13 @@ export const agentApi = {
     } while (cursor)
     return { conversations: [...new Map(conversations.map(c => [c.id, c])).values()] }
   },
+  /** 当前成员全部会话的工作目录（一次返回，不含路径与文件）。 */
+  listWorkspaces: async () => {
+    const result = await getClient().request<{ data: import('./types').ConversationWorkspaces[]; page: Page }>({
+      path: '/api/agent/workspaces', raw: true,
+    })
+    return { conversations: result.data }
+  },
   listEntriesPage: (id: string, query: { limit?: number; cursor?: string; entry_ref?: string }, signal?: AbortSignal) => getClient().request<{
     data: { conversation_id: string; entries: import('./types').ConversationEntry[] }; page: Page
   }>({ path: `/api/agent/conversations/${encodeURIComponent(id)}/entries`, query, raw: true, signal }),

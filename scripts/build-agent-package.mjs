@@ -11,6 +11,10 @@ const AGENT_ROOT = join(ROOT, "server", "agent_service");
 const WEB_ROOT = join(ROOT, "web");
 const CONFIG_TEMPLATE = join(ROOT, "deploy", "agent", "config", "agent.env.example");
 const DEFAULT_NODE_VERSION = "22.19.0";
+/** npm entry point relative to the npm package directory; the workbench runs `runtime/node runtime/npm/bin/npm-cli.js`. */
+const NPM_CLI = join("bin", "npm-cli.js");
+/** Top-level npm entries only needed for reading documentation, not for running npm. */
+const NPM_DOCUMENTATION = new Set(["docs", "man"]);
 const TARGETS = {
   "darwin-arm64": { nodeTarget: "darwin-arm64", archive: "tar.gz", runtimeName: "node" },
   "darwin-x64": { nodeTarget: "darwin-x64", archive: "tar.gz", runtimeName: "node" },
@@ -144,8 +148,9 @@ async function main() {
   rmSync(join(packageRoot, "pnpm-lock.yaml"), { force: true });
   rmSync(join(packageRoot, "pnpm-workspace.yaml"), { force: true });
 
-  const runtime = await installNodeRuntime(packageRoot, targetSpec, options.nodeVersion, options.nodeRuntime);
+  const runtime = await installNodeRuntime(packageRoot, targetSpec, options.nodeVersion, options.nodeRuntime, options.npmDir);
   verifyDependencyImports(runtime, packageRoot);
+  verifyBundledNpm(runtime, packageRoot);
   assertNoControlPlaneFiles(packageRoot);
 
   const files = collectFiles(packageRoot).filter((entry) => entry.path !== "manifest.json");
@@ -199,6 +204,7 @@ function parseArgs(args) {
       case "--manager-url": result.managerUrl = required(name, value); break;
       case "--node-version": result.nodeVersion = required(name, value); break;
       case "--node-runtime": result.nodeRuntime = resolve(required(name, value)); break;
+      case "--npm-dir": result.npmDir = resolve(required(name, value)); break;
       case "--skip-build": result.skipBuild = true; break;
       case "--help": result.help = true; break;
       default: throw new Error(`unknown option ${argument}`);
@@ -213,7 +219,7 @@ function required(name, value) {
 }
 
 function printHelp() {
-  console.log(`Build a self-contained Agent sidecar for the current OS/architecture.\n\nUsage:\n  node scripts/build-agent-package.mjs [options]\n\nOptions:\n  --target <target>       darwin-arm64, darwin-x64, win32-arm64, win32-x64\n  --config <file>         production/test agent.env; validated and copied into package\n  --manager-url <url>     fill the template Manager URL (config mode is preferred)\n  --version <version>     artifact version (defaults to server/agent_service package version)\n  --node-version <ver>    Node runtime to download (default: ${DEFAULT_NODE_VERSION})\n  --node-runtime <path>   use a local target Node binary instead of downloading\n  --out <directory>       output directory (default: dist/agent-packages)\n  --skip-build             reuse existing web/agent and Agent runtime build output\n`);
+  console.log(`Build a self-contained Agent sidecar for the current OS/architecture.\n\nUsage:\n  node scripts/build-agent-package.mjs [options]\n\nOptions:\n  --target <target>       darwin-arm64, darwin-x64, win32-arm64, win32-x64\n  --config <file>         production/test agent.env; validated and copied into package\n  --manager-url <url>     fill the template Manager URL (config mode is preferred)\n  --version <version>     artifact version (defaults to server/agent_service package version)\n  --node-version <ver>    Node runtime to download (default: ${DEFAULT_NODE_VERSION})\n  --node-runtime <path>   use a local target Node binary instead of downloading\n  --npm-dir <path>        npm package directory for --node-runtime (default: <bin>/../lib/node_modules/npm, or <dir>/node_modules/npm on Windows)\n  --out <directory>       output directory (default: dist/agent-packages)\n  --skip-build             reuse existing web/agent and Agent runtime build output\n`);
 }
 
 function prepareConfig(options) {
@@ -340,16 +346,43 @@ function validateSkillKeys(value) {
   if (!keys?.length || keys.some((key) => !key || typeof key.key_id !== "string" || key.algorithm !== "Ed25519" || typeof key.public_key !== "string" || !["current", "next", "revoked", "expired"].includes(key.status))) throw new Error("AITEAM_SKILL_SIGNING_PUBLIC_KEYS must contain public Ed25519 metadata");
 }
 
-async function installNodeRuntime(packageRoot, spec, requestedVersion, providedPath) {
-  const source = providedPath ?? await downloadNodeRuntime(spec.nodeTarget, spec.archive, requestedVersion);
-  if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`Node runtime is not a regular file: ${source}`);
-  const version = execFileSync(source, ["--version"], { encoding: "utf8", env: childEnvironment() }).trim().replace(/^v/u, "");
+async function installNodeRuntime(packageRoot, spec, requestedVersion, providedPath, providedNpm) {
+  const source = providedPath
+    ? { binary: providedPath, npm: providedNpm ?? localNpmDirectory(providedPath, spec.archive) }
+    : await downloadNodeRuntime(spec.nodeTarget, spec.archive, requestedVersion);
+  if (!existsSync(source.binary) || !lstatSync(source.binary).isFile()) throw new Error(`Node runtime is not a regular file: ${source.binary}`);
+  if (!existsSync(join(source.npm, NPM_CLI))) throw new Error(`npm package is missing ${NPM_CLI}: ${source.npm} (pass --npm-dir)`);
+  const version = execFileSync(source.binary, ["--version"], { encoding: "utf8", env: childEnvironment() }).trim().replace(/^v/u, "");
   if (!/^22\./u.test(version)) throw new Error(`Node runtime ${version} is unsupported; Agent requires Node 22`);
   const destination = join(packageRoot, "runtime", spec.runtimeName);
   mkdirSync(dirname(destination), { recursive: true });
-  cpSync(source, destination);
+  cpSync(source.binary, destination);
   if (process.platform !== "win32") execFileSync("chmod", ["755", destination], { env: childEnvironment() });
-  return { path: destination, version };
+  const npm = join(packageRoot, "runtime", "npm");
+  copyNpmPackage(source.npm, npm);
+  return { path: destination, version, npm };
+}
+
+function localNpmDirectory(binary, archiveType) {
+  return archiveType === "zip" ? join(dirname(binary), "node_modules", "npm") : join(dirname(binary), "..", "lib", "node_modules", "npm");
+}
+
+function copyNpmPackage(source, destination) {
+  rmSync(destination, { recursive: true, force: true });
+  cpSync(source, destination, {
+    recursive: true,
+    dereference: false,
+    filter: (path) => {
+      const fromRoot = relative(source, path);
+      return !NPM_DOCUMENTATION.has(fromRoot.split(sep)[0]);
+    },
+  });
+}
+
+function verifyBundledNpm(runtime, packageRoot) {
+  const version = execFileSync(runtime.path, [join(runtime.npm, NPM_CLI), "--version"], { cwd: packageRoot, encoding: "utf8", env: childEnvironment() }).trim();
+  if (!/^\d+\.\d+\.\d+/u.test(version)) throw new Error(`bundled npm did not report a version: ${version}`);
+  console.log(`[agent-package] npm:       ${version}`);
 }
 
 async function downloadNodeRuntime(nodeTarget, archiveType, version) {
@@ -388,10 +421,14 @@ async function downloadNodeRuntime(nodeTarget, archiveType, version) {
     if (!root) throw new Error(`Node archive ${filename} has no top-level directory`);
     const binary = archiveType === "zip" ? join(extracted, root.name, "node.exe") : join(extracted, root.name, "bin", "node");
     if (!existsSync(binary)) throw new Error(`Node archive ${filename} has no runtime binary`);
+    const npm = localNpmDirectory(binary, archiveType);
+    if (!existsSync(join(npm, NPM_CLI))) throw new Error(`Node archive ${filename} has no bundled npm`);
     const cachedBinary = join(cacheRoot, `${filename}.runtime`);
     cpSync(binary, cachedBinary);
     if (process.platform !== "win32") execFileSync("chmod", ["755", cachedBinary], { env: childEnvironment() });
-    return cachedBinary;
+    const cachedNpm = join(cacheRoot, `${filename}.npm`);
+    copyNpmPackage(npm, cachedNpm);
+    return { binary: cachedBinary, npm: cachedNpm };
   } finally {
     rmSync(extracted, { recursive: true, force: true });
   }

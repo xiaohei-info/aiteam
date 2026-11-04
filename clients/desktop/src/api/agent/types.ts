@@ -656,3 +656,26 @@ export interface LocalFileMetadata {
   created_at: string
   referenced_at?: string | null
 }
+
+// -------------------- 会话工作目录（GET /api/agent/workspaces） --------------------
+
+/** 一个数字员工在会话中的受管工作目录；只给目录名，不给本机路径。 */
+export interface ConversationWorkspace {
+  employee_id: string | null
+  role: 'entry' | 'coordinator' | 'member'
+  /** 已移出群聊的成员；目录保留历史产出。 */
+  removed: boolean
+  /** `conversation-<24 位 hex>`，Agent 数据目录 workspaces/ 下的直接子目录。 */
+  workspace_key: string
+  has_files: boolean
+}
+
+export interface ConversationWorkspaces {
+  conversation_id: string
+  kind: string
+  title: string | null
+  entry_employee_id: string | null
+  coordinator_employee_id: string | null
+  updated_at: string
+  workspaces: ConversationWorkspace[]
+}

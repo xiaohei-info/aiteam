@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 mod agent;
-mod agent_solutions;
+mod agent_projects;
 mod diagnostics;
 mod external_links;
 mod file_access;
@@ -10,19 +10,25 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+mod project_runner;
 mod secure_session;
 
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder
-        .manage(agent::AgentState::default())
-        .setup(agent::setup);
+    let builder = builder.manage(agent::AgentState::default()).setup(|app| {
+        agent::setup(app)?;
+        // After `agent::setup` takes the single-instance lock: any recorded run is a
+        // leftover of a killed instance, not of one still running.
+        project_runner::end_leftovers(app.handle());
+        Ok(())
+    });
 
     builder
         .manage(file_access::FileAccessState::default())
         .manage(office_editor::OfficeEditorState::default())
-        .manage(agent_solutions::AgentSolutionsState::default())
+        .manage(agent_projects::AgentProjectsState::default())
+        .manage(project_runner::ProjectRunnerState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -62,13 +68,28 @@ pub fn run() {
             office_editor::read_office_map,
             office_editor::set_active_office_map_cmd,
             office_editor::open_office_map_editor,
-            agent_solutions::list_agent_solutions,
-            agent_solutions::read_agent_solution_file,
-            agent_solutions::open_agent_solution_file,
+            agent_projects::list_agent_projects,
+            agent_projects::list_fred_workspace_files,
+            agent_projects::read_project_file,
+            agent_projects::open_project_file,
+            project_runner::detect_project_runner,
+            project_runner::start_project,
+            project_runner::stop_project,
+            project_runner::project_run_status,
+            project_runner::open_project_address,
+            project_runner::open_python_download,
+            project_runner::get_dependency_source,
+            project_runner::set_dependency_source,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if matches!(_event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                // Workbench projects must not outlive the app.
+                _app.state::<project_runner::ProjectRunnerState>()
+                    .stop_all();
+            }
             #[cfg(target_os = "macos")]
             if matches!(
                 _event,

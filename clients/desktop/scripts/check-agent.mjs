@@ -1,8 +1,10 @@
 import { restoreAgentNode } from './agent-runtime.mjs'
 import { createHash } from 'node:crypto'
-import { accessSync, constants, readFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+export const BUNDLED_NPM_CLI = 'runtime/npm/bin/npm-cli.js'
 
 export function parseAgentEnv(text) {
   const values = new Map()
@@ -68,6 +70,10 @@ export function checkAgentPackage(directory) {
     accessSync(path.join(directory, file), constants.R_OK)
   }
   accessSync(path.join(directory, 'runtime/node'), constants.X_OK)
+  // The workbench runs Node projects with `runtime/node runtime/npm/bin/npm-cli.js`.
+  if (!existsSync(path.join(directory, BUNDLED_NPM_CLI))) {
+    throw new Error(`Agent package has no bundled npm (${BUNDLED_NPM_CLI}). Run pnpm agent:build to rebuild it from server/agent_service.`)
+  }
   verifyConfigIntegrity(directory, manifest)
   const template = manifest.config_source === 'template'
   if (Boolean(manifest.configured) === template) {
