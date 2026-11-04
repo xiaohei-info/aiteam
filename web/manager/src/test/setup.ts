@@ -1,5 +1,10 @@
 /** vitest 全局 setup：jsdom 环境 + @testing-library/jest-dom 匹配器。 */
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// findBy*/waitFor 默认只等 1 秒。CI 覆盖率任务插桩后渲染变慢，弹窗、表格偶尔超过 1 秒才出现，
+// 导致和改动无关的 PR 偶发红灯。放宽到 4 秒；测试整体超时同步放宽，见 vitest.config.ts。
+configure({ asyncUtilTimeout: 4_000 });
 
 if (typeof window !== "undefined" && !window.matchMedia) {
   (window as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
