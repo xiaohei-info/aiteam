@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { webcrypto } from 'node:crypto'
-import { assistantFailure, dispatchPiEvent, entriesToMessages, resolvePiEventSenderIdentity, settledFailure, withFailure } from '../src/lib/piConverters.ts'
+import { dispatchPiEvent, entriesToMessages, resolvePiEventSenderIdentity } from '../src/lib/piConverters.ts'
+import { applyLocalFailures, assistantFailure, describeFailure, retryTarget, settledFailure } from '../src/lib/replyFailure.ts'
 import { createSettleTracker } from '../src/lib/groupStreamLifecycle.ts'
 import { classifyRequestError } from '../src/lib/requestError.ts'
 import { collectTodoTaskCards } from '../src/lib/todoTaskCard.ts'
@@ -24,7 +25,8 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../api/agent') return { agentApi: api, AgentApiError: Error }
     if (id === './agentAuth') return { useAgentAuthStore: { getState: () => ({}), subscribe: () => {} } }
     if (id === '../lib/pinnedConversations') return { getPinnedStorageKey: () => null }
-    if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity, settledFailure, withFailure }
+    if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity }
+    if (id === '../lib/replyFailure') return { applyLocalFailures, settledFailure }
     if (id === '../lib/replyProjection') return { mergeReplyProjection, reconcileReplyProjection }
     if (id === '../lib/groupStreamLifecycle') return { createSettleTracker }
     if (id === '../lib/globalActivityCollector') return { globalActivityCollector: { emit: () => {} } }
@@ -530,59 +532,106 @@ const failedReply = (id: string, work: string, errorMessage?: string) => ({
   message: { role: 'assistant', content: [], stopReason: 'error', ...(errorMessage ? { errorMessage } : {}) },
 })
 
-test('history shows why a model call failed instead of an empty reply', () => {
-  assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'error', errorMessage: ' 401 Unauthorized ' }), '⚠️ 模型调用失败：401 Unauthorized')
-  assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'error' }), '⚠️ 模型调用失败')
+test('failures are explained in plain words and keep the original error as detail', () => {
+  assert.deepEqual(assistantFailure({ role: 'assistant', content: [], stopReason: 'error', errorMessage: ' 401 Unauthorized ' }),
+    { kind: 'model', summary: '模型 Key 无效或没有权限，请联系管理员', detail: '401 Unauthorized' })
+  assert.deepEqual(assistantFailure({ role: 'assistant', content: [], stopReason: 'error' }), { kind: 'model', summary: '模型调用失败' })
   assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'stop', errorMessage: 'stale' }), undefined)
   assert.equal(assistantFailure({ role: 'user', content: 'hi', stopReason: 'error' }), undefined)
-  assert.equal(withFailure('', '⚠️ x'), '⚠️ x')
-  assert.equal(withFailure('done', undefined), 'done')
+  for (const [raw, summary] of [
+    ['429 Too Many Requests', '调用太频繁或额度已用完，请稍后再试'],
+    ['insufficient_quota', '调用太频繁或额度已用完，请稍后再试'],
+    ['503 Service Unavailable', '模型服务繁忙，请稍后重试'],
+    ['Overloaded', '模型服务繁忙，请稍后重试'],
+    ['fetch failed: ECONNREFUSED', '网络连接失败，请检查网络后重试'],
+    ["Cannot find module 'x'", '程序文件不完整，请重新安装 AIFred'],
+    ['Manager returned HTTP 404', '服务端找不到这个员工的配置，请联系管理员'],
+    ['something odd', '执行失败'],
+  ] as const) assert.equal(describeFailure('execution', raw).summary, summary, raw)
+  assert.deepEqual(settledFailure({ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' } as any),
+    { kind: 'execution', summary: '服务端找不到这个员工的配置，请联系管理员', detail: 'Manager returned HTTP 404' })
+  assert.deepEqual(settledFailure({ type: 'agent_settled', failed: true } as any), { kind: 'execution', summary: '执行失败' })
+  assert.equal(settledFailure({ type: 'agent_settled', failed: false, error_message: 'x' } as any), undefined)
+  assert.equal(settledFailure({ type: 'agent_settled' } as any), undefined)
+})
 
+test('history keeps the failure as its own field, last attempt of a work wins', () => {
   const [failed] = entriesToMessages([failedReply('e1', 'w1', '401 Unauthorized')] as any)
-  assert.equal(failed.content, '⚠️ 模型调用失败：401 Unauthorized')
-  assert.equal('failure' in failed, false)
+  assert.equal(failed.content, '')
+  assert.equal(failed.failure?.detail, '401 Unauthorized')
 
-  // The failure follows the text already written in the same work.
+  // The failure follows the text already written in the same work; the text stays clean for copying.
   const partial = { id: 'p1', entry_ref: 'ref-p1', type: 'message', work_id: 'w2', source_employee_id: 'pm',
     message: { role: 'assistant', content: [{ type: 'text', text: '先写好了一半' }], stopReason: 'toolUse' } }
   const [cut] = entriesToMessages([partial, failedReply('e2', 'w2', 'overloaded')] as any)
-  assert.equal(cut.content, '先写好了一半\n\n⚠️ 模型调用失败：overloaded')
+  assert.equal(cut.content, '先写好了一半')
+  assert.equal(cut.failure?.summary, '模型服务繁忙，请稍后重试')
 
   // An automatic retry that succeeded hides the earlier failure of the same work.
   const retried = { id: 'r1', entry_ref: 'ref-r1', type: 'message', work_id: 'w3', source_employee_id: 'pm',
     message: { role: 'assistant', content: [{ type: 'text', text: '重试后成功' }], stopReason: 'stop' } }
   const [ok] = entriesToMessages([failedReply('e3', 'w3', '429'), retried] as any)
   assert.equal(ok.content, '重试后成功')
+  assert.equal('failure' in ok, false)
+  const [plain] = entriesToMessages([retried] as any)
+  assert.equal('failure' in plain, false)
 })
 
 test('assistant message_end reports a failure only for failed model calls', () => {
   const seen: Array<[string | undefined, string | undefined]> = []
   const unknown: string[] = []
-  const callbacks = { onAssistantEnd: (failure: string | undefined, src?: string) => seen.push([failure, src]), onUnknown: (event: any) => unknown.push(event.type) }
+  const callbacks = { onAssistantEnd: (failure: any, src?: string) => seen.push([failure?.detail, src]), onUnknown: (event: any) => unknown.push(event.type) }
   dispatchPiEvent({ type: 'message_end', source_employee_id: 'pm', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'boom' } } as any, callbacks)
   dispatchPiEvent({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop' } } as any, callbacks)
   dispatchPiEvent({ type: 'message_end', message: { role: 'user', content: 'hi' } } as any, callbacks)
-  assert.deepEqual(seen, [['⚠️ 模型调用失败：boom', 'pm'], [undefined, undefined]])
+  assert.deepEqual(seen, [['boom', 'pm'], [undefined, undefined]])
   assert.deepEqual(unknown, ['message_end'])
-  assert.equal(settledFailure({ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' } as any), '⚠️ 执行失败：Manager returned HTTP 404')
-  assert.equal(settledFailure({ type: 'agent_settled', failed: false, error_message: 'x' } as any), undefined)
-  assert.equal(settledFailure({ type: 'agent_settled' } as any), undefined)
 })
 
-test('a run that ends on a failed model call shows the reason, and a retry clears it', async () => {
-  for (const [events, expected] of [
-    [[{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: "Cannot find module 'x'" } }],
-      "⚠️ 模型调用失败：Cannot find module 'x'"],
-    [[{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429' } },
-      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '重试成功' } },
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '重试成功' }], stopReason: 'stop' } }],
-      '重试成功'],
-    [[{ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' }], '⚠️ 执行失败：Manager returned HTTP 404'],
-  ] as const) {
+test('local failures attach to the same work, otherwise append, and never override history', () => {
+  const failure = { kind: 'execution' as const, summary: '执行失败' }
+  const history = [
+    { id: 'u', role: 'user', content: 'hi' },
+    { id: 'a', role: 'assistant', content: 'half', workId: 'w1', senderEmployeeId: 'pm' },
+  ]
+  const local = { id: 'pending', role: 'assistant', content: '' }
+  assert.deepEqual(applyLocalFailures(history, []), history)
+  assert.deepEqual(applyLocalFailures(history, [{ workId: 'w1', message: local, failure }])[1], { ...history[1], failure })
+  assert.deepEqual(applyLocalFailures(history, [{ workId: 'w1', senderEmployeeId: 'other', message: local, failure }]).map(m => m.id), ['u', 'a', 'pending'])
+  assert.deepEqual(applyLocalFailures(history, [{ message: local, failure }]).map(m => m.id), ['u', 'a', 'pending'])
+  const persisted = { ...history[1], failure: { kind: 'model' as const, summary: '模型调用失败' } }
+  assert.equal(applyLocalFailures([history[0], persisted], [{ workId: 'w1', message: local, failure }])[1].failure, persisted.failure)
+})
+
+test('retry is offered only for a last failed reply to a text-only message', () => {
+  const failure = { kind: 'model' as const, summary: 'x' }
+  const user = { id: 'u', role: 'user', content: ' 做个小游戏 ' }
+  const failed = { id: 'f', role: 'assistant', content: '', failure }
+  assert.deepEqual(retryTarget([user, failed]), { failedId: 'f', text: '做个小游戏' })
+  assert.equal(retryTarget([user, { ...failed, failure: undefined }]), null)
+  assert.equal(retryTarget([user, failed, { id: 'n', role: 'assistant', content: 'later' }]), null)
+  assert.equal(retryTarget([{ ...user, attachments: [{}] }, failed]), null)
+  assert.equal(retryTarget([failed]), null)
+})
+
+for (const [label, events, expected] of [
+  ['a failed model call', [{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: "Cannot find module 'x'" } }],
+    { content: '', detail: "Cannot find module 'x'" }],
+  ['a retried model call', [{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429' } },
+    { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '重试成功' } },
+    { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '重试成功' }], stopReason: 'stop' } }],
+    { content: '重试成功', detail: undefined }],
+  ['a pre-execution failure', [{ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' }],
+    { content: '', detail: 'Manager returned HTTP 404' }],
+] as const) {
+  test(`live run with ${label} shows the right failure, also after the post-run history sync`, async () => {
     let onEvent: (event: any) => void = () => {}
+    let synced!: () => void
+    const sync = new Promise<void>((resolve) => { synced = resolve })
     const store = chatStore({
       abortConversation: async () => {},
-      listEntries: async () => ({ entries: [] }),
+      // The Agent keeps no history for a run that failed before it started.
+      listEntries: async () => { setTimeout(synced, 0); return { entries: [] } },
       getConversationState: async () => ({ prompting: false }),
       subscribeEvents: (options: { onEvent: typeof onEvent }) => {
         onEvent = options.onEvent
@@ -593,9 +642,19 @@ test('a run that ends on a failed model call shows the reason, and a retry clear
     store.getState().startAssistantStream('failing')
     for (const event of events) onEvent(event)
     if (events[events.length - 1].type !== 'agent_settled') onEvent({ type: 'agent_settled' })
-    const replies = store.getState().activeConvMessages.filter((message: any) => message.role === 'assistant')
-    assert.equal(replies.length, 1)
-    assert.equal(replies[0].content, expected)
+    const replies = () => store.getState().activeConvMessages.filter((message: any) => message.role === 'assistant')
+    assert.equal(replies().length, 1)
+    assert.equal(replies()[0].content, expected.content)
+    assert.equal(replies()[0].failure?.detail, expected.detail)
+    await sync
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    if (expected.detail) {
+      assert.equal(replies().length, 1, 'the failure survives the history sync')
+      assert.equal(replies()[0].failure?.detail, expected.detail)
+    }
+    // The next round replaces it.
+    store.getState().startAssistantStream('failing')
+    await store.getState().refreshActiveEntries?.('failing').catch(() => {})
     store.getState().abortStream('failing')
-  }
-})
+  })
+}

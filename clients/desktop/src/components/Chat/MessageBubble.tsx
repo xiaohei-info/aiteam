@@ -14,6 +14,8 @@ export interface MessageBubbleProps {
   recipientName?: string
   time?: string
   above?: ReactNode
+  /** 气泡下方的附加内容（如失败提示条）。 */
+  below?: ReactNode
   isStreaming?: boolean
   hideBody?: boolean
   onContextMenu?: (e: MouseEvent<HTMLDivElement>) => void
@@ -28,6 +30,7 @@ export default function MessageBubble({
   recipientName,
   time,
   above,
+  below,
   isStreaming,
   hideBody,
   onContextMenu,
@@ -69,6 +72,8 @@ export default function MessageBubble({
         >
           {children}
         </div>}
+
+        {below && <div className="mb-below">{below}</div>}
 
         {time && <span className="mb-time">{time}</span>}
       </div>

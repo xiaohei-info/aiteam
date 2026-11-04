@@ -25,6 +25,7 @@ import { CONTEXT_RESET_ENTRY_TYPE, type ContextResetMemoryReason } from '../api/
 import { dividerMemoryText, isContextResetMemoryReason } from './contextResetMemory.ts'
 import type { Message, ThinkingStep, ToolCall } from '../stores/chat'
 import { splitLocalContext, type LocalContextAction } from './localContextBlock.ts'
+import { assistantFailure, type ReplyFailure } from './replyFailure.ts'
 
 // -------------------- Entry → Message --------------------
 
@@ -99,34 +100,6 @@ export function splitContentParts(parts: ConversationContentPart[]): SplitParts 
     thinkingSteps,
     toolCalls,
   }
-}
-
-// -------------------- 模型调用失败 --------------------
-
-/**
- * 模型调用失败时 Pi 只留下一条空的 assistant 消息（stopReason=error + errorMessage）。
- * 返回要展示的提示；非失败消息返回 undefined。
- */
-export function assistantFailure(message: ConversationMessage | undefined): string | undefined {
-  if (message?.role !== 'assistant' || message.stopReason !== 'error') return undefined
-  const detail = typeof message.errorMessage === 'string' ? message.errorMessage.trim() : ''
-  return detail ? `⚠️ 模型调用失败：${detail}` : '⚠️ 模型调用失败'
-}
-
-/**
- * agent_settled 自带的失败摘要：会话初始化等执行前失败没有 assistant 消息，
- * Agent 只在 settled 事件上给出 failed + error_message。
- */
-export function settledFailure(event: PiSseEventData | undefined): string | undefined {
-  if (event?.failed !== true || typeof event.error_message !== 'string') return undefined
-  const detail = event.error_message.trim()
-  return detail ? `⚠️ 执行失败：${detail}` : undefined
-}
-
-/** 把失败提示接在已有回复之后；没有回复时只显示提示。 */
-export function withFailure(content: string, failure: string | undefined): string {
-  if (!failure) return content
-  return content ? `${content}\n\n${failure}` : failure
 }
 
 // 把一个 ConversationMessage 展开成前端 Message 字段。role 转换以服务端为准:
@@ -303,7 +276,7 @@ export function entriesToMessages(
   resolveEmployeeName?: (employeeId: string) => string | undefined,
 ): Message[] {
   const seenIds = new Set<string>()
-  let msgs: FailableMessage[] = []
+  let msgs: Message[] = []
   for (const entry of entries) {
     if (!entry || !entry.id) continue
     const entryId = entry.entry_ref ?? entry.id
@@ -316,6 +289,7 @@ export function entriesToMessages(
       continue
     }
     const { role, content, thinkingSteps, toolCalls, localContext } = messageToFields(message)
+    const failure = assistantFailure(message)
 
     if (role === 'toolResult') {
       msgs = attachToolResult(msgs, entry)
@@ -354,15 +328,11 @@ export function entriesToMessages(
       recipientName,
       ...(localContext ? { localContext } : {}),
       _ts: ms,
-      failure: assistantFailure(message),
+      ...(failure ? { failure } : {}),
     })
   }
-  return groupWorkMessages(msgs).map(({ failure, ...message }) =>
-    failure ? { ...message, content: withFailure(message.content, failure) } : message)
+  return groupWorkMessages(msgs)
 }
-
-/** 历史转换中间态：同一次执行合并后只保留最后一条 assistant 的失败，重试成功即清除。 */
-type FailableMessage = Message & { failure?: string }
 
 export interface ContextResetDividers {
   // 分隔线画在含该 entry ref 的消息之前;value 为 reset_id。
@@ -459,8 +429,8 @@ export function contextResetMemoryText(resetId: string, dividers: ContextResetDi
 }
 
 /** Keep individual entry references; presentation grouping never changes read cursors. */
-function groupWorkMessages(messages: FailableMessage[]): FailableMessage[] {
-  const grouped: FailableMessage[] = []
+function groupWorkMessages(messages: Message[]): Message[] {
+  const grouped: Message[] = []
   const indices = new Map<string, number>()
   for (const message of messages) {
     const key = message.workId && message.role === 'assistant'
@@ -472,15 +442,17 @@ function groupWorkMessages(messages: FailableMessage[]): FailableMessage[] {
       continue
     }
     const previous = grouped[index]
+    // 可重试的错误会先产出一条失败消息再自动重试：只以本次执行最后一条为准。
+    const { failure: _previousFailure, ...rest } = previous
     grouped[index] = {
-      ...previous,
+      ...rest,
       content: [previous.content, message.content].filter(Boolean).join('\n\n'),
       thinkingSteps: [...(previous.thinkingSteps ?? []), ...(message.thinkingSteps ?? [])],
       toolCalls: [...(previous.toolCalls ?? []), ...(message.toolCalls ?? [])],
       entryRefs: [...(previous.entryRefs ?? [previous.id]), ...(message.entryRefs ?? [message.id])],
       recipientEmployeeId: previous.recipientEmployeeId ?? message.recipientEmployeeId,
       recipientName: previous.recipientName ?? message.recipientName,
-      failure: message.failure,
+      ...(message.failure ? { failure: message.failure } : {}),
     }
   }
   return grouped
@@ -521,7 +493,7 @@ export interface PiStreamCallbacks {
   onError?: (message: string, sourceEmployeeId?: string) => void
   // 一条 assistant 消息结束;failure 为模型调用失败的提示,成功时为 undefined。
   // 可重试的失败之后可能还有重试,是否展示以 settled 时最后一条为准。
-  onAssistantEnd?: (failure: string | undefined, sourceEmployeeId?: string) => void
+  onAssistantEnd?: (failure: ReplyFailure | undefined, sourceEmployeeId?: string) => void
   // 未处理的事件,便于调试期打点。生产不必挂载。
   onUnknown?: (event: PiSseEventData) => void
 }

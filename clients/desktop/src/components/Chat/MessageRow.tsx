@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react'
 import type { Message } from '../../stores/chat'
 import { ThinkingBlock } from './ThinkingBlock'
 import TextMessage from './TextMessage'
+import ReplyFailureNotice from './ReplyFailureNotice'
 import FileMessage from './FileMessage'
 import TodoTaskCard from './TodoTaskCard'
 import LocalCitationCard, { LocalContextChip } from './LocalCitationCard'
@@ -20,6 +21,8 @@ export interface MessageRowProps {
   isThisStreaming: boolean
   isThinkingPhase: boolean
   onAvatarClick?: (e: MouseEvent<HTMLButtonElement>) => void
+  /** 失败回复的「重试」；页面能重发触发消息时才提供。 */
+  onRetry?: () => void
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -32,6 +35,7 @@ export const MessageRow = memo(function MessageRow({
   isThisStreaming,
   isThinkingPhase,
   onAvatarClick,
+  onRetry,
 }: MessageRowProps) {
   const side = msg.role === 'user' ? 'right' : 'left'
 
@@ -91,6 +95,9 @@ export const MessageRow = memo(function MessageRow({
             </>
           : undefined
       }
+      below={msg.role === 'assistant' && msg.failure && !isThisStreaming
+        ? <ReplyFailureNotice failure={msg.failure} onRetry={onRetry} />
+        : undefined}
       content={displayContent}
       isStreaming={isThisStreaming}
       attachments={msg.attachments}
