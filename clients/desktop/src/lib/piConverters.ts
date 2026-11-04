@@ -25,6 +25,7 @@ import { CONTEXT_RESET_ENTRY_TYPE, type ContextResetMemoryReason } from '../api/
 import { dividerMemoryText, isContextResetMemoryReason } from './contextResetMemory.ts'
 import type { Message, ThinkingStep, ToolCall } from '../stores/chat'
 import { splitLocalContext, type LocalContextAction } from './localContextBlock.ts'
+import { assistantFailure, type ReplyFailure } from './replyFailure.ts'
 
 // -------------------- Entry → Message --------------------
 
@@ -288,6 +289,7 @@ export function entriesToMessages(
       continue
     }
     const { role, content, thinkingSteps, toolCalls, localContext } = messageToFields(message)
+    const failure = assistantFailure(message)
 
     if (role === 'toolResult') {
       msgs = attachToolResult(msgs, entry)
@@ -326,6 +328,7 @@ export function entriesToMessages(
       recipientName,
       ...(localContext ? { localContext } : {}),
       _ts: ms,
+      ...(failure ? { failure } : {}),
     })
   }
   return groupWorkMessages(msgs)
@@ -439,14 +442,17 @@ function groupWorkMessages(messages: Message[]): Message[] {
       continue
     }
     const previous = grouped[index]
+    // 可重试的错误会先产出一条失败消息再自动重试：只以本次执行最后一条为准。
+    const { failure: _previousFailure, ...rest } = previous
     grouped[index] = {
-      ...previous,
+      ...rest,
       content: [previous.content, message.content].filter(Boolean).join('\n\n'),
       thinkingSteps: [...(previous.thinkingSteps ?? []), ...(message.thinkingSteps ?? [])],
       toolCalls: [...(previous.toolCalls ?? []), ...(message.toolCalls ?? [])],
       entryRefs: [...(previous.entryRefs ?? [previous.id]), ...(message.entryRefs ?? [message.id])],
       recipientEmployeeId: previous.recipientEmployeeId ?? message.recipientEmployeeId,
       recipientName: previous.recipientName ?? message.recipientName,
+      ...(message.failure ? { failure: message.failure } : {}),
     }
   }
   return grouped
@@ -485,6 +491,9 @@ export interface PiStreamCallbacks {
   onApprovalRequired?: (event: PiSseEventData) => void
   // 服务端明确的错误信号:message_update.assistantMessageEvent.type='error' 或事件中 isError=true。
   onError?: (message: string, sourceEmployeeId?: string) => void
+  // 一条 assistant 消息结束;failure 为模型调用失败的提示,成功时为 undefined。
+  // 可重试的失败之后可能还有重试,是否展示以 settled 时最后一条为准。
+  onAssistantEnd?: (failure: ReplyFailure | undefined, sourceEmployeeId?: string) => void
   // 未处理的事件,便于调试期打点。生产不必挂载。
   onUnknown?: (event: PiSseEventData) => void
 }
@@ -654,8 +663,15 @@ export function dispatchPiEvent(event: PiSseEventData, callbacks: PiStreamCallba
       safe(callbacks.onSettled, (fn) => fn(src, event))
       return
 
-    case 'agent_start':
     case 'message_end':
+      if (event.message?.role === 'assistant') {
+        const failure = assistantFailure(event.message)
+        safe(callbacks.onAssistantEnd, (fn) => fn(failure, src))
+        return
+      }
+      safe(callbacks.onUnknown, (fn) => fn(event))
+      return
+    case 'agent_start':
       // 前端目前不需要专门反应;上游可以自己 hook onUnknown。
       safe(callbacks.onUnknown, (fn) => fn(event))
       return

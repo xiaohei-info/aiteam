@@ -35,6 +35,7 @@ import {
   resolvePiEventSenderIdentity,
   type PiStreamCallbacks,
 } from '../lib/piConverters'
+import { applyLocalFailures, settledFailure, type LocalFailure, type ReplyFailure } from '../lib/replyFailure'
 import {
   createSettleTracker,
   type SettleTracker,
@@ -137,6 +138,8 @@ export interface Message {
   _ts?: number
   /** 占位消息(未收到 agent_settled 前展示 thinking/工具调用过程)。 */
   _pending?: boolean
+  /** 本次执行以失败告终：单独显示为提示条，不拼进正文。 */
+  failure?: ReplyFailure
 }
 
 // 附件按文档中的会话文件 ID 下载。
@@ -282,6 +285,8 @@ interface ConvSubscription {
   placeholders: Map<string, string>
   workIds: Map<string, string>
   textBoundaries: Set<string>
+  // sourceEmployeeId → 最近一条 assistant 消息的模型调用失败;重试成功即清除,settled 时仍在才展示。
+  failures: Map<string, ReplyFailure>
   // 参与本轮 prompt 的 source_employee_id 集合(通过 agent_start / message_update 观察)
   activeSources: Set<string>
   // 已收到 agent_settled 的 source_employee_id
@@ -299,6 +304,13 @@ interface ConvSubscription {
   lastFlush: number
 }
 const subscriptions = new Map<string, ConvSubscription>()
+
+// 会话 → 本轮实时看到的失败。执行前失败不进聊天记录，按记录重建列表时要补回去；下一轮开始时清除。
+const localFailures = new Map<string, LocalFailure<Message>[]>()
+
+function withLocalFailures(convId: string, messages: Message[]): Message[] {
+  return applyLocalFailures(messages, localFailures.get(convId) ?? [])
+}
 
 function clearSubscription(convId: string): void {
   const sub = subscriptions.get(convId)
@@ -873,7 +885,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (subscription) subscription.historyEntries = entriesRes.entries ?? []
       const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
       const msgs = mergePendingProjection(
-        dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName)),
+        withLocalFailures(convId, dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName))),
         subscription,
       )
       set({
@@ -933,7 +945,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (subscription) subscription.historyEntries = entriesRes.entries ?? []
       const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
       const msgs = mergePendingProjection(
-        dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName)),
+        withLocalFailures(groupId, dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName))),
         subscription,
       )
       set({
@@ -973,7 +985,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // 期间又开始了新一轮生成,交给 SSE 结束后的同步,避免覆盖流式占位。
     if (subscriptions.has(convId)) return
     const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
-    const msgs = dedupById(entriesToMessages(res.entries ?? [], resolveEmployeeName))
+    const msgs = withLocalFailures(convId, dedupById(entriesToMessages(res.entries ?? [], resolveEmployeeName)))
     set({
       activeConvMessages: msgs,
       activeConvMsgIds: collectMsgIds(msgs),
@@ -1026,6 +1038,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   startAssistantStream: (convId, opts) => {
     if (subscriptions.has(convId)) return
+    // 新一轮开始：上一轮的失败提示已由聊天记录或本轮结果取代。
+    localFailures.delete(convId)
 
     const agentName = get().conversations.find((c) => c.id === convId)?.agentName
       || get().groups.find((g) => g.id === convId)?.name
@@ -1044,6 +1058,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       placeholders: new Map(),
       workIds: new Map(),
       textBoundaries: new Set(),
+      failures: new Map(),
       activeSources: new Set<string>(),
       settledSources: new Set<string>(),
       sourceIdentities: new Map(),
@@ -1129,7 +1144,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const text = sub.accumulatedText.get(key) ?? ''
       const message = sub.pendingMessages.get(msgId)
       const hasProcess = Boolean(message?.thinkingSteps?.length || message?.thinking)
-      const content = text || (hasProcess ? '' : EMPTY_REPLY_PLACEHOLDER)
+      // 失败有自己的提示条，空回复不再补「无回复内容」。
+      const content = text || (hasProcess || message?.failure ? '' : EMPTY_REPLY_PLACEHOLDER)
       if (message) sub.pendingMessages.set(msgId, { ...message, content, status: 'delivered', _pending: false })
       get().updateMessageContent(convId, msgId, content)
       set((s) => {
@@ -1143,6 +1159,32 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           ),
         }
       })
+    }
+
+    // 把失败挂到本轮回复上（实时显示）。
+    const markFailure = (sourceEmployeeId: string | undefined, failure: ReplyFailure): string => {
+      const msgId = ensurePlaceholder(sourceEmployeeId)
+      const pending = sub.pendingMessages.get(msgId)
+      if (pending) sub.pendingMessages.set(msgId, { ...pending, failure })
+      set((s) => {
+        if (convId !== s.activeConvId && convId !== s.activeGroupId) return {}
+        return { activeConvMessages: s.activeConvMessages.map((m) => m.id === msgId ? { ...m, failure } : m) }
+      })
+      return msgId
+    }
+
+    // 结束后按聊天记录重建列表时，执行前失败不在记录里；记下来，重建后补回。
+    const rememberFailure = (sourceEmployeeId: string | undefined, msgId: string, failure: ReplyFailure) => {
+      const message = sub.pendingMessages.get(msgId)
+      if (!message) return
+      const list = localFailures.get(convId) ?? []
+      list.push({
+        workId: sub.workIds.get(sourceEmployeeId ?? '') ?? message.workId,
+        senderEmployeeId: isGroup ? sourceEmployeeId : undefined,
+        message: { ...message, _pending: false, status: 'delivered' },
+        failure,
+      })
+      localFailures.set(convId, list)
     }
 
     const finalizeAll = () => {
@@ -1176,7 +1218,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           if (get().activeConvId !== convId && get().activeGroupId !== convId) return
           if (subscriptions.has(convId)) return
           const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
-          const msgs = dedupById(entriesToMessages(res.entries ?? [], resolveEmployeeName))
+          const msgs = withLocalFailures(convId, dedupById(entriesToMessages(res.entries ?? [], resolveEmployeeName)))
           set({
             activeConvMessages: msgs,
             activeConvMsgIds: collectMsgIds(msgs),
@@ -1334,11 +1376,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
         }
       },
-      onSettled: (src) => {
+      onAssistantEnd: (failure, src) => {
+        const key = src ?? ''
+        if (failure) sub.failures.set(key, failure)
+        else sub.failures.delete(key)
+      },
+      onSettled: (src, event) => {
         if (isGroup && !src) return
+        // 执行以失败告终时显示原因提示条，而不是只留下「无回复内容」。
+        const key = src ?? ''
+        const failure = sub.failures.get(key) ?? settledFailure(event)
+        sub.failures.delete(key)
+        const failedMsgId = failure ? markFailure(src, failure) : undefined
         // 最后一段 delta 必须落库,再标记 settled;避免节流吞掉尾部字节。
         flushText(src, true)
         finalizePlaceholder(src)
+        if (failure && failedMsgId) rememberFailure(src, failedMsgId, failure)
         sub.settledSources.add(src ?? '')
         tracker.markSettled(src)
         if (isGroup && !expectedTargetsKnown) scheduleConversationCompletionCheck()
@@ -1368,6 +1421,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       sub.accumulatedText.delete(key)
       sub.accumulatedThinking.delete(key)
       sub.textBoundaries.delete(key)
+      sub.failures.delete(key)
       sub.settledSources.delete(key)
       tracker.markRunning(source, true)
     }

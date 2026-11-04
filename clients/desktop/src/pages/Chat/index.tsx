@@ -35,6 +35,7 @@ import { ChatHeader } from '../../components/Chat/ChatHeader'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { resolveEmployeePresence } from '../../lib/employeePresence'
 import { getLastReadEntryId } from '../../lib/readAnchor'
+import { retryTarget } from '../../lib/replyFailure'
 import { isAppFocused, useAppFocus } from '../../hooks/useAppFocus'
 import { getAvatarFallback, getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
 
@@ -527,6 +528,14 @@ export default function Chat() {
     }
   }, [activeConvId, ensureConversation, submitMessage, unavailableMessage])
 
+  // 最后一条回复失败时提供「重试」：重发触发它的那条文字消息。生成或对齐中不提供，避免重复发送。
+  const retry = useMemo(() => retryTarget(messages), [messages])
+  const retryBusy = generatingConvIds.has(activeConvId) || syncingConvIds.has(activeConvId) || Boolean(unavailableMessage)
+  const retryText = retry && !retryBusy ? retry.text : null
+  const retryFailedReply = useCallback(() => {
+    if (retryText) void sendMessage(retryText)
+  }, [retryText, sendMessage])
+
   // 切换对话时从服务器拉取最新 20 条消息；人才市场跳转的默认消息等拉取完成后再发，避免被覆盖。
   useEffect(() => {
     if (!activeConvId) {
@@ -802,6 +811,7 @@ export default function Chat() {
                     displayContent={content}
                     isThisStreaming={streaming}
                     isThinkingPhase={streaming && content === ''}
+                    onRetry={retryText && retry?.failedId === msg.id ? retryFailedReply : undefined}
                   />
                   {msg.status === 'failed' && msg.role === 'user' && (
                     <span className="chat-message-failed-label" role="alert">发送失败</span>
