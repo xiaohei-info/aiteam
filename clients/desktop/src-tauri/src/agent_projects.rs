@@ -36,7 +36,8 @@ const MAX_ID_LEN: usize = 128;
 /// Claude desktop session records also hold system prompts and tool settings.
 const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
-const MAX_FRED_KEYS: usize = 1_000;
+/// Fred workspaces listed at most; the newest come first, so the oldest are left out.
+const MAX_FRED_WORKSPACES: usize = 1_000;
 /// Folders created shortly before a session's first record still belong to it.
 const CREATION_GRACE_MS: i64 = 2 * 60 * 1000;
 
@@ -240,6 +241,13 @@ pub struct FredWorkspace {
     pub file_count: usize,
     pub truncated: bool,
     pub files: Vec<ProjectFile>,
+}
+
+/// The Fred workspaces listed, and whether some were left out (`MAX_FRED_WORKSPACES`).
+#[derive(Debug, Serialize)]
+pub struct FredWorkspaceList {
+    pub workspaces: Vec<FredWorkspace>,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1581,18 +1589,30 @@ fn fred_workspace(root: &Path, key: &str) -> Result<Option<PathBuf>, String> {
         .then_some(dir))
 }
 
-fn list_fred_workspaces(root: &Path, keys: &[String]) -> Result<Vec<FredWorkspace>, String> {
-    if keys.len() > MAX_FRED_KEYS {
-        return Err("too_many_workspaces".into());
-    }
+/// Lists the Fred workspaces `keys` names, newest first as given. The host alone decides how
+/// many are listed; the rest are reported as `truncated` so the page can say so.
+fn list_fred_workspaces(root: &Path, keys: &[String]) -> Result<FredWorkspaceList, String> {
+    list_fred_workspaces_up_to(root, keys, MAX_FRED_WORKSPACES)
+}
+
+fn list_fred_workspaces_up_to(
+    root: &Path,
+    keys: &[String],
+    limit: usize,
+) -> Result<FredWorkspaceList, String> {
     let mut seen = HashSet::new();
     let mut workspaces = Vec::new();
+    let mut truncated = false;
     for key in keys {
         let Some(dir) = fred_workspace(root, key)? else {
             continue;
         };
         if !seen.insert(key.as_str()) {
             continue;
+        }
+        if workspaces.len() == limit {
+            truncated = true;
+            break;
         }
         let listing = list_project(&dir, MAX_PROJECT_FILES);
         let info = project_info(&dir);
@@ -1606,7 +1626,10 @@ fn list_fred_workspaces(root: &Path, keys: &[String]) -> Result<Vec<FredWorkspac
             files: listing.files,
         });
     }
-    Ok(workspaces)
+    Ok(FredWorkspaceList {
+        workspaces,
+        truncated,
+    })
 }
 
 /// The listed file with `file_id` in the project folder, found by listing it again.
@@ -1790,7 +1813,7 @@ pub async fn list_agent_projects(
 pub async fn list_fred_workspace_files(
     app: tauri::AppHandle,
     workspace_keys: Vec<String>,
-) -> Result<Vec<FredWorkspace>, String> {
+) -> Result<FredWorkspaceList, String> {
     let root = fred_workspace_root(&app)?;
     tauri::async_runtime::spawn_blocking(move || list_fred_workspaces(&root, &workspace_keys))
         .await
@@ -2461,7 +2484,9 @@ mod tests {
             linked.clone(),
             format!("conversation-{}", "d4".repeat(12)),
         ];
-        let workspaces = list_fred_workspaces(&root, &keys).unwrap();
+        let list = list_fred_workspaces(&root, &keys).unwrap();
+        assert!(!list.truncated);
+        let workspaces = list.workspaces;
         let listed: Vec<_> = workspaces
             .iter()
             .map(|workspace| (workspace.workspace_key.as_str(), workspace.file_count))
@@ -2481,6 +2506,10 @@ mod tests {
             );
         }
         assert_eq!(fred_workspace(&root, &linked).unwrap(), None);
+        // Past the limit the newest stay and the page is told the rest were left out.
+        let capped = list_fred_workspaces_up_to(&root, &keys, 1).unwrap();
+        assert_eq!(capped.workspaces.len(), 1);
+        assert!(capped.truncated);
         assert_eq!(
             parse_target("fred", &key, Some("0123456789abcdef")).unwrap(),
             AgentSource::Fred

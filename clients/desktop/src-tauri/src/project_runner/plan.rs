@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const CONSENT_FILE: &str = "workbench-run-consent.json";
 const MAX_CONSENT_BYTES: u64 = 4 * 1024 * 1024;
@@ -14,6 +17,14 @@ const MAX_CONSENT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_DEPENDENCY_BYTES: u64 = 1024 * 1024;
 const MARKER_FILE: &str = "dependencies.sha256";
 const SOURCE_FILE: &str = "workbench-dependency-source.json";
+/// `<app data>/workbench-runtime/bin`: the `npm` / `npx` commands project scripts call.
+const SHIM_DIR: &[&str] = &["workbench-runtime", "bin"];
+/// Oldest Python whose `venv` and pip the workbench relies on.
+const MIN_PYTHON_MINOR: u32 = 8;
+/// How long a runtime check (`python3 --version`, `xcode-select -p`) may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// A found (or missing) Python is trusted this long; installing one shows up after a refresh.
+const PYTHON_CACHE: Duration = Duration::from_secs(15);
 const MAX_SOURCE_URL_CHARS: usize = 512;
 pub const PYPI_MIRROR: &str = "https://pypi.tuna.tsinghua.edu.cn/simple";
 pub const NPM_MIRROR: &str = "https://registry.npmmirror.com";
@@ -144,6 +155,8 @@ pub struct RunContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodePlan {
     pub commands: Vec<String>,
+    /// What `npm run <script>` really runs, from `package.json`.
+    pub script: Option<String>,
     pub fingerprint: String,
 }
 
@@ -190,6 +203,15 @@ fn dependencies(runner: &Runner, root: &Path) -> Result<(String, Vec<u8>), Strin
     }
     let bytes = std::fs::read(&path).map_err(|_| "dependencies_unreadable")?;
     Ok((name.to_string(), bytes))
+}
+
+/// The text of the npm script a Node runner runs.
+fn script_text(runner: &Runner, manifest: &[u8]) -> Option<String> {
+    let Runner::Node { script } = runner else {
+        return None;
+    };
+    let manifest: serde_json::Value = serde_json::from_slice(manifest).ok()?;
+    manifest["scripts"][script].as_str().map(str::to_string)
 }
 
 fn npm_install(source: &DependencySource) -> Vec<String> {
@@ -277,6 +299,7 @@ pub fn describe(
     let (name, contents) = dependencies(runner, root)?;
     let commands = commands(runner, &run_dir.join("venv"), source);
     let joined = commands.join("\n");
+    let script = script_text(runner, &contents);
     let folder = root.display().to_string();
     let fingerprint = sha256(&[
         b"aifred-workbench-run-v1",
@@ -287,6 +310,7 @@ pub fn describe(
         &contents,
     ]);
     Ok(CodePlan {
+        script,
         commands,
         fingerprint,
     })
@@ -334,11 +358,11 @@ pub fn steps(
                 label: labels[1].clone(),
                 marker: None,
             });
-            let prefix = context
-                .node
-                .parent()
-                .map(Path::to_path_buf)
-                .into_iter()
+            // Scripts call `npm` / `npx` themselves (`npm run build && ...`, `npx vite`); a
+            // machine without Node has neither, so the bundled ones come first on `PATH`.
+            let shims = npm_shims(&context.data_dir, &context.node, &context.npm_cli)?;
+            let prefix = std::iter::once(shims)
+                .chain(context.node.parent().map(Path::to_path_buf))
                 .collect();
             Ok((steps, prefix))
         }
@@ -408,8 +432,132 @@ pub fn child_env(prefix: &[PathBuf], port: u16) -> Vec<(String, String)> {
     env
 }
 
-/// The system `python3`: Homebrew first on macOS, where GUI apps get a minimal `PATH`.
+/// Writes `npm` and `npx` commands that run the bundled npm with the bundled Node, and returns
+/// their folder. Rewritten only when they change.
+pub fn npm_shims(data_dir: &Path, node: &Path, npm_cli: &Path) -> Result<PathBuf, String> {
+    let dir = SHIM_DIR
+        .iter()
+        .fold(data_dir.to_path_buf(), |dir, part| dir.join(part));
+    std::fs::create_dir_all(&dir).map_err(|_| "run_failed")?;
+    let npx_cli = npm_cli.with_file_name("npx-cli.js");
+    for (name, cli) in [("npm", npm_cli), ("npx", npx_cli.as_path())] {
+        let (file, text) = if cfg!(windows) {
+            (
+                format!("{name}.cmd"),
+                format!("@\"{}\" \"{}\" %*\r\n", node.display(), cli.display()),
+            )
+        } else {
+            (
+                name.to_string(),
+                format!(
+                    "#!/bin/sh\nexec {} {} \"$@\"\n",
+                    sh_quote(&node.display().to_string()),
+                    sh_quote(&cli.display().to_string())
+                ),
+            )
+        };
+        let path = dir.join(file);
+        if std::fs::read_to_string(&path).is_ok_and(|current| current == text) {
+            continue;
+        }
+        std::fs::write(&path, text).map_err(|_| "run_failed")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|_| "run_failed")?;
+        }
+    }
+    Ok(dir)
+}
+
+/// `value` as one `sh` word.
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Runs a short check command, giving up (and killing it) after `PROBE_TIMEOUT`. Returns its
+/// stdout and stderr on success.
+fn probe(command: &mut Command) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    output.status.success().then(|| {
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text
+    })
+}
+
+/// `Python 3.N...` with N at least `MIN_PYTHON_MINOR`.
+fn supported_python_version(output: &str) -> bool {
+    let Some(version) = output.trim().strip_prefix("Python 3.") else {
+        return false;
+    };
+    let minor: String = version.chars().take_while(char::is_ascii_digit).collect();
+    minor
+        .parse::<u32>()
+        .is_ok_and(|minor| minor >= MIN_PYTHON_MINOR)
+}
+
+/// macOS ships `/usr/bin/python3` as a stub that pops up the Command Line Tools installer when
+/// run; it is a real Python only once the tools are installed.
+fn stub_python(path: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && path == Path::new("/usr/bin/python3")
+        && probe(Command::new("/usr/bin/xcode-select").arg("-p")).is_none()
+}
+
+/// A `python3` that actually runs and is new enough; checked by running it, not by its file.
+fn usable_python(path: &Path) -> bool {
+    path.is_file()
+        && !stub_python(path)
+        && probe(Command::new(path).arg("--version"))
+            .is_some_and(|out| supported_python_version(&out))
+}
+
+/// The system `python3`: Homebrew first on macOS, where GUI apps get a minimal `PATH`. Only one
+/// that runs counts; the answer is kept for `PYTHON_CACHE`.
 pub fn find_python() -> Option<PathBuf> {
+    static FOUND: Mutex<Option<(Instant, Option<PathBuf>)>> = Mutex::new(None);
+    let mut found = FOUND
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((at, python)) = found.as_ref() {
+        if at.elapsed() < PYTHON_CACHE {
+            return python.clone();
+        }
+    }
+    let python = python_candidates()
+        .into_iter()
+        .find(|path| usable_python(path));
+    *found = Some((Instant::now(), python.clone()));
+    python
+}
+
+fn python_candidates() -> Vec<PathBuf> {
     let name = if cfg!(windows) {
         "python.exe"
     } else {
@@ -427,12 +575,18 @@ pub fn find_python() -> Option<PathBuf> {
                 .collect()
         })
         .unwrap_or_default();
-    preferred
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for path in preferred
         .iter()
         .map(PathBuf::from)
         .chain(on_path)
         .chain(cfg!(unix).then(|| PathBuf::from("/usr/bin/python3")))
-        .find(|path| path.is_file())
+    {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
 }
 
 fn load_consent(data_dir: &Path) -> BTreeMap<String, String> {
@@ -589,7 +743,10 @@ mod tests {
         );
         assert_eq!(steps[1].program, ctx.node);
         assert_eq!(steps[1].args[1..], ["run", "dev"]);
-        assert_eq!(prefix, [data.join("runtime")]);
+        assert_eq!(
+            prefix,
+            [data.join("workbench-runtime/bin"), data.join("runtime")]
+        );
         let (marker, hash) = steps[0].marker.clone().unwrap();
         std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
         std::fs::write(&marker, hash).unwrap();
@@ -707,6 +864,7 @@ mod tests {
         let mirror = DependencySource::Mirror;
         let plan = describe(&dev, &root, &runs, "codex:abc", &mirror).unwrap();
         assert_eq!(plan.commands, [NPM_INSTALL, "npm run dev"]);
+        assert_eq!(plan.script.as_deref(), Some("vite"));
         // Another download source is another command: confirmed again.
         assert_ne!(
             describe(&dev, &root, &runs, "codex:abc", &DependencySource::System)
@@ -776,5 +934,67 @@ mod tests {
         assert_eq!(get("PORT"), Some("4321"));
         assert_eq!(get("HOST"), Some("127.0.0.1"));
         assert!(get("PATH").unwrap().starts_with("/opt/aifred/runtime"));
+    }
+
+    #[test]
+    fn python_must_report_a_supported_version() {
+        assert!(supported_python_version("Python 3.12.4\n"));
+        assert!(supported_python_version("Python 3.8.0"));
+        for output in [
+            "Python 3.7.9",
+            "Python 2.7.18",
+            "",
+            "xcrun: error: invalid active developer path",
+        ] {
+            assert!(!supported_python_version(output), "{output}");
+        }
+    }
+
+    /// Project scripts that call `npm` / `npx` themselves reach the bundled ones.
+    #[cfg(unix)]
+    #[test]
+    fn npm_and_npx_shims_run_the_bundled_npm() {
+        let data = temp("shims", &[]);
+        let runtime = data.join("it's runtime");
+        std::fs::create_dir_all(runtime.join("npm/bin")).unwrap();
+        let node = runtime.join("node");
+        std::fs::write(&node, "#!/bin/sh\necho \"node $*\"\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let npm_cli = runtime.join("npm/bin/npm-cli.js");
+        let dir = npm_shims(&data, &node, &npm_cli).unwrap();
+        assert_eq!(dir, data.join("workbench-runtime/bin"));
+        for (name, cli) in [("npm", "npm-cli.js"), ("npx", "npx-cli.js")] {
+            let output = Command::new("/bin/sh")
+                .args(["-c", &format!("{name} run 'a b'")])
+                .env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", dir.display()))
+                .output()
+                .unwrap();
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(
+                text.trim(),
+                format!(
+                    "node {} run a b",
+                    runtime.join("npm/bin").join(cli).display()
+                )
+            );
+        }
+        // Unchanged shims are left alone.
+        let before = std::fs::metadata(dir.join("npm"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        npm_shims(&data, &node, &npm_cli).unwrap();
+        assert_eq!(
+            std::fs::metadata(dir.join("npm"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(&data).unwrap();
     }
 }

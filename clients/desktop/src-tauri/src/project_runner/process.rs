@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,6 +23,9 @@ const MAX_READ_BYTES: u64 = 64 * 1024;
 pub const URL_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(unix)]
 const STOP_GRACE: Duration = Duration::from_secs(3);
+/// How often the start step's port is tried while it has printed no address.
+const PORT_PROBE_INTERVAL: Duration = Duration::from_secs(1);
+const PORT_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const LOG_FILE: &str = "run.log";
 const RECORD_FILE: &str = "process.json";
 const MAX_RECORD_BYTES: u64 = 1024;
@@ -149,6 +153,8 @@ struct Shared {
     log_file: Option<File>,
     ready: Option<Ready>,
     record: PathBuf,
+    /// The port handed to the start step (`PORT`); probed when it prints no address.
+    port: Option<u16>,
 }
 
 impl Shared {
@@ -176,6 +182,8 @@ pub struct Snapshot {
     pub url: Option<String>,
     pub exit_code: Option<i32>,
     pub url_timed_out: bool,
+    /// The port handed to the project, for opening it by hand when no address was found.
+    pub port: Option<u16>,
     pub logs: Vec<String>,
 }
 
@@ -183,12 +191,15 @@ pub struct Snapshot {
 pub struct ProcessRun(Arc<Mutex<Shared>>);
 
 impl ProcessRun {
-    /// `run_dir` keeps the log and the record of the running step.
+    /// `run_dir` keeps the log and the record of the running step. `port` is the port handed to
+    /// the start step; once it accepts connections the project counts as running even if it
+    /// printed no address.
     pub fn start(
         steps: Vec<Step>,
         cwd: PathBuf,
         env: Vec<(String, String)>,
         run_dir: &Path,
+        port: Option<u16>,
         ready: Ready,
     ) -> Result<Self, String> {
         if steps.is_empty() {
@@ -207,6 +218,7 @@ impl ProcessRun {
             log_file: Some(log_file),
             ready: Some(ready),
             record: run_dir.join(RECORD_FILE),
+            port,
         }));
         let supervised = shared.clone();
         std::thread::Builder::new()
@@ -226,6 +238,7 @@ impl ProcessRun {
                 && state
                     .starting_since
                     .is_some_and(|since| since.elapsed() >= URL_TIMEOUT),
+            port: state.port,
             logs: state.logs.iter().cloned().collect(),
         }
     }
@@ -301,6 +314,11 @@ fn supervise(shared: &Arc<Mutex<Shared>>, steps: &[Step], cwd: &Path, env: &[(St
                 std::thread::spawn(move || read_output(&shared, output, starting))
             })
             .collect();
+        // Not joined: it ends by itself at its next check once this step is over.
+        if starting {
+            let shared = shared.clone();
+            std::thread::spawn(move || probe_port(&shared, pid));
+        }
         let status = child.wait();
         // Background processes the step left behind would keep the output open; end them.
         terminate_group(pid);
@@ -400,6 +418,60 @@ fn terminate_group(pid: u32) {
         .status();
 }
 
+/// The address of `port` on this machine.
+pub fn local_address(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/")
+}
+
+/// The address of a server accepting connections on `port` on this machine, if any.
+fn listening(port: u16) -> Option<String> {
+    let v4 = SocketAddr::from(([127, 0, 0, 1], port));
+    if TcpStream::connect_timeout(&v4, PORT_PROBE_TIMEOUT).is_ok() {
+        return Some(local_address(port));
+    }
+    // Node may bind `localhost` to IPv6 only.
+    let v6 = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&v6, PORT_PROBE_TIMEOUT)
+        .is_ok()
+        .then(|| format!("http://localhost:{port}/"))
+}
+
+/// While the start step (`pid`) runs without printing an address, tries its port: a server that
+/// prints only "listening on 3000", or nothing, still opens.
+fn probe_port(shared: &Mutex<Shared>, pid: u32) {
+    loop {
+        std::thread::sleep(PORT_PROBE_INTERVAL);
+        let port = {
+            let state = lock(shared);
+            let waiting = state.phase == Phase::Starting
+                && state.url.is_none()
+                && !state.stopping
+                && state.pid == Some(pid);
+            match state.port {
+                Some(port) if waiting => port,
+                _ => return,
+            }
+        };
+        let Some(url) = listening(port) else {
+            continue;
+        };
+        let ready = {
+            let mut state = lock(shared);
+            if state.phase != Phase::Starting || state.url.is_some() || state.stopping {
+                return;
+            }
+            state.log(&format!("端口 {port} 已可访问：{url}"));
+            state.url = Some(url.clone());
+            state.phase = Phase::Running;
+            state.ready.take()
+        };
+        if let Some(ready) = ready {
+            ready(url);
+        }
+        return;
+    }
+}
+
 fn read_output(shared: &Mutex<Shared>, output: Box<dyn Read + Send>, starting: bool) {
     let mut reader = BufReader::new(output);
     let mut buffer = Vec::new();
@@ -460,18 +532,28 @@ fn strip_ansi(text: &str) -> String {
     output
 }
 
-/// The first `http://127.0.0.1:<port>` or `http://localhost:<port>` address in a line.
+/// Addresses dev servers print for themselves, and the address to open for each. Servers
+/// listening on all interfaces print `0.0.0.0` or `[::]`, which a browser cannot open.
+const ADDRESS_PREFIXES: &[(&str, &str)] = &[
+    ("http://127.0.0.1:", "http://127.0.0.1:"),
+    ("http://localhost:", "http://localhost:"),
+    ("http://0.0.0.0:", "http://127.0.0.1:"),
+    ("http://[::]:", "http://localhost:"),
+    ("http://[::1]:", "http://localhost:"),
+];
+
+/// The first address on this machine in a line, as the browser should open it.
 fn loopback_url(line: &str) -> Option<String> {
-    let (at, prefix) = ["http://127.0.0.1:", "http://localhost:"]
-        .into_iter()
-        .filter_map(|prefix| line.find(prefix).map(|at| (at, prefix)))
-        .min_by_key(|(at, _)| *at)?;
+    let (at, prefix, open) = ADDRESS_PREFIXES
+        .iter()
+        .filter_map(|(prefix, open)| line.find(prefix).map(|at| (at, *prefix, *open)))
+        .min_by_key(|(at, _, _)| *at)?;
     let digits: String = line[at + prefix.len()..]
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
     let port: u16 = digits.parse().ok().filter(|port| *port > 0)?;
-    Some(format!("{prefix}{port}/"))
+    Some(format!("{open}{port}/"))
 }
 
 #[cfg(test)]
@@ -493,9 +575,17 @@ mod tests {
             loopback_url("Local: http://localhost:3000 Network: http://127.0.0.1:9").as_deref(),
             Some("http://localhost:3000/")
         );
+        // Listening on all interfaces: opened on this machine.
+        assert_eq!(
+            loopback_url("Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...").as_deref(),
+            Some("http://127.0.0.1:8000/")
+        );
+        assert_eq!(
+            loopback_url("listening on http://[::]:3000").as_deref(),
+            Some("http://localhost:3000/")
+        );
         for line in [
             "Network: http://192.168.1.5:5173/",
-            "http://0.0.0.0:8000",
             "https://localhost:443",
             "http://localhost:/",
             "http://127.0.0.1:0/",
@@ -542,6 +632,7 @@ mod tests {
                 dir.to_path_buf(),
                 env(),
                 &dir.join("logs"),
+                None,
                 Box::new(|_| {}),
             )
             .unwrap()
@@ -661,6 +752,7 @@ mod tests {
                 dir.clone(),
                 env(),
                 &dir,
+                None,
                 Box::new(move |url| sender.send(url).unwrap()),
             )
             .unwrap();
@@ -675,6 +767,59 @@ mod tests {
             assert_eq!(snapshot.logs[MAX_LOG_LINES - 2], "line599");
             let file = std::fs::read_to_string(dir.join("run.log")).unwrap();
             assert!(file.lines().any(|line| line == "line0"));
+            drop(run);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        fn start_on_port(
+            dir: &Path,
+            step: Step,
+            port: u16,
+        ) -> (ProcessRun, std::sync::mpsc::Receiver<String>) {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let run = ProcessRun::start(
+                vec![step],
+                dir.to_path_buf(),
+                env(),
+                &dir.join("logs"),
+                Some(port),
+                Box::new(move |url| sender.send(url).unwrap()),
+            )
+            .unwrap();
+            (run, receiver)
+        }
+
+        #[test]
+        fn a_server_that_prints_no_address_is_found_by_its_port() {
+            let dir = temp("probe");
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (run, receiver) = start_on_port(&dir, sh("echo listening; sleep 30"), port);
+            let snapshot = wait(&run, |snapshot| snapshot.phase == Phase::Running);
+            assert_eq!(snapshot.url, Some(local_address(port)));
+            assert_eq!(snapshot.port, Some(port));
+            assert_eq!(
+                receiver.recv_timeout(Duration::from_secs(5)).unwrap(),
+                local_address(port)
+            );
+            drop(run);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[test]
+        fn a_step_that_exits_without_an_address_is_reported_as_exited() {
+            let dir = temp("probe-exit");
+            // A port nothing listens on: bound, read, released.
+            let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let (run, receiver) = start_on_port(&dir, sh("sleep 1; exit 3"), port);
+            let snapshot = wait(&run, |snapshot| snapshot.phase == Phase::Exited);
+            assert_eq!(snapshot.exit_code, Some(3));
+            assert_eq!(snapshot.url, None);
+            assert!(receiver.try_recv().is_err());
             drop(run);
             std::fs::remove_dir_all(&dir).unwrap();
         }

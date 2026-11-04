@@ -12,7 +12,7 @@ import {
   LOCAL_PROJECT_SOURCES,
   localSourceStates,
   type DependencySource,
-  type FredWorkspaceWire,
+  type FredWorkspaceListWire,
   type LocalProjectListWire,
   type ProjectFile,
   type ProjectFileContentWire,
@@ -29,13 +29,10 @@ export interface SourceLoadResult {
   states: SourceState[]
 }
 
-/** 与宿主 MAX_FRED_KEYS 一致。 */
-const MAX_FRED_WORKSPACES = 1000
-
 const hostError = (error: unknown, fallback?: string) => Object.assign(new Error(hostErrorMessage(error, fallback)), { cause: error })
 
-const fredState = (status: SourceState['status'], count: number, message?: string): SourceState => ({
-  source: 'fred', status, count, truncated: false, message,
+const fredState = (status: SourceState['status'], count: number, message?: string, truncated = false): SourceState => ({
+  source: 'fred', status, count, truncated, message,
 })
 
 /** Fred：接口给出每个会话的工作目录名，宿主按目录名列文件。 */
@@ -51,12 +48,13 @@ export async function loadFredProjects(): Promise<SourceLoadResult> {
     return { projects: [], states: [fredState('error', 0, classifyRequestError(error, 'Fred 会话读取失败，请稍后重试。').message)] }
   }
   try {
-    const keys = fredWorkspaceKeys(conversations, MAX_FRED_WORKSPACES)
-    const workspaces = keys.length
-      ? await invoke<FredWorkspaceWire[]>('list_fred_workspace_files', { workspaceKeys: keys })
-      : []
-    const projects = fredProjects(conversations, workspaces, experts)
-    return { projects, states: [fredState('ready', projects.length)] }
+    const keys = fredWorkspaceKeys(conversations)
+    const listed: FredWorkspaceListWire = keys.length
+      ? await invoke<FredWorkspaceListWire>('list_fred_workspace_files', { workspaceKeys: keys })
+      : { workspaces: [], truncated: false }
+    const projects = fredProjects(conversations, listed.workspaces, experts)
+    const message = listed.truncated ? '会话较多，只显示最近的部分' : undefined
+    return { projects, states: [fredState('ready', projects.length, message, listed.truncated)] }
   } catch (error) {
     return { projects: [], states: [fredState('error', 0, hostErrorMessage(error))] }
   }
@@ -150,6 +148,23 @@ export async function setDependencySource(source: DependencySource): Promise<Dep
 
 const DETECT_CONCURRENCY = 4
 const NOT_RUNNABLE: RunUnit[] = [{ dir: '', runner: { kind: 'none' } }]
+
+/** 在浏览器里试着打开运行中的项目：有地址开地址，否则开分配给它的端口。 */
+export async function openProjectAddress(part: ProjectPart, dir: string): Promise<void> {
+  try {
+    await invoke('open_project_address', { ...target(part), dir })
+  } catch (error) {
+    throw hostError(error, '无法在浏览器打开，请重试')
+  }
+}
+
+export async function openPythonDownload(): Promise<void> {
+  try {
+    await invoke('open_python_download')
+  } catch (error) {
+    throw hostError(error, '无法打开下载页，请访问 python.org 下载')
+  }
+}
 
 /** 逐个识别运行单元并取各单元当前运行状态（应用内可能已在运行）；单个失败按不可运行处理。 */
 export async function detectRunners(

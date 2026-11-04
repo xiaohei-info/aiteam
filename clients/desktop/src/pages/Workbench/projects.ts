@@ -145,6 +145,12 @@ export interface FredWorkspaceWire {
   files: ProjectFileWire[]
 }
 
+/** 宿主列出的 Fred 目录；上限由宿主决定，超出时 truncated 为 true。 */
+export interface FredWorkspaceListWire {
+  workspaces: FredWorkspaceWire[]
+  truncated: boolean
+}
+
 export interface ProjectFileContentWire {
   name: string
   path: string
@@ -210,15 +216,15 @@ function parseTime(value: string | null | undefined): number | null {
   return Number.isFinite(time) ? time : null
 }
 
-/** 交给宿主列文件的目录：只取接口判断为有文件的目录，去重。 */
-export function fredWorkspaceKeys(conversations: ConversationWorkspaces[], limit: number): string[] {
+/** 交给宿主列文件的目录：只取接口判断为有文件的目录，去重，保持接口给出的新到旧顺序（宿主超出上限时截掉旧的）。 */
+export function fredWorkspaceKeys(conversations: ConversationWorkspaces[]): string[] {
   const keys = new Set<string>()
   for (const conversation of conversations) {
     for (const workspace of conversation.workspaces) {
       if (workspace.has_files) keys.add(workspace.workspace_key)
     }
   }
-  return [...keys].slice(0, limit)
+  return [...keys]
 }
 
 const expertModel = (expert: ExpertProjection | undefined): string | null =>
@@ -297,7 +303,6 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_project_id: '项目标识无效',
   invalid_workspace_key: '工作目录标识无效',
   invalid_file_id: '文件标识无效',
-  too_many_workspaces: '工作目录过多，请清理部分会话后重试',
   project_not_found: '该项目目录已不存在或已被移动',
   file_not_found: '该文件已不在项目中',
   file_missing: '文件已删除或移动',
@@ -509,6 +514,8 @@ export type RunnerKind = Runner['kind']
 export interface RunUnit {
   dir: string
   runner: Runner
+  /** Python 项目，而这台电脑没有能运行的 Python。 */
+  needs_python?: boolean
 }
 
 /** 运行状态、进行中操作和错误按「目录 + 单元」区分。 */
@@ -530,11 +537,13 @@ export interface RunStatus {
   url: string | null
   exit_code: number | null
   url_timed_out: boolean
+  /** 分配给代码项目的端口；没识别到地址时可以试着打开。 */
+  port: number | null
   logs: string[]
 }
 
 export type StartOutcome =
-  | { outcome: 'needs_consent'; commands: string[]; cwd: string; fingerprint: string }
+  | { outcome: 'needs_consent'; commands: string[]; script: string | null; cwd: string; fingerprint: string }
   | ({ outcome: 'started' } & RunStatus)
 
 export const RUNNER_LABELS: Record<RunnerKind, string> = {
@@ -567,6 +576,11 @@ export function htmlPageToRun(runner: Runner, selectedFileId: string | null): st
 }
 
 /** 运行方式的一句话说明，显示在运行按钮旁。 */
+/** 确认弹窗里解释 npm 脚本实际执行什么；非 npm 项目或脚本取不到时为 null。 */
+export function consentScriptLine(runner: Runner, script: string | null): string | null {
+  return runner.kind === 'node' && script ? `npm run ${runner.script} 实际执行：${script}` : null
+}
+
 export function runnerDetail(runner: Runner): string {
   switch (runner.kind) {
     case 'node': return `npm run ${runner.script}`
@@ -586,7 +600,7 @@ export function runPhaseText(status: RunStatus | undefined): string | null {
   if (!status?.phase) return null
   switch (status.phase) {
     case 'preparing': return '正在安装依赖…'
-    case 'starting': return status.url_timed_out ? '30 秒内没有识别到访问地址，请查看日志' : '正在启动…'
+    case 'starting': return status.url_timed_out ? '项目已启动，但没找到访问地址' : '正在启动…'
     case 'running': return '运行中'
     case 'exited': return status.exit_code === null ? '已退出' : `已退出（退出码 ${status.exit_code}）`
     case 'failed': return status.exit_code === null ? '运行失败，请查看日志' : `运行失败（退出码 ${status.exit_code}），请查看日志`

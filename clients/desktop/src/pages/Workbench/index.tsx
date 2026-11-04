@@ -7,7 +7,7 @@ import { isTauri } from '../../api/agent/runtime'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { formatConversationTime } from '../../lib/conversationSummary'
 import { useChatStore } from '../../stores/chat'
-import { detectRunners, getDependencySource, loadFredProjects, loadLocalProjects, openProjectFile, projectRunStatus, readProjectFile, setDependencySource, startProject, stopProject } from './api'
+import { detectRunners, getDependencySource, loadFredProjects, loadLocalProjects, openProjectAddress, openProjectFile, openPythonDownload, projectRunStatus, readProjectFile, setDependencySource, startProject, stopProject } from './api'
 import { parseCsv, sandboxedHtml, svgDataUrl } from './preview'
 import {
   buildFileTree,
@@ -31,6 +31,7 @@ import {
   needsPolling,
   partKey,
   PROJECT_SOURCES,
+  consentScriptLine,
   projectRunnerKind,
   RUNNER_LABELS,
   runnerDetail,
@@ -64,7 +65,7 @@ const SOURCE_DESCRIPTIONS: Record<SourceKey, string> = {
   fred: '本机 Agent 会话中 AI 员工工作目录里的项目',
   codex: 'Codex 会话中新建的项目目录（只读识别）',
   claude: 'Claude Code CLI 会话中新建的项目目录（只读识别）',
-  claude_desktop: 'Claude 桌面版 Cowork 输出与 Code 会话中新建的项目目录（只读识别）',
+  claude_desktop: 'Claude 桌面版 Cowork 输出与 Code 会话中新建的项目目录（实验性，只读识别）',
   workbuddy: '~/WorkBuddy 下的任务目录（只读识别）',
   deepseek: '任一来源上由 DeepSeek 模型做出的项目，与各来源重复计数',
 }
@@ -101,6 +102,7 @@ interface ConsentRequest {
   unit: RunUnit
   projectName: string
   commands: string[]
+  script: string | null
   cwd: string
   fingerprint: string
 }
@@ -390,7 +392,7 @@ export default function Workbench() {
 
   const applyOutcome = (part: ProjectPart, unit: RunUnit, outcome: StartOutcome, projectName: string) => {
     if (outcome.outcome === 'needs_consent') {
-      setConsent({ part, unit, projectName, commands: outcome.commands, cwd: outcome.cwd, fingerprint: outcome.fingerprint })
+      setConsent({ part, unit, projectName, commands: outcome.commands, script: outcome.script, cwd: outcome.cwd, fingerprint: outcome.fingerprint })
       return
     }
     const status = runStatusFromOutcome(outcome)
@@ -434,6 +436,25 @@ export default function Workbench() {
       await openProjectFile(part, unitRevealFile(part, dir), true)
     } catch (error) {
       setRunError({ key: unitKey(part, dir), message: errorText(error, '无法在文件夹中显示，请重试') })
+    }
+  }
+
+  /** 没识别到访问地址时，试着在浏览器打开分配给项目的端口。 */
+  const tryOpenUnit = async (part: ProjectPart, dir: string) => {
+    setRunError(null)
+    try {
+      await openProjectAddress(part, dir)
+    } catch (error) {
+      setRunError({ key: unitKey(part, dir), message: errorText(error, '无法在浏览器打开，请重试') })
+    }
+  }
+
+  const showPythonDownload = async (part: ProjectPart, dir: string) => {
+    setRunError(null)
+    try {
+      await openPythonDownload()
+    } catch (error) {
+      setRunError({ key: unitKey(part, dir), message: errorText(error, '无法打开下载页，请访问 python.org 下载') })
     }
   }
 
@@ -571,6 +592,7 @@ export default function Workbench() {
                     label={[part.label, dir].filter(Boolean).join(' / ') || null}
                     removed={part.removed}
                     runner={unit?.runner}
+                    needsPython={Boolean(unit?.needs_python)}
                     status={runs[key]}
                     pending={pendingRun === key}
                     busy={pendingRun !== null}
@@ -578,6 +600,8 @@ export default function Workbench() {
                     onRun={() => unit && void runUnit(part, unit, selected.name)}
                     onStop={() => unit && void stopUnit(part, unit)}
                     onReveal={() => void revealUnit(part, dir)}
+                    onTryOpen={() => void tryOpenUnit(part, dir)}
+                    onDownloadPython={() => void showPythonDownload(part, dir)}
                   />
                 })
               })}
@@ -629,7 +653,7 @@ export default function Workbench() {
 
     {consent && <ChatDialog title="确认运行项目" icon={<ShieldAlert size={18} />} description={consent.unit.dir ? `${consent.projectName} / ${consent.unit.dir}` : consent.projectName} onClose={() => setConsent(null)}>
       <p className="chat-tools-note">首次运行（或命令、依赖文件变化后）需要你确认。将在项目目录中依次执行：</p>
-      <pre className={styles.consentCommands}>{consent.commands.join('\n')}</pre>
+      <pre className={styles.consentCommands}>{[...consent.commands, consentScriptLine(consent.unit.runner, consent.script)].filter(Boolean).join('\n')}</pre>
       <p className={styles.consentCwd}><span>工作目录</span>{consent.cwd}</p>
       <p className={styles.consentCwd}><span>依赖下载源</span>{dependencySourceLabel(downloadSource)}（可在工作台右上角「下载源」中更改）</p>
       <p className={styles.consentWarning}><TriangleAlert size={15} /><span>项目代码会以你的用户权限运行，可能访问网络和本机文件；安装依赖时会联网下载，并可能执行依赖包的安装脚本。只运行你信任的项目。</span></p>
@@ -714,11 +738,12 @@ function DependencySourceDialog({ value, onClose, onSaved }: {
   </ChatDialog>
 }
 
-function RunControls({ label, removed, runner, status, pending, busy, error, onRun, onStop, onReveal }: {
+function RunControls({ label, removed, runner, needsPython, status, pending, busy, error, onRun, onStop, onReveal, onTryOpen, onDownloadPython }: {
   /** 群聊员工名和 / 或子文件夹名；单个目录本身为 null。 */
   label: string | null
   removed: boolean
   runner: RunUnit['runner'] | undefined
+  needsPython: boolean
   status: RunStatus | undefined
   pending: boolean
   busy: boolean
@@ -726,6 +751,8 @@ function RunControls({ label, removed, runner, status, pending, busy, error, onR
   onRun: () => void
   onStop: () => void
   onReveal: () => void
+  onTryOpen: () => void
+  onDownloadPython: () => void
 }) {
   const running = Boolean(status?.running)
   const phase = runPhaseText(status)
@@ -740,12 +767,13 @@ function RunControls({ label, removed, runner, status, pending, busy, error, onR
           : <span className={styles.runDetail}><LoaderCircle size={12} className={styles.spinner} />正在识别运行方式…</span>}
       </div>
       <div className={styles.runActions}>
-        {runner && runner.kind !== 'none' && !running && <button type="button" className={styles.primaryButton} disabled={busy} onClick={onRun}>
+        {runner && runner.kind !== 'none' && !running && <button type="button" className={styles.primaryButton} disabled={busy || needsPython} title={needsPython ? '需要先安装 Python 3' : undefined} onClick={onRun}>
           {pending ? <LoaderCircle size={14} className={styles.spinner} /> : <Play size={14} />}运行
         </button>}
         {running && <button type="button" className={styles.primaryButton} disabled={busy || !status?.url} onClick={onRun} title={status?.url ?? '等待项目输出访问地址'}>
           {pending ? <LoaderCircle size={14} className={styles.spinner} /> : <ExternalLink size={14} />}打开
         </button>}
+        {running && !status?.url && status?.url_timed_out && status.port && <button type="button" className={styles.smallButton} onClick={onTryOpen}><ExternalLink size={13} />尝试在浏览器打开</button>}
         {running && <button type="button" className={styles.smallButton} disabled={busy} onClick={onStop}><Square size={12} />停止</button>}
         <button type="button" className={styles.smallButton} onClick={onReveal}><FolderSearch size={13} />在文件夹中显示</button>
       </div>
@@ -755,8 +783,12 @@ function RunControls({ label, removed, runner, status, pending, busy, error, onR
       {phase && <span>{phase}</span>}
       {running && status?.url && <code>{status.url}</code>}
     </div>}
+    {needsPython && !running && <div className={styles.errorBanner} role="status">
+      <TriangleAlert size={15} /><span>需要先安装 Python 3，装好后点右上角「刷新」</span>
+      <button type="button" className={styles.smallButton} onClick={onDownloadPython}><ExternalLink size={13} />下载 Python</button>
+    </div>}
     {error && <div className={styles.errorBanner} role="alert"><TriangleAlert size={15} /><span>{error}</span></div>}
-    {logs.length > 0 && <details className={styles.logs}>
+    {logs.length > 0 && <details className={styles.logs} open={Boolean(failed)}>
       <summary><Terminal size={13} />日志（最近 {logs.length} 行）</summary>
       <pre>{logs.join('\n')}</pre>
     </details>}

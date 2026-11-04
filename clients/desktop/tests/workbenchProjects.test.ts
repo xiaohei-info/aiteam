@@ -21,6 +21,7 @@ import {
   projectRunnerKind,
   PROJECT_SOURCES,
   runnableUnitCount,
+  consentScriptLine,
   runPhaseText,
   runStatusFromOutcome,
   sortProjects,
@@ -137,8 +138,8 @@ test('local projects map from the host and keep source states', () => {
 })
 
 test('Fred lists only folders with files, once each', () => {
-  assert.deepEqual(fredWorkspaceKeys(conversations, 10), [KEY_A, KEY_B, KEY_C])
-  assert.deepEqual(fredWorkspaceKeys(conversations, 2), [KEY_A, KEY_B])
+  // The host caps how many it lists (oldest dropped); the page sends all, newest first.
+  assert.deepEqual(fredWorkspaceKeys(conversations), [KEY_A, KEY_B, KEY_C])
 })
 
 test('Fred chats are one folder; groups merge every member folder, removed ones included', () => {
@@ -226,7 +227,7 @@ test('a project opens on its README, then index.html, then the newest file', () 
 })
 
 const status = (overrides: Partial<RunStatus>): RunStatus => ({
-  running: false, phase: null, url: null, exit_code: null, url_timed_out: false, logs: [], ...overrides,
+  running: false, phase: null, url: null, exit_code: null, url_timed_out: false, port: null, logs: [], ...overrides,
 })
 
 test('run state: badges, page choice, phase text and polling', () => {
@@ -254,9 +255,14 @@ test('run state: badges, page choice, phase text and polling', () => {
   assert.equal(htmlPageToRun(pages, null), 'p1')
   assert.equal(htmlPageToRun({ kind: 'static', dir: 'dist' }, 'p2'), null)
 
+  // The consent dialog says what an npm script really runs.
+  assert.equal(consentScriptLine({ kind: 'node', script: 'dev' }, 'rm -rf x && vite'), 'npm run dev 实际执行：rm -rf x && vite')
+  assert.equal(consentScriptLine({ kind: 'node', script: 'dev' }, null), null)
+  assert.equal(consentScriptLine({ kind: 'python', entry: 'a.py', dependencies: 'requirements.txt', streamlit: false }, 'x'), null)
+
   assert.equal(runPhaseText(undefined), null)
   assert.equal(runPhaseText(status({ phase: 'preparing', running: true })), '正在安装依赖…')
-  assert.match(runPhaseText(status({ phase: 'starting', running: true, url_timed_out: true })) ?? '', /30 秒/)
+  assert.match(runPhaseText(status({ phase: 'starting', running: true, url_timed_out: true })) ?? '', /没找到访问地址/)
   assert.equal(runPhaseText(status({ phase: 'exited', exit_code: 1 })), '已退出（退出码 1）')
   assert.match(runPhaseText(status({ phase: 'failed', exit_code: 3 })) ?? '', /退出码 3/)
 

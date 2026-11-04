@@ -76,6 +76,8 @@ pub fn run() {
             project_runner::start_project,
             project_runner::stop_project,
             project_runner::project_run_status,
+            project_runner::open_project_address,
+            project_runner::open_python_download,
             project_runner::get_dependency_source,
             project_runner::set_dependency_source,
         ])

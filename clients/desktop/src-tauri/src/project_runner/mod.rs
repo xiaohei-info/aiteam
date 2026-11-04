@@ -75,6 +75,7 @@ impl Run {
                     url: snapshot.url,
                     exit_code: snapshot.exit_code,
                     url_timed_out: snapshot.url_timed_out,
+                    port: snapshot.port,
                     logs: snapshot.logs,
                 }
             }
@@ -94,6 +95,8 @@ pub struct RunStatus {
     pub exit_code: Option<i32>,
     /// The start command printed no address within 30 seconds; the log tells more.
     pub url_timed_out: bool,
+    /// The port handed to a code project.
+    pub port: Option<u16>,
     /// The last 500 lines of output.
     pub logs: Vec<String>,
 }
@@ -106,6 +109,7 @@ impl RunStatus {
             url: None,
             exit_code: None,
             url_timed_out: false,
+            port: None,
             logs: Vec::new(),
         }
     }
@@ -118,6 +122,8 @@ pub enum StartOutcome {
     /// `fingerprint` as the consent.
     NeedsConsent {
         commands: Vec<String>,
+        /// What `npm run <script>` really runs.
+        script: Option<String>,
         cwd: String,
         fingerprint: String,
     },
@@ -222,6 +228,7 @@ impl ProjectRunnerState {
             if consent != Some(described.fingerprint.as_str()) {
                 return Ok(StartOutcome::NeedsConsent {
                     commands: described.commands,
+                    script: described.script,
                     cwd: root.display().to_string(),
                     fingerprint: described.fingerprint,
                 });
@@ -235,6 +242,7 @@ impl ProjectRunnerState {
             root.to_path_buf(),
             plan::child_env(&prefix, port),
             &run_dir,
+            Some(port),
             ready,
         )?));
         let status = run.status();
@@ -338,11 +346,18 @@ pub fn set_dependency_source(
     plan::save_source(&app_data_dir(&app)?, source)
 }
 
+/// Where to get Python when the machine has none that runs.
+const PYTHON_DOWNLOAD_URL: &str = "https://www.python.org/downloads/";
+
 /// Opens a loopback address of a running project in the system browser.
 fn open_in_browser(url: &str) -> Result<(), String> {
     if !url.starts_with("http://127.0.0.1:") && !url.starts_with("http://localhost:") {
         return Err("open_failed".into());
     }
+    open_url(url)
+}
+
+fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");
@@ -367,17 +382,39 @@ fn open_in_browser(url: &str) -> Result<(), String> {
         .map_err(|_| "open_failed".into())
 }
 
+/// A unit as the page shows it: whether the machine can run it is decided here, so the page can
+/// say so before anyone presses run.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct DetectedUnit {
+    #[serde(flatten)]
+    unit: RunUnit,
+    /// A Python project on a machine without a Python that runs.
+    needs_python: bool,
+}
+
+fn detected_units(units: Vec<RunUnit>, python_found: impl Fn() -> bool) -> Vec<DetectedUnit> {
+    units
+        .into_iter()
+        .map(|unit| DetectedUnit {
+            needs_python: matches!(unit.runner, Runner::Python { .. }) && !python_found(),
+            unit,
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn detect_project_runner(
     app: tauri::AppHandle,
     projects: tauri::State<'_, AgentProjectsState>,
     source: String,
     project_id: String,
-) -> Result<Vec<RunUnit>, String> {
+) -> Result<Vec<DetectedUnit>, String> {
     let projects = projects.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let root = resolve_project_dir(&app, &projects, &source, &project_id)?;
-        Ok(detect::detect_units(&root))
+        Ok(detected_units(detect::detect_units(&root), || {
+            plan::find_python().is_some()
+        }))
     })
     .await
     .map_err(|_| "scan_failed".to_string())?
@@ -453,6 +490,31 @@ pub async fn stop_project(
         .map_err(|_| "run_failed".to_string())
 }
 
+/// Tries a running project in the browser: its address, or when it printed none the port it was
+/// given. Takes the project rather than a URL, so the page can only open what the host started.
+#[tauri::command]
+pub fn open_project_address(
+    runs: tauri::State<'_, ProjectRunnerState>,
+    source: String,
+    project_id: String,
+    dir: Option<String>,
+) -> Result<(), String> {
+    let status = runs.status(&(source, project_id, dir.unwrap_or_default()));
+    if !status.running {
+        return Err("open_failed".into());
+    }
+    let url = status
+        .url
+        .or_else(|| status.port.map(process::local_address))
+        .ok_or("open_failed")?;
+    open_in_browser(&url)
+}
+
+#[tauri::command]
+pub fn open_python_download() -> Result<(), String> {
+    open_url(PYTHON_DOWNLOAD_URL)
+}
+
 #[tauri::command]
 pub fn project_run_status(
     runs: tauri::State<'_, ProjectRunnerState>,
@@ -503,6 +565,36 @@ mod tests {
 
     fn key(id: &str) -> RunKey {
         ("codex".into(), id.into(), String::new())
+    }
+
+    #[test]
+    fn only_python_units_need_python() {
+        let units = || {
+            vec![
+                RunUnit {
+                    dir: "web".into(),
+                    runner: Runner::Node {
+                        script: "dev".into(),
+                    },
+                },
+                RunUnit {
+                    dir: "api".into(),
+                    runner: Runner::Python {
+                        entry: "app.py".into(),
+                        dependencies: "requirements.txt".into(),
+                        streamlit: false,
+                    },
+                },
+            ]
+        };
+        let needs = |found: bool| -> Vec<bool> {
+            detected_units(units(), move || found)
+                .iter()
+                .map(|unit| unit.needs_python)
+                .collect()
+        };
+        assert_eq!(needs(false), [false, true]);
+        assert_eq!(needs(true), [false, false]);
     }
 
     #[test]
@@ -675,6 +767,7 @@ esac
             commands,
             cwd,
             fingerprint,
+            ..
         } = start(None)
         else {
             panic!("a code project must ask first");
