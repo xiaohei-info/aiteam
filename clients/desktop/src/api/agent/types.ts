@@ -241,6 +241,10 @@ export interface ConversationMessage {
   tool_kind?: 'memory' | 'rag' | 'todo'
   result?: unknown
   isError?: boolean
+  /** assistant 消息的结束原因；error 表示模型调用失败。 */
+  stopReason?: 'stop' | 'length' | 'toolUse' | 'deferred' | 'aborted' | 'error'
+  /** stopReason 为 error 时的脱敏失败摘要（≤240 字）。 */
+  errorMessage?: string
   [key: string]: unknown
 }
 

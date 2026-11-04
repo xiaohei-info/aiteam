@@ -101,6 +101,34 @@ export function splitContentParts(parts: ConversationContentPart[]): SplitParts 
   }
 }
 
+// -------------------- 模型调用失败 --------------------
+
+/**
+ * 模型调用失败时 Pi 只留下一条空的 assistant 消息（stopReason=error + errorMessage）。
+ * 返回要展示的提示；非失败消息返回 undefined。
+ */
+export function assistantFailure(message: ConversationMessage | undefined): string | undefined {
+  if (message?.role !== 'assistant' || message.stopReason !== 'error') return undefined
+  const detail = typeof message.errorMessage === 'string' ? message.errorMessage.trim() : ''
+  return detail ? `⚠️ 模型调用失败：${detail}` : '⚠️ 模型调用失败'
+}
+
+/**
+ * agent_settled 自带的失败摘要：会话初始化等执行前失败没有 assistant 消息，
+ * Agent 只在 settled 事件上给出 failed + error_message。
+ */
+export function settledFailure(event: PiSseEventData | undefined): string | undefined {
+  if (event?.failed !== true || typeof event.error_message !== 'string') return undefined
+  const detail = event.error_message.trim()
+  return detail ? `⚠️ 执行失败：${detail}` : undefined
+}
+
+/** 把失败提示接在已有回复之后；没有回复时只显示提示。 */
+export function withFailure(content: string, failure: string | undefined): string {
+  if (!failure) return content
+  return content ? `${content}\n\n${failure}` : failure
+}
+
 // 把一个 ConversationMessage 展开成前端 Message 字段。role 转换以服务端为准:
 //   - user → 用户气泡
 //   - assistant → 员工气泡(含 thinkingSteps)
@@ -275,7 +303,7 @@ export function entriesToMessages(
   resolveEmployeeName?: (employeeId: string) => string | undefined,
 ): Message[] {
   const seenIds = new Set<string>()
-  let msgs: Message[] = []
+  let msgs: FailableMessage[] = []
   for (const entry of entries) {
     if (!entry || !entry.id) continue
     const entryId = entry.entry_ref ?? entry.id
@@ -326,10 +354,15 @@ export function entriesToMessages(
       recipientName,
       ...(localContext ? { localContext } : {}),
       _ts: ms,
+      failure: assistantFailure(message),
     })
   }
-  return groupWorkMessages(msgs)
+  return groupWorkMessages(msgs).map(({ failure, ...message }) =>
+    failure ? { ...message, content: withFailure(message.content, failure) } : message)
 }
+
+/** 历史转换中间态：同一次执行合并后只保留最后一条 assistant 的失败，重试成功即清除。 */
+type FailableMessage = Message & { failure?: string }
 
 export interface ContextResetDividers {
   // 分隔线画在含该 entry ref 的消息之前;value 为 reset_id。
@@ -426,8 +459,8 @@ export function contextResetMemoryText(resetId: string, dividers: ContextResetDi
 }
 
 /** Keep individual entry references; presentation grouping never changes read cursors. */
-function groupWorkMessages(messages: Message[]): Message[] {
-  const grouped: Message[] = []
+function groupWorkMessages(messages: FailableMessage[]): FailableMessage[] {
+  const grouped: FailableMessage[] = []
   const indices = new Map<string, number>()
   for (const message of messages) {
     const key = message.workId && message.role === 'assistant'
@@ -447,6 +480,7 @@ function groupWorkMessages(messages: Message[]): Message[] {
       entryRefs: [...(previous.entryRefs ?? [previous.id]), ...(message.entryRefs ?? [message.id])],
       recipientEmployeeId: previous.recipientEmployeeId ?? message.recipientEmployeeId,
       recipientName: previous.recipientName ?? message.recipientName,
+      failure: message.failure,
     }
   }
   return grouped
@@ -485,6 +519,9 @@ export interface PiStreamCallbacks {
   onApprovalRequired?: (event: PiSseEventData) => void
   // 服务端明确的错误信号:message_update.assistantMessageEvent.type='error' 或事件中 isError=true。
   onError?: (message: string, sourceEmployeeId?: string) => void
+  // 一条 assistant 消息结束;failure 为模型调用失败的提示,成功时为 undefined。
+  // 可重试的失败之后可能还有重试,是否展示以 settled 时最后一条为准。
+  onAssistantEnd?: (failure: string | undefined, sourceEmployeeId?: string) => void
   // 未处理的事件,便于调试期打点。生产不必挂载。
   onUnknown?: (event: PiSseEventData) => void
 }
@@ -654,8 +691,15 @@ export function dispatchPiEvent(event: PiSseEventData, callbacks: PiStreamCallba
       safe(callbacks.onSettled, (fn) => fn(src, event))
       return
 
-    case 'agent_start':
     case 'message_end':
+      if (event.message?.role === 'assistant') {
+        const failure = assistantFailure(event.message)
+        safe(callbacks.onAssistantEnd, (fn) => fn(failure, src))
+        return
+      }
+      safe(callbacks.onUnknown, (fn) => fn(event))
+      return
+    case 'agent_start':
       // 前端目前不需要专门反应;上游可以自己 hook onUnknown。
       safe(callbacks.onUnknown, (fn) => fn(event))
       return

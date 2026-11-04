@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { webcrypto } from 'node:crypto'
-import { dispatchPiEvent, entriesToMessages, resolvePiEventSenderIdentity } from '../src/lib/piConverters.ts'
+import { assistantFailure, dispatchPiEvent, entriesToMessages, resolvePiEventSenderIdentity, settledFailure, withFailure } from '../src/lib/piConverters.ts'
 import { createSettleTracker } from '../src/lib/groupStreamLifecycle.ts'
 import { classifyRequestError } from '../src/lib/requestError.ts'
 import { collectTodoTaskCards } from '../src/lib/todoTaskCard.ts'
@@ -24,7 +24,7 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../api/agent') return { agentApi: api, AgentApiError: Error }
     if (id === './agentAuth') return { useAgentAuthStore: { getState: () => ({}), subscribe: () => {} } }
     if (id === '../lib/pinnedConversations') return { getPinnedStorageKey: () => null }
-    if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity }
+    if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity, settledFailure, withFailure }
     if (id === '../lib/replyProjection') return { mergeReplyProjection, reconcileReplyProjection }
     if (id === '../lib/groupStreamLifecycle') return { createSettleTracker }
     if (id === '../lib/globalActivityCollector') return { globalActivityCollector: { emit: () => {} } }
@@ -523,4 +523,79 @@ test('checklist updates keep one current card and the same snapshots across stre
     await store.getState().loadGroupConversation('c')
     assert.deepEqual(projection(), live, 'refresh preserves current card and history')
   } finally { await store.getState().abortStream('c') }
+})
+
+const failedReply = (id: string, work: string, errorMessage?: string) => ({
+  id, entry_ref: `ref-${id}`, type: 'message', work_id: work, source_employee_id: 'pm',
+  message: { role: 'assistant', content: [], stopReason: 'error', ...(errorMessage ? { errorMessage } : {}) },
+})
+
+test('history shows why a model call failed instead of an empty reply', () => {
+  assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'error', errorMessage: ' 401 Unauthorized ' }), '⚠️ 模型调用失败：401 Unauthorized')
+  assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'error' }), '⚠️ 模型调用失败')
+  assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'stop', errorMessage: 'stale' }), undefined)
+  assert.equal(assistantFailure({ role: 'user', content: 'hi', stopReason: 'error' }), undefined)
+  assert.equal(withFailure('', '⚠️ x'), '⚠️ x')
+  assert.equal(withFailure('done', undefined), 'done')
+
+  const [failed] = entriesToMessages([failedReply('e1', 'w1', '401 Unauthorized')] as any)
+  assert.equal(failed.content, '⚠️ 模型调用失败：401 Unauthorized')
+  assert.equal('failure' in failed, false)
+
+  // The failure follows the text already written in the same work.
+  const partial = { id: 'p1', entry_ref: 'ref-p1', type: 'message', work_id: 'w2', source_employee_id: 'pm',
+    message: { role: 'assistant', content: [{ type: 'text', text: '先写好了一半' }], stopReason: 'toolUse' } }
+  const [cut] = entriesToMessages([partial, failedReply('e2', 'w2', 'overloaded')] as any)
+  assert.equal(cut.content, '先写好了一半\n\n⚠️ 模型调用失败：overloaded')
+
+  // An automatic retry that succeeded hides the earlier failure of the same work.
+  const retried = { id: 'r1', entry_ref: 'ref-r1', type: 'message', work_id: 'w3', source_employee_id: 'pm',
+    message: { role: 'assistant', content: [{ type: 'text', text: '重试后成功' }], stopReason: 'stop' } }
+  const [ok] = entriesToMessages([failedReply('e3', 'w3', '429'), retried] as any)
+  assert.equal(ok.content, '重试后成功')
+})
+
+test('assistant message_end reports a failure only for failed model calls', () => {
+  const seen: Array<[string | undefined, string | undefined]> = []
+  const unknown: string[] = []
+  const callbacks = { onAssistantEnd: (failure: string | undefined, src?: string) => seen.push([failure, src]), onUnknown: (event: any) => unknown.push(event.type) }
+  dispatchPiEvent({ type: 'message_end', source_employee_id: 'pm', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'boom' } } as any, callbacks)
+  dispatchPiEvent({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop' } } as any, callbacks)
+  dispatchPiEvent({ type: 'message_end', message: { role: 'user', content: 'hi' } } as any, callbacks)
+  assert.deepEqual(seen, [['⚠️ 模型调用失败：boom', 'pm'], [undefined, undefined]])
+  assert.deepEqual(unknown, ['message_end'])
+  assert.equal(settledFailure({ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' } as any), '⚠️ 执行失败：Manager returned HTTP 404')
+  assert.equal(settledFailure({ type: 'agent_settled', failed: false, error_message: 'x' } as any), undefined)
+  assert.equal(settledFailure({ type: 'agent_settled' } as any), undefined)
+})
+
+test('a run that ends on a failed model call shows the reason, and a retry clears it', async () => {
+  for (const [events, expected] of [
+    [[{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: "Cannot find module 'x'" } }],
+      "⚠️ 模型调用失败：Cannot find module 'x'"],
+    [[{ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429' } },
+      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '重试成功' } },
+      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '重试成功' }], stopReason: 'stop' } }],
+      '重试成功'],
+    [[{ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' }], '⚠️ 执行失败：Manager returned HTTP 404'],
+  ] as const) {
+    let onEvent: (event: any) => void = () => {}
+    const store = chatStore({
+      abortConversation: async () => {},
+      listEntries: async () => ({ entries: [] }),
+      getConversationState: async () => ({ prompting: false }),
+      subscribeEvents: (options: { onEvent: typeof onEvent }) => {
+        onEvent = options.onEvent
+        return { close() {} }
+      },
+    })
+    store.getState().setActiveConvId('failing')
+    store.getState().startAssistantStream('failing')
+    for (const event of events) onEvent(event)
+    if (events[events.length - 1].type !== 'agent_settled') onEvent({ type: 'agent_settled' })
+    const replies = store.getState().activeConvMessages.filter((message: any) => message.role === 'assistant')
+    assert.equal(replies.length, 1)
+    assert.equal(replies[0].content, expected)
+    store.getState().abortStream('failing')
+  }
 })

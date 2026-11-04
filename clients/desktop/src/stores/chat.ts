@@ -33,6 +33,8 @@ import {
   dispatchPiEvent,
   entriesToMessages,
   resolvePiEventSenderIdentity,
+  settledFailure,
+  withFailure,
   type PiStreamCallbacks,
 } from '../lib/piConverters'
 import {
@@ -282,6 +284,8 @@ interface ConvSubscription {
   placeholders: Map<string, string>
   workIds: Map<string, string>
   textBoundaries: Set<string>
+  // sourceEmployeeId → 最近一条 assistant 消息的模型调用失败提示;重试成功即清除,settled 时仍在才展示。
+  failures: Map<string, string>
   // 参与本轮 prompt 的 source_employee_id 集合(通过 agent_start / message_update 观察)
   activeSources: Set<string>
   // 已收到 agent_settled 的 source_employee_id
@@ -1044,6 +1048,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       placeholders: new Map(),
       workIds: new Map(),
       textBoundaries: new Set(),
+      failures: new Map(),
       activeSources: new Set<string>(),
       settledSources: new Set<string>(),
       sourceIdentities: new Map(),
@@ -1334,8 +1339,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
         }
       },
-      onSettled: (src) => {
+      onAssistantEnd: (failure, src) => {
+        const key = src ?? ''
+        if (failure) sub.failures.set(key, failure)
+        else sub.failures.delete(key)
+      },
+      onSettled: (src, event) => {
         if (isGroup && !src) return
+        // 执行以失败告终时,把原因接在回复后,而不是只留下「无回复内容」。
+        const key = src ?? ''
+        const failure = sub.failures.get(key) ?? settledFailure(event)
+        sub.failures.delete(key)
+        if (failure) {
+          ensurePlaceholder(src)
+          sub.accumulatedText.set(key, withFailure(sub.accumulatedText.get(key) ?? '', failure))
+        }
         // 最后一段 delta 必须落库,再标记 settled;避免节流吞掉尾部字节。
         flushText(src, true)
         finalizePlaceholder(src)
@@ -1368,6 +1386,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       sub.accumulatedText.delete(key)
       sub.accumulatedThinking.delete(key)
       sub.textBoundaries.delete(key)
+      sub.failures.delete(key)
       sub.settledSources.delete(key)
       tracker.markRunning(source, true)
     }
