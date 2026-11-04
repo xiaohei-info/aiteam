@@ -321,6 +321,8 @@ const ConversationMessage = Type.Object({
   toolCallId: Type.Optional(Type.String({ description: "工具调用 ID；toolResult 消息用于关联调用。" })),
   toolName: Type.Optional(Type.String({ description: "工具名称；toolResult 消息提供。" })),
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
+  stopReason: Type.Optional(Type.String({ enum: ["stop", "length", "toolUse", "deferred", "aborted", "error"], description: "assistant 消息的结束原因；error 表示模型调用失败。" })),
+  errorMessage: Type.Optional(Type.String({ maxLength: 240, description: "stopReason 为 error 时的失败摘要，已脱敏并截断到 240 字。" })),
 }, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
   work_id: Type.Optional(Type.String({ maxLength: 256, description: "员工本次执行的工作记录 ID；可用于聚合 assistant/toolResult，缺省时不推断执行归属。" })),
