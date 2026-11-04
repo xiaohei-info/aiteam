@@ -75,6 +75,8 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/knowledge-sources'],
   ['GET', '/api/agent/work-records'],
   ['GET', '/api/agent/work-records/changes'],
+  // 工作台：会话受管工作目录索引（只有目录名，无本机路径）；旧版随包 Agent 返回 404。
+  ['GET', '/api/agent/workspaces'],
   ['GET', '/api/agent/usage/statistics'],
   // 段落解决率；旧版随包 Agent 没有该项时返回 404，员工详情隐藏解决率。
   ['GET', '/api/agent/usage/outcomes'],

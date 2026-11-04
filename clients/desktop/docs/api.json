@@ -373,6 +373,159 @@
       }
     },
     "schemas": {
+      "ConversationWorkspace": {
+        "type": "object",
+        "required": [
+          "employee_id",
+          "role",
+          "removed",
+          "workspace_key",
+          "has_files"
+        ],
+        "properties": {
+          "employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "授权员工/专家 ID。"
+              },
+              {
+                "type": "null",
+                "description": "授权员工/专家 ID。"
+              }
+            ],
+            "description": "使用该工作目录的数字员工；旧版无员工会话为 null。"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "entry",
+              "coordinator",
+              "member"
+            ],
+            "description": "entry 为私聊入口员工，coordinator 为群协调员工，member 为其他群成员。"
+          },
+          "removed": {
+            "type": "boolean",
+            "description": "该成员已移出群聊；目录保留历史产出，仍会返回。"
+          },
+          "workspace_key": {
+            "type": "string",
+            "pattern": "^conversation-[0-9a-f]{24}$",
+            "description": "受管工作目录名（Agent 数据目录 workspaces/ 下的直接子目录）；不返回本机绝对路径。"
+          },
+          "has_files": {
+            "type": "boolean",
+            "description": "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "一个数字员工在会话中的受管工作目录；不含文件列表与内容。"
+      },
+      "ConversationWorkspaces": {
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "kind",
+          "title",
+          "entry_employee_id",
+          "coordinator_employee_id",
+          "updated_at",
+          "workspaces"
+        ],
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "会话 ID。"
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "会话类型，例如 chat（私聊）或 group（群聊）。"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "description": "title 字段值。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "安全会话标题；未设置为 null。"
+          },
+          "entry_employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "entry employee id 字段值。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "私聊入口员工；群聊为 null。"
+          },
+          "coordinator_employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "coordinator employee id 字段值。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "群协调员工；私聊为 null。"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "会话最近更新时间。"
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationWorkspace"
+            },
+            "description": "协调员工优先、员工 ID 升序；只含真实存在于受管根目录下的目录。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "一个会话的全部受管工作目录。"
+      },
+      "ConversationWorkspaceListEnvelope": {
+        "type": "object",
+        "required": [
+          "data",
+          "page"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationWorkspaces"
+            },
+            "description": "当前成员的会话，按更新时间倒序；没有任何受管目录的会话不返回。"
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        },
+        "description": "当前成员全部会话的工作目录一次性列表。"
+      },
       "CustomGroupCreateRequest": {
         "type": "object",
         "required": [
@@ -7702,6 +7855,87 @@
     }
   },
   "paths": {
+    "/api/agent/workspaces": {
+      "get": {
+        "operationId": "listConversationWorkspaces",
+        "summary": "列出会话工作目录",
+        "description": "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊含全部成员，包括已移出成员），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的直接子目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "桌面工作台用的目录索引；不含路径、文件名或文件内容。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationWorkspaceListEnvelope"
+                },
+                "examples": {
+                  "group": {
+                    "summary": "群聊合成一个项目，包含已移出成员的目录",
+                    "value": {
+                      "data": [
+                        {
+                          "conversation_id": "group-client-1",
+                          "kind": "group",
+                          "title": "官网改版",
+                          "entry_employee_id": null,
+                          "coordinator_employee_id": "employee-1",
+                          "updated_at": "2026-11-03T01:25:00.000Z",
+                          "workspaces": [
+                            {
+                              "employee_id": "employee-1",
+                              "role": "coordinator",
+                              "removed": false,
+                              "workspace_key": "conversation-96acab21cdd5bd30977900a5",
+                              "has_files": true
+                            },
+                            {
+                              "employee_id": "employee-2",
+                              "role": "member",
+                              "removed": true,
+                              "workspace_key": "conversation-f7dff870d94910103922329b",
+                              "has_files": false
+                            }
+                          ]
+                        }
+                      ],
+                      "page": {
+                        "next_cursor": null,
+                        "has_more": false
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz",
