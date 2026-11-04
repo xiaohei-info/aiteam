@@ -1054,6 +1054,11 @@ export class SessionHost {
     return record;
   }
 
+  /** Root of the managed per-conversation working directories. */
+  get workspaceRoot(): string {
+    return this.options.cwdRoot;
+  }
+
   private recordKey(conversationId: string, employeeId?: string): string {
     return encodeScope([conversationId, employeeId ?? "__conversation__"]);
   }
