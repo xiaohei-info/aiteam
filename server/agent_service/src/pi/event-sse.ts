@@ -375,9 +375,13 @@ function boundText(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** Hides credentials: URL query parameters first, so the rest of the URL stays readable. */
+// One pass over both rules: a second pass of INLINE_SECRET would match `api_key=[内容已隐藏]…` again
+// and swallow the parameter name and the rest of the URL. Only URL_SECRET_PARAM has a capture group.
+const ANY_SECRET = new RegExp(`${URL_SECRET_PARAM.source}|${INLINE_SECRET.source}`, "gi");
+
+/** Hides credentials; in a URL query only the value goes, so the rest of the URL stays readable. */
 function redactSecrets(value: string): string {
-  return value.replace(URL_SECRET_PARAM, "$1[内容已隐藏]").replace(INLINE_SECRET, "[内容已隐藏]");
+  return value.replace(ANY_SECRET, (_match, urlParameter: string | undefined) => `${urlParameter ?? ""}[内容已隐藏]`);
 }
 
 export function safeText(value: string, max: number): string {
