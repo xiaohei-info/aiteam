@@ -289,7 +289,11 @@ test("SessionHost publishes a terminal event when Manager runtime setup fails", 
     };
     const host = fixture.createHost(undefined, manager);
     const events: string[] = [];
-    await host.subscribe("conversation-1", (envelope) => events.push(envelope.event.type));
+    const settledMessages: unknown[] = [];
+    await host.subscribe("conversation-1", (envelope) => {
+      events.push(envelope.event.type);
+      if (envelope.event.type === "agent_settled") settledMessages.push((envelope.event as { error_message?: unknown }).error_message);
+    });
 
     await assert.rejects(
       host.prompt("conversation-1", "hello", undefined, caller),
@@ -304,10 +308,14 @@ test("SessionHost publishes a terminal event when Manager runtime setup fails", 
     assert.ok(failure?.error_code);
     assert.ok(failure?.work_id);
 
-    // The next run replaces it.
-    runtimeError = "Manager returned HTTP 503";
+    // The next run replaces it, and what is kept for later is as redacted as the live event.
+    runtimeError = "Manager returned HTTP 503 api_key=sk-live-123 reading /Users/someone/.fred/runtime.json";
     await assert.rejects(host.prompt("conversation-1", "again", undefined, caller), /HTTP 503/);
-    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1").map((item) => item.error_message), ["Manager returned HTTP 503"]);
+    const stored = fixture.store.conversationFailures.list("conversation-1").map((item) => item.error_message);
+    assert.equal(stored.length, 1);
+    assert.match(stored[0]!, /^Manager returned HTTP 503 /);
+    assert.doesNotMatch(stored[0]!, /sk-live-123|\/Users\//);
+    assert.equal(stored[0], settledMessages.at(-1));
     await host.dispose();
   } finally {
     await fixture.close();
