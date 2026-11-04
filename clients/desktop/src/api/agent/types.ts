@@ -671,6 +671,7 @@ export interface ConversationWorkspace {
   removed: boolean
   /** `conversation-<24 位 hex>`，Agent 数据目录 workspaces/ 下的直接子目录。 */
   workspace_key: string
+  /** 目录内有非空文件；目录过大、Agent 扫描到上限仍未确定时也为 true，由宿主列文件时再确认。 */
   has_files: boolean
 }
 

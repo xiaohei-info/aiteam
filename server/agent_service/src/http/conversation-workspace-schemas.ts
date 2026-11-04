@@ -7,7 +7,7 @@ const ConversationWorkspace = Type.Object({
   role: Type.String({ enum: ["entry", "coordinator", "member"], description: "entry 为私聊入口员工，coordinator 为群协调员工，member 为其他群成员。" }),
   removed: Type.Boolean({ description: "该成员已移出群聊；目录保留历史产出，仍会返回。" }),
   workspace_key: Type.String({ pattern: "^conversation-[0-9a-f]{24}$", description: "受管工作目录名（Agent 数据目录 workspaces/ 下的直接子目录）；不返回本机绝对路径。" }),
-  has_files: Type.Boolean({ description: "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。" }),
+  has_files: Type.Boolean({ description: "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。目录过大、扫描达到上限仍未确定时按 true 返回，由桌面端列文件时再确认，避免把有项目的目录判成没有文件。" }),
 }, { $id: "ConversationWorkspace", additionalProperties: false, description: "一个数字员工在会话中的受管工作目录；不含文件列表与内容。" });
 
 const ConversationWorkspaces = Type.Object({

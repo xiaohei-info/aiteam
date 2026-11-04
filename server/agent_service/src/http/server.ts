@@ -1490,9 +1490,9 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { summary: "检查授权执行就绪状态", description: "检查 Agent runtime 和当前授权专家是否可以执行。", response: { 200: jsonResponse(Type.Ref("ReadinessEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { summary: "检查专家就绪状态", description: "检查指定授权专家的本地执行条件。", params: ExpertParams, response: { 200: jsonResponse(Type.Ref("ExpertReadinessEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/grants/sync", (request, response, caller) => this.syncGrants(request, response, caller!), routeSchema("syncGrants", { summary: "同步授权配置", description: "主动从 Manager 拉取当前成员的增量授权配置并更新本地投影。", body: Type.Ref("GrantSyncRequest"), response: { 200: jsonResponse(Type.Ref("GrantSyncEnvelope")), 503: problemResponse("ManagerUnavailable") } }));
-    this.registerRoute("GET", "/api/agent/workspaces", (_request, response, caller) => {
+    this.registerRoute("GET", "/api/agent/workspaces", async (_request, response, caller) => {
       if (!caller!.tenantId) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant is required");
-      const data = this.conversationWorkspaces.list(caller!.tenantId, caller!.userId ?? caller!.callerId);
+      const data = await this.conversationWorkspaces.list(caller!.tenantId, caller!.userId ?? caller!.callerId);
       this.writeJson(response, 200, { data, page: { next_cursor: null, has_more: false } });
     }, routeSchema("listConversationWorkspaces", { summary: "列出会话工作目录", description: "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊含全部成员，包括已移出成员），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的直接子目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。", response: { 200: jsonResponse(Type.Ref("ConversationWorkspaceListEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/work-records", (request, response, caller) => {
