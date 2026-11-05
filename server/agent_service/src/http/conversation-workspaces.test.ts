@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { AgentHttpServer } from "./server.js";
 import { createFixture } from "../test-fixture.js";
-import { hasProjectFile, managedWorkspaceKey } from "../services/conversation-workspaces.js";
+import { hasProjectFile, managedWorkspaceKey, MAX_ENTRIES_PER_WORKSPACE, ScanBudget } from "../services/conversation-workspaces.js";
 
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 
@@ -123,18 +123,18 @@ test("workspaces outside the managed root, symlinked or misnamed are skipped", a
 
     const { body } = await list(fixture);
     assert(!body.data.some((item: any) => item.conversation_id === "unsafe"));
-    assert.equal(managedWorkspaceKey("", root), null);
+    assert.equal(await managedWorkspaceKey("", root), null);
   } finally {
     rmSync(outside, { recursive: true, force: true });
     await fixture.close();
   }
 });
 
-test("has_files ignores empty, hidden, dependency and symlinked entries", () => {
+test("has_files ignores empty, hidden, dependency and symlinked entries", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiteam-has-files-"));
   const outside = mkdtempSync(join(tmpdir(), "aiteam-has-files-outside-"));
   try {
-    assert.equal(hasProjectFile(directory), false);
+    assert.equal(await hasProjectFile(directory), false);
     writeTree(directory, {
       "empty.html": "",
       ".env": "TOKEN=1",
@@ -145,11 +145,59 @@ test("has_files ignores empty, hidden, dependency and symlinked entries", () => 
     });
     writeFileSync(join(outside, "real.txt"), "outside");
     symlinkSync(join(outside, "real.txt"), join(directory, "link.txt"));
-    assert.equal(hasProjectFile(directory), false);
+    assert.equal(await hasProjectFile(directory), false);
     writeTree(directory, { "src/main.py": "print(1)" });
-    assert.equal(hasProjectFile(directory), true);
+    assert.equal(await hasProjectFile(directory), true);
   } finally {
     rmSync(directory, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("has_files does not report a large project directory as empty when the scan budget runs out", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiteam-has-files-large-"));
+  try {
+    // More top-level entries than one workspace may inspect, all empty; the real file sits deeper,
+    // so the scan stops before reaching it and must not answer "no files".
+    for (let index = 0; index <= MAX_ENTRIES_PER_WORKSPACE; index += 1) writeFileSync(join(directory, `empty-${index}.txt`), "");
+    writeTree(directory, { "zz/src/main.py": "print(1)" });
+    assert.equal(await hasProjectFile(directory), true);
+
+    // Without the deeper file the scan is still inconclusive, which also counts as "has files".
+    rmSync(join(directory, "zz"), { recursive: true, force: true });
+    assert.equal(await hasProjectFile(directory), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("has_files shares one budget across a request and stays conclusive within it", async () => {
+  const empty = mkdtempSync(join(tmpdir(), "aiteam-has-files-budget-"));
+  const small = mkdtempSync(join(tmpdir(), "aiteam-has-files-budget-"));
+  try {
+    writeTree(small, { "a.txt": "", "b.txt": "" });
+    // Enough budget: a small tree of empty files is still reported as empty.
+    const budget = new ScanBudget(2);
+    assert.equal(await hasProjectFile(small, budget), false);
+    // The request budget is now spent: the next workspace cannot be checked and is not hidden.
+    assert.equal(await hasProjectFile(small, budget), true);
+    // An empty directory needs no budget to be known empty.
+    assert.equal(await hasProjectFile(empty, new ScanBudget(0)), false);
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+    rmSync(small, { recursive: true, force: true });
+  }
+});
+
+test("has_files yields to the event loop while scanning", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiteam-has-files-async-"));
+  try {
+    for (let index = 0; index < 500; index += 1) writeFileSync(join(directory, `empty-${index}.txt`), "");
+    const order: string[] = [];
+    setImmediate(() => order.push("other work"));
+    await hasProjectFile(directory).then(() => order.push("scan done"));
+    assert.deepEqual(order, ["other work", "scan done"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

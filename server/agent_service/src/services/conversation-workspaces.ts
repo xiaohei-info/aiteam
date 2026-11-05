@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, realpathSync } from "node:fs";
+import { lstat, opendir, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { AgentSqliteStore, OwnedConversationWorkspaces } from "../storage/sqlite.js";
 import { safeText } from "../pi/event-sse.js";
@@ -9,7 +9,21 @@ export const WORKSPACE_KEY_PATTERN = /^conversation-[0-9a-f]{24}$/u;
 /** Directories that never count as project output. Hidden entries are skipped separately. */
 const IGNORED_DIRECTORIES = new Set(["node_modules", "__pycache__", "venv"]);
 /** Upper bound on directory entries inspected per workspace for `has_files`. */
-const MAX_ENTRIES_INSPECTED = 2_000;
+export const MAX_ENTRIES_PER_WORKSPACE = 2_000;
+/** Upper bound on directory entries inspected by one listing request, across all workspaces. */
+export const MAX_ENTRIES_PER_REQUEST = 20_000;
+
+/** Entries a scan may still inspect; shared by every workspace of one request. */
+export class ScanBudget {
+  constructor(private remaining: number) {}
+
+  /** Takes one entry; false once the budget is spent. */
+  take(): boolean {
+    if (this.remaining <= 0) return false;
+    this.remaining -= 1;
+    return true;
+  }
+}
 
 export type ConversationWorkspaceRole = "entry" | "coordinator" | "member";
 
@@ -38,12 +52,17 @@ export interface ConversationWorkspacesOut {
 export class ConversationWorkspaceService {
   constructor(private readonly store: Pick<AgentSqliteStore, "listOwnedConversationWorkspaces">, private readonly workspaceRoot: string) {}
 
-  list(tenantId: string, memberId: string): ConversationWorkspacesOut[] {
-    const root = canonical(this.workspaceRoot);
+  /**
+   * Scans with async fs calls so a large tree never blocks the event loop, and spends at most
+   * MAX_ENTRIES_PER_REQUEST entries in total however many conversations the member has.
+   */
+  async list(tenantId: string, memberId: string): Promise<ConversationWorkspacesOut[]> {
+    const root = await canonical(this.workspaceRoot);
     if (!root) return [];
+    const budget = new ScanBudget(MAX_ENTRIES_PER_REQUEST);
     const result: ConversationWorkspacesOut[] = [];
     for (const conversation of this.store.listOwnedConversationWorkspaces(tenantId, memberId)) {
-      const workspaces = this.workspaces(conversation, root);
+      const workspaces = await this.workspaces(conversation, root, budget);
       if (workspaces.length === 0) continue;
       result.push({
         conversation_id: conversation.id,
@@ -58,7 +77,7 @@ export class ConversationWorkspaceService {
     return result;
   }
 
-  private workspaces(conversation: OwnedConversationWorkspaces, root: string): ConversationWorkspaceOut[] {
+  private async workspaces(conversation: OwnedConversationWorkspaces, root: string, budget: ScanBudget): Promise<ConversationWorkspaceOut[]> {
     const candidates: Array<Omit<ConversationWorkspaceOut, "workspace_key" | "has_files"> & { path: string }> = conversation.participants.map((participant) => ({
       employee_id: participant.employee_id,
       role: participant.role === "coordinator" ? "coordinator" : participant.employee_id === conversation.entry_employee_id ? "entry" : "member",
@@ -70,39 +89,46 @@ export class ConversationWorkspaceService {
     const seen = new Set<string>();
     const out: ConversationWorkspaceOut[] = [];
     for (const { path, ...candidate } of candidates) {
-      const key = managedWorkspaceKey(path, root);
+      const key = await managedWorkspaceKey(path, root);
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      out.push({ ...candidate, workspace_key: key, has_files: hasProjectFile(join(root, key)) });
+      out.push({ ...candidate, workspace_key: key, has_files: await hasProjectFile(join(root, key), budget) });
     }
     return out;
   }
 }
 
 /** Returns the directory key when `path` is an existing, non-symlinked direct child of `root`. */
-export function managedWorkspaceKey(path: string, root: string): string | null {
+export async function managedWorkspaceKey(path: string, root: string): Promise<string | null> {
   if (!path) return null;
   const key = basename(path);
   if (!WORKSPACE_KEY_PATTERN.test(key)) return null;
   try {
-    if (!lstatSync(path).isDirectory()) return null;
+    if (!(await lstat(path)).isDirectory()) return null;
   } catch {
     return null;
   }
-  const resolved = canonical(path);
+  const resolved = await canonical(path);
   return resolved && dirname(resolved) === root && basename(resolved) === key ? key : null;
 }
 
-/** True when the tree holds at least one non-empty regular file outside hidden and dependency directories. */
-export function hasProjectFile(directory: string): boolean {
-  let budget = MAX_ENTRIES_INSPECTED;
+/**
+ * True when the tree holds at least one non-empty regular file outside hidden and dependency directories.
+ *
+ * Also true when the per-workspace or request budget runs out before an answer: the desktop then
+ * lists the directory itself and drops it if it is empty, whereas a false here would hide a real
+ * project for good. Entries are streamed, so a huge directory is never read into memory at once.
+ */
+export async function hasProjectFile(directory: string, requestBudget = new ScanBudget(MAX_ENTRIES_PER_REQUEST)): Promise<boolean> {
+  const budget = new ScanBudget(MAX_ENTRIES_PER_WORKSPACE);
   const pending = [directory];
   while (pending.length > 0) {
     const current = pending.pop()!;
     let entries;
-    try { entries = readdirSync(current, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) {
-      if (--budget < 0) return false;
+    try { entries = await opendir(current); } catch { continue; }
+    // Breaking out of the loop closes the directory handle.
+    for await (const entry of entries) {
+      if (!budget.take() || !requestBudget.take()) return true;
       if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
       const path = join(current, entry.name);
       if (entry.isDirectory()) {
@@ -111,7 +137,7 @@ export function hasProjectFile(directory: string): boolean {
       }
       if (!entry.isFile()) continue;
       try {
-        if (lstatSync(path).size > 0) return true;
+        if ((await lstat(path)).size > 0) return true;
       } catch {
         // The file can disappear while a tool is writing; keep looking.
       }
@@ -120,6 +146,6 @@ export function hasProjectFile(directory: string): boolean {
   return false;
 }
 
-function canonical(path: string): string | null {
-  try { return realpathSync(path); } catch { return null; }
+async function canonical(path: string): Promise<string | null> {
+  try { return await realpath(path); } catch { return null; }
 }

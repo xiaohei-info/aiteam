@@ -418,7 +418,7 @@
           },
           "has_files": {
             "type": "boolean",
-            "description": "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。"
+            "description": "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。目录过大、扫描达到上限仍未确定时按 true 返回，由桌面端列文件时再确认，避免把有项目的目录判成没有文件。"
           }
         },
         "additionalProperties": false,
