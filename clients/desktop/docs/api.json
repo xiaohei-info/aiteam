@@ -3085,7 +3085,8 @@
           },
           "error_message": {
             "type": "string",
-            "description": "有界的失败摘要，与 agent_settled 事件中的 error_message 相同。"
+            "maxLength": 1000,
+            "description": "失败原因，与 agent_settled 事件中的 error_message 相同：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。"
           },
           "failed_at": {
             "type": "string",
@@ -3961,7 +3962,8 @@
           },
           "error_message": {
             "type": "string",
-            "description": "有界且脱敏的失败摘要。"
+            "maxLength": 1000,
+            "description": "失败原因：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。"
           },
           "approvalId": {
             "type": "string",
