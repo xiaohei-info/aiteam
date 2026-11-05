@@ -15,6 +15,7 @@ test("Pi SSE serializer keeps bounded ordinary tool summaries without credential
     type: "tool_execution_update",
     conversation_id: "conversation-1",
     toolName: "read",
+    file_name: "data",
     args: { safe: "visible" },
     partialResult: { output: "partial" },
   });
@@ -149,6 +150,21 @@ test("Pi SSE serializer classifies bounded tool metadata without forwarding raw 
   assert(!JSON.stringify(event).includes("raw-provider"));
   assert(!JSON.stringify(event).includes("provider.json"));
   assert(!JSON.stringify(event).includes("secret"));
+});
+
+test("file tool events name the file without its directory, and only a safe name", () => {
+  const fileName = (toolName: string, path: unknown, type = "tool_execution_start") =>
+    serializePiEvent({ type, toolCallId: "call", toolName, args: { path, content: "hello" } } as never)?.file_name;
+  assert.equal(fileName("write", "output/github_trending_ai_24h_report.md"), "github_trending_ai_24h_report.md");
+  assert.equal(fileName("read", "/Users/someone/Library/workspaces/x/报告.md"), "报告.md");
+  assert.equal(fileName("edit", "C:\\work\\app.py", "tool_execution_update"), "app.py");
+  for (const unsafe of [".env", "config/.env", "secrets.json", "api_key.txt", "notes/", "..", "a\u0007b.md", "sk-abcdefghijklmnopqrstuvwxyz123456.md", 42]) {
+    assert.equal(fileName("write", unsafe), undefined, String(unsafe));
+  }
+  assert.equal(fileName("bash", "report.md"), undefined, "only file tools");
+  assert.equal(fileName("write", "report.md", "tool_execution_end"), undefined);
+  const event = serializePiEvent({ type: "tool_execution_start", toolCallId: "call", toolName: "write", args: { path: "/Users/someone/report.md", content: "x" } } as never);
+  assert(!JSON.stringify(event).includes("someone"), "the directory never leaves the Agent");
 });
 
 test("Pi SSE serializer bounds structured todo arguments and keeps thinking content bounded", () => {
