@@ -3,10 +3,10 @@
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  border: 1px solid var(--danger-border-soft);
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
   border-radius: 8px;
-  background: var(--danger-bg);
-  color: var(--danger);
+  background: var(--warning-bg);
+  color: var(--warning);
   font-size: 0.69rem;
   line-height: 1.5;
 }
@@ -21,7 +21,7 @@
 .rfn-summary {
   flex: 1 1 auto;
   min-width: 0;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .rfn-actions {
@@ -48,10 +48,10 @@
 
 .rfn-button {
   padding: 2px 8px;
-  border: 1px solid var(--danger-border-strong);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
   border-radius: 6px;
 }
-.rfn-button:hover { background: var(--danger-bg); }
+.rfn-button:hover { background: var(--warning-bg); }
 
 .rfn-detail {
   display: flex;

@@ -308,13 +308,14 @@ test("SessionHost publishes a terminal event when Manager runtime setup fails", 
     assert.ok(failure?.error_code);
     assert.ok(failure?.work_id);
 
-    // The next run replaces it, and what is kept for later is as redacted as the live event.
+    // The next run replaces it, and what is kept for later matches the live event: no credentials, paths kept.
     runtimeError = "Manager returned HTTP 503 api_key=sk-live-123 reading /Users/someone/.fred/runtime.json";
     await assert.rejects(host.prompt("conversation-1", "again", undefined, caller), /HTTP 503/);
     const stored = fixture.store.conversationFailures.list("conversation-1").map((item) => item.error_message);
     assert.equal(stored.length, 1);
     assert.match(stored[0]!, /^Manager returned HTTP 503 /);
-    assert.doesNotMatch(stored[0]!, /sk-live-123|\/Users\//);
+    assert.doesNotMatch(stored[0]!, /sk-live-123/);
+    assert.match(stored[0]!, /\/Users\/someone\/\.fred\/runtime\.json$/);
     assert.equal(stored[0], settledMessages.at(-1));
     await host.dispose();
   } finally {
