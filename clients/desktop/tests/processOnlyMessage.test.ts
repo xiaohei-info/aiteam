@@ -55,3 +55,12 @@ test('thinking phase keeps the reply bubble so 思考中 stays visible under the
   assert.match(answered, /已经写好正文/)
   assert.doesNotMatch(answered, /思考中/)
 })
+
+test('a running reply shows its progress in place of 思考中', () => {
+  const TextMessage = component('TextMessage')
+  const html = renderToStaticMarkup(React.createElement(TextMessage, {
+    conversationId: 'c', side: 'left', content: '', isStreaming: true, pendingLabel: '正在运行命令 · 第 18 步',
+  }))
+  assert.match(html, /正在运行命令 · 第 18 步/)
+  assert.doesNotMatch(html, /思考中/)
+})

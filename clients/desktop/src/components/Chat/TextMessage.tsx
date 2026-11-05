@@ -27,6 +27,8 @@ interface TextMessageProps {
   /** 「复制」用的全文；正文只显示开头时传入，缺省复制 content。 */
   copyContent?: string
   isStreaming?: boolean
+  /** 运行中尚无正文时代替「思考中」显示的进度。 */
+  pendingLabel?: ReactNode
   attachments?: MessageAttachment[]
   onAvatarClick?: (e: MouseEvent<HTMLButtonElement>) => void
 }
@@ -34,7 +36,7 @@ interface TextMessageProps {
 interface MenuPos { x: number; y: number }
 
 export default function TextMessage({
-  conversationId, side, avatar, name, recipientName, time, above, below, content, copyContent, isStreaming, attachments, onAvatarClick,
+  conversationId, side, avatar, name, recipientName, time, above, below, content, copyContent, isStreaming, pendingLabel, attachments, onAvatarClick,
 }: TextMessageProps) {
   const [menu, setMenu] = useState<MenuPos | null>(null)
 
@@ -53,7 +55,7 @@ export default function TextMessage({
         <div className={`tm-md${isStreaming ? ' streaming' : ''}`}>
           {!content && !attachments?.length ? (
             <span className="tm-thinking-placeholder">
-              {isStreaming ? <>思考中<WaveDots /></> : '（无回复内容）'}
+              {isStreaming ? <>{pendingLabel ?? '思考中'}<WaveDots /></> : '（无回复内容）'}
             </span>
           ) : content ? (
           <ReactMarkdown

@@ -106,6 +106,8 @@ export interface ToolCall {
   id: string
   name: string
   toolKind?: 'memory' | 'rag' | 'todo'
+  /** read/write/edit 所操作文件的文件名（Agent 事件 file_name），只用于进度显示。 */
+  fileName?: string
   input?: Record<string, unknown>
   result?: string
   resultValue?: unknown

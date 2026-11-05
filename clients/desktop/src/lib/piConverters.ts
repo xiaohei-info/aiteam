@@ -612,6 +612,7 @@ export function dispatchPiEvent(event: PiSseEventData, callbacks: PiStreamCallba
         id: event.toolCallId ?? event.tool_call_id ?? `tool_${Date.now()}`,
         name: event.toolName ?? '',
         toolKind: event.tool_kind,
+        fileName: typeof event.file_name === 'string' && event.file_name ? event.file_name : undefined,
         input: eventArgsToRecord(event.args),
       }
       safe(callbacks.onToolCall, (fn) => fn(call, 'exec_start', src))
@@ -622,6 +623,7 @@ export function dispatchPiEvent(event: PiSseEventData, callbacks: PiStreamCallba
         id: event.toolCallId ?? event.tool_call_id ?? `tool_${Date.now()}`,
         name: event.toolName ?? '',
         toolKind: event.tool_kind,
+        fileName: typeof event.file_name === 'string' && event.file_name ? event.file_name : undefined,
         input: eventArgsToRecord(event.args),
         result: eventResultToText(event.partialResult),
         resultValue: event.partialResult,
