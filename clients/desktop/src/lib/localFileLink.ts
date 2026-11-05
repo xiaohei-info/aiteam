@@ -35,8 +35,21 @@ export function pathBasename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? ''
 }
 
-/** Newest generated file whose name equals the file name in `path`. */
-export function pickArtifactForPath<T extends { filename: string; created_at: string }>(
+/** How many trailing folder/file names `artifactPath` shares with the link path. */
+function sharedTail(linkSegments: readonly string[], artifactPath: string | null | undefined): number {
+  const segments = (artifactPath ?? '').split('/').filter(Boolean)
+  let shared = 0
+  while (shared < segments.length && shared < linkSegments.length
+    && segments[segments.length - 1 - shared] === linkSegments[linkSegments.length - 1 - shared]) shared += 1
+  return shared
+}
+
+/**
+ * Generated file whose name equals the file name in `path`. When several share that name
+ * (`game/README.md`, `tool/README.md`), the one whose recorded folder matches the link wins;
+ * otherwise the newest.
+ */
+export function pickArtifactForPath<T extends { filename: string; created_at: string; path?: string | null }>(
   files: readonly T[],
   path: string,
 ): T | null {
@@ -44,5 +57,7 @@ export function pickArtifactForPath<T extends { filename: string; created_at: st
   if (!name) return null
   const exact = files.filter(file => file.filename === name)
   const matches = exact.length > 0 ? exact : files.filter(file => file.filename.toLowerCase() === name.toLowerCase())
-  return [...matches].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null
+  const linkSegments = path.split(/[\\/]/).filter(Boolean)
+  return [...matches].sort((a, b) => sharedTail(linkSegments, b.path ?? b.filename) - sharedTail(linkSegments, a.path ?? a.filename)
+    || b.created_at.localeCompare(a.created_at))[0] ?? null
 }

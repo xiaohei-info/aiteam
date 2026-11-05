@@ -667,6 +667,8 @@ export interface LocalFileMetadata {
   member_id: string
   kind: 'attachment' | 'artifact'
   filename: string
+  /** 产物在会话目录中的相对路径（`/` 分隔，群聊以员工名开头）；附件为 null，旧版 Agent 不返回。 */
+  path?: string | null
   mime_type: string
   byte_size: number
   sha256: string

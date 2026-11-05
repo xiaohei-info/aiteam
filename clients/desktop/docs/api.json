@@ -6265,6 +6265,7 @@
           "member_id",
           "kind",
           "filename",
+          "path",
           "mime_type",
           "byte_size",
           "sha256",
@@ -6304,6 +6305,21 @@
             "minLength": 1,
             "maxLength": 255,
             "description": "安全文件名。"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "产物在会话目录中的相对路径，用 / 分隔，例如 html-game-demo/js/game.js；群聊以员工名开头。上传的附件为 null。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "产物相对路径；附件为 null。"
           },
           "mime_type": {
             "type": "string",

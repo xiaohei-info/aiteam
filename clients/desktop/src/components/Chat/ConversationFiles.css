@@ -139,6 +139,38 @@
 
 .conversation-file-pending { color: var(--brand); }
 
+.conversation-file-folder > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.conversation-file-folder > summary::-webkit-details-marker { display: none; }
+.conversation-file-folder > summary:hover { color: var(--brand); background: var(--brand-bg-soft); }
+
+.conversation-file-folder-chevron { flex: 0 0 auto; transition: transform 120ms ease; }
+.conversation-file-folder[open] > summary .conversation-file-folder-chevron { transform: rotate(90deg); }
+
+.conversation-file-folder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+
+.conversation-file-folder-count { color: var(--text-muted); font-size: 11px; }
+
+.conversation-file-folder-items { padding-left: 16px; border-left: 1px solid var(--border); margin-left: 14px; }
+
 .conversation-files-state {
   display: flex;
   align-items: center;
@@ -159,6 +191,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-files-spinner { animation: none; }
+  .conversation-file-folder-chevron { transition: none; }
   .conversation-file-main:active,
   .conversation-file-reveal:active { transform: none; }
 }
