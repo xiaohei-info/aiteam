@@ -1352,7 +1352,8 @@ export class SessionHost {
   /**
    * A finished run whose last reply runs past LONG_REPLY_CHARS also gets that reply as a Markdown
    * artifact, so the chat can show the opening and a file card. A reply the chat would show with
-   * anything redacted, or one over the file quota, stays chat-only and is shown in full.
+   * anything redacted, or one that cannot be stored (over the file size limit), stays chat-only
+   * and is shown in full.
    */
   private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
     const tenantId = authorization?.caller.tenantId;
@@ -1380,7 +1381,7 @@ export class SessionHost {
         reply: { entryRef, chars: [...text].length },
       });
     } catch {
-      // Over the per-conversation quota the reply simply stays chat-only.
+      // A reply that cannot be stored simply stays chat-only.
     }
   }
 
