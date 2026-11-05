@@ -37,7 +37,8 @@ function renderer() {
       if (id === '../../lib/localDirectoryCitations') return localCitationHelpers
       if (id === '../../lib/replyFailure') return replyFailureHelpers
       if (id === '../../lib/avatarUtils') return { getEmployeeAvatar: () => '', renderAvatar: () => null }
-      if (id === './TextMessage') return { __esModule: true, default: ({ above, content }: any) => React.createElement('div', null, above, content) }
+      if (id === './TextMessage') return { __esModule: true, default: ({ above, content, copyContent, below }: any) => React.createElement('div', { 'data-copy': copyContent }, above, content, below) }
+      if (id === './ReplyFileCard') return { __esModule: true, default: ({ file }: any) => React.createElement('span', null, `card:${file.id}`) }
       // 本地目录引用卡片不是本套用例的对象；与 FileMessage 同样 stub 为空渲染。
       if (id === './LocalCitationCard') return { __esModule: true, default: () => null }
       if (id === './FileMessage' || id.endsWith('.css')) return { __esModule: true, default: () => null }
@@ -58,6 +59,11 @@ function renderer() {
       return renderToStaticMarkup(React.createElement(MessageRow, {
         conversationId: 'c', userAvatar: '', displayContent: '', isThisStreaming: streaming, isThinkingPhase: streaming,
         msg: { id: 'reply', role: 'assistant', content: '', toolCalls: calls, thinkingSteps: steps },
+      }))
+    },
+    renderMessage(msg: Record<string, unknown>, displayContent: string, streaming: boolean) {
+      return renderToStaticMarkup(React.createElement(MessageRow, {
+        conversationId: 'c', userAvatar: '', displayContent, isThisStreaming: streaming, isThinkingPhase: false, msg,
       }))
     },
     click() { assert.ok(toggle); toggle() },
@@ -161,3 +167,23 @@ test('expanded history snapshots show unfinished instead of a spinning in-progre
   assert.match(html, /进行中/)
   assert.match(html, /未完成/)
 })
+
+test('a reply saved as a file shows its opening and the file card once it stops streaming', () => {
+  const view = renderer()
+  const file = { id: 'file-1', filename: '总结-1105-2010.md', path: '回复/总结-1105-2010.md', chars: 2_400 }
+  const full = `开头${'正文'.repeat(1_200)}`
+  const msg = { id: 'reply', role: 'assistant', content: full, replyFile: file, replyPreview: '开头…' }
+  const body = (html: string) => html.replace(/ data-copy="[^"]*"/, '')
+  const settled = view.renderMessage(msg, full, false)
+  assert.match(body(settled), /开头…/)
+  assert.match(body(settled), /card:file-1/)
+  assert.doesNotMatch(body(settled), /正文正文/)
+  assert.match(settled, new RegExp(`data-copy="${full}"`), 'copy still takes the full reply')
+  const streaming = view.renderMessage(msg, full, true)
+  assert.match(streaming, /正文正文/)
+  assert.doesNotMatch(streaming, /card:|data-copy/)
+  const plain = view.renderMessage({ id: 'old', role: 'assistant', content: full }, full, false)
+  assert.match(plain, /正文正文/)
+  assert.doesNotMatch(plain, /card:/)
+})
+

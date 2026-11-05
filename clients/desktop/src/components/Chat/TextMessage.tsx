@@ -24,6 +24,8 @@ interface TextMessageProps {
   /** 气泡下方的附加内容（如失败提示条）；有它时空回复不再显示「无回复内容」。 */
   below?: ReactNode
   content: string
+  /** 「复制」用的全文；正文只显示开头时传入，缺省复制 content。 */
+  copyContent?: string
   isStreaming?: boolean
   attachments?: MessageAttachment[]
   onAvatarClick?: (e: MouseEvent<HTMLButtonElement>) => void
@@ -32,7 +34,7 @@ interface TextMessageProps {
 interface MenuPos { x: number; y: number }
 
 export default function TextMessage({
-  conversationId, side, avatar, name, recipientName, time, above, below, content, isStreaming, attachments, onAvatarClick,
+  conversationId, side, avatar, name, recipientName, time, above, below, content, copyContent, isStreaming, attachments, onAvatarClick,
 }: TextMessageProps) {
   const [menu, setMenu] = useState<MenuPos | null>(null)
 
@@ -96,7 +98,7 @@ export default function TextMessage({
         <ContextMenu
           x={menu.x} y={menu.y} onClose={() => setMenu(null)}
           items={[
-            { label: '复制', icon: <Copy size={14} strokeWidth={1.7} />, onClick: () => navigator.clipboard.writeText(content) },
+            { label: '复制', icon: <Copy size={14} strokeWidth={1.7} />, onClick: () => navigator.clipboard.writeText(copyContent ?? content) },
           ]}
         />
       )}

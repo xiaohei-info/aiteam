@@ -4,6 +4,7 @@ import type { Message } from '../../stores/chat'
 import { ThinkingBlock } from './ThinkingBlock'
 import TextMessage from './TextMessage'
 import ReplyFailureNotice from './ReplyFailureNotice'
+import ReplyFileCard from './ReplyFileCard'
 import FileMessage from './FileMessage'
 import TodoTaskCard from './TodoTaskCard'
 import LocalCitationCard, { LocalContextChip } from './LocalCitationCard'
@@ -63,6 +64,8 @@ export const MessageRow = memo(function MessageRow({
     : []
 
   const localContext = msg.role === 'user' ? msg.localContext : undefined
+  // 长回复已另存成文件：流式时照常显示，结束后只留开头和文件卡片。
+  const replyFile = msg.role === 'assistant' && !isThisStreaming && msg.replyPreview !== undefined ? msg.replyFile : undefined
 
   if (msg.msgType === 'file' || msg.msgType === 'image') {
     return (
@@ -98,13 +101,15 @@ export const MessageRow = memo(function MessageRow({
             </>
           : undefined
       }
-      below={(msg.truncated || (msg.role === 'assistant' && msg.failure)) && !isThisStreaming
+      below={(msg.truncated || replyFile || (msg.role === 'assistant' && msg.failure)) && !isThisStreaming
         ? <>
-            {msg.truncated && <div className="tm-truncated-note">{TRUNCATED_NOTE}</div>}
+            {replyFile && <ReplyFileCard conversationId={conversationId} file={replyFile} />}
+            {msg.truncated && !replyFile && <div className="tm-truncated-note">{TRUNCATED_NOTE}</div>}
             {msg.role === 'assistant' && msg.failure && <ReplyFailureNotice failure={msg.failure} onRetry={onRetry} />}
           </>
         : undefined}
-      content={displayContent}
+      content={replyFile ? msg.replyPreview! : displayContent}
+      copyContent={replyFile ? displayContent : undefined}
       isStreaming={isThisStreaming}
       attachments={msg.attachments}
       onAvatarClick={onAvatarClick}

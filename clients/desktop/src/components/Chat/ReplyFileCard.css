@@ -1,0 +1,84 @@
+.reply-file-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  margin-top: 8px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+
+.reply-file-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.reply-file-main:hover,
+.reply-file-reveal:hover {
+  border-color: var(--border-active);
+  background: var(--brand-bg-soft);
+}
+
+.reply-file-main:disabled,
+.reply-file-reveal:disabled { cursor: wait; opacity: .65; }
+
+.reply-file-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  background: var(--brand-bg-soft);
+  color: var(--brand);
+}
+
+.reply-file-info { display: grid; min-width: 0; gap: 3px; }
+
+.reply-file-info strong,
+.reply-file-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reply-file-info strong { font-size: 12px; font-weight: 550; }
+.reply-file-info small { color: var(--text-muted); font-size: 11px; }
+
+.reply-file-reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.reply-file-reveal:hover { color: var(--brand); }
+
+.reply-file-error { grid-column: 1 / -1; margin: 0 4px 2px; color: var(--warning); font-size: 12px; }
+
+.reply-file-spinner { animation: reply-file-spin 900ms linear infinite; }
+
+@keyframes reply-file-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reply-file-spinner { animation: none; }
+}

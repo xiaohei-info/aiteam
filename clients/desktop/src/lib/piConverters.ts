@@ -20,12 +20,14 @@ import type {
   ConversationMessage,
   PiSseAssistantMessageEvent,
   PiSseEventData,
+  ReplyFile,
 } from '../api/agent/types'
 import { CONTEXT_RESET_ENTRY_TYPE, type ContextResetMemoryReason } from '../api/agent/types.ts'
 import { dividerMemoryText, isContextResetMemoryReason } from './contextResetMemory.ts'
 import type { Message, ThinkingStep, ToolCall } from '../stores/chat'
 import { splitLocalContext, type LocalContextAction } from './localContextBlock.ts'
 import { assistantFailure, type ReplyFailure } from './replyFailure.ts'
+import { replyPreview } from './replyPreview.ts'
 
 // -------------------- Entry → Message --------------------
 
@@ -337,6 +339,8 @@ export function entriesToMessages(
       recipientName,
       ...(localContext ? { localContext } : {}),
       ...(truncated ? { truncated } : {}),
+      ...(role === 'assistant' && isReplyFile(entry.reply_file)
+        ? { replyFile: entry.reply_file, replyPreview: replyPreview(content) } : {}),
       _ts: ms,
       ...(failure ? { failure } : {}),
     })
@@ -438,6 +442,15 @@ export function contextResetMemoryText(resetId: string, dividers: ContextResetDi
   return dividerMemoryText(dividers.memory.get(resetId) ?? [])
 }
 
+/** Only the exact shape the Agent sends; anything else leaves the reply shown in full. */
+function isReplyFile(value: unknown): value is ReplyFile {
+  const file = value as Partial<ReplyFile> | null
+  return typeof file === 'object' && file !== null && typeof file.id === 'string' && file.id !== ''
+    && typeof file.filename === 'string' && file.filename !== ''
+    && (file.path === null || typeof file.path === 'string')
+    && typeof file.chars === 'number' && Number.isFinite(file.chars) && file.chars >= 0
+}
+
 /** Keep individual entry references; presentation grouping never changes read cursors. */
 function groupWorkMessages(messages: Message[]): Message[] {
   const grouped: Message[] = []
@@ -453,7 +466,8 @@ function groupWorkMessages(messages: Message[]): Message[] {
     }
     const previous = grouped[index]
     // 可重试的错误会先产出一条失败消息再自动重试：只以本次执行最后一条为准。
-    const { failure: _previousFailure, ...rest } = previous
+    // 回复文件只属于最后一条；之前的过程文字原样保留在折叠正文里。
+    const { failure: _previousFailure, replyFile: _previousReplyFile, replyPreview: _previousPreview, ...rest } = previous
     grouped[index] = {
       ...rest,
       content: [previous.content, message.content].filter(Boolean).join('\n\n'),
@@ -464,6 +478,8 @@ function groupWorkMessages(messages: Message[]): Message[] {
       recipientName: previous.recipientName ?? message.recipientName,
       ...(previous.truncated || message.truncated ? { truncated: true } : {}),
       ...(message.failure ? { failure: message.failure } : {}),
+      ...(message.replyFile && message.replyPreview !== undefined
+        ? { replyFile: message.replyFile, replyPreview: [previous.content, message.replyPreview].filter(Boolean).join('\n\n') } : {}),
     }
   }
   return grouped

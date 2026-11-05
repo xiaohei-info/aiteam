@@ -279,7 +279,18 @@ export interface ConversationEntry {
   source_employee_id?: string
   source_employee_display_name?: string
   source_role?: 'human' | 'child' | 'participant' | 'coordinator'
+  /** 这条员工回复超过 2000 字时，全文另存成的 Markdown 产物；文件被删除后不再返回。 */
+  reply_file?: ReplyFile
   [key: string]: unknown
+}
+
+/** 长回复另存的产物：用产物 ID 打开或下载。 */
+export interface ReplyFile {
+  id: string
+  filename: string
+  path: string | null
+  /** 回复全文字数（Unicode 字符）。 */
+  chars: number
 }
 
 // -------------------- SSE 事件 --------------------
