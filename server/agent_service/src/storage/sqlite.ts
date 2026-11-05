@@ -488,6 +488,14 @@ export class AgentSqliteStore {
       );
       CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
 
+      -- Workspace folders being renamed to the conversation-named layout; a row outlives a crash
+      -- between the rename and the path update, so the next start finishes the move.
+      CREATE TABLE IF NOT EXISTS workspace_move (
+        old_path TEXT PRIMARY KEY,
+        new_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS schedule_retry (
         conversation_id TEXT PRIMARY KEY,
         schedule_id TEXT NOT NULL,
@@ -906,6 +914,63 @@ export class AgentSqliteStore {
       byConversation.set(conversationId, list);
     }
     return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
+  }
+
+  /** Every conversation with its workspace paths, any owner; used once at start-up to move legacy folders. */
+  listAllConversationWorkspaces(): Array<OwnedConversationWorkspaces & { tenant_id: string | null; member_id: string | null; created_at: string }> {
+    // SAFETY: the selected columns are exactly the declared row fields.
+    const conversations = this.db.prepare(`
+      SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at, tenant_id, member_id, created_at
+      FROM conversation ORDER BY created_at, id
+    `).all() as unknown as Array<Omit<OwnedConversationWorkspaces, "participants"> & { tenant_id: string | null; member_id: string | null; created_at: string }>;
+    // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id.
+    const participants = this.db.prepare(`
+      SELECT conversation_id, employee_id, role, workspace, removed_at FROM conversation_participant_session
+      ORDER BY conversation_id, CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
+    `).all() as unknown as Array<ConversationWorkspaceParticipant & { conversation_id: string }>;
+    const byConversation = new Map<string, ConversationWorkspaceParticipant[]>();
+    for (const { conversation_id: conversationId, ...participant } of participants) {
+      byConversation.set(conversationId, [...(byConversation.get(conversationId) ?? []), participant]);
+    }
+    return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
+  }
+
+  /** True when a conversation, a participant or a pending move uses `path` or a folder inside it. */
+  workspaceInUse(path: string): boolean {
+    const prefix = `${path}/`;
+    const inside = "(x = ? OR substr(x, 1, length(?)) = ?)";
+    const query = (table: string, column: string) => `SELECT 1 FROM ${table} WHERE ${inside.replaceAll("x", column)}`;
+    return [
+      query("conversation", "workspace"),
+      query("conversation_participant_session", "workspace"),
+      query("workspace_move", "new_path"),
+    ].some((sql) => this.db.prepare(sql).get(path, prefix, prefix) !== undefined);
+  }
+
+  listWorkspaceMoves(): Array<{ old_path: string; new_path: string }> {
+    return this.db.prepare("SELECT old_path, new_path FROM workspace_move ORDER BY created_at, old_path").all() as Array<{ old_path: string; new_path: string }>;
+  }
+
+  /** Records the moves of one conversation together, so its folders never end up half planned. */
+  planWorkspaceMoves(moves: ReadonlyArray<{ oldPath: string; newPath: string }>): void {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const insert = this.db.prepare("INSERT INTO workspace_move(old_path, new_path, created_at) VALUES (?, ?, ?)");
+      for (const move of moves) insert.run(move.oldPath, move.newPath, now);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** Points every row at the moved folder and drops the pending move, in one transaction. */
+  finishWorkspaceMove(oldPath: string, newPath: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE conversation SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("UPDATE conversation_participant_session SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("DELETE FROM workspace_move WHERE old_path = ?").run(oldPath);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   /** Returns the row even for a removed member so a re-added member resumes the same Session. */

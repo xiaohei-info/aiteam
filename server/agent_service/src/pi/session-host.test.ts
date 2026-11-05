@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -750,6 +751,44 @@ test("captured artifacts keep their folder, skip dependencies, and an edited fil
     assert.equal(list().length, 3);
   } finally {
     await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("new working folders are named after the conversation; group members get a subfolder each", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const short = (id: string) => createHash("sha256").update(id).digest("hex").slice(0, 6);
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "产品经理", revoked: false, synced_at: now },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "worker", display_name: "工程师", revoked: false, synced_at: now },
+    ], [], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord", display_name: "产品经理", tool_policy: { allowed_tools: [] } },
+      { employee_id: "worker", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "worker", display_name: "工程师", tool_policy: { allowed_tools: [] } },
+    ]);
+    const root = join(fixture.dataRoot, "workspaces");
+    fixture.store.createConversation({ id: "named-group", kind: "group", title: "招聘/评审", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    await host.initializeConversationParticipants("named-group", { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const groupDir = join(root, `招聘_评审-${short("named-group")}`);
+    assert.deepEqual(
+      fixture.store.listConversationParticipants("named-group").map((item) => [item.employee_id, item.workspace]),
+      [["coordinator", join(groupDir, "产品经理")], ["worker", join(groupDir, "工程师")]],
+    );
+    assert.ok(existsSync(join(groupDir, "工程师")));
+
+    fixture.store.createConversation({ id: "named-chat", title: "热门AI项目总结", tenantId: "tenant-1", memberId: "member-1", sessionFile: "", workspace: "" });
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("named-chat", "hi");
+    assert.equal(fixture.store.getConversation("named-chat")?.workspace, join(root, `热门AI项目总结-${short("named-chat")}`));
+    // Renaming keeps the folder.
+    fixture.store.updateConversation("named-chat", { title: "改名后" });
+    fixture.faux.setResponses([fauxAssistantMessage("ok")]);
+    await host.prompt("named-chat", "again");
+    assert.equal(fixture.store.getConversation("named-chat")?.workspace, join(root, `热门AI项目总结-${short("named-chat")}`));
+    await host.dispose();
+  } finally {
     await fixture.close();
   }
 });
