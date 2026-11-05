@@ -230,3 +230,41 @@ test("history entries expose only the context-reset custom marker with bounded d
   const other = serializePiEntry({ id: "c1", type: "custom", customType: "other_extension", data: { note: "private" } });
   assert.deepEqual(other, { id: "c1", type: "custom" });
 });
+
+test("credential URL query parameters are hidden in live and persisted messages", () => {
+  const url = "https://example.test/api?key=url-secret-1&page=2&access_token=url-secret-2#top";
+  const signed = "https://bucket.example.test/a.png?X-Amz-Credential=url-secret-3&X-Amz-Signature=url-secret-4";
+  const failed = { role: "assistant", content: [], stopReason: "error", errorMessage: `401 from ${url}` };
+  const answer = { role: "assistant", content: [{ type: "text", text: `图片在 ${signed} ，接口 ${url}` }], stopReason: "stop" };
+  for (const message of [failed, answer]) {
+    const live = serializePiEvent({ type: "message_end", message } as never);
+    const stored = serializePiEntry({ id: `entry-${message.stopReason}`, type: "message", message });
+    for (const serialized of [JSON.stringify(live), JSON.stringify(stored)]) {
+      assert.doesNotMatch(serialized, /url-secret-\d/);
+      // Only the values go: the host, path and harmless parameters stay readable.
+      assert.match(serialized, /https:\/\/example\.test\/api\?key=\[内容已隐藏\]&page=2/);
+    }
+  }
+  // A bare word "key" or a parameter that merely ends in "key" is not a credential.
+  const plain = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "sort key=name, https://example.test/?monkey=1" }], stopReason: "stop" } } as never);
+  assert.match(JSON.stringify(plain), /sort key=name, https:\/\/example\.test\/\?monkey=1/);
+});
+
+test("credential URL parameters keep their name and the rest of the URL, live and persisted", () => {
+  // Names that the plain-text rule also knows (api_key, token, secret …) must not be redacted twice.
+  const names = ["api_key", "apikey", "api-key", "key", "token", "access_token", "refresh_token", "secret", "client_secret", "credential", "X-Amz-Credential", "X-Amz-Signature", "sig", "auth", "password_pwd"];
+  for (const name of names) {
+    const url = `https://example.test/v1/files?${name}=v-${name.length}x9&page=2#top`;
+    const message = { role: "assistant", content: [{ type: "text", text: `see ${url} now` }], stopReason: "error", errorMessage: `401 from ${url}` };
+    const live = serializePiEvent({ type: "message_end", message } as never)?.message as Record<string, unknown>;
+    const stored = serializePiEntry({ id: `entry-${name}`, type: "message", message })?.message as Record<string, unknown>;
+    const expected = `https://example.test/v1/files?${name}=[内容已隐藏]&page=2#top`;
+    for (const serialized of [live, stored]) {
+      assert.equal(serialized.errorMessage, `401 from ${expected}`, name);
+      assert.deepEqual(serialized.content, [{ type: "text", text: `see ${expected} now` }], name);
+    }
+  }
+  // The same names outside a URL are still hidden whole, as before.
+  const plain = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "api_key=abc123 token: xyz Bearer qwe" }], stopReason: "stop" } } as never)?.message as Record<string, unknown>;
+  assert.deepEqual(plain.content, [{ type: "text", text: "[内容已隐藏] [内容已隐藏] [内容已隐藏]" }]);
+});

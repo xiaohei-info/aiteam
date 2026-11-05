@@ -13,6 +13,10 @@ const ASSISTANT_EVENTS = new Set([
 ]);
 const SECRET_KEY = /(?:authorization|access.?token|refresh.?token|token|api.?key|credential|secret|password|session.?file|workspace|cwd|path|filename|file.?path|private.?key)/i;
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
+// Credential-like URL query parameters (`?key=…`, `&access_token=…`, `&X-Amz-Signature=…`). The bare
+// name `key` is too common for INLINE_SECRET, so it only counts as a secret after `?`, `&` or `;`.
+// The parameter name stays readable; the value is hidden up to the next parameter or fragment.
+const URL_SECRET_PARAM = /([?&;](?:[a-z0-9]+[_.-])*(?:key|apikey|token|secret|signature|sig|password|passwd|pwd|credential|auth)=)[^&#\s"'<>]+/gi;
 // Stop at brackets, quotes and CJK/ASCII sentence punctuation so a path inside a Markdown link,
 // parentheses or a sentence is replaced without swallowing the closing characters.
 const INLINE_PATH = /(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|root|opt|srv|mnt|data)(?:\/[^\s"'<>()\[\]{}，。；：！？、）】》」』]*)*|[A-Za-z]:\\[^\s"'<>()\[\]{}，。；：！？、）】》」』]*)/gi;
@@ -333,7 +337,7 @@ function copyIdentifier(result: Record<string, unknown>, raw: Record<string, unk
 
 function copyApprovalSummary(result: Record<string, unknown>, raw: Record<string, unknown>): void {
   if (typeof raw.summary === "string") {
-    const redacted = raw.summary.replace(INLINE_SECRET, "[内容已隐藏]");
+    const redacted = redactSecrets(raw.summary);
     result.summary = redacted.length <= MAX_TEXT_CHARS ? redacted : `${redacted.slice(0, Math.max(0, MAX_TEXT_CHARS - 1))}…`;
   }
 }
@@ -371,8 +375,17 @@ function boundText(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
+// One pass over both rules: a second pass of INLINE_SECRET would match `api_key=[内容已隐藏]…` again
+// and swallow the parameter name and the rest of the URL. Only URL_SECRET_PARAM has a capture group.
+const ANY_SECRET = new RegExp(`${URL_SECRET_PARAM.source}|${INLINE_SECRET.source}`, "gi");
+
+/** Hides credentials; in a URL query only the value goes, so the rest of the URL stays readable. */
+function redactSecrets(value: string): string {
+  return value.replace(ANY_SECRET, (_match, urlParameter: string | undefined) => `${urlParameter ?? ""}[内容已隐藏]`);
+}
+
 export function safeText(value: string, max: number): string {
-  return boundText(redactInlinePaths(value.replace(INLINE_SECRET, "[内容已隐藏]")), max);
+  return boundText(redactInlinePaths(redactSecrets(value)), max);
 }
 
 /**
@@ -381,7 +394,7 @@ export function safeText(value: string, max: number): string {
  * arguments, results, thinking and diagnostics keep using `safeText`.
  */
 export function safeMessageText(value: string, max: number): string {
-  return boundText(value.replace(INLINE_SECRET, "[内容已隐藏]"), max);
+  return boundText(redactSecrets(value), max);
 }
 
 function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
