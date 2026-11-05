@@ -2766,7 +2766,6 @@ export class AgentHttpServer {
       this.writeJson(response, 201, { data: record });
     } catch (error) {
       if (error instanceof Error && error.message.includes("maximum size")) throw new HttpProblem(413, "file_too_large", error.message);
-      if (error instanceof Error && (error.message.includes("Local file count limit") || error.message.includes("Local file storage limit"))) throw new HttpProblem(413, "local_file_storage_limit", error.message);
       throw error;
     }
   }
