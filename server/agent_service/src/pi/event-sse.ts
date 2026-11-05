@@ -24,8 +24,16 @@ const INLINE_PATH = /(?:\/(?:Users|Volumes|private|home|tmp|var|workspace|etc|ro
 const PATH_TRAILING_PUNCTUATION = /[.,;:!?]+$/u;
 const UNSAFE_VALUE_KEY = /^(?:api|provider|model|raw|headers|request|diagnostics|session)$/i;
 
+// Budget for everything except user/assistant message bodies (see `bodyBytes`).
 const MAX_EVENT_BYTES = 24 * 1024;
 const MAX_TEXT_CHARS = 4_000;
+/**
+ * User and assistant message bodies are what the reader came for, so they are returned in full; this
+ * cap only stops runaway data. A body cut at the cap carries `truncated: true`. Live `message_update`
+ * snapshots keep `MAX_TEXT_CHARS` because the desktop builds streaming text from deltas and every
+ * update repeats the whole message.
+ */
+export const MAX_MESSAGE_TEXT_CHARS = 200_000;
 const MAX_TOOL_NAME_CHARS = 128;
 const MAX_IDENTIFIER_CHARS = 256;
 const MAX_SOURCE_NAME_CHARS = 256;
@@ -67,7 +75,7 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   } else if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) {
     result.timestamp = raw.timestamp;
   }
-  const message = serializeMessage(raw.message);
+  const message = serializeMessage(raw.message, MAX_MESSAGE_TEXT_CHARS);
   if (message) result.message = message;
   for (const key of ["work_id", "entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
     const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
@@ -97,7 +105,7 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
 function boundEntry(value: Record<string, unknown>): Record<string, unknown> {
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return { id: value.id, type: value.type }; }
-  if (Buffer.byteLength(serialized, "utf8") <= MAX_EVENT_BYTES) return value;
+  if (Buffer.byteLength(serialized, "utf8") - bodyBytes(value.message) <= MAX_EVENT_BYTES) return value;
   return { id: value.id, type: value.type, ...(value.work_id ? { work_id: value.work_id } : {}), ...(value.entry_ref ? { entry_ref: value.entry_ref } : {}), ...(value.participant_employee_id ? { participant_employee_id: value.participant_employee_id } : {}), ...(value.timestamp !== undefined ? { timestamp: value.timestamp } : {}), ...(value.source_employee_id ? { source_employee_id: value.source_employee_id } : {}) };
 }
 
@@ -121,12 +129,12 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
   const result: Record<string, unknown> = { type: raw.type, ...serializeMetadata(extra) };
   if (TOOL_EVENTS.has(raw.type)) serializeToolEvent(result, raw);
   else if (raw.type === "message_update") {
-    const message = serializeMessage(raw.message);
+    const message = serializeMessage(raw.message, MAX_TEXT_CHARS);
     const assistantMessageEvent = serializeAssistantMessageEvent(raw.assistantMessageEvent);
     if (message) result.message = message;
     if (assistantMessageEvent) result.assistantMessageEvent = assistantMessageEvent;
   } else if (raw.type === "message_end") {
-    const message = serializeMessage(raw.message);
+    const message = serializeMessage(raw.message, MAX_MESSAGE_TEXT_CHARS);
     if (message) result.message = message;
   } else if (raw.type === "agent_end") {
     if (Array.isArray(raw.messages)) result.message_count = Math.min(raw.messages.length, MAX_ARRAY_ITEMS);
@@ -186,12 +194,12 @@ function serializeToolEvent(result: Record<string, unknown>, raw: Record<string,
   }
 }
 
-function serializeMessage(value: unknown): Record<string, unknown> | undefined {
+function serializeMessage(value: unknown, bodyMax: number): Record<string, unknown> | undefined {
   const raw = asRecord(value);
   if (!raw || (raw.role !== "user" && raw.role !== "assistant" && raw.role !== "toolResult")) return undefined;
   const result: Record<string, unknown> = { role: raw.role };
   if (typeof raw.timestamp === "number" && Number.isFinite(raw.timestamp)) result.timestamp = raw.timestamp;
-  const content = serializeContent(raw.content, raw.role !== "toolResult");
+  const content = raw.role === "toolResult" ? serializeContent(raw.content, false, MAX_TEXT_CHARS) : serializeContent(raw.content, true, bodyMax);
   if (content !== undefined) result.content = content;
   if (raw.role === "assistant") {
     // A failed model call ends with an empty message whose only explanation is errorMessage.
@@ -211,15 +219,20 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   return result;
 }
 
-function serializeContent(value: unknown, keepPaths = false): BoundedEventPayload {
-  const text = keepPaths ? safeMessageText : safeText;
-  if (typeof value === "string") return text(value, MAX_TEXT_CHARS);
+/** `body` marks user/assistant text: it keeps paths and flags a cut with `truncated: true`. */
+function serializeContent(value: unknown, body: boolean, max: number): BoundedEventPayload {
+  const text = body ? safeMessageText : safeText;
+  if (typeof value === "string") return text(value, max);
   if (!Array.isArray(value)) return undefined;
   const output: unknown[] = [];
   for (const part of value.slice(0, MAX_ARRAY_ITEMS)) {
     const raw = asRecord(part);
     if (!raw || typeof raw.type !== "string") continue;
-    if (raw.type === "text" && typeof raw.text === "string") output.push({ type: "text", text: text(raw.text, MAX_TEXT_CHARS) });
+    if (raw.type === "text" && typeof raw.text === "string") {
+      const item: Record<string, unknown> = { type: "text", text: text(raw.text, max) };
+      if (body && redactSecrets(raw.text).length > max) item.truncated = true;
+      output.push(item);
+    }
     else if (raw.type === "thinking" && typeof raw.thinking === "string") output.push({ type: "thinking", thinking: safeText(raw.thinking, MAX_TEXT_CHARS) });
     else if (raw.type === "toolCall") {
       const toolCall = serializeToolCall(raw);
@@ -420,10 +433,24 @@ export function safeMessageText(value: string, max: number): string {
   return boundText(redactSecrets(value), max);
 }
 
+/** Serialized size of user/assistant text bodies, which are bounded by their own cap instead. */
+function bodyBytes(message: unknown): number {
+  const raw = asRecord(message);
+  if (!raw || (raw.role !== "user" && raw.role !== "assistant")) return 0;
+  if (typeof raw.content === "string") return Buffer.byteLength(JSON.stringify(raw.content), "utf8");
+  if (!Array.isArray(raw.content)) return 0;
+  let total = 0;
+  for (const part of raw.content) {
+    const item = asRecord(part);
+    if (item?.type === "text" && typeof item.text === "string") total += Buffer.byteLength(JSON.stringify(item.text), "utf8");
+  }
+  return total;
+}
+
 function boundEvent(value: Record<string, unknown>): Record<string, unknown> {
   let serialized: string;
   try { serialized = JSON.stringify(value); } catch { return minimalEvent(value); }
-  if (Buffer.byteLength(serialized, "utf8") <= MAX_EVENT_BYTES) return value;
+  if (Buffer.byteLength(serialized, "utf8") - bodyBytes(value.message) <= MAX_EVENT_BYTES) return value;
   return minimalEvent(value);
 }
 
