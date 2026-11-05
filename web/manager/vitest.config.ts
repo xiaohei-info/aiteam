@@ -27,6 +27,8 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // 单个测试里可能有多次 findBy 等待（每次最长 4 秒，见 setup.ts），整体超时要留出余量。
+    testTimeout: 15_000,
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",
