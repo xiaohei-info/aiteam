@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classifyToolKind, serializePiEntry, serializePiEvent } from "./event-sse.js";
+import { historyEntryRef } from "./session-history.js";
 
 test("Pi SSE serializer keeps bounded ordinary tool summaries without credential/path fields", () => {
   const event = serializePiEvent({
@@ -66,6 +67,21 @@ test("failed model calls keep a redacted, bounded error on live and persisted as
   assert.deepEqual(odd, { role: "assistant", content: [] });
   const user = serializePiEvent({ type: "message_end", message: { role: "user", content: "hi", stopReason: "error", errorMessage: "x" } } as never)?.message;
   assert.deepEqual(user, { role: "user", content: "hi" });
+});
+
+test("generated entry_ref hashes survive serialization even when they look like a key prefix", () => {
+  // sha256 base64url can contain `rk-`/`sk-`/`pk-`; credential redaction used to rewrite those refs.
+  const prefixed: string[] = [];
+  for (let i = 0; prefixed.length < 3; i++) {
+    const ref = historyEntryRef("c1", "e1", `entry-${i}`);
+    if (/(?:sk|pk|rk)-/i.test(ref)) prefixed.push(ref);
+  }
+  for (const ref of [...prefixed, "entry_v1_qrk-F-hXrM1ftGnv7VRTwDesBE-hPa30TVk4GbbfMB4"]) {
+    assert.equal(serializePiEntry({ id: "a1", type: "message", entry_ref: ref })?.entry_ref, ref);
+  }
+  for (const invalid of ["entry_v1_short", "Bearer sk-live-credential", `entry_v1_${"a".repeat(43)} extra`, 42]) {
+    assert.equal(serializePiEntry({ id: "a1", type: "message", entry_ref: invalid })?.entry_ref, undefined, String(invalid));
+  }
 });
 
 test("Pi tool classification covers memory, RAG, and todo tools", () => {
