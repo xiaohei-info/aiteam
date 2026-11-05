@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 /** The failure summary is already bounded and redacted by the caller; this cap only guards the table. */
-const MAX_MESSAGE_CHARS = 240;
+const MAX_MESSAGE_CHARS = 1_000;
 
 /**
  * A run that failed before Pi wrote anything to the session (for example Manager runtime-config

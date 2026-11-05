@@ -8,6 +8,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import * as todoHelpers from '../src/lib/todoTaskCard.ts'
 import * as localCitationHelpers from '../src/lib/localDirectoryCitations.ts'
+import * as replyFailureHelpers from '../src/lib/replyFailure.ts'
 import type { ThinkingStep, ToolCall } from '../src/stores/chat.ts'
 
 const nodeRequire = createRequire(import.meta.url)
@@ -34,6 +35,7 @@ function renderer() {
       if (id === 'react/jsx-runtime') return { ...runtime, jsx: jsx(runtime.jsx), jsxs: jsx(runtime.jsxs) }
       if (id === '../../lib/todoTaskCard') return todoHelpers
       if (id === '../../lib/localDirectoryCitations') return localCitationHelpers
+      if (id === '../../lib/replyFailure') return replyFailureHelpers
       if (id === '../../lib/avatarUtils') return { getEmployeeAvatar: () => '', renderAvatar: () => null }
       if (id === './TextMessage') return { __esModule: true, default: ({ above, content }: any) => React.createElement('div', null, above, content) }
       // 本地目录引用卡片不是本套用例的对象；与 FileMessage 同样 stub 为空渲染。

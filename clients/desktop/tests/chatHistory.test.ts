@@ -5,7 +5,7 @@ import vm from 'node:vm'
 import ts from 'typescript'
 import { webcrypto } from 'node:crypto'
 import { dispatchPiEvent, entriesToMessages, resolvePiEventSenderIdentity } from '../src/lib/piConverters.ts'
-import { applyLocalFailures, assistantFailure, describeFailure, retryTarget, settledFailure } from '../src/lib/replyFailure.ts'
+import { applyLocalFailures, assistantFailure, describeFailure, displayDetail, retryTarget, settledFailure } from '../src/lib/replyFailure.ts'
 import { createSettleTracker } from '../src/lib/groupStreamLifecycle.ts'
 import { classifyRequestError } from '../src/lib/requestError.ts'
 import { collectTodoTaskCards } from '../src/lib/todoTaskCard.ts'
@@ -534,25 +534,34 @@ const failedReply = (id: string, work: string, errorMessage?: string) => ({
 
 test('failures are explained in plain words and keep the original error as detail', () => {
   assert.deepEqual(assistantFailure({ role: 'assistant', content: [], stopReason: 'error', errorMessage: ' 401 Unauthorized ' }),
-    { kind: 'model', summary: '模型 Key 无效或没有权限，请联系管理员', detail: '401 Unauthorized' })
-  assert.deepEqual(assistantFailure({ role: 'assistant', content: [], stopReason: 'error' }), { kind: 'model', summary: '模型调用失败' })
+    { kind: 'model', summary: '抱歉，模型服务授权异常，请联系管理员。', detail: '401 Unauthorized' })
+  assert.deepEqual(assistantFailure({ role: 'assistant', content: [], stopReason: 'error' }), { kind: 'model', summary: '抱歉，这条消息没能回复，请稍后再试。' })
   assert.equal(assistantFailure({ role: 'assistant', content: [], stopReason: 'stop', errorMessage: 'stale' }), undefined)
   assert.equal(assistantFailure({ role: 'user', content: 'hi', stopReason: 'error' }), undefined)
   for (const [raw, summary] of [
-    ['429 Too Many Requests', '调用太频繁或额度已用完，请稍后再试'],
-    ['insufficient_quota', '调用太频繁或额度已用完，请稍后再试'],
-    ['503 Service Unavailable', '模型服务繁忙，请稍后重试'],
-    ['Overloaded', '模型服务繁忙，请稍后重试'],
-    ['fetch failed: ECONNREFUSED', '网络连接失败，请检查网络后重试'],
-    ["Cannot find module 'x'", '程序文件不完整，请重新安装 AIFred'],
-    ['Manager returned HTTP 404', '服务端找不到这个员工的配置，请联系管理员'],
-    ['something odd', '执行失败'],
+    ['429 Too Many Requests', '抱歉，模型额度暂时用满，请稍后再试。'],
+    ['insufficient_quota', '抱歉，模型额度暂时用满，请稍后再试。'],
+    ['503 Service Unavailable', '抱歉，模型服务繁忙，请稍后再试。'],
+    ['Overloaded', '抱歉，模型服务繁忙，请稍后再试。'],
+    ['fetch failed: ECONNREFUSED', '抱歉，网络连接中断，请稍后再试。'],
+    ["Cannot find module 'x'", '抱歉，程序加载异常，请联系管理员。'],
+    ['Manager returned HTTP 404', '抱歉，暂未找到该员工的配置，请联系管理员。'],
+    ['something odd', '抱歉，这次没能开始处理，请稍后再试。'],
   ] as const) assert.equal(describeFailure('execution', raw).summary, summary, raw)
   assert.deepEqual(settledFailure({ type: 'agent_settled', failed: true, error_message: 'Manager returned HTTP 404' } as any),
-    { kind: 'execution', summary: '服务端找不到这个员工的配置，请联系管理员', detail: 'Manager returned HTTP 404' })
-  assert.deepEqual(settledFailure({ type: 'agent_settled', failed: true } as any), { kind: 'execution', summary: '执行失败' })
+    { kind: 'execution', summary: '抱歉，暂未找到该员工的配置，请联系管理员。', detail: 'Manager returned HTTP 404' })
+  assert.deepEqual(settledFailure({ type: 'agent_settled', failed: true } as any), { kind: 'execution', summary: '抱歉，这次没能开始处理，请稍后再试。' })
   assert.equal(settledFailure({ type: 'agent_settled', failed: false, error_message: 'x' } as any), undefined)
   assert.equal(settledFailure({ type: 'agent_settled' } as any), undefined)
+})
+
+test('the technical detail hides paths on screen; the copy keeps them for developers', () => {
+  const raw = "Cannot find module '~/app/node_modules/x/a.js' imported from /Users/someone/app/b.js. See C:\\Fred\\c.js"
+  assert.equal(displayDetail(raw), "Cannot find module '[路径已隐藏]' imported from [路径已隐藏]. See [路径已隐藏]")
+  assert.equal(displayDetail('401 Unauthorized'), '401 Unauthorized')
+  assert.equal(displayDetail('ratio 1/2 and a lone ~ stay'), 'ratio 1/2 and a lone ~ stay')
+  // The failure itself keeps the full text, which is what「复制」puts on the clipboard.
+  assert.equal(describeFailure('model', raw).detail, raw)
 })
 
 test('history keeps the failure as its own field, last attempt of a work wins', () => {
@@ -565,7 +574,7 @@ test('history keeps the failure as its own field, last attempt of a work wins', 
     message: { role: 'assistant', content: [{ type: 'text', text: '先写好了一半' }], stopReason: 'toolUse' } }
   const [cut] = entriesToMessages([partial, failedReply('e2', 'w2', 'overloaded')] as any)
   assert.equal(cut.content, '先写好了一半')
-  assert.equal(cut.failure?.summary, '模型服务繁忙，请稍后重试')
+  assert.equal(cut.failure?.summary, '抱歉，模型服务繁忙，请稍后再试。')
 
   // An automatic retry that succeeded hides the earlier failure of the same work.
   const retried = { id: 'r1', entry_ref: 'ref-r1', type: 'message', work_id: 'w3', source_employee_id: 'pm',
@@ -589,7 +598,7 @@ test('assistant message_end reports a failure only for failed model calls', () =
 })
 
 test('local failures attach to the same work, otherwise append, and never override history', () => {
-  const failure = { kind: 'execution' as const, summary: '执行失败' }
+  const failure = { kind: 'execution' as const, summary: '抱歉，这次没能开始处理，请稍后再试。' }
   const history = [
     { id: 'u', role: 'user', content: 'hi' },
     { id: 'a', role: 'assistant', content: 'half', workId: 'w1', senderEmployeeId: 'pm' },
@@ -599,7 +608,7 @@ test('local failures attach to the same work, otherwise append, and never overri
   assert.deepEqual(applyLocalFailures(history, [{ workId: 'w1', message: local, failure }])[1], { ...history[1], failure })
   assert.deepEqual(applyLocalFailures(history, [{ workId: 'w1', senderEmployeeId: 'other', message: local, failure }]).map(m => m.id), ['u', 'a', 'pending'])
   assert.deepEqual(applyLocalFailures(history, [{ message: local, failure }]).map(m => m.id), ['u', 'a', 'pending'])
-  const persisted = { ...history[1], failure: { kind: 'model' as const, summary: '模型调用失败' } }
+  const persisted = { ...history[1], failure: { kind: 'model' as const, summary: '抱歉，这条消息没能回复，请稍后再试。' } }
   assert.equal(applyLocalFailures([history[0], persisted], [{ workId: 'w1', message: local, failure }])[1].failure, persisted.failure)
 })
 
@@ -674,7 +683,7 @@ test('after a restart the stored pre-execution failure is shown again until the 
   const replies = () => store.getState().activeConvMessages.filter((message: any) => message.role === 'assistant')
   assert.equal(replies().length, 1)
   assert.equal(replies()[0].content, '')
-  assert.deepEqual(replies()[0].failure, { kind: 'execution', summary: '服务端找不到这个员工的配置，请联系管理员', detail: 'Manager returned HTTP 404' })
+  assert.deepEqual(replies()[0].failure, { kind: 'execution', summary: '抱歉，暂未找到该员工的配置，请联系管理员。', detail: 'Manager returned HTTP 404' })
 
   // The next run supersedes it, on the Agent and here.
   store.getState().startAssistantStream('restarted')
@@ -698,5 +707,5 @@ test('a stored group failure is attached to the participant that failed', async 
   const [reply] = store.getState().activeConvMessages
   assert.equal(reply.senderEmployeeId, 'pm')
   assert.equal(reply.senderName, '产品经理')
-  assert.equal(reply.failure.summary, '网络连接失败，请检查网络后重试')
+  assert.equal(reply.failure.summary, '抱歉，网络连接中断，请稍后再试。')
 })
