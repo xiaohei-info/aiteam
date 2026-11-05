@@ -26,7 +26,7 @@ function chatStore(api: Record<string, unknown>) {
     if (id === './agentAuth') return { useAgentAuthStore: { getState: () => ({}), subscribe: () => {} } }
     if (id === '../lib/pinnedConversations') return { getPinnedStorageKey: () => null }
     if (id === '../lib/piConverters') return { entriesToMessages, dispatchPiEvent, resolvePiEventSenderIdentity }
-    if (id === '../lib/replyFailure') return { applyLocalFailures, settledFailure }
+    if (id === '../lib/replyFailure') return { applyLocalFailures, describeFailure, settledFailure }
     if (id === '../lib/replyProjection') return { mergeReplyProjection, reconcileReplyProjection }
     if (id === '../lib/groupStreamLifecycle') return { createSettleTracker }
     if (id === '../lib/globalActivityCollector') return { globalActivityCollector: { emit: () => {} } }
@@ -658,3 +658,45 @@ for (const [label, events, expected] of [
     store.getState().abortStream('failing')
   })
 }
+
+test('after a restart the stored pre-execution failure is shown again until the next run', async () => {
+  const stored = { employee_id: null, work_id: 'w9', error_code: 'manager_unavailable', error_message: 'Manager returned HTTP 404', failed_at: '2026-11-04T08:00:00.000Z' }
+  const user = { id: 'u1', entry_ref: 'ref-u1', type: 'message', work_id: 'w9', message: { role: 'user', content: '做个小游戏' } }
+  let failures: any[] = [stored]
+  const store = chatStore({
+    abortConversation: async () => {},
+    listEntries: async () => ({ entries: [user] }),
+    getConversationState: async () => ({ prompting: false, failures }),
+    subscribeEvents: () => ({ close() {} }),
+  })
+  store.getState().setActiveConvId('restarted')
+  await store.getState().loadConversation('restarted')
+  const replies = () => store.getState().activeConvMessages.filter((message: any) => message.role === 'assistant')
+  assert.equal(replies().length, 1)
+  assert.equal(replies()[0].content, '')
+  assert.deepEqual(replies()[0].failure, { kind: 'execution', summary: '服务端找不到这个员工的配置，请联系管理员', detail: 'Manager returned HTTP 404' })
+
+  // The next run supersedes it, on the Agent and here.
+  store.getState().startAssistantStream('restarted')
+  failures = []
+  await store.getState().abortStream('restarted')
+  await store.getState().loadConversation('restarted')
+  assert.equal(replies().length, 0)
+})
+
+test('a stored group failure is attached to the participant that failed', async () => {
+  const stored = { employee_id: 'pm', work_id: null, error_code: 'execution_failed', error_message: 'fetch failed', failed_at: '2026-11-04T08:00:00.000Z' }
+  const store = chatStore({
+    abortConversation: async () => {},
+    listEntries: async () => ({ entries: [] }),
+    getConversationState: async () => ({ prompting: false, failures: [stored] }),
+    subscribeEvents: () => ({ close() {} }),
+  })
+  store.setState({ groups: [{ id: 'g1', name: 'G', members: [{ employee_id: 'pm', display_name: '产品经理' }] }] })
+  store.getState().setActiveGroupId('g1')
+  await store.getState().loadGroupConversation('g1')
+  const [reply] = store.getState().activeConvMessages
+  assert.equal(reply.senderEmployeeId, 'pm')
+  assert.equal(reply.senderName, '产品经理')
+  assert.equal(reply.failure.summary, '网络连接失败，请检查网络后重试')
+})
