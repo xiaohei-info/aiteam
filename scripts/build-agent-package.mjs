@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { collectFiles, tarArguments } from "./agent-package-files.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const AGENT_ROOT = join(ROOT, "server", "agent_service");
@@ -455,22 +456,9 @@ function assertNoControlPlaneFiles(packageRoot) {
   if (!existsSync(join(packageRoot, "web", "agent", "dist", "index.html"))) throw new Error("Agent package is missing the Agent SPA");
 }
 
-function collectFiles(root, current = root) {
-  const entries = [];
-  for (const name of readdirSync(current)) {
-    const absolute = join(current, name);
-    const relativePath = relative(root, absolute).split(sep).join("/");
-    const info = lstatSync(absolute);
-    if (info.isDirectory()) entries.push(...collectFiles(root, absolute));
-    else if (info.isSymbolicLink()) entries.push({ path: relativePath, symlink: readlinkSync(absolute) });
-    else if (info.isFile()) entries.push({ path: relativePath, size: info.size, sha256: createHash("sha256").update(readFileSync(absolute)).digest("hex") });
-  }
-  return entries.sort((left, right) => left.path.localeCompare(right.path));
-}
-
 function createArchive(packageRoot, archivePath, archiveType) {
   if (archiveType === "tar.gz") {
-    execFileSync("tar", ["-czf", archivePath, "-C", dirname(packageRoot), relative(dirname(packageRoot), packageRoot)], { stdio: "inherit", env: childEnvironment() });
+    execFileSync("tar", tarArguments(packageRoot, archivePath), { stdio: "inherit", env: childEnvironment() });
     return;
   }
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive -LiteralPath $env:AITEAM_AGENT_PACKAGE -DestinationPath $env:AITEAM_AGENT_ARCHIVE -Force"], { env: childEnvironment({ AITEAM_AGENT_PACKAGE: packageRoot, AITEAM_AGENT_ARCHIVE: archivePath }), stdio: "inherit" });
