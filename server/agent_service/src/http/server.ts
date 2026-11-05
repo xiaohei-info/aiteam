@@ -965,13 +965,13 @@ const problemExample = (summary: string, status: number, code: string, detail: s
 });
 const OPENAPI_COMPONENT_RESPONSES = {
   BadRequest: { description: "请求体不是有效 JSON 或格式不正确。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { invalidJson: problemExample("请求无效", 400, "invalid_json", "Request body must be a JSON object") } } } },
-  Unauthorized: { description: "缺少或无效的认证凭据。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unauthenticated: problemExample("未认证", 401, "unauthenticated", "Authentication is required") } } } },
+  Unauthorized: { description: "缺少或无效的认证凭据，或 Manager 已吊销该会话；客户端应退出登录。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unauthenticated: problemExample("未认证", 401, "unauthenticated", "Authentication is required") } } } },
   Forbidden: { description: "已认证身份无权访问目标资源。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { forbidden: problemExample("无权访问", 403, "forbidden", "Authenticated caller is not authorized") } } } },
   NotFound: { description: "会话、文件或目录资源不存在。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { notFound: problemExample("资源不存在", 404, "not_found", "Conversation or file not found") } } } },
   Conflict: { description: "请求与当前会话、幂等收据或游标状态冲突。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { conflict: problemExample("状态冲突", 409, "conflict", "Request conflicts with current state") } } } },
   TooLarge: { description: "请求体、文件或图片超过大小限制。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { tooLarge: problemExample("内容过大", 413, "request_too_large", "File or request exceeds a limit") } } } },
   ValidationError: { description: "请求参数或请求体校验失败。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { validation: problemExample("参数校验失败", 422, "validation_error", "Request validation failed") } } } },
-  ManagerUnavailable: { description: "Manager 或其受控能力当前不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
+  ManagerUnavailable: { description: "Manager 或其受控能力当前不可用；需要登录的接口在 Manager 无法确认会话时也返回此错误，客户端应保持登录、稍后重试。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
   BadGateway: { description: "受控上游语音服务返回失败或不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { upstream: problemExample("上游不可用", 502, "speech_upstream_unavailable", "Speech transcription service is unavailable") } } } },
   InternalError: { description: "Agent 未预期的内部错误；详细信息只写入受控日志。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { internal: problemExample("内部错误", 500, "internal_error", "Internal server error") } } } },
   Gone: { description: "该 Agent 接口已移除，请使用文档中指定的替代能力。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { gone: problemExample("接口已移除", 410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools") } } } },
@@ -1228,7 +1228,8 @@ export class AgentHttpServer {
             const managerBacked = publicAuth || MANAGER_BACKED_OPERATION_IDS.has(operationId);
             if (authenticated || publicAuth) operation.responses["401"] ??= { $ref: "#/components/responses/Unauthorized" };
             if (authenticated || publicAuth) operation.responses["403"] ??= { $ref: "#/components/responses/Forbidden" };
-            if (managerBacked) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
+            // Authenticated routes also return 503 when Manager cannot confirm the session.
+            if (managerBacked || authenticated) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
             else if (!operationId.includes("AutomationTask") && operationId !== "listAgentConnectors") delete operation.responses["503"];
             if (path === "/api/auth/resolve-tenant-by-account") {
               operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
@@ -1551,7 +1552,11 @@ export class AgentHttpServer {
         try {
           let caller: AuthenticatedCaller | undefined;
           if (authenticated) {
-            try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
+            try { caller = await this.options.authenticate(raw); } catch (error) {
+              // Manager could not confirm the session: deny access but do not declare the login invalid.
+              if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is unavailable");
+              throw new HttpProblem(401, "unauthenticated", "Authentication is required");
+            }
             if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
             const context = requestContext.getStore();
             if (context) context.tenant_id = caller.tenantId;
