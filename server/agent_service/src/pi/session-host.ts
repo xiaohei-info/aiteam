@@ -28,6 +28,7 @@ import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../stora
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
+import { checklistUnfinished, TODO_RECONCILE_PROMPT, TODO_RECONCILE_SKIPPED, TODO_RECONCILE_TYPE } from "./todo-reconcile.js";
 import { CONTEXT_RESET_ENTRY_TYPE, failureText, redactSecrets, serializePiEvent } from "./event-sse.js";
 import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
@@ -245,6 +246,8 @@ interface SessionRecord {
   activeMessage?: Record<string, unknown>;
   /** Where the running prompt's entries start, so its last reply can be saved before it settles. */
   activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
+  /** Set while the hidden checklist turn runs; entriesAt is where its entries start. */
+  reconcile?: { entriesAt: number };
   factStatus?: MemoryStatusActivity;
   factPendingCount?: number;
   factUpdatedAt?: string;
@@ -1169,6 +1172,7 @@ export class SessionHost {
       customTools,
     });
     record.session = result.session;
+    this.guardReconcileTools(record, result.session);
     record.capabilitySignature = capabilitySignature;
     try { chmodSync(record.sessionManager.getSessionFile()!, 0o600); } catch { /* SDK may defer the first write */ }
     record.unsubscribe = result.session.subscribe((event) => this.publish(record, event));
@@ -1227,6 +1231,45 @@ export class SessionHost {
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
+  }
+
+  /**
+   * The hidden checklist turn costs one model call: the run stops after the turn that answered the
+   * checklist prompt, whatever the model did. Tools other than todo_update, built-in ones included,
+   * are skipped before any approval.
+   */
+  private guardReconcileTools(record: SessionRecord, session: AgentSession): void {
+    const before = session.agent.beforeToolCall;
+    const stop = session.agent.shouldStopAfterTurn;
+    session.agent.beforeToolCall = async (context, signal) => {
+      if (record.reconcile && context.toolCall.name !== TODO_UPDATE_TOOL_NAME) return { block: true, reason: TODO_RECONCILE_SKIPPED };
+      return before?.(context, signal);
+    };
+    session.agent.shouldStopAfterTurn = async (context, signal) =>
+      context.newMessages.some((message) => message.role === "custom" && message.customType === TODO_RECONCILE_TYPE)
+      || (await stop?.(context, signal) ?? false);
+  }
+
+  /** The run's entries before any hidden checklist turn: what the reply, its file and its result come from. */
+  private replyEntries(record: SessionRecord, entriesBefore: number): SessionEntry[] {
+    const entries = record.sessionManager.getEntries();
+    return entries.slice(entriesBefore, record.reconcile?.entriesAt ?? entries.length);
+  }
+
+  /**
+   * Queue the hidden checklist turn when the reply just finished normally and the run's checklist
+   * still has unfinished items. Queued as a follow-up during turn_end, so it runs inside this run.
+   */
+  private reconcileChecklist(record: SessionRecord, session: AgentSession, entriesBefore: number, message: unknown): void {
+    const reply = message as { role?: unknown; stopReason?: unknown; content?: unknown } | undefined;
+    if (record.reconcile || record.aborting || reply?.role !== "assistant" || reply.stopReason !== "stop") return;
+    if (Array.isArray(reply.content) && reply.content.some((part) => (part as { type?: unknown }).type === "toolCall")) return;
+    if (session.pendingMessageCount > 0 || !session.getActiveToolNames().includes(TODO_UPDATE_TOOL_NAME)) return;
+    const entries = record.sessionManager.getEntries();
+    if (!checklistUnfinished(entries.slice(entriesBefore))) return;
+    record.reconcile = { entriesAt: entries.length };
+    void session.sendCustomMessage({ customType: TODO_RECONCILE_TYPE, content: TODO_RECONCILE_PROMPT, display: false }, { deliverAs: "followUp" })
+      .catch(() => { record.reconcile = undefined; });
   }
 
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
@@ -1511,7 +1554,9 @@ export class SessionHost {
       if (record.aborting) throw new Error("Prompt aborted during initialization");
       unsubscribeSource = session.subscribe((event) => {
         if (event.type === "agent_settled") settled = true;
-        if (event.type === "message_end" && event.message.role === "assistant") stopReason = event.message.stopReason;
+        // The hidden checklist turn never decides the run's result.
+        if (event.type === "message_end" && event.message.role === "assistant" && !record.reconcile) stopReason = event.message.stopReason;
+        if (event.type === "turn_end") this.reconcileChecklist(record, session, entriesBefore, event.message);
         if (event.type !== "message_end" || event.message.role !== "user") return;
         // Pi emits message_end immediately before appending the same message object.
         // The microtask observes its stable entry ID; the closure is per participant delivery.
@@ -1538,7 +1583,7 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
-      const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
+      const text = this.latestAssistantText(this.replyEntries(record, entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
       // completed when no successful terminal entry was proven.
@@ -1585,7 +1630,7 @@ export class SessionHost {
       try {
         if (workId && owner && authorization) {
           const entries = record.sessionManager.getEntries().slice(entriesBefore);
-          const outcome = observedWorkOutcome(stopReason ?? lastAssistantStopReason(entries), settled, record.aborting, failed);
+          const outcome = observedWorkOutcome(stopReason ?? lastAssistantStopReason(this.replyEntries(record, entriesBefore)), settled, record.aborting, failed);
           const capture: UsageCapture = {
             ...owner, employeeId, startedAt, endedAt: Date.now(), entries, settled: outcome === "succeeded",
             pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
@@ -1614,6 +1659,7 @@ export class SessionHost {
         record.activeStatus = undefined;
         record.activeMessage = undefined;
         record.activeReply = undefined;
+        record.reconcile = undefined;
         await this.disposeSession(record);
       }
     }
@@ -1959,6 +2005,8 @@ export class SessionHost {
     if (!serialized) return;
     // SAFETY: only the discriminator is read; each supported value is matched explicitly below.
     const eventType = (event as unknown as { type?: unknown }).type;
+    // The hidden checklist turn shows only its tool calls, never its text, thinking or errors.
+    if (record.reconcile && (eventType === "message_update" || (eventType === "message_end" && message?.role !== "toolResult"))) return;
     if (record.prompting) {
       if (eventType === "message_update" && serialized.message && typeof serialized.message === "object") {
         record.activeMessage = serialized.message as Record<string, unknown>;
@@ -1973,7 +2021,7 @@ export class SessionHost {
         record.activeStatus = "waiting";
         // Before clients hear the run settled, so the history they reload already links the file.
         if (record.activeReply && !record.aborting) {
-          this.saveLongReply(record, record.activeReply.authorization, record.sessionManager.getEntries().slice(record.activeReply.entriesBefore));
+          this.saveLongReply(record, record.activeReply.authorization, this.replyEntries(record, record.activeReply.entriesBefore));
         }
       }
     }
