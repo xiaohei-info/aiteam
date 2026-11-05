@@ -9,6 +9,7 @@ import { useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Panel from './Panel'
 import TopBar from './TopBar'
+import ManagerUnavailableNotice from './ManagerUnavailableNotice'
 import AgentDetailPanel from '../Chat/AgentDetailPanel'
 import GroupDetailPanel from '../Chat/GroupDetailPanel'
 import { useChatStore } from '../../stores/chat'
@@ -72,6 +73,7 @@ export default function Layout({ children }: LayoutProps) {
       <Sidebar />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar />
+        <ManagerUnavailableNotice />
         <div className={`${showPanel ? 'workspace-stage ' : ''}flex min-h-0 flex-1 overflow-hidden`}>
           {showPanel && <Panel />}
           <main className={`${showPanel ? 'workspace-main ' : ''}relative flex-1 overflow-hidden`}>

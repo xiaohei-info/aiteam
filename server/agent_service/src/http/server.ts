@@ -240,7 +240,7 @@ const ConversationFailureOut = Type.Object({
   employee_id: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "群聊中失败的参与者；单聊为 null。" }),
   work_id: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "失败那次执行的工作记录 ID；未建立工作记录时为 null。" }),
   error_code: Type.String({ minLength: 1, description: "稳定的失败代码。" }),
-  error_message: Type.String({ description: "有界的失败摘要，与 agent_settled 事件中的 error_message 相同。" }),
+  error_message: Type.String({ maxLength: 1000, description: "失败原因，与 agent_settled 事件中的 error_message 相同：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" }),
   failed_at: Type.String({ format: "date-time", description: "失败时间。" }),
 }, { $id: "ConversationFailureOut", additionalProperties: false, description: "一次在 Pi 写入会话前就失败的执行。" });
 const ConversationStateEnvelope = Type.Object({ data: Type.Ref("ConversationStateOut") }, { $id: "ConversationStateEnvelope", description: "会话状态响应。" });
@@ -331,7 +331,7 @@ const ConversationMessage = Type.Object({
   toolName: Type.Optional(Type.String({ description: "工具名称；toolResult 消息提供。" })),
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
   stopReason: Type.Optional(Type.String({ enum: ["stop", "length", "toolUse", "deferred", "aborted", "error"], description: "assistant 消息的结束原因；error 表示模型调用失败。" })),
-  errorMessage: Type.Optional(Type.String({ maxLength: 240, description: "stopReason 为 error 时的失败摘要，已脱敏并截断到 240 字。" })),
+  errorMessage: Type.Optional(Type.String({ maxLength: 1000, description: "stopReason 为 error 时的失败原因：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" })),
 }, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
   work_id: Type.Optional(Type.String({ maxLength: 256, description: "员工本次执行的工作记录 ID；可用于聚合 assistant/toolResult，缺省时不推断执行归属。" })),
@@ -407,7 +407,7 @@ const PiSseEventData = Type.Object({
   willRetry: Type.Optional(Type.Boolean({ description: "上下文压缩后是否重试。" })),
   failed: Type.Optional(Type.Boolean({ description: "提示是否以失败终态结束。" })),
   error_code: Type.Optional(Type.String({ description: "安全的本地失败分类。" })),
-  error_message: Type.Optional(Type.String({ description: "有界且脱敏的失败摘要。" })),
+  error_message: Type.Optional(Type.String({ maxLength: 1000, description: "失败原因：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" })),
   approvalId: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
   approval_id: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
   approvalBatchId: Type.Optional(Type.String({ description: "危险工具批次 ID。" })),
@@ -965,13 +965,13 @@ const problemExample = (summary: string, status: number, code: string, detail: s
 });
 const OPENAPI_COMPONENT_RESPONSES = {
   BadRequest: { description: "请求体不是有效 JSON 或格式不正确。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { invalidJson: problemExample("请求无效", 400, "invalid_json", "Request body must be a JSON object") } } } },
-  Unauthorized: { description: "缺少或无效的认证凭据。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unauthenticated: problemExample("未认证", 401, "unauthenticated", "Authentication is required") } } } },
+  Unauthorized: { description: "缺少或无效的认证凭据，或 Manager 已吊销该会话；客户端应退出登录。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unauthenticated: problemExample("未认证", 401, "unauthenticated", "Authentication is required") } } } },
   Forbidden: { description: "已认证身份无权访问目标资源。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { forbidden: problemExample("无权访问", 403, "forbidden", "Authenticated caller is not authorized") } } } },
   NotFound: { description: "会话、文件或目录资源不存在。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { notFound: problemExample("资源不存在", 404, "not_found", "Conversation or file not found") } } } },
   Conflict: { description: "请求与当前会话、幂等收据或游标状态冲突。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { conflict: problemExample("状态冲突", 409, "conflict", "Request conflicts with current state") } } } },
   TooLarge: { description: "请求体、文件或图片超过大小限制。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { tooLarge: problemExample("内容过大", 413, "request_too_large", "File or request exceeds a limit") } } } },
   ValidationError: { description: "请求参数或请求体校验失败。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { validation: problemExample("参数校验失败", 422, "validation_error", "Request validation failed") } } } },
-  ManagerUnavailable: { description: "Manager 或其受控能力当前不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
+  ManagerUnavailable: { description: "Manager 或其受控能力当前不可用；需要登录的接口在 Manager 无法确认会话时也返回此错误，客户端应保持登录、稍后重试。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { unavailable: problemExample("依赖不可用", 503, "manager_unavailable", "Manager-backed capability is unavailable") } } } },
   BadGateway: { description: "受控上游语音服务返回失败或不可用。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { upstream: problemExample("上游不可用", 502, "speech_upstream_unavailable", "Speech transcription service is unavailable") } } } },
   InternalError: { description: "Agent 未预期的内部错误；详细信息只写入受控日志。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { internal: problemExample("内部错误", 500, "internal_error", "Internal server error") } } } },
   Gone: { description: "该 Agent 接口已移除，请使用文档中指定的替代能力。", content: { "application/problem+json": { schema: { $ref: "#/components/schemas/Problem" }, examples: { gone: problemExample("接口已移除", 410, "gone", "Agent knowledge base endpoints were removed; use the Pi knowledge tools") } } } },
@@ -1228,7 +1228,8 @@ export class AgentHttpServer {
             const managerBacked = publicAuth || MANAGER_BACKED_OPERATION_IDS.has(operationId);
             if (authenticated || publicAuth) operation.responses["401"] ??= { $ref: "#/components/responses/Unauthorized" };
             if (authenticated || publicAuth) operation.responses["403"] ??= { $ref: "#/components/responses/Forbidden" };
-            if (managerBacked) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
+            // Authenticated routes also return 503 when Manager cannot confirm the session.
+            if (managerBacked || authenticated) operation.responses["503"] ??= { $ref: "#/components/responses/ManagerUnavailable" };
             else if (!operationId.includes("AutomationTask") && operationId !== "listAgentConnectors") delete operation.responses["503"];
             if (path === "/api/auth/resolve-tenant-by-account") {
               operation.responses["404"] ??= { $ref: "#/components/responses/NotFound" };
@@ -1551,7 +1552,11 @@ export class AgentHttpServer {
         try {
           let caller: AuthenticatedCaller | undefined;
           if (authenticated) {
-            try { caller = await this.options.authenticate(raw); } catch { throw new HttpProblem(401, "unauthenticated", "Authentication is required"); }
+            try { caller = await this.options.authenticate(raw); } catch (error) {
+              // Manager could not confirm the session: deny access but do not declare the login invalid.
+              if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Manager authentication is unavailable");
+              throw new HttpProblem(401, "unauthenticated", "Authentication is required");
+            }
             if (!caller.callerId || typeof caller.tenantId !== "string" || !caller.tenantId.trim() || !(caller.userId ?? caller.callerId) || (caller.claims && caller.claims.tenant_id !== caller.tenantId)) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant and member are required");
             const context = requestContext.getStore();
             if (context) context.tenant_id = caller.tenantId;

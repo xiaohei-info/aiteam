@@ -14,6 +14,7 @@ import { logDevRequest } from '../requestLogging'
 import { newRequestCorrelation, recordApplicationLog } from '../../lib/applicationLog'
 import { recordAuthDiagnostic, type AuthDiagnosticInput } from '../../lib/authDiagnostics'
 import { shouldInvalidateSessionOnUnauthorized } from '../../lib/authSession'
+import { reportManagerResponse } from '../../lib/managerReachability'
 import { DEPLOYED_AGENT_HTTP_ORIGINS } from './config'
 import { resolveBackendBaseUrl } from '../backend/config'
 import { isDocumentedRequest } from './contract'
@@ -205,6 +206,8 @@ export class ServiceApiClient {
       request_id: correlation.request_id, trace_id: correlation.trace_id,
       server_request_id: res.headers.get('x-request-id'), status: res.status,
     })
+    const authenticated = headers.Authorization !== undefined
+    if (res.ok) reportManagerResponse(res.status, undefined, authenticated)
     // 无 body 的成功响应(204 等)
     if (res.status === 204) {
       logResponse(res.status, null)
@@ -230,6 +233,7 @@ export class ServiceApiClient {
       if (isJson) {
         const problem = (await res.json().catch(() => null)) as AgentProblem | null
         logResponse(res.status, problem)
+        reportManagerResponse(res.status, problem?.code, authenticated)
         await handleUnauthorized()
         throw new AgentApiError(
           problem?.detail ?? problem?.title ?? `HTTP ${res.status}`,
