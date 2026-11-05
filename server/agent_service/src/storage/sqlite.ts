@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { segmentOutcomeSummary, usdDecimal, usdUnits, type SegmentOutcomeSummary, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
+import { ConversationFailureStore } from "./conversation-failures.js";
 import { ContextSegmentStore, type SegmentOutcomeBucket, type SegmentOwner } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
@@ -118,6 +119,25 @@ export interface ConversationMetadata {
 }
 
 export type ConversationParticipantRole = "coordinator" | "member";
+
+export interface ConversationWorkspaceParticipant {
+  employee_id: string;
+  role: ConversationParticipantRole;
+  workspace: string;
+  removed_at: string | null;
+}
+
+export interface OwnedConversationWorkspaces {
+  id: string;
+  kind: string;
+  title: string | null;
+  entry_employee_id: string | null;
+  coordinator_employee_id: string | null;
+  /** Legacy conversation-level workspace; participant rows are authoritative when present. */
+  workspace: string;
+  updated_at: string;
+  participants: ConversationWorkspaceParticipant[];
+}
 
 export interface ConversationParticipantSession {
   conversation_id: string;
@@ -406,6 +426,7 @@ export class AgentSqliteStore {
   readonly avatarRoot: string;
   readonly workRecords: WorkRecordRepository;
   readonly contextSegments: ContextSegmentStore;
+  readonly conversationFailures: ConversationFailureStore;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
@@ -644,6 +665,7 @@ export class AgentSqliteStore {
     this.automation = new AutomationTaskRepository(this.db);
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.contextSegments = new ContextSegmentStore(this.db, (owner, buckets) => this.publishSegmentOutcomes(owner, buckets));
+    this.conversationFailures = new ConversationFailureStore(this.db);
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
   }
@@ -828,6 +850,7 @@ export class AgentSqliteStore {
         this.deleteConversationLocalFiles(id, existing.tenantId, existing.memberId);
       }
       this.automation.conversationDeleted(id);
+      this.conversationFailures.deleteConversation(id);
       this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
@@ -849,6 +872,33 @@ export class AgentSqliteStore {
       WHERE conversation_id = ? AND (? = 1 OR removed_at IS NULL)
       ORDER BY CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
     `).all(conversationId, options.includeRemoved ? 1 : 0) as unknown as ConversationParticipantSession[];
+  }
+
+  /**
+   * Owner-scoped conversations with every participant workspace path, removed members included,
+   * newest first. Desktop workbench input only; paths never leave the Agent process.
+   */
+  listOwnedConversationWorkspaces(tenantId: string, memberId: string): OwnedConversationWorkspaces[] {
+    // SAFETY: the selected columns are exactly the row fields declared on OwnedConversationWorkspaces.
+    const conversations = this.db.prepare(`
+      SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at
+      FROM conversation WHERE tenant_id = ? AND member_id = ?
+      ORDER BY updated_at DESC, id DESC
+    `).all(tenantId, memberId) as unknown as Array<Omit<OwnedConversationWorkspaces, "participants">>;
+    // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id; role is CHECK-constrained.
+    const participants = this.db.prepare(`
+      SELECT p.conversation_id, p.employee_id, p.role, p.workspace, p.removed_at
+      FROM conversation_participant_session p JOIN conversation c ON c.id = p.conversation_id
+      WHERE c.tenant_id = ? AND c.member_id = ?
+      ORDER BY p.conversation_id, CASE p.role WHEN 'coordinator' THEN 0 ELSE 1 END, p.employee_id
+    `).all(tenantId, memberId) as unknown as Array<ConversationWorkspaceParticipant & { conversation_id: string }>;
+    const byConversation = new Map<string, ConversationWorkspaceParticipant[]>();
+    for (const { conversation_id: conversationId, ...participant } of participants) {
+      const list = byConversation.get(conversationId) ?? [];
+      list.push(participant);
+      byConversation.set(conversationId, list);
+    }
+    return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
   }
 
   /** Returns the row even for a removed member so a re-added member resumes the same Session. */

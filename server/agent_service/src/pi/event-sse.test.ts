@@ -40,6 +40,34 @@ test("persisted entries use the same redacted boundary as live events", () => {
   assert.equal((entry?.message as { role?: string } | undefined)?.role, "assistant");
 });
 
+test("failed model calls keep a redacted, bounded error on live and persisted assistant messages", () => {
+  const failed = {
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: `Cannot find module '/Users/someone/app/openai-completions.js' api_key=hidden-value ${"x".repeat(400)}`,
+    provider: "secret-provider",
+  };
+  const live = serializePiEvent({ type: "message_end", message: failed } as never)?.message as Record<string, unknown>;
+  const stored = serializePiEntry({ id: "entry-error", type: "message", message: failed })?.message as Record<string, unknown>;
+  for (const message of [live, stored]) {
+    assert.equal(message.stopReason, "error");
+    const error = message.errorMessage as string;
+    assert.match(error, /^Cannot find module/);
+    assert.equal(error.length, 240);
+    assert(!error.includes("/Users/someone"));
+    assert(!error.includes("hidden-value"));
+    assert(!JSON.stringify(message).includes("secret-provider"));
+  }
+  // Only a failed call carries an error; unknown stop reasons and non-assistant roles carry neither.
+  const done = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [], stopReason: "stop", errorMessage: "stale" } } as never)?.message;
+  assert.deepEqual(done, { role: "assistant", content: [], stopReason: "stop" });
+  const odd = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [], stopReason: "provider_internal" } } as never)?.message;
+  assert.deepEqual(odd, { role: "assistant", content: [] });
+  const user = serializePiEvent({ type: "message_end", message: { role: "user", content: "hi", stopReason: "error", errorMessage: "x" } } as never)?.message;
+  assert.deepEqual(user, { role: "user", content: "hi" });
+});
+
 test("Pi tool classification covers memory, RAG, and todo tools", () => {
   assert.equal(classifyToolKind("hindsight_recall"), "memory");
   assert.equal(classifyToolKind("knowledge_search"), "rag");

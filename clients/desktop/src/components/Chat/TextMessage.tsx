@@ -21,6 +21,8 @@ interface TextMessageProps {
   recipientName?: string
   time?: string
   above?: ReactNode
+  /** 气泡下方的附加内容（如失败提示条）；有它时空回复不再显示「无回复内容」。 */
+  below?: ReactNode
   content: string
   isStreaming?: boolean
   attachments?: MessageAttachment[]
@@ -30,7 +32,7 @@ interface TextMessageProps {
 interface MenuPos { x: number; y: number }
 
 export default function TextMessage({
-  conversationId, side, avatar, name, recipientName, time, above, content, isStreaming, attachments, onAvatarClick,
+  conversationId, side, avatar, name, recipientName, time, above, below, content, isStreaming, attachments, onAvatarClick,
 }: TextMessageProps) {
   const [menu, setMenu] = useState<MenuPos | null>(null)
 
@@ -42,8 +44,8 @@ export default function TextMessage({
   return (
     <>
       <MessageBubble
-        side={side} avatar={avatar} name={name} recipientName={recipientName} time={time} above={above}
-        hideBody={!content && !attachments?.length && Boolean(above) && !isStreaming}
+        side={side} avatar={avatar} name={name} recipientName={recipientName} time={time} above={above} below={below}
+        hideBody={!content && !attachments?.length && Boolean(above || below) && !isStreaming}
         isStreaming={isStreaming} onContextMenu={handleContextMenu} onAvatarClick={onAvatarClick}
       >
         <div className={`tm-md${isStreaming ? ' streaming' : ''}`}>
