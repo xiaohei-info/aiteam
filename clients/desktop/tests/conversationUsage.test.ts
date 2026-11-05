@@ -19,7 +19,8 @@ test('累计消耗遍历分页，排除其他会话并去重工作记录', async
 })
 test('未上报、部分缺失和真实零消耗有不同语义', async () => {
   assert.equal((await readConversationUsage('chat', async () => page([]))).tokens, null)
-  assert.equal((await readConversationUsage('chat', async () => page([record('one', 'chat', 20), record('two', 'chat', null)]))).tokens, null)
+  assert.equal((await readConversationUsage('chat', async () => page([record('one', 'chat', 20), record('two', 'chat', null)]))).tokens, 20, '缺用量的运行不影响其他运行的累计')
+  assert.equal((await readConversationUsage('chat', async () => page([record('one', 'chat', null)]))).tokens, null, '全部缺失仍是未上报')
   assert.equal((await readConversationUsage('chat', async () => page([record('one', 'chat', 0)]))).tokens, 0)
 })
 test('分页失败或循环游标不能呈现不完整的累计消耗', async () => {
