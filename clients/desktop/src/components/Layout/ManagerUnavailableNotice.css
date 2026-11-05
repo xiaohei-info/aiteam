@@ -1,0 +1,12 @@
+.manager-unavailable-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
