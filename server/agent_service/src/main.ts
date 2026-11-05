@@ -8,6 +8,7 @@ import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
+import { backfillArtifactPaths } from "./services/artifact-paths.js";
 import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
@@ -45,6 +46,8 @@ mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
 if (environment === "production") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
+// Before any session runs: artifacts captured by older builds get their workspace folder.
+backfillArtifactPaths(store, cwdRoot);
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;

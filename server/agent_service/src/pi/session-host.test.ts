@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
@@ -701,6 +701,81 @@ test("SessionHost exposes local context HUD state, persists thinking changes, an
     assert.equal(fixture.store.readOwnedLocalFile(artifacts[0]!.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), "export const answer = 42;\n");
   } finally {
     await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("captured artifacts keep their folder, skip dependencies, and an edited file replaces its copy", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  let workspace = "";
+  const host = fixture.createHost(undefined, undefined, (_id, _authorization, path) => {
+    workspace = path ?? "";
+    return createControlledResourceLoader("test system prompt");
+  });
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const write = (path: string, text: string) => {
+      mkdirSync(dirname(join(workspace, path)), { recursive: true });
+      writeFileSync(join(workspace, path), text);
+    };
+    fixture.faux.setResponses([() => {
+      write("README.md", "top v1");
+      write("game/README.md", "game");
+      write("game/js/main.js", "main");
+      write("game/node_modules/lib/index.js", "dependency");
+      write("tool/__pycache__/x.py", "cache");
+      write("tool/.env-folder/x.md", "hidden");
+      write("tool/env/pyvenv.cfg", "home = /usr");
+      write("tool/env/lib/site.py", "venv");
+      return fauxAssistantMessage("done");
+    }]);
+    await host.prompt("conversation-1", "make", undefined, caller);
+    const list = () => fixture.store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1", "artifact");
+    assert.deepEqual(list().map((item) => item.path).sort(), ["README.md", "game/README.md", "game/js/main.js"]);
+    assert.deepEqual(list().map((item) => item.filename).sort(), ["README.md", "README.md", "main.js"]);
+
+    fixture.faux.setResponses([() => {
+      write("README.md", "top v2");
+      return fauxAssistantMessage("edited");
+    }]);
+    await host.prompt("conversation-1", "edit", undefined, caller);
+    const top = list().filter((item) => item.path === "README.md");
+    assert.equal(top.length, 1);
+    assert.equal(fixture.store.readOwnedLocalFile(top[0]!.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), "top v2");
+    assert.equal(list().length, 3);
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("group chat artifacts sit under the employee's name", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "产品/经理", revoked: false, synced_at: now },
+    ], [], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord", display_name: "产品/经理", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "artifact-group", kind: "group", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+    await host.initializeConversationParticipants("artifact-group", caller);
+    const workspace = fixture.store.listConversationParticipants("artifact-group").find((item) => item.employee_id === "coordinator")!.workspace;
+    fixture.faux.setResponses([() => {
+      writeFileSync(join(workspace, "plan.md"), "plan");
+      return fauxAssistantMessage("done");
+    }]);
+    await host.prompt("artifact-group", "写计划", undefined, caller);
+    assert.deepEqual(fixture.store.listOwnedLocalFiles("artifact-group", "tenant-1", "member-1", "artifact").map((item) => item.path), ["产品_经理/plan.md"]);
+    await host.dispose();
+  } finally {
     await fixture.close();
   }
 });

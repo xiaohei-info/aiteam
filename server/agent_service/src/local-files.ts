@@ -1,6 +1,10 @@
-import { basename, extname } from "node:path";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { basename, extname, join } from "node:path";
 
 export const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_ARTIFACT_PATH_CHARS = 1_024;
+/** Dependency and cache folders are tool output, not something the employee made. */
+const IGNORED_WORKSPACE_DIRECTORIES = new Set(["node_modules", "__pycache__", "venv"]);
 export const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 export const AUDIO_MIMES = new Set([
   "audio/aac", "audio/flac", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/opus", "audio/wav", "audio/webm", "audio/x-wav",
@@ -99,6 +103,58 @@ export function mimeTypeForFilename(filename: string): string | undefined {
 export function isSafeArtifactFilename(filename: string): boolean {
   const name = basename(filename);
   return name === filename && !name.startsWith(".") && !SENSITIVE_ARTIFACT_NAME.test(name);
+}
+
+/** A `/`-separated path inside a workspace whose every segment is a safe artifact name. */
+export function isSafeArtifactPath(path: string): boolean {
+  if (!path || path.length > MAX_ARTIFACT_PATH_CHARS || /[\u0000-\u001f\u007f\\]/u.test(path)) return false;
+  return path.split("/").every((segment) => segment.length > 0 && segment.length <= 255 && !segment.startsWith("."));
+}
+
+/** One readable path segment from a display name: no separators, control characters or leading dots. */
+export function safePathSegment(value: string | null | undefined, fallback: string): string {
+  const cleaned = (value ?? "").replace(/[\u0000-\u001f\u007f/\\:]+/gu, "_").replace(/^[.\s]+/u, "").trim().slice(0, 64).trim();
+  return cleaned || fallback.replace(/[^A-Za-z0-9_-]+/gu, "_").slice(0, 64) || "_";
+}
+
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  mimeType: string;
+}
+
+/**
+ * Files an employee made in its workspace, keyed by `/`-separated path from the root. Hidden entries,
+ * symlinks, dependency folders and Python virtual environments are skipped.
+ */
+export function scanWorkspaceFiles(root: string): Map<string, WorkspaceFile> {
+  const files = new Map<string, WorkspaceFile>();
+  const visit = (directory: string, prefix: string): void => {
+    let entries;
+    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+      const path = join(directory, entry.name);
+      const pathFromRoot = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (IGNORED_WORKSPACE_DIRECTORIES.has(entry.name) || existsSync(join(path, "pyvenv.cfg"))) continue;
+        visit(path, pathFromRoot);
+        continue;
+      }
+      if (!entry.isFile() || !isSafeArtifactFilename(entry.name) || !isSafeArtifactPath(pathFromRoot)) continue;
+      const mimeType = mimeTypeForFilename(entry.name);
+      if (!mimeType) continue;
+      try {
+        const info = lstatSync(path);
+        if (info.isFile()) files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, mimeType });
+      } catch {
+        // A file can disappear while a tool is writing it; ignore that snapshot.
+      }
+    }
+  };
+  visit(root, "");
+  return files;
 }
 
 /** Keep obvious credentials out of generated artifacts even when a safe extension is used. */
