@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { segmentOutcomeSummary, usdDecimal, usdUnits, type SegmentOutcomeSummary, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
+import { ConversationFailureStore } from "./conversation-failures.js";
 import { ContextSegmentStore, type SegmentOutcomeBucket, type SegmentOwner } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
@@ -425,6 +426,7 @@ export class AgentSqliteStore {
   readonly avatarRoot: string;
   readonly workRecords: WorkRecordRepository;
   readonly contextSegments: ContextSegmentStore;
+  readonly conversationFailures: ConversationFailureStore;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
@@ -663,6 +665,7 @@ export class AgentSqliteStore {
     this.automation = new AutomationTaskRepository(this.db);
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.contextSegments = new ContextSegmentStore(this.db, (owner, buckets) => this.publishSegmentOutcomes(owner, buckets));
+    this.conversationFailures = new ConversationFailureStore(this.db);
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
   }
@@ -847,6 +850,7 @@ export class AgentSqliteStore {
         this.deleteConversationLocalFiles(id, existing.tenantId, existing.memberId);
       }
       this.automation.conversationDeleted(id);
+      this.conversationFailures.deleteConversation(id);
       this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);

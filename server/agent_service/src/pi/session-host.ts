@@ -28,7 +28,7 @@ import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../stora
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { CONTEXT_RESET_ENTRY_TYPE, serializePiEvent } from "./event-sse.js";
+import { CONTEXT_RESET_ENTRY_TYPE, safeText, serializePiEvent } from "./event-sse.js";
 import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
@@ -1480,6 +1480,8 @@ export class SessionHost {
     record.activeSourceRole = command.source.type === "employee" ? "child" : (record.role === "coordinator" ? "coordinator" : "participant");
     record.activeWorkId = workId;
     record.activeStatus = "thinking";
+    // A new run supersedes the participant's last failure, whatever its own outcome.
+    this.options.store.conversationFailures.clear(record.conversationId, record.employeeId);
     record.activeMessage = undefined;
     const workspaceBefore = this.workspaceSnapshot(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
@@ -1538,12 +1540,22 @@ export class SessionHost {
         ? new PreExecutionAuthorizationError(error instanceof Error ? error.message : undefined)
         : error;
       if (!settled) {
-        const message = terminalError instanceof Error ? terminalError.message : "Prompt execution failed";
+        // Redact before storing: the stored copy is served again later, outside the event serializer.
+        const message = safeText(terminalError instanceof Error ? terminalError.message : "Prompt execution failed", 240);
+        const code = errorCode(terminalError);
+        // Pi wrote nothing for this run, so the transcript cannot explain the missing reply after a
+        // restart; keep the reason until the participant runs again. A user's own abort needs none.
+        if (!record.aborting) {
+          this.options.store.conversationFailures.record({
+            conversationId: record.conversationId, employeeId: record.employeeId, workId,
+            errorCode: code, errorMessage: message, failedAt: Date.now(),
+          });
+        }
         this.publish(record, {
           type: "agent_settled",
           failed: true,
-          error_code: errorCode(terminalError),
-          error_message: message.slice(0, 240),
+          error_code: code,
+          error_message: message,
         } as never);
       }
       throw terminalError;
