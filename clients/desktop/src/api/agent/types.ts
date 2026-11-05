@@ -115,6 +115,18 @@ export interface ConversationStateOut {
   conversation_id: string
   state: ConversationStateValue
   prompting: boolean
+  /** 各参与者最近一次在执行前就失败的运行（不进会话记录）；参与者再次执行时清除。旧版 Agent 不返回。 */
+  failures?: ConversationFailureOut[]
+}
+
+/** 一次在 Pi 写入会话前就失败的执行。 */
+export interface ConversationFailureOut {
+  /** 群聊中失败的参与者；单聊为 null。 */
+  employee_id: string | null
+  work_id: string | null
+  error_code: string
+  error_message: string
+  failed_at: string
 }
 
 // GET /conversations/:id/receipts/:idempotency_key。202 只表示已接受，执行在后台异步开始；

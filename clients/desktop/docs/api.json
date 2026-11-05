@@ -3013,7 +3013,8 @@
         "required": [
           "conversation_id",
           "state",
-          "prompting"
+          "prompting",
+          "failures"
         ],
         "properties": {
           "conversation_id": {
@@ -3027,10 +3028,73 @@
           "prompting": {
             "type": "boolean",
             "description": "是否正在执行提示；这是瞬时运行态，不会改变持久化 state。"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationFailureOut"
+            },
+            "description": "各参与者最近一次在执行前就失败的运行（这类失败不进会话记录）；参与者再次执行时清除。"
           }
         },
         "additionalProperties": false,
-        "description": "会话运行状态；state 是持久化状态，prompting 是当前是否有提示执行。"
+        "description": "会话运行状态；state 是持久化状态，prompting 是当前是否有提示执行，failures 是重启后仍需提示的执行前失败。"
+      },
+      "ConversationFailureOut": {
+        "type": "object",
+        "required": [
+          "employee_id",
+          "work_id",
+          "error_code",
+          "error_message",
+          "failed_at"
+        ],
+        "properties": {
+          "employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "description": "授权员工/专家 ID。"
+              },
+              {
+                "type": "null",
+                "description": "授权员工/专家 ID。"
+              }
+            ],
+            "description": "群聊中失败的参与者；单聊为 null。"
+          },
+          "work_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "description": "work id 字段值。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "失败那次执行的工作记录 ID；未建立工作记录时为 null。"
+          },
+          "error_code": {
+            "type": "string",
+            "minLength": 1,
+            "description": "稳定的失败代码。"
+          },
+          "error_message": {
+            "type": "string",
+            "description": "有界的失败摘要，与 agent_settled 事件中的 error_message 相同。"
+          },
+          "failed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "失败时间。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "一次在 Pi 写入会话前就失败的执行。"
       },
       "ConversationStateEnvelope": {
         "type": "object",
@@ -9756,7 +9820,8 @@
                       "data": {
                         "conversation_id": "conversation-1",
                         "state": "active",
-                        "prompting": false
+                        "prompting": false,
+                        "failures": []
                       }
                     }
                   }

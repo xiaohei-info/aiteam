@@ -27,6 +27,7 @@ import type {
   ConversationReconciliation,
   ExpertProjection,
   SolutionProjection,
+  ConversationFailureOut,
 } from '../api/agent/types'
 import type { EventSubscription } from '../api/agent/events'
 import {
@@ -35,7 +36,7 @@ import {
   resolvePiEventSenderIdentity,
   type PiStreamCallbacks,
 } from '../lib/piConverters'
-import { applyLocalFailures, settledFailure, type LocalFailure, type ReplyFailure } from '../lib/replyFailure'
+import { applyLocalFailures, describeFailure, settledFailure, type LocalFailure, type ReplyFailure } from '../lib/replyFailure'
 import {
   createSettleTracker,
   type SettleTracker,
@@ -310,6 +311,36 @@ const localFailures = new Map<string, LocalFailure<Message>[]>()
 
 function withLocalFailures(convId: string, messages: Message[]): Message[] {
   return applyLocalFailures(messages, localFailures.get(convId) ?? [])
+}
+
+/**
+ * Agent 记下的执行前失败：应用重启后内存里没有本轮失败，按它补上提示。
+ * 本轮实时看到的失败更完整，已有时不覆盖。
+ */
+function rememberStoredFailures(
+  convId: string,
+  stored: readonly ConversationFailureOut[] | undefined,
+  isGroup: boolean,
+  resolveName: (employeeId: string) => string | undefined,
+): void {
+  if (!stored?.length || localFailures.has(convId)) return
+  localFailures.set(convId, stored.map((item) => {
+    const senderEmployeeId = isGroup ? item.employee_id ?? undefined : undefined
+    const workId = item.work_id ?? undefined
+    const failedAt = new Date(item.failed_at)
+    const at = Number.isNaN(failedAt.getTime()) ? new Date() : failedAt
+    return {
+      workId,
+      senderEmployeeId,
+      failure: describeFailure('execution', item.error_message),
+      message: {
+        id: `failure:${convId}:${item.employee_id ?? ''}`,
+        workId, role: 'assistant', msgType: 'text', content: '', time: hhmm(at), status: 'delivered',
+        senderEmployeeId, senderName: senderEmployeeId ? resolveName(senderEmployeeId) ?? senderEmployeeId : undefined,
+        _ts: at.getTime(),
+      },
+    }
+  }))
 }
 
 function clearSubscription(convId: string): void {
@@ -884,6 +915,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const subscription = subscriptions.get(convId)
       if (subscription) subscription.historyEntries = entriesRes.entries ?? []
       const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
+      rememberStoredFailures(convId, stateRes?.failures, false, resolveEmployeeName)
       const msgs = mergePendingProjection(
         withLocalFailures(convId, dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName))),
         subscription,
@@ -944,6 +976,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const subscription = subscriptions.get(groupId)
       if (subscription) subscription.historyEntries = entriesRes.entries ?? []
       const resolveEmployeeName = (id: string) => get().workbenchEmployees.find((e) => e.employeeId === id)?.displayName
+      rememberStoredFailures(groupId, stateRes?.failures, true, (id) => (
+        get().groups.find((g) => g.id === groupId)?.members?.find((m) => m.employee_id === id)?.display_name ?? resolveEmployeeName(id)
+      ))
       const msgs = mergePendingProjection(
         withLocalFailures(groupId, dedupById(entriesToMessages(entriesRes.entries ?? [], resolveEmployeeName))),
         subscription,
