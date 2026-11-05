@@ -37,7 +37,7 @@ test("Agent platform metadata, local projections, readiness, office, identity an
     const listed = await fetch(`${base}/api/agent/conversations`, { headers: auth });
     assert.equal((await listed.json() as { data: unknown[] }).data.length, 1);
     const runtimeState = await fetch(`${base}/api/agent/conversations/${conversation.id}/state`, { headers: auth });
-    assert.deepEqual((await runtimeState.json() as { data: { state: string; prompting: boolean } }).data, { conversation_id: conversation.id, state: "active", prompting: false });
+    assert.deepEqual((await runtimeState.json() as { data: { state: string; prompting: boolean } }).data, { conversation_id: conversation.id, state: "active", prompting: false, failures: [] });
     const updated = await fetch(`${base}/api/agent/conversations/${conversation.id}/state`, { method: "PUT", headers: auth, body: JSON.stringify({ state: "paused" }) });
     assert.equal((await updated.json() as { data: { state: string } }).data.state, "paused");
     fixture.faux.setResponses([]);
