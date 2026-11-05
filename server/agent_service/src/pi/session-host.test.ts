@@ -780,6 +780,83 @@ test("group chat artifacts sit under the employee's name", async () => {
   }
 });
 
+test("a reply over 2000 characters is also saved as a Markdown artifact and linked from its entry", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const host = fixture.createHost();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: now },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1", title: "热门/AI 项目" });
+    const long = `# 总结\n${"字".repeat(2_000)}`;
+    const exactly = "字".repeat(2_000);
+    fixture.faux.setResponses([
+      fauxAssistantMessage(exactly),
+      fauxAssistantMessage(long),
+      fauxAssistantMessage(long),
+      // Only the chat redaction rules catch a bare key; the file would otherwise carry it unredacted.
+      fauxAssistantMessage(`${long} 令牌是 sk-proj-abcdefghijklmnopqrstuvwxyz012345`),
+    ]);
+    const savedAtSettle: number[] = [];
+    await host.subscribe("conversation-1", (envelope) => {
+      if ((envelope.event as { type?: string }).type === "agent_settled") savedAtSettle.push(fixture.store.listReplyFiles("conversation-1", "tenant-1", "member-1").size);
+    });
+    for (const text of ["short", "long", "again", "secret"]) await host.prompt("conversation-1", text, undefined, caller);
+    assert.deepEqual(savedAtSettle, [0, 1, 2, 2], "the file exists before clients hear the run settled");
+
+    const files = fixture.store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1", "artifact");
+    assert.equal(files.length, 2, "exactly 2000 characters and a reply with a credential stay chat-only");
+    const [first, second] = files;
+    assert.match(first!.path!, /^回复\/热门_AI 项目-\d{4}-\d{4}\.md$/u);
+    assert.equal(second!.path, first!.path!.replace(/\.md$/u, "-2.md"), "a second reply in the same minute gets its own name");
+    assert.equal(first!.filename, first!.path!.split("/").at(-1));
+    assert.equal(first!.mime_type, "text/markdown");
+    assert.equal(fixture.store.readOwnedLocalFile(first!.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), `${long}\n`);
+
+    const assistants = (await host.entries("conversation-1", caller)).filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    const linked = assistants.map((entry) => (entry as { reply_file?: { id: string; chars: number } }).reply_file);
+    assert.deepEqual(linked.map((file) => file?.id), [undefined, first!.id, second!.id, undefined]);
+    assert.equal(linked[1]!.chars, [...long.trim()].length);
+
+    fixture.store.deleteOwnedLocalFile(first!.id, "conversation-1", "tenant-1", "member-1");
+    const after = (await host.entries("conversation-1", caller)).filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+    assert.equal((after[1] as { reply_file?: unknown }).reply_file, undefined, "once the file is deleted the chat shows the full reply again");
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});
+
+test("a failed run saves no reply file, and group replies sit under the employee's name", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "coord", display_name: "产品经理", revoked: false, synced_at: now },
+    ], [], [
+      { employee_id: "coordinator", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "coord", display_name: "产品经理", tool_policy: { allowed_tools: [] } },
+    ]);
+    fixture.store.createConversation({ id: "reply-group", kind: "group", title: "", tenantId: "tenant-1", memberId: "member-1", coordinatorEmployeeId: "coordinator", sessionFile: "", workspace: "" });
+    const host = fixture.createHost();
+    await host.initializeConversationParticipants("reply-group", caller);
+    const long = "长".repeat(2_001);
+    fixture.faux.setResponses([fauxAssistantMessage(long, { stopReason: "error", errorMessage: "boom" })]);
+    await host.prompt("reply-group", "失败", undefined, caller).catch(() => undefined);
+    assert.equal(fixture.store.listOwnedLocalFiles("reply-group", "tenant-1", "member-1", "artifact").length, 0);
+    fixture.faux.setResponses([fauxAssistantMessage(long)]);
+    await host.prompt("reply-group", "成功", undefined, caller);
+    const paths = fixture.store.listOwnedLocalFiles("reply-group", "tenant-1", "member-1", "artifact").map((item) => item.path);
+    assert.equal(paths.length, 1);
+    assert.match(paths[0]!, /^产品经理\/回复\/产品经理-\d{4}-\d{4}\.md$/u, "an untitled conversation is named after the employee");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost aborts an active Pi prompt", async () => {
   const fixture = await createFixture();
   try {

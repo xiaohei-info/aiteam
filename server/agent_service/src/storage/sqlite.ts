@@ -321,6 +321,14 @@ export interface LocalFileRecord {
   referenced_at: string | null;
 }
 
+/** A long employee reply saved as an artifact, keyed by the `entry_ref` of the message it came from. */
+export interface ReplyFile {
+  id: string;
+  filename: string;
+  path: string | null;
+  chars: number;
+}
+
 export type UnplacedArtifact = Pick<LocalFileRecord, "id" | "conversation_id" | "tenant_id" | "member_id" | "filename" | "byte_size" | "sha256">;
 
 interface LocalFileRow extends LocalFileRecord {
@@ -645,6 +653,8 @@ export class AgentSqliteStore {
       "ALTER TABLE usage_summary_outbox ADD COLUMN cost_total_decimal TEXT",
       "ALTER TABLE local_file ADD COLUMN referenced_at TEXT",
       "ALTER TABLE local_file ADD COLUMN path TEXT",
+      "ALTER TABLE local_file ADD COLUMN source_entry_ref TEXT",
+      "ALTER TABLE local_file ADD COLUMN reply_chars INTEGER",
       "ALTER TABLE idempotency_receipt ADD COLUMN failure_code TEXT",
       "ALTER TABLE idempotency_receipt ADD COLUMN failure_detail TEXT",
       "ALTER TABLE schedule_retry ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''",
@@ -1007,6 +1017,8 @@ export class AgentSqliteStore {
     data: Buffer;
     /** IDs this file replaces: they stop counting toward the quota and go in the same transaction. */
     replaces?: readonly string[];
+    /** Set when the file holds the full text of one employee reply. */
+    reply?: { entryRef: string; chars: number };
   }): LocalFileRecord {
     if (input.data.byteLength > LOCAL_FILE_MAX_BYTES) throw new Error("Local file exceeds maximum size");
     if (!input.filename || input.filename.length > LOCAL_FILE_MAX_NAME || input.filename.includes("/") || input.filename.includes("\\") || /[\u0000-\u001f\u007f]/u.test(input.filename)) throw new Error("Invalid local file name");
@@ -1042,7 +1054,7 @@ export class AgentSqliteStore {
       quota.bytes -= replaced.reduce((total, file) => total + file.byte_size, 0);
       if (quota.count >= MAX_LOCAL_FILES_PER_CONVERSATION) throw new Error(`Local file count limit is ${MAX_LOCAL_FILES_PER_CONVERSATION} per conversation`);
       if (quota.bytes + input.data.byteLength > MAX_LOCAL_FILE_BYTES_PER_CONVERSATION) throw new Error(`Local file storage limit is ${MAX_LOCAL_FILE_BYTES_PER_CONVERSATION} bytes per conversation`);
-      this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.path, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at);
+      this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at, source_entry_ref, reply_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.path, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at, input.reply?.entryRef ?? null, input.reply?.chars ?? null);
       for (const file of replaced) {
         this.db.prepare("DELETE FROM local_file WHERE id = ?").run(file.id);
         removedFiles.push(file.storage_path);
@@ -1099,6 +1111,12 @@ export class AgentSqliteStore {
     this.db.prepare("DELETE FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").run(conversationId, tenantId, memberId);
     for (const path of paths) if (path) rmSync(path, { force: true });
     try { rmdirSync(join(this.attachmentRoot, conversationFileDirName(conversationId))); } catch { /* still holds another owner's files, or never existed */ }
+  }
+
+  /** Saved long replies of one conversation by the `entry_ref` of their source message. */
+  listReplyFiles(conversationId: string, tenantId: string, memberId: string): Map<string, ReplyFile> {
+    const rows = this.db.prepare("SELECT id, filename, path, reply_chars AS chars, source_entry_ref FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND kind = 'artifact' AND source_entry_ref IS NOT NULL ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId) as unknown as Array<ReplyFile & { source_entry_ref: string }>;
+    return new Map(rows.map(({ source_entry_ref: entryRef, ...file }) => [entryRef, file]));
   }
 
   /** Artifacts captured before paths were recorded; `backfillArtifactPaths` places them once. */

@@ -64,6 +64,20 @@ export interface PiEventMetadata {
  * boundary as live events. Conversation history is local content, but it still
  * must not bypass credential/path filtering when returned over HTTP.
  */
+/** `{ id, filename, path, chars }` of a reply saved as an artifact; anything else is dropped. */
+function serializeReplyFile(value: unknown): Record<string, unknown> | undefined {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.chars !== "number" || !Number.isSafeInteger(raw.chars) || raw.chars < 0) return undefined;
+  const id = boundedIdentifier(raw.id, MAX_IDENTIFIER_CHARS);
+  if (!id || typeof raw.filename !== "string" || !raw.filename) return undefined;
+  return {
+    id,
+    filename: safeMessageText(raw.filename, 255),
+    path: typeof raw.path === "string" && raw.path ? safeMessageText(raw.path, 1_024) : null,
+    chars: raw.chars,
+  };
+}
+
 export function serializePiEntry(entry: unknown): Record<string, unknown> | undefined {
   const raw = asRecord(entry);
   if (!raw || typeof raw.id !== "string" || typeof raw.type !== "string") return undefined;
@@ -77,6 +91,8 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   }
   const message = serializeMessage(raw.message, MAX_MESSAGE_TEXT_CHARS);
   if (message) result.message = message;
+  const replyFile = serializeReplyFile(raw.reply_file);
+  if (replyFile) result.reply_file = replyFile;
   for (const key of ["work_id", "entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
     const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
     if (value) result[key] = value;
@@ -398,7 +414,7 @@ function boundText(value: string, max: number): string {
 const ANY_SECRET = new RegExp(`${URL_SECRET_PARAM.source}|${INLINE_SECRET.source}`, "gi");
 
 /** Hides credentials; in a URL query only the value goes, so the rest of the URL stays readable. */
-function redactSecrets(value: string): string {
+export function redactSecrets(value: string): string {
   return value.replace(ANY_SECRET, (_match, urlParameter: string | undefined) => `${urlParameter ?? ""}[内容已隐藏]`);
 }
 

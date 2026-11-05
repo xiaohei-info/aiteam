@@ -350,6 +350,12 @@ const ConversationEntry = Type.Object({
   source_employee_id: Type.Optional(Type.String({ description: "产生该条目的员工 ID。" })),
   source_employee_display_name: Type.Optional(Type.String({ description: "产生该条目的员工展示名。" })),
   source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "消息来源角色。" })),
+  reply_file: Type.Optional(Type.Object({
+    id: Type.String({ minLength: 1, description: "产物 ID，用于 /artifacts/{artifact_id} 打开或下载。" }),
+    filename: Type.String({ minLength: 1, maxLength: 255, description: "文件名，例如 热门AI项目总结-1105-2010.md。" }),
+    path: Type.Union([Type.String({ minLength: 1, maxLength: 1024 }), Type.Null()], { description: "产物在会话目录中的相对路径，例如 回复/热门AI项目总结-1105-2010.md。" }),
+    chars: Type.Integer({ minimum: 0, description: "回复全文字数（按 Unicode 字符计）。" }),
+  }, { additionalProperties: false, description: "员工一次执行的最后一条回复超过 2000 字时，全文另存成的 Markdown 产物；只出现在 assistant 消息条目上。文件被删除后不再返回，客户端显示全文。" })),
 }, { $id: "ConversationEntry", additionalProperties: true, description: "会话历史条目（仅返回脱敏后的持久化视图）。", "x-dynamic-json": true });
 const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "按 timestamp、conversation ID、participant ID、Session append ordinal、Pi entry ID 正序；同逻辑输入去重。" }) }, { additionalProperties: false }), page: Type.Optional(Type.Ref("Page")) }, { $id: "ConversationEntriesEnvelope", description: "无查询参数保持旧 data 形状且不返回 page；提供 limit/cursor/entry_ref 时分页。Pi JSONL 为正文事实源，只读不创建 Session。" });
 const PiSseToolCall = Type.Object({
