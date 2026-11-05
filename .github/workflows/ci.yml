@@ -21,6 +21,8 @@ on:
       - "scripts/check-openapi.sh"
       - "scripts/check_openapi.py"
       - "scripts/export_openapi.py"
+      - "scripts/build-agent-package.mjs"
+      - "scripts/agent-package-files*.mjs"
       - ".github/workflows/ci.yml"
   pull_request:
     # main = 终态总控边界；feature/** = v1 开发期的集成分支（PR 多打到这里）。
@@ -31,6 +33,8 @@ on:
       - "scripts/check-openapi.sh"
       - "scripts/check_openapi.py"
       - "scripts/export_openapi.py"
+      - "scripts/build-agent-package.mjs"
+      - "scripts/agent-package-files*.mjs"
       - ".github/workflows/ci.yml"
 
 # 同一 PR/分支的旧 run 直接作废——过期提交的结果没有信息量，只烧分钟数。
@@ -160,6 +164,8 @@ jobs:
         run: pnpm check
       - name: Sandbox dry-run contract
         run: bash scripts/check-agent-sandbox.sh --dry-run
+      - name: Agent package file list
+        run: node --test scripts/agent-package-files.test.mjs
       - name: Test Agent
         working-directory: server/agent_service
         run: pnpm test
