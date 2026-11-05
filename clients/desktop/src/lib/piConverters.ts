@@ -51,17 +51,21 @@ export interface SplitParts {
   content: string
   thinkingSteps: ThinkingStep[]
   toolCalls: ToolCall[]
+  /** 有文本片段被 Agent 按长度上限截断。 */
+  truncated: boolean
 }
 
 export function splitContentParts(parts: ConversationContentPart[]): SplitParts {
   const texts: string[] = []
   const thinkingSteps: ThinkingStep[] = []
   const toolCalls: ToolCall[] = []
+  let truncated = false
 
   for (const part of parts) {
     if (!part || typeof part !== 'object') continue
     if (part.type === 'text') {
       if (typeof part.text === 'string') texts.push(part.text)
+      if (part.truncated === true) truncated = true
     } else if (part.type === 'thinking') {
       const text = typeof part.thinking === 'string' ? part.thinking : ''
       if (!text) continue
@@ -99,6 +103,7 @@ export function splitContentParts(parts: ConversationContentPart[]): SplitParts 
     content: texts.join(''),
     thinkingSteps,
     toolCalls,
+    truncated,
   }
 }
 
@@ -113,10 +118,12 @@ function messageToFields(msg: ConversationMessage): {
   toolCalls?: ToolCall[]
   isError?: boolean
   localContext?: LocalContextAction
+  truncated: boolean
 } {
   let content = ''
   let thinkingSteps: ThinkingStep[] | undefined
   let toolCalls: ToolCall[] | undefined
+  let truncated = false
 
   const raw = msg.content
   if (typeof raw === 'string') {
@@ -124,6 +131,7 @@ function messageToFields(msg: ConversationMessage): {
   } else if (Array.isArray(raw)) {
     const split = splitContentParts(raw)
     content = split.content
+    truncated = split.truncated
     if (split.thinkingSteps.length > 0) thinkingSteps = split.thinkingSteps
     if (split.toolCalls.length > 0) toolCalls = split.toolCalls
   }
@@ -138,6 +146,7 @@ function messageToFields(msg: ConversationMessage): {
     toolCalls,
     isError: msg.isError,
     localContext: local.localContext,
+    truncated,
   }
 }
 
@@ -288,7 +297,7 @@ export function entriesToMessages(
       // 无 message 的 entry(纯系统条目)暂不展示,交给上游按需扩展。
       continue
     }
-    const { role, content, thinkingSteps, toolCalls, localContext } = messageToFields(message)
+    const { role, content, thinkingSteps, toolCalls, localContext, truncated } = messageToFields(message)
     const failure = assistantFailure(message)
 
     if (role === 'toolResult') {
@@ -327,6 +336,7 @@ export function entriesToMessages(
       recipientEmployeeId,
       recipientName,
       ...(localContext ? { localContext } : {}),
+      ...(truncated ? { truncated } : {}),
       _ts: ms,
       ...(failure ? { failure } : {}),
     })
@@ -452,6 +462,7 @@ function groupWorkMessages(messages: Message[]): Message[] {
       entryRefs: [...(previous.entryRefs ?? [previous.id]), ...(message.entryRefs ?? [message.id])],
       recipientEmployeeId: previous.recipientEmployeeId ?? message.recipientEmployeeId,
       recipientName: previous.recipientName ?? message.recipientName,
+      ...(previous.truncated || message.truncated ? { truncated: true } : {}),
       ...(message.failure ? { failure: message.failure } : {}),
     }
   }

@@ -3383,7 +3383,11 @@
               },
               "text": {
                 "type": "string",
-                "description": "文本片段。"
+                "description": "文本片段。user/assistant 正文在历史条目和 message_end 中完整返回（仅超过 200000 字时截断），message_update 快照最多 4000 字；toolResult 文本最多 4000 字。"
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "user/assistant 正文被长度上限截断时为 true；未截断时不返回。"
               }
             },
             "additionalProperties": false,

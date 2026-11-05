@@ -11,6 +11,9 @@ import { getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
 import { collectTodoTaskCards, withToolCallSteps } from '../../lib/todoTaskCard'
 import { collectLocalCitationHits } from '../../lib/localDirectoryCitations'
 
+/** Agent 只在正文超过 20 万字时截断（文本片段 truncated）。 */
+const TRUNCATED_NOTE = '内容过长，仅显示前 20 万字。'
+
 export interface MessageRowProps {
   conversationId: string
   msg: Message
@@ -95,8 +98,11 @@ export const MessageRow = memo(function MessageRow({
             </>
           : undefined
       }
-      below={msg.role === 'assistant' && msg.failure && !isThisStreaming
-        ? <ReplyFailureNotice failure={msg.failure} onRetry={onRetry} />
+      below={(msg.truncated || (msg.role === 'assistant' && msg.failure)) && !isThisStreaming
+        ? <>
+            {msg.truncated && <div className="tm-truncated-note">{TRUNCATED_NOTE}</div>}
+            {msg.role === 'assistant' && msg.failure && <ReplyFailureNotice failure={msg.failure} onRetry={onRetry} />}
+          </>
         : undefined}
       content={displayContent}
       isStreaming={isThisStreaming}

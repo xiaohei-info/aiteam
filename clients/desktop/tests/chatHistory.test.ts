@@ -586,6 +586,17 @@ test('history keeps the failure as its own field, last attempt of a work wins', 
   assert.equal('failure' in plain, false)
 })
 
+test('a body the Agent cut at its length cap is flagged, also after merging a work', () => {
+  const reply = (id: string, text: string, truncated?: boolean) => ({ id, entry_ref: `ref-${id}`, type: 'message', work_id: 'w1', source_employee_id: 'pm',
+    message: { role: 'assistant', content: [{ type: 'text', text, ...(truncated ? { truncated } : {}) }], stopReason: 'stop' } })
+  const [full] = entriesToMessages([reply('a', '完整的长报告')] as any)
+  assert.equal(full.content, '完整的长报告')
+  assert.equal('truncated' in full, false)
+  const [merged] = entriesToMessages([reply('b', '前半…', true), reply('c', '后续')] as any)
+  assert.equal(merged.content, '前半…\n\n后续')
+  assert.equal(merged.truncated, true)
+})
+
 test('assistant message_end reports a failure only for failed model calls', () => {
   const seen: Array<[string | undefined, string | undefined]> = []
   const unknown: string[] = []
