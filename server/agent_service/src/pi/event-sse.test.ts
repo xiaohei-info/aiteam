@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { homedir } from "node:os";
-import { classifyToolKind, failureText, MAX_FAILURE_MESSAGE_CHARS, serializePiEntry, serializePiEvent } from "./event-sse.js";
+import { classifyToolKind, failureText, MAX_FAILURE_MESSAGE_CHARS, MAX_MESSAGE_TEXT_CHARS, serializePiEntry, serializePiEvent } from "./event-sse.js";
 
 test("Pi SSE serializer keeps bounded ordinary tool summaries without credential/path fields", () => {
   const event = serializePiEvent({
@@ -191,8 +191,48 @@ test("execution work ID rides persisted entries, survives bounding, and is never
   // The same field is live SSE metadata; runtime-supplied values never pass through.
   assert.equal(serializePiEvent({ type: "agent_settled", work_id: "runtime-forged" } as never)?.work_id, undefined);
   // Oversized entries collapse to the minimal shape, which must still carry the grouping key.
-  const bounded = serializePiEntry({ id: "entry", type: "message", work_id: id, message: { role: "assistant", content: "x".repeat(100_000) } });
+  const thinking = Array.from({ length: 8 }, () => ({ type: "thinking", thinking: "x".repeat(4_000) }));
+  const bounded = serializePiEntry({ id: "entry", type: "message", work_id: id, message: { role: "assistant", content: thinking } });
+  assert.equal(bounded?.message, undefined);
   assert.equal(bounded?.work_id, id);
+});
+
+test("user and assistant message bodies are returned in full; the cap only stops runaway text", () => {
+  // A long Chinese report is ~3 bytes per character, far past the 24KB event budget.
+  const report = `开头${"热门项目总结。".repeat(9_000)}结尾 /Users/edy/report.md api_key=sk-secret`;
+  const expected = report.replace("api_key=sk-secret", "[内容已隐藏]");
+  for (const role of ["assistant", "user"] as const) {
+    const entry = serializePiEntry({ id: "e", type: "message", message: { role, content: [{ type: "text", text: report }] } });
+    assert.deepEqual((entry?.message as { content: unknown[] }).content, [{ type: "text", text: expected }], role);
+  }
+  const plain = serializePiEntry({ id: "e", type: "message", message: { role: "assistant", content: report } });
+  assert.equal((plain?.message as { content: string }).content, expected);
+  const end = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: report }] } } as never);
+  assert.deepEqual((end?.message as { content: unknown[] }).content, [{ type: "text", text: expected }]);
+
+  const runaway = serializePiEntry({ id: "e", type: "message", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(MAX_MESSAGE_TEXT_CHARS + 10) }] } });
+  const [cut] = (runaway?.message as { content: Array<{ text: string; truncated?: boolean }> }).content;
+  assert.equal(cut.text.length, MAX_MESSAGE_TEXT_CHARS);
+  assert.equal(cut.text.endsWith("…"), true);
+  assert.equal(cut.truncated, true);
+
+  // Thinking and tool output keep the 4000-character diagnostic cap.
+  const other = serializePiEntry({ id: "e", type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "t".repeat(5_000) }] } });
+  assert.equal((other?.message as { content: Array<{ thinking: string }> }).content[0].thinking.length, 4_000);
+  const tool = serializePiEntry({ id: "e", type: "message", message: { role: "toolResult", toolCallId: "c", toolName: "bash", content: [{ type: "text", text: "o".repeat(5_000) }] } });
+  assert.deepEqual((tool?.message as { content: unknown[] }).content, [{ type: "text", text: `${"o".repeat(3_999)}…` }]);
+});
+
+test("live message_update snapshots stay short and never push the delta out of the event", () => {
+  const event = serializePiEvent({
+    type: "message_update",
+    message: { role: "assistant", content: [{ type: "thinking", thinking: "t".repeat(4_000) }, { type: "text", text: "字".repeat(8_000) }] },
+    assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "字" },
+  } as never);
+  const [, text] = (event?.message as { content: Array<{ text?: string; truncated?: boolean }> }).content;
+  assert.equal(text.text?.length, 4_000);
+  assert.equal(text.truncated, true);
+  assert.deepEqual(event?.assistantMessageEvent, { type: "text_delta", contentIndex: 1, delta: "字" });
 });
 
 test("approval_required summary keeps full file paths but still hides credentials and is bounded", () => {
