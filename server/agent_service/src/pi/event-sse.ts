@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 const ALLOWED_EVENTS = new Set([
@@ -31,7 +32,7 @@ const MAX_SOURCE_NAME_CHARS = 256;
 const MAX_OBJECT_KEYS = 24;
 const MAX_ARRAY_ITEMS = 32;
 const MAX_JSON_DEPTH = 4;
-const MAX_ERROR_MESSAGE_CHARS = 240;
+export const MAX_FAILURE_MESSAGE_CHARS = 1_000;
 const STOP_REASONS = new Set(["stop", "length", "toolUse", "deferred", "aborted", "error"]);
 
 /** Session custom entry marking where a new model context starts; never sent to the LLM. */
@@ -131,11 +132,11 @@ export function serializePiEvent(event: AgentSessionEvent, extra: PiEventMetadat
     if (Array.isArray(raw.messages)) result.message_count = Math.min(raw.messages.length, MAX_ARRAY_ITEMS);
     copyBoolean(result, raw, "failed");
     copyIdentifier(result, raw, "error_code");
-    copyText(result, raw, "error_message");
+    copyFailure(result, raw, "error_message");
   } else if (raw.type === "agent_settled") {
     copyBoolean(result, raw, "failed");
     copyIdentifier(result, raw, "error_code");
-    copyText(result, raw, "error_message");
+    copyFailure(result, raw, "error_message");
   } else if (raw.type === "auto_retry_start") {
     copyInteger(result, raw, "attempt");
     copyInteger(result, raw, "maxAttempts");
@@ -195,7 +196,7 @@ function serializeMessage(value: unknown): Record<string, unknown> | undefined {
   if (raw.role === "assistant") {
     // A failed model call ends with an empty message whose only explanation is errorMessage.
     if (typeof raw.stopReason === "string" && STOP_REASONS.has(raw.stopReason)) result.stopReason = raw.stopReason;
-    if (raw.stopReason === "error" && typeof raw.errorMessage === "string") result.errorMessage = safeText(raw.errorMessage, MAX_ERROR_MESSAGE_CHARS);
+    if (raw.stopReason === "error" && typeof raw.errorMessage === "string") result.errorMessage = failureText(raw.errorMessage);
   }
   if (raw.role === "toolResult") {
     copyIdentifier(result, raw, "toolCallId");
@@ -346,6 +347,10 @@ function copyText(result: Record<string, unknown>, raw: Record<string, unknown>,
   if (typeof raw[key] === "string") result[key] = safeText(raw[key] as string, MAX_TEXT_CHARS);
 }
 
+function copyFailure(result: Record<string, unknown>, raw: Record<string, unknown>, key: string): void {
+  if (typeof raw[key] === "string") result[key] = failureText(raw[key] as string);
+}
+
 function copyInteger(result: Record<string, unknown>, raw: Record<string, unknown>, key: string): void {
   if (typeof raw[key] === "number" && Number.isInteger(raw[key]) && raw[key] >= 0) result[key] = raw[key];
 }
@@ -386,6 +391,24 @@ function redactSecrets(value: string): string {
 
 export function safeText(value: string, max: number): string {
   return boundText(redactInlinePaths(redactSecrets(value)), max);
+}
+
+/**
+ * Failure reasons (assistant `errorMessage`, `agent_settled` / `agent_end` `error_message`) keep file
+ * paths so the copy a user sends to developers says which file failed. Credentials are still hidden
+ * and the home directory becomes `~`, so the account name does not travel with it. The desktop hides
+ * paths when it displays the reason and copies the full text.
+ */
+export function failureText(value: string, home: string = homedir()): string {
+  return boundText(shortenHome(redactSecrets(value), home), MAX_FAILURE_MESSAGE_CHARS);
+}
+
+function shortenHome(value: string, home: string): string {
+  const root = home.replace(/[\\/]+$/, "");
+  if (root.length < 2) return value;
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Only a whole directory name: `/Users/ed` must not turn `/Users/edy/…` into `~y/…`.
+  return value.replace(new RegExp(`${escaped}(?=[\\\\/\\s"'<>()\\[\\]{}]|$)`, "g"), "~");
 }
 
 /**

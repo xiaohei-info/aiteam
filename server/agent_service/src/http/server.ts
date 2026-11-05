@@ -240,7 +240,7 @@ const ConversationFailureOut = Type.Object({
   employee_id: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "群聊中失败的参与者；单聊为 null。" }),
   work_id: Type.Union([Type.String({ minLength: 1 }), Type.Null()], { description: "失败那次执行的工作记录 ID；未建立工作记录时为 null。" }),
   error_code: Type.String({ minLength: 1, description: "稳定的失败代码。" }),
-  error_message: Type.String({ description: "有界的失败摘要，与 agent_settled 事件中的 error_message 相同。" }),
+  error_message: Type.String({ maxLength: 1000, description: "失败原因，与 agent_settled 事件中的 error_message 相同：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" }),
   failed_at: Type.String({ format: "date-time", description: "失败时间。" }),
 }, { $id: "ConversationFailureOut", additionalProperties: false, description: "一次在 Pi 写入会话前就失败的执行。" });
 const ConversationStateEnvelope = Type.Object({ data: Type.Ref("ConversationStateOut") }, { $id: "ConversationStateEnvelope", description: "会话状态响应。" });
@@ -331,7 +331,7 @@ const ConversationMessage = Type.Object({
   toolName: Type.Optional(Type.String({ description: "工具名称；toolResult 消息提供。" })),
   isError: Type.Optional(Type.Boolean({ description: "工具结果是否为错误。" })),
   stopReason: Type.Optional(Type.String({ enum: ["stop", "length", "toolUse", "deferred", "aborted", "error"], description: "assistant 消息的结束原因；error 表示模型调用失败。" })),
-  errorMessage: Type.Optional(Type.String({ maxLength: 240, description: "stopReason 为 error 时的失败摘要，已脱敏并截断到 240 字。" })),
+  errorMessage: Type.Optional(Type.String({ maxLength: 1000, description: "stopReason 为 error 时的失败原因：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" })),
 }, { $id: "ConversationMessage", additionalProperties: true, description: "脱敏会话消息；assistant 消息可包含 thinking、toolCall 和 text 片段。", "x-dynamic-json": true });
 const ConversationEntry = Type.Object({
   work_id: Type.Optional(Type.String({ maxLength: 256, description: "员工本次执行的工作记录 ID；可用于聚合 assistant/toolResult，缺省时不推断执行归属。" })),
@@ -407,7 +407,7 @@ const PiSseEventData = Type.Object({
   willRetry: Type.Optional(Type.Boolean({ description: "上下文压缩后是否重试。" })),
   failed: Type.Optional(Type.Boolean({ description: "提示是否以失败终态结束。" })),
   error_code: Type.Optional(Type.String({ description: "安全的本地失败分类。" })),
-  error_message: Type.Optional(Type.String({ description: "有界且脱敏的失败摘要。" })),
+  error_message: Type.Optional(Type.String({ maxLength: 1000, description: "失败原因：凭据已隐藏，家目录替换为 ~，保留其余路径便于排查，最多 1000 字。" })),
   approvalId: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
   approval_id: Type.Optional(Type.String({ description: "本地审批记录 ID。" })),
   approvalBatchId: Type.Optional(Type.String({ description: "危险工具批次 ID。" })),
