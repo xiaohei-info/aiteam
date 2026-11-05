@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyToolKind, serializePiEntry, serializePiEvent } from "./event-sse.js";
+import { homedir } from "node:os";
+import { classifyToolKind, failureText, MAX_FAILURE_MESSAGE_CHARS, serializePiEntry, serializePiEvent } from "./event-sse.js";
 
 test("Pi SSE serializer keeps bounded ordinary tool summaries without credential/path fields", () => {
   const event = serializePiEvent({
@@ -40,12 +41,22 @@ test("persisted entries use the same redacted boundary as live events", () => {
   assert.equal((entry?.message as { role?: string } | undefined)?.role, "assistant");
 });
 
-test("failed model calls keep a redacted, bounded error on live and persisted assistant messages", () => {
+test("failure reasons keep paths for developers, hide credentials and shorten only the home directory", () => {
+  assert.equal(failureText("Cannot find module '/Users/edy/app/a.js' imported from /Users/edy/app", "/Users/edy"),
+    "Cannot find module '~/app/a.js' imported from ~/app");
+  // A home that is a prefix of another account's directory is left alone.
+  assert.equal(failureText("see /Users/edy2/app", "/Users/edy"), "see /Users/edy2/app");
+  assert.equal(failureText("see C:\\Users\\edy\\app", "C:\\Users\\edy\\"), "see ~\\app");
+  assert.equal(failureText("401 api_key=hidden-value at /opt/x", "/Users/edy"), "401 [内容已隐藏] at /opt/x");
+  assert.equal(failureText("x".repeat(MAX_FAILURE_MESSAGE_CHARS + 50), "/Users/edy").length, MAX_FAILURE_MESSAGE_CHARS);
+});
+
+test("failed model calls keep a credential-free, bounded error on live and persisted assistant messages", () => {
   const failed = {
     role: "assistant",
     content: [],
     stopReason: "error",
-    errorMessage: `Cannot find module '/Users/someone/app/openai-completions.js' api_key=hidden-value ${"x".repeat(400)}`,
+    errorMessage: `Cannot find module '/Users/someone/app/openai-completions.js' from ${homedir()}/fred api_key=hidden-value ${"x".repeat(1200)}`,
     provider: "secret-provider",
   };
   const live = serializePiEvent({ type: "message_end", message: failed } as never)?.message as Record<string, unknown>;
@@ -53,9 +64,9 @@ test("failed model calls keep a redacted, bounded error on live and persisted as
   for (const message of [live, stored]) {
     assert.equal(message.stopReason, "error");
     const error = message.errorMessage as string;
-    assert.match(error, /^Cannot find module/);
-    assert.equal(error.length, 240);
-    assert(!error.includes("/Users/someone"));
+    assert.match(error, /^Cannot find module '\/Users\/someone\/app\/openai-completions\.js' from ~\/fred /);
+    assert.equal(error.length, MAX_FAILURE_MESSAGE_CHARS);
+    assert(!error.includes(homedir()));
     assert(!error.includes("hidden-value"));
     assert(!JSON.stringify(message).includes("secret-provider"));
   }
