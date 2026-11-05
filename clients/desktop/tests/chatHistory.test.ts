@@ -615,6 +615,13 @@ test('a reply saved as a file keeps its full text and gets a preview, also as th
   const [later] = entriesToMessages([reply('d', long, { reply_file: file }), reply('e', '补充一句')] as any)
   assert.equal('replyFile' in later, false, 'a file that is not the last part would hide the later text')
 
+  const checklist = { id: 'g', entry_ref: 'ref-g', type: 'message', work_id: 'w1', source_employee_id: 'pm',
+    message: { role: 'assistant', content: [{ type: 'toolCall', id: 'todo', name: 'todo_update', arguments: {} }], stopReason: 'toolUse' } }
+  const [closed] = entriesToMessages([reply('b', '我先查一下资料。'), reply('c', long, { reply_file: file }), checklist] as any)
+  assert.deepEqual(closed.replyFile, file, 'a tool-only entry after the reply keeps the card')
+  assert.equal(closed.replyPreview, `我先查一下资料。\n\n${replyPreview(long)}`)
+  assert.equal(closed.toolCalls?.length ?? closed.thinkingSteps?.length, 1)
+
   for (const broken of [{ ...file, chars: '2001' }, { ...file, id: '' }, 'file-1', null]) {
     const [message] = entriesToMessages([reply('f', long, { reply_file: broken })] as any)
     assert.equal('replyFile' in message, false, JSON.stringify(broken))
