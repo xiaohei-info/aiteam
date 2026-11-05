@@ -7,6 +7,7 @@ import type { LocalFileMetadata } from '../../api/agent/types'
 import { isTauriRuntime } from '../../api/agent/runtime'
 import { formatFileSize, type CachedFile } from '../../lib/fileCache'
 import { buildFileTree, type FileTreeNode } from '../../lib/fileTree'
+import { refreshWhenRunsSettle } from '../../lib/settledRefresh'
 
 type FileKind = LocalFileMetadata['kind']
 
@@ -38,7 +39,19 @@ export default function ConversationFiles({ conversationId }: { conversationId: 
       .then(results => { if (!cancelled) setFiles(results.flatMap(result => result.files)) })
       .catch(() => { if (!cancelled) setError('会话文件读取失败') })
       .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    // 打开期间员工可能又生成了文件；运行结束后静默刷新，读取失败时保留当前列表。
+    const stopRefreshing = refreshWhenRunsSettle({
+      subscribe: onEvent => {
+        const subscription = agentApi.subscribeEvents({ conversationId, onEvent })
+        return () => subscription.close()
+      },
+      isPrompting: async () => (await agentApi.getConversationState(conversationId)).prompting,
+      reload: async () => {
+        const results = await Promise.all([agentApi.listFiles(conversationId, 'attachment'), agentApi.listFiles(conversationId, 'artifact')])
+        if (!cancelled) { setFiles(results.flatMap(result => result.files)); setError('') }
+      },
+    })
+    return () => { cancelled = true; stopRefreshing() }
   }, [conversationId])
 
   const cacheForNative = async (file: LocalFileMetadata): Promise<string> => {
