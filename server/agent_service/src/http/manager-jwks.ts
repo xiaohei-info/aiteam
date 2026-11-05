@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { parsePublicJwks, verifyJwt, type AuthenticatedCaller, type AuthenticateRequest, type JwtJwk } from "./auth.js";
+import { ManagerUnavailableError } from "../manager-client.js";
 
 const TENANT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TTL_MS = 60_000;
@@ -9,6 +10,8 @@ type Entry = { keys: Map<string, JwtJwk>; expires: number; attempted: number; pe
 /** Fixed trusted Manager only. Bearers cannot discover tenants (JWKS GET can create keys).
  * Admission is called only after successful Manager credential authentication.
  * Expired material is never used on refresh failure; Manager owns current + retired 24h.
+ * Only an explicit Manager verdict rejects the credential; when Manager cannot give one,
+ * requests fail with ManagerUnavailableError so callers keep the login but still deny access.
  */
 export class ManagerJwksAuthenticator {
   private readonly origin: string;
@@ -75,16 +78,27 @@ export class ManagerJwksAuthenticator {
   private async refresh(tenant: string, entry: Entry): Promise<void> {
     if (entry.pending) return entry.pending;
     const now = Date.now();
-    if (now - entry.attempted < COOLDOWN_MS) throw new Error("Manager public key refresh cooling down");
+    // Fresh keys are Manager's current verdict: an unknown kid is then rejected by verifyJwt.
+    const fresh = entry.expires > now;
+    if (now - entry.attempted < COOLDOWN_MS) {
+      if (fresh) return;
+      throw new ManagerUnavailableError("Manager public key refresh cooling down");
+    }
     const window = Math.floor(now / 1000);
     if (this.window !== window) { this.window = window; this.requests = 0; }
-    if (this.active >= 4 || this.requests >= 16) throw new Error("Manager public key refresh busy");
+    if (this.active >= 4 || this.requests >= 16) {
+      if (fresh) return;
+      throw new ManagerUnavailableError("Manager public key refresh busy");
+    }
     entry.attempted = now;
     this.active += 1;
     this.requests += 1;
     entry.pending = this.download(tenant).then((keys) => {
       entry.keys = keys; // Replace, never merge revoked/retired keys back into the cache.
       entry.expires = Date.now() + TTL_MS;
+    }, (cause) => {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      throw new ManagerUnavailableError(`Manager public keys are unavailable: ${reason}`, { cause });
     }).finally(() => { this.active -= 1; entry.pending = undefined; });
     return entry.pending;
   }
@@ -124,12 +138,13 @@ export async function verifyManagerSession(origin: string, token: string): Promi
       headers: { accept: "application/json", authorization: `Bearer ${token}` },
     });
   } catch (cause) {
-    throw new Error("Manager authentication session is unavailable", { cause });
+    throw new ManagerUnavailableError("Manager authentication session is unavailable", { cause });
   }
   if (!response.ok) {
     await response.body?.cancel();
+    // 401/403 is Manager's revocation verdict; any other failure cannot prove revocation.
     if (response.status === 401 || response.status === 403) throw new Error("Manager authentication session is revoked");
-    throw new Error("Manager authentication session check failed");
+    throw new ManagerUnavailableError("Manager authentication session check failed", { status: response.status });
   }
   await response.body?.cancel();
 }

@@ -41,6 +41,7 @@ async function mockManager() {
     }
     if (state.mode === "auth-disconnect") { req.socket.destroy(); return; }
     if (state.mode === "auth-redirect") { res.writeHead(307, { location: "http://127.0.0.1:1/forbidden" }); res.end(); return; }
+    if (state.mode === "auth-500") { res.writeHead(500); res.end("{}"); return; }
     if (req.url?.endsWith("/api/auth/session")) {
       if (state.failAuth) { res.writeHead(401); res.end(JSON.stringify({ code: "unauthorized" })); return; }
       res.end(JSON.stringify({ data: { active: true } })); return;
@@ -105,6 +106,49 @@ test("real Agent HTTP login verifies Manager token before return; multiple tenan
     manager.state.token = jwt(manager.a1, A);
     assert.equal((await login("a", { tenant_id: B })).status, 503);
   } finally { await http.close(); await fixture.close(); await manager.close(); }
+});
+
+test("protected routes distinguish a revoked session (401) from an unreachable Manager (503)", async () => {
+  const manager = await mockManager();
+  const fixture = await createFixture();
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  const auth = new ManagerJwksAuthenticator(manager.origin, "aiteam-manager", "aiteam-agent");
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, managerClient: new HttpManagerClient(manager.origin), authenticate: auth.authenticate, verifyLoginToken: (token, tenant) => auth.verifyLoginToken(token, tenant) });
+  await http.listen(0, "127.0.0.1");
+  const base = `http://127.0.0.1:${(http.server.address() as { port: number }).port}`;
+  const token = jwt(manager.a1, A);
+  const whoami = async () => {
+    const r = await fetch(`${base}/api/agent/whoami`, { headers: { authorization: `Bearer ${token}` } });
+    const body = r.status === 200 ? undefined : await r.json() as { code?: string };
+    return { status: r.status, code: body?.code };
+  };
+  try {
+    await auth.verifyLoginToken(token, A);
+    assert.equal((await whoami()).status, 200);
+    for (const mode of ["auth-disconnect", "auth-redirect", "auth-500"]) {
+      manager.state.mode = mode;
+      assert.deepEqual(await whoami(), { status: 503, code: "manager_unavailable" }, `${mode} must deny access without invalidating the login`);
+    }
+    manager.state.mode = "ok";
+    assert.equal((await whoami()).status, 200, "access resumes once Manager confirms the session again");
+
+    // Expired public keys that cannot be refreshed: unavailable, not invalid.
+    now += 60_001;
+    manager.state.mode = "failure";
+    assert.deepEqual(await whoami(), { status: 503, code: "manager_unavailable" });
+    assert.deepEqual(await whoami(), { status: 503, code: "manager_unavailable" }, "refresh cooldown stays unavailable");
+    now += 5001;
+    manager.state.mode = "ok";
+    assert.equal((await whoami()).status, 200);
+
+    manager.state.failAuth = true;
+    assert.deepEqual(await whoami(), { status: 401, code: "unauthenticated" }, "revocation is reported immediately");
+    manager.state.failAuth = false;
+    const unknownKid = jwt(manager.a1, A, {}, { kid: `${A}:99` });
+    assert.equal((await fetch(`${base}/api/agent/whoami`, { headers: { authorization: `Bearer ${unknownKid}` } })).status, 401, "a key absent from fresh Manager keys is invalid, even during cooldown");
+  } finally { Date.now = realNow; await http.close(); await fixture.close(); await manager.close(); }
 });
 
 test("bounded tenant refresh: single flight, unknown kid cooldown, rotation grace, removal and Manager failure", async () => {

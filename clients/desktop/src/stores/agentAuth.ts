@@ -9,6 +9,7 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { recordAuthDiagnostic, authErrorStatus, sessionRemainingSeconds, type AuthDiagnosticInput } from '../lib/authDiagnostics'
+import { restoreFailureMessage } from '../lib/managerReachability'
 import { AgentApiClient } from '../api/agent'
 import { backendApi } from '../api/backend'
 import { syncAuthenticatedAgent, type EnterpriseIdentity } from '../api/agent/auth'
@@ -288,7 +289,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         if (!isCurrentSession(generation)) return
         recordAuthDiagnostic({ reason: 'restore_identity_failed', source: 'restore', status: authErrorStatus(error), expiresInSeconds: sessionRemainingSeconds(session.claims.exp) })
         clearRuntimeSession(set)
-        set({ restoreError: '无法验证已保存身份，请确认本机 Agent 和企业服务可用后重试。' })
+        set({ restoreError: restoreFailureMessage(error) })
         return
       }
       const grantsSyncSkipped = await syncGrantsWithoutBlocking(verifier, { tenant_id: session.tenantId, user_id: userId }, 'restore')
