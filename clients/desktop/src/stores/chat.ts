@@ -141,6 +141,8 @@ export interface Message {
   _pending?: boolean
   /** 本次执行以失败告终：单独显示为提示条，不拼进正文。 */
   failure?: ReplyFailure
+  /** 正文超过 Agent 的长度上限被截断，正文下方提示。 */
+  truncated?: boolean
 }
 
 // 附件按文档中的会话文件 ID 下载。

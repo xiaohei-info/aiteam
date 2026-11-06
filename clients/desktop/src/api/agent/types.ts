@@ -238,7 +238,8 @@ export const CONTEXT_RESET_ENTRY_TYPE = 'aiteam_context_reset'
 
 // server.ts ConversationContentPart。前端消息渲染要按 type 分流。
 export type ConversationContentPart =
-  | { type: 'text'; text: string }
+  // truncated：正文超过 Agent 的兜底上限（20 万字）被截断；正常回复完整返回，不带该字段。
+  | { type: 'text'; text: string; truncated?: boolean }
   | { type: 'thinking'; thinking: string }
   | { type: 'toolCall'; id?: string; name?: string; arguments?: unknown }
   | { type: 'image' }
