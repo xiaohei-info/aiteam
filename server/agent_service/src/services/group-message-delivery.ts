@@ -13,6 +13,7 @@ export interface GroupMessageCommand {
   targetEmployeeIds: string[];
   text: string;
   images?: ImageContent[];
+  attachmentIds?: string[];
   logicalMessageId: string;
   idempotencyKey?: string;
   toolCallId?: string;
