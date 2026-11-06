@@ -4,6 +4,7 @@ import type { AgentSqliteStore, ConversationParticipantRole, ReplyFile } from ".
 import { compareReadOrder } from "../storage/read-cursor.js";
 import type { WorkRecordRow } from "../storage/work-records.js";
 import { safeText } from "./event-sse.js";
+import { reconcileEntryPositions } from "./todo-reconcile.js";
 
 export type HistoryOrder = [number, string, string, number, string];
 export type HistoryEntry = SessionEntry & {
@@ -72,6 +73,18 @@ export function workIdsForEntries(entries: readonly SessionEntry[], records: rea
 }
 
 /** Pure projection of already-owned Session entries; no Session creation or body persistence. */
+/**
+ * A hidden checklist turn keeps only its tool calls: its text, thinking and errors are never shown,
+ * and a model message without a tool call disappears.
+ */
+function reconcileToolCallsOnly(entry: SessionEntry): SessionEntry | undefined {
+  if (entry.type !== "message" || entry.message.role !== "assistant") return entry;
+  const content = entry.message.content.filter((part) => part.type === "toolCall");
+  if (content.length === 0) return undefined;
+  const { errorMessage: _errorMessage, ...message } = entry.message;
+  return { ...entry, message: { ...message, content, stopReason: "toolUse" } };
+}
+
 export function mergeHistorySources(store: AgentSqliteStore, conversationId: string, sources: HistorySource[]): IndexedHistoryEntry[] {
   const conversation = store.getConversation(conversationId);
   const experts = new Map(store.listLoadedExperts(conversation?.tenantId ?? undefined, conversation?.memberId ?? undefined, true).map((expert) => [expert.employee_id, expert]));
@@ -81,8 +94,10 @@ export function mergeHistorySources(store: AgentSqliteStore, conversationId: str
     ? store.listReplyFiles(conversationId, conversation.tenantId, conversation.memberId) : new Map<string, ReplyFile>();
   const indexed = sources.flatMap((source) => {
     const workIds = workIdsForEntries(source.entries, workRecords.filter((row) => row.employee_id === source.employeeId));
-    return source.entries.flatMap((raw, ordinal): IndexedHistoryEntry[] => {
-      if (typeof raw.id !== "string" || raw.type === ("session" as string)) return [];
+    const reconcile = reconcileEntryPositions(source.entries);
+    return source.entries.flatMap((stored, ordinal): IndexedHistoryEntry[] => {
+      const raw = reconcile.has(ordinal) ? reconcileToolCallsOnly(stored) : stored;
+      if (!raw || typeof raw.id !== "string" || raw.type === ("session" as string)) return [];
       // Non-displayed custom messages are model-only instructions (e.g. the first-chat introduction).
       if (raw.type === "custom_message" && !raw.display) return [];
       const entry: HistoryEntry = { ...raw, entry_ref: historyEntryRef(conversationId, source.employeeId, raw.id) };

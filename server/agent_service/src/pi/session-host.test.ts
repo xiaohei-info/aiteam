@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
 import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
 import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import { appLogger } from "../observability.js";
-import { resetTranscript } from "./session-host.js";
+import { resetTranscript, SessionHost } from "./session-host.js";
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { serializePiEvent } from "./event-sse.js";
 
 function lease(version: number, token: string): HindsightRuntimeConfig {
   return {
@@ -577,6 +580,131 @@ test("SessionHost reminds the model about a stale checklist without storing or s
     await host.dispose();
   } finally {
     await fixture.close();
+  }
+});
+
+async function checklistFixture() {
+  const fixture = await createFixture();
+  const probeRuns: string[] = [];
+  const probe = defineTool({
+    // A safe tool name, so it runs without an approval; the fixture has no sandbox, so no built-in grep.
+    name: "grep", label: "Probe", description: "Test tool", parameters: Type.Object({}),
+    execute: async (toolCallId) => {
+      probeRuns.push(toolCallId);
+      return { content: [{ type: "text", text: "probe ran" }], details: undefined };
+    },
+  });
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update", "grep"] } }]);
+  fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+  const host = new SessionHost({
+    cwdRoot: join(fixture.dataRoot, "workspaces"), agentDir: join(fixture.dataRoot, "pi"), sessionDir: join(fixture.dataRoot, "sessions"),
+    store: fixture.store, modelRuntime: fixture.modelRuntime, model: fixture.faux.getModel(),
+    resourceLoaderFactory: (_id, auth) => createControlledResourceLoader("test system prompt", undefined, auth),
+    customTools: [probe],
+  });
+  const events: Array<{ type: string; text: string }> = [];
+  // What clients receive: the serialized events, not the in-process objects.
+  await host.subscribe("conversation-1", (envelope) => events.push({ type: envelope.event.type, text: JSON.stringify(serializePiEvent(envelope.event) ?? {}) }));
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const outcomes = () => fixture.store.workRecords.forConversation("conversation-1", { tenantId: "tenant-1", memberId: "member-1" }).map((row) => row.outcome);
+  return { fixture, host, events, caller, outcomes, probeRuns };
+}
+
+const checklist = (...statuses: string[]) => fauxAssistantMessage(fauxToolCall("todo_update", {
+  items: statuses.map((status, index) => ({ id: `item-${index}`, title: `Item ${index}`, status })),
+}), { stopReason: "toolUse" });
+
+test("SessionHost closes an unfinished checklist with one hidden turn that shows only the update", async () => {
+  const { fixture, host, events, caller, outcomes } = await checklistFixture();
+  try {
+    const reply = `总结\n${"长".repeat(2_100)}`;
+    let prompt = "";
+    fixture.faux.setResponses([
+      checklist("in_progress", "pending"),
+      fauxAssistantMessage(reply),
+      (context) => {
+        const last = context.messages[context.messages.length - 1];
+        prompt = JSON.stringify(last?.content ?? "");
+        return fauxAssistantMessage([fauxThinking("hidden thinking"), fauxText("hidden text"), fauxToolCall("todo_update", {
+          items: [{ id: "item-0", title: "Item 0", status: "completed" }, { id: "item-1", title: "Item 1", status: "completed" }],
+        })], { stopReason: "toolUse" });
+      },
+      fauxAssistantMessage("must not be called"),
+    ]);
+    const entryId = await host.prompt("conversation-1", "track this", undefined, caller);
+    assert.ok(entryId, "the run still succeeds with the reply as its result");
+    assert.match(prompt, /Platform check/);
+    assert.equal(fixture.faux.getPendingResponseCount(), 1, "one extra model call, ended by the update");
+
+    const live = events.map((event) => event.text).join("\n");
+    assert.doesNotMatch(live, /hidden text|hidden thinking|Platform check/);
+    assert.equal(events.filter((event) => event.type === "tool_execution_end" && event.text.includes("todo_update")).length, 2);
+
+    const entries = await host.entries("conversation-1", caller);
+    const stored = JSON.stringify(entries);
+    assert.doesNotMatch(stored, /hidden text|hidden thinking|Platform check/);
+    const results = entries.filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "todo_update");
+    const last = results.at(-1);
+    assert(last?.type === "message" && last.message.role === "toolResult");
+    assert.deepEqual((last.message.details as { items: Array<{ status: string }> }).items.map((item) => item.status), ["completed", "completed"]);
+    const answer = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.reply_file);
+    assert(answer?.type === "message" && answer.message.role === "assistant", "the long reply is still saved as a file");
+    assert.equal(answer.reply_file?.chars, [...reply].length);
+    assert.deepEqual(outcomes(), ["succeeded"]);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost skips other tools in the hidden checklist turn and ends the run", async () => {
+  for (const tool of ["grep", "not_a_tool"]) {
+    const { fixture, host, caller, outcomes, probeRuns } = await checklistFixture();
+    try {
+      fixture.faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("grep", {}), { stopReason: "toolUse" }),
+        checklist("pending"),
+        fauxAssistantMessage("done"),
+        fauxAssistantMessage(fauxToolCall(tool, {}), { stopReason: "toolUse" }),
+        fauxAssistantMessage("must not be called"),
+      ]);
+      assert.ok(await host.prompt("conversation-1", "track this", undefined, caller), tool);
+      assert.equal(probeRuns.length, 1, "the probe ran once, before the checklist turn");
+      assert.equal(fixture.faux.getPendingResponseCount(), 1, tool);
+      const entries = await host.entries("conversation-1", caller);
+      const results = entries.filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === tool);
+      const last = results.at(-1);
+      assert(last?.type === "message" && last.message.role === "toolResult", tool);
+      assert.equal(last.message.isError, true, tool);
+      if (tool === "grep") assert.match(JSON.stringify(last.message.content), /Skipped: only todo_update/);
+      assert.deepEqual(outcomes(), ["succeeded"], tool);
+      await host.dispose();
+    } finally {
+      await fixture.close();
+    }
+  }
+});
+
+test("SessionHost adds no checklist turn when the checklist is done, absent, or the hidden turn fails", async () => {
+  for (const [label, responses, pending] of [
+    ["finished checklist", [checklist("completed"), fauxAssistantMessage("done"), fauxAssistantMessage("spare")], 1],
+    ["no checklist", [fauxAssistantMessage("done"), fauxAssistantMessage("spare")], 1],
+    ["failed hidden turn", [checklist("pending"), fauxAssistantMessage("done")], 0],
+  ] as const) {
+    const { fixture, host, caller, outcomes } = await checklistFixture();
+    try {
+      fixture.faux.setResponses([...responses]);
+      assert.ok(await host.prompt("conversation-1", "track this", undefined, caller), label);
+      assert.equal(fixture.faux.getPendingResponseCount(), pending, label);
+      assert.deepEqual(outcomes(), ["succeeded"], label);
+      const stored = JSON.stringify(await host.entries("conversation-1", caller));
+      assert.doesNotMatch(stored, /Platform check|No more faux/, label);
+      await host.dispose();
+    } finally {
+      await fixture.close();
+    }
   }
 });
 
