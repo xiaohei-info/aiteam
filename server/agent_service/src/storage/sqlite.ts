@@ -426,9 +426,7 @@ interface ConversationRow {
 const DEFAULT_LEASE_MS = 30_000;
 const LOCAL_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const LOCAL_FILE_MAX_NAME = 255;
-// Conservative local-file quota per tenant/member and conversation, shared by both kinds.
-const MAX_LOCAL_FILES_PER_CONVERSATION = 32;
-const MAX_LOCAL_FILE_BYTES_PER_CONVERSATION = 50 * 1024 * 1024;
+// A conversation keeps any number of files; only each file's size is capped (LOCAL_FILE_MAX_BYTES).
 // Unreferenced uploads are retained briefly so a delayed prompt can still use them.
 const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -1015,7 +1013,7 @@ export class AgentSqliteStore {
     path?: string;
     mimeType: string;
     data: Buffer;
-    /** IDs this file replaces: they stop counting toward the quota and go in the same transaction. */
+    /** IDs this file replaces: they are removed in the same transaction as the insert. */
     replaces?: readonly string[];
     /** Set when the file holds the full text of one employee reply. */
     reply?: { entryRef: string; chars: number };
@@ -1049,11 +1047,6 @@ export class AgentSqliteStore {
         const file = this.getOwnedLocalFile(replacedId, input.conversationId, input.tenantId, input.memberId);
         return file ? [file] : [];
       });
-      const quota = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(byte_size), 0) AS bytes FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").get(input.conversationId, input.tenantId, input.memberId) as { count: number; bytes: number };
-      quota.count -= replaced.length;
-      quota.bytes -= replaced.reduce((total, file) => total + file.byte_size, 0);
-      if (quota.count >= MAX_LOCAL_FILES_PER_CONVERSATION) throw new Error(`Local file count limit is ${MAX_LOCAL_FILES_PER_CONVERSATION} per conversation`);
-      if (quota.bytes + input.data.byteLength > MAX_LOCAL_FILE_BYTES_PER_CONVERSATION) throw new Error(`Local file storage limit is ${MAX_LOCAL_FILE_BYTES_PER_CONVERSATION} bytes per conversation`);
       this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at, source_entry_ref, reply_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.path, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at, input.reply?.entryRef ?? null, input.reply?.chars ?? null);
       for (const file of replaced) {
         this.db.prepare("DELETE FROM local_file WHERE id = ?").run(file.id);
