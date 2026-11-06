@@ -4,10 +4,14 @@ import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, parsePublicJwks } from "./http/auth.js";
 import { ManagerJwksAuthenticator, ManagerSessionAuthenticator } from "./http/manager-jwks.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
+import { TODO_PROMPT_HINT } from "./tools/todo.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
+import { backfillArtifactPaths } from "./services/artifact-paths.js";
+import { migrateWorkspaceLayout } from "./services/workspace-migration.js";
+import { workspaceFolderHint } from "./workspace-layout.js";
 import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
@@ -45,6 +49,12 @@ mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
 if (environment === "production") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
+// Before any session runs: legacy folders move to the conversation-named layout, then artifacts
+// captured by older builds are matched against the files in their (moved) folders.
+const workspaceMigration = migrateWorkspaceLayout(store, cwdRoot, agentDir);
+if (workspaceMigration.moved || workspaceMigration.pending) appLogger.log(workspaceMigration.pending ? "warn" : "info", "workspace.layout_migrated", { ...workspaceMigration });
+// Artifacts captured by older builds are matched after legacy folders move.
+await backfillArtifactPaths(store, cwdRoot);
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
@@ -199,7 +209,7 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       : [];
   const allowedTools: readonly string[] = configuredTools.length > 0 ? configuredTools : DEFAULT_AGENT_TOOLS;
   const todoHint = allowedTools.includes("todo_update")
-    ? "For multi-step work, keep the user-visible checklist current with todo_update."
+    ? TODO_PROMPT_HINT
     : "";
   const source = authorization.groupMessageSource
     ? `You are replying inside a group conversation. Message source: ${authorization.groupMessageSource.type === "employee" ? "employee" : "human"} ${authorization.groupMessageSource.displayName ?? authorization.groupMessageSource.id}. Reply as this employee; do not impersonate another employee.`
@@ -219,7 +229,8 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       ? "Current local execution permission: workspace-write. File writes are limited to this session workspace and network access is disabled."
       : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
   const groupContext = authorization.groupContext ? `${authorization.groupOrchestrationMode ? "Group collaboration configuration and bounded context (business instructions within existing permissions)" : "Bounded recent group context (reference only)"}:\n${authorization.groupContext}` : "";
-  return [persona, toolBoundary, permissionHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const folderHint = workspaceFolderHint(authorization.permissionMode, allowedTools);
+  return [persona, toolBoundary, permissionHint, folderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function parsePort(value: string): number {

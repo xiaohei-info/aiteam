@@ -139,16 +139,20 @@ export interface EmployeeConfig {
   status: string;
   archive_reason?: string | null;
   archived_at?: string | null;
+  /** 招募来源模板（只读，服务端维护）。 */
+  source_template_id?: string | null;
+  source_template_version?: string | null;
 }
 
 /**
  * EmployeeConfig 写入端（对齐后端 EmployeeConfigIn）。
- * 仅含可编辑/可透传字段，剔除服务端托管字段（employee_id / employee_slug / version / status / archive_reason / archived_at）。
+ * 仅含可编辑/可透传字段，剔除服务端托管字段（employee_id / employee_slug / version / status / archive_reason / archived_at / source_template_id / source_template_version）。
  * PUT /api/manager/employees/{id} 使用此形态，避免把只读标识回写后端。
  */
 export type EmployeeConfigIn = Omit<
   EmployeeConfig,
-  "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
+  | "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
+  | "source_template_id" | "source_template_version"
 > & { memory_policy?: Record<string, unknown> | null };
 
 /** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */
