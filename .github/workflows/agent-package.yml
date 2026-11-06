@@ -36,7 +36,7 @@ jobs:
       fail-fast: false
       matrix:
         target: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.include_darwin_x64 && '["darwin-arm64","darwin-x64","win32-x64"]' || '["darwin-arm64","win32-x64"]') }}
-    runs-on: ${{ matrix.target == 'darwin-arm64' && 'macos-14' || matrix.target == 'darwin-x64' && 'macos-13' || 'windows-2022' }}
+    runs-on: ${{ matrix.target == 'darwin-arm64' && 'macos-15' || matrix.target == 'darwin-x64' && 'macos-13' || 'windows-2022' }}
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || 'agent-package' }}
     steps:
