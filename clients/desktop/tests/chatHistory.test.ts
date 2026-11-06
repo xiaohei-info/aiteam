@@ -660,6 +660,29 @@ test('reply preview cuts near 500 characters at a line break and closes an open 
   assert.equal((code.match(/```/g) ?? []).length, 2)
 })
 
+test('reply preview stops before a table it would cut and keeps whole rows when the table comes first', () => {
+  const row = (index: number) => `| ${index} | ${'项目'.repeat(20)} |`
+  const table = (rows: number) => ['| 排名 | 名称 |', '| :---: | :--- |', ...Array.from({ length: rows }, (_, index) => row(index))].join('\n')
+  const tail = `\n\n${'后续内容。'.repeat(200)}`
+
+  assert.equal(replyPreview(`开场说明：\n\n${table(40)}${tail}`), '开场说明：\n\n…', 'cut across the rows')
+  const wide = `开场说明：\n\n| 排名 | 名称 |\n| --- | --- |\n| 1 | ${'宽'.repeat(900)} |`
+  assert.equal(replyPreview(wide), '开场说明：\n\n…', 'cut inside a row with no line break nearby')
+  const fitting = `开场说明：\n\n${table(3)}${tail}`
+  assert.ok(replyPreview(fitting).includes(row(2)), 'a table that fits stays whole')
+
+  const first = replyPreview(`${table(40)}${tail}`).split('\n')
+  assert.deepEqual(first.slice(0, 3), ['| 排名 | 名称 |', '| :---: | :--- |', row(0)])
+  assert.equal(first[first.length - 1], '…')
+  assert.ok(first.slice(0, -2).every((line) => line.endsWith('|')), 'only whole rows')
+  assert.ok(replyPreview(`| 排名 | 名称 |\n| --- | --- |\n| 1 | ${'宽'.repeat(900)} |`).includes('宽'.repeat(900)), 'the first row is kept whole even past the limit')
+
+  const piped = `说明\n${Array.from({ length: 60 }, (_, index) => `| 不是表格 ${index} ${'内容'.repeat(5)}`).join('\n')}`
+  assert.match(replyPreview(piped), /\| 不是表格 \d+ (内容)+\n\n…$/u, 'pipes without a rule line are ordinary text')
+  const fenced = replyPreview(`说明\n\`\`\`\n${table(40)}`)
+  assert.match(fenced, /\|\n```\n\n…$/u, 'a table inside a code block stays as code')
+})
+
 test('assistant message_end reports a failure only for failed model calls', () => {
   const seen: Array<[string | undefined, string | undefined]> = []
   const unknown: string[] = []
