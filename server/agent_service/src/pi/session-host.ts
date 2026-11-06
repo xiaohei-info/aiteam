@@ -78,6 +78,7 @@ export interface PromptDeliveryOptions {
   hiddenPromptType?: string;
   /** See GroupMessageCommand.disableTools. */
   disableTools?: boolean;
+  attachmentIds?: string[];
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -368,6 +369,7 @@ export class SessionHost {
         targetEmployeeIds,
         text,
         images,
+        attachmentIds: deliveryOptions?.attachmentIds,
         logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         idempotencyKey: deliveryOptions?.idempotencyKey,
         caller,
@@ -1350,13 +1352,6 @@ export class SessionHost {
     return `${basename(record.workspace)}/`;
   }
 
-<<<<<<< HEAD
-  /**
-   * A finished run whose last reply runs past LONG_REPLY_CHARS also gets that reply as a Markdown
-   * artifact, so the chat can show the opening and a file card. A reply the chat would show with
-   * anything redacted, or one that cannot be stored (over the file size limit), stays chat-only
-   * and is shown in full.
-   */
   private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
@@ -1387,10 +1382,7 @@ export class SessionHost {
     }
   }
 
-  private captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): void {
-=======
   private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
->>>>>>> e06c9611 (fix(agent): bound artifact workspace scans)
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
     if (!tenantId || !memberId) return;
@@ -1544,6 +1536,9 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
+      if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
+        this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
+      }
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
@@ -1605,11 +1600,9 @@ export class SessionHost {
           if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
         }
       } finally {
-        const baseline = await workspaceBeforePromise;
-        // The async baseline may finish after Session initialization. Exclude files whose mtime
-        // proves they appeared during this run, otherwise the first capture would treat them as old.
-        const before = new Map<string, WorkspaceFile>([...baseline].filter(([, file]) => file.scannedAtMs < startedAt));
-        await this.captureWorkspaceArtifacts(record, authorization, before);
+        // The model run is over before the bounded artifact post-processing finishes. Clear the
+        // active state first so callers can change thinking level or start the next run while the
+        // filesystem snapshot is being finalized.
         record.promptPromise = undefined;
         record.sessionReady = undefined;
         record.prompting = false;
@@ -1624,6 +1617,11 @@ export class SessionHost {
         record.activeStatus = undefined;
         record.activeMessage = undefined;
         record.activeReply = undefined;
+        const baseline = await workspaceBeforePromise;
+        // The async baseline may finish after Session initialization. Exclude files whose scan
+        // observation proves they appeared during this run, otherwise the first capture sees them as old.
+        const before = new Map<string, WorkspaceFile>([...baseline].filter(([, file]) => file.scannedAtMs < startedAt));
+        await this.captureWorkspaceArtifacts(record, authorization, before);
         await this.disposeSession(record);
       }
     }

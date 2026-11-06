@@ -2508,7 +2508,7 @@ export class AgentHttpServer {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, ...delivery });
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, attachmentIds, ...delivery });
       if (!lastEntryId) {
         this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" });
         return;
