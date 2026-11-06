@@ -1,8 +1,11 @@
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { lstat, opendir } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 export const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_ARTIFACT_PATH_CHARS = 1_024;
+/** Keep artifact discovery bounded like the workspace project scan. */
+export const MAX_ARTIFACT_ENTRIES_PER_DIRECTORY = 2_000;
+export const MAX_ARTIFACT_ENTRIES_PER_SCAN = 20_000;
 /** Dependency and cache folders are tool output, not something the employee made. */
 const IGNORED_WORKSPACE_DIRECTORIES = new Set(["node_modules", "__pycache__", "venv"]);
 export const IMAGE_MIMES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
@@ -121,6 +124,7 @@ export interface WorkspaceFile {
   path: string;
   size: number;
   mtimeMs: number;
+  scannedAtMs: number;
   mimeType: string;
 }
 
@@ -128,32 +132,39 @@ export interface WorkspaceFile {
  * Files an employee made in its workspace, keyed by `/`-separated path from the root. Hidden entries,
  * symlinks, dependency folders and Python virtual environments are skipped.
  */
-export function scanWorkspaceFiles(root: string): Map<string, WorkspaceFile> {
+export async function scanWorkspaceFiles(root: string): Promise<Map<string, WorkspaceFile>> {
   const files = new Map<string, WorkspaceFile>();
-  const visit = (directory: string, prefix: string): void => {
+  const pending: Array<{ directory: string; prefix: string }> = [{ directory: root, prefix: "" }];
+  let remaining = MAX_ARTIFACT_ENTRIES_PER_SCAN;
+  while (pending.length > 0 && remaining > 0) {
+    const current = pending.pop()!;
     let entries;
-    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
+    try { entries = await opendir(current.directory); } catch { continue; }
+    let inspected = 0;
+    for await (const entry of entries) {
+      if (inspected >= MAX_ARTIFACT_ENTRIES_PER_DIRECTORY || remaining <= 0) break;
+      inspected += 1;
+      remaining -= 1;
       if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
-      const path = join(directory, entry.name);
-      const pathFromRoot = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const path = join(current.directory, entry.name);
+      const pathFromRoot = current.prefix ? `${current.prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (IGNORED_WORKSPACE_DIRECTORIES.has(entry.name) || existsSync(join(path, "pyvenv.cfg"))) continue;
-        visit(path, pathFromRoot);
+        if (IGNORED_WORKSPACE_DIRECTORIES.has(entry.name)) continue;
+        try { await lstat(join(path, "pyvenv.cfg")); continue; } catch { /* ordinary directory */ }
+        pending.push({ directory: path, prefix: pathFromRoot });
         continue;
       }
       if (!entry.isFile() || !isSafeArtifactFilename(entry.name) || !isSafeArtifactPath(pathFromRoot)) continue;
       const mimeType = mimeTypeForFilename(entry.name);
       if (!mimeType) continue;
       try {
-        const info = lstatSync(path);
-        if (info.isFile()) files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, mimeType });
+        const info = await lstat(path);
+        if (info.isFile()) files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, scannedAtMs: Date.now(), mimeType });
       } catch {
         // A file can disappear while a tool is writing it; ignore that snapshot.
       }
     }
-  };
-  visit(root, "");
+  }
   return files;
 }
 

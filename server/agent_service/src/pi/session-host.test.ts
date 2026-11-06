@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "../test-fixture.js";
@@ -773,7 +773,7 @@ test("group chat artifacts sit under the employee's name", async () => {
       return fauxAssistantMessage("done");
     }]);
     await host.prompt("artifact-group", "写计划", undefined, caller);
-    assert.deepEqual(fixture.store.listOwnedLocalFiles("artifact-group", "tenant-1", "member-1", "artifact").map((item) => item.path), ["产品_经理/plan.md"]);
+    assert.deepEqual(fixture.store.listOwnedLocalFiles("artifact-group", "tenant-1", "member-1", "artifact").map((item) => item.path), [`${basename(workspace)}/plan.md`]);
     await host.dispose();
   } finally {
     await fixture.close();

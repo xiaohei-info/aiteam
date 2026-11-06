@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
-import { safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
+import { basename, isAbsolute, relative } from "node:path";
+import { scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import type { AgentSqliteStore, UnplacedArtifact } from "../storage/sqlite.js";
 
-type Store = Pick<AgentSqliteStore, "listUnplacedArtifacts" | "setArtifactPath" | "listOwnedConversationWorkspaces" | "listLoadedExperts">;
+type Store = Pick<AgentSqliteStore, "listUnplacedArtifacts" | "setArtifactPath" | "listOwnedConversationWorkspaces">;
 
 /**
  * Artifacts captured before paths were recorded only kept their file name. Each one is matched by
@@ -12,7 +12,7 @@ type Store = Pick<AgentSqliteStore, "listUnplacedArtifacts" | "setArtifactPath" 
  * gone or was changed since is placed at the top level. Every artifact is placed once, so later
  * starts do no work. Returns how many artifacts were placed.
  */
-export function backfillArtifactPaths(store: Store, workspaceRoot: string): number {
+export async function backfillArtifactPaths(store: Store, workspaceRoot: string): Promise<number> {
   const pending = store.listUnplacedArtifacts();
   if (pending.length === 0) return 0;
   const byConversation = new Map<string, UnplacedArtifact[]>();
@@ -25,7 +25,7 @@ export function backfillArtifactPaths(store: Store, workspaceRoot: string): numb
   let placed = 0;
   for (const artifacts of byConversation.values()) {
     const { tenant_id: tenantId, member_id: memberId, conversation_id: conversationId } = artifacts[0];
-    const candidates = root ? workspaceFiles(store, root, tenantId, memberId, conversationId) : [];
+    const candidates = root ? await workspaceFiles(store, root, tenantId, memberId, conversationId) : [];
     // Identical copies of one file at two paths each take their own path.
     const taken = new Set<string>();
     for (const artifact of artifacts) {
@@ -42,11 +42,10 @@ export function backfillArtifactPaths(store: Store, workspaceRoot: string): numb
 
 interface Candidate extends WorkspaceFile { artifactPath: string }
 
-function workspaceFiles(store: Store, root: string, tenantId: string, memberId: string, conversationId: string): Candidate[] {
+async function workspaceFiles(store: Store, root: string, tenantId: string, memberId: string, conversationId: string): Promise<Candidate[]> {
   const conversation = store.listOwnedConversationWorkspaces(tenantId, memberId).find((item) => item.id === conversationId);
   if (!conversation) return [];
   const group = conversation.kind === "group" || conversation.coordinator_employee_id !== null;
-  const experts = group ? store.listLoadedExperts(tenantId, memberId, true) : [];
   const workspaces = conversation.participants.map((participant) => ({ employeeId: participant.employee_id as string | null, path: participant.workspace }));
   if (conversation.workspace) workspaces.push({ employeeId: conversation.entry_employee_id, path: conversation.workspace });
   const seen = new Set<string>();
@@ -56,9 +55,9 @@ function workspaceFiles(store: Store, root: string, tenantId: string, memberId: 
     if (!resolved || seen.has(resolved)) continue;
     seen.add(resolved);
     const prefix = group && workspace.employeeId
-      ? `${safePathSegment(experts.find((item) => item.employee_id === workspace.employeeId)?.display_name, workspace.employeeId)}/`
+      ? `${basename(workspace.path)}/`
       : "";
-    for (const [path, file] of scanWorkspaceFiles(resolved)) out.push({ ...file, artifactPath: `${prefix}${path}` });
+    for (const [path, file] of await scanWorkspaceFiles(resolved)) out.push({ ...file, artifactPath: `${prefix}${path}` });
   }
   return out.sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
 }
