@@ -21,7 +21,7 @@ function fixture() {
   return { root, store, workspaces, write, artifact, paths, close: () => { store.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
-test("backfill finds each old artifact's folder by content; anything unmatched goes to the top level", () => {
+test("backfill finds each old artifact's folder by content; anything unmatched goes to the top level", async () => {
   const f = fixture();
   try {
     f.store.createConversation({ id: "chat", sessionFile: "", workspace: join(f.workspaces, "one"), tenantId: "t", memberId: "m" });
@@ -37,23 +37,23 @@ test("backfill finds each old artifact's folder by content; anything unmatched g
     const stale = f.artifact("chat", "edited.md", "original");
     const gone = f.artifact("chat", "deleted.md", "no longer there");
 
-    assert.equal(backfillArtifactPaths(f.store, f.workspaces), 6);
-    assert.deepEqual(f.paths("chat"), {
+    assert.equal(await backfillArtifactPaths(f.store, f.workspaces), 6);
+    const found = f.paths("chat");
+    assert.deepEqual(Object.fromEntries(Object.entries(found).filter(([id]) => id !== first.id && id !== second.id)), {
       [game.id]: "game/README.md",
       [tool.id]: "tool/README.md",
-      [first.id]: "a/same.md",
-      [second.id]: "b/same.md",
       [stale.id]: "edited.md",
       [gone.id]: "deleted.md",
     });
+    assert.deepEqual([found[first.id], found[second.id]].sort(), ["a/same.md", "b/same.md"]);
     assert.equal(f.store.readOwnedLocalFile(game.id, "chat", "t", "m")?.data.toString(), "game readme");
-    assert.equal(backfillArtifactPaths(f.store, f.workspaces), 0, "a second start has nothing to do");
+    assert.equal(await backfillArtifactPaths(f.store, f.workspaces), 0, "a second start has nothing to do");
   } finally {
     f.close();
   }
 });
 
-test("backfill puts group chat artifacts under the employee's name, including removed members", () => {
+test("backfill puts group chat artifacts under the stable employee workspace folder, including removed members", async () => {
   const f = fixture();
   try {
     f.store.createConversation({ id: "group", kind: "group", coordinatorEmployeeId: "lead", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
@@ -68,14 +68,14 @@ test("backfill puts group chat artifacts under the employee's name, including re
     const lead = f.artifact("group", "plan.md", "lead plan");
     const gone = f.artifact("group", "plan.md", "gone plan");
 
-    backfillArtifactPaths(f.store, f.workspaces);
-    assert.deepEqual(f.paths("group"), { [lead.id]: "产品经理/docs/plan.md", [gone.id]: "gone/plan.md" });
+    await backfillArtifactPaths(f.store, f.workspaces);
+    assert.deepEqual(f.paths("group"), { [lead.id]: "lead-dir/docs/plan.md", [gone.id]: "gone-dir/plan.md" });
   } finally {
     f.close();
   }
 });
 
-test("backfill never reads a workspace recorded outside the managed root", () => {
+test("backfill never reads a workspace recorded outside the managed root", async () => {
   const f = fixture();
   const outside = mkdtempSync(join(tmpdir(), "aiteam-artifact-paths-outside-"));
   try {
@@ -83,7 +83,7 @@ test("backfill never reads a workspace recorded outside the managed root", () =>
     writeFileSync(join(outside, "secret", "note.md"), "note");
     f.store.createConversation({ id: "chat", sessionFile: "", workspace: outside, tenantId: "t", memberId: "m" });
     const note = f.artifact("chat", "note.md", "note");
-    backfillArtifactPaths(f.store, f.workspaces);
+    await backfillArtifactPaths(f.store, f.workspaces);
     assert.deepEqual(f.paths("chat"), { [note.id]: "note.md" });
   } finally {
     rmSync(outside, { recursive: true, force: true });
@@ -91,12 +91,12 @@ test("backfill never reads a workspace recorded outside the managed root", () =>
   }
 });
 
-test("uploaded attachments stay out of the backfill", () => {
+test("uploaded attachments stay out of the backfill", async () => {
   const f = fixture();
   try {
     f.store.createConversation({ id: "chat", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
     const upload = f.store.createLocalFile({ conversationId: "chat", tenantId: "t", memberId: "m", kind: "attachment", filename: "a.md", mimeType: "text/markdown", data: Buffer.from("a") });
-    assert.equal(backfillArtifactPaths(f.store, f.workspaces), 0);
+    assert.equal(await backfillArtifactPaths(f.store, f.workspaces), 0);
     assert.equal(f.store.getOwnedLocalFile(upload.id, "chat", "t", "m")?.path, null);
   } finally {
     f.close();
