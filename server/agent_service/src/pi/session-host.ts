@@ -1341,20 +1341,21 @@ export class SessionHost {
   }
 
   /** Group chats keep each employee's files under its name so two `README.md` never collide. */
-  private artifactPrefix(record: SessionRecord, tenantId: string, memberId: string): string {
+  private artifactPrefix(record: SessionRecord): string {
     const metadata = this.options.store.getConversationMetadata(record.conversationId);
     if (!record.employeeId || !(metadata?.kind === "group" || metadata?.coordinator_employee_id)) return "";
-    const expert = this.options.store.listLoadedExperts(tenantId, memberId, true).find((item) => item.employee_id === record.employeeId);
-    return `${safePathSegment(expert?.display_name, record.employeeId)}/`;
+    // The workspace folder is fixed when created and already includes a unique suffix.
+    // Do not derive artifact paths from the mutable employee display name.
+    return `${basename(record.workspace)}/`;
   }
 
-  private captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): void {
+  private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
     if (!tenantId || !memberId) return;
     let existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
-    const prefix = this.artifactPrefix(record, tenantId, memberId);
-    for (const [pathFromRoot, current] of scanWorkspaceFiles(record.workspace)) {
+    const prefix = this.artifactPrefix(record);
+    for (const [pathFromRoot, current] of await scanWorkspaceFiles(record.workspace)) {
       const previous = before.get(pathFromRoot);
       if (previous && previous.size === current.size && previous.mtimeMs === current.mtimeMs) continue;
       if (current.size > MAX_LOCAL_FILE_BYTES) continue;
@@ -1461,7 +1462,8 @@ export class SessionHost {
     // A new run supersedes the participant's last failure, whatever its own outcome.
     this.options.store.conversationFailures.clear(record.conversationId, record.employeeId);
     record.activeMessage = undefined;
-    const workspaceBefore = scanWorkspaceFiles(record.workspace);
+    // Start the bounded async baseline scan without delaying Session initialization or aborts.
+    const workspaceBeforePromise = scanWorkspaceFiles(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
     let sourceCapture = Promise.resolve();
     let settled = false;
@@ -1561,7 +1563,11 @@ export class SessionHost {
           if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
         }
       } finally {
-        this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
+        const baseline = await workspaceBeforePromise;
+        // The async baseline may finish after Session initialization. Exclude files whose mtime
+        // proves they appeared during this run, otherwise the first capture would treat them as old.
+        const before = new Map<string, WorkspaceFile>([...baseline].filter(([, file]) => file.scannedAtMs < startedAt));
+        await this.captureWorkspaceArtifacts(record, authorization, before);
         record.promptPromise = undefined;
         record.sessionReady = undefined;
         record.prompting = false;

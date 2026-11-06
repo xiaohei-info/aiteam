@@ -52,7 +52,8 @@ const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // captured by older builds are matched against the files in their (moved) folders.
 const workspaceMigration = migrateWorkspaceLayout(store, cwdRoot, agentDir);
 if (workspaceMigration.moved || workspaceMigration.pending) appLogger.log(workspaceMigration.pending ? "warn" : "info", "workspace.layout_migrated", { ...workspaceMigration });
-backfillArtifactPaths(store, cwdRoot);
+// Artifacts captured by older builds are matched after legacy folders move.
+await backfillArtifactPaths(store, cwdRoot);
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
