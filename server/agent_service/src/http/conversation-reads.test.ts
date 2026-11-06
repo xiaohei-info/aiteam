@@ -170,7 +170,9 @@ test("full-text search scans beyond display limits, redacts before slicing, and 
   const { http, request } = await serve(fixture);
   try {
     const legacy = await request("/conversations/c1/entries");
-    assert.doesNotMatch(JSON.stringify(legacy), /LongNeedle|BlockNeedle/);
+    // Bodies are returned in full now; blocks past the 32-part cap are still left out.
+    assert.match(JSON.stringify(legacy), /LongNeedle/);
+    assert.doesNotMatch(JSON.stringify(legacy), /BlockNeedle/);
     for (const q of ["longneedle", "BlockNeedle", "FINDME"]) {
       const hits = await request(`/messages/search?q=${q}`);
       assert.equal(hits.data.length, 1);
@@ -190,6 +192,24 @@ test("full-text search scans beyond display limits, redacts before slicing, and 
     await request(`/messages/search?q=answer&cursor=${cursor}`, 422, undefined, true);
     await request(`/conversations/group/entries?cursor=${cursor}`, 422);
     for (const query of ["q=", "q=%20%20", "q=x&q=y", "q=x&limit=101", "q=x&after=1", `q=${"a".repeat(201)}`]) await request(`/messages/search?${query}`, 422);
+  } finally { await http.close(); await fixture.close(); }
+});
+
+test("history returns long replies in full and flags only runaway bodies as truncated", async () => {
+  const fixture = await createFixture();
+  const report = `开头${"热门项目总结。".repeat(9_000)}结尾`;
+  persisted(fixture, "c1", null, [
+    message("report", "assistant", [{ type: "text", text: report }]),
+    message("runaway", "assistant", [{ type: "text", text: "x".repeat(200_010) }]),
+  ]);
+  const { http, request } = await serve(fixture);
+  try {
+    const entries = (await request("/conversations/c1/entries")).data.entries;
+    const parts = (id: string) => entries.find((entry: any) => entry.id === id).message.content;
+    assert.deepEqual(parts("report"), [{ type: "text", text: report }]);
+    const [cut] = parts("runaway");
+    assert.equal(cut.text.length, 200_000);
+    assert.equal(cut.truncated, true);
   } finally { await http.close(); await fixture.close(); }
 });
 
