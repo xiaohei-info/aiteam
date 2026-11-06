@@ -3630,6 +3630,50 @@
               "coordinator"
             ],
             "description": "消息来源角色。"
+          },
+          "reply_file": {
+            "type": "object",
+            "required": [
+              "id",
+              "filename",
+              "path",
+              "chars"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "产物 ID，用于 /artifacts/{artifact_id} 打开或下载。"
+              },
+              "filename": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255,
+                "description": "文件名，例如 热门AI项目总结-1105-2010.md。"
+              },
+              "path": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "path 字段值。"
+                  },
+                  {
+                    "type": "null",
+                    "description": "允许为 null。"
+                  }
+                ],
+                "description": "产物在会话目录中的相对路径，例如 回复/热门AI项目总结-1105-2010.md。"
+              },
+              "chars": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "回复全文字数（按 Unicode 字符计）。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "员工一次执行的最后一条回复超过 2000 字时，全文另存成的 Markdown 产物；只出现在 assistant 消息条目上。文件被删除后不再返回，客户端显示全文。"
           }
         },
         "additionalProperties": true,

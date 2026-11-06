@@ -28,6 +28,7 @@ import type {
   ExpertProjection,
   SolutionProjection,
   ConversationFailureOut,
+  ReplyFile,
 } from '../api/agent/types'
 import type { EventSubscription } from '../api/agent/events'
 import {
@@ -143,6 +144,10 @@ export interface Message {
   failure?: ReplyFailure
   /** 正文超过 Agent 的长度上限被截断，正文下方提示。 */
   truncated?: boolean
+  /** 本次执行的最后一条回复已另存成文件：结束后只显示 replyPreview 和文件卡片。 */
+  replyFile?: ReplyFile
+  /** 折叠后显示的正文：之前的过程文字 + 回复开头约 500 字。 */
+  replyPreview?: string
 }
 
 // 附件按文档中的会话文件 ID 下载。

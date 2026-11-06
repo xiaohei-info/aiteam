@@ -10,6 +10,7 @@ import { createSettleTracker } from '../src/lib/groupStreamLifecycle.ts'
 import { classifyRequestError } from '../src/lib/requestError.ts'
 import { collectTodoTaskCards } from '../src/lib/todoTaskCard.ts'
 import { mergeReplyProjection, reconcileReplyProjection } from '../src/lib/replyProjection.ts'
+import { replyPreview } from '../src/lib/replyPreview.ts'
 
 function chatStore(api: Record<string, unknown>) {
   const source = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
@@ -615,6 +616,41 @@ test('a body the Agent cut at its length cap is flagged, also after merging a wo
   const [merged] = entriesToMessages([reply('b', '前半…', true), reply('c', '后续')] as any)
   assert.equal(merged.content, '前半…\n\n后续')
   assert.equal(merged.truncated, true)
+})
+
+test('a reply saved as a file keeps its full text and gets a preview, also as the last part of a work', () => {
+  const file = { id: 'file-1', filename: '总结-1105-2010.md', path: '回复/总结-1105-2010.md', chars: 2_001 }
+  const reply = (id: string, text: string, extra: Record<string, unknown> = {}) => ({ id, entry_ref: `ref-${id}`, type: 'message', work_id: 'w1', source_employee_id: 'pm',
+    message: { role: 'assistant', content: [{ type: 'text', text }], stopReason: 'stop' }, ...extra })
+  const long = `第一段\n${'长'.repeat(2_000)}`
+  const [single] = entriesToMessages([reply('a', long, { reply_file: file })] as any)
+  assert.equal(single.content, long)
+  assert.deepEqual(single.replyFile, file)
+  assert.equal(single.replyPreview, replyPreview(long))
+
+  const [merged] = entriesToMessages([reply('b', '我先查一下资料。'), reply('c', long, { reply_file: file })] as any)
+  assert.equal(merged.content, `我先查一下资料。\n\n${long}`)
+  assert.equal(merged.replyPreview, `我先查一下资料。\n\n${replyPreview(long)}`)
+
+  const [later] = entriesToMessages([reply('d', long, { reply_file: file }), reply('e', '补充一句')] as any)
+  assert.equal('replyFile' in later, false, 'a file that is not the last part would hide the later text')
+
+  for (const broken of [{ ...file, chars: '2001' }, { ...file, id: '' }, 'file-1', null]) {
+    const [message] = entriesToMessages([reply('f', long, { reply_file: broken })] as any)
+    assert.equal('replyFile' in message, false, JSON.stringify(broken))
+  }
+})
+
+test('reply preview cuts near 500 characters at a line break and closes an open code block', () => {
+  assert.equal(replyPreview('短回复'), '短回复')
+  const lines = Array.from({ length: 40 }, (_, index) => `第 ${index} 行：${'内容'.repeat(5)}`).join('\n')
+  const preview = replyPreview(lines)
+  assert.ok(Array.from(preview).length <= 504)
+  assert.match(preview, /行：(内容)+\n\n…$/u, 'ends on a whole line')
+  assert.equal(Array.from(replyPreview('😀'.repeat(600))).length, 503, 'counts characters, not UTF-16 units')
+  const code = replyPreview(`说明\n\`\`\`python\n${'x = 1\n'.repeat(200)}`)
+  assert.match(code, /\n```\n\n…$/u)
+  assert.equal((code.match(/```/g) ?? []).length, 2)
 })
 
 test('assistant message_end reports a failure only for failed model calls', () => {
