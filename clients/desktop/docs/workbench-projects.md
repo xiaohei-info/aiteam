@@ -16,7 +16,7 @@
 
 | 来源 | 读取位置 | 什么算一个项目 |
 |---|---|---|
-| Fred | 本机 Agent 接口 `GET /api/agent/workspaces` 返回会话的 `workspace_key`，宿主按 key 列出 `<agent-data>/workspaces/conversation-*` | 一个会话的工作目录算一个项目。群聊中每个员工的目录是一个子文件夹，已移出群聊的成员的目录也保留 |
+| Fred | 本机 Agent 接口 `GET /api/agent/workspaces` 返回会话的 `workspace_key`，宿主按 key 列出 `<agent-data>/workspaces/` 下的目录（私聊 `<会话名>-<短 ID>`，群聊成员 `<会话名>-<短 ID>/<员工名>`，旧版 `conversation-<24 位十六进制>`） | 一个会话的工作目录算一个项目。群聊中每个员工的目录是一个子文件夹，已移出群聊的成员的目录也保留 |
 | Codex | `$CODEX_HOME`（默认 `~/.codex`）下的 `sessions/`、`archived_sessions/` | 见下方「Codex / Claude 规则」 |
 | Claude Code | `$CLAUDE_CONFIG_DIR`（默认 `~/.claude`）下的 `projects/` | 同上 |
 | Claude 桌面版 | Code 标签页沿用 Claude Code 的会话记录；Cowork 读 `local-agent-mode-sessions/`（可用 `COWORK_SESSIONS_DIR` 覆盖） | Code 标签页同上；Cowork 会话的 `outputs/` 直接算 |
@@ -32,7 +32,7 @@
 
 单个项目最多列 2000 个文件，扫描最多 20000 个条目、12 层深。页面内预览的文件不超过 2 MB，更大的文件用系统默认应用打开。
 
-**标识**：普通项目和文件的 id 是路径的 FNV-1a 哈希（16 位十六进制），Fred 项目的 id 是 `workspace_key`。前端只传 id，路径一律由宿主重新解析，不接受前端传来的路径。
+**标识**：普通项目和文件的 id 是路径的 FNV-1a 哈希（16 位十六进制），Fred 项目的 id 是 `workspace_key`（可含中文和 `/`；运行状态目录名对这类 key 用哈希）。前端只传 id，路径一律由宿主重新解析，不接受前端传来的路径。
 
 ## 3. 运行
 

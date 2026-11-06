@@ -553,10 +553,18 @@ fn fred_workspaces_are_addressed_by_validated_keys_only() {
     assert_eq!(listed, [(key.as_str(), 2), (empty.as_str(), 0)]);
     assert_eq!(workspaces[0].name.as_deref(), Some("fred-game"));
 
+    let too_long = "长".repeat(129);
     for bad in [
+        "",
         "../x",
-        "conversation-ABCDEF",
-        "conversation-a1a1",
+        ".hidden",
+        "会话-a1b2c3/.cache",
+        "a/b/c",
+        "a/",
+        "/a",
+        "a\\b",
+        "a\u{7f}b",
+        too_long.as_str(),
         &format!("conversation-{}/..", "a1".repeat(12)),
     ] {
         assert_eq!(
@@ -565,6 +573,7 @@ fn fred_workspaces_are_addressed_by_validated_keys_only() {
         );
     }
     assert_eq!(fred_workspace(&root, &linked).unwrap(), None);
+    assert!(valid_workspace_key(&"长".repeat(128)));
     // Past the limit the newest stay and the page is told the rest were left out.
     let capped = list_fred_workspaces_up_to(&root, &keys, 1).unwrap();
     assert_eq!(capped.workspaces.len(), 1);
@@ -574,7 +583,7 @@ fn fred_workspaces_are_addressed_by_validated_keys_only() {
         AgentSource::Fred
     );
     assert_eq!(
-        parse_target("fred", "0123456789abcdef", None).unwrap_err(),
+        parse_target("fred", "../0123456789abcdef", None).unwrap_err(),
         "invalid_project_id"
     );
     assert_eq!(
@@ -609,4 +618,55 @@ fn parses_rfc3339_timestamps() {
         Some(1_790_841_600_500)
     );
     assert_eq!(parse_rfc3339_millis("2026-13-01T10:00:00Z"), None);
+}
+
+#[test]
+fn conversation_named_workspaces_resolve_one_or_two_levels_without_links() {
+    let root = std::env::temp_dir().join(format!("aiteam-fred-layout-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("热门AI项目总结-44f964")).unwrap();
+    std::fs::write(root.join("热门AI项目总结-44f964").join("report.md"), "报告").unwrap();
+    std::fs::create_dir_all(root.join("前端招聘组-22527b").join("产品经理")).unwrap();
+    std::fs::write(
+        root.join("前端招聘组-22527b")
+            .join("产品经理")
+            .join("index.html"),
+        "<p>x</p>",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("前端招聘组-22527b"), root.join("链接组-cccccc")).unwrap();
+
+    let keys = [
+        "热门AI项目总结-44f964".to_string(),
+        "前端招聘组-22527b/产品经理".to_string(),
+        "链接组-cccccc/产品经理".to_string(),
+    ];
+    let listed: Vec<_> = list_fred_workspaces(&root, &keys)
+        .unwrap()
+        .workspaces
+        .into_iter()
+        .map(|workspace| (workspace.workspace_key, workspace.file_count))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("热门AI项目总结-44f964".to_string(), 1),
+            ("前端招聘组-22527b/产品经理".to_string(), 1)
+        ]
+    );
+    assert_eq!(
+        fred_workspace(&root, "前端招聘组-22527b/产品经理").unwrap(),
+        Some(root.join("前端招聘组-22527b").join("产品经理"))
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        fred_workspace(&root, "链接组-cccccc/产品经理").unwrap(),
+        None
+    );
+    assert_eq!(
+        parse_target("fred", "前端招聘组-22527b/产品经理", None).unwrap(),
+        AgentSource::Fred
+    );
+    std::fs::remove_dir_all(&root).unwrap();
 }
