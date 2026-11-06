@@ -171,7 +171,7 @@ test("files stored before per-conversation folders move into them on start, also
   }
 });
 
-test("a replacing file counts against the quota only by its growth, and a failed replace keeps the old copy", () => {
+test("a replacing file takes the old copy's place, and a failed replace keeps the old copy", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-local-replace-test-"));
   const store = new AgentSqliteStore(join(root, "agent.sqlite"));
   const owner = ["c", "t", "m"] as const;
@@ -180,10 +180,9 @@ test("a replacing file counts against the quota only by its growth, and a failed
   store.createConversation({ id: "other", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
   try {
     const first = save("0.txt", Buffer.from("old"));
-    for (let index = 1; index < 32; index += 1) save(`${index}.txt`, Buffer.from("x"));
-    assert.throws(() => save("new.txt", Buffer.from("x")), /count limit/);
+    for (let index = 1; index < 40; index += 1) save(`${index}.txt`, Buffer.from("x"));
     const second = save("0.txt", Buffer.from("new"), [first.id]);
-    assert.equal(store.listOwnedLocalFiles(...owner).length, 32);
+    assert.equal(store.listOwnedLocalFiles(...owner).length, 40);
     assert.equal(store.getOwnedLocalFile(first.id, ...owner), undefined);
     assert.equal(existsSync(join(store.attachmentRoot, "c", `${first.id}.bin`)), false);
     assert.equal(store.readOwnedLocalFile(second.id, ...owner)?.data.toString(), "new");
@@ -195,12 +194,9 @@ test("a replacing file counts against the quota only by its growth, and a failed
 
     store.createConversation({ id: "bytes", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
     const inBytes = (filename: string, data: Buffer, replaces?: string[]) => store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "artifact", filename, path: filename, mimeType: "application/octet-stream", data, replaces });
-    const fiveMiB = Buffer.alloc(5 * 1024 * 1024);
     const small = inBytes("small.bin", Buffer.from("small"));
-    for (let index = 0; index < 9; index += 1) inBytes(`big-${index}.bin`, fiveMiB);
-    inBytes("one.bin", Buffer.alloc(1024 * 1024));
-    assert.throws(() => inBytes("small.bin", fiveMiB, [small.id]), /storage limit/);
-    assert.equal(store.readOwnedLocalFile(small.id, "bytes", "t", "m")?.data.toString(), "small", "a replace over the limit leaves the old copy");
+    assert.throws(() => inBytes("small.bin", Buffer.alloc(5 * 1024 * 1024 + 1), [small.id]), /maximum size/);
+    assert.equal(store.readOwnedLocalFile(small.id, "bytes", "t", "m")?.data.toString(), "small", "a replace that fails leaves the old copy");
     assert.equal(store.readOwnedLocalFile(third.id, ...owner)?.data.toString(), "again");
   } finally {
     store.close();
@@ -208,7 +204,7 @@ test("a replacing file counts against the quota only by its growth, and a failed
   }
 });
 
-test("local attachment quotas and startup cleanup keep managed storage bounded", () => {
+test("a conversation keeps any number and total size of files, and startup cleanup removes unindexed ones", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-local-quota-test-"));
   const path = join(root, "agent.sqlite");
   const store = new AgentSqliteStore(path);
@@ -222,14 +218,14 @@ test("local attachment quotas and startup cleanup keep managed storage bounded",
   const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
   store.db.prepare("UPDATE local_file SET created_at = ? WHERE id IN (?, ?)").run(old, stale.id, known.id);
   try {
-    for (let index = 1; index < 31; index += 1) store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "attachment", filename: `${index}.txt`, mimeType: "text/plain", data: Buffer.from("x") });
+    for (let index = 1; index < 40; index += 1) store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "attachment", filename: `${index}.txt`, mimeType: "text/plain", data: Buffer.from("x") });
     const artifact = store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "artifact", filename: "artifact.txt", mimeType: "text/plain", data: Buffer.from("x") });
     assert.equal(artifact.kind, "artifact");
-    assert.throws(() => store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "artifact", filename: "too-many.txt", mimeType: "text/plain", data: Buffer.from("x") }), /count limit/);
+    assert.equal(store.listOwnedLocalFiles("c", "t", "m").length, 41, "past the former limit of 32");
     store.createConversation({ id: "bytes", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
     const fiveMiB = Buffer.alloc(5 * 1024 * 1024);
-    for (let index = 0; index < 10; index += 1) store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "attachment", filename: `bytes-${index}.bin`, mimeType: "application/octet-stream", data: fiveMiB });
-    assert.throws(() => store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "artifact", filename: "too-large-artifact.bin", mimeType: "application/octet-stream", data: Buffer.from("x") }), /storage limit/);
+    for (let index = 0; index < 11; index += 1) store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "attachment", filename: `bytes-${index}.bin`, mimeType: "application/octet-stream", data: fiveMiB });
+    assert.equal(store.listOwnedLocalFiles("bytes", "t", "m").reduce((total, file) => total + file.byte_size, 0), 55 * 1024 * 1024, "past the former 50 MiB limit");
     store.close();
     writeFileSync(join(root, "attachments", ".stale.tmp"), "stale");
     writeFileSync(join(root, "attachments", "orphan.bin"), "orphan");
