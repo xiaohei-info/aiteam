@@ -28,8 +28,8 @@ import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../stora
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { CONTEXT_RESET_ENTRY_TYPE, failureText, serializePiEvent } from "./event-sse.js";
-import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
+import { CONTEXT_RESET_ENTRY_TYPE, failureText, redactSecrets, serializePiEvent } from "./event-sse.js";
+import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
@@ -245,6 +245,8 @@ interface SessionRecord {
   activeWorkId?: string;
   activeStatus?: "thinking" | "tool" | "text" | "waiting" | "error";
   activeMessage?: Record<string, unknown>;
+  /** Where the running prompt's entries start, so its last reply can be saved before it settles. */
+  activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
   factStatus?: MemoryStatusActivity;
   factPendingCount?: number;
   factUpdatedAt?: string;
@@ -1351,6 +1353,36 @@ export class SessionHost {
     return `${basename(record.workspace)}/`;
   }
 
+  private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
+    const tenantId = authorization?.caller.tenantId;
+    const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
+    if (!tenantId || !memberId) return;
+    const entry = [...entries].reverse().find((item) => item.type === "message" && item.message.role === "assistant");
+    if (entry?.type !== "message" || entry.message.role !== "assistant" || entry.message.stopReason === "error" || entry.message.stopReason === "aborted") return;
+    const text = entry.message.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("").trim();
+    if ([...text].length <= LONG_REPLY_CHARS || redactSecrets(text) !== text) return;
+    const data = Buffer.from(`${text}\n`, "utf8");
+    if (data.byteLength > MAX_LOCAL_FILE_BYTES || containsLikelySecret(data, "text/markdown")) return;
+    const entryRef = historyEntryRef(record.conversationId, record.employeeId, entry.id);
+    if (this.options.store.listReplyFiles(record.conversationId, tenantId, memberId).has(entryRef)) return;
+    const title = this.options.store.getConversationMetadata(record.conversationId)?.title?.trim();
+    const expert = record.employeeId ? this.options.store.listLoadedExperts(tenantId, memberId, true).find((item) => item.employee_id === record.employeeId) : undefined;
+    const name = `${safePathSegment(title || expert?.display_name, record.employeeId ?? "reply")}-${replyStamp(entry.timestamp)}`;
+    const taken = new Set(this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact").map((item) => item.path));
+    const folder = `${this.artifactPrefix(record)}回复/`;
+    let path = `${folder}${name}.md`;
+    for (let index = 2; taken.has(path); index += 1) path = `${folder}${name}-${index}.md`;
+    try {
+      this.options.store.createLocalFile({
+        conversationId: record.conversationId, tenantId, memberId, kind: "artifact",
+        filename: basename(path), path, mimeType: "text/markdown", data,
+        reply: { entryRef, chars: [...text].length },
+      });
+    } catch {
+      // A reply that cannot be stored simply stays chat-only.
+    }
+  }
+
   private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
@@ -1464,6 +1496,7 @@ export class SessionHost {
     // A new run supersedes the participant's last failure, whatever its own outcome.
     this.options.store.conversationFailures.clear(record.conversationId, record.employeeId);
     record.activeMessage = undefined;
+    record.activeReply = { authorization, entriesBefore };
     // Start the bounded async baseline scan without delaying Session initialization or aborts.
     const workspaceBeforePromise = scanWorkspaceFiles(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
@@ -1584,6 +1617,7 @@ export class SessionHost {
         record.activeWorkId = undefined;
         record.activeStatus = undefined;
         record.activeMessage = undefined;
+        record.activeReply = undefined;
         const baseline = await workspaceBeforePromise;
         // The async baseline may finish after Session initialization. Exclude files whose scan
         // observation proves they appeared during this run, otherwise the first capture sees them as old.
@@ -1946,6 +1980,10 @@ export class SessionHost {
       } else if (eventType === "agent_settled") {
         record.activeMessage = undefined;
         record.activeStatus = "waiting";
+        // Before clients hear the run settled, so the history they reload already links the file.
+        if (record.activeReply && !record.aborting) {
+          this.saveLongReply(record, record.activeReply.authorization, record.sessionManager.getEntries().slice(record.activeReply.entriesBefore));
+        }
       }
     }
     const entryId = this.entryIdentity(event);
@@ -2224,4 +2262,15 @@ function boundGroupContext(value: string): string {
   const head = Math.floor(MAX_GROUP_CONTEXT_CHARS / 2);
   const tail = MAX_GROUP_CONTEXT_CHARS - head - 1;
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
+}
+
+/** Replies longer than this many characters are also saved as a Markdown artifact. */
+export const LONG_REPLY_CHARS = 2_000;
+
+/** `MMDD-HHmm` in local time, as people read it in a file list. */
+function replyStamp(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  const date = Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  const two = (value: number) => String(value).padStart(2, "0");
+  return `${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}`;
 }

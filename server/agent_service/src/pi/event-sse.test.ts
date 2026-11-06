@@ -351,3 +351,13 @@ test("credential URL parameters keep their name and the rest of the URL, live an
   const plain = serializePiEvent({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "api_key=abc123 token: xyz Bearer qwe" }], stopReason: "stop" } } as never)?.message as Record<string, unknown>;
   assert.deepEqual(plain.content, [{ type: "text", text: "[内容已隐藏] [内容已隐藏] [内容已隐藏]" }]);
 });
+
+test("history entries carry a saved reply file only in its exact shape", () => {
+  const base = { id: "e1", type: "message", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } };
+  const file = { id: "file-1", filename: "总结-1105-2010.md", path: "回复/总结-1105-2010.md", chars: 2_001 };
+  assert.deepEqual(serializePiEntry({ ...base, reply_file: { ...file, storage_path: "/Users/me/secret.bin" } })?.reply_file, file);
+  assert.deepEqual(serializePiEntry({ ...base, reply_file: { ...file, path: null } })?.reply_file, { ...file, path: null });
+  for (const broken of [null, "file-1", { ...file, chars: -1 }, { ...file, chars: 1.5 }, { ...file, id: "" }, { ...file, filename: 3 }]) {
+    assert.equal(serializePiEntry({ ...base, reply_file: broken })?.reply_file, undefined, JSON.stringify(broken));
+  }
+});
