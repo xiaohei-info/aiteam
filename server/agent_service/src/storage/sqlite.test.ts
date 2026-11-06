@@ -162,7 +162,7 @@ test("files stored before per-conversation folders move into them on start, also
       assert.equal(existsSync(join(restarted.attachmentRoot, `${file.id}.bin`)), false);
     }
     assert.deepEqual(readdirSync(restarted.attachmentRoot), ["conv"]);
-    assert.deepEqual(restarted.listOwnedLocalFiles(...owner).map((item) => item.path), ["docs/a.md", "docs/b.md"]);
+    assert.deepEqual(restarted.listOwnedLocalFiles(...owner).map((item) => item.path).sort(), ["docs/a.md", "docs/b.md"]);
     restarted.deleteConversationLocalFiles(...owner);
     assert.deepEqual(readdirSync(restarted.attachmentRoot), []);
   } finally {
