@@ -850,7 +850,8 @@ test("a failed run saves no reply file, and group replies sit under the employee
     await host.prompt("reply-group", "成功", undefined, caller);
     const paths = fixture.store.listOwnedLocalFiles("reply-group", "tenant-1", "member-1", "artifact").map((item) => item.path);
     assert.equal(paths.length, 1);
-    assert.match(paths[0]!, /^产品经理\/回复\/产品经理-\d{4}-\d{4}\.md$/u, "an untitled conversation is named after the employee");
+    const workspacePrefix = basename(fixture.store.listConversationParticipants("reply-group")[0]!.workspace);
+    assert.match(paths[0]!, new RegExp(`^${workspacePrefix}/回复/产品经理-\\d{4}-\\d{4}\\.md$`, "u"), "group replies use the stable employee workspace folder");
     await host.dispose();
   } finally {
     await fixture.close();
