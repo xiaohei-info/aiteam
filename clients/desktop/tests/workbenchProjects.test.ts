@@ -12,6 +12,7 @@ import {
   formatSize,
   fredProjects,
   fredWorkspaceKeys,
+  partKey,
   fromLocalProject,
   hostErrorMessage,
   htmlPageToRun,
@@ -140,6 +141,23 @@ test('local projects map from the host and keep source states', () => {
 test('Fred lists only folders with files, once each', () => {
   // The host caps how many it lists (oldest dropped); the page sends all, newest first.
   assert.deepEqual(fredWorkspaceKeys(conversations), [KEY_A, KEY_B, KEY_C])
+})
+
+test('Fred keys named after the conversation pass through whole, slash and Chinese included', () => {
+  const member = '前端招聘组-22527b/产品经理'
+  const named: ConversationWorkspaces[] = [{
+    conversation_id: 'group-2',
+    kind: 'group',
+    title: '前端招聘组',
+    entry_employee_id: null,
+    coordinator_employee_id: 'e2',
+    updated_at: '2026-11-04T00:00:00Z',
+    workspaces: [{ employee_id: 'e2', role: 'coordinator', removed: false, workspace_key: member, has_files: true }],
+  }]
+  assert.deepEqual(fredWorkspaceKeys(named), [member])
+  const [project] = fredProjects(named, [workspace(member, [file('m1', 'index.html', 10, 'html')])], experts)
+  assert.equal(project.parts[0].id, member)
+  assert.equal(partKey(project.parts[0]), `fred:${member}`)
 })
 
 test('Fred chats are one folder; groups merge every member folder, removed ones included', () => {

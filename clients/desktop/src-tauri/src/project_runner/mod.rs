@@ -13,6 +13,7 @@ use detect::{RunUnit, Runner};
 use plan::{DependencySource, RunContext};
 use process::{Phase, ProcessRun, Ready};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use static_server::{encode_path, StaticServer};
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -39,14 +40,28 @@ fn unit_at(root: &Path, dir: &str) -> Result<(PathBuf, Runner), String> {
 /// had before units existed.
 fn unit_names(key: &RunKey) -> (String, String) {
     let (source, id, dir) = key;
+    let folder = run_folder_id(id);
     if dir.is_empty() {
-        (id.clone(), format!("{source}:{id}"))
+        (folder, format!("{source}:{id}"))
     } else {
         (
-            format!("{id}-{}", file_id(dir)),
+            format!("{folder}-{}", file_id(dir)),
             format!("{source}:{id}/{dir}"),
         )
     }
+}
+
+/// A project id as one folder name. Hex ids and legacy Fred keys stay as they are; a Fred key
+/// named after its conversation may hold any letter and a `/`, so it is hashed.
+fn run_folder_id(id: &str) -> String {
+    let plain = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if plain {
+        return id.to_string();
+    }
+    format!("k{}", &hex::encode(Sha256::digest(id.as_bytes()))[..24])
 }
 
 enum Run {
@@ -639,6 +654,34 @@ mod tests {
         let (name, consent) = unit_names(&unit("site"));
         assert!(name.starts_with("conversation-1-") && name.len() == "conversation-1-".len() + 16);
         assert_eq!(consent, "fred:conversation-1/site");
+        // A conversation-named key may hold any letter and a slash: its folder name is a hash.
+        let named: RunKey = (
+            "fred".into(),
+            "前端招聘组-22527b/产品经理".into(),
+            String::new(),
+        );
+        let (folder, consent) = unit_names(&named);
+        assert!(
+            folder.starts_with('k')
+                && folder.len() == 25
+                && folder[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        );
+        assert_eq!(consent, "fred:前端招聘组-22527b/产品经理");
+        assert_ne!(
+            folder,
+            unit_names(&(
+                "fred".into(),
+                "前端招聘组-22527b/工程师".into(),
+                String::new()
+            ))
+            .0
+        );
+        let (unit_folder, _) = unit_names(&(
+            "fred".into(),
+            "前端招聘组-22527b/产品经理".into(),
+            "web".into(),
+        ));
+        assert_eq!(unit_folder, format!("{folder}-{}", file_id("web")));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
