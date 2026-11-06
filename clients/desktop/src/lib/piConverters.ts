@@ -466,7 +466,8 @@ function groupWorkMessages(messages: Message[]): Message[] {
     }
     const previous = grouped[index]
     // 可重试的错误会先产出一条失败消息再自动重试：只以本次执行最后一条为准。
-    // 回复文件只属于最后一条；之前的过程文字原样保留在折叠正文里。
+    // 回复文件只属于最后一段正文；之前的过程文字原样保留在折叠正文里。
+    // 之后只有工具调用、没有正文的条目（例如结束前补更新任务清单）不影响它。
     const { failure: _previousFailure, replyFile: _previousReplyFile, replyPreview: _previousPreview, ...rest } = previous
     grouped[index] = {
       ...rest,
@@ -481,7 +482,9 @@ function groupWorkMessages(messages: Message[]): Message[] {
       ...(previous.truncated || message.truncated ? { truncated: true } : {}),
       ...(message.failure ? { failure: message.failure } : {}),
       ...(message.replyFile && message.replyPreview !== undefined
-        ? { replyFile: message.replyFile, replyPreview: [previous.content, message.replyPreview].filter(Boolean).join('\n\n') } : {}),
+        ? { replyFile: message.replyFile, replyPreview: [previous.content, message.replyPreview].filter(Boolean).join('\n\n') }
+        : !message.content && !message.failure && previous.replyFile && previous.replyPreview !== undefined
+          ? { replyFile: previous.replyFile, replyPreview: previous.replyPreview } : {}),
     }
   }
   return grouped
