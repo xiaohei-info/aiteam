@@ -2,8 +2,8 @@ import { connectorTools } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -28,15 +28,16 @@ import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../stora
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
 import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
-import { CONTEXT_RESET_ENTRY_TYPE, failureText, serializePiEvent } from "./event-sse.js";
-import { historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
+import { CONTEXT_RESET_ENTRY_TYPE, failureText, redactSecrets, serializePiEvent } from "./event-sse.js";
+import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
-import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
+import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
+import { conversationFolder, conversationFolderBase, employeeFolder } from "../workspace-layout.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
@@ -78,6 +79,7 @@ export interface PromptDeliveryOptions {
   hiddenPromptType?: string;
   /** See GroupMessageCommand.disableTools. */
   disableTools?: boolean;
+  attachmentIds?: string[];
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -217,13 +219,6 @@ interface Subscriber {
   queued: PiEventEnvelope[];
 }
 
-interface WorkspaceFileSnapshot {
-  path: string;
-  size: number;
-  mtimeMs: number;
-  mimeType: string;
-}
-
 interface SessionRecord {
   conversationId: string;
   employeeId?: string;
@@ -250,6 +245,8 @@ interface SessionRecord {
   activeWorkId?: string;
   activeStatus?: "thinking" | "tool" | "text" | "waiting" | "error";
   activeMessage?: Record<string, unknown>;
+  /** Where the running prompt's entries start, so its last reply can be saved before it settles. */
+  activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
   factStatus?: MemoryStatusActivity;
   factPendingCount?: number;
   factUpdatedAt?: string;
@@ -373,6 +370,7 @@ export class SessionHost {
         targetEmployeeIds,
         text,
         images,
+        attachmentIds: deliveryOptions?.attachmentIds,
         logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         idempotencyKey: deliveryOptions?.idempotencyKey,
         caller,
@@ -998,7 +996,7 @@ export class SessionHost {
     const participant = resolvedEmployeeId
       ? this.options.store.getConversationParticipant(conversationId, resolvedEmployeeId)
       : undefined;
-    const workspace = participant?.workspace || indexed.workspace || join(this.options.cwdRoot, this.safeDirectoryName(`${conversationId}:${resolvedEmployeeId ?? "conversation"}`));
+    const workspace = participant?.workspace || indexed.workspace || this.newWorkspace(indexed, conversationId, resolvedEmployeeId);
     this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
     this.assertManagedPath(workspace, this.options.cwdRoot);
@@ -1346,42 +1344,52 @@ export class SessionHost {
     await controlled?.shutdown?.();
   }
 
-  private workspaceSnapshot(root: string): Map<string, WorkspaceFileSnapshot> {
-    const files = new Map<string, WorkspaceFileSnapshot>();
-    const visit = (directory: string): void => {
-      let entries;
-      try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
-        const path = join(directory, entry.name);
-        if (entry.isDirectory()) {
-          visit(path);
-          continue;
-        }
-        if (!entry.isFile() || !isSafeArtifactFilename(entry.name)) continue;
-        const mimeType = mimeTypeForFilename(entry.name);
-        if (!mimeType) continue;
-        try {
-          const info = lstatSync(path);
-          if (!info.isFile()) continue;
-          const pathFromRoot = relative(root, path);
-          if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) continue;
-          files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, mimeType });
-        } catch {
-          // A file can disappear while a tool is writing it; ignore that snapshot.
-        }
-      }
-    };
-    visit(root);
-    return files;
+  /** Group chats keep each employee's files under its name so two `README.md` never collide. */
+  private artifactPrefix(record: SessionRecord): string {
+    const metadata = this.options.store.getConversationMetadata(record.conversationId);
+    if (!record.employeeId || !(metadata?.kind === "group" || metadata?.coordinator_employee_id)) return "";
+    // The workspace folder is fixed when created and already includes a unique suffix.
+    // Do not derive artifact paths from the mutable employee display name.
+    return `${basename(record.workspace)}/`;
   }
 
-  private captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFileSnapshot>): void {
+  private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
     if (!tenantId || !memberId) return;
-    const existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
-    for (const [pathFromRoot, current] of this.workspaceSnapshot(record.workspace)) {
+    const entry = [...entries].reverse().find((item) => item.type === "message" && item.message.role === "assistant");
+    if (entry?.type !== "message" || entry.message.role !== "assistant" || entry.message.stopReason === "error" || entry.message.stopReason === "aborted") return;
+    const text = entry.message.content.filter((part): part is TextContent => part.type === "text").map((part) => part.text).join("").trim();
+    if ([...text].length <= LONG_REPLY_CHARS || redactSecrets(text) !== text) return;
+    const data = Buffer.from(`${text}\n`, "utf8");
+    if (data.byteLength > MAX_LOCAL_FILE_BYTES || containsLikelySecret(data, "text/markdown")) return;
+    const entryRef = historyEntryRef(record.conversationId, record.employeeId, entry.id);
+    if (this.options.store.listReplyFiles(record.conversationId, tenantId, memberId).has(entryRef)) return;
+    const title = this.options.store.getConversationMetadata(record.conversationId)?.title?.trim();
+    const expert = record.employeeId ? this.options.store.listLoadedExperts(tenantId, memberId, true).find((item) => item.employee_id === record.employeeId) : undefined;
+    const name = `${safePathSegment(title || expert?.display_name, record.employeeId ?? "reply")}-${replyStamp(entry.timestamp)}`;
+    const taken = new Set(this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact").map((item) => item.path));
+    const folder = `${this.artifactPrefix(record)}回复/`;
+    let path = `${folder}${name}.md`;
+    for (let index = 2; taken.has(path); index += 1) path = `${folder}${name}-${index}.md`;
+    try {
+      this.options.store.createLocalFile({
+        conversationId: record.conversationId, tenantId, memberId, kind: "artifact",
+        filename: basename(path), path, mimeType: "text/markdown", data,
+        reply: { entryRef, chars: [...text].length },
+      });
+    } catch {
+      // A reply that cannot be stored simply stays chat-only.
+    }
+  }
+
+  private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
+    const tenantId = authorization?.caller.tenantId;
+    const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
+    if (!tenantId || !memberId) return;
+    let existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
+    const prefix = this.artifactPrefix(record);
+    for (const [pathFromRoot, current] of await scanWorkspaceFiles(record.workspace)) {
       const previous = before.get(pathFromRoot);
       if (previous && previous.size === current.size && previous.mtimeMs === current.mtimeMs) continue;
       if (current.size > MAX_LOCAL_FILE_BYTES) continue;
@@ -1393,19 +1401,24 @@ export class SessionHost {
         continue;
       }
       if (data.byteLength > MAX_LOCAL_FILE_BYTES || (IMAGE_MIMES.has(current.mimeType) && !hasImageSignature(current.mimeType, data)) || containsLikelySecret(data, current.mimeType)) continue;
-      const filename = basename(pathFromRoot);
+      const path = `${prefix}${pathFromRoot}`;
       const sha256 = createHash("sha256").update(data).digest("hex");
-      if (existing.some((item) => item.filename === filename && item.sha256 === sha256)) continue;
+      // One artifact per path: an edited file replaces its previous copy instead of piling up.
+      const older = existing.filter((item) => item.path === path);
+      if (older.some((item) => item.sha256 === sha256)) continue;
       try {
         const artifact = this.options.store.createLocalFile({
           conversationId: record.conversationId,
           tenantId,
           memberId,
           kind: "artifact",
-          filename,
+          filename: basename(pathFromRoot),
+          path,
           mimeType: current.mimeType,
           data,
+          replaces: older.map((item) => item.id),
         });
+        existing = existing.filter((item) => !older.includes(item));
         existing.push(artifact);
         this.options.store.markLocalFilesReferenced([artifact.id], record.conversationId, tenantId, memberId, "artifact");
       } catch {
@@ -1483,7 +1496,9 @@ export class SessionHost {
     // A new run supersedes the participant's last failure, whatever its own outcome.
     this.options.store.conversationFailures.clear(record.conversationId, record.employeeId);
     record.activeMessage = undefined;
-    const workspaceBefore = this.workspaceSnapshot(record.workspace);
+    record.activeReply = { authorization, entriesBefore };
+    // Start the bounded async baseline scan without delaying Session initialization or aborts.
+    const workspaceBeforePromise = scanWorkspaceFiles(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
     let sourceCapture = Promise.resolve();
     let settled = false;
@@ -1522,6 +1537,9 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
+      if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
+        this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
+      }
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
@@ -1583,7 +1601,9 @@ export class SessionHost {
           if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
         }
       } finally {
-        this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
+        // The model run is over before the bounded artifact post-processing finishes. Clear the
+        // active state first so callers can change thinking level or start the next run while the
+        // filesystem snapshot is being finalized.
         record.promptPromise = undefined;
         record.sessionReady = undefined;
         record.prompting = false;
@@ -1597,6 +1617,12 @@ export class SessionHost {
         record.activeWorkId = undefined;
         record.activeStatus = undefined;
         record.activeMessage = undefined;
+        record.activeReply = undefined;
+        const baseline = await workspaceBeforePromise;
+        // The async baseline may finish after Session initialization. Exclude files whose scan
+        // observation proves they appeared during this run, otherwise the first capture sees them as old.
+        const before = new Map<string, WorkspaceFile>([...baseline].filter(([, file]) => file.scannedAtMs < startedAt));
+        await this.captureWorkspaceArtifacts(record, authorization, before);
         await this.disposeSession(record);
       }
     }
@@ -1954,6 +1980,10 @@ export class SessionHost {
       } else if (eventType === "agent_settled") {
         record.activeMessage = undefined;
         record.activeStatus = "waiting";
+        // Before clients hear the run settled, so the history they reload already links the file.
+        if (record.activeReply && !record.aborting) {
+          this.saveLongReply(record, record.activeReply.authorization, record.sessionManager.getEntries().slice(record.activeReply.entriesBefore));
+        }
       }
     }
     const entryId = this.entryIdentity(event);
@@ -2005,8 +2035,26 @@ export class SessionHost {
     if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path escapes Agent data root");
   }
 
-  private safeDirectoryName(conversationId: string): string {
-    return `conversation-${createHash("sha256").update(conversationId).digest("hex").slice(0, 24)}`;
+  /**
+   * A new working folder named after the conversation (see workspace-layout.ts): a private chat's
+   * employee works in the conversation folder, each group member in a subfolder of it.
+   */
+  private newWorkspace(indexed: ConversationRecord, conversationId: string, employeeId: string | undefined): string {
+    const root = resolve(this.options.cwdRoot);
+    const store = this.options.store;
+    const experts = store.listLoadedExperts(indexed.tenantId ?? undefined, indexed.memberId ?? undefined, true);
+    const displayName = (id: string | null | undefined) => id ? experts.find((expert) => expert.employee_id === id)?.display_name : undefined;
+    const group = indexed.kind === "group" || Boolean(indexed.coordinatorEmployeeId);
+    const participants = group ? store.listConversationParticipants(conversationId, { includeRemoved: true }) : [];
+    const shared = participants.map((participant) => participant.workspace).find((path) => path && dirname(dirname(resolve(path))) === root);
+    const conversationDir = shared ? dirname(resolve(shared)) : conversationFolder(
+      root,
+      conversationFolderBase({ title: indexed.title, employeeName: displayName(indexed.coordinatorEmployeeId ?? indexed.entryEmployeeId ?? employeeId), createdAt: indexed.createdAt }),
+      conversationId,
+      (path) => store.workspaceInUse(path),
+    );
+    if (!group || !employeeId) return conversationDir;
+    return employeeFolder(conversationDir, displayName(employeeId), employeeId, (path) => store.workspaceInUse(path));
   }
 }
 
@@ -2214,4 +2262,15 @@ function boundGroupContext(value: string): string {
   const head = Math.floor(MAX_GROUP_CONTEXT_CHARS / 2);
   const tail = MAX_GROUP_CONTEXT_CHARS - head - 1;
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
+}
+
+/** Replies longer than this many characters are also saved as a Markdown artifact. */
+export const LONG_REPLY_CHARS = 2_000;
+
+/** `MMDD-HHmm` in local time, as people read it in a file list. */
+function replyStamp(timestamp: string): string {
+  const parsed = new Date(timestamp);
+  const date = Number.isFinite(parsed.getTime()) ? parsed : new Date();
+  const two = (value: number) => String(value).padStart(2, "0");
+  return `${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}`;
 }

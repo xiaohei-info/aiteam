@@ -300,7 +300,8 @@ const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Ty
 const ConversationContentPart = Type.Union([
   Type.Object({
     type: Type.Literal("text", { description: "普通文本片段。" }),
-    text: Type.String({ description: "文本片段。" }),
+    text: Type.String({ description: "文本片段。user/assistant 正文在历史条目和 message_end 中完整返回（仅超过 200000 字时截断），message_update 快照最多 4000 字；toolResult 文本最多 4000 字。" }),
+    truncated: Type.Optional(Type.Boolean({ description: "user/assistant 正文被长度上限截断时为 true；未截断时不返回。" })),
   }, { additionalProperties: false, description: "文本内容片段。" }),
   Type.Object({
     type: Type.Literal("thinking", { description: "模型思考片段。" }),
@@ -349,6 +350,12 @@ const ConversationEntry = Type.Object({
   source_employee_id: Type.Optional(Type.String({ description: "产生该条目的员工 ID。" })),
   source_employee_display_name: Type.Optional(Type.String({ description: "产生该条目的员工展示名。" })),
   source_role: Type.Optional(Type.String({ enum: ["human", "child", "participant", "coordinator"], description: "消息来源角色。" })),
+  reply_file: Type.Optional(Type.Object({
+    id: Type.String({ minLength: 1, description: "产物 ID，用于 /artifacts/{artifact_id} 打开或下载。" }),
+    filename: Type.String({ minLength: 1, maxLength: 255, description: "文件名，例如 热门AI项目总结-1105-2010.md。" }),
+    path: Type.Union([Type.String({ minLength: 1, maxLength: 1024 }), Type.Null()], { description: "产物在会话目录中的相对路径，例如 回复/热门AI项目总结-1105-2010.md。" }),
+    chars: Type.Integer({ minimum: 0, description: "回复全文字数（按 Unicode 字符计）。" }),
+  }, { additionalProperties: false, description: "员工一次执行的最后一条回复超过 2000 字时，全文另存成的 Markdown 产物；只出现在 assistant 消息条目上。文件被删除后不再返回，客户端显示全文。" })),
 }, { $id: "ConversationEntry", additionalProperties: true, description: "会话历史条目（仅返回脱敏后的持久化视图）。", "x-dynamic-json": true });
 const ConversationEntriesEnvelope = Type.Object({ data: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }), entries: Type.Array(Type.Ref("ConversationEntry"), { description: "按 timestamp、conversation ID、participant ID、Session append ordinal、Pi entry ID 正序；同逻辑输入去重。" }) }, { additionalProperties: false }), page: Type.Optional(Type.Ref("Page")) }, { $id: "ConversationEntriesEnvelope", description: "无查询参数保持旧 data 形状且不返回 page；提供 limit/cursor/entry_ref 时分页。Pi JSONL 为正文事实源，只读不创建 Session。" });
 const PiSseToolCall = Type.Object({
@@ -391,6 +398,7 @@ const PiSseEventData = Type.Object({
   toolCallId: Type.Optional(Type.String({ description: "Pi 工具调用 ID；与 toolName、执行事件关联。" })),
   toolName: Type.Optional(Type.String({ description: "工具名称。" })),
   tool_kind: Type.Optional(Type.String({ enum: ["memory", "rag", "todo"], description: "Agent 专用工具类别；普通工具不返回此字段。" })),
+  file_name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: "read、write、edit 的 tool_execution_start/update 提供：所操作文件的文件名，不含目录；像凭据的文件名、隐藏文件不提供。args 不含路径，进度展示只能用它。" })),
   args: Type.Optional(PiSseJsonValue),
   partialResult: Type.Optional(PiSseJsonValue),
   result: Type.Optional(PiSseJsonValue),
@@ -639,7 +647,7 @@ const AudioTranscriptionResponse = Type.Object({
 }, { $id: "AudioTranscriptionResponse", additionalProperties: false, description: "语音识别结果。" });
 const AudioTranscriptionEnvelope = Type.Object({ data: Type.Ref("AudioTranscriptionResponse") }, { $id: "AudioTranscriptionEnvelope", description: "语音识别响应。" });
 const LocalFileMetadata = Type.Object({
-  id: Type.String({ minLength: 1, description: "文件 ID。" }), conversation_id: Type.String({ minLength: 1, description: "所属会话 ID。" }), tenant_id: Type.String({ minLength: 1, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, description: "所属成员 ID。" }), kind: Type.String({ enum: ["attachment", "artifact"], description: "文件类型。" }), filename: Type.String({ minLength: 1, maxLength: MAX_LOCAL_FILE_NAME, description: "安全文件名。" }), mime_type: Type.String({ enum: FILE_MIME_TYPES, description: "文件 MIME 类型。" }), byte_size: Type.Integer({ minimum: 0, maximum: MAX_LOCAL_FILE_BYTES, description: "文件字节数；单文件最大 5 MiB。" }), sha256: Type.String({ minLength: 64, maxLength: 64, pattern: "^[a-f0-9]{64}$", description: "文件内容 SHA-256 摘要。" }), created_at: Type.String({ format: "date-time", description: "创建时间（ISO 8601 UTC）。" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time", description: "被提示引用的时间。" }), Type.Null()], { description: "被提示引用的时间；未引用时为 null。" })),
+  id: Type.String({ minLength: 1, description: "文件 ID。" }), conversation_id: Type.String({ minLength: 1, description: "所属会话 ID。" }), tenant_id: Type.String({ minLength: 1, description: "企业租户 ID。" }), member_id: Type.String({ minLength: 1, description: "所属成员 ID。" }), kind: Type.String({ enum: ["attachment", "artifact"], description: "文件类型。" }), filename: Type.String({ minLength: 1, maxLength: MAX_LOCAL_FILE_NAME, description: "安全文件名。" }), path: Type.Union([Type.String({ minLength: 1, maxLength: 1024, description: "产物在会话目录中的相对路径，用 / 分隔，例如 html-game-demo/js/game.js；群聊以员工名开头。上传的附件为 null。" }), Type.Null()], { description: "产物相对路径；附件为 null。" }), mime_type: Type.String({ enum: FILE_MIME_TYPES, description: "文件 MIME 类型。" }), byte_size: Type.Integer({ minimum: 0, maximum: MAX_LOCAL_FILE_BYTES, description: "文件字节数；单文件最大 5 MiB。" }), sha256: Type.String({ minLength: 64, maxLength: 64, pattern: "^[a-f0-9]{64}$", description: "文件内容 SHA-256 摘要。" }), created_at: Type.String({ format: "date-time", description: "创建时间（ISO 8601 UTC）。" }), referenced_at: Type.Optional(Type.Union([Type.String({ format: "date-time", description: "被提示引用的时间。" }), Type.Null()], { description: "被提示引用的时间；未引用时为 null。" })),
 }, { $id: "LocalFileMetadata", description: "本地文件元数据；响应不包含文件内容。" });
 const LocalFileEnvelope = Type.Object({ data: Type.Ref("LocalFileMetadata") }, { $id: "LocalFileEnvelope", description: "单个本地文件响应。" });
 const Page = Type.Object({ next_cursor: Type.Union([Type.String({ minLength: 1, description: "下一页游标。" }), Type.Null()], { description: "下一页游标；无下一页时为 null。" }), has_more: Type.Boolean({ description: "是否还有更多。" }) }, { $id: "Page", description: "分页信息；当前文件、授权和市场列表返回 null 游标表示一次性结果。" });
@@ -789,7 +797,7 @@ const EXAMPLE_CONVERSATION = {
 };
 const EXAMPLE_FILE = {
   id: "file-1", conversation_id: "conversation-1", tenant_id: "tenant-1", member_id: "member-1",
-  kind: "attachment", filename: "notes.md", mime_type: "text/markdown", byte_size: 5,
+  kind: "attachment", filename: "notes.md", path: null, mime_type: "text/markdown", byte_size: 5,
   sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   created_at: "2026-09-01T08:02:00.000Z", referenced_at: null,
 };
@@ -908,7 +916,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   listConversationEntries: { request: { limit: { summary: "条数", value: 50 }, cursor: { summary: "上一页 next_cursor", value: "page_v1.opaque" }, entry_ref: { summary: "搜索定位", value: "entry_v1_opaque" } }, responses: { "200": { description: "脱敏历史条目；无参数不返回 page，分页参数启用正序续读。", examples: { paged: { summary: "带 limit 的历史分页；引用仅为形状示例，实际值来自响应", value: { data: { conversation_id: "conversation-1", entries: [{ id: "pi-entry-1", entry_ref: "entry_v1_opaque", participant_employee_id: "employee-1", type: "message", parentId: null, timestamp: "2026-09-05T08:00:00.000Z", source_employee_id: "employee-1", source_role: "participant", message: { role: "assistant", content: "以下是今日总结。" } }] }, page: { next_cursor: "page_v1.opaque", has_more: true } } }, entries: { summary: "消息、思考和工具条目", value: { data: { conversation_id: "conversation-1", entries: [{ id: "entry-1", type: "message", timestamp: "2026-09-01T08:02:00.000Z", message: { role: "user", content: "请总结今天的工作" } }, { id: "entry-2", type: "message", timestamp: "2026-09-01T08:02:01.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "整理信息" }, { type: "text", text: "这是摘要" }] } }, { id: "entry-3", type: "message", message: { role: "toolResult", toolCallId: "call-1", toolName: "bash", isError: false, content: "done" } }] } } } } } } },
   abortConversation: { responses: { "200": { description: "终止结果；没有活动执行时 aborted 为 false。", examples: { aborted: { summary: "终止结果", value: { data: { conversation_id: "conversation-1", aborted: true } } } } } } },
   listAttachments: { responses: { "200": { description: "会话附件元数据列表；当前为一次性结果。", examples: { list: { summary: "附件列表", value: { data: [EXAMPLE_FILE], page: EXAMPLE_PAGE } } } } } },
-  listArtifacts: { responses: { "200": { description: "会话产物元数据列表；当前为一次性结果。", examples: { list: { summary: "产物列表", value: { data: [{ ...EXAMPLE_FILE, id: "artifact-1", kind: "artifact", filename: "report.md" }], page: EXAMPLE_PAGE } } } } } },
+  listArtifacts: { responses: { "200": { description: "会话产物元数据列表；当前为一次性结果。", examples: { list: { summary: "产物列表", value: { data: [{ ...EXAMPLE_FILE, id: "artifact-1", kind: "artifact", filename: "report.md", path: "output/report.md" }], page: EXAMPLE_PAGE } } } } } },
   uploadAttachment: { request: { file: { summary: "附件上传", value: { filename: "notes.md", mime_type: "text/markdown", data: "bm90ZXM=" } } }, responses: { "201": { description: "已保存的附件元数据；不返回文件字节。", examples: { uploaded: { summary: "上传成功", value: { data: EXAMPLE_FILE } } } } } },
   uploadArtifact: { request: { file: { summary: "产物上传", value: { filename: "report.md", mime_type: "text/markdown", data: "cmVwb3J0" } } }, responses: { "201": { description: "已保存的产物元数据；不返回文件字节。", examples: { uploaded: { summary: "上传成功", value: { data: { ...EXAMPLE_FILE, id: "artifact-1", kind: "artifact", filename: "report.md" } } } } } } },
   downloadAttachment: { responses: { "200": { description: "按文件元数据返回原始二进制；Content-Type 与文件 MIME 一致。", examples: { text: { summary: "文本附件", value: "notes" } } } } },
@@ -1437,7 +1445,7 @@ export class AgentHttpServer {
     }));
     this.registerRoute("GET", "/api/agent/messages/search", (request, response, caller) => {
       this.writeJson(response, 200, this.conversationReads.search(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
-    }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 4,000 字/32 块展示截断影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
+    }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 展示的长度与 32 块上限影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);
@@ -2501,7 +2509,7 @@ export class AgentHttpServer {
     const callerId = caller.callerId;
     const heartbeat = setInterval(() => this.options.store.renewLease(conversationId, callerId, key, ownerInstance), 10_000);
     try {
-      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, ...delivery });
+      const lastEntryId = await this.options.host.prompt(conversationId, text, images, caller, mentions, { logicalMessageId: key, idempotencyKey: key, attachmentIds, ...delivery });
       if (!lastEntryId) {
         this.options.store.markUnknown(conversationId, callerId, key, ownerInstance, undefined, { code: "prompt_not_settled", detail: "Prompt did not produce a proven terminal entry" });
         return;
@@ -2766,7 +2774,6 @@ export class AgentHttpServer {
       this.writeJson(response, 201, { data: record });
     } catch (error) {
       if (error instanceof Error && error.message.includes("maximum size")) throw new HttpProblem(413, "file_too_large", error.message);
-      if (error instanceof Error && (error.message.includes("Local file count limit") || error.message.includes("Local file storage limit"))) throw new HttpProblem(413, "local_file_storage_limit", error.message);
       throw error;
     }
   }

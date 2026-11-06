@@ -21,6 +21,7 @@ import { HINDSIGHT_CLIENT_PROTOCOL, normalizeHindsightRuntimeConfig, type Hindsi
 import type { SessionAuthorization } from "./session-host.js";
 import { ApprovalService } from "../approval-service.js";
 import { createRagMcpFactory, ragToolNames } from "./rag-mcp.js";
+import { todoReminderExtension, todoUpdateAllowed } from "./todo-reminder.js";
 
 const HINDSIGHT_TOOLS = new Set(["hindsight_recall", "hindsight_retain"]);
 const DEFAULT_MEMORY_TOOLS = ["hindsight_recall", "hindsight_retain"] as const;
@@ -133,6 +134,7 @@ export function createControlledResourceLoader(
     extensionFactories: [
       ...(lifecycle ? [lifecycle.factory] : []),
       ...(rag ? [rag] : []),
+      ...(authorization && todoUpdateAllowed(authorization.snapshot.tool_policy) ? [todoReminderExtension] : []),
     ],
   });
   let shutdownPromise: Promise<void> | undefined;

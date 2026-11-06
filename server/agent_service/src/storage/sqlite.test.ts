@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -119,7 +119,7 @@ test("local files are metadata-owned, atomically stored, and deleted by conversa
   try {
     const record = store.createLocalFile({ conversationId: "conversation-1", tenantId: "tenant-1", memberId: "member-1", kind: "attachment", filename: "photo.png", mimeType: "image/png", data: Buffer.from("png") });
     assert.equal(record.byte_size, 3);
-    assert.equal(statSync(join(store.attachmentRoot, `${record.id}.bin`)).mode & 0o777, 0o600);
+    assert.equal(statSync(join(store.attachmentRoot, "conversation-1", `${record.id}.bin`)).mode & 0o777, 0o600);
     assert.deepEqual(store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1").map((item) => item.id), [record.id]);
     assert.equal(store.listOwnedLocalFiles("conversation-1", "tenant-1", "other-member").length, 0);
     assert.equal(store.readOwnedLocalFile(record.id, "conversation-1", "tenant-1", "member-1")?.data.toString(), "png");
@@ -127,17 +127,84 @@ test("local files are metadata-owned, atomically stored, and deleted by conversa
     store.markLocalFilesReferenced([record.id], "conversation-1", "tenant-1", "member-1");
     assert(store.getOwnedLocalFile(record.id, "conversation-1", "tenant-1", "member-1")?.referenced_at);
     assert.throws(() => store.createLocalFile({ conversationId: "conversation-1", tenantId: "tenant-1", memberId: "member-1", kind: "attachment", filename: "../escape", mimeType: "text/plain", data: Buffer.from("x") }), /Invalid local file name/);
-    rmSync(join(store.attachmentRoot, `${record.id}.bin`), { force: true });
+    rmSync(join(store.attachmentRoot, "conversation-1", `${record.id}.bin`), { force: true });
     store.deleteConversationLocalFiles("conversation-1", "tenant-1", "member-1");
     assert.equal(store.listOwnedLocalFiles("conversation-1", "tenant-1", "member-1").length, 0);
-    assert.equal(statSync(join(store.attachmentRoot, `${record.id}.bin`), { throwIfNoEntry: false }), undefined);
+    assert.equal(statSync(join(store.attachmentRoot, "conversation-1", `${record.id}.bin`), { throwIfNoEntry: false }), undefined);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("local attachment quotas and startup cleanup keep managed storage bounded", () => {
+test("files stored before per-conversation folders move into them on start, also after a crash mid-move", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-local-layout-test-"));
+  const path = join(root, "agent.sqlite");
+  const store = new AgentSqliteStore(path);
+  store.createConversation({ id: "conv", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+  const owner = ["conv", "t", "m"] as const;
+  const created = ["a", "b"].map((name) => store.createLocalFile({ conversationId: "conv", tenantId: "t", memberId: "m", kind: "artifact", filename: `${name}.md`, path: `docs/${name}.md`, mimeType: "text/markdown", data: Buffer.from(name) }));
+  assert.equal(created[0]!.path, "docs/a.md");
+  assert.throws(() => store.createLocalFile({ conversationId: "conv", tenantId: "t", memberId: "m", kind: "artifact", filename: "x.md", path: "../x.md", mimeType: "text/markdown", data: Buffer.from("x") }), /Invalid local file path/);
+  // Rewind to the old layout: both blobs directly in attachments/. For "b" the link into the
+  // folder already exists, as if the previous start stopped right after linking.
+  for (const file of created) {
+    const legacy = join(store.attachmentRoot, `${file.id}.bin`);
+    renameSync(join(store.attachmentRoot, "conv", `${file.id}.bin`), legacy);
+    store.db.prepare("UPDATE local_file SET storage_path = ? WHERE id = ?").run(legacy, file.id);
+  }
+  linkSync(join(store.attachmentRoot, `${created[1]!.id}.bin`), join(store.attachmentRoot, "conv", `${created[1]!.id}.bin`));
+  store.close();
+  const restarted = new AgentSqliteStore(path);
+  try {
+    for (const [index, file] of created.entries()) {
+      assert.equal(restarted.readOwnedLocalFile(file.id, ...owner)?.data.toString(), ["a", "b"][index]);
+      assert.equal(existsSync(join(restarted.attachmentRoot, `${file.id}.bin`)), false);
+    }
+    assert.deepEqual(readdirSync(restarted.attachmentRoot), ["conv"]);
+    assert.deepEqual(restarted.listOwnedLocalFiles(...owner).map((item) => item.path).sort(), ["docs/a.md", "docs/b.md"]);
+    restarted.deleteConversationLocalFiles(...owner);
+    assert.deepEqual(readdirSync(restarted.attachmentRoot), []);
+  } finally {
+    restarted.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a replacing file takes the old copy's place, and a failed replace keeps the old copy", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiteam-local-replace-test-"));
+  const store = new AgentSqliteStore(join(root, "agent.sqlite"));
+  const owner = ["c", "t", "m"] as const;
+  const save = (filename: string, data: Buffer, replaces?: string[]) => store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "artifact", filename, path: filename, mimeType: "text/plain", data, replaces });
+  store.createConversation({ id: "c", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+  store.createConversation({ id: "other", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+  try {
+    const first = save("0.txt", Buffer.from("old"));
+    for (let index = 1; index < 40; index += 1) save(`${index}.txt`, Buffer.from("x"));
+    const second = save("0.txt", Buffer.from("new"), [first.id]);
+    assert.equal(store.listOwnedLocalFiles(...owner).length, 40);
+    assert.equal(store.getOwnedLocalFile(first.id, ...owner), undefined);
+    assert.equal(existsSync(join(store.attachmentRoot, "c", `${first.id}.bin`)), false);
+    assert.equal(store.readOwnedLocalFile(second.id, ...owner)?.data.toString(), "new");
+
+    store.createLocalFile({ conversationId: "other", tenantId: "t", memberId: "m", kind: "artifact", filename: "a.txt", mimeType: "text/plain", data: Buffer.from("a") });
+    const foreign = store.listOwnedLocalFiles("other", "t", "m")[0]!;
+    const third = save("0.txt", Buffer.from("again"), [second.id, foreign.id]);
+    assert(store.getOwnedLocalFile(foreign.id, "other", "t", "m"), "another conversation's file is never replaced");
+
+    store.createConversation({ id: "bytes", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+    const inBytes = (filename: string, data: Buffer, replaces?: string[]) => store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "artifact", filename, path: filename, mimeType: "application/octet-stream", data, replaces });
+    const small = inBytes("small.bin", Buffer.from("small"));
+    assert.throws(() => inBytes("small.bin", Buffer.alloc(5 * 1024 * 1024 + 1), [small.id]), /maximum size/);
+    assert.equal(store.readOwnedLocalFile(small.id, "bytes", "t", "m")?.data.toString(), "small", "a replace that fails leaves the old copy");
+    assert.equal(store.readOwnedLocalFile(third.id, ...owner)?.data.toString(), "again");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a conversation keeps any number and total size of files, and startup cleanup removes unindexed ones", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-local-quota-test-"));
   const path = join(root, "agent.sqlite");
   const store = new AgentSqliteStore(path);
@@ -151,26 +218,31 @@ test("local attachment quotas and startup cleanup keep managed storage bounded",
   const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
   store.db.prepare("UPDATE local_file SET created_at = ? WHERE id IN (?, ?)").run(old, stale.id, known.id);
   try {
-    for (let index = 1; index < 31; index += 1) store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "attachment", filename: `${index}.txt`, mimeType: "text/plain", data: Buffer.from("x") });
+    for (let index = 1; index < 40; index += 1) store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "attachment", filename: `${index}.txt`, mimeType: "text/plain", data: Buffer.from("x") });
     const artifact = store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "artifact", filename: "artifact.txt", mimeType: "text/plain", data: Buffer.from("x") });
     assert.equal(artifact.kind, "artifact");
-    assert.throws(() => store.createLocalFile({ conversationId: "c", tenantId: "t", memberId: "m", kind: "artifact", filename: "too-many.txt", mimeType: "text/plain", data: Buffer.from("x") }), /count limit/);
+    assert.equal(store.listOwnedLocalFiles("c", "t", "m").length, 41, "past the former limit of 32");
     store.createConversation({ id: "bytes", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
     const fiveMiB = Buffer.alloc(5 * 1024 * 1024);
-    for (let index = 0; index < 10; index += 1) store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "attachment", filename: `bytes-${index}.bin`, mimeType: "application/octet-stream", data: fiveMiB });
-    assert.throws(() => store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "artifact", filename: "too-large-artifact.bin", mimeType: "application/octet-stream", data: Buffer.from("x") }), /storage limit/);
+    for (let index = 0; index < 11; index += 1) store.createLocalFile({ conversationId: "bytes", tenantId: "t", memberId: "m", kind: "attachment", filename: `bytes-${index}.bin`, mimeType: "application/octet-stream", data: fiveMiB });
+    assert.equal(store.listOwnedLocalFiles("bytes", "t", "m").reduce((total, file) => total + file.byte_size, 0), 55 * 1024 * 1024, "past the former 50 MiB limit");
     store.close();
     writeFileSync(join(root, "attachments", ".stale.tmp"), "stale");
     writeFileSync(join(root, "attachments", "orphan.bin"), "orphan");
+    writeFileSync(join(root, "attachments", "c", "orphan.bin"), "orphan");
+    mkdirSync(join(root, "attachments", "empty"));
     const restarted = new AgentSqliteStore(path);
     try {
-      assert.equal(statSync(join(restarted.attachmentRoot, `${indexed.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
-      assert.equal(statSync(join(restarted.attachmentRoot, `${stale.id}.bin`), { throwIfNoEntry: false }), undefined);
+      assert.equal(statSync(join(restarted.attachmentRoot, "c", `${indexed.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
+      assert.equal(statSync(join(restarted.attachmentRoot, "stale", `${stale.id}.bin`), { throwIfNoEntry: false }), undefined);
       assert.equal(restarted.getOwnedLocalFile(stale.id, "stale", "t", "m"), undefined);
-      assert.equal(statSync(join(restarted.attachmentRoot, `${known.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
+      assert.equal(statSync(join(restarted.attachmentRoot, "known", `${known.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
       assert(restarted.getOwnedLocalFile(known.id, "known", "t", "m")?.referenced_at);
       assert.equal(statSync(join(restarted.attachmentRoot, ".stale.tmp"), { throwIfNoEntry: false }), undefined);
       assert.equal(statSync(join(restarted.attachmentRoot, "orphan.bin"), { throwIfNoEntry: false }), undefined);
+      assert.equal(statSync(join(restarted.attachmentRoot, "c", "orphan.bin"), { throwIfNoEntry: false }), undefined);
+      assert.equal(statSync(join(restarted.attachmentRoot, "empty"), { throwIfNoEntry: false }), undefined);
+      assert.equal(statSync(join(restarted.attachmentRoot, "stale"), { throwIfNoEntry: false }), undefined, "a folder left empty by cleanup goes too");
     } finally { restarted.close(); }
   } finally {
     try { store.close(); } catch { /* already closed */ }
@@ -197,10 +269,10 @@ test("startup cleanup protects unreferenced files for accepted and unknown promp
     store.close();
     const restarted = new AgentSqliteStore(path);
     try {
-      assert.equal(statSync(join(restarted.attachmentRoot, `${ordinary.id}.bin`), { throwIfNoEntry: false }), undefined);
+      assert.equal(statSync(join(restarted.attachmentRoot, "ordinary", `${ordinary.id}.bin`), { throwIfNoEntry: false }), undefined);
       assert.equal(restarted.getOwnedLocalFile(ordinary.id, "ordinary", "t", "m"), undefined);
-      assert.equal(statSync(join(restarted.attachmentRoot, `${accepted.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
-      assert.equal(statSync(join(restarted.attachmentRoot, `${unknown.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
+      assert.equal(statSync(join(restarted.attachmentRoot, "accepted", `${accepted.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
+      assert.equal(statSync(join(restarted.attachmentRoot, "unknown", `${unknown.id}.bin`), { throwIfNoEntry: false })?.isFile(), true);
       assert(restarted.getOwnedLocalFile(accepted.id, "accepted", "t", "m"));
       assert(restarted.getOwnedLocalFile(unknown.id, "unknown", "t", "m"));
     } finally { restarted.close(); }

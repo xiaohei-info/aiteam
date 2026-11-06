@@ -404,4 +404,15 @@ describe("toEmployeeConfigIn", () => {
     expect(minimal.tools).toEqual(["t1"]);
     expect(minimal.model_policy.model).toBe("gpt-4o");
   });
+
+  it("剔除招募来源字段：后端写入端禁止多余字段，回传会导致 422", () => {
+    const recruited: EmployeeConfig = {
+      ...employeeConfigured,
+      source_template_id: "template-1",
+      source_template_version: "3",
+    };
+    const keys = Object.keys(toEmployeeConfigIn(recruited));
+    expect(keys).not.toContain("source_template_id");
+    expect(keys).not.toContain("source_template_version");
+  });
 });

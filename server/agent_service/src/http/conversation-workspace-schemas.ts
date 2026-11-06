@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { WORKSPACE_KEY_SOURCE } from "../workspace-layout.js";
 
 const nullableId = (description: string) => Type.Union([Type.String({ minLength: 1, maxLength: 256 }), Type.Null()], { description });
 
@@ -6,7 +7,7 @@ const ConversationWorkspace = Type.Object({
   employee_id: nullableId("使用该工作目录的数字员工；旧版无员工会话为 null。"),
   role: Type.String({ enum: ["entry", "coordinator", "member"], description: "entry 为私聊入口员工，coordinator 为群协调员工，member 为其他群成员。" }),
   removed: Type.Boolean({ description: "该成员已移出群聊；目录保留历史产出，仍会返回。" }),
-  workspace_key: Type.String({ pattern: "^conversation-[0-9a-f]{24}$", description: "受管工作目录名（Agent 数据目录 workspaces/ 下的直接子目录）；不返回本机绝对路径。" }),
+  workspace_key: Type.String({ minLength: 1, maxLength: 257, pattern: WORKSPACE_KEY_SOURCE, description: "受管工作目录相对 Agent 数据目录 workspaces/ 的路径，以 / 分隔：私聊为「会话名-短 ID」一段，群聊成员为「会话名-短 ID/员工名」两段；旧版目录为 conversation-<24 位十六进制> 一段。各段不以 . 开头、不含路径分隔符与控制字符；不返回本机绝对路径。" }),
   has_files: Type.Boolean({ description: "目录内是否至少有一个非空文件；忽略隐藏文件、node_modules、__pycache__、venv 与符号链接。目录过大、扫描达到上限仍未确定时按 true 返回，由桌面端列文件时再确认，避免把有项目的目录判成没有文件。" }),
 }, { $id: "ConversationWorkspace", additionalProperties: false, description: "一个数字员工在会话中的受管工作目录；不含文件列表与内容。" });
 

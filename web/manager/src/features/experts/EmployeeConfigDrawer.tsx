@@ -107,6 +107,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     archive_reason,
     archived_at,
     memory_policy,
+    source_template_id,
+    source_template_version,
     ...editable
   } = config;
   void employee_id;
@@ -117,6 +119,9 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   void archived_at;
   // Memory is edited independently and immediately. Never echo a stale drawer snapshot.
   void memory_policy;
+  // Recruitment source is server-owned; the write schema forbids extra fields (422).
+  void source_template_id;
+  void source_template_version;
   return editable;
 }
 

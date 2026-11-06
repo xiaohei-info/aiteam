@@ -6,6 +6,9 @@ export const MAX_TODO_ITEMS = 32;
 export const MAX_TODO_ID_CHARS = 128;
 export const MAX_TODO_TITLE_CHARS = 500;
 
+/** System prompt rule: the list only moves when the model updates it, so spell out when to do that. */
+export const TODO_PROMPT_HINT = "For multi-step work, create the user-visible checklist with todo_update before you start, then call it again every time an item starts or finishes: in_progress for the item you are starting, completed for the item you just finished. The user follows your progress only through these updates, so every finished item must be completed before your final reply.";
+
 const INLINE_SECRET = /(?:bearer\s+|basic\s+|(?:sk|pk|rk)-)[a-z0-9._~+/=-]+|(?:token|secret|password|api[ _-]?key)\s*[:=]\s*[^\s,;]+/gi;
 const INLINE_PATH = /(?:\/(?:Users|private|home|tmp|var|workspace|etc|root)(?:\/[^\s"'<>]*)*|[A-Za-z]:\\[^\s"'<>]*)/gi;
 
@@ -58,7 +61,7 @@ export function createTodoUpdateTool(): ToolDefinition<typeof todoUpdateParamete
   return defineTool({
     name: TODO_UPDATE_TOOL_NAME,
     label: "Update todo list",
-    description: "Replace the bounded local todo list for the current response.",
+    description: "Replace the checklist the user sees for the current response. Send every item each time. Set an item to in_progress when you start it and to completed as soon as it is done, and update the list before your final reply.",
     promptSnippet: "todo_update(items)",
     parameters: todoUpdateParameters,
     executionMode: "sequential",
