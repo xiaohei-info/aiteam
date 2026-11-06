@@ -244,6 +244,26 @@ test('next-message reconciliation preserves prior steps, text and tool results o
   } finally { await store.getState().abortStream('c') }
 })
 
+test('a reply spanning several entries shows when it finished and still sorts by when it started', () => {
+  const started = Date.parse('2026-11-05T14:10:00.000Z')
+  const finished = Date.parse('2026-11-05T14:21:00.000Z')
+  const entry = (id: string, timestamp: number, content: unknown[]) => ({
+    id, entry_ref: id, type: 'message', work_id: 'w1', timestamp: new Date(timestamp).toISOString(),
+    message: { role: 'assistant', content, timestamp },
+  })
+  const clock = (ms: number) => {
+    const at = new Date(ms)
+    return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  }
+  const [reply, ...others] = entriesToMessages([
+    entry('call', started, [{ type: 'toolCall', id: 't1', name: 'bash', arguments: {} }]),
+    entry('final', finished, [{ type: 'text', text: 'done' }]),
+  ] as never)
+  assert.equal(others.length, 0)
+  assert.equal(reply.time, clock(finished))
+  assert.equal(reply._ts, started)
+})
+
 test('agent_start after settled opens a new employee reply without work_id and does not revive old rows', async () => {
   let emit: (event: any) => void = () => {}
   const store = chatStore({

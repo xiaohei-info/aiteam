@@ -1,10 +1,10 @@
 import { lstat, opendir, realpath } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import type { AgentSqliteStore, OwnedConversationWorkspaces } from "../storage/sqlite.js";
 import { safeText } from "../pi/event-sse.js";
+import { WORKSPACE_KEY_PATTERN } from "../workspace-layout.js";
 
-/** Managed workspace directory name produced by SessionHost.safeDirectoryName. */
-export const WORKSPACE_KEY_PATTERN = /^conversation-[0-9a-f]{24}$/u;
+export { WORKSPACE_KEY_PATTERN };
 
 /** Directories that never count as project output. Hidden entries are skipped separately. */
 const IGNORED_DIRECTORIES = new Set(["node_modules", "__pycache__", "venv"]);
@@ -98,18 +98,23 @@ export class ConversationWorkspaceService {
   }
 }
 
-/** Returns the directory key when `path` is an existing, non-symlinked direct child of `root`. */
+/**
+ * The folder's path below the canonical `root` (`/`-separated, see WORKSPACE_KEY_PATTERN) when
+ * `path` is an existing folder there. The stored path must end in the same segments as the
+ * resolved one, so a symlinked folder or parent folder is never listed.
+ */
 export async function managedWorkspaceKey(path: string, root: string): Promise<string | null> {
   if (!path) return null;
-  const key = basename(path);
-  if (!WORKSPACE_KEY_PATTERN.test(key)) return null;
   try {
     if (!(await lstat(path)).isDirectory()) return null;
   } catch {
     return null;
   }
   const resolved = await canonical(path);
-  return resolved && dirname(resolved) === root && basename(resolved) === key ? key : null;
+  if (!resolved) return null;
+  const key = relative(root, resolved).split(sep).join("/");
+  if (!WORKSPACE_KEY_PATTERN.test(key) || join(root, key) !== resolved) return null;
+  return resolve(path).endsWith(`${sep}${key.split("/").join(sep)}`) ? key : null;
 }
 
 /**

@@ -2,25 +2,41 @@
 
 use super::*;
 
-/// Fred's managed workspace folder name: `conversation-<24 hex>`.
+/// Longest segment of a workspace key, in characters; same as the Agent's rule.
+const MAX_KEY_SEGMENT_CHARS: usize = 128;
+
+/// Fred's `workspace_key`: the folder's path below `workspaces/`. One segment for a private chat
+/// (`<会话名>-<短 ID>`, or a legacy `conversation-<24 hex>`), two for a group member
+/// (`<会话名>-<短 ID>/<员工名>`). No segment starts with a dot or holds a separator or control
+/// character, so a key never leaves the root. Mirrors `WORKSPACE_KEY_PATTERN` in the Agent.
 pub(super) fn valid_workspace_key(key: &str) -> bool {
-    key.strip_prefix("conversation-").is_some_and(|hex| {
-        hex.len() == 24
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    let segments: Vec<&str> = key.split('/').collect();
+    (1..=2).contains(&segments.len()) && segments.iter().all(|segment| valid_key_segment(segment))
 }
 
-/// Fred's managed workspace folder for `key`, if it exists as a real folder.
+fn valid_key_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && !segment.starts_with('.')
+        && segment.chars().count() <= MAX_KEY_SEGMENT_CHARS
+        && !segment
+            .chars()
+            .any(|ch| ch == '/' || ch == '\\' || ch.is_ascii_control())
+}
+
+/// Fred's managed workspace folder for `key`, if it exists as a real folder. Each level is
+/// checked without following links, so a linked conversation folder never resolves.
 pub(super) fn fred_workspace(root: &Path, key: &str) -> Result<Option<PathBuf>, String> {
     if !valid_workspace_key(key) {
         return Err("invalid_workspace_key".into());
     }
-    let dir = root.join(key);
-    Ok(std::fs::symlink_metadata(&dir)
-        .is_ok_and(|meta| meta.is_dir())
-        .then_some(dir))
+    let mut dir = root.to_path_buf();
+    for segment in key.split('/') {
+        dir.push(segment);
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(dir))
 }
 
 /// Lists the Fred workspaces `keys` names, newest first as given. The host alone decides how

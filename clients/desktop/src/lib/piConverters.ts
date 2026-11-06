@@ -471,6 +471,8 @@ function groupWorkMessages(messages: Message[]): Message[] {
     const { failure: _previousFailure, replyFile: _previousReplyFile, replyPreview: _previousPreview, ...rest } = previous
     grouped[index] = {
       ...rest,
+      // 显示完成时间；_ts 保持开始时间，它决定排序和时间分隔。
+      time: message.time || previous.time,
       content: [previous.content, message.content].filter(Boolean).join('\n\n'),
       thinkingSteps: [...(previous.thinkingSteps ?? []), ...(message.thinkingSteps ?? [])],
       toolCalls: [...(previous.toolCalls ?? []), ...(message.toolCalls ?? [])],
