@@ -3,7 +3,7 @@ import { appLogger, makeRequestContext, requestContext, safeError } from "../obs
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -38,6 +38,7 @@ import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
+import { conversationFolder, conversationFolderBase, employeeFolder } from "../workspace-layout.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
@@ -998,7 +999,7 @@ export class SessionHost {
     const participant = resolvedEmployeeId
       ? this.options.store.getConversationParticipant(conversationId, resolvedEmployeeId)
       : undefined;
-    const workspace = participant?.workspace || indexed.workspace || join(this.options.cwdRoot, this.safeDirectoryName(`${conversationId}:${resolvedEmployeeId ?? "conversation"}`));
+    const workspace = participant?.workspace || indexed.workspace || this.newWorkspace(indexed, conversationId, resolvedEmployeeId);
     this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
     mkdirSync(workspace, { recursive: true, mode: 0o700 });
     this.assertManagedPath(workspace, this.options.cwdRoot);
@@ -1395,12 +1396,6 @@ export class SessionHost {
     return `${basename(record.workspace)}/`;
   }
 
-  /**
-   * A finished run whose last reply runs past LONG_REPLY_CHARS also gets that reply as a Markdown
-   * artifact, so the chat can show the opening and a file card. A reply the chat would show with
-   * anything redacted, or one that cannot be stored (over the file size limit), stays chat-only
-   * and is shown in full.
-   */
   private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
@@ -1587,10 +1582,10 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
-      const text = this.latestAssistantText(this.replyEntries(record, entriesBefore));
       if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
         this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
       }
+      const text = this.latestAssistantText(this.replyEntries(record, entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
       // completed when no successful terminal entry was proven.
@@ -2088,8 +2083,26 @@ export class SessionHost {
     if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Path escapes Agent data root");
   }
 
-  private safeDirectoryName(conversationId: string): string {
-    return `conversation-${createHash("sha256").update(conversationId).digest("hex").slice(0, 24)}`;
+  /**
+   * A new working folder named after the conversation (see workspace-layout.ts): a private chat's
+   * employee works in the conversation folder, each group member in a subfolder of it.
+   */
+  private newWorkspace(indexed: ConversationRecord, conversationId: string, employeeId: string | undefined): string {
+    const root = resolve(this.options.cwdRoot);
+    const store = this.options.store;
+    const experts = store.listLoadedExperts(indexed.tenantId ?? undefined, indexed.memberId ?? undefined, true);
+    const displayName = (id: string | null | undefined) => id ? experts.find((expert) => expert.employee_id === id)?.display_name : undefined;
+    const group = indexed.kind === "group" || Boolean(indexed.coordinatorEmployeeId);
+    const participants = group ? store.listConversationParticipants(conversationId, { includeRemoved: true }) : [];
+    const shared = participants.map((participant) => participant.workspace).find((path) => path && dirname(dirname(resolve(path))) === root);
+    const conversationDir = shared ? dirname(resolve(shared)) : conversationFolder(
+      root,
+      conversationFolderBase({ title: indexed.title, employeeName: displayName(indexed.coordinatorEmployeeId ?? indexed.entryEmployeeId ?? employeeId), createdAt: indexed.createdAt }),
+      conversationId,
+      (path) => store.workspaceInUse(path),
+    );
+    if (!group || !employeeId) return conversationDir;
+    return employeeFolder(conversationDir, displayName(employeeId), employeeId, (path) => store.workspaceInUse(path));
   }
 }
 

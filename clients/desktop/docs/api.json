@@ -413,8 +413,10 @@
           },
           "workspace_key": {
             "type": "string",
-            "pattern": "^conversation-[0-9a-f]{24}$",
-            "description": "受管工作目录名（Agent 数据目录 workspaces/ 下的直接子目录）；不返回本机绝对路径。"
+            "minLength": 1,
+            "maxLength": 257,
+            "pattern": "^[^./\\\\\\u0000-\\u001f\\u007f][^/\\\\\\u0000-\\u001f\\u007f]{0,127}(?:/[^./\\\\\\u0000-\\u001f\\u007f][^/\\\\\\u0000-\\u001f\\u007f]{0,127})?$",
+            "description": "受管工作目录相对 Agent 数据目录 workspaces/ 的路径，以 / 分隔：私聊为「会话名-短 ID」一段，群聊成员为「会话名-短 ID/员工名」两段；旧版目录为 conversation-<24 位十六进制> 一段。各段不以 . 开头、不含路径分隔符与控制字符；不返回本机绝对路径。"
           },
           "has_files": {
             "type": "boolean",
@@ -3383,7 +3385,11 @@
               },
               "text": {
                 "type": "string",
-                "description": "文本片段。"
+                "description": "文本片段。user/assistant 正文在历史条目和 message_end 中完整返回（仅超过 200000 字时截断），message_update 快照最多 4000 字；toolResult 文本最多 4000 字。"
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "user/assistant 正文被长度上限截断时为 true；未截断时不返回。"
               }
             },
             "additionalProperties": false,
@@ -6261,6 +6267,7 @@
           "member_id",
           "kind",
           "filename",
+          "path",
           "mime_type",
           "byte_size",
           "sha256",
@@ -6300,6 +6307,21 @@
             "minLength": 1,
             "maxLength": 255,
             "description": "安全文件名。"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "description": "产物在会话目录中的相对路径，用 / 分隔，例如 html-game-demo/js/game.js；群聊以员工名开头。上传的附件为 null。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "产物相对路径；附件为 null。"
           },
           "mime_type": {
             "type": "string",

@@ -398,6 +398,7 @@ const PiSseEventData = Type.Object({
   toolCallId: Type.Optional(Type.String({ description: "Pi 工具调用 ID；与 toolName、执行事件关联。" })),
   toolName: Type.Optional(Type.String({ description: "工具名称。" })),
   tool_kind: Type.Optional(Type.String({ enum: ["memory", "rag", "todo"], description: "Agent 专用工具类别；普通工具不返回此字段。" })),
+  file_name: Type.Optional(Type.String({ minLength: 1, maxLength: 255, description: "read、write、edit 的 tool_execution_start/update 提供：所操作文件的文件名，不含目录；像凭据的文件名、隐藏文件不提供。args 不含路径，进度展示只能用它。" })),
   args: Type.Optional(PiSseJsonValue),
   partialResult: Type.Optional(PiSseJsonValue),
   result: Type.Optional(PiSseJsonValue),
@@ -2773,7 +2774,6 @@ export class AgentHttpServer {
       this.writeJson(response, 201, { data: record });
     } catch (error) {
       if (error instanceof Error && error.message.includes("maximum size")) throw new HttpProblem(413, "file_too_large", error.message);
-      if (error instanceof Error && (error.message.includes("Local file count limit") || error.message.includes("Local file storage limit"))) throw new HttpProblem(413, "local_file_storage_limit", error.message);
       throw error;
     }
   }

@@ -101,6 +101,10 @@
   font-size: 0.85em;
   color: var(--text-muted);
 }
+.tm-truncated-note {
+  font-size: 0.69rem;
+  color: var(--text-muted);
+}
 
 /* ─── 图片 ─── */
 

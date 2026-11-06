@@ -426,9 +426,7 @@ interface ConversationRow {
 const DEFAULT_LEASE_MS = 30_000;
 const LOCAL_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const LOCAL_FILE_MAX_NAME = 255;
-// Conservative local-file quota per tenant/member and conversation, shared by both kinds.
-const MAX_LOCAL_FILES_PER_CONVERSATION = 32;
-const MAX_LOCAL_FILE_BYTES_PER_CONVERSATION = 50 * 1024 * 1024;
+// A conversation keeps any number of files; only each file's size is capped (LOCAL_FILE_MAX_BYTES).
 // Unreferenced uploads are retained briefly so a delayed prompt can still use them.
 const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -495,6 +493,14 @@ export class AgentSqliteStore {
         PRIMARY KEY (conversation_id, employee_id)
       );
       CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
+
+      -- Workspace folders being renamed to the conversation-named layout; a row outlives a crash
+      -- between the rename and the path update, so the next start finishes the move.
+      CREATE TABLE IF NOT EXISTS workspace_move (
+        old_path TEXT PRIMARY KEY,
+        new_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS schedule_retry (
         conversation_id TEXT PRIMARY KEY,
@@ -918,6 +924,63 @@ export class AgentSqliteStore {
     return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
   }
 
+  /** Every conversation with its workspace paths, any owner; used once at start-up to move legacy folders. */
+  listAllConversationWorkspaces(): Array<OwnedConversationWorkspaces & { tenant_id: string | null; member_id: string | null; created_at: string }> {
+    // SAFETY: the selected columns are exactly the declared row fields.
+    const conversations = this.db.prepare(`
+      SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at, tenant_id, member_id, created_at
+      FROM conversation ORDER BY created_at, id
+    `).all() as unknown as Array<Omit<OwnedConversationWorkspaces, "participants"> & { tenant_id: string | null; member_id: string | null; created_at: string }>;
+    // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id.
+    const participants = this.db.prepare(`
+      SELECT conversation_id, employee_id, role, workspace, removed_at FROM conversation_participant_session
+      ORDER BY conversation_id, CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
+    `).all() as unknown as Array<ConversationWorkspaceParticipant & { conversation_id: string }>;
+    const byConversation = new Map<string, ConversationWorkspaceParticipant[]>();
+    for (const { conversation_id: conversationId, ...participant } of participants) {
+      byConversation.set(conversationId, [...(byConversation.get(conversationId) ?? []), participant]);
+    }
+    return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
+  }
+
+  /** True when a conversation, a participant or a pending move uses `path` or a folder inside it. */
+  workspaceInUse(path: string): boolean {
+    const prefix = `${path}/`;
+    const inside = "(x = ? OR substr(x, 1, length(?)) = ?)";
+    const query = (table: string, column: string) => `SELECT 1 FROM ${table} WHERE ${inside.replaceAll("x", column)}`;
+    return [
+      query("conversation", "workspace"),
+      query("conversation_participant_session", "workspace"),
+      query("workspace_move", "new_path"),
+    ].some((sql) => this.db.prepare(sql).get(path, prefix, prefix) !== undefined);
+  }
+
+  listWorkspaceMoves(): Array<{ old_path: string; new_path: string }> {
+    return this.db.prepare("SELECT old_path, new_path FROM workspace_move ORDER BY created_at, old_path").all() as Array<{ old_path: string; new_path: string }>;
+  }
+
+  /** Records the moves of one conversation together, so its folders never end up half planned. */
+  planWorkspaceMoves(moves: ReadonlyArray<{ oldPath: string; newPath: string }>): void {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const insert = this.db.prepare("INSERT INTO workspace_move(old_path, new_path, created_at) VALUES (?, ?, ?)");
+      for (const move of moves) insert.run(move.oldPath, move.newPath, now);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** Points every row at the moved folder and drops the pending move, in one transaction. */
+  finishWorkspaceMove(oldPath: string, newPath: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE conversation SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("UPDATE conversation_participant_session SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("DELETE FROM workspace_move WHERE old_path = ?").run(oldPath);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
   /** Returns the row even for a removed member so a re-added member resumes the same Session. */
   getConversationParticipant(conversationId: string, employeeId: string): ConversationParticipantSession | undefined {
     return this.db.prepare(`
@@ -1015,7 +1078,7 @@ export class AgentSqliteStore {
     path?: string;
     mimeType: string;
     data: Buffer;
-    /** IDs this file replaces: they stop counting toward the quota and go in the same transaction. */
+    /** IDs this file replaces: they are removed in the same transaction as the insert. */
     replaces?: readonly string[];
     /** Set when the file holds the full text of one employee reply. */
     reply?: { entryRef: string; chars: number };
@@ -1049,11 +1112,6 @@ export class AgentSqliteStore {
         const file = this.getOwnedLocalFile(replacedId, input.conversationId, input.tenantId, input.memberId);
         return file ? [file] : [];
       });
-      const quota = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(byte_size), 0) AS bytes FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").get(input.conversationId, input.tenantId, input.memberId) as { count: number; bytes: number };
-      quota.count -= replaced.length;
-      quota.bytes -= replaced.reduce((total, file) => total + file.byte_size, 0);
-      if (quota.count >= MAX_LOCAL_FILES_PER_CONVERSATION) throw new Error(`Local file count limit is ${MAX_LOCAL_FILES_PER_CONVERSATION} per conversation`);
-      if (quota.bytes + input.data.byteLength > MAX_LOCAL_FILE_BYTES_PER_CONVERSATION) throw new Error(`Local file storage limit is ${MAX_LOCAL_FILE_BYTES_PER_CONVERSATION} bytes per conversation`);
       this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at, source_entry_ref, reply_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.path, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at, input.reply?.entryRef ?? null, input.reply?.chars ?? null);
       for (const file of replaced) {
         this.db.prepare("DELETE FROM local_file WHERE id = ?").run(file.id);

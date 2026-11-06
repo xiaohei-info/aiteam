@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { isSafeArtifactFilename } from "../local-files.js";
 
 const ALLOWED_EVENTS = new Set([
   "agent_start", "agent_end", "agent_settled", "message_update", "message_end",
@@ -36,6 +37,9 @@ const MAX_TEXT_CHARS = 4_000;
 export const MAX_MESSAGE_TEXT_CHARS = 200_000;
 const MAX_TOOL_NAME_CHARS = 128;
 const MAX_IDENTIFIER_CHARS = 256;
+const MAX_FILE_NAME_CHARS = 255;
+/** Tools whose `path` argument names one file; the progress line shows that file's name. */
+const FILE_TOOLS = new Set(["read", "write", "edit"]);
 const MAX_SOURCE_NAME_CHARS = 256;
 const MAX_OBJECT_KEYS = 24;
 const MAX_ARRAY_ITEMS = 32;
@@ -209,11 +213,30 @@ function serializeToolEvent(result: Record<string, unknown>, raw: Record<string,
   // Ordinary coding/custom tools still get bounded summaries. The serializer
   // strips credentials, paths, runtime objects, and oversized payloads below.
   if (raw.type !== "tool_execution_end" && Object.prototype.hasOwnProperty.call(raw, "args")) result.args = safeToolValue(raw.args, kind);
+  if (raw.type !== "tool_execution_end") {
+    const fileName = toolFileName(raw);
+    if (fileName) result.file_name = fileName;
+  }
   if (raw.type === "tool_execution_update" && Object.prototype.hasOwnProperty.call(raw, "partialResult")) result.partialResult = safeToolResult(raw.partialResult, kind);
   if (raw.type === "tool_execution_end") {
     if (Object.prototype.hasOwnProperty.call(raw, "result")) result.result = safeToolResult(raw.result, kind);
     copyBoolean(result, raw, "isError");
   }
+}
+
+/**
+ * The name, without any directory, of the file a read/write/edit call works on. `args` drops every
+ * path, so this is the only place the user can see which file is being written. Names that look
+ * like credentials, hidden files, or that the text redaction would change are left out.
+ */
+function toolFileName(raw: Record<string, unknown>): string | undefined {
+  if (typeof raw.toolName !== "string" || !FILE_TOOLS.has(raw.toolName)) return undefined;
+  const path = asRecord(raw.args)?.path;
+  if (typeof path !== "string") return undefined;
+  const name = path.split(/[\\/]/).pop() ?? "";
+  if (!name || name === "." || name === ".." || Array.from(name).length > MAX_FILE_NAME_CHARS) return undefined;
+  if (/[\u0000-\u001f\u007f]/u.test(name) || !isSafeArtifactFilename(name)) return undefined;
+  return safeText(name, MAX_FILE_NAME_CHARS) === name ? name : undefined;
 }
 
 function serializeMessage(value: unknown, bodyMax: number): Record<string, unknown> | undefined {

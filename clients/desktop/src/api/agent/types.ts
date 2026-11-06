@@ -238,7 +238,8 @@ export const CONTEXT_RESET_ENTRY_TYPE = 'aiteam_context_reset'
 
 // server.ts ConversationContentPart。前端消息渲染要按 type 分流。
 export type ConversationContentPart =
-  | { type: 'text'; text: string }
+  // truncated：正文超过 Agent 的兜底上限（20 万字）被截断；正常回复完整返回，不带该字段。
+  | { type: 'text'; text: string; truncated?: boolean }
   | { type: 'thinking'; thinking: string }
   | { type: 'toolCall'; id?: string; name?: string; arguments?: unknown }
   | { type: 'image' }
@@ -666,6 +667,8 @@ export interface LocalFileMetadata {
   member_id: string
   kind: 'attachment' | 'artifact'
   filename: string
+  /** 产物在会话目录中的相对路径（`/` 分隔，群聊以员工名开头）；附件为 null，旧版 Agent 不返回。 */
+  path?: string | null
   mime_type: string
   byte_size: number
   sha256: string
