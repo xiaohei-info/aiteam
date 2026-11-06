@@ -54,3 +54,18 @@ test('a path is matched to the newest generated file with the same name', () => 
   assert.equal(pickArtifactForPath(files, '/'), null)
   assert.equal(pathBasename('C:\\Users\\me\\a.md'), 'a.md')
 })
+
+test('among files with the same name, the one whose folder matches the link wins over the newest', () => {
+  const ws = '/Users/me/Library/Application Support/com.aiteam.desktop/agent-data/workspaces/conversation-1'
+  const files = [
+    { id: 'game', filename: 'README.md', path: 'game/README.md', created_at: '2026-11-01T10:00:00Z' },
+    { id: 'tool', filename: 'README.md', path: 'tool/README.md', created_at: '2026-11-01T11:00:00Z' },
+    { id: 'top', filename: 'README.md', path: 'README.md', created_at: '2026-11-01T09:00:00Z' },
+    { id: 'legacy', filename: 'README.md', path: null, created_at: '2026-11-01T12:00:00Z' },
+  ]
+  assert.equal(pickArtifactForPath(files, `${ws}/game/README.md`)?.id, 'game')
+  assert.equal(pickArtifactForPath(files, `file://${ws}/tool/README.md`.replace('file://', ''))?.id, 'tool')
+  assert.equal(pickArtifactForPath(files, 'C:\\ws\\game\\README.md')?.id, 'game')
+  assert.equal(pickArtifactForPath(files, `${ws}/README.md`)?.id, 'legacy', 'a bare name matches every candidate equally, so the newest wins')
+  assert.equal(pickArtifactForPath(files, `${ws}/other/README.md`)?.id, 'legacy')
+})

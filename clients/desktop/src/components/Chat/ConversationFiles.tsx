@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Archive, FileAudio, FileImage, FileText, FileVideo, FolderSearch, LoaderCircle } from 'lucide-react'
+import { Archive, ChevronRight, FileAudio, FileImage, FileText, FileVideo, Folder, FolderSearch, LoaderCircle } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import './ConversationFiles.css'
 import { agentApi } from '../../api/agent'
 import type { LocalFileMetadata } from '../../api/agent/types'
 import { isTauriRuntime } from '../../api/agent/runtime'
 import { formatFileSize, type CachedFile } from '../../lib/fileCache'
+import { buildFileTree, type FileTreeNode } from '../../lib/fileTree'
 
 type FileKind = LocalFileMetadata['kind']
 
@@ -91,6 +92,35 @@ export default function ConversationFiles({ conversationId }: { conversationId: 
     .map(kind => ({ kind, files: files.filter(file => file.kind === kind) }))
     .filter(group => group.files.length > 0)
 
+  const renderFile = (file: LocalFileMetadata) => {
+    const key = `${file.kind}:${file.id}`
+    const label = file.path ?? file.filename
+    return <div className="conversation-file-row" key={key}>
+      <button type="button" className="conversation-file-main" onClick={() => void handleOpen(file)} disabled={pendingAction !== null} title={`打开 ${label}`}>
+        <span className="conversation-file-icon"><FileIcon mime={file.mime_type} /></span>
+        <span className="conversation-file-info"><strong>{file.filename}</strong><small>{formatFileSize(file.byte_size)} · {file.mime_type || '未知类型'}</small></span>
+      </button>
+      {isTauriRuntime() && <button type="button" className="conversation-file-reveal" onClick={() => void handleReveal(file)} disabled={pendingAction !== null} title="在 Finder 中显示" aria-label={`在 Finder 中显示 ${label}`}>
+        {pendingAction === `reveal:${key}` ? <LoaderCircle size={15} className="conversation-files-spinner" /> : <FolderSearch size={15} />}
+        <span>Finder</span>
+      </button>}
+      {pendingAction === `open:${key}` && <LoaderCircle size={15} className="conversation-file-pending conversation-files-spinner" aria-label="正在打开" />}
+    </div>
+  }
+
+  // A folder that is alone at its level opens by itself, so one folder never hides everything.
+  const renderNodes = (nodes: FileTreeNode<LocalFileMetadata>[]) => nodes.map(node => node.type === 'file'
+    ? renderFile(node.file)
+    : <details className="conversation-file-folder" key={`folder:${node.path}`} open={nodes.length === 1}>
+      <summary title={node.path}>
+        <ChevronRight size={14} className="conversation-file-folder-chevron" aria-hidden="true" />
+        <Folder size={15} strokeWidth={1.7} aria-hidden="true" />
+        <span className="conversation-file-folder-name">{node.name}</span>
+        <span className="conversation-file-folder-count">{node.count}</span>
+      </summary>
+      <div className="conversation-file-folder-items">{renderNodes(node.children)}</div>
+    </details>)
+
   return <section className="conversation-files" aria-label="会话附件与产物">
     <div className="conversation-files-head">
       <div>
@@ -105,22 +135,7 @@ export default function ConversationFiles({ conversationId }: { conversationId: 
     {!loading && !error && groups.length > 0 && <div className="conversation-files-list">
       {groups.map(({ kind, files: groupFiles }) => <section className="conversation-file-group" key={kind}>
         <div className="conversation-file-group-head"><h4>{groupLabels[kind]}</h4><span>{groupFiles.length}</span></div>
-        <div className="conversation-file-items">
-          {groupFiles.map(file => {
-            const key = `${file.kind}:${file.id}`
-            return <div className="conversation-file-row" key={key}>
-              <button type="button" className="conversation-file-main" onClick={() => void handleOpen(file)} disabled={pendingAction !== null} title={`打开 ${file.filename}`}>
-                <span className="conversation-file-icon"><FileIcon mime={file.mime_type} /></span>
-                <span className="conversation-file-info"><strong>{file.filename}</strong><small>{formatFileSize(file.byte_size)} · {file.mime_type || '未知类型'}</small></span>
-              </button>
-              {isTauriRuntime() && <button type="button" className="conversation-file-reveal" onClick={() => void handleReveal(file)} disabled={pendingAction !== null} title="在 Finder 中显示" aria-label={`在 Finder 中显示 ${file.filename}`}>
-                {pendingAction === `reveal:${key}` ? <LoaderCircle size={15} className="conversation-files-spinner" /> : <FolderSearch size={15} />}
-                <span>Finder</span>
-              </button>}
-              {pendingAction === `open:${key}` && <LoaderCircle size={15} className="conversation-file-pending conversation-files-spinner" aria-label="正在打开" />}
-            </div>
-          })}
-        </div>
+        <div className="conversation-file-items">{renderNodes(buildFileTree(groupFiles))}</div>
       </section>)}
     </div>}
   </section>
