@@ -7,6 +7,7 @@ import ReplyFailureNotice from './ReplyFailureNotice'
 import ReplyFileCard from './ReplyFileCard'
 import FileMessage from './FileMessage'
 import TodoTaskCard from './TodoTaskCard'
+import RunProgress from './RunProgress'
 import LocalCitationCard, { LocalContextChip } from './LocalCitationCard'
 import { getEmployeeAvatar, renderAvatar } from '../../lib/avatarUtils'
 import { collectTodoTaskCards, withToolCallSteps } from '../../lib/todoTaskCard'
@@ -111,6 +112,7 @@ export const MessageRow = memo(function MessageRow({
       content={replyFile ? msg.replyPreview! : displayContent}
       copyContent={replyFile ? displayContent : undefined}
       isStreaming={isThisStreaming}
+      pendingLabel={isThinkingPhase ? <RunProgress steps={thinkingSteps ?? []} startedAt={msg._ts} /> : undefined}
       attachments={msg.attachments}
       onAvatarClick={onAvatarClick}
     />

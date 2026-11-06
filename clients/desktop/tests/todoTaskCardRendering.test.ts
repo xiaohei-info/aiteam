@@ -39,6 +39,8 @@ function renderer() {
       if (id === '../../lib/avatarUtils') return { getEmployeeAvatar: () => '', renderAvatar: () => null }
       if (id === './TextMessage') return { __esModule: true, default: ({ above, content, copyContent, below }: any) => React.createElement('div', { 'data-copy': copyContent }, above, content, below) }
       if (id === './ReplyFileCard') return { __esModule: true, default: ({ file }: any) => React.createElement('span', null, `card:${file.id}`) }
+      // 运行进度只替换「思考中」文字，由 runProgress.test.ts 覆盖；这里 stub 为空渲染。
+      if (id === './RunProgress') return { __esModule: true, default: () => null }
       // 本地目录引用卡片不是本套用例的对象；与 FileMessage 同样 stub 为空渲染。
       if (id === './LocalCitationCard') return { __esModule: true, default: () => null }
       if (id === './FileMessage' || id.endsWith('.css')) return { __esModule: true, default: () => null }

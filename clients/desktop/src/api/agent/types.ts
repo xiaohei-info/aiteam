@@ -358,6 +358,8 @@ export interface PiSseEventData {
   toolCallId?: string
   toolName?: string
   tool_kind?: 'memory' | 'rag' | 'todo'
+  /** read/write/edit 的 start/update 事件：文件名，不含目录。 */
+  file_name?: string
   args?: unknown
   partialResult?: unknown
   result?: unknown
