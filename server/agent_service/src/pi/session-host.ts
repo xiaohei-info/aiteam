@@ -1591,7 +1591,6 @@ export class SessionHost {
       if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
         this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
       }
-      const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
       // completed when no successful terminal entry was proven.
