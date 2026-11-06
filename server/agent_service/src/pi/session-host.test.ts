@@ -552,6 +552,34 @@ test("SessionHost registers todo_update only for an explicitly authorized parent
   }
 });
 
+test("SessionHost reminds the model about a stale checklist without storing or showing the reminder", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update", "read"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost(undefined, undefined, (_id, auth) => createControlledResourceLoader("test system prompt", undefined, auth));
+    const read = () => fauxAssistantMessage(fauxToolCall("read", { path: "missing.txt" }), { stopReason: "toolUse" });
+    let seen = "";
+    fixture.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("todo_update", { items: [{ id: "one", title: "Finish", status: "completed" }, { id: "two", title: "Next", status: "pending" }] }), { stopReason: "toolUse" }),
+      ...Array.from({ length: 8 }, read),
+      (context) => {
+        const last = context.messages[context.messages.length - 1];
+        seen = last?.role === "toolResult" ? last.content.map((part) => part.type === "text" ? part.text : "").join("") : "";
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    await host.prompt("conversation-1", "track this", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.match(seen, /Platform reminder/);
+    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /Platform reminder/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost does not register todo_update when the snapshot policy omits it", async () => {
   const fixture = await createFixture();
   try {
