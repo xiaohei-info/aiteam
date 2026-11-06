@@ -2,7 +2,7 @@ import { connectorTools } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, chmodSync, lstatSync, readFileSync, readdirSync, rmSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
@@ -36,7 +36,7 @@ import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
-import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, isSafeArtifactFilename, MAX_LOCAL_FILE_BYTES, mimeTypeForFilename } from "../local-files.js";
+import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
@@ -78,6 +78,7 @@ export interface PromptDeliveryOptions {
   hiddenPromptType?: string;
   /** See GroupMessageCommand.disableTools. */
   disableTools?: boolean;
+  attachmentIds?: string[];
 }
 
 export type ConversationThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -215,13 +216,6 @@ interface Subscriber {
   listener: (envelope: PiEventEnvelope) => void;
   replaying: boolean;
   queued: PiEventEnvelope[];
-}
-
-interface WorkspaceFileSnapshot {
-  path: string;
-  size: number;
-  mtimeMs: number;
-  mimeType: string;
 }
 
 interface SessionRecord {
@@ -373,6 +367,7 @@ export class SessionHost {
         targetEmployeeIds,
         text,
         images,
+        attachmentIds: deliveryOptions?.attachmentIds,
         logicalMessageId: deliveryOptions?.logicalMessageId ?? `${conversationId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         idempotencyKey: deliveryOptions?.idempotencyKey,
         caller,
@@ -1346,42 +1341,22 @@ export class SessionHost {
     await controlled?.shutdown?.();
   }
 
-  private workspaceSnapshot(root: string): Map<string, WorkspaceFileSnapshot> {
-    const files = new Map<string, WorkspaceFileSnapshot>();
-    const visit = (directory: string): void => {
-      let entries;
-      try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
-      for (const entry of entries) {
-        if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
-        const path = join(directory, entry.name);
-        if (entry.isDirectory()) {
-          visit(path);
-          continue;
-        }
-        if (!entry.isFile() || !isSafeArtifactFilename(entry.name)) continue;
-        const mimeType = mimeTypeForFilename(entry.name);
-        if (!mimeType) continue;
-        try {
-          const info = lstatSync(path);
-          if (!info.isFile()) continue;
-          const pathFromRoot = relative(root, path);
-          if (!pathFromRoot || pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) continue;
-          files.set(pathFromRoot, { path, size: info.size, mtimeMs: info.mtimeMs, mimeType });
-        } catch {
-          // A file can disappear while a tool is writing it; ignore that snapshot.
-        }
-      }
-    };
-    visit(root);
-    return files;
+  /** Group chats keep each employee's files under its name so two `README.md` never collide. */
+  private artifactPrefix(record: SessionRecord): string {
+    const metadata = this.options.store.getConversationMetadata(record.conversationId);
+    if (!record.employeeId || !(metadata?.kind === "group" || metadata?.coordinator_employee_id)) return "";
+    // The workspace folder is fixed when created and already includes a unique suffix.
+    // Do not derive artifact paths from the mutable employee display name.
+    return `${basename(record.workspace)}/`;
   }
 
-  private captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFileSnapshot>): void {
+  private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
     if (!tenantId || !memberId) return;
-    const existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
-    for (const [pathFromRoot, current] of this.workspaceSnapshot(record.workspace)) {
+    let existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
+    const prefix = this.artifactPrefix(record);
+    for (const [pathFromRoot, current] of await scanWorkspaceFiles(record.workspace)) {
       const previous = before.get(pathFromRoot);
       if (previous && previous.size === current.size && previous.mtimeMs === current.mtimeMs) continue;
       if (current.size > MAX_LOCAL_FILE_BYTES) continue;
@@ -1393,19 +1368,24 @@ export class SessionHost {
         continue;
       }
       if (data.byteLength > MAX_LOCAL_FILE_BYTES || (IMAGE_MIMES.has(current.mimeType) && !hasImageSignature(current.mimeType, data)) || containsLikelySecret(data, current.mimeType)) continue;
-      const filename = basename(pathFromRoot);
+      const path = `${prefix}${pathFromRoot}`;
       const sha256 = createHash("sha256").update(data).digest("hex");
-      if (existing.some((item) => item.filename === filename && item.sha256 === sha256)) continue;
+      // One artifact per path: an edited file replaces its previous copy instead of piling up.
+      const older = existing.filter((item) => item.path === path);
+      if (older.some((item) => item.sha256 === sha256)) continue;
       try {
         const artifact = this.options.store.createLocalFile({
           conversationId: record.conversationId,
           tenantId,
           memberId,
           kind: "artifact",
-          filename,
+          filename: basename(pathFromRoot),
+          path,
           mimeType: current.mimeType,
           data,
+          replaces: older.map((item) => item.id),
         });
+        existing = existing.filter((item) => !older.includes(item));
         existing.push(artifact);
         this.options.store.markLocalFilesReferenced([artifact.id], record.conversationId, tenantId, memberId, "artifact");
       } catch {
@@ -1483,7 +1463,8 @@ export class SessionHost {
     // A new run supersedes the participant's last failure, whatever its own outcome.
     this.options.store.conversationFailures.clear(record.conversationId, record.employeeId);
     record.activeMessage = undefined;
-    const workspaceBefore = this.workspaceSnapshot(record.workspace);
+    // Start the bounded async baseline scan without delaying Session initialization or aborts.
+    const workspaceBeforePromise = scanWorkspaceFiles(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
     let sourceCapture = Promise.resolve();
     let settled = false;
@@ -1522,6 +1503,9 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
+      if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
+        this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
+      }
       const text = this.latestAssistantText(record.sessionManager.getEntries().slice(entriesBefore));
       // Keep the public prompt promise compatible with Pi's resolved-error
       // behavior; callers use the absent entry ID to avoid marking a receipt
@@ -1583,7 +1567,9 @@ export class SessionHost {
           if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
         }
       } finally {
-        this.captureWorkspaceArtifacts(record, authorization, workspaceBefore);
+        // The model run is over before the bounded artifact post-processing finishes. Clear the
+        // active state first so callers can change thinking level or start the next run while the
+        // filesystem snapshot is being finalized.
         record.promptPromise = undefined;
         record.sessionReady = undefined;
         record.prompting = false;
@@ -1597,6 +1583,11 @@ export class SessionHost {
         record.activeWorkId = undefined;
         record.activeStatus = undefined;
         record.activeMessage = undefined;
+        const baseline = await workspaceBeforePromise;
+        // The async baseline may finish after Session initialization. Exclude files whose scan
+        // observation proves they appeared during this run, otherwise the first capture sees them as old.
+        const before = new Map<string, WorkspaceFile>([...baseline].filter(([, file]) => file.scannedAtMs < startedAt));
+        await this.captureWorkspaceArtifacts(record, authorization, before);
         await this.disposeSession(record);
       }
     }
