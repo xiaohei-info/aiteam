@@ -9,7 +9,7 @@ import { TODO_UPDATE_TOOL_NAME, type TodoItem } from "../tools/todo.js";
  */
 export const TODO_RECONCILE_TYPE = "todo_reconcile";
 
-export const TODO_RECONCILE_PROMPT = "[Platform check, not from the user] Your reply is finished, but the checklist the user sees still has unfinished items. Call todo_update once with the true final status of every item: completed for each item you finished, unchanged for anything you did not do. Do not write any text and do not call any other tool.";
+export const TODO_RECONCILE_PROMPT = "[Platform check, not from the user] Your reply is finished, but the checklist the user sees still has unfinished items. Call todo_update once with the true final status of every item: completed for each item you finished, and keep pending or in_progress for anything you did not do. Do not write any text and do not call any other tool.";
 
 export const TODO_RECONCILE_SKIPPED = "Skipped: only todo_update may run while the checklist is being closed.";
 
