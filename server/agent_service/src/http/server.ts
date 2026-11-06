@@ -300,7 +300,8 @@ const ConversationDeleteEnvelope = Type.Object({ data: Type.Object({ deleted: Ty
 const ConversationContentPart = Type.Union([
   Type.Object({
     type: Type.Literal("text", { description: "普通文本片段。" }),
-    text: Type.String({ description: "文本片段。" }),
+    text: Type.String({ description: "文本片段。user/assistant 正文在历史条目和 message_end 中完整返回（仅超过 200000 字时截断），message_update 快照最多 4000 字；toolResult 文本最多 4000 字。" }),
+    truncated: Type.Optional(Type.Boolean({ description: "user/assistant 正文被长度上限截断时为 true；未截断时不返回。" })),
   }, { additionalProperties: false, description: "文本内容片段。" }),
   Type.Object({
     type: Type.Literal("thinking", { description: "模型思考片段。" }),
@@ -1438,7 +1439,7 @@ export class AgentHttpServer {
     }));
     this.registerRoute("GET", "/api/agent/messages/search", (request, response, caller) => {
       this.writeJson(response, 200, this.conversationReads.search(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
-    }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 4,000 字/32 块展示截断影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
+    }, routeSchema("searchMessages", { summary: "搜索本机消息全文", description: "扫描当前 owner 的全部会话 JSONL，匹配完整脱敏可见文本（不受 HTTP 展示的长度与 32 块上限影响），只返回安全 snippet 与 entry_ref。按 timestamp、conversation ID、participant ID、Session append ordinal、Pi ID 全 tuple 倒序，cursor 绑定 q/会话/发送员工筛选。只读不创建 Session，不上传内容，不搜索 thinking/tool/internal。", querystring: MessageSearchQuery, response: { 200: jsonResponse(Type.Ref("MessageSearchEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/abort", async (_request, response, caller, fastifyRequest) => {
       const conversationId = String((fastifyRequest?.params as { conversation_id: string }).conversation_id);
       this.requireOwnedConversation(conversationId, caller!);

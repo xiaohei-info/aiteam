@@ -4,6 +4,7 @@ import { AgentHttpServer, HttpProblem } from "./http/server.js";
 import { createJwtAuthenticator, parsePublicJwks } from "./http/auth.js";
 import { ManagerJwksAuthenticator, ManagerSessionAuthenticator } from "./http/manager-jwks.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
+import { TODO_PROMPT_HINT } from "./tools/todo.js";
 import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
@@ -199,7 +200,7 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       : [];
   const allowedTools: readonly string[] = configuredTools.length > 0 ? configuredTools : DEFAULT_AGENT_TOOLS;
   const todoHint = allowedTools.includes("todo_update")
-    ? "For multi-step work, keep the user-visible checklist current with todo_update."
+    ? TODO_PROMPT_HINT
     : "";
   const source = authorization.groupMessageSource
     ? `You are replying inside a group conversation. Message source: ${authorization.groupMessageSource.type === "employee" ? "employee" : "human"} ${authorization.groupMessageSource.displayName ?? authorization.groupMessageSource.id}. Reply as this employee; do not impersonate another employee.`
