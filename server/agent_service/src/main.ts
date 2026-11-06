@@ -48,7 +48,7 @@ if (environment === "production") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // Before any session runs: artifacts captured by older builds get their workspace folder.
-backfillArtifactPaths(store, cwdRoot);
+await backfillArtifactPaths(store, cwdRoot);
 const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, modelId: process.env.AITEAM_PI_MODEL });
 
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
