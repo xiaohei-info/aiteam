@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createTodoUpdateTool, MAX_TODO_ITEMS, normalizeTodoItems } from "./todo.js";
+import { createTodoUpdateTool, MAX_TODO_ITEMS, normalizeTodoItems, TODO_PROMPT_HINT } from "./todo.js";
+
+test("todo_update tells the model when each status applies", () => {
+  for (const text of [createTodoUpdateTool().description, TODO_PROMPT_HINT]) {
+    assert.match(text, /in_progress/);
+    assert.match(text, /completed/);
+    assert.match(text, /final reply/);
+  }
+});
 
 test("todo_update validates a unique, bounded todo shape and returns a structured result", async () => {
   const tool = createTodoUpdateTool();

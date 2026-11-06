@@ -8,8 +8,9 @@ import { ConversationFailureStore } from "./conversation-failures.js";
 import { ContextSegmentStore, type SegmentOutcomeBucket, type SegmentOwner } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { chmodSync, closeSync, copyFileSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, writeSync } from "node:fs";
+import { isSafeArtifactPath } from "../local-files.js";
 import { hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES } from "../local-files.js";
 
 function createSha256(data: Buffer): string {
@@ -311,12 +312,24 @@ export interface LocalFileRecord {
   member_id: string;
   kind: LocalFileKind;
   filename: string;
+  /** Artifact location relative to the conversation folder (`a/b.md`); null for uploads. */
+  path: string | null;
   mime_type: string;
   byte_size: number;
   sha256: string;
   created_at: string;
   referenced_at: string | null;
 }
+
+/** A long employee reply saved as an artifact, keyed by the `entry_ref` of the message it came from. */
+export interface ReplyFile {
+  id: string;
+  filename: string;
+  path: string | null;
+  chars: number;
+}
+
+export type UnplacedArtifact = Pick<LocalFileRecord, "id" | "conversation_id" | "tenant_id" | "member_id" | "filename" | "byte_size" | "sha256">;
 
 interface LocalFileRow extends LocalFileRecord {
   storage_path: string;
@@ -413,9 +426,7 @@ interface ConversationRow {
 const DEFAULT_LEASE_MS = 30_000;
 const LOCAL_FILE_MAX_BYTES = 5 * 1024 * 1024;
 const LOCAL_FILE_MAX_NAME = 255;
-// Conservative local-file quota per tenant/member and conversation, shared by both kinds.
-const MAX_LOCAL_FILES_PER_CONVERSATION = 32;
-const MAX_LOCAL_FILE_BYTES_PER_CONVERSATION = 50 * 1024 * 1024;
+// A conversation keeps any number of files; only each file's size is capped (LOCAL_FILE_MAX_BYTES).
 // Unreferenced uploads are retained briefly so a delayed prompt can still use them.
 const UNREFERENCED_LOCAL_FILE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -482,6 +493,14 @@ export class AgentSqliteStore {
         PRIMARY KEY (conversation_id, employee_id)
       );
       CREATE INDEX IF NOT EXISTS conversation_participant_session_idx ON conversation_participant_session(conversation_id, role, employee_id);
+
+      -- Workspace folders being renamed to the conversation-named layout; a row outlives a crash
+      -- between the rename and the path update, so the next start finishes the move.
+      CREATE TABLE IF NOT EXISTS workspace_move (
+        old_path TEXT PRIMARY KEY,
+        new_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+      );
 
       CREATE TABLE IF NOT EXISTS schedule_retry (
         conversation_id TEXT PRIMARY KEY,
@@ -639,6 +658,9 @@ export class AgentSqliteStore {
       "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN cost_total_decimal TEXT",
       "ALTER TABLE local_file ADD COLUMN referenced_at TEXT",
+      "ALTER TABLE local_file ADD COLUMN path TEXT",
+      "ALTER TABLE local_file ADD COLUMN source_entry_ref TEXT",
+      "ALTER TABLE local_file ADD COLUMN reply_chars INTEGER",
       "ALTER TABLE idempotency_receipt ADD COLUMN failure_code TEXT",
       "ALTER TABLE idempotency_receipt ADD COLUMN failure_detail TEXT",
       "ALTER TABLE schedule_retry ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''",
@@ -666,6 +688,7 @@ export class AgentSqliteStore {
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.contextSegments = new ContextSegmentStore(this.db, (owner, buckets) => this.publishSegmentOutcomes(owner, buckets));
     this.conversationFailures = new ConversationFailureStore(this.db);
+    this.moveRootLocalFiles();
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
   }
@@ -901,6 +924,63 @@ export class AgentSqliteStore {
     return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
   }
 
+  /** Every conversation with its workspace paths, any owner; used once at start-up to move legacy folders. */
+  listAllConversationWorkspaces(): Array<OwnedConversationWorkspaces & { tenant_id: string | null; member_id: string | null; created_at: string }> {
+    // SAFETY: the selected columns are exactly the declared row fields.
+    const conversations = this.db.prepare(`
+      SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at, tenant_id, member_id, created_at
+      FROM conversation ORDER BY created_at, id
+    `).all() as unknown as Array<Omit<OwnedConversationWorkspaces, "participants"> & { tenant_id: string | null; member_id: string | null; created_at: string }>;
+    // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id.
+    const participants = this.db.prepare(`
+      SELECT conversation_id, employee_id, role, workspace, removed_at FROM conversation_participant_session
+      ORDER BY conversation_id, CASE role WHEN 'coordinator' THEN 0 ELSE 1 END, employee_id
+    `).all() as unknown as Array<ConversationWorkspaceParticipant & { conversation_id: string }>;
+    const byConversation = new Map<string, ConversationWorkspaceParticipant[]>();
+    for (const { conversation_id: conversationId, ...participant } of participants) {
+      byConversation.set(conversationId, [...(byConversation.get(conversationId) ?? []), participant]);
+    }
+    return conversations.map((conversation) => ({ ...conversation, participants: byConversation.get(conversation.id) ?? [] }));
+  }
+
+  /** True when a conversation, a participant or a pending move uses `path` or a folder inside it. */
+  workspaceInUse(path: string): boolean {
+    const prefix = `${path}/`;
+    const inside = "(x = ? OR substr(x, 1, length(?)) = ?)";
+    const query = (table: string, column: string) => `SELECT 1 FROM ${table} WHERE ${inside.replaceAll("x", column)}`;
+    return [
+      query("conversation", "workspace"),
+      query("conversation_participant_session", "workspace"),
+      query("workspace_move", "new_path"),
+    ].some((sql) => this.db.prepare(sql).get(path, prefix, prefix) !== undefined);
+  }
+
+  listWorkspaceMoves(): Array<{ old_path: string; new_path: string }> {
+    return this.db.prepare("SELECT old_path, new_path FROM workspace_move ORDER BY created_at, old_path").all() as Array<{ old_path: string; new_path: string }>;
+  }
+
+  /** Records the moves of one conversation together, so its folders never end up half planned. */
+  planWorkspaceMoves(moves: ReadonlyArray<{ oldPath: string; newPath: string }>): void {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const insert = this.db.prepare("INSERT INTO workspace_move(old_path, new_path, created_at) VALUES (?, ?, ?)");
+      for (const move of moves) insert.run(move.oldPath, move.newPath, now);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** Points every row at the moved folder and drops the pending move, in one transaction. */
+  finishWorkspaceMove(oldPath: string, newPath: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE conversation SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("UPDATE conversation_participant_session SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
+      this.db.prepare("DELETE FROM workspace_move WHERE old_path = ?").run(oldPath);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
   /** Returns the row even for a removed member so a re-added member resumes the same Session. */
   getConversationParticipant(conversationId: string, employeeId: string): ConversationParticipantSession | undefined {
     return this.db.prepare(`
@@ -995,14 +1075,21 @@ export class AgentSqliteStore {
     memberId: string;
     kind: LocalFileKind;
     filename: string;
+    path?: string;
     mimeType: string;
     data: Buffer;
+    /** IDs this file replaces: they are removed in the same transaction as the insert. */
+    replaces?: readonly string[];
+    /** Set when the file holds the full text of one employee reply. */
+    reply?: { entryRef: string; chars: number };
   }): LocalFileRecord {
     if (input.data.byteLength > LOCAL_FILE_MAX_BYTES) throw new Error("Local file exceeds maximum size");
     if (!input.filename || input.filename.length > LOCAL_FILE_MAX_NAME || input.filename.includes("/") || input.filename.includes("\\") || /[\u0000-\u001f\u007f]/u.test(input.filename)) throw new Error("Invalid local file name");
+    if (input.path !== undefined && !isSafeArtifactPath(input.path)) throw new Error("Invalid local file path");
     const id = randomUUID();
-    const storagePath = join(this.attachmentRoot, `${id}.bin`);
-    const temporaryPath = join(this.attachmentRoot, `.${id}.tmp`);
+    const directory = this.conversationFileDir(input.conversationId);
+    const storagePath = join(directory, `${id}.bin`);
+    const temporaryPath = join(directory, `.${id}.tmp`);
     const fd = openSync(temporaryPath, "wx", 0o600);
     try {
       let offset = 0;
@@ -1017,29 +1104,39 @@ export class AgentSqliteStore {
       throw error;
     }
     const createdAt = new Date().toISOString();
-    const row = { id, conversation_id: input.conversationId, tenant_id: input.tenantId, member_id: input.memberId, kind: input.kind, filename: input.filename, mime_type: input.mimeType, byte_size: input.data.byteLength, sha256: createSha256(input.data), storage_path: storagePath, created_at: createdAt, referenced_at: null };
+    const row = { id, conversation_id: input.conversationId, tenant_id: input.tenantId, member_id: input.memberId, kind: input.kind, filename: input.filename, path: input.path ?? null, mime_type: input.mimeType, byte_size: input.data.byteLength, sha256: createSha256(input.data), storage_path: storagePath, created_at: createdAt, referenced_at: null };
+    const removedFiles: string[] = [];
     try {
       this.db.exec("BEGIN IMMEDIATE");
-      const quota = this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(byte_size), 0) AS bytes FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").get(input.conversationId, input.tenantId, input.memberId) as { count: number; bytes: number };
-      if (quota.count >= MAX_LOCAL_FILES_PER_CONVERSATION) throw new Error(`Local file count limit is ${MAX_LOCAL_FILES_PER_CONVERSATION} per conversation`);
-      if (quota.bytes + input.data.byteLength > MAX_LOCAL_FILE_BYTES_PER_CONVERSATION) throw new Error(`Local file storage limit is ${MAX_LOCAL_FILE_BYTES_PER_CONVERSATION} bytes per conversation`);
-      this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at, referenced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at);
+      const replaced = (input.replaces ?? []).flatMap((replacedId) => {
+        const file = this.getOwnedLocalFile(replacedId, input.conversationId, input.tenantId, input.memberId);
+        return file ? [file] : [];
+      });
+      this.db.prepare("INSERT INTO local_file (id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at, source_entry_ref, reply_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.id, row.conversation_id, row.tenant_id, row.member_id, row.kind, row.filename, row.path, row.mime_type, row.byte_size, row.sha256, row.storage_path, row.created_at, row.referenced_at, input.reply?.entryRef ?? null, input.reply?.chars ?? null);
+      for (const file of replaced) {
+        this.db.prepare("DELETE FROM local_file WHERE id = ?").run(file.id);
+        removedFiles.push(file.storage_path);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction may already be closed */ }
       rmSync(storagePath, { force: true });
       throw error;
     }
+    for (const removed of removedFiles) {
+      const resolved = this.managedFilePath(removed);
+      if (resolved) rmSync(resolved, { force: true });
+    }
     return this.publicLocalFile(row);
   }
 
   listOwnedLocalFiles(conversationId: string, tenantId: string, memberId: string, kind?: LocalFileKind): LocalFileRecord[] {
-    const rows = this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, created_at, referenced_at FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND (? IS NULL OR kind = ?) ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId, kind ?? null, kind ?? null) as unknown as LocalFileRecord[];
+    const rows = this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, created_at, referenced_at FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND (? IS NULL OR kind = ?) ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId, kind ?? null, kind ?? null) as unknown as LocalFileRecord[];
     return rows;
   }
 
   getOwnedLocalFile(id: string, conversationId: string, tenantId: string, memberId: string): LocalFileRow | undefined {
-    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at, referenced_at FROM local_file WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ?").get(id, conversationId, tenantId, memberId) as LocalFileRow | undefined;
+    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, kind, filename, path, mime_type, byte_size, sha256, storage_path, created_at, referenced_at FROM local_file WHERE id = ? AND conversation_id = ? AND tenant_id = ? AND member_id = ?").get(id, conversationId, tenantId, memberId) as LocalFileRow | undefined;
   }
 
   readOwnedLocalFile(id: string, conversationId: string, tenantId: string, memberId: string): { record: LocalFileRecord; data: Buffer } | undefined {
@@ -1071,6 +1168,58 @@ export class AgentSqliteStore {
     const paths = rows.map((row) => this.managedFilePath(row.storage_path));
     this.db.prepare("DELETE FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ?").run(conversationId, tenantId, memberId);
     for (const path of paths) if (path) rmSync(path, { force: true });
+    try { rmdirSync(join(this.attachmentRoot, conversationFileDirName(conversationId))); } catch { /* still holds another owner's files, or never existed */ }
+  }
+
+  /** Saved long replies of one conversation by the `entry_ref` of their source message. */
+  listReplyFiles(conversationId: string, tenantId: string, memberId: string): Map<string, ReplyFile> {
+    const rows = this.db.prepare("SELECT id, filename, path, reply_chars AS chars, source_entry_ref FROM local_file WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND kind = 'artifact' AND source_entry_ref IS NOT NULL ORDER BY created_at ASC, id ASC").all(conversationId, tenantId, memberId) as unknown as Array<ReplyFile & { source_entry_ref: string }>;
+    return new Map(rows.map(({ source_entry_ref: entryRef, ...file }) => [entryRef, file]));
+  }
+
+  /** Artifacts captured before paths were recorded; `backfillArtifactPaths` places them once. */
+  listUnplacedArtifacts(): UnplacedArtifact[] {
+    return this.db.prepare("SELECT id, conversation_id, tenant_id, member_id, filename, byte_size, sha256 FROM local_file WHERE kind = 'artifact' AND path IS NULL ORDER BY created_at ASC, id ASC").all() as unknown as UnplacedArtifact[];
+  }
+
+  setArtifactPath(id: string, path: string): void {
+    if (!isSafeArtifactPath(path)) throw new Error("Invalid local file path");
+    this.db.prepare("UPDATE local_file SET path = ? WHERE id = ? AND kind = 'artifact' AND path IS NULL").run(path, id);
+  }
+
+  private conversationFileDir(conversationId: string): string {
+    const directory = join(this.attachmentRoot, conversationFileDirName(conversationId));
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  }
+
+  /**
+   * Files stored before per-conversation folders sit directly in `attachments/`. Each one is linked
+   * into its conversation folder before the row moves and the old name goes, so a crash at any point
+   * leaves a readable file and the next start finishes the move.
+   */
+  private moveRootLocalFiles(): void {
+    const rows = this.db.prepare("SELECT id, conversation_id, storage_path FROM local_file").all() as { id: string; conversation_id: string; storage_path: string }[];
+    for (const row of rows) {
+      if (dirname(row.storage_path) !== this.attachmentRoot) continue;
+      try {
+        const target = join(this.conversationFileDir(row.conversation_id), basename(row.storage_path));
+        if (!existsSync(target)) {
+          if (!existsSync(row.storage_path)) continue;
+          try { linkSync(row.storage_path, target); }
+          catch {
+            const temporary = `${target}.tmp`;
+            copyFileSync(row.storage_path, temporary);
+            chmodSync(temporary, 0o600);
+            renameSync(temporary, target);
+          }
+        }
+        this.db.prepare("UPDATE local_file SET storage_path = ? WHERE id = ?").run(target, row.id);
+        rmSync(row.storage_path, { force: true });
+      } catch {
+        // Keep the old location; the next start retries.
+      }
+    }
   }
 
   private managedFilePath(storagePath: string): string | undefined {
@@ -1117,12 +1266,23 @@ export class AgentSqliteStore {
         // Invalid metadata is retained for diagnosis; never follow it during cleanup.
       }
     }
+    this.removeUnindexedFiles(this.attachmentRoot, indexed);
+    // Per-conversation folders are one level deep; symlinked folders are never followed.
     for (const entry of readdirSync(this.attachmentRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const directory = join(this.attachmentRoot, entry.name);
+      this.removeUnindexedFiles(directory, indexed);
+      try { rmdirSync(directory); } catch { /* not empty */ }
+    }
+  }
+
+  private removeUnindexedFiles(directory: string, indexed: ReadonlySet<string>): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
       if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-      const candidate = join(this.attachmentRoot, entry.name);
+      const candidate = join(directory, entry.name);
       const temporary = /^\\..+\\.tmp$/u.test(entry.name);
       let resolved: string | undefined;
-      try { resolved = this.managedFilePath(candidate); } catch { /* symlink/path escape: remove only the root entry below */ }
+      try { resolved = this.managedFilePath(candidate); } catch { /* symlink/path escape: remove only this entry below */ }
       if (!temporary && resolved && indexed.has(resolved)) continue;
       rmSync(candidate, { force: true });
     }
@@ -1868,4 +2028,9 @@ export class AgentSqliteStore {
       risk_level: row.risk_level as ApprovalRecord["risk_level"],
     };
   }
+}
+
+/** Folder under `attachments/` for one conversation's files; odd IDs get a stable hash name. */
+export function conversationFileDirName(conversationId: string): string {
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(conversationId) ? conversationId : `c-${createHash("sha256").update(conversationId).digest("hex").slice(0, 32)}`;
 }

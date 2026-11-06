@@ -101,7 +101,27 @@ test("group workspaces merge into one conversation and keep removed members", as
   }
 });
 
-test("workspaces outside the managed root, symlinked or misnamed are skipped", async () => {
+test("workspaces named after the conversation return their path below the root as the key", async () => {
+  const fixture = await createFixture();
+  try {
+    const root = join(fixture.dataRoot, "workspaces");
+    const privateDir = join(root, "热门AI项目总结-96acab");
+    writeTree(privateDir, { "report.md": "x" });
+    fixture.store.createConversation({ id: "private", kind: "chat", entryEmployeeId: "employee-1", tenantId: "tenant-1", memberId: "member-1", workspace: privateDir });
+    fixture.store.createConversation({ id: "group", kind: "group", coordinatorEmployeeId: "coord", tenantId: "tenant-1", memberId: "member-1" });
+    const coordinator = join(root, "前端招聘组-4c3b15", "张三");
+    writeTree(coordinator, { "index.html": "x" });
+    participant(fixture, "group", "coord", "coordinator", coordinator);
+
+    const byId = new Map((await list(fixture)).body.data.map((item: any) => [item.conversation_id, item.workspaces]));
+    assert.deepEqual((byId.get("private") as any).map((item: any) => item.workspace_key), ["热门AI项目总结-96acab"]);
+    assert.deepEqual((byId.get("group") as any).map((item: any) => item.workspace_key), ["前端招聘组-4c3b15/张三"]);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("workspaces outside the managed root, symlinked, hidden or too deep are skipped", async () => {
   const fixture = await createFixture();
   const outside = mkdtempSync(join(tmpdir(), "aiteam-outside-"));
   try {
@@ -111,15 +131,20 @@ test("workspaces outside the managed root, symlinked or misnamed are skipped", a
     writeTree(escaped, { "index.html": "x" });
     const linked = join(root, key("linked"));
     symlinkSync(escaped, linked);
-    const misnamed = join(root, "not-a-workspace");
-    mkdirSync(misnamed);
-    writeTree(misnamed, { "index.html": "x" });
+    const hidden = join(root, ".hidden");
+    writeTree(hidden, { "index.html": "x" });
+    const tooDeep = join(root, "会话-aaaaaa", "成员", "子目录");
+    writeTree(tooDeep, { "index.html": "x" });
+    // The parent folder is a link to another conversation's folder: its member folder is not listed.
+    writeTree(join(root, "真实会话-bbbbbb", "成员"), { "index.html": "x" });
+    symlinkSync(join(root, "真实会话-bbbbbb"), join(root, "链接会话-cccccc"));
+    const linkedParent = join(root, "链接会话-cccccc", "成员");
     const traversal = join(root, "..", key("traversal"));
     mkdirSync(traversal);
     writeTree(traversal, { "index.html": "x" });
 
     fixture.store.createConversation({ id: "unsafe", kind: "group", coordinatorEmployeeId: "a", tenantId: "tenant-1", memberId: "member-1" });
-    for (const [employeeId, path] of [["a", escaped], ["b", linked], ["c", misnamed], ["d", traversal]] as const) participant(fixture, "unsafe", employeeId, employeeId === "a" ? "coordinator" : "member", path);
+    for (const [employeeId, path] of [["a", escaped], ["b", linked], ["c", hidden], ["d", traversal], ["e", tooDeep], ["f", linkedParent]] as const) participant(fixture, "unsafe", employeeId, employeeId === "a" ? "coordinator" : "member", path);
 
     const { body } = await list(fixture);
     assert(!body.data.some((item: any) => item.conversation_id === "unsafe"));

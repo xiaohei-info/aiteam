@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { AgentSqliteStore, ConversationParticipantRole } from "../storage/sqlite.js";
+import type { AgentSqliteStore, ConversationParticipantRole, ReplyFile } from "../storage/sqlite.js";
 import { compareReadOrder } from "../storage/read-cursor.js";
 import type { WorkRecordRow } from "../storage/work-records.js";
 import { safeText } from "./event-sse.js";
@@ -17,6 +17,8 @@ export type HistoryEntry = SessionEntry & {
   source_display_name?: string;
   source_role?: "human" | "participant" | "coordinator";
   logical_message_id?: string;
+  /** The full text of this assistant reply saved as an artifact. */
+  reply_file?: ReplyFile;
 };
 
 export interface IndexedHistoryEntry {
@@ -75,6 +77,8 @@ export function mergeHistorySources(store: AgentSqliteStore, conversationId: str
   const experts = new Map(store.listLoadedExperts(conversation?.tenantId ?? undefined, conversation?.memberId ?? undefined, true).map((expert) => [expert.employee_id, expert]));
   const workRecords = conversation?.tenantId && conversation.memberId
     ? store.workRecords.forConversation(conversationId, { tenantId: conversation.tenantId, memberId: conversation.memberId }) : [];
+  const replyFiles = conversation?.tenantId && conversation.memberId
+    ? store.listReplyFiles(conversationId, conversation.tenantId, conversation.memberId) : new Map<string, ReplyFile>();
   const indexed = sources.flatMap((source) => {
     const workIds = workIdsForEntries(source.entries, workRecords.filter((row) => row.employee_id === source.employeeId));
     return source.entries.flatMap((raw, ordinal): IndexedHistoryEntry[] => {
@@ -82,8 +86,11 @@ export function mergeHistorySources(store: AgentSqliteStore, conversationId: str
       // Non-displayed custom messages are model-only instructions (e.g. the first-chat introduction).
       if (raw.type === "custom_message" && !raw.display) return [];
       const entry: HistoryEntry = { ...raw, entry_ref: historyEntryRef(conversationId, source.employeeId, raw.id) };
-      // Never trust a raw runtime field over the owner-scoped work index.
+      // Never trust a raw runtime field over the owner-scoped work index or file store.
       delete entry.work_id;
+      delete entry.reply_file;
+      const replyFile = raw.type === "message" && raw.message?.role === "assistant" ? replyFiles.get(entry.entry_ref) : undefined;
+      if (replyFile) entry.reply_file = replyFile;
       if (raw.type === "message" && (raw.message?.role === "assistant" || raw.message?.role === "toolResult")) {
         const workId = workIds.get(ordinal);
         if (workId) entry.work_id = workId;
