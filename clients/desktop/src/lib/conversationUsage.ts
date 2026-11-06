@@ -3,7 +3,7 @@ import type { WorkHistoryEnvelope, WorkRecord } from '../api/agent/observations.
 export interface ConversationUsage { tokens: number | null; outcome: WorkRecord['outcome'] | null }
 type ReadWorkPage = (before?: string) => Promise<WorkHistoryEnvelope>
 
-/** Sum authoritative work usage across every page, excluding other conversations. */
+/** Sum the work usage on record across every page, excluding other conversations; null when there is none. */
 export async function readConversationUsage(conversationId: string, readPage: ReadWorkPage): Promise<ConversationUsage> {
   const records = new Map<string, WorkRecord>()
   const cursors = new Set<string>()
@@ -19,9 +19,10 @@ export async function readConversationUsage(conversationId: string, readPage: Re
     cursors.add(next); before = next
   } while (before)
   const work = [...records.values()]
+  // 一次运行没有用量（例如中途被结束）不应让整个会话显示 0，只累加有记录的运行。
+  const measured = work.flatMap(record => record.usage ? [record.usage.token_total] : [])
   return {
-    tokens: work.length > 0 && work.every(record => record.usage != null)
-      ? work.reduce((sum, record) => sum + record.usage!.token_total, 0) : null,
+    tokens: measured.length > 0 ? measured.reduce((sum, tokens) => sum + tokens, 0) : null,
     outcome: work[0]?.outcome ?? null,
   }
 }
