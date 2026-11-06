@@ -64,6 +64,9 @@ export interface PiEventMetadata {
  * boundary as live events. Conversation history is local content, but it still
  * must not bypass credential/path filtering when returned over HTTP.
  */
+/** Shape produced by `historyEntryRef`: `entry_v1_` + base64url sha256. */
+const ENTRY_REF = /^entry_v1_[A-Za-z0-9_-]{43}$/;
+
 export function serializePiEntry(entry: unknown): Record<string, unknown> | undefined {
   const raw = asRecord(entry);
   if (!raw || typeof raw.id !== "string" || typeof raw.type !== "string") return undefined;
@@ -77,7 +80,10 @@ export function serializePiEntry(entry: unknown): Record<string, unknown> | unde
   }
   const message = serializeMessage(raw.message, MAX_MESSAGE_TEXT_CHARS);
   if (message) result.message = message;
-  for (const key of ["work_id", "entry_ref", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
+  // entry_ref is a server-generated sha256 reference, not content: validate its shape instead of
+  // redacting it, since a hash can contain `rk-`/`sk-`/`pk-` and redaction would corrupt it.
+  if (typeof raw.entry_ref === "string" && ENTRY_REF.test(raw.entry_ref)) result.entry_ref = raw.entry_ref;
+  for (const key of ["work_id", "participant_employee_id", "logical_message_id", "source_type", "source_id", "source_display_name", "source_employee_id", "source_employee_display_name", "source_role"] as const) {
     const value = boundedIdentifier(raw[key], key.includes("display_name") ? MAX_SOURCE_NAME_CHARS : MAX_IDENTIFIER_CHARS);
     if (value) result[key] = value;
   }
