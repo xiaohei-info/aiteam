@@ -23,7 +23,7 @@ import { Type } from "typebox";
 import { ConversationBusyError, EventCursorStaleError, InvalidEventCursorError, type PiEventEnvelope, SessionHost } from "../pi/session-host.js";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { IdempotencyConflictError, IdempotencyUnknownError, type AgentSqliteStore, type ConversationMetadata as StoredConversationMetadata, type IdempotencyReceipt } from "../storage/sqlite.js";
-import type { AuthenticatedCaller, AuthenticateRequest } from "./auth.js";
+import { JwtClockError, type AuthenticatedCaller, type AuthenticateRequest } from "./auth.js";
 import { ManagerAuthError, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerUnavailableError, ManagerValidationError, normalizeAuthorizedConfig, type ManagerClient, type MarketplaceTemplate } from "../manager-client.js";
 import { SessionAuthorizationError, type PromptDeliveryOptions } from "../pi/session-host.js";
 import { serializePiEntry, serializePiEvent } from "../pi/event-sse.js";
@@ -1049,7 +1049,7 @@ export interface AgentHttpServerOptions {
 }
 
 export class HttpProblem extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly errors?: unknown) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly errors?: unknown, readonly meta?: Record<string, string | number | boolean | null>) {
     super(message);
     this.name = "HttpProblem";
   }
@@ -1624,7 +1624,13 @@ export class AgentHttpServer {
         const caller = await this.options.verifyLoginToken(token, expected);
         if (caller.tenantId !== expected || !caller.claims) throw new Error("Manager token identity mismatch");
         data.claims = caller.claims;
-      } catch { throw new ManagerUnavailableError("Manager token failed local verification"); }
+      } catch (error) {
+        if (error instanceof JwtClockError) {
+          // Reported only after Manager-calibrated comparison, so the skew is real (or uncalibratable).
+          throw new HttpProblem(503, "clock_skew_detected", "Local system clock differs from Manager", undefined, { skew_seconds: error.skewSeconds });
+        }
+        throw new ManagerUnavailableError("Manager token failed local verification");
+      }
     }
   }
 
@@ -2897,8 +2903,8 @@ export class AgentHttpServer {
 
   private writeError(response: ServerResponse, error: unknown, requestId: string): void {
     if (response.writableEnded) return;
-    let problem: { status: number; code: string; detail: string; errors?: unknown };
-    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined };
+    let problem: { status: number; code: string; detail: string; errors?: unknown; meta?: Record<string, string | number | boolean | null> };
+    if (error instanceof HttpProblem || error instanceof AutomationError) problem = { status: error.status, code: error.code, detail: error.message, errors: error instanceof HttpProblem ? error.errors : undefined, meta: error instanceof HttpProblem ? error.meta : undefined };
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
@@ -2914,7 +2920,7 @@ export class AgentHttpServer {
     else if (error instanceof SessionAuthorizationError) problem = { status: 403, code: "employee_not_authorized", detail: error.message };
     else if (error instanceof ManagerUnavailableError) problem = { status: 503, code: "manager_unavailable", detail: error.message };
     else problem = { status: 500, code: "internal_error", detail: "Internal server error" };
-    this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}) }, "application/problem+json; charset=utf-8");
+    this.writeJson(response, problem.status, { type: "about:blank", title: problem.code, status: problem.status, code: problem.code, detail: problem.detail, instance: requestId, request_id: requestId, ...(problem.errors ? { errors: problem.errors } : {}), ...(problem.meta ? { meta: problem.meta } : {}) }, "application/problem+json; charset=utf-8");
   }
 }
 

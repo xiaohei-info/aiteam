@@ -31,6 +31,8 @@ async function mockManager() {
   const server = createServer(async (req, res) => {
     state.paths.push(req.url ?? "");
     res.setHeader("content-type", "application/json");
+    // Same process as the tests that fake Date.now: Manager reports the faked clock, not wall time.
+    res.setHeader("date", new Date(Date.now()).toUTCString());
     if (req.url?.endsWith("/jwks.json")) {
       state.hits++;
       if (state.mode === "failure") { res.writeHead(503); res.end("{}"); return; }

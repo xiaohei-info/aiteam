@@ -1,3 +1,4 @@
+import { managerClock } from "./clock.js";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { encodeScope } from "./runtime-lease-cache.js";
 
@@ -24,7 +25,7 @@ export class ExecutionAuthorizationRegistry {
   private readonly now: () => number;
 
   constructor(options: ExecutionAuthorizationOptions = {}) {
-    this.now = options.now ?? (() => Date.now());
+    this.now = options.now ?? (() => managerClock.now());
   }
 
   register(caller: AuthenticatedCaller): ExecutionIdentity | undefined {
