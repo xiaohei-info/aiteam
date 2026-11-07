@@ -42,7 +42,7 @@ interface Props {
   onClose: () => void;
   onSave: (input: GatewayChannelInput) => Promise<void>;
   onFetchModels: (input: UpstreamModelPreviewInput) => Promise<string[]>;
-  onSaveCapabilities: (modelId: string, input: ModelCapabilitiesInput) => Promise<void>;
+  onSaveCapabilitiesBatch: (items: [string, ModelCapabilitiesInput][]) => Promise<void>;
 }
 
 /**
@@ -50,7 +50,7 @@ interface Props {
  * model list, pick the models the platform offers, then tune each model's parameters.
  * The stored API key is never shown; blank keeps it.
  */
-export function ChannelDialog({ channel, types, models, busy, onClose, onSave, onFetchModels, onSaveCapabilities }: Props) {
+export function ChannelDialog({ channel, types, models, busy, onClose, onSave, onFetchModels, onSaveCapabilitiesBatch }: Props) {
   const isNew = channel === null;
   const [step, setStep] = useState<Step>("connect");
   const [form, setForm] = useState<ChannelForm>(() => (channel ? channelToForm(channel) : emptyChannelForm()));
@@ -145,7 +145,7 @@ export function ChannelDialog({ channel, types, models, busy, onClose, onSave, o
     setError(null);
     setSavingParams(true);
     try {
-      for (const [modelId, input] of inputs) await onSaveCapabilities(modelId, input);
+      await onSaveCapabilitiesBatch(inputs);
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存模型参数失败");
