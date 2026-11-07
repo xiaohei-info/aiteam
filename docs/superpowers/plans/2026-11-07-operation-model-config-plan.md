@@ -35,7 +35,8 @@
    - 渠道 CRUD 编排：校验地址（http/https，无 userinfo/query/fragment）、JSON 对象字段校验、敏感请求头值回显为掩码，保存时掩码值沿用原值；写操作后重新同步模型。
    - `update_model_capabilities`：写 context_window / max_tokens / reasoning / thinking_mode / thinking_levels / thinking_level_map / input；写入后自动同步不再覆盖（现有 `update_model_metadata` 只补缺失 thinking 字段）。
 3. 路由（`/api/operation/providers/{provider_id}/...`，system_admin / system_operator）：
-   - `GET|POST channels`、`PUT|DELETE channels/{channel_id}`、`POST channels/{channel_id}/status`、`POST channels/{channel_id}/test`、`POST channels/fetch-models`
+   - `GET|POST channels`、`PUT|DELETE channels/{channel_id}`、`POST channels/{channel_id}/status`、`POST channels/{channel_id}/test`、`POST channels/upstream-models`
+   - 上游地址仅允许 http(s)，拒绝 userinfo、查询参数、片段及本机、内网、回环、保留和云 metadata 地址；网关侧仍需在实际出站请求前再次校验解析后的目标地址并限制跳转。
    - `PUT models/{model_id}/capabilities`
 4. 错误：网关失败统一 409 `Conflict`，消息经 `_redact_error_detail`，不带 Key。
 

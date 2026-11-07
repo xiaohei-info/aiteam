@@ -80,6 +80,19 @@ def test_create_channel_posts_single_mode_and_resolves_id_by_name():
     assert posted == {"mode": "single", "channel": {"name": "新渠道", "key": "sk-upstream", "type": 1}}
 
 
+def test_create_channel_uses_id_returned_by_gateway_without_followup_list():
+    methods = []
+
+    def handler(request):
+        methods.append(request.method)
+        if request.method == "POST":
+            return _ok({"id": 17, "name": "新渠道"})
+        return _ok({"items": [], "total": 0})
+
+    assert _client(handler).create_channel({"name": "新渠道", "key": "sk-upstream"}) == 17
+    assert methods == ["GET", "POST"]
+
+
 def test_update_channel_keeps_stored_key_when_blank_and_refuses_status():
     sent = {}
 
@@ -139,6 +152,14 @@ def _channel_input(**overrides) -> GatewayChannelInput:
 ])
 def test_channel_input_rejects_unsafe_base_url(url):
     with pytest.raises(ValidationError):
+        _channel_input(base_url=url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1:9300", "http://10.0.0.4", "http://[::1]", "http://localhost", "http://metadata.google.internal",
+])
+def test_channel_input_rejects_private_or_metadata_base_url(url):
+    with pytest.raises(ValidationError, match="本机|内网|metadata|保留"):
         _channel_input(base_url=url)
 
 
