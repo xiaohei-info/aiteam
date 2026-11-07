@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformProvidersPage } from "./PlatformProvidersPage";
@@ -10,7 +10,33 @@ const providerApi = vi.hoisted(() => ({
   publishPricedModels: vi.fn(),
   publishModel: vi.fn(),
   setRate: vi.fn(),
+  channels: vi.fn(),
+  channelTypes: vi.fn(),
+  createChannel: vi.fn(),
+  updateChannel: vi.fn(),
+  deleteChannel: vi.fn(),
+  setChannelEnabled: vi.fn(),
+  testChannel: vi.fn(),
+  upstreamModels: vi.fn(),
+  updateModelCapabilities: vi.fn(),
 }));
+
+const PROVIDER = {
+  provider_id: "p1", provider_code: "newapi", display_name: "LLM 网关",
+  relay_base_url: "http://127.0.0.1:9300/v1", api_protocol: "openai-completions",
+  status: "published", version: 1, updated_at: "2026-01-01T00:00:00Z",
+};
+
+const CHANNEL = {
+  id: 3, name: "Anthropic 主渠道", channel_type: 14, channel_type_label: "Anthropic", status: "enabled",
+  base_url: "https://up.example", models: ["claude-sonnet-5-5"], model_mapping: {}, header_override: {}, param_override: {},
+  group: "default", priority: 0, weight: 0, test_model: null, response_time_ms: null, tested_at: null,
+};
+
+const MODEL = {
+  provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published",
+  source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z",
+};
 
 vi.mock("./usePlatformProvidersApi", () => ({
   usePlatformProvidersApi: () => providerApi,
@@ -21,6 +47,8 @@ describe("PlatformProvidersPage", () => {
     vi.clearAllMocks();
     providerApi.list.mockReturnValue(new Promise(() => {}));
     providerApi.models.mockResolvedValue([]);
+    providerApi.channels.mockResolvedValue([]);
+    providerApi.channelTypes.mockResolvedValue([{ channel_type: 1, label: "OpenAI 兼容" }, { channel_type: 14, label: "Anthropic" }]);
   });
 
   it("只展示 LLM 网关，不提供新增服务入口", () => {
@@ -39,6 +67,7 @@ describe("PlatformProvidersPage", () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("LLM 网关暂无可用模型")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "发布全部有价格模型" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "价格" }));
     expect(screen.getByText(/新模型会自动补齐公开价格并发布/)).toBeInTheDocument();
   });
 
@@ -57,8 +86,87 @@ describe("PlatformProvidersPage", () => {
     ]);
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("MiniMax M3")).toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: "配置模型" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "价格" }));
     expect(screen.getAllByRole("button", { name: "设置价格" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "发布模型" })).toBeInTheDocument();
+  });
+
+  it("模型配置 tab 列出上游渠道，不显示 Key，可测试连接和删除", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.testChannel.mockResolvedValue({ ok: false, seconds: 1, message: "403 permission_error" });
+    providerApi.deleteChannel.mockResolvedValue(null);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "模型配置" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText(/NewAPI/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(screen.getByText("连接失败：403 permission_error")).toBeInTheDocument());
+    expect(providerApi.testChannel).toHaveBeenCalledWith("p1", 3);
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(providerApi.deleteChannel).toHaveBeenCalledWith("p1", 3));
+  });
+
+  it("新增渠道：弹窗经页面调用 upstreamModels 与 createChannel", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.upstreamModels.mockResolvedValue(["gpt-5.6"]);
+    providerApi.createChannel.mockResolvedValue(CHANNEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "新增渠道" }));
+    fireEvent.change(await screen.findByLabelText(/渠道名称/), { target: { value: "新渠道" } });
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk" } });
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+    fireEvent.click(await screen.findByLabelText("gpt-5.6"));
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+    await waitFor(() => expect(providerApi.createChannel).toHaveBeenCalledWith("p1", expect.objectContaining({ name: "新渠道", models: ["gpt-5.6"] })));
+    expect(providerApi.upstreamModels).toHaveBeenCalledWith("p1", { channel_type: 1, base_url: "", key: "sk" });
+  });
+
+  it("编辑渠道：保存走 updateChannel，完成后关闭弹窗", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.updateChannel.mockResolvedValue(CHANNEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+    await waitFor(() => expect(providerApi.updateChannel).toHaveBeenCalledWith("p1", 3, expect.objectContaining({ models: ["claude-sonnet-5-5"] })));
+    fireEvent.click(await screen.findByRole("button", { name: "完成" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "完成" })).not.toBeInTheDocument());
+  });
+
+  it("配置模型：保存走 updateModelCapabilities 并关闭弹窗", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.models.mockResolvedValue([{ model: MODEL, rate: null }]);
+    providerApi.updateModelCapabilities.mockResolvedValue(MODEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "配置模型" }));
+    fireEvent.change(await screen.findByLabelText(/^上下文窗口/), { target: { value: "200000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() => expect(providerApi.updateModelCapabilities).toHaveBeenCalledWith("p1", "minimax-m3", expect.objectContaining({ context_window: 200000 })));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "保存配置" })).not.toBeInTheDocument());
+  });
+
+  it("模型能力的 token 数可填任意正整数（如 200000、16000），不被浏览器步长校验拦下", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.models.mockResolvedValue([
+      { model: { provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" }, rate: null },
+    ]);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "配置模型" }));
+    const context = await screen.findByLabelText(/^上下文窗口/) as HTMLInputElement;
+    const maxTokens = screen.getByLabelText(/^最大输出/) as HTMLInputElement;
+    fireEvent.change(context, { target: { value: "200000" } });
+    fireEvent.change(maxTokens, { target: { value: "16000" } });
+    expect(context.validity.valid).toBe(true);
+    expect(maxTokens.validity.valid).toBe(true);
   });
 
   it("在大模型服务页提供 LLM 网关超链接，并保留价格更新入口", async () => {

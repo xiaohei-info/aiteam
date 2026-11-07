@@ -15,7 +15,31 @@ from shared.contracts.platform_provider import PlatformModel, PlatformModelRate,
 from shared.errors import AppError
 from shared.service_token import verify_service_token
 
+from .gateway_channels import (
+    GatewayChannelInput,
+    GatewayChannelOut,
+    GatewayChannelTestOut,
+    GatewayChannelTypeOut,
+    ModelCapabilitiesInput,
+    UpstreamModelPreviewInput,
+    channel_type_options,
+)
 from .platform_provider_service import PlatformProviderService, build_platform_provider_service
+
+
+class ChannelStatusInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
+class ChannelTestInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str | None = Field(default=None, max_length=255, description="测试用模型；留空用渠道的测试模型。")
+
+
+class UpstreamModelsOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    models: list[str] = Field(default_factory=list, description="上游返回的模型名。")
 
 
 class ModelRateCreate(BaseModel):
@@ -154,6 +178,53 @@ def publish_model(provider_id: str, body: ModelPublishRequest, request: Request,
 @router.post("/providers/{provider_id}/models/publish-priced", operation_id="operation_platform_models_publish_priced")
 def publish_priced_models(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PublishedCountOut]:
     return Envelope(data=PublishedCountOut(**_service(request).publish_priced_models(provider_id)))
+
+
+@router.get("/providers/{provider_id}/channel-types", operation_id="operation_gateway_channel_types")
+def list_channel_types(provider_id: str, _claims=Depends(_platform_admin)) -> ListEnvelope[GatewayChannelTypeOut]:
+    return ListEnvelope(data=channel_type_options())
+
+
+@router.get("/providers/{provider_id}/channels", operation_id="operation_gateway_channel_list")
+def list_channels(provider_id: str, request: Request, _claims=Depends(_platform_admin)) -> ListEnvelope[GatewayChannelOut]:
+    return ListEnvelope(data=_service(request).list_channels(provider_id))
+
+
+@router.post("/providers/{provider_id}/channels", status_code=status.HTTP_201_CREATED, operation_id="operation_gateway_channel_create")
+def create_channel(provider_id: str, body: GatewayChannelInput, request: Request, _claims=Depends(_platform_admin)) -> Envelope[GatewayChannelOut]:
+    return Envelope(data=_service(request).create_channel(provider_id, body))
+
+
+@router.put("/providers/{provider_id}/channels/{channel_id}", operation_id="operation_gateway_channel_update")
+def update_channel(provider_id: str, channel_id: int, body: GatewayChannelInput, request: Request, _claims=Depends(_platform_admin)) -> Envelope[GatewayChannelOut]:
+    return Envelope(data=_service(request).update_channel(provider_id, channel_id, body))
+
+
+@router.delete("/providers/{provider_id}/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT, operation_id="operation_gateway_channel_delete")
+def delete_channel(provider_id: str, channel_id: int, request: Request, _claims=Depends(_platform_admin)) -> Response:
+    _service(request).delete_channel(provider_id, channel_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/providers/{provider_id}/channels/{channel_id}/status", operation_id="operation_gateway_channel_status")
+def set_channel_status(provider_id: str, channel_id: int, body: ChannelStatusInput, request: Request, _claims=Depends(_platform_admin)) -> Envelope[GatewayChannelOut]:
+    return Envelope(data=_service(request).set_channel_enabled(provider_id, channel_id, enabled=body.enabled))
+
+
+@router.post("/providers/{provider_id}/channels/{channel_id}/test", operation_id="operation_gateway_channel_test")
+def test_channel(provider_id: str, channel_id: int, body: ChannelTestInput, request: Request, _claims=Depends(_platform_admin)) -> Envelope[GatewayChannelTestOut]:
+    return Envelope(data=_service(request).test_channel(provider_id, channel_id, body.model))
+
+
+@router.post("/providers/{provider_id}/channels/upstream-models", operation_id="operation_gateway_channel_upstream_models")
+def preview_upstream_models(provider_id: str, body: UpstreamModelPreviewInput, request: Request, response: Response, _claims=Depends(_platform_admin)) -> Envelope[UpstreamModelsOut]:
+    response.headers["Cache-Control"] = "no-store"
+    return Envelope(data=UpstreamModelsOut(models=_service(request).preview_upstream_models(provider_id, body)))
+
+
+@router.put("/providers/{provider_id}/models/{model_id:path}/capabilities", operation_id="operation_platform_model_capabilities_update")
+def update_model_capabilities(provider_id: str, model_id: str, body: ModelCapabilitiesInput, request: Request, _claims=Depends(_platform_admin)) -> Envelope[PlatformModel]:
+    return Envelope(data=_service(request).update_model_capabilities(provider_id, model_id, body))
 
 
 @router.get("/catalog/platform-providers", operation_id="operation_platform_provider_pull")

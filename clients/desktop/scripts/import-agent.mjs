@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkAgentPackage } from './check-agent.mjs'
+import { stripQuarantine } from './quarantine.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const input = process.argv[2]
@@ -42,6 +43,8 @@ try {
   cpSync(packageDirectory, staging, { recursive: true, dereference: false })
   // Only replace the disposable bundled runtime; user data is stored outside the project.
   archiveAgentNode(staging, manifest)
+  // Downloaded artifacts quarantine every extracted file; the first launch would then exceed the readiness limit.
+  stripQuarantine(staging)
   rmSync(destination, { recursive: true, force: true })
   renameSync(staging, destination)
   console.log(`Imported Agent ${manifest.version} (${manifest.target}) to ${destination}`)

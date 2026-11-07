@@ -23,9 +23,20 @@ from cryptography.fernet import Fernet
 from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformModelRef, PlatformProvider, TenantProviderAccess
 from shared.config import load_settings
 from shared.crypto import CryptoService
-from shared.errors import Conflict, NotFound
+from shared.errors import Conflict, NotFound, ValidationProblem
 
-from .newapi_client import NewApiAdminClient, NewApiError
+from .gateway_channels import (
+    GatewayChannelInput,
+    GatewayChannelOut,
+    GatewayChannelTestOut,
+    ModelCapabilitiesInput,
+    UpstreamModelPreviewInput,
+    channel_out,
+    channel_payload,
+    enabled_channel_models,
+    merged_capabilities,
+)
+from .newapi_client import NewApiAdminClient, NewApiError, _redact_error_detail
 from .platform_provider_repository import PlatformProviderRepository, ProviderRow, ModelRow, RateRow, AccessRow
 from .public_pricing_client import ModelsDevPricingClient, PublicModelPrice, PublicPricingError
 
@@ -138,10 +149,9 @@ class PlatformProviderService:
         return [self._provider_output(row) for row in self._repo.list_providers(published_only=published_only)]
 
     def _sync_models(self, provider: ProviderRow) -> list[PlatformModel]:
-        if provider.newapi_channel_id is None:
-            raise Conflict("LLM 网关 channel is not configured")
+        """Discover the union of models offered by every enabled gateway channel."""
         try:
-            model_ids = self._newapi.get_channel_models(provider.newapi_channel_id)
+            model_ids = enabled_channel_models(self._newapi.list_channels())
         except NewApiError as exc:
             raise Conflict("LLM 网关 model discovery failed; check the gateway channel configuration") from exc
         if not model_ids:
@@ -150,6 +160,95 @@ class PlatformProviderService:
 
     def sync_models(self, provider_id: str) -> list[PlatformModel]:
         return self._sync_models(self._require_provider(provider_id))
+
+    # ---- gateway upstream channels (keys are write-only) -------------------
+
+    @staticmethod
+    def _gateway(action: Callable[[], Any]) -> Any:
+        try:
+            return action()
+        except NewApiError as exc:
+            raise Conflict(f"LLM 网关操作失败：{exc}") from exc
+
+    def _resync_after_channel_change(self, provider: ProviderRow) -> None:
+        """Refresh the model union; an empty gateway must not fail the channel write."""
+        try:
+            self._auto_prepare_models(provider, self._sync_models(provider))
+        except Conflict:
+            logger.warning("model resync after gateway channel change failed", exc_info=True)
+
+    def list_channels(self, provider_id: str) -> list[GatewayChannelOut]:
+        self._require_provider(provider_id)
+        return [channel_out(item) for item in self._gateway(self._newapi.list_channels)]
+
+    def create_channel(self, provider_id: str, body: GatewayChannelInput) -> GatewayChannelOut:
+        provider = self._require_provider(provider_id)
+        if not body.key:
+            raise ValidationProblem("新建渠道需要填写 API Key")
+        try:
+            payload = channel_payload(body)
+        except ValueError as exc:
+            raise ValidationProblem(str(exc)) from exc
+        channel_id = self._gateway(lambda: self._newapi.create_channel(payload))
+        self._resync_after_channel_change(provider)
+        return channel_out(self._gateway(lambda: self._newapi.get_channel(channel_id)))
+
+    def update_channel(self, provider_id: str, channel_id: int, body: GatewayChannelInput) -> GatewayChannelOut:
+        provider = self._require_provider(provider_id)
+        original = self._gateway(lambda: self._newapi.get_channel(channel_id))
+        try:
+            payload = channel_payload(body, original=original)
+        except ValueError as exc:
+            raise ValidationProblem(str(exc)) from exc
+        updated = self._gateway(lambda: self._newapi.update_channel(channel_id, payload))
+        self._resync_after_channel_change(provider)
+        return channel_out(updated)
+
+    def delete_channel(self, provider_id: str, channel_id: int) -> None:
+        provider = self._require_provider(provider_id)
+        self._gateway(lambda: self._newapi.delete_channel(channel_id))
+        self._resync_after_channel_change(provider)
+
+    def set_channel_enabled(self, provider_id: str, channel_id: int, *, enabled: bool) -> GatewayChannelOut:
+        provider = self._require_provider(provider_id)
+        self._gateway(lambda: self._newapi.set_channel_status(channel_id, enabled=enabled))
+        self._resync_after_channel_change(provider)
+        return channel_out(self._gateway(lambda: self._newapi.get_channel(channel_id)))
+
+    def test_channel(self, provider_id: str, channel_id: int, model: str | None = None) -> GatewayChannelTestOut:
+        self._require_provider(provider_id)
+        result = self._newapi.test_channel(channel_id, model)
+        message = str(result.get("message") or "")
+        return GatewayChannelTestOut(
+            ok=bool(result.get("ok")),
+            seconds=result.get("seconds"),
+            message=_redact_error_detail(message) if message else "",
+        )
+
+    def preview_upstream_models(self, provider_id: str, body: UpstreamModelPreviewInput) -> list[str]:
+        """Saved channel without a new key uses its stored key; otherwise preview with the typed key."""
+        self._require_provider(provider_id)
+        saved_id = body.channel_id
+        if saved_id is not None and not body.key:
+            return self._gateway(lambda: self._newapi.fetch_upstream_models(saved_id))
+        channel_type = body.channel_type
+        if channel_type is None and saved_id is not None:
+            channel_type = channel_out(self._gateway(lambda: self._newapi.get_channel(saved_id))).channel_type
+        return self._gateway(lambda: self._newapi.preview_upstream_models(
+            channel_type=channel_type or 1, base_url=body.base_url, key=body.key or "",
+        ))
+
+    def update_model_capabilities(self, provider_id: str, model_id: str, body: ModelCapabilitiesInput) -> PlatformModel:
+        self._require_provider(provider_id)
+        model = self._require_model(provider_id, model_id)
+        row = self._repo.set_model_capabilities(
+            provider_id, model_id,
+            display_name=body.display_name.strip() or model.display_name,
+            capabilities=merged_capabilities(model.capabilities or {}, body),
+        )
+        if row is None:
+            raise NotFound("platform model not found")
+        return _model(row)
 
     def list_models(self, provider_id: str, *, published_only: bool = False) -> list[dict]:
         self._require_provider(provider_id)
