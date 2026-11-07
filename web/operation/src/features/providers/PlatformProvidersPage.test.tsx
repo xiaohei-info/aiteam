@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformProvidersPage } from "./PlatformProvidersPage";
@@ -10,7 +10,28 @@ const providerApi = vi.hoisted(() => ({
   publishPricedModels: vi.fn(),
   publishModel: vi.fn(),
   setRate: vi.fn(),
+  channels: vi.fn(),
+  channelTypes: vi.fn(),
+  createChannel: vi.fn(),
+  updateChannel: vi.fn(),
+  deleteChannel: vi.fn(),
+  setChannelEnabled: vi.fn(),
+  testChannel: vi.fn(),
+  upstreamModels: vi.fn(),
+  updateModelCapabilities: vi.fn(),
 }));
+
+const PROVIDER = {
+  provider_id: "p1", provider_code: "newapi", display_name: "LLM 网关",
+  relay_base_url: "http://127.0.0.1:9300/v1", api_protocol: "openai-completions",
+  status: "published", version: 1, updated_at: "2026-01-01T00:00:00Z",
+};
+
+const CHANNEL = {
+  id: 3, name: "Anthropic 主渠道", channel_type: 14, channel_type_label: "Anthropic", status: "enabled",
+  base_url: "https://up.example", models: ["claude-sonnet-5-5"], model_mapping: {}, header_override: {}, param_override: {},
+  group: "default", priority: 0, weight: 0, test_model: null, response_time_ms: null, tested_at: null,
+};
 
 vi.mock("./usePlatformProvidersApi", () => ({
   usePlatformProvidersApi: () => providerApi,
@@ -21,6 +42,8 @@ describe("PlatformProvidersPage", () => {
     vi.clearAllMocks();
     providerApi.list.mockReturnValue(new Promise(() => {}));
     providerApi.models.mockResolvedValue([]);
+    providerApi.channels.mockResolvedValue([]);
+    providerApi.channelTypes.mockResolvedValue([{ channel_type: 1, label: "OpenAI 兼容" }, { channel_type: 14, label: "Anthropic" }]);
   });
 
   it("只展示 LLM 网关，不提供新增服务入口", () => {
@@ -39,6 +62,7 @@ describe("PlatformProvidersPage", () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("LLM 网关暂无可用模型")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "发布全部有价格模型" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "价格" }));
     expect(screen.getByText(/新模型会自动补齐公开价格并发布/)).toBeInTheDocument();
   });
 
@@ -57,8 +81,51 @@ describe("PlatformProvidersPage", () => {
     ]);
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("MiniMax M3")).toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: "配置模型" })).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "价格" }));
     expect(screen.getAllByRole("button", { name: "设置价格" })).toHaveLength(2);
     expect(screen.getByRole("button", { name: "发布模型" })).toBeInTheDocument();
+  });
+
+  it("模型配置 tab 列出上游渠道，不显示 Key，可测试连接和删除", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.testChannel.mockResolvedValue({ ok: false, seconds: 1, message: "403 permission_error" });
+    providerApi.deleteChannel.mockResolvedValue(null);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "模型配置" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByText(/NewAPI/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(screen.getByText("连接失败：403 permission_error")).toBeInTheDocument());
+    expect(providerApi.testChannel).toHaveBeenCalledWith("p1", 3);
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(providerApi.deleteChannel).toHaveBeenCalledWith("p1", 3));
+  });
+
+  it("新建渠道必须填 Key，编辑时 Key 留空不提交", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.updateChannel.mockResolvedValue(CHANNEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "新增渠道" }));
+    fireEvent.change(await screen.findByLabelText(/渠道名称/), { target: { value: "新渠道" } });
+    fireEvent.change(screen.getByLabelText(/^模型/), { target: { value: "gpt-5.6" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存渠道" }));
+    expect(await screen.findByText("新建渠道需要填写 API Key")).toBeInTheDocument();
+    expect(providerApi.createChannel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存渠道" }));
+    await waitFor(() => expect(providerApi.updateChannel).toHaveBeenCalledWith(
+      "p1", 3, expect.not.objectContaining({ key: expect.anything() }),
+    ));
   });
 
   it("在大模型服务页提供 LLM 网关超链接，并保留价格更新入口", async () => {
