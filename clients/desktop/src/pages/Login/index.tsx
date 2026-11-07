@@ -183,7 +183,7 @@ export default function Login() {
         } else if (err.status === 422) {
           setError('提交的信息不符合要求，请检查后重试')
         } else if (err.status === 503) {
-          setError(loginUnavailableMessage(problemDetail))
+          setError(loginUnavailableMessage(problemDetail, problemCode, err.problem?.meta))
         } else if (err.status >= 500) {
           setError('后端服务异常,请稍后重试')
         } else {

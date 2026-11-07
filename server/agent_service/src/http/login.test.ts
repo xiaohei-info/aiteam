@@ -1,6 +1,7 @@
 /** 公开登录端点的企业解析契约：不填 tenant_id 时由同源 Agent 让 Manager 解析。 */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { JwtClockError } from "./auth.js";
 import { AgentHttpServer } from "./server.js";
 import { ManagerAuthError } from "../manager-client.js";
 import { createFixture } from "../test-fixture.js";
@@ -139,4 +140,42 @@ test("OpenAPI 上 login/reset-password 暴露 enterprise，tenant_id 不再必�
       assert(schema.required?.includes("account"), `${ref[1]} 应要求 account`);
     }
   });
+});
+
+async function loginWithVerifier(verify: () => Promise<never>): Promise<{ status: number; body: { code: string; detail: string; meta?: Record<string, unknown> } }> {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    managerClient: {
+      login: async (input: { account: string; tenant_id: string }) => ({ data: { token: "tok", claims: CLAIMS(input.account, input.tenant_id) } }),
+    } as never,
+    verifyLoginToken: verify,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const response = await post(`http://127.0.0.1:${address.port}`, "/api/agent/login", { account: "alice", password: "pw", tenant_id: "tenant-1" });
+    return { status: response.status, body: (await response.json()) as never };
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+}
+
+test("login 在本机时钟与 Manager 不一致时返回 503 clock_skew_detected 并带偏差秒数", async () => {
+  const { status, body } = await loginWithVerifier(async () => { throw new JwtClockError("JWT issued-at claim is in the future", 754); });
+  assert.equal(status, 503);
+  assert.equal(body.code, "clock_skew_detected");
+  assert.deepEqual(body.meta, { skew_seconds: 754 });
+});
+
+test("login 其他本地校验失败仍是 manager_unavailable，不带时钟信息", async () => {
+  const { status, body } = await loginWithVerifier(async () => { throw new Error("Invalid JWT signature"); });
+  assert.equal(status, 503);
+  assert.equal(body.code, "manager_unavailable");
+  assert.match(body.detail, /authentication is unavailable/u);
+  assert.equal(body.meta, undefined);
 });

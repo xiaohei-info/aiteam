@@ -1,5 +1,6 @@
 import { createPublicKey, verify, type JsonWebKey } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { managerClock } from "../clock.js";
 
 export interface JwtClaims {
   tenant_id?: string;
@@ -71,6 +72,16 @@ export interface JwtAuthenticatorOptions {
   issuer: string;
   audience: string;
   clockSkewSeconds?: number;
+  /** Epoch milliseconds; defaults to the Manager-calibrated clock so a skewed local clock does not reject valid tokens. */
+  now?: () => number;
+}
+
+/** The token is not yet valid by the (Manager-calibrated) clock: the local clock is behind. */
+export class JwtClockError extends Error {
+  constructor(message: string, readonly skewSeconds: number) {
+    super(message);
+    this.name = "JwtClockError";
+  }
 }
 
 export type AuthenticateRequest = (request: IncomingMessage) => AuthenticatedCaller | Promise<AuthenticatedCaller>;
@@ -106,15 +117,17 @@ export function verifyJwt(token: string, keys: Map<string, JwtJwk>, options: Omi
   const valid = verify("RSA-SHA256", Buffer.from(signed), createPublicKey({ key: jwk as unknown as JsonWebKey, format: "jwk" }), signature);
   if (!valid) throw new Error("Invalid JWT signature");
 
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor((options.now ?? (() => managerClock.now()))() / 1000);
   const skew = options.clockSkewSeconds ?? 30;
   if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp) || claims.exp + skew <= now) throw new Error("JWT is expired");
-  if (typeof claims.iat !== "number" || !Number.isFinite(claims.iat) || claims.iat - skew > now) throw new Error("JWT issued-at claim is missing or invalid");
+  if (typeof claims.iat !== "number" || !Number.isFinite(claims.iat) || claims.iat - skew > now) throw typeof claims.iat === "number" && Number.isFinite(claims.iat)
+    ? new JwtClockError("JWT issued-at claim is in the future", claims.iat - now)
+    : new Error("JWT issued-at claim is missing or invalid");
   if (claims.nbf !== undefined && (typeof claims.nbf !== "number" || !Number.isFinite(claims.nbf))) throw new Error("JWT not-before claim is invalid");
   if (claims.iss !== options.issuer) throw new Error("JWT issuer mismatch");
   if (!audienceContains(claims.aud, options.audience)) throw new Error("JWT audience mismatch");
   if (typeof claims.enterprise_id !== "string" || !Array.isArray(claims.roles)) throw new Error("JWT required claims are missing");
-  if (typeof claims.nbf === "number" && claims.nbf - skew > now) throw new Error("JWT is not active");
+  if (typeof claims.nbf === "number" && claims.nbf - skew > now) throw new JwtClockError("JWT is not active", claims.nbf - now);
   const userId = typeof claims.user_id === "string" ? claims.user_id : typeof claims.sub === "string" ? claims.sub : "";
   if (!userId || typeof claims.tenant_id !== "string" || !claims.tenant_id.trim()) throw new Error("JWT identity claims are missing");
   const caller: AuthenticatedCaller = {

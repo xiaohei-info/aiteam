@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { parsePublicJwks, verifyJwt, type AuthenticatedCaller, type AuthenticateRequest, type JwtJwk } from "./auth.js";
 import { ManagerUnavailableError } from "../manager-client.js";
+import { managerClock } from "../clock.js";
 
 const TENANT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TTL_MS = 60_000;
@@ -104,7 +105,7 @@ export class ManagerJwksAuthenticator {
   }
 
   private async download(tenant: string): Promise<Map<string, JwtJwk>> {
-    const response = await fetch(`${this.origin}/api/auth/${tenant}/jwks.json`, {
+    const response = await managerClock.observingFetch(fetch)(`${this.origin}/api/auth/${tenant}/jwks.json`, {
       redirect: "error", signal: AbortSignal.timeout(3000), headers: { accept: "application/json" },
     });
     if (!response.ok || !response.headers.get("content-type")?.includes("application/json") || !response.body) {
@@ -132,7 +133,7 @@ export class ManagerJwksAuthenticator {
 export async function verifyManagerSession(origin: string, token: string): Promise<void> {
   let response: Response;
   try {
-    response = await fetch(`${origin}/api/auth/session`, {
+    response = await managerClock.observingFetch(fetch)(`${origin}/api/auth/session`, {
       redirect: "error",
       signal: AbortSignal.timeout(3000),
       headers: { accept: "application/json", authorization: `Bearer ${token}` },

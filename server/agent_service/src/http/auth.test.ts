@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { test } from "node:test";
-import { createJwtAuthenticator } from "./auth.js";
+import { createJwtAuthenticator, JwtClockError } from "./auth.js";
 
 function token(exp = Math.floor(Date.now() / 1000) + 60, tenantId: unknown = "tenant-a"): { token: string; jwks: { keys: [{ kty: "RSA"; n: string; e: string; kid: string; alg: "RS256" }] } } {
   const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -40,4 +40,22 @@ test("JWT authenticator verifies tenant identity and rejects expiry", async () =
   assert.throws(() => createJwtAuthenticator({ jwks: valid.jwks } as never), /issuer and audience are required/);
   const wrongAudience = token();
   await assert.rejects(async () => createJwtAuthenticator({ jwks: wrongAudience.jwks, issuer: "manager", audience: "other" })({ headers: { authorization: `Bearer ${wrongAudience.token}` } } as never), /audience mismatch/);
+});
+
+test("JWT time claims are judged on the injected (Manager-calibrated) clock", async () => {
+  const signed = token(Math.floor(Date.now() / 1000) + 3600);
+  const issuedAt = JSON.parse(Buffer.from(signed.token.split('.')[1], "base64url").toString("utf8")).iat as number;
+  const request = { headers: { authorization: `Bearer ${signed.token}` } } as never;
+  const options = { jwks: signed.jwks, issuer: "manager", audience: "agent", clockSkewSeconds: 0 };
+  // Local clock 10 minutes behind Manager: iat looks future-dated without calibration.
+  const behind = () => (issuedAt - 600) * 1000;
+  await assert.rejects(async () => createJwtAuthenticator({ ...options, now: behind })(request), (error: unknown) => error instanceof JwtClockError && error.skewSeconds === 600);
+  // The same clock corrected by the +600s offset accepts the token.
+  await createJwtAuthenticator({ ...options, now: () => behind() + 600_000 })(request);
+  // Local clock 10 minutes ahead: calibration also stops premature expiry.
+  const shortLived = token(issuedAt + 300);
+  const shortRequest = { headers: { authorization: `Bearer ${shortLived.token}` } } as never;
+  const ahead = () => (issuedAt + 600) * 1000;
+  await assert.rejects(async () => createJwtAuthenticator({ jwks: shortLived.jwks, issuer: "manager", audience: "agent", now: ahead })(shortRequest), /expired/);
+  await createJwtAuthenticator({ jwks: shortLived.jwks, issuer: "manager", audience: "agent", now: () => ahead() - 600_000 })(shortRequest);
 });
