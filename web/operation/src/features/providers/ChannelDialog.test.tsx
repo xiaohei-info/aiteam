@@ -26,7 +26,7 @@ function setup(overrides: Partial<Props> = {}) {
     onClose: vi.fn(),
     onSave: vi.fn().mockResolvedValue(undefined),
     onFetchModels: vi.fn().mockResolvedValue(["MiniMax-M3", "gpt-5.6", "embed-1"]),
-    onSaveCapabilities: vi.fn().mockResolvedValue(undefined),
+    onSaveCapabilitiesBatch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   render(<ChannelDialog {...props} />);
@@ -166,7 +166,7 @@ describe("ChannelDialog 第③步 模型参数", () => {
     expect(screen.getByRole("button", { name: /claude-sonnet-5-5 · 上下文/ })).toHaveAttribute("aria-expanded", "false");
     click("完成");
     expect(props.onClose).toHaveBeenCalled();
-    expect(props.onSaveCapabilities).not.toHaveBeenCalled();
+    expect(props.onSaveCapabilitiesBatch).not.toHaveBeenCalled();
   });
 
   it("只保存改动过的模型，校验失败时留在弹窗", async () => {
@@ -176,16 +176,18 @@ describe("ChannelDialog 第③步 模型参数", () => {
     type(/^上下文窗口/, "200000");
     click("保存参数");
     expect(await screen.findByText("claude-sonnet-5-5：最大输出不能超过上下文窗口")).toBeInTheDocument();
-    expect(props.onSaveCapabilities).not.toHaveBeenCalled();
+    expect(props.onSaveCapabilitiesBatch).not.toHaveBeenCalled();
 
     type(/^最大输出/, "16000");
     click("保存参数");
     await waitFor(() => expect(props.onClose).toHaveBeenCalled());
-    expect(props.onSaveCapabilities).toHaveBeenCalledWith("claude-sonnet-5-5", expect.objectContaining({ context_window: 200000, max_tokens: 16000 }));
+    expect(props.onSaveCapabilitiesBatch).toHaveBeenCalledWith([
+      ["claude-sonnet-5-5", expect.objectContaining({ context_window: 200000, max_tokens: 16000 })],
+    ]);
   });
 
   it("保存参数失败时显示原因、不关闭", async () => {
-    const props = await editedChannelAtParams({ onSaveCapabilities: vi.fn().mockRejectedValue(new Error("网关不可用")) });
+    const props = await editedChannelAtParams({ onSaveCapabilitiesBatch: vi.fn().mockRejectedValue(new Error("网关不可用")) });
     click(/claude-sonnet-5-5 · 上下文/);
     type(/^上下文窗口/, "200000");
     click("保存参数");
