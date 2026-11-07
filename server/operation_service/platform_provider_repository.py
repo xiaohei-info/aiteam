@@ -334,6 +334,29 @@ class PlatformProviderRepository:
             ).fetchone()
         return self._model(row) if row else None
 
+    def set_model_capabilities(
+        self,
+        provider_id: str,
+        model_id: str,
+        *,
+        display_name: str,
+        capabilities: dict[str, Any],
+    ) -> ModelRow | None:
+        """Replace one model's operator-edited runtime capabilities.
+
+        Stable refs are not versioned here; the next runtime config issued by
+        Manager reads the current catalog. The saved thinking fields keep the
+        public-catalog backfill in update_model_metadata from overwriting it.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """UPDATE platform_model SET display_name=%s, capabilities=%s::jsonb, updated_at=now()
+                   WHERE provider_id=%s::uuid AND model_id=%s
+                   RETURNING provider_id::text,model_id,display_name,capabilities,status,source,version,updated_at""",
+                (display_name, json.dumps(capabilities), provider_id, model_id),
+            ).fetchone()
+        return self._model(row) if row else None
+
     def list_models(self, provider_id: str, *, published_only: bool = False) -> list[ModelRow]:
         suffix = " AND status='published'" if published_only else " AND status <> 'disabled'"
         with self._connect() as conn:

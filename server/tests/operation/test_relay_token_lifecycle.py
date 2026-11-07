@@ -1222,16 +1222,16 @@ def test_service_catalog_discovery_and_publish_guards():
             self.result = result
             self.error = error
 
-        def get_channel_models(self, _channel_id):
+        def list_channels(self):
             if self.error:
                 raise self.error
-            return self.result
+            return [{"id": 1, "status": 1, "models": ",".join(self.result)}]
 
     repo = CatalogRepo()
     service = PlatformProviderService(repo, Discovery(["m1"]), FakeCrypto(), "http://relay/v1")
     assert service.sync_models("p1")[0].model_id == "m1"
-    with pytest.raises(Conflict, match="channel"):
-        service._sync_models(replace(PROVIDER, newapi_channel_id=None))
+    # Discovery reads every enabled gateway channel; the legacy mapping is optional.
+    assert service._sync_models(replace(PROVIDER, newapi_channel_id=None))[0].model_id == "m1"
     with pytest.raises(Conflict, match="discovery failed"):
         PlatformProviderService(repo, Discovery(error=NewApiError("gateway")), FakeCrypto(), "http://relay/v1").sync_models("p1")
     with pytest.raises(Conflict, match="discovered no models"):
