@@ -10,6 +10,12 @@ from urllib.parse import quote
 import httpx
 
 
+def _model_id_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise NewApiError("LLM gateway returned an invalid upstream model list")
+    return sorted({item.strip() for item in value if isinstance(item, str) and item.strip()})
+
+
 class NewApiError(RuntimeError):
     def __init__(self, message: str, *, token_id: int | None = None):
         super().__init__(message)
@@ -83,6 +89,85 @@ class NewApiAdminClient:
 
     def pricing(self) -> dict:
         return self._request("GET", "/api/pricing", auth=False)
+
+    # Upstream channel management.  List/detail responses never include the
+    # upstream key; keys are only ever written, never read back.
+    _CHANNEL_PAGE_SIZE = 100
+    _CHANNEL_MAX_PAGES = 20
+
+    def list_channels(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for page in range(1, self._CHANNEL_MAX_PAGES + 1):
+            payload = self._request("GET", f"/api/channel/?p={page}&page_size={self._CHANNEL_PAGE_SIZE}&id_sort=true")
+            data = payload.get("data")
+            if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+                raise NewApiError("LLM gateway returned an invalid channel list")
+            batch: list[Any] = data["items"]
+            items.extend(item for item in batch if isinstance(item, dict))
+            total = data.get("total")
+            if len(batch) < self._CHANNEL_PAGE_SIZE or (isinstance(total, int) and len(items) >= total):
+                return items
+        raise NewApiError("LLM gateway channel list exceeded the supported size")
+
+    def get_channel(self, channel_id: int) -> dict[str, Any]:
+        data = self._request("GET", f"/api/channel/{int(channel_id)}").get("data")
+        if not isinstance(data, dict) or data.get("id") != int(channel_id):
+            raise NewApiError("LLM gateway returned an invalid channel")
+        return data
+
+    def find_channels_by_name(self, name: str) -> list[dict[str, Any]]:
+        return [item for item in self.list_channels() if item.get("name") == name]
+
+    def create_channel(self, channel: dict[str, Any]) -> int:
+        """Create one channel; NewAPI does not return its id, so names must be unique."""
+        name = channel.get("name")
+        if not isinstance(name, str) or not name:
+            raise NewApiError("channel name is required")
+        if self.find_channels_by_name(name):
+            raise NewApiError("channel name already exists")
+        self._request("POST", "/api/channel/", json={"mode": "single", "channel": channel})
+        created = self.find_channels_by_name(name)
+        if len(created) != 1 or not isinstance(created[0].get("id"), int):
+            raise NewApiError("LLM gateway did not report the created channel")
+        return created[0]["id"]
+
+    def update_channel(self, channel_id: int, fields: dict[str, Any]) -> dict[str, Any]:
+        """Patch one channel. An empty key keeps the stored upstream key."""
+        if "status" in fields:
+            raise NewApiError("channel status must be changed through the status endpoint")
+        body = {key: value for key, value in fields.items() if not (key == "key" and not value)}
+        body["id"] = int(channel_id)
+        self._request("PUT", "/api/channel/", json=body)
+        return self.get_channel(channel_id)
+
+    def delete_channel(self, channel_id: int) -> None:
+        self._request("DELETE", f"/api/channel/{int(channel_id)}")
+
+    def set_channel_status(self, channel_id: int, *, enabled: bool) -> None:
+        self._request("POST", f"/api/channel/{int(channel_id)}/status", json={"status": 1 if enabled else 2})
+
+    def test_channel(self, channel_id: int, model: str | None = None) -> dict[str, Any]:
+        """Send one gateway-side probe request; failures are returned, not raised."""
+        path = f"/api/channel/test/{int(channel_id)}"
+        if model:
+            path += f"?model={quote(model, safe='')}"
+        try:
+            payload = self._request("GET", path)
+        except NewApiError as exc:
+            return {"ok": False, "seconds": None, "message": str(exc)}
+        seconds = payload.get("time")
+        return {"ok": True, "seconds": float(seconds) if isinstance(seconds, (int, float)) else None, "message": ""}
+
+    def fetch_upstream_models(self, channel_id: int) -> list[str]:
+        return _model_id_list(self._request("GET", f"/api/channel/fetch_models/{int(channel_id)}").get("data"))
+
+    def preview_upstream_models(
+        self, *, channel_type: int, base_url: str, key: str, header_override: str | None = None,
+    ) -> list[str]:
+        body: dict[str, Any] = {"type": int(channel_type), "base_url": base_url, "key": key}
+        if header_override:
+            body["header_override"] = header_override
+        return _model_id_list(self._request("POST", "/api/channel/fetch_models", json=body).get("data"))
 
     def find_user(self, username: str) -> dict | None:
         """Reconcile an exact username across the bounded search result."""
