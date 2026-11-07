@@ -118,12 +118,14 @@ export function PlatformProvidersPage() {
               <ChannelsPanel
                 channels={channels}
                 types={channelTypes}
+                models={models.map((item) => item.model)}
                 busy={busy}
                 onSave={(channel, input) => dialogAction(() => channel ? api.updateChannel(selected.provider_id, channel.id, input) : api.createChannel(selected.provider_id, input))}
                 onDelete={(channel) => action(() => api.deleteChannel(selected.provider_id, channel.id))}
                 onToggle={(channel, enabled) => action(() => api.setChannelEnabled(selected.provider_id, channel.id, enabled))}
                 onTest={(channel) => api.testChannel(selected.provider_id, channel.id)}
                 onFetchModels={(input) => api.upstreamModels(selected.provider_id, input)}
+                onSaveCapabilities={(modelId, input) => dialogAction(() => api.updateModelCapabilities(selected.provider_id, modelId, input))}
               />
               <VStack gap={1}><Heading level={2}>模型能力</Heading><Text type="supporting">上下文窗口、最大输出、思考档位和图片输入会随员工配置下发到本机运行时。</Text></VStack>
               {models.length === 0 ? <EmptyState title="LLM 网关暂无可用模型" description="请先新增并启用上游渠道。" /> : models.map((item) => (

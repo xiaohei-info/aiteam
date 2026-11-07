@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  addModelRows,
   capabilitiesToForm,
+  channelStatusLabel,
   channelToForm,
+  connectionError,
+  mergeModelRows,
+  type ModelRow,
   emptyChannelForm,
   formatTokens,
   formToCapabilitiesInput,
@@ -24,7 +29,7 @@ describe("channel form", () => {
   });
 
   it("新建渠道必须填 Key，编辑时留空不提交 key", () => {
-    const form = { ...emptyChannelForm(), name: "新渠道", models: "gpt-5.6" };
+    const form = { ...emptyChannelForm(), name: "新渠道", rows: [{ upstream: "gpt-5.6", name: "gpt-5.6", selected: true }] };
     expect(formToChannelInput(form, { isNew: true })).toEqual({ ok: false, error: "新建渠道需要填写 API Key" });
     const edit = formToChannelInput(channelToForm(channel), { isNew: false });
     expect(edit.ok && "key" in edit.value).toBe(false);
@@ -37,7 +42,58 @@ describe("channel form", () => {
     expect(formToChannelInput({ ...base, paramOverride: "{bad" }, { isNew: false })).toEqual({ ok: false, error: "参数覆盖不是有效的 JSON" });
     expect(formToChannelInput({ ...base, headerOverride: "[]" }, { isNew: false })).toEqual({ ok: false, error: "自定义请求头必须是 JSON 对象" });
     expect(formToChannelInput({ ...base, headerOverride: '{"X": 1}' }, { isNew: false })).toEqual({ ok: false, error: "自定义请求头的值必须是字符串" });
-    expect(formToChannelInput({ ...base, models: " " }, { isNew: false })).toEqual({ ok: false, error: "至少填写一个模型" });
+    expect(formToChannelInput({ ...base, rows: base.rows.map((row) => ({ ...row, selected: false })) }, { isNew: false })).toEqual({ ok: false, error: "至少选择一个模型" });
+  });
+
+  it("编辑时把模型映射还原成上游名/平台名，并保留不属于列表的映射", () => {
+    const form = channelToForm({ ...channel, model_mapping: { a: "a-2026", orphan: "x" } });
+    expect(form.rows).toEqual([
+      { upstream: "a-2026", name: "a", selected: true },
+      { upstream: "b", name: "b", selected: true },
+    ]);
+    expect(form.extraMapping).toEqual({ orphan: "x" });
+    const result = formToChannelInput(form, { isNew: false });
+    expect(result.ok && result.value.model_mapping).toEqual({ orphan: "x", a: "a-2026" });
+  });
+
+  it("由勾选的模型行生成 models 与 model_mapping，并校验平台名", () => {
+    const base = { ...emptyChannelForm(), name: "新渠道", key: "sk" };
+    const minimax: ModelRow = { upstream: "MiniMax-M3", name: "minimax-m3", selected: true };
+    const gpt: ModelRow = { upstream: "gpt-5.6", name: "gpt-5.6", selected: true };
+    const rows: ModelRow[] = [minimax, gpt, { upstream: "embed", name: "embed", selected: false }];
+    const result = formToChannelInput({ ...base, rows }, { isNew: true });
+    expect(result.ok && result.value.models).toEqual(["minimax-m3", "gpt-5.6"]);
+    expect(result.ok && result.value.model_mapping).toEqual({ "minimax-m3": "MiniMax-M3" });
+    expect(result.ok && result.value.key).toBe("sk");
+    expect(formToChannelInput({ ...base, rows: [{ ...minimax, name: " " }] }, { isNew: true })).toEqual({ ok: false, error: "模型「MiniMax-M3」的平台模型名不能为空" });
+    expect(formToChannelInput({ ...base, rows: [minimax, { ...gpt, name: "minimax-m3" }] }, { isNew: true })).toEqual({ ok: false, error: "平台模型名「minimax-m3」重复" });
+    expect(formToChannelInput({ ...base, name: " ", rows }, { isNew: true })).toEqual({ ok: false, error: "请填写渠道名称" });
+  });
+
+  it("合并上游列表与手动添加的模型", () => {
+    const rows: ModelRow[] = [{ upstream: "a", name: "a", selected: true }];
+    expect(mergeModelRows(rows, ["a", "b", "b"])).toEqual([
+      { upstream: "a", name: "a", selected: true },
+      { upstream: "b", name: "b", selected: false },
+    ]);
+    expect(addModelRows(mergeModelRows(rows, ["b"]), "b, c")).toEqual([
+      { upstream: "a", name: "a", selected: true },
+      { upstream: "b", name: "b", selected: true },
+      { upstream: "c", name: "c", selected: true },
+    ]);
+  });
+
+  it("第一步校验渠道名称和新建时的 Key", () => {
+    expect(connectionError(emptyChannelForm(), { isNew: true })).toBe("请填写渠道名称");
+    expect(connectionError({ ...emptyChannelForm(), name: "x" }, { isNew: true })).toBe("新建渠道需要填写 API Key");
+    expect(connectionError({ ...emptyChannelForm(), name: "x" }, { isNew: false })).toBeNull();
+  });
+
+  it("渠道状态文案", () => {
+    expect(channelStatusLabel("enabled").label).toBe("已启用");
+    expect(channelStatusLabel("manually_disabled").label).toBe("已停用");
+    expect(channelStatusLabel("auto_disabled").label).toBe("自动停用");
+    expect(channelStatusLabel("other" as GatewayChannel["status"]).label).toBe("未知状态");
   });
 });
 

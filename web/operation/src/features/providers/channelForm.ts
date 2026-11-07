@@ -3,14 +3,25 @@ import type { GatewayChannel, GatewayChannelInput, ModelCapabilitiesInput, Platf
 
 export const MASK = "********";
 
-/** Editable text state of one gateway channel; JSON fields stay as text until submit. */
+/**
+ * One model the channel can offer. `upstream` is the name the upstream knows;
+ * `name` is the model id our platform exposes (a rename becomes a gateway model_mapping entry).
+ */
+export interface ModelRow {
+  upstream: string;
+  name: string;
+  selected: boolean;
+}
+
+/** Editable state of one gateway channel; JSON fields stay as text until submit. */
 export interface ChannelForm {
   name: string;
   channelType: string;
   baseUrl: string;
   key: string;
-  models: string;
-  modelMapping: string;
+  rows: ModelRow[];
+  /** Mapping entries that do not belong to a listed model; kept untouched on save. */
+  extraMapping: Record<string, string>;
   headerOverride: string;
   paramOverride: string;
   group: string;
@@ -23,7 +34,7 @@ export type FormResult<T> = { ok: true; value: T } | { ok: false; error: string 
 
 export function emptyChannelForm(): ChannelForm {
   return {
-    name: "", channelType: "1", baseUrl: "", key: "", models: "", modelMapping: "", headerOverride: "", paramOverride: "",
+    name: "", channelType: "1", baseUrl: "", key: "", rows: [], extraMapping: {}, headerOverride: "", paramOverride: "",
     group: "default", priority: 0, weight: 0, testModel: "",
   };
 }
@@ -33,13 +44,14 @@ function jsonText(value: Record<string, unknown>): string {
 }
 
 export function channelToForm(channel: GatewayChannel): ChannelForm {
+  const listed = new Set(channel.models);
   return {
     name: channel.name,
     channelType: String(channel.channel_type),
     baseUrl: channel.base_url,
     key: "",
-    models: channel.models.join("\n"),
-    modelMapping: jsonText(channel.model_mapping),
+    rows: channel.models.map((name) => ({ upstream: channel.model_mapping[name] || name, name, selected: true })),
+    extraMapping: Object.fromEntries(Object.entries(channel.model_mapping).filter(([name]) => !listed.has(name))),
     headerOverride: jsonText(channel.header_override),
     paramOverride: jsonText(channel.param_override),
     group: channel.group,
@@ -52,6 +64,42 @@ export function channelToForm(channel: GatewayChannel): ChannelForm {
 /** Model names separated by newlines or commas, trimmed and de-duplicated in order. */
 export function parseModelList(text: string): string[] {
   return [...new Set(text.split(/[\n,]/).map((item) => item.trim()).filter(Boolean))];
+}
+
+/** Append upstream models not seen yet as unchecked rows; existing rows keep their choice. */
+export function mergeModelRows(rows: ModelRow[], upstream: string[]): ModelRow[] {
+  const known = new Set(rows.map((row) => row.upstream));
+  const added = [...new Set(upstream)].filter((name) => !known.has(name)).map((name) => ({ upstream: name, name, selected: false }));
+  return [...rows, ...added];
+}
+
+/** Manually typed model names: check existing rows, append the rest as checked rows. */
+export function addModelRows(rows: ModelRow[], text: string): ModelRow[] {
+  const names = parseModelList(text);
+  const checked = rows.map((row) => (names.includes(row.upstream) ? { ...row, selected: true } : row));
+  const known = new Set(rows.map((row) => row.upstream));
+  return [...checked, ...names.filter((name) => !known.has(name)).map((name) => ({ upstream: name, name, selected: true }))];
+}
+
+/** Step 1 check before fetching models or moving on. */
+export function connectionError(form: ChannelForm, { isNew }: { isNew: boolean }): string | null {
+  if (!form.name.trim()) return "请填写渠道名称";
+  if (isNew && !form.key.trim()) return "新建渠道需要填写 API Key";
+  return null;
+}
+
+function selectedModels(rows: ModelRow[]): FormResult<{ models: string[]; mapping: Record<string, string> }> {
+  const models: string[] = [];
+  const mapping: Record<string, string> = {};
+  for (const row of rows.filter((item) => item.selected)) {
+    const name = row.name.trim();
+    if (!name) return { ok: false, error: `模型「${row.upstream}」的平台模型名不能为空` };
+    if (models.includes(name)) return { ok: false, error: `平台模型名「${name}」重复` };
+    models.push(name);
+    if (name !== row.upstream) mapping[name] = row.upstream;
+  }
+  if (!models.length) return { ok: false, error: "至少选择一个模型" };
+  return { ok: true, value: { models, mapping } };
 }
 
 function parseObject(text: string, label: string): FormResult<Record<string, unknown>> {
@@ -70,12 +118,10 @@ function parseStringMap(text: string, label: string): FormResult<Record<string, 
 }
 
 export function formToChannelInput(form: ChannelForm, { isNew }: { isNew: boolean }): FormResult<GatewayChannelInput> {
-  if (!form.name.trim()) return { ok: false, error: "请填写渠道名称" };
-  if (isNew && !form.key.trim()) return { ok: false, error: "新建渠道需要填写 API Key" };
-  const models = parseModelList(form.models);
-  if (!models.length) return { ok: false, error: "至少填写一个模型" };
-  const mapping = parseStringMap(form.modelMapping, "模型映射");
-  if (!mapping.ok) return mapping;
+  const connection = connectionError(form, { isNew });
+  if (connection) return { ok: false, error: connection };
+  const chosen = selectedModels(form.rows);
+  if (!chosen.ok) return chosen;
   const headers = parseStringMap(form.headerOverride, "自定义请求头");
   if (!headers.ok) return headers;
   const params = parseObject(form.paramOverride, "参数覆盖");
@@ -84,8 +130,8 @@ export function formToChannelInput(form: ChannelForm, { isNew }: { isNew: boolea
     name: form.name.trim(),
     channel_type: Number(form.channelType),
     base_url: form.baseUrl.trim(),
-    models,
-    model_mapping: mapping.value,
+    models: chosen.value.models,
+    model_mapping: { ...form.extraMapping, ...chosen.value.mapping },
     header_override: headers.value,
     param_override: params.value,
     group: form.group.trim() || "default",

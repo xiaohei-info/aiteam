@@ -11,23 +11,25 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { ChannelDialog } from "./ChannelDialog";
 import { channelStatusLabel } from "./channelForm";
-import type { GatewayChannel, GatewayChannelInput, GatewayChannelTestResult, GatewayChannelType, UpstreamModelPreviewInput } from "./types";
+import type { GatewayChannel, GatewayChannelInput, GatewayChannelTestResult, GatewayChannelType, ModelCapabilitiesInput, PlatformModel, UpstreamModelPreviewInput } from "./types";
 
 interface Props {
   channels: GatewayChannel[];
   types: GatewayChannelType[];
+  models: PlatformModel[];
   busy: boolean;
   onSave: (channel: GatewayChannel | null, input: GatewayChannelInput) => Promise<void>;
   onDelete: (channel: GatewayChannel) => Promise<void>;
   onToggle: (channel: GatewayChannel, enabled: boolean) => Promise<void>;
   onTest: (channel: GatewayChannel) => Promise<GatewayChannelTestResult | null>;
   onFetchModels: (input: UpstreamModelPreviewInput) => Promise<string[]>;
+  onSaveCapabilities: (modelId: string, input: ModelCapabilitiesInput) => Promise<void>;
 }
 
 type Editing = { channel: GatewayChannel | null } | null;
 
 /** Upstream channels of the LLM gateway: URL, key (write-only), models and compatibility overrides. */
-export function ChannelsPanel({ channels, types, busy, onSave, onDelete, onToggle, onTest, onFetchModels }: Props) {
+export function ChannelsPanel({ channels, types, models, busy, onSave, onDelete, onToggle, onTest, onFetchModels, onSaveCapabilities }: Props) {
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<GatewayChannel | null>(null);
   const [testing, setTesting] = useState<number | null>(null);
@@ -87,10 +89,12 @@ export function ChannelsPanel({ channels, types, busy, onSave, onDelete, onToggl
         <ChannelDialog
           channel={editing.channel}
           types={types}
+          models={models}
           busy={busy}
           onClose={() => setEditing(null)}
           onFetchModels={onFetchModels}
-          onSave={async (input) => { await onSave(editing.channel, input); setEditing(null); }}
+          onSave={(input) => onSave(editing.channel, input)}
+          onSaveCapabilities={onSaveCapabilities}
         />
       )}
       <AlertDialog
