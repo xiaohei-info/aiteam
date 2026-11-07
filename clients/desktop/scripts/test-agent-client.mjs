@@ -84,6 +84,8 @@ function environment({ desktop = true, dev = false, address = 'http://127.0.0.1:
           if (command === 'secure_session_read') return credential
           if (command === 'secure_session_write') { credential = args.session; return }
           if (command === 'secure_session_delete') { credential = null; return }
+          if (command === 'secure_login_credentials_read') return null
+          if (command === 'secure_login_credentials_write' || command === 'secure_login_credentials_delete') return
           assert.equal(command, 'get_agent_base_url')
           invocations++
           if (address instanceof Error) throw address
