@@ -119,13 +119,23 @@ class NewApiAdminClient:
         return [item for item in self.list_channels() if item.get("name") == name]
 
     def create_channel(self, channel: dict[str, Any]) -> int:
-        """Create one channel; NewAPI does not return its id, so names must be unique."""
+        """Create one channel and prefer the gateway's returned id.
+
+        Older gateways do not return an id, so the name lookup remains as a
+        compatibility fallback. New gateways should return the created record
+        to avoid the check/create/find race under concurrent requests.
+        """
         name = channel.get("name")
         if not isinstance(name, str) or not name:
             raise NewApiError("channel name is required")
         if self.find_channels_by_name(name):
             raise NewApiError("channel name already exists")
-        self._request("POST", "/api/channel/", json={"mode": "single", "channel": channel})
+        response = self._request("POST", "/api/channel/", json={"mode": "single", "channel": channel})
+        data = response.get("data")
+        if isinstance(data, dict) and isinstance(data.get("id"), int):
+            return data["id"]
+        if isinstance(data, int):
+            return data
         created = self.find_channels_by_name(name)
         if len(created) != 1 or not isinstance(created[0].get("id"), int):
             raise NewApiError("LLM gateway did not report the created channel")

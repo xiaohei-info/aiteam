@@ -5,7 +5,9 @@ write-only here, never stored by Operator and never returned to any client.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -49,6 +51,17 @@ def _validated_base_url(value: str) -> str:
         raise ValueError("上游地址必须是 http(s) 地址")
     if parts.username or parts.password or parts.query or parts.fragment:
         raise ValueError("上游地址不能包含账号、查询参数或片段")
+    hostname = parts.hostname.rstrip(".").casefold()
+    if hostname in {"localhost", "localhost.localdomain", "metadata.google.internal"} or hostname.endswith((".localhost", ".local")):
+        raise ValueError("上游地址不能指向本机、内网或云 metadata 地址")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError("上游地址不能指向本机、内网或保留地址")
+    if re.fullmatch(r"\d+(?:\.\d+){3}", hostname):
+        raise ValueError("上游地址中的 IPv4 地址无效")
     return value
 
 
