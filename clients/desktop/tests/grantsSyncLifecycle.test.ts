@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
+import { AUTO_LOGIN_STORAGE_KEY, writeAutoLoginPreference } from '../src/lib/autoLogin.ts'
 
 const require = createRequire(import.meta.url)
 const { build } = require(require.resolve('esbuild', { paths: [dirname(require.resolve('vite'))] }))
@@ -29,21 +30,69 @@ async function fixture() {
     } }],
   })
   const vault = { value: null as string | null }
+  const credentialCalls: Array<{ command: string; args?: any }> = []
+  const storage = new Map<string, string>()
   const adapter = {
     request: async (r: any, token: string) => r.path.endsWith('whoami') ? claims(token) : {},
     invoke: async (command: string, args?: any) => {
+      if (command.startsWith('secure_login_credentials_')) {
+        credentialCalls.push({ command, args })
+        return command.endsWith('_read') ? null : undefined
+      }
       if (command === 'secure_session_read') return vault.value
       if (command === 'secure_session_write') vault.value = args.session
       if (command === 'secure_session_delete') vault.value = null
     },
   }
   ;(globalThis as any).__grantsTest = adapter
+  ;(globalThis as any).localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value) },
+    removeItem: (key: string) => { storage.delete(key) },
+  }
   ;(globalThis as any).window = { __TAURI_INTERNALS__: {}, addEventListener() {} }
   const store = require(output).useAgentAuthStore
-  return { store, adapter, vault, close: () => { rmSync(directory, { recursive: true, force: true }); delete (globalThis as any).window } }
+  return {
+    store,
+    adapter,
+    vault,
+    credentialCalls,
+    storage,
+    close: () => {
+      rmSync(directory, { recursive: true, force: true })
+      delete (globalThis as any).window
+      delete (globalThis as any).localStorage
+    },
+  }
 }
 function claims(token: string) { return { user_id: token, tenant_id: 'tenant', roles: ['owner'] } }
-function session(token: string) { return { token, claims: claims(token), tenantId: 'tenant', account: token } }
+function session(token: string, credentialEnterprise = '') {
+  return { token, claims: claims(token), tenantId: 'tenant', account: token, credentialEnterprise }
+}
+
+test('active logout clears only the current saved credential and auto-login preference; passive logout keeps both', async () => {
+  const f = await fixture()
+  try {
+    await f.store.getState().setSession(session('A', 'acme'))
+    writeAutoLoginPreference(true)
+    f.credentialCalls.length = 0
+
+    await f.store.getState().logout()
+
+    assert.equal(f.storage.get(AUTO_LOGIN_STORAGE_KEY), undefined)
+    const activeDelete = f.credentialCalls.find(item => item.command === 'secure_login_credentials_delete')
+    assert.deepEqual(activeDelete?.args, { enterprise: 'acme', account: 'A' })
+
+    await f.store.getState().setSession(session('B', 'beta'))
+    writeAutoLoginPreference(true)
+    f.credentialCalls.length = 0
+
+    await f.store.getState().logout({ reason: 'token_expired', source: 'expiry_timer' })
+
+    assert.equal(f.storage.get(AUTO_LOGIN_STORAGE_KEY), 'true')
+    assert.equal(f.credentialCalls.some(item => item.command === 'secure_login_credentials_delete'), false)
+  } finally { f.close() }
+})
 
 for (const operation of ['login', 'restore']) {
   test(`${operation}: logout during sync prevents stale token and vault writes`, async () => {

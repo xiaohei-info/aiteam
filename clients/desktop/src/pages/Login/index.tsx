@@ -21,6 +21,13 @@ import {
   saveLoginCredentials,
   type SavedCredentialProfileSummary,
 } from '../../lib/loginCredentials'
+import { readAutoLoginPreference, shouldAutoLogin, writeAutoLoginPreference } from '../../lib/autoLogin'
+
+interface LoginInput {
+  enterprise: string
+  account: string
+  password: string
+}
 
 export default function Login() {
   const [enterprise, setEnterprise] = useState('')
@@ -28,6 +35,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [savedProfiles, setSavedProfiles] = useState<SavedCredentialProfileSummary[]>([])
   const [rememberCredentials, setRememberCredentials] = useState(true)
+  const [autoLogin, setAutoLogin] = useState(() => readAutoLoginPreference())
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -56,11 +64,18 @@ export default function Login() {
         setEnterprise(saved.enterprise)
         setAccount(saved.account)
         setPassword(saved.password)
+        // The restored session was missing or rejected: sign in again against Manager with the remembered password.
+        const pendingReset = Boolean(useAgentAuthStore.getState().pendingPasswordReset)
+        if (shouldAutoLogin({ enabled: readAutoLoginPreference(), hasSavedCredentials: true, passwordResetPending: pendingReset })) {
+          void runLogin(saved)
+        }
       })
       .catch(() => {
         // Credential loading is best-effort; the form remains usable.
       })
     return () => { cancelled = true }
+    // runLogin reads only setters and store state; the saved credentials are loaded once per page visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const syncSavedPasswordForIdentity = (nextEnterprise: string, nextAccount: string) => {
@@ -109,17 +124,21 @@ export default function Login() {
         return
       }
     }
+    await runLogin({ enterprise, account, password })
+  }
+
+  async function runLogin(input: LoginInput) {
     setIsLoading(true)
     setError(null)
     try {
-      const loginEnterprise = (pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? enterprise).trim()
-      const loginAccount = (pendingPasswordReset?.account ?? account).trim()
-      let loginPassword = password
+      const loginEnterprise = (pendingPasswordReset?.enterprise ?? pendingPasswordReset?.tenant_id ?? input.enterprise).trim()
+      const loginAccount = (pendingPasswordReset?.account ?? input.account).trim()
+      let loginPassword = input.password
       if (pendingPasswordReset) {
-        await resetPassword(password, newPassword)
+        await resetPassword(input.password, newPassword)
         loginPassword = newPassword
       } else {
-        const outcome = await login(enterprise.trim(), account.trim(), password)
+        const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password)
         if (outcome === 'password_reset_required') {
           setNewPassword('')
           setConfirmPassword('')
@@ -129,6 +148,7 @@ export default function Login() {
           return
         }
       }
+      writeAutoLoginPreference(rememberCredentials && autoLogin)
       try {
         if (rememberCredentials) {
           await saveLoginCredentials({ enterprise: loginEnterprise, account: loginAccount, password: loginPassword })
@@ -334,10 +354,25 @@ export default function Login() {
               <input
                 type="checkbox"
                 checked={rememberCredentials}
-                onChange={(e) => setRememberCredentials(e.target.checked)}
+                onChange={(e) => {
+                  setRememberCredentials(e.target.checked)
+                  if (!e.target.checked) setAutoLogin(false)
+                }}
                 className="accent-brand"
               />
               记住账号和密码
+            </label>
+          )}
+          {!pendingPasswordReset && (
+            <label className={`flex items-center gap-2 px-1 text-[12px] ${rememberCredentials ? 'text-txt-secondary' : 'text-txt-muted'}`}>
+              <input
+                type="checkbox"
+                checked={rememberCredentials && autoLogin}
+                disabled={!rememberCredentials}
+                onChange={(e) => setAutoLogin(e.target.checked)}
+                className="accent-brand"
+              />
+              自动登录（重启后用记住的密码重新登录）
             </label>
           )}
           <div className="group">

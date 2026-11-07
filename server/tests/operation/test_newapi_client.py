@@ -148,9 +148,11 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
             return [ModelRow("p1", "minimax-m3", "", {}, "draft", "discovery", 1, now)]
 
     class NewAPI:
-        def get_channel_models(self, channel_id):
-            assert channel_id == 1
-            return ["minimax-m3"]
+        def list_channels(self):
+            return [
+                {"id": 1, "status": 1, "models": "minimax-m3"},
+                {"id": 2, "status": 2, "models": "disabled-only"},
+            ]
 
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     result = service.ensure_internal_provider()
@@ -169,7 +171,7 @@ def test_internal_provider_sync_reports_gateway_discovery_errors():
         def get_provider(self, _): return provider
 
     class NewAPI:
-        def get_channel_models(self, _): raise NewApiError("upstream unavailable")
+        def list_channels(self): raise NewApiError("upstream unavailable")
 
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     with pytest.raises(Conflict, match="LLM 网关 model discovery failed"):
@@ -183,23 +185,38 @@ def test_internal_provider_sync_rejects_an_empty_gateway_model_list():
         def get_provider(self, _): return provider
 
     class NewAPI:
-        def get_channel_models(self, _): return []
+        def list_channels(self): return [{"id": 1, "status": 3, "models": "auto-disabled"}]
 
     service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
     with pytest.raises(Conflict, match="LLM 网关 discovered no models"):
         service.sync_models("p1")
 
 
-def test_internal_provider_sync_requires_the_deployment_channel_mapping():
-    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", None, "published", 1, datetime.now(UTC))
+def test_model_discovery_is_the_union_of_enabled_gateway_channels():
+    now = datetime.now(UTC)
+    provider = ProviderRow("p1", "newapi", "LLM 网关", "http://relay/v1", "openai-completions", None, "published", 1, now)
+    seen = []
 
     class Repo:
-        def get_provider(self, _provider_id):
-            return provider
+        def get_provider(self, _): return provider
+        def upsert_discovered_models(self, _provider_id, model_ids):
+            seen.append(model_ids)
+            return [ModelRow("p1", model_id, "", {}, "draft", "discovery", 1, now) for model_id in model_ids]
 
-    service = PlatformProviderService(Repo(), None, None, "http://relay/v1")
-    with pytest.raises(Conflict, match="LLM 网关 channel is not configured"):
-        service.sync_models("p1")
+    class NewAPI:
+        def list_channels(self):
+            return [
+                {"id": 1, "status": 1, "models": "gpt-5.6, minimax-m3"},
+                {"id": 7, "status": 1, "models": "minimax-m3,claude-sonnet-5-5"},
+                {"id": 8, "status": 2, "models": "manually-off"},
+                {"id": 9, "status": 3, "models": "auto-off"},
+                {"id": 10, "status": 1, "models": None},
+            ]
+
+    service = PlatformProviderService(Repo(), NewAPI(), None, "http://relay/v1")
+    # The legacy single-channel mapping is no longer required for discovery.
+    assert [model.model_id for model in service.sync_models("p1")] == ["claude-sonnet-5-5", "gpt-5.6", "minimax-m3"]
+    assert seen == [["claude-sonnet-5-5", "gpt-5.6", "minimax-m3"]]
 
 
 def test_public_price_sync_only_fills_unpriced_models():
@@ -242,7 +259,7 @@ def test_internal_provider_bootstrap_enriches_model_capabilities():
         def publish_priced_models(self, _): return []
 
     class NewAPI:
-        def get_channel_models(self, _): return ["minimax-m3"]
+        def list_channels(self): return [{"id": 1, "status": 1, "models": "minimax-m3"}]
 
     class Pricing:
         def fetch(self):
@@ -323,9 +340,7 @@ def test_internal_provider_bootstrap_fills_public_prices_and_publishes_priced_mo
             return [model]
 
     class NewAPI:
-        def get_channel_models(self, channel_id):
-            assert channel_id == 1
-            return ["gpt-5.5"]
+        def list_channels(self): return [{"id": 1, "status": 1, "models": "gpt-5.5"}]
 
     class Pricing:
         def fetch(self):
@@ -358,7 +373,7 @@ def test_internal_provider_bootstrap_survives_public_price_source_outage():
             return []
 
     class NewAPI:
-        def get_channel_models(self, _): return ["unpriced"]
+        def list_channels(self): return [{"id": 1, "status": 1, "models": "unpriced"}]
 
     class Pricing:
         def fetch(self): raise PublicPricingError("temporarily unavailable")
