@@ -128,6 +128,22 @@ describe("PlatformProvidersPage", () => {
     ));
   });
 
+  it("模型能力的 token 数可填任意正整数（如 200000、16000），不被浏览器步长校验拦下", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.models.mockResolvedValue([
+      { model: { provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" }, rate: null },
+    ]);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "配置模型" }));
+    const context = await screen.findByLabelText(/上下文窗口/) as HTMLInputElement;
+    const maxTokens = screen.getByLabelText(/最大输出/) as HTMLInputElement;
+    fireEvent.change(context, { target: { value: "200000" } });
+    fireEvent.change(maxTokens, { target: { value: "16000" } });
+    expect(context.validity.valid).toBe(true);
+    expect(maxTokens.validity.valid).toBe(true);
+  });
+
   it("在大模型服务页提供 LLM 网关超链接，并保留价格更新入口", async () => {
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     expect(screen.getByRole("link", { name: "打开 LLM 网关" })).toHaveAttribute("href", "http://localhost:9300/");

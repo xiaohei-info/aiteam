@@ -52,8 +52,8 @@ export function CapabilitiesDialog({ model, busy, onClose, onSave }: Props) {
           {error && <Banner status="error" title={error} />}
           <TextInput label="显示名称" value={form.displayName} onChange={(displayName) => set({ displayName })} isOptional />
           <HStack gap={2}>
-            <NumberInput label="上下文窗口（tokens）" value={form.contextWindow} hasClear onChange={(contextWindow) => set({ contextWindow })} min={1024} step={1024} description="留空按 128K 处理" isOptional />
-            <NumberInput label="最大输出（tokens）" value={form.maxTokens} hasClear onChange={(maxTokens) => set({ maxTokens })} min={1} step={1024} description="留空由运行时决定" isOptional />
+            <NumberInput label="上下文窗口（tokens）" value={form.contextWindow} hasClear onChange={(contextWindow) => set({ contextWindow })} min={1024} step={1} description="留空按 128K 处理" isOptional />
+            <NumberInput label="最大输出（tokens）" value={form.maxTokens} hasClear onChange={(maxTokens) => set({ maxTokens })} min={1} step={1} description="留空由运行时决定" isOptional />
           </HStack>
           <CheckboxInput label="支持图片输入" value={form.image} onChange={(image) => set({ image })} />
           <Switch label="支持思考" value={form.reasoning} onChange={(reasoning) => set({ reasoning, thinkingMode: reasoning && form.thinkingMode === "none" ? "effort" : form.thinkingMode })} />
