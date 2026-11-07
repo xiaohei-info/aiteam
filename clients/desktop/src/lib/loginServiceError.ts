@@ -10,8 +10,8 @@ export function loginUnavailableMessage(problemDetail = '', problemCode = '', pr
   if (problemCode === 'clock_skew_detected') {
     const skew = (problemMeta as { skew_seconds?: unknown } | undefined)?.skew_seconds
     const minutes = typeof skew === 'number' && Number.isFinite(skew) ? Math.max(1, Math.round(Math.abs(skew) / 60)) : null
-    const gap = minutes === null ? '' : `约 ${minutes} 分钟`
-    return `本机系统时间与企业服务器相差${gap}，请开启系统自动校时后重试`
+    if (minutes === null) return '本机系统时间与企业服务器的偏差无法确定，请开启系统自动校时后重试'
+    return `本机系统时间与企业服务器相差约 ${minutes} 分钟，请开启系统自动校时后重试`
   }
   if (/token failed local verification/i.test(problemDetail)) {
     return '登录凭证未通过本机校验，请核对本机 Agent 的公钥配置，或联系管理员'

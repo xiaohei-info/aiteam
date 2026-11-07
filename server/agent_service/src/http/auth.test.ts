@@ -43,8 +43,8 @@ test("JWT authenticator verifies tenant identity and rejects expiry", async () =
 });
 
 test("JWT time claims are judged on the injected (Manager-calibrated) clock", async () => {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const signed = token(issuedAt + 3600);
+  const signed = token(Math.floor(Date.now() / 1000) + 3600);
+  const issuedAt = JSON.parse(Buffer.from(signed.token.split('.')[1], "base64url").toString("utf8")).iat as number;
   const request = { headers: { authorization: `Bearer ${signed.token}` } } as never;
   const options = { jwks: signed.jwks, issuer: "manager", audience: "agent", clockSkewSeconds: 0 };
   // Local clock 10 minutes behind Manager: iat looks future-dated without calibration.

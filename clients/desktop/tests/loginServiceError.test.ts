@@ -19,5 +19,6 @@ test('clock_skew_detected tells the user to fix the system clock and shows the g
   assert.match(message, /系统时间/)
   assert.match(message, /约 13 分钟/)
   assert.doesNotMatch(message, /Manager 未就绪/)
+  assert.match(loginUnavailableMessage('', 'clock_skew_detected'), /偏差无法确定/)
   assert.match(loginUnavailableMessage('', 'clock_skew_detected'), /自动校时/)
 })
