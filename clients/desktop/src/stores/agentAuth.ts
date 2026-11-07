@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { recordAuthDiagnostic, authErrorStatus, sessionRemainingSeconds, type AuthDiagnosticInput } from '../lib/authDiagnostics'
 import { restoreFailureMessage } from '../lib/managerReachability'
+import { endLaunchAutoLogin, writeAutoLoginPreference } from '../lib/autoLogin'
 import { AgentApiClient } from '../api/agent'
 import { backendApi } from '../api/backend'
 import { syncAuthenticatedAgent, type EnterpriseIdentity } from '../api/agent/auth'
@@ -21,6 +22,7 @@ import {
   readCredentialWithRetry,
   resolveAuthenticatedTenantId,
 } from '../lib/authSession'
+import { deleteSavedLoginCredentials } from '../lib/loginCredentials'
 
 // 旧版 WebView 持久化 key,只用于一次性迁移和清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
@@ -31,6 +33,7 @@ interface PersistedSession {
   claims: AuthClaims
   tenantId: string
   account: string
+  credentialEnterprise?: string
 }
 
 type PendingPasswordReset = EnterpriseIdentity & { account: string }
@@ -42,6 +45,7 @@ interface AgentAuthState {
   claims: AuthClaims | null
   tenantId: string | null
   account: string | null
+  credentialEnterprise: string | null
   pendingPasswordReset: PendingPasswordReset | null
   isAuthenticated: boolean
   isRestoring: boolean
@@ -98,7 +102,12 @@ function parseSession(raw: string | null): PersistedSession | null {
     if (value.claims.tenant_id !== null && typeof value.claims.tenant_id !== 'string') return null
     if (value.claims.exp !== undefined && typeof value.claims.exp !== 'number') return null
     const tenantId = resolveAuthenticatedTenantId(value.tenantId, value.claims.tenant_id)
-    return { ...value, tenantId, account: value.account.trim() } as PersistedSession
+    return {
+      ...value,
+      tenantId,
+      account: value.account.trim(),
+      credentialEnterprise: typeof value.credentialEnterprise === 'string' ? value.credentialEnterprise.trim() : '',
+    } as PersistedSession
   } catch {
     return null
   }
@@ -221,6 +230,7 @@ function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): v
     claims: null,
     tenantId: null,
     account: null,
+    credentialEnterprise: null,
     pendingPasswordReset: null,
     isAuthenticated: false,
     isRestoring: false,
@@ -234,6 +244,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   claims: null,
   tenantId: null,
   account: null,
+  credentialEnterprise: null,
   pendingPasswordReset: null,
   isAuthenticated: false,
   isRestoring: true,
@@ -300,6 +311,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         claims: session.claims,
         tenantId: session.tenantId,
         account: session.account,
+        credentialEnterprise: session.credentialEnterprise?.trim() ?? '',
         pendingPasswordReset: null,
         isAuthenticated: true,
         isRestoring: false,
@@ -357,6 +369,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       claims: result.claims,
       tenantId,
       account,
+      credentialEnterprise: enterprise,
     }, generation)
     return 'authenticated'
   },
@@ -382,6 +395,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       claims: result.claims,
       tenantId,
       account: pending.account,
+      credentialEnterprise: pending.enterprise?.trim() ?? '',
     }, generation)
   },
 
@@ -430,6 +444,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       claims: validatedSession.claims,
       tenantId: validatedSession.tenantId,
       account: validatedSession.account,
+      credentialEnterprise: validatedSession.credentialEnterprise?.trim() ?? '',
       pendingPasswordReset: null,
       isAuthenticated: true,
       isRestoring: false,
@@ -442,6 +457,15 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
 
   logout: async (reason = { reason: 'user_logout', source: 'user' }) => {
     const generation = beginSessionOperation()
+    const userInitiated = reason.reason === 'user_logout'
+    const credentialEnterprise = get().credentialEnterprise ?? ''
+    const credentialAccount = get().account ?? ''
+    if (userInitiated) {
+      // Only an explicit user logout ends this launch's auto-login opportunity.
+      // Expiry, revocation and 401 recovery keep the remembered credential.
+      endLaunchAutoLogin()
+      writeAutoLoginPreference(false)
+    }
     const token = get().token
     recordAuthDiagnostic({ ...reason, expiresInSeconds: reason.expiresInSeconds ?? sessionRemainingSeconds(get().claims?.exp) })
     if (token) {
@@ -453,7 +477,14 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     clearRuntimeSession(set)
     try {
       await enqueueStorage(async () => {
-        if (isCurrentSession(generation)) await deleteSecureSession()
+        if (!isCurrentSession(generation)) return
+        await deleteSecureSession()
+        if (userInitiated && credentialAccount.trim()) {
+          await deleteSavedLoginCredentials({
+            enterprise: credentialEnterprise,
+            account: credentialAccount,
+          })
+        }
       })
     } catch (error) {
       recordAuthDiagnostic({ reason: 'credential_delete_failed', source: reason.source })
