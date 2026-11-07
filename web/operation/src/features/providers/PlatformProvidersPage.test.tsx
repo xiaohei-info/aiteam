@@ -111,6 +111,17 @@ describe("PlatformProvidersPage", () => {
     await waitFor(() => expect(providerApi.deleteChannel).toHaveBeenCalledWith("p1", 3));
   });
 
+  it("测试连接请求本身失败时显示错误", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.testChannel.mockRejectedValue(new Error("网络连接失败"));
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(screen.getByText("连接失败：网络连接失败")).toBeInTheDocument());
+    expect(providerApi.testChannel).toHaveBeenCalledWith("p1", 3);
+  });
+
   it("新增渠道：弹窗经页面调用 upstreamModels 与 createChannel", async () => {
     providerApi.list.mockResolvedValue([PROVIDER]);
     providerApi.channels.mockResolvedValue([CHANNEL]);
