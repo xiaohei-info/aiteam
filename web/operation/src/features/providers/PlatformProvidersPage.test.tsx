@@ -33,6 +33,11 @@ const CHANNEL = {
   group: "default", priority: 0, weight: 0, test_model: null, response_time_ms: null, tested_at: null,
 };
 
+const MODEL = {
+  provider_id: "p1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: {}, status: "published",
+  source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z",
+};
+
 vi.mock("./usePlatformProvidersApi", () => ({
   usePlatformProvidersApi: () => providerApi,
 }));
@@ -106,26 +111,152 @@ describe("PlatformProvidersPage", () => {
     await waitFor(() => expect(providerApi.deleteChannel).toHaveBeenCalledWith("p1", 3));
   });
 
-  it("新建渠道必须填 Key，编辑时 Key 留空不提交", async () => {
+  it("新建渠道分三步：获取上游模型 → 勾选并改平台名 → 设置参数", async () => {
     providerApi.list.mockResolvedValue([PROVIDER]);
     providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.upstreamModels.mockResolvedValue(["MiniMax-M3", "gpt-5.6", "embed-1"]);
+    providerApi.createChannel.mockImplementation(async () => {
+      providerApi.models.mockResolvedValue([{ model: { ...MODEL, model_id: "minimax-m3" }, rate: null }]);
+      return CHANNEL;
+    });
+    providerApi.updateModelCapabilities.mockResolvedValue(MODEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "新增渠道" }));
+    fireEvent.click(await screen.findByRole("button", { name: "获取模型并继续" }));
+    expect(await screen.findByText("请填写渠道名称")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/渠道名称/), { target: { value: "新渠道" } });
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+    expect(await screen.findByText("新建渠道需要填写 API Key")).toBeInTheDocument();
+    expect(providerApi.upstreamModels).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-up" } });
+    fireEvent.change(screen.getByLabelText(/上游地址/), { target: { value: " https://up.example " } });
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+
+    expect(await screen.findByText("已选 0 / 共 3 个")).toBeInTheDocument();
+    const advanced = screen.getByRole("button", { name: "高级设置" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(providerApi.upstreamModels).toHaveBeenCalledWith("p1", { channel_type: 1, base_url: "https://up.example", key: "sk-up" });
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+    expect(await screen.findByText("至少选择一个模型")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("搜索模型"), { target: { value: "m" } });
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    expect(screen.getByText("已选 2 / 共 3 个")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("embed-1"));
+    expect(screen.getByText("已选 1 / 共 3 个")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "全不选" }));
+    expect(screen.getByText("已选 0 / 共 3 个")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("搜索模型"), { target: { value: "" } });
+    fireEvent.click(screen.getByLabelText("MiniMax-M3"));
+    fireEvent.change(screen.getByLabelText("MiniMax-M3 平台模型名"), { target: { value: "minimax-m3" } });
+    fireEvent.change(screen.getByLabelText(/手动添加模型/), { target: { value: "extra-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(screen.getByText("已选 2 / 共 4 个")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("extra-model"));
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() => expect(providerApi.createChannel).toHaveBeenCalledWith("p1", expect.objectContaining({
+      name: "新渠道", key: "sk-up", models: ["minimax-m3"], model_mapping: { "minimax-m3": "MiniMax-M3" },
+    })));
+    const row = await screen.findByRole("button", { name: /minimax-m3 · 上下文/ });
+    expect(screen.getByRole("button", { name: "完成" })).toBeInTheDocument();
+    fireEvent.click(row);
+    fireEvent.change(await screen.findByLabelText(/^最大输出/), { target: { value: "300000" } });
+    fireEvent.change(screen.getByLabelText(/^上下文窗口/), { target: { value: "200000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    expect(await screen.findByText("minimax-m3：最大输出不能超过上下文窗口")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^最大输出/), { target: { value: "16000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
+    await waitFor(() => expect(providerApi.updateModelCapabilities).toHaveBeenCalledWith("p1", "minimax-m3", expect.objectContaining({
+      context_window: 200000, max_tokens: 16000,
+    })));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "保存参数" })).not.toBeInTheDocument());
+  });
+
+  it("编辑渠道：Key 留空用已保存渠道拉列表、不提交 key，取消勾选即移除模型", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([{ ...CHANNEL, models: ["claude-sonnet-5-5", "old-model"] }]);
+    providerApi.upstreamModels.mockResolvedValue(["claude-sonnet-5-5", "claude-haiku-5-5"]);
     providerApi.updateChannel.mockResolvedValue(CHANNEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(await screen.findByText("已保存渠道不能修改类型")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+    expect(await screen.findByText("已选 2 / 共 3 个")).toBeInTheDocument();
+    expect(providerApi.upstreamModels).toHaveBeenCalledWith("p1", { channel_id: 3 });
+    fireEvent.click(screen.getByLabelText("old-model"));
+    fireEvent.click(screen.getByRole("button", { name: "上一步" }));
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-new" } });
+    providerApi.upstreamModels.mockRejectedValueOnce(new Error("LLM 网关操作失败：401"));
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+    expect(await screen.findByText("LLM 网关操作失败：401")).toBeInTheDocument();
+    expect(providerApi.upstreamModels).toHaveBeenLastCalledWith("p1", { channel_type: 14, base_url: "https://up.example", key: "sk-new", channel_id: 3 });
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存并继续" }));
+
+    await waitFor(() => expect(providerApi.updateChannel).toHaveBeenCalledWith(
+      "p1", 3, expect.not.objectContaining({ key: expect.anything() }),
+    ));
+    expect(providerApi.updateChannel.mock.calls[0]?.[2]).toEqual(expect.objectContaining({ models: ["claude-sonnet-5-5"] }));
+    expect(await screen.findByText(/claude-sonnet-5-5：模型同步中/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+    await waitFor(() => expect(screen.queryByText(/模型同步中/)).not.toBeInTheDocument());
+  });
+
+  it("上游没返回模型或保存失败时留在弹窗内提示，可手动添加", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.upstreamModels.mockResolvedValue([]);
+    providerApi.createChannel.mockRejectedValue(new Error("渠道名称已存在"));
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText("Anthropic 主渠道")).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole("button", { name: "新增渠道" }));
     fireEvent.change(await screen.findByLabelText(/渠道名称/), { target: { value: "新渠道" } });
-    fireEvent.change(screen.getByLabelText(/^模型/), { target: { value: "gpt-5.6" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存渠道" }));
+    fireEvent.click(screen.getByRole("button", { name: "跳过获取，手动添加" }));
     expect(await screen.findByText("新建渠道需要填写 API Key")).toBeInTheDocument();
-    expect(providerApi.createChannel).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk" } });
+    fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
+    expect(await screen.findByText(/上游没有返回模型/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "跳过获取，手动添加" }));
+    expect(await screen.findByText(/还没有模型/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/手动添加模型/), { target: { value: "gpt-5.6" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
+    expect(await screen.findByText("渠道名称已存在")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存并继续" })).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-    fireEvent.click(await screen.findByRole("button", { name: "保存渠道" }));
-    await waitFor(() => expect(providerApi.updateChannel).toHaveBeenCalledWith(
-      "p1", 3, expect.not.objectContaining({ key: expect.anything() }),
-    ));
+  it("模型配置弹窗可保存，失败时显示原因", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.channels.mockResolvedValue([CHANNEL]);
+    providerApi.models.mockResolvedValue([{ model: MODEL, rate: null }]);
+    providerApi.updateModelCapabilities.mockRejectedValueOnce(new Error("网关不可用")).mockResolvedValueOnce(MODEL);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "配置模型" }));
+    fireEvent.change(await screen.findByLabelText(/^最大输出/), { target: { value: "300000" } });
+    fireEvent.change(screen.getByLabelText(/^上下文窗口/), { target: { value: "200000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText("最大输出不能超过上下文窗口")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^最大输出/), { target: { value: "16000" } });
+    fireEvent.click(screen.getByLabelText("支持图片输入"));
+    fireEvent.click(screen.getByRole("switch", { name: "支持思考" }));
+    fireEvent.click(screen.getByLabelText("high（高）"));
+    fireEvent.change(screen.getByLabelText("minimax-m3 high 上游取值"), { target: { value: "max" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText("网关不可用")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    await waitFor(() => expect(providerApi.updateModelCapabilities).toHaveBeenLastCalledWith("p1", "minimax-m3", expect.objectContaining({
+      context_window: 200000, max_tokens: 16000, reasoning: true, thinking_mode: "effort", thinking_level_map: { high: "max" }, input: ["text", "image"],
+    })));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "保存配置" })).not.toBeInTheDocument());
   });
 
   it("模型能力的 token 数可填任意正整数（如 200000、16000），不被浏览器步长校验拦下", async () => {
@@ -136,8 +267,8 @@ describe("PlatformProvidersPage", () => {
     ]);
     render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
     fireEvent.click(await screen.findByRole("button", { name: "配置模型" }));
-    const context = await screen.findByLabelText(/上下文窗口/) as HTMLInputElement;
-    const maxTokens = screen.getByLabelText(/最大输出/) as HTMLInputElement;
+    const context = await screen.findByLabelText(/^上下文窗口/) as HTMLInputElement;
+    const maxTokens = screen.getByLabelText(/^最大输出/) as HTMLInputElement;
     fireEvent.change(context, { target: { value: "200000" } });
     fireEvent.change(maxTokens, { target: { value: "16000" } });
     expect(context.validity.valid).toBe(true);
