@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { recordAuthDiagnostic, authErrorStatus, sessionRemainingSeconds, type AuthDiagnosticInput } from '../lib/authDiagnostics'
 import { restoreFailureMessage } from '../lib/managerReachability'
+import { endLaunchAutoLogin } from '../lib/autoLogin'
 import { AgentApiClient } from '../api/agent'
 import { backendApi } from '../api/backend'
 import { syncAuthenticatedAgent, type EnterpriseIdentity } from '../api/agent/auth'
@@ -442,6 +443,8 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
 
   logout: async (reason = { reason: 'user_logout', source: 'user' }) => {
     const generation = beginSessionOperation()
+    // Signed out while in use (user, expiry, revocation): the next login in this launch must be manual.
+    endLaunchAutoLogin()
     const token = get().token
     recordAuthDiagnostic({ ...reason, expiresInSeconds: reason.expiresInSeconds ?? sessionRemainingSeconds(get().claims?.exp) })
     if (token) {
