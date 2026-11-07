@@ -202,7 +202,7 @@ export function ChannelDialog({ channel, types, models, busy, onClose, onSave, o
                   <Button label="添加" size="sm" variant="secondary" onClick={addManual} isDisabled={!manual.trim()} />
                 </HStack>
                 <TextInput label="测试模型" value={form.testModel} onChange={(testModel) => set({ testModel })} description="测试连接时使用；留空用第一个模型" isOptional />
-                <Collapsible trigger={<Text weight="semibold">高级设置</Text>}>
+                <Collapsible defaultIsOpen={false} trigger={<Text weight="semibold">高级设置</Text>}>
                   <VStack gap={3}>
                     <TextArea label="自定义请求头" value={form.headerOverride} onChange={(headerOverride) => set({ headerOverride })} rows={3} placeholder={'{"X-Custom": "value"}'} description="敏感请求头显示为 ********，保持不变即沿用原值" isOptional />
                     <TextArea label="参数覆盖" value={form.paramOverride} onChange={(paramOverride) => set({ paramOverride })} rows={3} placeholder={'{"temperature": 0.7}'} description="覆盖发给上游的请求体参数" isOptional />
@@ -223,6 +223,7 @@ export function ChannelDialog({ channel, types, models, busy, onClose, onSave, o
                   return (
                     <Collapsible
                       key={modelId}
+                      defaultIsOpen={false}
                       trigger={<Text weight="semibold">{`${modelId} · 上下文 ${formatTokens(value.contextWindow)} · 最大输出 ${formatTokens(value.maxTokens)} · ${value.reasoning ? "支持思考" : "不思考"}`}</Text>}
                     >
                       <CapabilitiesFields modelId={modelId} form={value} onChange={(patch) => setParams((current) => ({ ...current, [modelId]: { ...paramForm(model), ...patch } }))} />

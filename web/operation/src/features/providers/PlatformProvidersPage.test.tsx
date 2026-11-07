@@ -135,6 +135,10 @@ describe("PlatformProvidersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "获取模型并继续" }));
 
     expect(await screen.findByText("已选 0 / 共 3 个")).toBeInTheDocument();
+    const advanced = screen.getByRole("button", { name: "高级设置" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
     expect(providerApi.upstreamModels).toHaveBeenCalledWith("p1", { channel_type: 1, base_url: "https://up.example", key: "sk-up" });
     fireEvent.click(screen.getByRole("button", { name: "保存并继续" }));
     expect(await screen.findByText("至少选择一个模型")).toBeInTheDocument();
