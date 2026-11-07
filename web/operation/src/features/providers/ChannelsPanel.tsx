@@ -23,13 +23,13 @@ interface Props {
   onToggle: (channel: GatewayChannel, enabled: boolean) => Promise<void>;
   onTest: (channel: GatewayChannel) => Promise<GatewayChannelTestResult | null>;
   onFetchModels: (input: UpstreamModelPreviewInput) => Promise<string[]>;
-  onSaveCapabilities: (modelId: string, input: ModelCapabilitiesInput) => Promise<void>;
+  onSaveCapabilitiesBatch: (items: [string, ModelCapabilitiesInput][]) => Promise<void>;
 }
 
 type Editing = { channel: GatewayChannel | null } | null;
 
 /** Upstream channels of the LLM gateway: URL, key (write-only), models and compatibility overrides. */
-export function ChannelsPanel({ channels, types, models, busy, onSave, onDelete, onToggle, onTest, onFetchModels, onSaveCapabilities }: Props) {
+export function ChannelsPanel({ channels, types, models, busy, onSave, onDelete, onToggle, onTest, onFetchModels, onSaveCapabilitiesBatch }: Props) {
   const [editing, setEditing] = useState<Editing>(null);
   const [deleting, setDeleting] = useState<GatewayChannel | null>(null);
   const [testing, setTesting] = useState<number | null>(null);
@@ -40,6 +40,11 @@ export function ChannelsPanel({ channels, types, models, busy, onSave, onDelete,
     try {
       const result = await onTest(channel);
       if (result) setResults((current) => ({ ...current, [channel.id]: result }));
+    } catch (cause) {
+      setResults((current) => ({
+        ...current,
+        [channel.id]: { ok: false, seconds: null, message: cause instanceof Error ? cause.message : "测试连接失败" },
+      }));
     } finally {
       setTesting(null);
     }
@@ -94,7 +99,7 @@ export function ChannelsPanel({ channels, types, models, busy, onSave, onDelete,
           onClose={() => setEditing(null)}
           onFetchModels={onFetchModels}
           onSave={(input) => onSave(editing.channel, input)}
-          onSaveCapabilities={onSaveCapabilities}
+          onSaveCapabilitiesBatch={onSaveCapabilitiesBatch}
         />
       )}
       <AlertDialog
