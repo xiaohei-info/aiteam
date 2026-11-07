@@ -1469,7 +1469,8 @@ describe("详情页多 section", () => {
     });
   });
 
-  it("编辑专家只提交当前字段与平台技能引用", async () => {
+  // Shared by the two edit tests below; kept as two short tests so each stays well under the 5s timeout in CI coverage runs.
+  async function openFullExpertEditor() {
     const expertItem = makeCatalogItem({
       catalog_type: "expert_template",
       template_id: "exp-full",
@@ -1496,27 +1497,45 @@ describe("详情页多 section", () => {
     await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
     fireEvent.click(screen.getByText("编辑"));
     await waitFor(() => expect(screen.getByText("保存")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
-    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile("new-avatar.png")] } });
-    await waitFor(() => expect(screen.getByText("已选择：new-avatar.png")).toBeInTheDocument());
-    const descTa = screen.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && (el as HTMLTextAreaElement).value === "旧描述");
-    expect(descTa).toBeTruthy();
-    fireEvent.change(descTa!, { target: { value: "新描述" } });
-    fireEvent.click(screen.getByText("保存"));
+  }
 
+  async function savedPatchBody(): Promise<Record<string, unknown>> {
+    fireEvent.click(screen.getByText("保存"));
+    let body: Record<string, unknown> = {};
     await waitFor(() => {
       const patchCall = mockFetch.mock.calls.find((c: unknown[]) => (c[0] as string).includes("/exp-full") && c[1] && (c[1] as { method?: string }).method === "PATCH");
       expect(patchCall).toBeDefined();
-      const body = JSON.parse((patchCall![1] as { body: string }).body);
-      expect(body.category).toBe("finance");
-      expect(body.avatar_url).toBe("data:image/png;base64,iVBORw0KGgo=");
-      expect(body.description).toBe("新描述");
-      expect(body.platform_skill_refs).toEqual([{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }]);
-      expect(body.skill_ids).toBeUndefined();
-      expect(body.tags).toBeUndefined();
-      expect(body.initial_memories).toBeUndefined();
-      expect(body.sort_order).toBeUndefined();
+      body = JSON.parse((patchCall![1] as { body: string }).body);
     });
+    return body;
+  }
+
+  it("编辑专家只提交当前字段与平台技能引用", async () => {
+    await openFullExpertEditor();
+    fireEvent.change(screen.getByLabelText("category"), { target: { value: "finance" } });
+    const descTa = screen.getAllByRole("textbox").find((el) => el.tagName === "TEXTAREA" && (el as HTMLTextAreaElement).value === "旧描述");
+    expect(descTa).toBeTruthy();
+    fireEvent.change(descTa!, { target: { value: "新描述" } });
+
+    const body = await savedPatchBody();
+    expect(body.category).toBe("finance");
+    expect(body.description).toBe("新描述");
+    expect(body.platform_skill_refs).toEqual([{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }]);
+    // The stored avatar is a legacy URL; the file-only editor does not re-submit it.
+    expect(body.avatar_url).toBeUndefined();
+    expect(body.skill_ids).toBeUndefined();
+    expect(body.tags).toBeUndefined();
+    expect(body.initial_memories).toBeUndefined();
+    expect(body.sort_order).toBeUndefined();
+  });
+
+  it("编辑专家替换头像后提交本地图片 data URL", async () => {
+    await openFullExpertEditor();
+    fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile("new-avatar.png")] } });
+    await waitFor(() => expect(screen.getByText("已选择：new-avatar.png")).toBeInTheDocument());
+
+    const body = await savedPatchBody();
+    expect(body.avatar_url).toBe("data:image/png;base64,iVBORw0KGgo=");
   });
 
   it("operator 可进入编辑模式", async () => {
