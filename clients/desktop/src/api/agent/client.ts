@@ -28,6 +28,8 @@ export interface AgentProblem {
   status?: number
   detail?: string
   code?: string
+  errors?: unknown
+  meta?: Record<string, string | number | boolean | null>
 }
 
 // application/problem+json → Error 的封装,业务侧 catch 后可读 status/code 分支处理。

@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { managerClock } from "./clock.js";
 import { appLogger, observedFetch, safeError } from "./observability.js";
 import { isIP } from "node:net";
 import type { AuthenticatedCaller } from "./http/auth.js";
@@ -199,7 +200,7 @@ export class HttpManagerClient implements ManagerClient {
   private readonly fetchImpl: typeof fetch;
   constructor(private readonly baseUrl: string, fetchImpl: typeof fetch = fetch) {
     this.managerOrigin = new URL(baseUrl).origin;
-    this.fetchImpl = observedFetch(fetchImpl);
+    this.fetchImpl = managerClock.observingFetch(observedFetch(fetchImpl));
   }
 
   async resolveTenantByAccount(account: string, enterprise?: string | null): Promise<unknown> {
