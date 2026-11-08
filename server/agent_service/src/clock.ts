@@ -1,10 +1,9 @@
 /**
  * Manager-calibrated wall clock.
  *
- * Manager stamps `iat`/`exp` with its own clock, while the Agent runs on a user machine whose clock may
- * be minutes off (typical on Windows without time sync). Every Manager HTTP response carries a standard
- * `Date` header; we turn it into an offset so token time claims are compared in Manager time instead of
- * local time. Manager's `/api/auth/session` stays the authority for revocation and expiry.
+ * Manager-relative wall clock for local deadlines that explicitly need a shared
+ * time basis. JWT validity and session revocation remain Manager-authoritative;
+ * Agent authentication does not use this clock to reject absolute JWT claims.
  */
 
 /** Offsets beyond this are not plausible calibration data; ignoring them keeps a bogus `Date` header harmless. */

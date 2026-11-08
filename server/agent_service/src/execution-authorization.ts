@@ -1,4 +1,3 @@
-import { managerClock } from "./clock.js";
 import type { AuthenticatedCaller } from "./http/auth.js";
 import { encodeScope } from "./runtime-lease-cache.js";
 
@@ -11,7 +10,6 @@ export interface ExecutionIdentity {
 }
 
 export interface ExecutionAuthorizationOptions {
-  now?: () => number;
 }
 
 /**
@@ -22,21 +20,14 @@ export interface ExecutionAuthorizationOptions {
 export class ExecutionAuthorizationRegistry {
   private readonly identities = new Map<string, ExecutionIdentity>();
   private readonly generations = new Map<string, number>();
-  private readonly now: () => number;
 
-  constructor(options: ExecutionAuthorizationOptions = {}) {
-    this.now = options.now ?? (() => managerClock.now());
-  }
+  constructor(_options: ExecutionAuthorizationOptions = {}) {}
 
   register(caller: AuthenticatedCaller): ExecutionIdentity | undefined {
     if (!caller.tenantId || !(caller.userId ?? caller.callerId)) return undefined;
     const memberId = caller.userId ?? caller.callerId;
-    const expiry = typeof caller.claims?.exp === "number" && Number.isFinite(caller.claims.exp)
-      ? caller.claims.exp * 1_000
-      : Number.POSITIVE_INFINITY;
-    if (expiry <= this.now()) return undefined;
     const key = this.key(caller.tenantId, memberId);
-    const identity: ExecutionIdentity = { caller, tenantId: caller.tenantId, memberId, expiresAt: expiry, generation: this.generation(key) };
+    const identity: ExecutionIdentity = { caller, tenantId: caller.tenantId, memberId, expiresAt: Number.POSITIVE_INFINITY, generation: this.generation(key) };
     this.identities.set(key, identity);
     return identity;
   }
@@ -44,7 +35,7 @@ export class ExecutionAuthorizationRegistry {
   resolve(tenantId: string, memberId: string, options: { requireAccessToken?: boolean } = {}): AuthenticatedCaller | undefined {
     const key = this.key(tenantId, memberId);
     const identity = this.identities.get(key);
-    if (!identity || identity.generation !== this.generation(key) || identity.expiresAt <= this.now()) {
+    if (!identity || identity.generation !== this.generation(key)) {
       if (identity) this.identities.delete(key);
       return undefined;
     }

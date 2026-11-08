@@ -59,3 +59,14 @@ test("JWT time claims are judged on the injected (Manager-calibrated) clock", as
   await assert.rejects(async () => createJwtAuthenticator({ jwks: shortLived.jwks, issuer: "manager", audience: "agent", now: ahead })(shortRequest), /expired/);
   await createJwtAuthenticator({ jwks: shortLived.jwks, issuer: "manager", audience: "agent", now: () => ahead() - 600_000 })(shortRequest);
 });
+
+test("Manager-authoritative verification can defer absolute time claims to Manager", async () => {
+  const signed = token(Math.floor(Date.now() / 1000) - 60);
+  const authenticate = createJwtAuthenticator({
+    jwks: signed.jwks,
+    issuer: "manager",
+    audience: "agent",
+    validateTimeClaims: false,
+  });
+  await authenticate({ headers: { authorization: `Bearer ${signed.token}` } } as never);
+});

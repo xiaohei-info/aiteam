@@ -98,7 +98,9 @@ if (managerJwksMode && (useDevAuth || process.env.AITEAM_AGENT_JWKS_JSON?.trim()
 const managerAuth = managerJwksMode ? new ManagerJwksAuthenticator(
   managerUrl ?? "", process.env.AITEAM_AGENT_JWT_ISSUER ?? "", process.env.AITEAM_AGENT_JWT_AUDIENCE ?? "",
 ) : undefined;
-const staticAuth = !useDevAuth && !managerJwksMode ? createJwtAuthenticator(loadJwtOptions()) : undefined;
+const staticAuth = !useDevAuth && !managerJwksMode
+  ? createJwtAuthenticator({ ...loadJwtOptions(), ...(managerUrl ? { validateTimeClaims: false } : {}) })
+  : undefined;
 const serverSessionAuth = staticAuth && managerUrl
   ? new ManagerSessionAuthenticator(staticAuth, managerUrl)
   : undefined;

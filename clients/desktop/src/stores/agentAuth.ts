@@ -26,7 +26,7 @@ import { deleteSavedLoginCredentials } from '../lib/loginCredentials'
 
 // 旧版 WebView 持久化 key,只用于一次性迁移和清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
-const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 
 interface PersistedSession {
   token: string
@@ -67,7 +67,7 @@ interface AgentAuthState {
 }
 
 let volatileSession: PersistedSession | null = null
-let expiryTimer: ReturnType<typeof setTimeout> | null = null
+
 let restorePromise: Promise<void> | null = null
 let storageQueue: Promise<void> = Promise.resolve()
 let sessionGeneration = 0
@@ -174,33 +174,6 @@ function pushToken(token: string | null): void {
   globalRef.__agentToken = token
 }
 
-// exp(Unix 秒)距离失效不足 30 秒 → 视为无效会话,避免带临界 token 发请求。
-function isExpired(claims: AuthClaims | null): boolean {
-  if (!claims?.exp) return false
-  return claims.exp * 1000 <= Date.now() + 30_000
-}
-
-function clearExpiryTimer(): void {
-  if (expiryTimer !== null) clearTimeout(expiryTimer)
-  expiryTimer = null
-}
-
-function scheduleExpiry(claims: AuthClaims): void {
-  clearExpiryTimer()
-  if (!claims.exp) return
-  const delay = claims.exp * 1000 - Date.now() - 30_000
-  if (delay <= 0) {
-    void useAgentAuthStore.getState().logout({ reason: 'token_expired', source: 'expiry_timer' }).catch(() => {})
-    return
-  }
-  expiryTimer = setTimeout(() => {
-    if (delay > MAX_TIMER_DELAY_MS) {
-      scheduleExpiry(useAgentAuthStore.getState().claims ?? claims)
-      return
-    }
-    void useAgentAuthStore.getState().logout({ reason: 'token_expired', source: 'expiry_timer' }).catch(() => {})
-  }, Math.min(delay, MAX_TIMER_DELAY_MS))
-}
 
 function recordSkippedEmployees(skipped: string[], source: AuthDiagnosticInput['source']): string[] {
   if (skipped.length > 0) recordAuthDiagnostic({ reason: 'grants_sync_partial', source })
@@ -223,7 +196,6 @@ async function syncGrantsWithoutBlocking(
 }
 
 function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): void {
-  clearExpiryTimer()
   pushToken(null)
   set({
     token: null,
@@ -266,7 +238,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       try {
         session = await readSecureSession()
         if (!isCurrentSession(generation)) return
-        if (!session && legacySession && !isExpired(legacySession.claims)) {
+        if (!session && legacySession) {
           await writeSecureSession(legacySession)
           if (!isCurrentSession(generation)) {
             await deleteSecureSession()
@@ -281,8 +253,8 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         set({ restoreError: '暂时无法读取本地沙盒中已保存的登录凭证，请检查应用存储权限后重试恢复。' })
         return
       }
-      if (!session || isExpired(session.claims)) {
-        recordAuthDiagnostic({ reason: session ? 'restore_expired' : 'restore_missing', source: 'restore', expiresInSeconds: sessionRemainingSeconds(session?.claims.exp) })
+      if (!session) {
+        recordAuthDiagnostic({ reason: 'restore_missing', source: 'restore' })
         await deleteSecureSession().catch(() => { recordAuthDiagnostic({ reason: 'credential_delete_failed', source: 'restore' }) })
         if (isCurrentSession(generation)) clearRuntimeSession(set)
         return
@@ -318,7 +290,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         grantsSyncSkipped,
       })
       recordAuthDiagnostic({ reason: 'session_restored', source: 'restore', expiresInSeconds: sessionRemainingSeconds(session.claims.exp) })
-      scheduleExpiry(session.claims)
+
     })
     restorePromise = task
     try {
@@ -417,10 +389,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     resolveAuthenticatedTenantId(tenantId, verified.tenant_id)
     if (verified.user_id !== session.claims.user_id) throw new Error('本机身份与登录结果不一致')
     const validatedSession = { ...session, claims: verified, tenantId, account: session.account.trim() }
-    if (isExpired(validatedSession.claims)) {
-      await get().logout({ reason: 'invalid_login_session', source: 'login', expiresInSeconds: sessionRemainingSeconds(validatedSession.claims.exp) })
-      throw new Error('refusing to persist an expired authentication session')
-    }
+
     const grantsSyncSkipped = await syncGrantsWithoutBlocking(verifier, { tenant_id: tenantId, user_id: verified.user_id }, 'login')
     if (!isCurrentSession(generation)) return
     const isTenantSwitch = Boolean(get().token && get().tenantId !== validatedSession.tenantId)
@@ -452,7 +421,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       grantsSyncSkipped,
     })
     recordAuthDiagnostic({ reason: 'login_succeeded', source: 'login', expiresInSeconds: sessionRemainingSeconds(validatedSession.claims.exp) })
-    scheduleExpiry(validatedSession.claims)
+
   },
 
   logout: async (reason = { reason: 'user_logout', source: 'user' }) => {
