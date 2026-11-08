@@ -1,10 +1,11 @@
 import { archiveAgentNode } from './agent-runtime.mjs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { hostAgentTarget, unpackAgentArtifact } from './agent-target.mjs'
 import { checkAgentPackage } from './check-agent.mjs'
 import { stripQuarantine } from './quarantine.mjs'
 
@@ -16,20 +17,10 @@ const temporary = mkdtempSync(path.join(tmpdir(), 'aiteam-agent-import-'))
 const destination = path.join(root, 'src-tauri/resources/agent')
 
 try {
-  let packageDirectory = source
-  if (source.endsWith('.zip')) {
-    execFileSync('unzip', ['-q', source, '-d', temporary])
-    const archives = readdirSync(temporary).filter((name) => name.endsWith('-darwin-arm64.tar.gz'))
-    if (archives.length !== 1) throw new Error('Expected one darwin-arm64.tar.gz inside the artifact')
-    packageDirectory = path.join(temporary, archives[0])
-  }
-  if (packageDirectory.endsWith('.tar.gz')) {
-    execFileSync('tar', ['-xzf', packageDirectory, '-C', temporary])
-    const directories = readdirSync(temporary, { withFileTypes: true }).filter((entry) => entry.isDirectory())
-    if (directories.length !== 1) throw new Error('Expected one Agent package directory')
-    packageDirectory = path.join(temporary, directories[0].name)
-  }
-  const manifest = checkAgentPackage(packageDirectory)
+  // The imported runtime is launched on this machine, so only a package for this host is accepted.
+  const target = hostAgentTarget()
+  const packageDirectory = unpackAgentArtifact(source, temporary, target)
+  const manifest = checkAgentPackage(packageDirectory, { target })
   for (const entry of manifest.files) {
     const filename = path.resolve(packageDirectory, entry.path)
     if (!filename.startsWith(`${packageDirectory}${path.sep}`)) throw new Error(`Invalid manifest path: ${entry.path}`)
@@ -43,7 +34,8 @@ try {
   cpSync(packageDirectory, staging, { recursive: true, dereference: false })
   // Only replace the disposable bundled runtime; user data is stored outside the project.
   archiveAgentNode(staging, manifest)
-  // Downloaded artifacts quarantine every extracted file; the first launch would then exceed the readiness limit.
+  // Downloaded artifacts mark every extracted file (macOS quarantine, Windows Zone.Identifier); the first launch
+  // would then exceed the readiness limit.
   stripQuarantine(staging)
   rmSync(destination, { recursive: true, force: true })
   renameSync(staging, destination)
