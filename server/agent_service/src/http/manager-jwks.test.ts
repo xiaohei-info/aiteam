@@ -29,12 +29,12 @@ const request = (token: string) => ({ headers: { authorization: `Bearer ${token}
 
 async function mockManager() {
   const a1 = material(A, 1), a2 = material(A, 2), b1 = material(B, 1);
-  const state = { keys: [a1.jwk], hits: 0, paths: [] as string[], mode: "ok", token: "", failAuth: false, scoped: false, dateLagMs: 0 };
+  const state = { keys: [a1.jwk], hits: 0, paths: [] as string[], mode: "ok", token: "", failAuth: false, scoped: false, dateLagMs: 0, managerNow: undefined as (() => number) | undefined };
   const server = createServer(async (req, res) => {
     state.paths.push(req.url ?? "");
     res.setHeader("content-type", "application/json");
     // Same process as the tests that fake Date.now: Manager reports the faked clock, not wall time.
-    res.setHeader("date", new Date(Date.now() - state.dateLagMs).toUTCString());
+    res.setHeader("date", new Date((state.managerNow ?? Date.now)() - state.dateLagMs).toUTCString());
     if (req.url?.endsWith("/jwks.json")) {
       state.hits++;
       if (state.mode === "failure") { res.writeHead(503); res.end("{}"); return; }
@@ -125,6 +125,24 @@ test("a Date header lagging Manager's token clock by a second does not fail logi
     const future = jwt(manager.a1, A, { iat: Math.floor(Date.now() / 1000) + 600 });
     await assert.rejects(() => auth.verifyLoginToken(future, A), (error: unknown) => error instanceof JwtClockError);
   } finally { managerClock.reset(); await manager.close(); }
+});
+
+test("an Agent clock 10 minutes fast or slow still logs in: token times are judged on Manager time", async () => {
+  // Manager keeps true time; only the Agent's local clock is skewed. Its Date header is whole seconds and
+  // trails the live clock (uvicorn refreshes it about once a second), as measured against the test Manager.
+  const manager = await mockManager();
+  const realNow = Date.now;
+  manager.state.managerNow = () => realNow();
+  manager.state.dateLagMs = 1000;
+  try {
+    for (const skewMs of [-600_000, 600_000]) {
+      managerClock.reset();
+      Date.now = () => realNow() + skewMs;
+      const auth = new ManagerJwksAuthenticator(manager.origin, "aiteam-manager", "aiteam-agent");
+      const iat = Math.floor(realNow() / 1000);
+      await auth.verifyLoginToken(jwt(manager.a1, A, { iat, exp: iat + 3600 }), A);
+    }
+  } finally { Date.now = realNow; managerClock.reset(); await manager.close(); }
 });
 
 test("protected routes distinguish a revoked session (401) from an unreachable Manager (503)", async () => {
