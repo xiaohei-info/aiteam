@@ -140,6 +140,7 @@ export default function Login() {
       } else {
         const outcome = await login(input.enterprise.trim(), input.account.trim(), input.password)
         if (outcome === 'password_reset_required') {
+          setIsLoading(false)
           setNewPassword('')
           setConfirmPassword('')
           setShowPassword(false)
@@ -158,11 +159,11 @@ export default function Login() {
       } catch {
         setError('登录成功，但登录信息未能保存，请下次手动输入')
       }
-      setPassword('')
-      setNewPassword('')
-      setConfirmPassword('')
+      // Navigation is a transition: the login page stays on screen until the workspace route has loaded.
+      // Keep the submitted form and the busy state until then; the form state is dropped on unmount.
       navigate('/chat')
     } catch (err) {
+      setIsLoading(false)
       if (err instanceof SessionPersistenceError) {
         setError(err.message)
       } else if (err instanceof AgentApiError) {
@@ -193,8 +194,6 @@ export default function Login() {
         // 非 AgentApiError:通常是 fetch 层异常(相对路径 + tauri http、CORS、DNS、断网)。
         setError('网络异常,请检查连接或稍后重试')
       }
-    } finally {
-      setIsLoading(false)
     }
   }
 
