@@ -2,7 +2,7 @@
 
 状态：部分完成，其余待排期，由另一位开发在 Windows 环境实施并验证。
 - 2026-10-31：余飞确认本轮只验收 macOS ARM64，Windows 后续适配（基线 main `3a2f7964`）。
-- 2026-11-08：完成三项与平台相关的修复（见「一、已完成」），并按 main `450b4475` 重新盘点剩余改动。**这三项都没有在 Windows 上编译或运行过。**
+- 2026-11-08：完成两项与平台相关的修复（见「一、已完成」），并按 main `450b4475` 重新盘点剩余改动。**这两项都没有在 Windows 上编译或运行过。** 时钟偏差提示的平台文案（原 `d33f6576`）已撤回：时间校验改为完全由服务端控制，Agent 端不再校验时间。
 
 ## 现状概览
 
@@ -17,12 +17,11 @@
     - `file_access.rs`、`files.rs`、`external_links.rs`、`agent_solutions.rs`、`office_editor.rs`、`agent_projects/`；
     - `project_runner/`：已有 `node.exe`、`CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`、`taskkill /T /F`。
 
-## 一、已完成（分支 `fix/desktop-windows-sync`，未推送）
+## 一、已完成（分支 `fix/desktop-windows-sync`，PR #173）
 
 | 提交 | 内容 | 验证情况 |
 | --- | --- | --- |
 | `7853621d` | Agent 包导入、检查、构建按目标平台工作 | macOS 实测导入；Windows 路径只有模拟测试 |
-| `d33f6576` | 时钟偏差提示按平台写出校时入口 | 单元测试 |
 | `cbb7fa92` | Windows 上用 DPAPI 保护凭据库主密钥 | 只在 macOS 跑过同一模块的测试，Windows 代码没编译过 |
 
 `7853621d` 的具体改动：
@@ -31,10 +30,6 @@
 - 解压统一用系统 bsdtar，Windows 用 `%SystemRoot%\System32\tar.exe`；拒收与目标平台不符的包。
 - `quarantine.mjs` 在 Windows 上用 PowerShell `Unblock-File` 清除下载标记 Zone.Identifier。目录路径通过环境变量传给 PowerShell，不拼进脚本。
 - `integrate-agent.mjs` 在 Windows 上通过 shell 调 `pnpm.cmd`（Node 修复 CVE-2024-27980 后，直接 spawn `.cmd` 会报 EINVAL）。
-
-`d33f6576` 的具体改动：
-- `src/lib/loginServiceError.ts` 根据 WebView 的 UA 判断平台：WebView2 带 `Windows NT`，WKWebView 带 `Macintosh`。
-- Windows 提示「设置 > 时间和语言 > 日期和时间」并点「立即同步」；macOS 提示「系统设置 > 通用 > 日期与时间」。
 
 `cbb7fa92` 的具体改动：
 - `src-tauri/src/secure_session.rs`：Windows 上用 `CryptProtectData` 加密 `master.key`。
@@ -117,7 +112,6 @@
 - 应用正常退出、被任务管理器强制结束后，都没有残留的 Agent 进程（`node.exe`）。
 - 从浏览器下载的 Agent zip 导入后，没有残留的 Zone.Identifier，首次启动不被拦截。
 - 凭据库 `master.key` 以 `dpapi:` 开头。换一个 Windows 用户读取会失败，应用应提示重新登录，不能崩溃。
-- 时钟偏差提示指向 Windows 的设置路径。
 - 升级安装后，登录状态和本机数据还在。
 - 本地目录检索：授权目录内能读取，经由符号链接或 junction 指向目录外的路径会被拒绝。
 - 再按 macOS 验收清单走一遍功能：段落评估、不评估重置、用量、记忆、知识来源、人才市场套餐周期、办公室地图编辑器。
