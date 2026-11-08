@@ -86,7 +86,9 @@ test("real Agent HTTP login verifies Manager token before return; multiple tenan
     fixture.store.createConversation({ id: "private-a", sessionFile: "", workspace: "", tenantId: A, memberId: "member" });
     const listB = await fetch(`${base}/api/agent/conversations`, { headers: { authorization: `Bearer ${jwt(manager.b1, B)}` } });
     assert.equal(JSON.stringify(await listB.json()).includes("private-a"), false);
-    const invalid = [jwt(manager.b1, A, {}, { kid: manager.a1.jwk.kid }), jwt(manager.a1, A, { exp: 1 }), jwt(manager.a1, B), jwt(manager.a1, A, { iss: "evil" }), jwt(manager.a1, A, { aud: "evil" }), jwt(manager.a1, A, { nbf: Math.floor(Date.now() / 1000) + 100 }), jwt(manager.a1, A, {}, { alg: "none" }), jwt(manager.a1, A, {}, { kid: `${A}:999` })];
+    const deferredTime = [jwt(manager.a1, A, { exp: 1 }), jwt(manager.a1, A, { nbf: Math.floor(Date.now() / 1000) + 100 })];
+    for (const token of deferredTime) assert.equal((await fetch(`${base}/api/agent/whoami`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+    const invalid = [jwt(manager.b1, A, {}, { kid: manager.a1.jwk.kid }), jwt(manager.a1, B), jwt(manager.a1, A, { iss: "evil" }), jwt(manager.a1, A, { aud: "evil" }), jwt(manager.a1, A, {}, { alg: "none" }), jwt(manager.a1, A, {}, { kid: `${A}:999` })];
     for (const token of invalid) {
       assert.equal((await fetch(`${base}/api/agent/whoami`, { headers: { authorization: `Bearer ${token}` } })).status, 401);
       manager.state.token = token;

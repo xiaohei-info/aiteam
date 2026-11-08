@@ -121,7 +121,7 @@ function SecurityTab({ profile, logout, resync }: {
   logout: ReturnType<typeof useLogout>["logout"];
   resync: ReturnType<typeof useResync>;
 }): ReactNode {
-  const tokenStatus = profile && profile.tokenExpiresAt * 1000 > Date.now() ? "Token 有效" : "Token 已过期";
+  const tokenStatus = profile ? "由企业服务校验" : "未登录";
   return (
     <VStack gap={3}>
       <Card padding={4}><VStack gap={2}><Heading level={2}>安全</Heading><Text>{tokenStatus}</Text></VStack></Card>

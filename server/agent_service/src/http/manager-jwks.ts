@@ -37,7 +37,9 @@ export class ManagerJwksAuthenticator {
     if (!entry) throw new Error("Tenant requires Manager login");
     if (entry.expires <= Date.now() || !entry.keys.has(kid)) await this.refresh(tenant, entry);
     if (entry.expires <= Date.now()) throw new Error("Manager public keys expired");
-    const caller = verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience, clockSkewSeconds: 0 });
+    // Manager owns exp/iat/nbf and session revocation. Agent only verifies the
+    // signature and identity before asking Manager for the authoritative result.
+    const caller = verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience, validateTimeClaims: false });
     await verifyManagerSession(this.origin, token);
     return caller;
   };
