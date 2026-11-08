@@ -22,7 +22,7 @@ export class ManagerJwksAuthenticator {
   private requests = 0;
 
   constructor(managerUrl: string, private readonly issuer: string, private readonly audience: string) {
-    const url = new URL(managerUrl);
+    const url = parseManagerUrl(managerUrl);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/") throw new Error("Manager JWKS requires a fixed http(s) origin without credentials, path, query or fragment");
     if (!issuer || !audience) throw new Error("JWT issuer and audience are required");
     this.origin = url.origin;
@@ -65,8 +65,8 @@ export class ManagerJwksAuthenticator {
     if (typeof token !== "string" || token.length > 16_384) throw new Error("Invalid JWT");
     const parts = token.split(".");
     if (parts.length !== 3) throw new Error("Malformed JWT");
-    const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
-    const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+    const header = parseJwtSegment(parts[0]);
+    const claims = parseJwtSegment(parts[1]);
     const tenant = claims?.tenant_id;
     const kid = header?.kid;
     if (header?.alg !== "RS256" || typeof tenant !== "string" || !TENANT.test(tenant) || typeof kid !== "string" || !this.scopedKid(kid, tenant)) throw new Error("Invalid JWT tenant/key scope");
@@ -132,6 +132,22 @@ export class ManagerJwksAuthenticator {
   }
 }
 
+function parseManagerUrl(value: string): URL {
+  try {
+    return new URL(value);
+  } catch {
+    throw new Error("Manager URL is invalid");
+  }
+}
+
+function parseJwtSegment(segment: string): { tenant_id?: unknown; kid?: unknown; alg?: unknown } | null {
+  try {
+    return JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Malformed JWT");
+  }
+}
+
 export async function verifyManagerSession(origin: string, token: string): Promise<void> {
   let response: Response;
   try {
@@ -157,7 +173,7 @@ export class ManagerSessionAuthenticator {
   private readonly origin: string;
 
   constructor(private readonly local: AuthenticateRequest, managerUrl: string) {
-    this.origin = new URL(managerUrl).origin;
+    this.origin = parseManagerUrl(managerUrl).origin;
   }
 
   readonly authenticate = async (request: IncomingMessage): Promise<AuthenticatedCaller> => {
