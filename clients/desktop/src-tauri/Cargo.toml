@@ -27,6 +27,10 @@ tokio = { version = "1", features = ["time"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# DPAPI wraps the auth vault master key (src/secure_session.rs); already in the tree via Tauri.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
 [dev-dependencies]
 # Match the URLPattern engine used by tauri-plugin-http 2.5.9.
 regex = "1"
