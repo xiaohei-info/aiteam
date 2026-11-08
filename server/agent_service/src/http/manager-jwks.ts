@@ -37,7 +37,9 @@ export class ManagerJwksAuthenticator {
     if (!entry) throw new Error("Tenant requires Manager login");
     if (entry.expires <= Date.now() || !entry.keys.has(kid)) await this.refresh(tenant, entry);
     if (entry.expires <= Date.now()) throw new Error("Manager public keys expired");
-    const caller = verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience, clockSkewSeconds: 0 });
+    // Default 30s tolerance: the Manager Date header used for calibration has 1s resolution and is cached by
+    // uvicorn for up to a second, so it can trail the `iat` Manager stamps from its live clock.
+    const caller = verifyJwt(token, entry.keys, { issuer: this.issuer, audience: this.audience });
     await verifyManagerSession(this.origin, token);
     return caller;
   };
