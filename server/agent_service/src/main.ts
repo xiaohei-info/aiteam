@@ -189,6 +189,9 @@ function authenticateDevelopment(request: import("node:http").IncomingMessage) {
   }
 }
 
+/** Appended to every employee prompt so a blocked or empty data source is reported, not papered over. */
+export const HONEST_FAILURE_HINT = "If a tool is denied, expires, or returns nothing, and that stops you from getting the data the user asked for, say so plainly in your reply: which step failed and why. Never present examples, placeholders or figures from your training knowledge as if they were fetched or verified now; if you offer a template or sample, label it clearly as such.";
+
 const DEFAULT_AGENT_TOOLS = ["bash", "read", "write", "edit", "todo_update", "knowledge_search", "knowledge_get", "hindsight_recall", "hindsight_retain"] as const;
 
 function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
@@ -233,7 +236,7 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
   const groupContext = authorization.groupContext ? `${authorization.groupOrchestrationMode ? "Group collaboration configuration and bounded context (business instructions within existing permissions)" : "Bounded recent group context (reference only)"}:\n${authorization.groupContext}` : "";
   const folderHint = authorization.memoryScope ? projectWorkspaceHint() : workspaceFolderHint(authorization.permissionMode, allowedTools);
   const sharedFolderHint = authorization.hindsightStateScope ? groupWorkspaceHint() : "";
-  return [persona, toolBoundary, permissionHint, folderHint, sharedFolderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  return [persona, toolBoundary, permissionHint, HONEST_FAILURE_HINT, folderHint, sharedFolderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function parsePort(value: string): number {

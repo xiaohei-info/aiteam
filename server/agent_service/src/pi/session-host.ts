@@ -41,7 +41,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -257,6 +257,10 @@ interface SessionRecord {
   activeMessage?: Record<string, unknown>;
   /** Where the running prompt's entries start, so its last reply can be saved before it settles. */
   activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
+  /** Set when a scheduled run's tool approval expired unattended; the run is aborted and fails with this error. */
+  backgroundApprovalFailure?: ApprovalExpiredError;
+  /** The running prompt comes from a schedule; the gate closure outlives each run's authorization object. */
+  activeBackground?: boolean;
   /** Set while the hidden checklist turn runs; entriesAt is where its entries start. */
   reconcile?: { entriesAt: number };
   factStatus?: MemoryStatusActivity;
@@ -1354,7 +1358,7 @@ export class SessionHost {
     const execute = tool.execute.bind(tool);
     return {
       ...tool,
-      execute: async (toolCallId, params, signal, onUpdate, context) => this.approvalService.execute({
+      execute: async (toolCallId, params, signal, onUpdate, context) => this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
         memberId: authorization.caller.userId ?? authorization.caller.callerId,
         conversationId: record.conversationId,
@@ -1376,8 +1380,26 @@ export class SessionHost {
       // Queued after approval, so a request waiting for the user never holds up the other employees.
       }, () => record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
         ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, params, signal, onUpdate, context))
-        : execute(toolCallId, params, signal, onUpdate, context)) as ReturnType<ToolDefinition["execute"]>,
+        : execute(toolCallId, params, signal, onUpdate, context))) as ReturnType<ToolDefinition["execute"]>,
     } as ToolDefinition;
+  }
+
+  /**
+   * A scheduled run has no one watching for the approval prompt. If it expires, handing the error back to
+   * the model only makes it retry (another 10 minutes each) and finish with a made-up answer, so the whole
+   * run is aborted instead and fails with an explicit reason.
+   */
+  private async abortBackgroundRunOnExpiry<T>(record: SessionRecord, toolName: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (!record.activeBackground || !(error instanceof ApprovalExpiredError) || record.aborting) throw error;
+      const failure = new ApprovalExpiredError(`定时任务调用 ${toolName} 需要审批，但 10 分钟内无人处理，已中止本次运行。请把该对话的权限调高，或在审批提示出现时及时处理。`);
+      record.backgroundApprovalFailure ??= failure;
+      // Not awaited: abort() waits for this very tool call to finish.
+      void record.session?.abort().catch(() => undefined);
+      throw record.backgroundApprovalFailure;
+    }
   }
 
   private allowedTools(snapshot: FrozenSnapshot): Set<string> {
@@ -1599,6 +1621,8 @@ export class SessionHost {
     appLogger.log("info", "execution.started", { work_id: workId, conversation_id: record.conversationId, employee_id: employeeId, source_id: command.source.id, source_type: command.source.type, tenant_id: owner?.tenantId });
     record.prompting = true;
     record.aborting = false;
+    record.backgroundApprovalFailure = undefined;
+    record.activeBackground = authorization?.background === true;
     record.activeToolCallId = command.toolCallId;
     record.activePromptReceipt = command.idempotencyKey ?? command.logicalMessageId;
     record.activeSnapshotVersion = authorization?.snapshot.snapshot_version;
@@ -1653,6 +1677,7 @@ export class SessionHost {
       })();
       record.promptPromise = promptPromise;
       const entryId = await promptPromise;
+      if (record.backgroundApprovalFailure) throw record.backgroundApprovalFailure;
       if (!record.aborting && stopReason !== "aborted" && stopReason !== "error" && command.attachmentIds?.length && authorization?.caller.tenantId) {
         this.options.store.markLocalFilesReferenced(command.attachmentIds, record.conversationId, authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId);
       }
@@ -1673,7 +1698,8 @@ export class SessionHost {
       const terminalError = !record.session && isPreExecutionAuthorizationFailure(error)
         ? new PreExecutionAuthorizationError(error instanceof Error ? error.message : undefined)
         : error;
-      if (!settled) {
+      const approvalAbort = error === record.backgroundApprovalFailure;
+      if (!settled || approvalAbort) {
         // Redact before storing: the stored copy is served again later, outside the event serializer.
         const message = failureText(terminalError instanceof Error ? terminalError.message : "Prompt execution failed");
         const code = errorCode(terminalError);
@@ -1685,7 +1711,7 @@ export class SessionHost {
             errorCode: code, errorMessage: message, failedAt: Date.now(),
           });
         }
-        this.publish(record, {
+        if (!settled) this.publish(record, {
           type: "agent_settled",
           failed: true,
           error_code: code,
@@ -1724,6 +1750,7 @@ export class SessionHost {
         record.sessionReady = undefined;
         record.prompting = false;
         record.aborting = false;
+        record.activeBackground = undefined;
         record.activeToolCallId = undefined;
         record.activePromptReceipt = undefined;
         record.activeSnapshotVersion = undefined;
