@@ -146,3 +146,39 @@ test("past one-shot creation fails without orphan rows; completed creation repla
     assert.equal((await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "new-grant" })).status, 403);
   } finally { await f.finish(); }
 });
+
+test("a task's execution permission defaults to read-only, can be chosen, changed, and survives an employee switch", async () => {
+  const f = await start();
+  try {
+    const plain = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "plain" });
+    assert.equal(plain.status, 201, JSON.stringify(plain.payload));
+    assert.equal(plain.data.permission_mode, "read-only");
+    assert.equal(f.store.getConversation(plain.data.conversation_id)?.permissionMode, "read-only");
+
+    const wide = await f.call("automation-tasks", "POST", { ...input(), name: "联网抓取", permission_mode: "full-access" }, { "Idempotency-Key": "wide" });
+    assert.equal(wide.status, 201, JSON.stringify(wide.payload));
+    assert.equal(wide.data.permission_mode, "full-access");
+    assert.equal(f.store.getConversation(wide.data.conversation_id)?.permissionMode, "full-access");
+
+    // The same key with a different permission is a different request.
+    assert.equal((await f.call("automation-tasks", "POST", { ...input(), permission_mode: "full-access" }, { "Idempotency-Key": "plain" })).status, 409);
+
+    const bad = await f.call("automation-tasks", "POST", { ...input(), permission_mode: "root" }, { "Idempotency-Key": "bad" });
+    assert.equal(bad.status, 422);
+
+    const patched = await f.call(`automation-tasks/${plain.data.task_id}`, "PATCH", { permission_mode: "workspace-write" }, { "If-Match": plain.data.etag });
+    assert.equal(patched.status, 200, JSON.stringify(patched.payload));
+    assert.equal(patched.data.permission_mode, "workspace-write");
+    assert.equal(f.store.getConversation(plain.data.conversation_id)?.permissionMode, "workspace-write");
+
+    // Switching employee opens a new conversation that keeps the chosen permission.
+    const switched = await f.call(`automation-tasks/${wide.data.task_id}`, "PATCH", { employee_id: "e2" }, { "If-Match": wide.data.etag });
+    assert.equal(switched.status, 200, JSON.stringify(switched.payload));
+    assert.notEqual(switched.data.conversation_id, wide.data.conversation_id);
+    assert.equal(switched.data.permission_mode, "full-access");
+
+    // Editing other fields leaves the permission alone.
+    const renamed = await f.call(`automation-tasks/${wide.data.task_id}`, "PATCH", { name: "改名" }, { "If-Match": switched.data.etag });
+    assert.equal(renamed.data.permission_mode, "full-access");
+  } finally { await f.finish(); }
+});
