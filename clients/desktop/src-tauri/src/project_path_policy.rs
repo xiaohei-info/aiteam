@@ -71,7 +71,7 @@ fn roots(policy: &PlatformPolicy, home: &Path, windows: bool) -> Vec<(PathBuf, b
 }
 
 fn sensitive_names(platform: &PlatformPolicy) -> std::collections::HashSet<String> {
-    let mut names = platform.home_roots.iter().filter_map(|root| root.rsplit(|ch| ch == '/' || ch == '\\').next()).map(str::to_lowercase).collect::<std::collections::HashSet<_>>();
+    let mut names = platform.home_roots.iter().filter_map(|root| root.rsplit(['/', '\\']).next()).map(str::to_lowercase).collect::<std::collections::HashSet<_>>();
     for aliases in platform.short_names.values() {
         names.extend(aliases.iter().map(|alias| alias.to_lowercase()));
     }
