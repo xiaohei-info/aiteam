@@ -1882,7 +1882,9 @@ export class AgentHttpServer {
   }
 
   private assertProjectAvailable(conversation: { projectSource?: string | null; workspace: string }): void {
-    if (conversation.projectSource) assertProjectWorkspace(conversation.workspace);
+    if (!conversation.projectSource) return;
+    if (!isAllowedProjectFolder(conversation.workspace, this.options.host.runtimeRoots)) throw new ProjectWorkspaceUnavailableError();
+    assertProjectWorkspace(conversation.workspace);
   }
 
   private resolvePromptTargets(conversation: ReturnType<AgentSqliteStore["getConversation"]>, caller: AuthenticatedCaller, mentions: string[]): string[] {

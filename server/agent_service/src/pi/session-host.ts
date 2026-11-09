@@ -36,7 +36,7 @@ import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./w
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
-import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope } from "./project-conversation.js";
+import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
 import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
@@ -1173,7 +1173,10 @@ export class SessionHost {
           background: authorization.background,
         })
       : { revision: "none", tools: [] as ("local_dir_search" | "local_dir_read")[], roots: [] as string[] };
-    if (record.borrowedWorkspace && !options.skipSandbox) assertProjectWorkspace(record.workspace);
+    if (record.borrowedWorkspace && !options.skipSandbox) {
+      if (!isAllowedProjectFolder(record.workspace, this.runtimeRoots)) throw new ProjectWorkspaceUnavailableError();
+      assertProjectWorkspace(record.workspace);
+    }
     // Added folders become writable under workspace-write, so never open the home folder, "/" or
     // anything overlapping the Agent's own data (database, sessions, workspaces).
     const extraRoots = authorization && this.hasCodingTools(authorization.snapshot)

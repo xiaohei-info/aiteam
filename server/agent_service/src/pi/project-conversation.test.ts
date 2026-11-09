@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
@@ -81,15 +80,39 @@ test("assertProjectWorkspace accepts only a real folder at the stored canonical 
   }
 });
 
-test("isAllowedProjectFolder rejects root, home and anything overlapping Agent data", () => {
+test("isAllowedProjectFolder rejects root, home, sensitive trees and Agent data", () => {
   const roots = ["/data/agent/workspaces", "/data/agent/pi"];
-  assert.equal(isAllowedProjectFolder("/work/app", roots, "/home/u"), true);
-  assert.equal(isAllowedProjectFolder("/data/agent-other", roots, "/home/u"), true, "a sibling sharing a name prefix is unrelated");
-  assert.equal(isAllowedProjectFolder("/", roots, "/home/u"), false);
-  assert.equal(isAllowedProjectFolder("/home/u", roots, "/home/u"), false);
-  assert.equal(isAllowedProjectFolder("/data/agent/workspaces/x", roots, "/home/u"), false, "inside runtime data");
-  assert.equal(isAllowedProjectFolder("/data/agent", roots, "/home/u"), false, "contains runtime data");
-  assert.equal(isAllowedProjectFolder(homedir(), [], homedir()), false);
+  assert.equal(isAllowedProjectFolder("/work/app", roots, "/home/u", "darwin"), true);
+  assert.equal(isAllowedProjectFolder("/data/agent-other", roots, "/home/u", "darwin"), true, "a sibling sharing a name prefix is unrelated");
+  assert.equal(isAllowedProjectFolder("/home/u/Documents/app", roots, "/home/u", "darwin"), true);
+  for (const path of ["/home/u/.ssh", "/home/u/.ssh/id_ed25519", "/home/u/Library", "/home/u/Library/Keychains", "/home/u/.aws", "/home/u/.gnupg", "/home/u/.kube", "/home/u/.docker"]) {
+    assert.equal(isAllowedProjectFolder(path, roots, "/home/u", "darwin"), false, path);
+  }
+  assert.equal(isAllowedProjectFolder("/", roots, "/home/u", "darwin"), false);
+  assert.equal(isAllowedProjectFolder("/home/u", roots, "/home/u", "darwin"), false);
+  assert.equal(isAllowedProjectFolder("/home", roots, "/home/u", "darwin"), false, "an ancestor containing the home sensitive trees");
+  assert.equal(isAllowedProjectFolder("/data/agent/workspaces/x", roots, "/home/u", "darwin"), false, "inside runtime data");
+  assert.equal(isAllowedProjectFolder("/data/agent", roots, "/home/u", "darwin"), false, "contains runtime data");
+
+  const windowsHome = "C:/Users/Alice";
+  assert.equal(isAllowedProjectFolder("C:/Users/Alice/Projects/app", [], windowsHome, "win32"), true);
+  for (const path of [
+    "C:/Users/Alice/.ssh",
+    "C:/Users/Alice/AppData/Local",
+    "C:/Users/Alice/APPDAT~1/Local",
+    "C:/Users/Alice/.aws",
+    "C:/Users/Alice/.gnupg",
+    "C:/Users/Alice/.kube",
+    "C:/Users/Alice/.docker",
+    "C:/Windows/System32",
+    "C:/Program Files/AIFred",
+    "C:/Program Files (x86)/AIFred",
+    "C:/",
+  ]) {
+    assert.equal(isAllowedProjectFolder(path, [], windowsHome, "win32"), false, path);
+  }
+  assert.equal(isAllowedProjectFolder("//server/share/Projects/app", [], windowsHome, "win32"), true);
+  assert.equal(isAllowedProjectFolder("//server/share/.ssh", [], windowsHome, "win32"), false);
 });
 
 test("project columns and the borrowed folder cannot be changed after creation", async () => {

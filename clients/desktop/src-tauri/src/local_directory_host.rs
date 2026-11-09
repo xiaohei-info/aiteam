@@ -1,5 +1,6 @@
 //! Private desktop → Agent authority channel. Credentials never enter the WebView.
 use crate::agent_projects::{file_id, resolve_project_dir, AgentProjectsState};
+use crate::project_path_policy::{is_allowed_project_folder, system_protected_roots};
 use crate::{file_access, local_directory_reader::SourceRoot};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -238,15 +239,7 @@ impl Bridge {
 
 // Runtime allowlists and Agent state that no registered source may expose.
 fn protected_roots(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, String> {
-    let mut protected = vec![
-        PathBuf::from("/System"),
-        PathBuf::from("/usr"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/sbin"),
-        PathBuf::from("/Library/Apple"),
-        PathBuf::from("/dev"),
-        PathBuf::from("/opt"),
-    ];
+    let mut protected = system_protected_roots();
     protected.push(
         app.path()
             .app_data_dir()
@@ -337,14 +330,10 @@ fn take_challenge(
     Ok(value)
 }
 
-/// An employee writes in a project folder, so unlike a knowledge source it may neither sit inside
-/// protected data nor contain it. Root and the home folder are never a project.
+/// A project folder must not expose credentials, system data, or Agent runtime data.
+/// The exact sensitive-tree definition is shared with the Agent and future Windows host.
 fn project_folder_allowed(path: &Path, home: &Path, protected: &[PathBuf]) -> bool {
-    let inside = |candidate: &Path, parent: &Path| is_protected(candidate, &[parent.to_path_buf()]);
-    path.parent().is_some()
-        && !inside(home, path)
-        && !is_protected(path, protected)
-        && !protected.iter().any(|root| inside(root, path))
+    is_allowed_project_folder(path, home, protected)
 }
 
 /// Turns a challenge into a one-time ticket for a listed project. The host resolves the folder again
@@ -570,13 +559,15 @@ mod tests {
         assert!(allowed("/Users/a/WorkBuddy/20260101"));
         assert!(allowed("/Systemx"));
         assert!(!allowed("/"));
-        assert!(!allowed("/Users"), "holds the home folder");
+        assert!(!allowed("/Users"), "contains the home sensitive trees");
         assert!(!allowed("/Users/a"), "the home folder");
+        assert!(!allowed("/Users/a/.ssh"), "SSH credentials");
+        assert!(!allowed("/Users/a/.ssh/keys"), "inside SSH credentials");
+        assert!(!allowed("/Users/a/Library"), "the complete Library tree");
+        assert!(!allowed("/Users/a/Library/Keychains"), "Keychains");
+        assert!(!allowed("/Users/a/.aws"), "cloud credentials");
         assert!(!allowed("/System/Library"), "inside protected data");
-        assert!(!allowed("/Users/a/Library"), "holds the app's data folder");
-        assert!(!allowed(
-            "/Users/a/Library/Application Support/com.aiteam.desktop/agent"
-        ));
+        assert!(!allowed("/Users/a/Library/Application Support/com.aiteam.desktop/agent"));
     }
 
     #[test]

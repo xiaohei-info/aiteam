@@ -10,6 +10,7 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+mod project_path_policy;
 mod project_runner;
 mod secure_session;
 

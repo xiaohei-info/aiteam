@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "macos": {
+    "home_roots": [".ssh", "Library", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gcloud"],
+    "system_roots": ["/", "/System", "/usr", "/bin", "/sbin", "/Library/Apple", "/dev", "/opt"]
+  },
+  "windows": {
+    "home_roots": [".ssh", "AppData", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".config/gcloud"],
+    "system_roots": ["Windows", "Program Files", "Program Files (x86)"],
+    "short_names": {
+      "Windows": ["WINDOW~1"],
+      "Program Files": ["PROGRA~1"],
+      "Program Files (x86)": ["PROGRA~2"],
+      "AppData": ["APPDAT~1"]
+    }
+  }
+}
