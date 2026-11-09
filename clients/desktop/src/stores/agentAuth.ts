@@ -10,7 +10,7 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { recordAuthDiagnostic, authErrorStatus, sessionRemainingSeconds, type AuthDiagnosticInput } from '../lib/authDiagnostics'
 import { restoreFailureMessage } from '../lib/managerReachability'
-import { endLaunchAutoLogin, writeAutoLoginPreference } from '../lib/autoLogin'
+import { canAttemptAutoLogin, endLaunchAutoLogin, readAutoLoginPreference, shouldAutoLogin, writeAutoLoginPreference } from '../lib/autoLogin'
 import { AgentApiClient } from '../api/agent'
 import { backendApi } from '../api/backend'
 import { syncAuthenticatedAgent, type EnterpriseIdentity } from '../api/agent/auth'
@@ -22,7 +22,7 @@ import {
   readCredentialWithRetry,
   resolveAuthenticatedTenantId,
 } from '../lib/authSession'
-import { deleteSavedLoginCredentials } from '../lib/loginCredentials'
+import { deleteSavedLoginCredentials, readSavedLoginCredentials } from '../lib/loginCredentials'
 
 // 旧版 WebView 持久化 key,只用于一次性迁移和清理,禁止再写入。
 const LEGACY_STORAGE_KEY = 'aifred.agent-auth.v1'
@@ -50,11 +50,20 @@ interface AgentAuthState {
   isAuthenticated: boolean
   isRestoring: boolean
   restoreError: string | null
+  // 正在无感恢复会话或自动登录：应用展示内部页，顶栏显示“连接中...”，页面内容等拿到 token 才挂载。
+  isConnecting: boolean
+  // 连接期间侧栏展示的账号；登录完成前不代表已认证身份。
+  connectingAccount: string | null
+  // 自动登录失败的原始错误，由登录页转成提示文案。
+  autoLoginFailure: unknown
   // 最近一次授权同步中未更新的员工（Agent partial 同步）；空数组表示完整同步或无结果。
   grantsSyncSkipped: string[]
   sessionGeneration: number
 
   restoreSession: () => Promise<void>
+  // 连接中且恢复已结束时调用：能自动登录就登录，否则结束连接，由路由回到登录页。
+  // 由 App 在本机 Agent 就绪后触发，避免登录请求早于 Agent 启动完成。
+  runPendingAutoLogin: () => Promise<void>
   // 企业代码或名称通过 enterprise 登录；留空时按账号解析内部租户。
   // 失败会抛 AgentApiError 交给 UI 层判断。
   login: (enterprise: string, account: string, password: string) => Promise<AgentLoginOutcome>
@@ -69,13 +78,15 @@ interface AgentAuthState {
 let volatileSession: PersistedSession | null = null
 
 let restorePromise: Promise<void> | null = null
+let pendingAutoLogin: Promise<void> | null = null
 let storageQueue: Promise<void> = Promise.resolve()
 let sessionGeneration = 0
 
-function beginSessionOperation(): number {
+// initial is written together with the new generation, so subscribers never see an in-between signed-out state.
+function beginSessionOperation(initial: Partial<AgentAuthState> = { isRestoring: false }): number {
   const generation = ++sessionGeneration
   restorePromise = null
-  useAgentAuthStore.setState({ sessionGeneration: generation, isRestoring: false })
+  useAgentAuthStore.setState({ sessionGeneration: generation, ...initial })
   return generation
 }
 
@@ -195,6 +206,25 @@ async function syncGrantsWithoutBlocking(
   }
 }
 
+async function attemptPendingAutoLogin(): Promise<void> {
+  const store = useAgentAuthStore
+  try {
+    const saved = canAttemptAutoLogin() ? await readSavedLoginCredentials().catch(() => null) : null
+    const eligible = shouldAutoLogin({
+      enabled: readAutoLoginPreference(),
+      hasSavedCredentials: Boolean(saved),
+      passwordResetPending: Boolean(store.getState().pendingPasswordReset),
+    })
+    if (!saved || !eligible) return
+    store.setState({ connectingAccount: saved.account })
+    await store.getState().login(saved.enterprise, saved.account, saved.password)
+  } catch (error) {
+    store.setState({ autoLoginFailure: error })
+  } finally {
+    store.setState({ isConnecting: false, connectingAccount: null })
+  }
+}
+
 function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): void {
   pushToken(null)
   set({
@@ -207,6 +237,7 @@ function clearRuntimeSession(set: (partial: Partial<AgentAuthState>) => void): v
     isAuthenticated: false,
     isRestoring: false,
     restoreError: null,
+    autoLoginFailure: null,
     grantsSyncSkipped: [],
   })
 }
@@ -221,14 +252,17 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
   isAuthenticated: false,
   isRestoring: true,
   restoreError: null,
+  isConnecting: false,
+  connectingAccount: null,
+  autoLoginFailure: null,
   grantsSyncSkipped: [],
   sessionGeneration: 0,
 
   restoreSession: async () => {
     if (restorePromise) return restorePromise
-    const generation = beginSessionOperation()
+    // 将要自动登录时从一开始就进入连接中；否则读到已保存会话才进入，没有会话的用户直接去登录页。
+    const generation = beginSessionOperation({ isRestoring: true, restoreError: null, autoLoginFailure: null, isConnecting: canAttemptAutoLogin() })
     recordAuthDiagnostic({ reason: 'restore_started', source: 'restore' })
-    set({ isRestoring: true, restoreError: null })
     const task = enqueueStorage(async () => {
       if (!isCurrentSession(generation)) return
       // Always remove the WebView copy, even when the keychain already has a
@@ -259,6 +293,7 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         if (isCurrentSession(generation)) clearRuntimeSession(set)
         return
       }
+      set({ isConnecting: true, connectingAccount: session.account })
       // Verify the restored credential against the local Agent before restoring access.
       const verifier = new AgentApiClient({ getToken: () => session.token })
       let userId: string
@@ -287,6 +322,8 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
         pendingPasswordReset: null,
         isAuthenticated: true,
         isRestoring: false,
+        isConnecting: false,
+        connectingAccount: null,
         grantsSyncSkipped,
       })
       recordAuthDiagnostic({ reason: 'session_restored', source: 'restore', expiresInSeconds: sessionRemainingSeconds(session.claims.exp) })
@@ -298,6 +335,12 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     } finally {
       if (restorePromise === task) restorePromise = null
     }
+  },
+
+  runPendingAutoLogin: () => {
+    // React StrictMode runs effects twice; both callers must share one attempt.
+    pendingAutoLogin ??= attemptPendingAutoLogin().finally(() => { pendingAutoLogin = null })
+    return pendingAutoLogin
   },
 
   login: async (inputEnterprise, account, password) => {
@@ -418,6 +461,9 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
       isAuthenticated: true,
       isRestoring: false,
       restoreError: null,
+      isConnecting: false,
+      connectingAccount: null,
+      autoLoginFailure: null,
       grantsSyncSkipped,
     })
     recordAuthDiagnostic({ reason: 'login_succeeded', source: 'login', expiresInSeconds: sessionRemainingSeconds(validatedSession.claims.exp) })
@@ -443,6 +489,9 @@ export const useAgentAuthStore = create<AgentAuthState>((set, get) => ({
     // Revoke runtime access synchronously; serialize the keychain deletion
     // behind any in-flight migration/write so a stale token cannot win.
     removeLegacySession()
+    // 掉签且还能自动登录时留在内部页重新连接；isConnecting 必须先于清空会话写入，登录页才不会闪现。
+    const reconnecting = !userInitiated && canAttemptAutoLogin()
+    set({ isConnecting: reconnecting, connectingAccount: reconnecting ? credentialAccount || null : null })
     clearRuntimeSession(set)
     try {
       await enqueueStorage(async () => {

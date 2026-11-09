@@ -21,12 +21,30 @@ import {
   saveLoginCredentials,
   type SavedCredentialProfileSummary,
 } from '../../lib/loginCredentials'
-import { readAutoLoginPreference, shouldAutoLogin, writeAutoLoginPreference } from '../../lib/autoLogin'
+import { readAutoLoginPreference, writeAutoLoginPreference } from '../../lib/autoLogin'
 
 interface LoginInput {
   enterprise: string
   account: string
   password: string
+}
+
+function describeLoginFailure(err: unknown, resettingPassword: boolean): string {
+  if (err instanceof SessionPersistenceError) return err.message
+  // 非 AgentApiError:通常是 fetch 层异常(相对路径 + tauri http、CORS、DNS、断网)。
+  if (!(err instanceof AgentApiError)) return '网络异常,请检查连接或稍后重试'
+  const problemCode = err.problem?.code ?? err.code
+  const problemDetail = err.problem?.detail ?? ''
+  if (err.status === 401) return resettingPassword ? '当前密码不正确，请重新输入' : '企业标识、账号或密码错误，请重试'
+  if (err.status === 403) return '当前账号无法完成此操作，请联系管理员'
+  if (err.status === 404) return '账号不存在或所属企业未开通,请联系管理员'
+  if (err.status === 422 && problemCode === 'validation_error' && /password policy violation/i.test(problemDetail)) {
+    return '新密码不符合企业密码策略（长度、大小写字母、数字和符号）'
+  }
+  if (err.status === 422) return '提交的信息不符合要求，请检查后重试'
+  if (err.status === 503) return loginUnavailableMessage(problemDetail, problemCode, err.problem?.meta)
+  if (err.status >= 500) return '后端服务异常,请稍后重试'
+  return err.problem?.detail ?? err.message ?? '登录失败'
 }
 
 export default function Login() {
@@ -42,7 +60,11 @@ export default function Login() {
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // 自动登录在内部页进行，失败后才来到这里，第一屏就要说明原因。
+  const [error, setError] = useState<string | null>(() => {
+    const failure = useAgentAuthStore.getState().autoLoginFailure
+    return failure ? describeLoginFailure(failure, false) : null
+  })
   const login = useAgentAuthStore((s) => s.login)
   const resetPassword = useAgentAuthStore((s) => s.resetPassword)
   const cancelPasswordReset = useAgentAuthStore((s) => s.cancelPasswordReset)
@@ -64,18 +86,11 @@ export default function Login() {
         setEnterprise(saved.enterprise)
         setAccount(saved.account)
         setPassword(saved.password)
-        // The restored session was missing or rejected: sign in again against Manager with the remembered password.
-        const pendingReset = Boolean(useAgentAuthStore.getState().pendingPasswordReset)
-        if (shouldAutoLogin({ enabled: readAutoLoginPreference(), hasSavedCredentials: true, passwordResetPending: pendingReset })) {
-          void runLogin(saved)
-        }
       })
       .catch(() => {
         // Credential loading is best-effort; the form remains usable.
       })
     return () => { cancelled = true }
-    // runLogin reads only setters and store state; the saved credentials are loaded once per page visit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const syncSavedPasswordForIdentity = (nextEnterprise: string, nextAccount: string) => {
@@ -164,36 +179,7 @@ export default function Login() {
       navigate('/chat')
     } catch (err) {
       setIsLoading(false)
-      if (err instanceof SessionPersistenceError) {
-        setError(err.message)
-      } else if (err instanceof AgentApiError) {
-        const problemCode = err.problem?.code ?? err.code
-        const problemDetail = err.problem?.detail ?? ''
-        if (err.status === 401) {
-          setError(pendingPasswordReset ? '当前密码不正确，请重新输入' : '企业标识、账号或密码错误，请重试')
-        } else if (err.status === 403) {
-          setError('当前账号无法完成此操作，请联系管理员')
-        } else if (err.status === 404) {
-          setError('账号不存在或所属企业未开通,请联系管理员')
-        } else if (
-          err.status === 422
-          && problemCode === 'validation_error'
-          && /password policy violation/i.test(problemDetail)
-        ) {
-          setError('新密码不符合企业密码策略（长度、大小写字母、数字和符号）')
-        } else if (err.status === 422) {
-          setError('提交的信息不符合要求，请检查后重试')
-        } else if (err.status === 503) {
-          setError(loginUnavailableMessage(problemDetail, problemCode, err.problem?.meta))
-        } else if (err.status >= 500) {
-          setError('后端服务异常,请稍后重试')
-        } else {
-          setError(err.problem?.detail ?? err.message ?? '登录失败')
-        }
-      } else {
-        // 非 AgentApiError:通常是 fetch 层异常(相对路径 + tauri http、CORS、DNS、断网)。
-        setError('网络异常,请检查连接或稍后重试')
-      }
+      setError(describeLoginFailure(err, Boolean(pendingPasswordReset)))
     }
   }
 

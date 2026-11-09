@@ -1,4 +1,5 @@
-// 自动登录：只在每次启动、恢复已保存登录失败后进入登录页的那一次，用钥匙串里记住的密码登录。
+// 自动登录：每次启动只有一次机会，在已保存的登录恢复失败后，用钥匙串里记住的密码登录。
+// 登录过程在应用内部页进行（顶栏显示“连接中...”），失败才进入登录页。
 // 只有用户主动退出会结束本次启动的自动登录机会；过期、被吊销或 401 掉签仍可按开关自动恢复。
 // 本地只保存开关本身；账号密码仍只在钥匙串。
 
@@ -32,6 +33,11 @@ let launchAttemptAvailable = true
 /** 本次启动中已退出登录：之后再到登录页都不自动登录。 */
 export function endLaunchAutoLogin(): void {
   launchAttemptAvailable = false
+}
+
+/** 本次启动还能否自动登录：开关已开且机会未用。只查询，不消耗机会。 */
+export function canAttemptAutoLogin(storage: PreferenceStorage | null = defaultStorage()): boolean {
+  return launchAttemptAvailable && readAutoLoginPreference(storage)
 }
 
 /** 取走本次启动唯一的一次自动登录机会。 */

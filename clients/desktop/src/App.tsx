@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import Layout from './components/Layout'
 import CommandPalette from './components/Layout/CommandPalette'
 import ConversationHistorySearch from './components/Layout/ConversationHistorySearch'
@@ -148,9 +148,15 @@ async function waitForBackendReady(
   return { ok: false, failure: classifyBackendStartupFailure(lastError, stage) }
 }
 
-function ProtectedRoutes() {
+// 连接中还没有 token，页面请求会失败，所以只展示外壳和加载态，登录完成后再挂载页面。
+function ConnectingContent() {
+  const { pathname } = useLocation()
+  return pathname === '/' ? <Navigate to="/chat" replace /> : <RouteLoading />
+}
+
+function AuthenticatedContent() {
   return (
-    <Layout>
+    <>
       <RechargePromptDialog />
       <ApprovalDialog />
       <Suspense fallback={<RouteLoading />}>
@@ -174,8 +180,13 @@ function ProtectedRoutes() {
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
       </Suspense>
-    </Layout>
+    </>
   )
+}
+
+function ProtectedRoutes() {
+  const isAuthenticated = useAgentAuthStore((s) => s.isAuthenticated)
+  return <Layout>{isAuthenticated ? <AuthenticatedContent /> : <ConnectingContent />}</Layout>
 }
 
 export default function App() {
@@ -184,6 +195,8 @@ export default function App() {
   // 立即迁移并清理 WebView 中的旧 JWT。
   const isAuthenticated = useAgentAuthStore((s) => s.isAuthenticated)
   const isRestoring = useAgentAuthStore((s) => s.isRestoring)
+  const isConnecting = useAgentAuthStore((s) => s.isConnecting)
+  const runPendingAutoLogin = useAgentAuthStore((s) => s.runPendingAutoLogin)
   const sessionGeneration = useAgentAuthStore((s) => s.sessionGeneration)
   const restoreAgentSession = useAgentAuthStore((s) => s.restoreSession)
   const isOnline = useNetworkStatus()
@@ -220,6 +233,12 @@ export default function App() {
     return () => controller.abort()
   }, [backendCheckAttempt])
 
+  // 登录请求要经过本机 Agent，必须等它就绪；恢复成功时 isConnecting 已清除，不会走到这里。
+  const autoLoginPending = backendReady && isConnecting && !isRestoring && !isAuthenticated
+  useEffect(() => {
+    if (autoLoginPending) void runPendingAutoLogin()
+  }, [autoLoginPending, runPendingAutoLogin])
+
   const handleBackendRetry = () => {
     setBackendFailure(null)
     setBackendDiagnostic(null)
@@ -241,7 +260,7 @@ export default function App() {
     )
   }
 
-  if (isRestoring) {
+  if (isRestoring && !isConnecting) {
     return (
       <div
         data-tauri-drag-region
@@ -268,11 +287,14 @@ export default function App() {
       )}
       <Suspense fallback={<RouteLoading />}>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/profile/:tab?" element={isAuthenticated ? <Profile /> : <Navigate to="/login" replace />} />
+          <Route path="/login" element={isConnecting ? <Navigate to="/chat" replace /> : <Login />} />
+          <Route
+            path="/profile/:tab?"
+            element={isAuthenticated ? <Profile /> : isConnecting ? <ProtectedRoutes /> : <Navigate to="/login" replace />}
+          />
           <Route
             path="/*"
-            element={isAuthenticated ? <ProtectedRoutes /> : <Navigate to="/login" replace />}
+            element={isAuthenticated || isConnecting ? <ProtectedRoutes /> : <Navigate to="/login" replace />}
           />
         </Routes>
       </Suspense>

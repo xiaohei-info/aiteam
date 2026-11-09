@@ -1,15 +1,17 @@
 import { useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronRight, Search, Settings } from 'lucide-react'
+import { ArrowLeft, ChevronRight, LoaderCircle, Search, Settings } from 'lucide-react'
 import './TopBar.css'
 import { isGlobalSearchShortcut, requestGlobalSearch } from './globalSearch'
 import { resolveTopBarRoute } from './topBarRoutes'
 import { useTopBarOverrideValue } from './topBarOverride'
+import { useAgentAuthStore } from '../../stores/agentAuth'
 
 export default function TopBar() {
   const location = useLocation()
   const navigate = useNavigate()
   const override = useTopBarOverrideValue()
+  const isConnecting = useAgentAuthStore((s) => s.isConnecting)
   const route = override ?? resolveTopBarRoute(location.pathname)
 
   useEffect(() => {
@@ -82,6 +84,12 @@ export default function TopBar() {
               )
             })}
           </nav>
+        )}
+        {isConnecting && (
+          <span className="topbar-connecting" role="status">
+            <LoaderCircle className="animate-spin" size={14} strokeWidth={1.8} aria-hidden="true" />
+            连接中...
+          </span>
         )}
       </div>
 
