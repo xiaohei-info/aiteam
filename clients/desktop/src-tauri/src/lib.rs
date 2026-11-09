@@ -76,6 +76,7 @@ pub fn run() {
             agent_projects::list_fred_workspace_files,
             agent_projects::read_project_file,
             agent_projects::open_project_file,
+            agent_projects::fred_workspace_path,
             project_runner::detect_project_runner,
             project_runner::start_project,
             project_runner::stop_project,

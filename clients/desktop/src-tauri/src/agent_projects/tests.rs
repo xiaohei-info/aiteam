@@ -665,6 +665,18 @@ fn conversation_named_workspaces_resolve_one_or_two_levels_without_links() {
         None
     );
     assert_eq!(
+        fred_workspace_display_path(&root, "前端招聘组-22527b").unwrap(),
+        root.join("前端招聘组-22527b").to_string_lossy()
+    );
+    assert_eq!(
+        fred_workspace_display_path(&root, "不存在-000000").unwrap_err(),
+        "project_not_found"
+    );
+    assert_eq!(
+        fred_workspace_display_path(&root, "../escape").unwrap_err(),
+        "invalid_workspace_key"
+    );
+    assert_eq!(
         parse_target("fred", "前端招聘组-22527b/产品经理", None).unwrap(),
         AgentSource::Fred
     );

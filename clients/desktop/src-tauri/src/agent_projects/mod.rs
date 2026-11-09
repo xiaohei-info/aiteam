@@ -399,6 +399,25 @@ pub async fn read_project_file(
     .map_err(|_| "scan_failed".to_string())?
 }
 
+/// Absolute path of a Fred-managed conversation folder, for display in the permissions panel.
+/// The WebView names it only by `workspace_key`; a missing or linked folder is `project_not_found`.
+pub(super) fn fred_workspace_display_path(root: &Path, key: &str) -> Result<String, String> {
+    fred_workspace(root, key)?
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .ok_or_else(|| "project_not_found".to_string())
+}
+
+#[tauri::command]
+pub async fn fred_workspace_path(
+    app: tauri::AppHandle,
+    workspace_key: String,
+) -> Result<String, String> {
+    let root = fred_workspace_root(&app)?;
+    tauri::async_runtime::spawn_blocking(move || fred_workspace_display_path(&root, &workspace_key))
+        .await
+        .map_err(|_| "scan_failed".to_string())?
+}
+
 /// Opens a project file (or the folder without `file_id`) with the system app, or reveals it.
 #[tauri::command]
 pub async fn open_project_file(

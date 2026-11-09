@@ -1,4 +1,4 @@
-import type { PermissionMode } from '../api/agent/types.ts'
+import type { ConversationWorkspaces, PermissionMode } from '../api/agent/types.ts'
 
 /** 占位会话 emp_<员工 ID>：还没真正创建，也还没有添加任何目录。 */
 export function isDraftConversation(conversationId: string): boolean {
@@ -15,4 +15,16 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
 export function permissionSummary(mode: PermissionMode, enabledDirectoryCount: number): string {
   const label = PERMISSION_MODE_LABELS[mode] ?? PERMISSION_MODE_LABELS['read-only']
   return enabledDirectoryCount > 0 ? `${label} · ${enabledDirectoryCount} 个目录` : label
+}
+
+/**
+ * 会话在受管根目录下的工作目录名。群聊成员共用一个目录；私聊优先取当前入口员工的，
+ * 换过员工的旧私聊没有匹配时取仍在会话内的第一个。没有受管目录时为 null。
+ */
+export function conversationWorkspaceKey(item: ConversationWorkspaces | undefined, entryEmployeeId: string | null): string | null {
+  const all = item?.workspaces ?? []
+  const live = all.filter(workspace => !workspace.removed)
+  const pool = live.length > 0 ? live : all
+  const own = entryEmployeeId ? pool.find(workspace => workspace.employee_id === entryEmployeeId) : undefined
+  return (own ?? pool[0])?.workspace_key ?? null
 }

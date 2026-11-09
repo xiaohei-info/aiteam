@@ -33,8 +33,13 @@
 .cperm-folder { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-3); }
 .cperm-folder > svg { flex: none; color: var(--brand); }
 .cperm-folder-meta { display: grid; flex: 1; gap: 2px; min-width: 0; }
-.cperm-folder-meta span { color: var(--text-muted); font-size: 11.5px; }
+.cperm-folder-meta > span { color: var(--text-muted); font-size: 11.5px; }
 .cperm-folder-meta code { overflow: hidden; color: var(--text-primary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.cperm-folder-meta code.cperm-path { display: flex; }
+.cperm-path-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cperm-path-tail { flex: none; }
+.cperm-folder-actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.cperm-panel .cdir-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-bg-soft); color: var(--brand); cursor: pointer; }
 .cperm-folder-block .cdir-notice { margin-top: 6px; }
 .cperm-modes { display: grid; gap: 4px; }
 .cperm-panel .cperm-mode { position: relative; display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }

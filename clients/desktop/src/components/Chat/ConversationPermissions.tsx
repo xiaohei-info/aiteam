@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useMergeRefs } from '@floating-ui/react'
 import { invoke } from '@tauri-apps/api/core'
-import { ChevronDown, FolderCog, FolderOpen, LoaderCircle, ShieldCheck, Zap } from 'lucide-react'
+import { ChevronDown, FolderCog, FolderOpen, FolderSearch, LoaderCircle, ShieldCheck, Zap } from 'lucide-react'
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
 import { openFilePrivacySettings } from '../../lib/fileAccess'
-import { permissionSummary } from '../../lib/conversationPermissions'
+import { conversationWorkspaceKey, isDraftConversation, permissionSummary } from '../../lib/conversationPermissions'
+import { isMacUserAgent } from '../../lib/projectConversation'
 import { describeProjectFolderError } from '../../lib/projectConversation'
 import type { ConversationMetadata, PermissionMode } from '../../api/agent/types'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
@@ -19,6 +20,14 @@ interface ConversationPermissionsProps {
   conversationId: string
   generating: boolean
   ensureConversation: () => Promise<{ id: string }>
+}
+/** 路径过长时在中间省略：开头尽量多留，结尾固定保留最后两段，鼠标悬停看全路径。 */
+function FolderPath({ path, fallback }: { path?: string; fallback: string }) {
+  if (!path) return <code>{fallback}</code>
+  const trimmed = path.replace(/[\\/]+$/, '')
+  const last = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  const cut = last > 0 ? Math.max(trimmed.lastIndexOf('/', last - 1), trimmed.lastIndexOf('\\', last - 1)) + 1 : 0
+  return <code className="cperm-path"><span className="cperm-path-head">{trimmed.slice(0, cut)}</span><span className="cperm-path-tail">{trimmed.slice(cut)}</span></code>
 }
 const grants = ['读取和修改工作区外的文件', '执行本机命令', '访问网络']
 
@@ -36,6 +45,7 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   const [moving, setMoving] = useState(false)
   const [folderError, setFolderError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [managedFolder, setManagedFolder] = useState<{ key: string; path: string } | null>(null)
   const permissionRevision = useRef(0)
   const activeId = useRef(conversationId)
   activeId.current = conversationId
@@ -76,6 +86,23 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   const projectPath = metadata?.project?.path
   const group = metadata?.kind === 'group'
   const directories = useConversationDirectories(conversationId, ensureConversation)
+  const entryEmployeeId = metadata?.entry_employee_id ?? null
+  // 受管工作目录的真实路径：前端只拿目录名，路径由桌面宿主解析；项目对话自带 project.path，不用取。
+  useEffect(() => {
+    setManagedFolder(null)
+    if (!open || !metadata || projectPath || isDraftConversation(conversationId)) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const { conversations } = await agentApi.listWorkspaces()
+        const key = conversationWorkspaceKey(conversations.find(item => item.conversation_id === metadata.id), entryEmployeeId)
+        if (!key) return
+        const path = await invoke<string>('fred_workspace_path', { workspaceKey: key })
+        if (!cancelled) setManagedFolder({ key, path })
+      } catch { /* 取不到路径时保留原有文字，不打扰用户 */ }
+    })()
+    return () => { cancelled = true }
+  }, [open, metadata?.id, projectPath, conversationId, entryEmployeeId])
   const { busy: directoriesBusy } = directories
   const modeDisabled = saving || generating || (!metadata && !conversationId.startsWith('emp_'))
 
@@ -121,6 +148,17 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
       if (activeId.current === sourceId) setFolderError(describeProjectFolderError(err))
     } finally { setMoving(false) }
   }
+  const revealFolder = async () => {
+    const target = managedFolder
+      ? { source: 'fred', projectId: managedFolder.key }
+      : metadata?.project?.id ? { source: metadata.project.source, projectId: metadata.project.id } : null
+    if (!target) return
+    setFolderError('')
+    try { await invoke('open_project_file', { ...target, fileId: null, reveal: true }) }
+    catch { setFolderError('无法打开该文件夹，可能已被移动或删除') }
+  }
+  const canReveal = Boolean(managedFolder || (projectPath && metadata?.project?.id))
+  const revealLabel = isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件夹中显示'
   const chooseFullAccess = () => {
     if (full) return
     setAccepted(grants.map(() => false)); setConfirm(true)
@@ -160,16 +198,21 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
               {directories.enabledCount > 0 && <span>另加 {directories.enabledCount} 个</span>}
             </div>
             <div className="cperm-folder-block">
-              <div className="cperm-folder" title={projectPath ?? undefined}>
+              <div className="cperm-folder" title={projectPath ?? managedFolder?.path}>
                 <FolderOpen size={16} aria-hidden="true" />
                 <div className="cperm-folder-meta">
                   <span>{projectPath ? '工作目录（项目所在文件夹）' : '工作目录'}</span>
-                  <code>{projectPath ?? (group ? '全群共用的文件夹' : '由 AIFred 管理')}</code>
+                  <FolderPath path={projectPath ?? managedFolder?.path} fallback={group ? '全群共用的文件夹' : '由 AIFred 管理'} />
                 </div>
-                {projectPath && <button type="button" className="cdir-add" disabled={moving || generating} onClick={() => void relocateProject()}>
-                  {moving ? <LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" /> : <FolderCog size={14} aria-hidden="true" />}
-                  更换目录
-                </button>}
+                <div className="cperm-folder-actions">
+                  {canReveal && <button type="button" className="cdir-icon" title={revealLabel} aria-label={revealLabel} onClick={() => void revealFolder()}>
+                    <FolderSearch size={14} aria-hidden="true" />
+                  </button>}
+                  {projectPath && <button type="button" className="cdir-add" disabled={moving || generating} onClick={() => void relocateProject()}>
+                    {moving ? <LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" /> : <FolderCog size={14} aria-hidden="true" />}
+                    更换目录
+                  </button>}
+                </div>
               </div>
               {folderError && <p className="cdir-notice err" role="alert"><span>{folderError}</span></p>}
             </div>
