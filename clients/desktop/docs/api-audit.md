@@ -85,9 +85,9 @@
 | GET | `/api/agent/office/scene` | officeScene | 已核对调用 | `src/api/agent/index.ts:132` |
 | GET | `/api/agent/office/feed` | officeFeed | 已核对调用 | `src/api/agent/index.ts:135` |
 | POST | `/api/agent/conversations/custom-group` | createCustomGroup | 已核对调用 | `src/api/agent/customGroups.ts:31` |
-| GET | `/api/agent/local-directories` | listLocalDirectories | 已核对调用 | `src/api/agent/localDirectories.ts:58`<br>`src/pages/KnowledgeBase/LocalDirectoriesPanel.tsx`<br>`src/pages/TalentMarket/TalentEmployeeWorkspace.tsx` |
+| GET | `/api/agent/local-directories` | listLocalDirectories | 已核对调用 | `src/api/agent/localDirectories.ts`（`?conversation_id=` 只返回该会话的绑定）<br>`src/components/Chat/ConversationDirectories.tsx` |
 | POST | `/api/agent/local-directories` | registerLocalDirectory | 已核对调用 | `src/api/agent/localDirectories.ts:66`（凭一次性票据注册，禁止提交路径）<br>`src/pages/KnowledgeBase/LocalDirectoriesPanel.tsx` |
 | POST | `/api/agent/local-directories/challenges` | createLocalDirectoryChallenge | 已核对调用 | `src/api/agent/localDirectories.ts:62`<br>`src/pages/KnowledgeBase/LocalDirectoriesPanel.tsx`（原生选择器前置挑战） |
-| PUT | `/api/agent/local-directories/{directory_id}/bindings/{employee_id}` | setLocalDirectoryBinding | 已核对调用 | `src/api/agent/localDirectories.ts:70`（`expected_revision` 乐观并发，409 提示刷新重试）<br>`src/pages/TalentMarket/TalentEmployeeWorkspace.tsx` |
+| PUT | `/api/agent/conversations/{conversation_id}/local-directories/{directory_id}` | setConversationLocalDirectoryBinding | 已核对调用 | `src/api/agent/localDirectories.ts`（按会话添加或移除，群里所有员工共用；`expected_revision` 乐观并发，409 提示刷新重试）<br>`src/components/Chat/ConversationDirectories.tsx`。2026-11-09 起取代按员工生效的 `PUT /api/agent/local-directories/{directory_id}/bindings/{employee_id}` 和按「会话 + 员工」生效的路径 |
 | DELETE | `/api/agent/local-directories/{directory_id}` | revokeLocalDirectory | 已核对调用 | `src/api/agent/localDirectories.ts:80`（两段式确认）<br>`src/pages/KnowledgeBase/LocalDirectoriesPanel.tsx` |
 | POST | `/api/agent/local-directory-citations/{citation_id}/verify` | verifyLocalDirectoryCitation | 已核对调用 | `src/api/agent/localDirectories.ts:85`（每次展示原文前实时重验授权）<br>`src/components/Chat/LocalCitationCard.tsx` |

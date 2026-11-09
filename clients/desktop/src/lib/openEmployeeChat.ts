@@ -11,8 +11,8 @@ export async function openEmployeeChat(
   navigate: NavigateFunction,
 ): Promise<void> {
   const store = useChatStore.getState()
-  // 列表按最近消息排序，第一条即最近的会话。
-  const existing = store.conversations.find((item) => item._employeeId === employee.employeeId)
+  // 列表按最近消息排序，第一条即最近的会话。项目对话属于那个项目，不作为员工的主会话。
+  const existing = store.conversations.find((item) => item._employeeId === employee.employeeId && !item.projectName)
   if (existing) {
     store.setActiveConvId(existing.id)
     navigate('/chat')

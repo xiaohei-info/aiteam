@@ -9,8 +9,8 @@ export const LOCAL_DIRECTORIES_PATH = base
 export const LOCAL_DIRECTORY_CHALLENGES_PATH = `${base}/challenges`
 export const LOCAL_DIRECTORY_CITATION_VERIFY_PATH = '/api/agent/local-directory-citations/{citation_id}/verify'
 
+/** 某个会话对目录的开关，会话里的员工共用；目录授权按成员保存，开关按会话保存。 */
 export interface LocalDirectoryBinding {
-  employee_id: string
   enabled: boolean
   revision: number
 }
@@ -22,7 +22,8 @@ export interface LocalDirectory {
   revision: number
   /** 'ready' 或具体不可用原因码（authorization_unavailable / unauthorized / …）。 */
   status: string
-  bindings: LocalDirectoryBinding[]
+  /** 请求时 conversation_id 指定会话的绑定；未指定会话时为 null。 */
+  binding: LocalDirectoryBinding | null
 }
 
 export interface LocalDirectoryList {
@@ -40,7 +41,7 @@ export interface RegisteredLocalDirectory {
 }
 
 export interface LocalDirectoryBindingUpdate {
-  employee_id: string
+  conversation_id: string
   directory_id: string
   enabled: boolean
   revision: number
@@ -62,8 +63,8 @@ export interface LocalDirectoryCitation {
   next_offset: number | null
 }
 
-export function listLocalDirectories(client: ServiceApiClient): Promise<LocalDirectoryList> {
-  return client.request<LocalDirectoryList>({ method: 'GET', path: base })
+export function listLocalDirectories(client: ServiceApiClient, conversationId?: string): Promise<LocalDirectoryList> {
+  return client.request<LocalDirectoryList>({ method: 'GET', path: base, ...(conversationId ? { query: { conversation_id: conversationId } } : {}) })
 }
 
 export function createLocalDirectoryChallenge(client: ServiceApiClient): Promise<string> {
@@ -75,16 +76,17 @@ export function registerLocalDirectory(client: ServiceApiClient, ticket: string)
   return client.request<RegisteredLocalDirectory>({ method: 'POST', path: base, body: { ticket } })
 }
 
+/** 把目录添加到这个会话或从中移除：会话里的员工共用，不影响其他会话。 */
 export function setLocalDirectoryBinding(
   client: ServiceApiClient,
+  conversationId: string,
   directoryId: string,
-  employeeId: string,
   enabled: boolean,
   expectedRevision: number,
 ): Promise<LocalDirectoryBindingUpdate> {
   return client.request<LocalDirectoryBindingUpdate>({
     method: 'PUT',
-    path: `${base}/${encodeURIComponent(directoryId)}/bindings/${encodeURIComponent(employeeId)}`,
+    path: `/api/agent/conversations/${encodeURIComponent(conversationId)}/local-directories/${encodeURIComponent(directoryId)}`,
     body: { enabled, expected_revision: expectedRevision },
   })
 }

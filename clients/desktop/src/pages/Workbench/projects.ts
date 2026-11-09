@@ -1,15 +1,15 @@
 /**
  * 工作台：AI Agent 做出的项目（vibecoding 产物）。一个项目 = 一个目录，可看文件、可一键运行。
  *
- * - Fred：本机 Agent 会话的受管工作目录。私聊一个目录；群聊合成一个项目，每个员工的目录是一部分
- *   （含已移出成员）。目录索引来自 GET /api/agent/workspaces，文件由桌面宿主按目录名列出。
+ * - Fred：本机 Agent 会话的受管工作目录。私聊一个目录；群聊成员共用一个目录。还没合并到共用目录的
+ *   老群合成一个项目，每个员工的目录是一部分（含已移出成员）。目录索引来自 GET /api/agent/workspaces，文件由桌面宿主按目录名列出。
  * - Codex / Claude Code / Claude 桌面版 / WorkBuddy：桌面宿主只读识别 Agent 新建的目录
  *   （见 src-tauri/src/agent_projects.rs），用户自己的仓库不算。
  * - DeepSeek 不是来源，而是按模型筛选：任一来源上由 DeepSeek 模型做出的项目都算，与来源重复计数。
  *
  * 本文件只放纯函数，便于 node 测试。
  */
-import type { ConversationWorkspaces, ExpertProjection } from '../../api/agent/types'
+import type { ConversationMetadata, ConversationWorkspaces, ExpertProjection } from '../../api/agent/types'
 
 /** 桌面宿主扫描的本机 Agent，与 Rust 侧 AgentSource 的序列化值一致。 */
 export type LocalProjectSource = 'codex' | 'claude' | 'claude_desktop' | 'workbuddy'
@@ -51,7 +51,7 @@ export interface ProjectFile {
 }
 
 /**
- * 能单独读文件、单独运行的目录。普通项目只有一部分；Fred 群聊每个员工一部分。
+ * 能单独读文件、单独运行的目录。普通项目只有一部分；未合并到共用目录的 Fred 老群每个员工一部分。
  * `source` + `id` 就是交给宿主的项目标识（Fred 为 workspace_key）。
  */
 export interface ProjectPart {
@@ -79,8 +79,10 @@ export interface ProjectSummary {
   createdAt: number | null
   updatedAt: number | null
   isGroup: boolean
-  /** Fred 会话，用于「回到会话」。 */
+  /** Fred 会话，用于「继续对话」。 */
   conversationId: string | null
+  /** 其他工具做出、已交给 Fred 员工继续做的项目：最初的来源。此时 `source` 为 fred，各部分仍按原来源交给宿主。 */
+  origin?: LocalProjectSource
   /** 至少一部分，每部分至少一个文件。 */
   parts: ProjectPart[]
   fileCount: number
@@ -232,7 +234,8 @@ const expertModel = (expert: ExpertProjection | undefined): string | null =>
 
 /**
  * 会话 + 宿主列出的目录 → Fred 项目；没有文件的会话不出现。
- * 私聊归属入口员工；群聊归属协调员工，每个员工的目录是一部分，已移出的成员也保留。
+ * 私聊归属入口员工；群聊归属协调员工。群员工共用一个目录，同一目录只算一部分、不标员工名；
+ * 还没迁移到共用目录的群聊（旧目录改名未完成）才按员工分部分，已移出的成员也保留。
  */
 export function fredProjects(
   conversations: ConversationWorkspaces[],
@@ -248,17 +251,21 @@ export function fredProjects(
     const parts: ProjectPart[] = []
     const folders: FredWorkspaceWire[] = []
     const models = new Set<string>()
+    const sharedFolder = new Set(conversation.workspaces.map(workspace => workspace.workspace_key)).size === 1
+    const seen = new Set<string>()
     for (const workspace of conversation.workspaces) {
       const folder = listed.get(workspace.workspace_key)
       if (!folder || folder.files.length === 0) continue
-      folders.push(folder)
       const model = expertModel(workspace.employee_id ? expertsById.get(workspace.employee_id) : undefined)
       if (model) models.add(model)
+      if (seen.has(folder.workspace_key)) continue
+      seen.add(folder.workspace_key)
+      folders.push(folder)
       parts.push({
         source: 'fred',
         id: folder.workspace_key,
-        label: isGroup ? employeeName(workspace.employee_id) ?? '未知员工' : null,
-        removed: workspace.removed,
+        label: isGroup && !sharedFolder ? employeeName(workspace.employee_id) ?? '未知员工' : null,
+        removed: !sharedFolder && workspace.removed,
         fileCount: folder.file_count,
         truncated: folder.truncated,
         files: folder.files.map(fromFileWire),
@@ -269,7 +276,7 @@ export function fredProjects(
     const owner = ownerId ? expertsById.get(ownerId) : undefined
     const ownerName = owner?.display_name ?? (isGroup ? '群聊协作' : '未知员工')
     const title = conversation.title?.trim() || null
-    // 私聊：项目清单里的名称优先；群聊由多个目录组成，用会话标题。
+    // 私聊：项目清单里的名称优先；群聊用会话标题。
     const name = (!isGroup ? folders[0].name : null) ?? title ?? (isGroup ? '未命名群聊' : `与 ${ownerName} 的会话`)
     const updated = folders.map(folder => folder.updated_at ?? 0)
     projects.push({
@@ -292,6 +299,71 @@ export function fredProjects(
     })
   }
   return projects
+}
+
+/** 交给员工继续做的项目对话：按来源和工作台项目 ID 找回对应的项目。 */
+export interface ProjectHandoff {
+  source: string
+  id: string
+  conversationId: string
+  employeeName: string
+  employeeAvatarUrl: string | null
+  updatedAt: number | null
+}
+
+/** 每个项目最近的一个项目对话；没有项目 ID 的早期对话和群聊不算。 */
+export function projectHandoffs(conversations: ConversationMetadata[], experts: ExpertProjection[]): ProjectHandoff[] {
+  const expertsById = new Map(experts.map(expert => [expert.employee_id, expert]))
+  const latest = new Map<string, ProjectHandoff>()
+  for (const conversation of conversations) {
+    const project = conversation.project
+    if (!project?.id || conversation.kind === 'group') continue
+    const expert = conversation.entry_employee_id ? expertsById.get(conversation.entry_employee_id) : undefined
+    const handoff: ProjectHandoff = {
+      source: project.source,
+      id: project.id,
+      conversationId: conversation.id,
+      employeeName: expert?.display_name ?? '未知员工',
+      employeeAvatarUrl: expert?.avatar_url ?? null,
+      updatedAt: parseTime(conversation.last_message_at) ?? parseTime(conversation.updated_at),
+    }
+    const key = projectKey(project.source as ProjectSource, project.id)
+    const current = latest.get(key)
+    if (!current || (handoff.updatedAt ?? 0) > (current.updatedAt ?? 0)) latest.set(key, handoff)
+  }
+  return [...latest.values()]
+}
+
+/** 已经交给 Fred 员工继续做的项目归到 Fred：按钮变成「继续对话」，员工显示接手的员工。 */
+export function withHandoffs(projects: ProjectSummary[], handoffs: ProjectHandoff[]): ProjectSummary[] {
+  const byKey = new Map(handoffs.map(handoff => [projectKey(handoff.source as ProjectSource, handoff.id), handoff]))
+  return projects.map(project => {
+    const handoff = project.source === 'fred' ? undefined : byKey.get(project.key)
+    if (!handoff) return project
+    return {
+      ...project,
+      source: 'fred',
+      origin: project.source as LocalProjectSource,
+      conversationId: handoff.conversationId,
+      employeeName: handoff.employeeName,
+      employeeAvatarUrl: handoff.employeeAvatarUrl,
+      updatedAt: Math.max(project.updatedAt ?? 0, handoff.updatedAt ?? 0) || null,
+    }
+  })
+}
+
+/**
+ * 来源卡片只显示扫描出项目的平台：读取中或 0 个项目的不显示；读取失败的保留，让用户看到原因。
+ */
+export function shownSources(
+  countOf: (source: ProjectSource) => number,
+  states: Partial<Record<ProjectSource, SourceState>>,
+  loading: { fred: boolean; local: boolean },
+): ProjectSource[] {
+  return PROJECT_SOURCES.filter(source => {
+    if (source === 'fred' ? loading.fred : loading.local) return false
+    return countOf(source) > 0 || states[source]?.status === 'error'
+  })
 }
 
 // -------------------- 错误提示 --------------------
@@ -357,6 +429,7 @@ export function filterProjects(projects: ProjectSummary[], filter: ProjectFilter
       project.employeeName,
       project.location ?? '',
       SOURCE_LABELS[project.source],
+      project.origin ? SOURCE_LABELS[project.origin] : '',
       ...project.models,
       ...project.parts.flatMap(part => [part.label ?? '', ...part.files.map(file => file.path)]),
     ].join('\n').toLowerCase()
@@ -420,11 +493,12 @@ function insertFiles(nodes: TreeNode[], part: ProjectPart, index: number, prefix
   }
 }
 
-/** 项目文件树：目录在前、按名称排序；群聊第一层是员工名。 */
-export function buildFileTree(project: Pick<ProjectSummary, 'isGroup' | 'parts'>): TreeNode[] {
+/** 项目文件树：目录在前、按名称排序；旧群聊按员工分部分时第一层是员工名。 */
+export function buildFileTree(project: Pick<ProjectSummary, 'parts'>): TreeNode[] {
+  const byEmployee = project.parts.some(part => part.label !== null)
   const roots: TreeNode[] = []
   project.parts.forEach((part, index) => {
-    if (!project.isGroup) {
+    if (!byEmployee) {
       insertFiles(roots, part, index, partKey(part), 0)
       return
     }
@@ -433,8 +507,8 @@ export function buildFileTree(project: Pick<ProjectSummary, 'isGroup' | 'parts'>
     insertFiles(dir.children, part, index, partKey(part), 1)
     roots.push(dir)
   })
-  // 群聊保持接口给出的员工顺序（协调员工在前），只排序每个员工目录内部。
-  if (project.isGroup) {
+  // 保持接口给出的员工顺序（协调员工在前），只排序每个员工目录内部。
+  if (byEmployee) {
     for (const node of roots) if (node.kind === 'dir') sortNodes(node.children)
     return roots
   }

@@ -11,6 +11,8 @@ import {
   hostErrorMessage,
   LOCAL_PROJECT_SOURCES,
   localSourceStates,
+  projectHandoffs,
+  type ProjectHandoff,
   type DependencySource,
   type FredWorkspaceListWire,
   type LocalProjectListWire,
@@ -27,6 +29,17 @@ import {
 export interface SourceLoadResult {
   projects: ProjectSummary[]
   states: SourceState[]
+}
+
+/** 已交给 Fred 员工继续做的项目。读取失败时为空，项目仍按原来源显示。 */
+export async function loadProjectHandoffs(): Promise<ProjectHandoff[]> {
+  if (!isTauri()) return []
+  try {
+    const [{ experts }, { conversations }] = await Promise.all([agentApi.listExperts(), agentApi.listAllConversations()])
+    return projectHandoffs(conversations, experts)
+  } catch {
+    return []
+  }
 }
 
 const hostError = (error: unknown, fallback?: string) => Object.assign(new Error(hostErrorMessage(error, fallback)), { cause: error })

@@ -278,6 +278,7 @@ export default function ConversationHistorySearch() {
           lastMessage: '',
           time: '',
           lastMessageAt: result.timestamp ?? undefined,
+          projectName: conversation.project?.name ?? null,
           _employeeId: conversation.entry_employee_id ?? undefined,
         })
       }

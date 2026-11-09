@@ -28,6 +28,19 @@
 .secondaryButton { background: var(--surface-1); color: var(--text-secondary); border-color: var(--border); }
 .secondaryButton:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-active); color: var(--text-primary); }
 .emptyState button { background: var(--brand); color: var(--text-on-brand); margin-top: 8px; }
+/* 「交给员工继续做」：主操作，用品牌色突出。 */
+.accentButton {
+  border: 1px solid transparent; border-radius: 8px; min-height: 36px; padding: 0 16px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0;
+  font: inherit; font-size: 12px; font-weight: 650; cursor: pointer;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand) 82%, #fff), var(--brand));
+  color: var(--text-on-brand);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--brand) 35%, transparent);
+  transition: filter .15s, box-shadow .15s, transform .15s;
+}
+.accentButton:hover:not(:disabled) { filter: brightness(1.06); box-shadow: 0 4px 14px color-mix(in srgb, var(--brand) 45%, transparent); transform: translateY(-1px); }
+.accentButton:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+.originNote { font-size: 11px; color: var(--text-muted); }
 .root button:disabled { opacity: .5; cursor: not-allowed; }
 .root :is(button, input, select):focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; box-shadow: var(--brand-focus-ring); }
 
@@ -96,6 +109,8 @@
 .detailHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; border-bottom: 1px solid var(--border); padding-bottom: 18px; margin-bottom: 20px; }
 .detailHeader h2 { font-size: 19px; line-height: 1.5; margin: 8px 0 0; overflow-wrap: anywhere; }
 .detailTitle { min-width: 0; }
+.detailActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
+.detailBlock { margin: -8px 0 16px; }
 .detailDescription { margin: 6px 0 0; font-size: 12px; line-height: 1.7; color: var(--text-secondary); overflow-wrap: anywhere; }
 .detailEyebrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
 .detailMeta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; }
@@ -237,3 +252,17 @@
   .detail { margin-bottom: 0; }
   .detail > .detailPlaceholder { min-height: 200px; }
 }
+
+/* 交给员工继续做的弹窗。 */
+.developField { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; font-size: 13px; color: var(--text-secondary); }
+.developEmployees { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.developEmployee { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--text-primary); cursor: pointer; }
+.developEmployee:hover { background: var(--surface-3, var(--surface-1)); }
+.developEmployee[data-disabled] { opacity: .55; cursor: not-allowed; }
+.developEmployee input { accent-color: var(--brand); flex-shrink: 0; }
+.developAvatar { display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; overflow: hidden; border-radius: 50%; background: var(--surface-1); font-size: 12px; }
+.developAvatar img { width: 100%; height: 100%; object-fit: cover; }
+.developEmployeeText { display: flex; flex-direction: column; min-width: 0; }
+.developEmployeeText strong { font-size: 13px; font-weight: 600; }
+.developEmployeeText small { font-size: 11px; color: var(--text-muted); }
+.developError { margin: 0; color: var(--danger); font-size: 13px; }

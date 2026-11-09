@@ -30,6 +30,7 @@ import {
   listEntries,
   markConversationRead,
   resetConversationContext,
+  setConversationProjectFolder,
   setConversationState,
   setThinkingLevel,
   submitPrompt,
@@ -153,6 +154,7 @@ export const agentApi = {
   updateConversation: (id: string, patch: Parameters<typeof updateConversation>[2]) =>
     updateConversation(getClient(), id, patch),
   deleteConversation: (id: string) => deleteConversation(getClient(), id),
+  setConversationProjectFolder: (id: string, ticket: string) => setConversationProjectFolder(getClient(), id, ticket),
   markConversationRead: (id: string, lastReadEntryId: string | null) =>
     markConversationRead(getClient(), id, lastReadEntryId),
   getConversationState: (id: string) => getConversationState(getClient(), id),
@@ -211,11 +213,11 @@ export const agentApi = {
   // 桌面端是唯一授权方：票据由原生选择器签发，Agent 永远不会通过 HTTP 拿到路径。
   // 以下全部发往本机 Agent（getLocalClient），不走远端会话服务。
   supportsLocalDirectories: () => supportsLocalDirectories(getLocalClient()),
-  listLocalDirectories: () => listLocalDirectories(getLocalClient()),
+  listLocalDirectories: (conversationId?: string) => listLocalDirectories(getLocalClient(), conversationId),
   createLocalDirectoryChallenge: () => createLocalDirectoryChallenge(getLocalClient()),
   registerLocalDirectory: (ticket: string) => registerLocalDirectory(getLocalClient(), ticket),
-  setLocalDirectoryBinding: (directoryId: string, employeeId: string, enabled: boolean, expectedRevision: number) =>
-    setLocalDirectoryBinding(getLocalClient(), directoryId, employeeId, enabled, expectedRevision),
+  setLocalDirectoryBinding: (conversationId: string, directoryId: string, enabled: boolean, expectedRevision: number) =>
+    setLocalDirectoryBinding(getLocalClient(), conversationId, directoryId, enabled, expectedRevision),
   revokeLocalDirectory: (directoryId: string) => revokeLocalDirectory(getLocalClient(), directoryId),
   verifyLocalDirectoryCitation: (citationId: string, offset?: number) => verifyLocalDirectoryCitation(getLocalClient(), citationId, offset),
   // 企业 / 个人 / 本机知识来源索引；本机目录只在本机 Agent 上，401 只提示不登出。

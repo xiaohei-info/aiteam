@@ -28,6 +28,14 @@
 .cdir-section-head span:last-child:not(:first-child) { flex: none; font-variant-numeric: tabular-nums; }
 
 /* ─── 本会话权限 ─── */
+/* 项目对话的工作目录：路径 + 更换按钮。 */
+.cperm-folder-block { margin: 0 0 10px; }
+.cperm-folder { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-3); }
+.cperm-folder > svg { flex: none; color: var(--brand); }
+.cperm-folder-meta { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.cperm-folder-meta span { color: var(--text-muted); font-size: 11.5px; }
+.cperm-folder-meta code { overflow: hidden; color: var(--text-primary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.cperm-folder-block .cdir-notice { margin-top: 6px; }
 .cperm-modes { display: grid; gap: 4px; }
 .cperm-panel .cperm-mode { position: relative; display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
 .cperm-panel .cperm-mode:hover:not(:disabled) { background: var(--surface-3); }
@@ -44,6 +52,8 @@
 .cperm-mode-text small { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
 
 /* ─── 目录列表 ─── */
+.cdir-added { display: grid; gap: 0; }
+.cdir-added .cdir-list { margin-top: 4px; }
 .cdir-list { display: grid; gap: 4px; max-height: 220px; margin: 0; padding: 0; overflow: auto; list-style: none; }
 .cdir-loading { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 2px; color: var(--text-secondary); }
 .cdir-empty { margin: 0; padding: 12px; border: 1px dashed var(--border-active); border-radius: var(--radius-md); color: var(--text-secondary); line-height: 1.6; }

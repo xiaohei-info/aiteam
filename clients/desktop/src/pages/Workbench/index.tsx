@@ -4,16 +4,18 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronDown, ChevronRight, Download, Folder, Inbox, LayoutDashboard, LoaderCircle, MessageSquare, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, Folder, Inbox, LayoutDashboard, LoaderCircle, MessageSquare, RefreshCw, Search, UserRoundPlus } from 'lucide-react'
 import { isTauri } from '../../api/agent/runtime'
+import { isMacUserAgent, projectHandoffBlock } from '../../lib/projectConversation'
 import { useChatStore } from '../../stores/chat'
-import { getDependencySource, loadFredProjects, loadLocalProjects, openProjectFile, readProjectFile } from './api'
+import { getDependencySource, loadFredProjects, loadLocalProjects, loadProjectHandoffs, openProjectFile, readProjectFile } from './api'
 import ConsentDialog from './ConsentDialog'
 import DependencySourceDialog from './DependencySourceDialog'
 import FileIcon from './FileIcon'
 import FilePanel, { BINARY_FORMATS, type ContentState, type FileAction } from './FilePanel'
 import { errorText, formatTime } from './format'
 import ProjectCard from './ProjectCard'
+import ProjectDevelopDialog from './ProjectDevelopDialog'
 import {
   buildFileTree,
   DEFAULT_DEPENDENCY_SOURCE,
@@ -24,8 +26,13 @@ import {
   filterProjects,
   isExpanded,
   matchesSource,
+  DEEPSEEK,
+  FILTER_LABELS,
   partKey,
   projectRunnerKind,
+  shownSources,
+  withHandoffs,
+  type ProjectHandoff,
   runnableUnitCount,
   sortProjects,
   unitKey,
@@ -40,7 +47,7 @@ import {
   type SourceState,
 } from './projects'
 import RunControls from './RunControls'
-import SourceBadge, { type SourceKey } from './SourceBadge'
+import SourceBadge from './SourceBadge'
 import SourceCards from './SourceCards'
 import { useProjectRuns } from './useProjectRuns'
 import styles from './index.module.css'
@@ -55,6 +62,7 @@ export default function Workbench() {
   const desktop = isTauri()
   const [fredProjects, setFredProjects] = useState<ProjectSummary[]>([])
   const [localProjects, setLocalProjects] = useState<ProjectSummary[]>([])
+  const [handoffs, setHandoffs] = useState<ProjectHandoff[]>([])
   const [states, setStates] = useState<Partial<Record<ProjectSource, SourceState>>>({})
   const [loading, setLoading] = useState({ fred: true, local: true })
   const [source, setSource] = useState<SourceFilter>('all')
@@ -70,11 +78,13 @@ export default function Workbench() {
   const [actionError, setActionError] = useState('')
   const [downloadSource, setDownloadSource] = useState<DependencySource>(DEFAULT_DEPENDENCY_SOURCE)
   const [sourceDialog, setSourceDialog] = useState(false)
+  const [developing, setDeveloping] = useState<ProjectSummary | null>(null)
 
   useEffect(() => {
     if (desktop) void getDependencySource().then(setDownloadSource)
   }, [desktop])
-  const allProjects = useMemo(() => sortProjects([...fredProjects, ...localProjects]), [fredProjects, localProjects])
+  // 已交给 Fred 员工继续做的外部项目归到 Fred。
+  const allProjects = useMemo(() => sortProjects([...fredProjects, ...withHandoffs(localProjects, handoffs)]), [fredProjects, localProjects, handoffs])
   const partsByKey = useMemo(() => new Map(allProjects.flatMap(project => project.parts.map(part => [partKey(part), part] as const))), [allProjects])
   const { units, runs, pendingRun, runError, consent, redetect, clearRunError, cancelConsent, run, stop, reveal, tryOpen, downloadPython, confirmConsent } = useProjectRuns(desktop, partsByKey)
   const loadSequence = useRef(0)
@@ -95,9 +105,11 @@ export default function Workbench() {
       mergeStates(result.states)
       setLoading(previous => ({ ...previous, fred: false }))
     })
-    void loadLocalProjects().then(result => {
+    // 项目对话和外部项目一起到，免得项目先显示在原来源、再跳到 Fred。
+    void Promise.all([loadLocalProjects(), loadProjectHandoffs()]).then(([result, adopted]) => {
       if (request !== loadSequence.current) return
       setLocalProjects(result.projects)
+      setHandoffs(adopted)
       mergeStates(result.states)
       setLoading(previous => ({ ...previous, local: false }))
     })
@@ -120,6 +132,8 @@ export default function Workbench() {
   const employees = useMemo(() => employeeOptions(allProjects, source), [allProjects, source])
   const visible = useMemo(() => filterProjects(allProjects, { source, employee, query }), [allProjects, source, employee, query])
   const selected = useMemo(() => allProjects.find(project => project.key === selectedKey) ?? null, [allProjects, selectedKey])
+  // Fred 的项目回到原会话继续；其他工具的项目交给一位员工在新对话里接着做。
+  const handoffBlock = selected && selected.source !== 'fred' ? projectHandoffBlock({ desktop, mac: isMacUserAgent(navigator.userAgent) }) : null
   const selectedPart = selected && selectedFile ? selected.parts[selectedFile.part] ?? null : null
   const selectedProjectFile = selectedPart?.files.find(file => file.id === selectedFile?.fileId) ?? null
   const tree = useMemo(() => (selected ? buildFileTree(selected) : []), [selected])
@@ -127,6 +141,15 @@ export default function Workbench() {
   const fileCount = useMemo(() => allProjects.reduce((total, project) => total + project.fileCount, 0), [allProjects])
   const isLoading = loading.fred || loading.local
   const hasFilters = Boolean(query.trim() || employee || source !== 'all')
+  const countOf = useCallback((key: SourceFilter) => allProjects.filter(project => matchesSource(project, key)).length, [allProjects])
+  const shown = useMemo(() => shownSources(countOf, states, loading), [countOf, states, loading])
+  const showDeepSeek = !isLoading && countOf(DEEPSEEK) > 0
+  // 选中的来源被隐藏（例如项目都交给了员工）时回到全部来源。
+  useEffect(() => {
+    if (isLoading || source === 'all') return
+    const hidden = source === DEEPSEEK ? !showDeepSeek : !shown.includes(source)
+    if (hidden) setSource('all')
+  }, [isLoading, source, shown, showDeepSeek])
 
   const selectSource = (next: SourceFilter) => {
     setSource(next)
@@ -219,7 +242,6 @@ export default function Workbench() {
 
   const selectedFileIdIn = (part: ProjectPart) => (selectedPart && partKey(selectedPart) === partKey(part) ? selectedFile?.fileId ?? null : null)
 
-  const sourceCount = (key: SourceKey) => allProjects.filter(project => matchesSource(project, key)).length
   const fileContent = selectedPart && selectedProjectFile && content?.key === fileNodeKey(selectedPart, selectedProjectFile) ? content : null
   const selectedFileNodeKey = selectedPart && selectedProjectFile ? fileNodeKey(selectedPart, selectedProjectFile) : null
 
@@ -246,7 +268,9 @@ export default function Workbench() {
       totalProjects={allProjects.length}
       fileCount={fileCount}
       employeeCount={employees.length}
-      countOf={sourceCount}
+      countOf={countOf}
+      shown={shown}
+      showDeepSeek={showDeepSeek}
       onSelect={selectSource}
     />
 
@@ -294,12 +318,17 @@ export default function Workbench() {
         {!selected ? <div className={styles.detailPlaceholder}><LayoutDashboard size={28} /><span>选择左侧项目，查看文件或直接运行。</span></div> : <div className={styles.detailPanel}>
           <div className={styles.detailHeader}>
             <div className={styles.detailTitle}>
-              <span className={styles.detailEyebrow}><SourceBadge source={selected.source} />{selected.employeeName}</span>
+              <span className={styles.detailEyebrow}><SourceBadge source={selected.source} />{selected.origin && <span className={styles.originNote}>原来自 {FILTER_LABELS[selected.origin]}</span>}{selected.employeeName}</span>
               <h2>{selected.name}</h2>
               {selected.description && <p className={styles.detailDescription}>{selected.description}</p>}
             </div>
-            {selected.conversationId && <button className={styles.secondaryButton} type="button" onClick={() => openInChat(selected)}><MessageSquare size={14} />回到会话</button>}
+            <div className={styles.detailActions}>
+              {selected.source === 'fred'
+                ? selected.conversationId && <button className={styles.secondaryButton} type="button" onClick={() => openInChat(selected)}><MessageSquare size={14} />继续对话</button>
+                : <button className={styles.accentButton} type="button" disabled={Boolean(handoffBlock)} title={handoffBlock ?? '选一位员工，在这个项目的目录里接着做'} onClick={() => setDeveloping(selected)}><UserRoundPlus size={14} />交给员工继续做</button>}
+            </div>
           </div>
+          {handoffBlock && <p className={`${styles.hint} ${styles.detailBlock}`}>{handoffBlock}</p>}
 
           <div className={styles.sectionHeading}><h3>运行</h3>{(selected.isGroup || runnableUnitCount(selected.parts.map(part => units[partKey(part)])) > 1) && <span>每个应用单独运行</span>}</div>
           {!desktop
@@ -333,7 +362,7 @@ export default function Workbench() {
           <div className={styles.detailMeta}>
             <div><span>最近更新</span><strong>{formatTime(selected.updatedAt)}</strong></div>
             <div><span>模型</span><strong>{selected.models.length ? selected.models.join('、') : '未记录'}</strong></div>
-            <div><span>{selected.source === 'fred' ? '会话类型' : '项目目录'}</span><strong>{selected.source === 'fred' ? (selected.isGroup ? '群聊' : '单聊') : selected.location ?? '未记录'}</strong></div>
+            <div><span>{selected.location ? '项目目录' : '会话类型'}</span><strong>{selected.location ?? (selected.isGroup ? '群聊' : '单聊')}</strong></div>
           </div>
 
           <div className={styles.sectionHeading}><h3>文件</h3><span>{selected.fileCount} 个{selected.truncated ? ' · 文件过多，只列出一部分' : ''}</span></div>
@@ -374,6 +403,7 @@ export default function Workbench() {
       </section>
     </div>
 
+    {developing && <ProjectDevelopDialog project={developing} onClose={() => setDeveloping(null)} />}
     {consent && <ConsentDialog request={consent} downloadSource={downloadSource} onCancel={cancelConsent} onConfirm={confirmConsent} />}
 
     {sourceDialog && <DependencySourceDialog

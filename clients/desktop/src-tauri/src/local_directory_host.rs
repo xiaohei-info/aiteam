@@ -1,4 +1,5 @@
 //! Private desktop → Agent authority channel. Credentials never enter the WebView.
+use crate::agent_projects::{file_id, resolve_project_dir, AgentProjectsState};
 use crate::{file_access, local_directory_reader::SourceRoot};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Clone)]
 pub struct ChannelConfig {
@@ -20,6 +22,8 @@ struct Pending {
     member: String,
     expires: Instant,
     resource: Option<Value>,
+    /// Kept apart from `resource`: a project ticket never registers a knowledge directory, nor the reverse.
+    project: Option<Value>,
 }
 struct Bridge {
     config: ChannelConfig,
@@ -159,6 +163,7 @@ impl Bridge {
                         member: request.member_id,
                         expires: Instant::now() + Duration::from_secs(120),
                         resource: None,
+                        project: None,
                     },
                 );
                 Ok(json!({"challenge": ticket}))
@@ -185,6 +190,12 @@ impl Bridge {
                     Ok(resource.clone())
                 })
             }
+            "consume_project" => take_project_ticket(
+                &self.pending,
+                &request.ticket,
+                &request.tenant_id,
+                &request.member_id,
+            ),
             "check" | "list" | "read" => {
                 file_access::with_knowledge_access(app, &request.canonical_path, |revision| {
                     reject_runtime_roots(app, &request.canonical_path)?;
@@ -286,15 +297,7 @@ pub async fn select_local_knowledge_directory(
     challenge: String,
 ) -> Result<RegistrationSelection, String> {
     let bridge = BRIDGE.get().ok_or("authorization_unavailable")?.clone();
-    let pending = bridge
-        .pending
-        .lock()
-        .map_err(|_| "authorization_unavailable")?
-        .remove(&challenge)
-        .ok_or("citation_expired")?;
-    if pending.expires <= Instant::now() || pending.resource.is_some() {
-        return Err("citation_expired".into());
-    }
+    let pending = take_challenge(&bridge.pending, &challenge)?;
     let selected = file_access::select_file_access_directories(app.clone(), None).await?;
     let path = selected.directories.first().ok_or("cancelled")?;
     reject_runtime_roots(&app, path)?;
@@ -318,9 +321,263 @@ pub async fn select_local_knowledge_directory(
     })
 }
 
+/// Removes a challenge that has not been turned into a ticket yet.
+fn take_challenge(
+    pending: &Mutex<HashMap<String, Pending>>,
+    challenge: &str,
+) -> Result<Pending, String> {
+    let value = pending
+        .lock()
+        .map_err(|_| "authorization_unavailable")?
+        .remove(challenge)
+        .ok_or("citation_expired")?;
+    if value.expires <= Instant::now() || value.resource.is_some() || value.project.is_some() {
+        return Err("citation_expired".into());
+    }
+    Ok(value)
+}
+
+/// An employee writes in a project folder, so unlike a knowledge source it may neither sit inside
+/// protected data nor contain it. Root and the home folder are never a project.
+fn project_folder_allowed(path: &Path, home: &Path, protected: &[PathBuf]) -> bool {
+    let inside = |candidate: &Path, parent: &Path| is_protected(candidate, &[parent.to_path_buf()]);
+    path.parent().is_some()
+        && !inside(home, path)
+        && !is_protected(path, protected)
+        && !protected.iter().any(|root| inside(root, path))
+}
+
+/// Turns a challenge into a one-time ticket for a listed project. The host resolves the folder again
+/// from the source and opaque id, so the WebView never names a path.
+pub async fn authorize_project_workspace(
+    app: tauri::AppHandle,
+    projects: AgentProjectsState,
+    challenge: String,
+    source: String,
+    project_id: String,
+) -> Result<RegistrationSelection, String> {
+    // The Agent resolves Fred projects itself, from the member's own conversations.
+    if source == "fred" {
+        return Err("invalid_source".into());
+    }
+    let bridge = BRIDGE.get().ok_or("authorization_unavailable")?.clone();
+    let pending = take_challenge(&bridge.pending, &challenge)?;
+    let project = tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
+        let dir = resolve_project_dir(&app, &projects, &source, &project_id)?
+            .canonicalize()
+            .map_err(|_| "project_not_found")?;
+        let home = app
+            .path()
+            .home_dir()
+            .map_err(|_| "authorization_unavailable")?;
+        if !project_folder_allowed(&dir, &home, &protected_roots(&app)?) {
+            return Err("source_overlaps_runtime".into());
+        }
+        // The id is the workbench's own project id, so the WebView can find this conversation again.
+        Ok(json!({"canonical_path": dir, "source": source, "project_id": project_id}))
+    })
+    .await
+    .map_err(|_| "authorization_unavailable")??;
+    issue_project_ticket(&bridge, pending, project)
+}
+
+/// Source of a ticket for a folder the user picked to relocate a project. The Agent accepts it only
+/// for moving an existing project conversation, never for creating one.
+const PICKED_FOLDER_SOURCE: &str = "folder";
+
+/// Lets the user pick the new location of a project that moved. Unlike the knowledge picker this
+/// records no file access grant: the folder only becomes the conversation's working directory.
+pub async fn select_project_folder(
+    app: tauri::AppHandle,
+    challenge: String,
+    default_path: Option<String>,
+) -> Result<RegistrationSelection, String> {
+    let bridge = BRIDGE.get().ok_or("authorization_unavailable")?.clone();
+    let pending = take_challenge(&bridge.pending, &challenge)?;
+    let project = tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
+        let mut picker = app.dialog().file().set_title("选择项目现在所在的文件夹");
+        if let Some(initial) = default_path
+            .map(PathBuf::from)
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .filter(|path| path.is_dir())
+        {
+            picker = picker.set_directory(initial);
+        }
+        if let Some(window) = app.get_webview_window("main") {
+            picker = picker.set_parent(&window);
+        }
+        let selected = picker.blocking_pick_folder().ok_or("cancelled")?;
+        let dir = selected
+            .into_path()
+            .map_err(|_| "project_not_found")?
+            .canonicalize()
+            .map_err(|_| "project_not_found")?;
+        if !dir.is_dir() {
+            return Err("project_not_found".into());
+        }
+        let home = app
+            .path()
+            .home_dir()
+            .map_err(|_| "authorization_unavailable")?;
+        if !project_folder_allowed(&dir, &home, &protected_roots(&app)?) {
+            return Err("source_overlaps_runtime".into());
+        }
+        // Same id the workbench gives a folder, so a moved project is found again where it is now.
+        let project_id = file_id(&dir.to_string_lossy());
+        Ok(json!({"canonical_path": dir, "source": PICKED_FOLDER_SOURCE, "project_id": project_id}))
+    })
+    .await
+    .map_err(|_| "authorization_unavailable")??;
+    issue_project_ticket(&bridge, pending, project)
+}
+
+/// Stores a resolved project folder under a fresh one-time ticket, valid for 30 seconds.
+fn issue_project_ticket(
+    bridge: &Bridge,
+    pending: Pending,
+    project: Value,
+) -> Result<RegistrationSelection, String> {
+    let ticket = uuid::Uuid::new_v4().to_string();
+    bridge
+        .pending
+        .lock()
+        .map_err(|_| "authorization_unavailable")?
+        .insert(
+            ticket.clone(),
+            Pending {
+                project: Some(project),
+                expires: Instant::now() + Duration::from_secs(30),
+                ..pending
+            },
+        );
+    Ok(RegistrationSelection { ticket })
+}
+
+/// Redeems a project ticket once, for the member it was issued to.
+fn take_project_ticket(
+    pending: &Mutex<HashMap<String, Pending>>,
+    ticket: &str,
+    tenant: &str,
+    member: &str,
+) -> Result<Value, String> {
+    let value = pending
+        .lock()
+        .map_err(|_| "authorization_unavailable")?
+        .remove(ticket)
+        .ok_or("citation_expired")?;
+    if value.expires <= Instant::now() || value.tenant != tenant || value.member != member {
+        return Err("unauthorized".into());
+    }
+    value.project.ok_or_else(|| "unauthorized".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pending_with(
+        entries: Vec<(&str, Option<Value>, Option<Value>, Duration)>,
+    ) -> Mutex<HashMap<String, Pending>> {
+        Mutex::new(
+            entries
+                .into_iter()
+                .map(|(key, resource, project, ttl)| {
+                    (
+                        key.to_string(),
+                        Pending {
+                            tenant: "t".into(),
+                            member: "m".into(),
+                            expires: Instant::now() + ttl,
+                            resource,
+                            project,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn project_tickets_are_one_time_and_bound_to_the_member() {
+        let ttl = Duration::from_secs(30);
+        let project = json!({"canonical_path": "/work/app", "source": "codex"});
+        let pending = pending_with(vec![
+            ("ok", None, Some(project.clone()), ttl),
+            ("other-member", None, Some(project.clone()), ttl),
+            ("expired", None, Some(project.clone()), Duration::ZERO),
+        ]);
+        assert_eq!(
+            take_project_ticket(&pending, "ok", "t", "m").unwrap(),
+            project
+        );
+        assert_eq!(
+            take_project_ticket(&pending, "ok", "t", "m").unwrap_err(),
+            "citation_expired"
+        );
+        assert_eq!(
+            take_project_ticket(&pending, "other-member", "t", "x").unwrap_err(),
+            "unauthorized"
+        );
+        assert_eq!(
+            take_project_ticket(&pending, "other-member", "t", "m").unwrap_err(),
+            "citation_expired",
+            "a refused attempt still uses the ticket up"
+        );
+        assert_eq!(
+            take_project_ticket(&pending, "expired", "t", "m").unwrap_err(),
+            "unauthorized"
+        );
+    }
+
+    #[test]
+    fn project_and_knowledge_tickets_are_not_interchangeable() {
+        let ttl = Duration::from_secs(30);
+        let pending = pending_with(vec![
+            ("challenge", None, None, ttl),
+            ("knowledge", Some(json!({})), None, ttl),
+            ("project", None, Some(json!({})), ttl),
+        ]);
+        // An unused challenge and a knowledge ticket redeem no project.
+        assert!(take_project_ticket(&pending, "challenge", "t", "m").is_err());
+        assert!(take_project_ticket(&pending, "knowledge", "t", "m").is_err());
+        // A ticket cannot be turned into another ticket.
+        assert!(take_challenge(&pending, "project").is_err());
+    }
+
+    #[test]
+    fn only_a_fresh_challenge_can_be_authorized() {
+        let ttl = Duration::from_secs(30);
+        let pending = pending_with(vec![
+            ("fresh", None, None, ttl),
+            ("expired", None, None, Duration::ZERO),
+            ("knowledge", Some(json!({})), None, ttl),
+        ]);
+        assert!(take_challenge(&pending, "fresh").is_ok());
+        assert!(take_challenge(&pending, "fresh").is_err());
+        assert!(take_challenge(&pending, "expired").is_err());
+        assert!(take_challenge(&pending, "knowledge").is_err());
+    }
+
+    #[test]
+    fn project_folders_exclude_root_home_and_protected_data() {
+        let home = Path::new("/Users/a");
+        let protected = vec![
+            PathBuf::from("/System"),
+            PathBuf::from("/Users/a/Library/Application Support/com.aiteam.desktop"),
+        ];
+        let allowed = |path: &str| project_folder_allowed(Path::new(path), home, &protected);
+        assert!(allowed("/Users/a/Documents/app"));
+        assert!(allowed("/Users/a/WorkBuddy/20260101"));
+        assert!(allowed("/Systemx"));
+        assert!(!allowed("/"));
+        assert!(!allowed("/Users"), "holds the home folder");
+        assert!(!allowed("/Users/a"), "the home folder");
+        assert!(!allowed("/System/Library"), "inside protected data");
+        assert!(!allowed("/Users/a/Library"), "holds the app's data folder");
+        assert!(!allowed(
+            "/Users/a/Library/Application Support/com.aiteam.desktop/agent"
+        ));
+    }
 
     #[test]
     fn protected_paths_are_excluded_but_ancestors_are_allowed() {

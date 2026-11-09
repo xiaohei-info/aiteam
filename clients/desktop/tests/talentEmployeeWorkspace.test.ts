@@ -71,6 +71,9 @@ test('talent start-chat reuses an employee\'s real conversation and ignores plac
   assert.equal(findEmployeeConversationId(conversations, 'one'), 'conv-one')
   assert.equal(findEmployeeConversationId(conversations.slice(0, 2), 'one'), null)
   assert.equal(findEmployeeConversationId(conversations, 'missing'), null)
+  // 项目对话有独立的工作目录和记忆，不作为员工的主会话。
+  assert.equal(findEmployeeConversationId([{ id: 'project-one', _employeeId: 'one', projectName: '项目' }, ...conversations], 'one'), 'conv-one')
+  assert.equal(findEmployeeConversationId([{ id: 'project-one', _employeeId: 'one', projectName: '项目' }], 'one'), null)
 })
 
 test('talent list shows why a recruited employee cannot start a conversation', () => {

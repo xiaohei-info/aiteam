@@ -80,6 +80,10 @@ export interface ConversationMetadata {
   unread_count?: number
   // 会话属于自动化任务时为任务 ID（任务可能已删除）；旧版 Agent 不返回。
   automation_task_id?: string | null
+  // 工作目录是已有项目目录时存在。旧版 Agent 不返回。
+  // id：工作台中该项目的 ID，用来把已交给员工的项目归到 Fred；早期创建的项目对话没有。
+  // path：项目目录在本机的路径（即本会话的工作目录），项目搬家后可在权限面板更换。
+  project?: { source: string; name: string; id?: string; path?: string } | null
   // 最新可见 user/assistant 消息时间；null 也可能是旧消息时间缺失，不代表一定为空会话。
   // 保留 optional 以兼容旧 Agent；不能用 updated_at（改名/已读时间）兜底。
   last_message_at?: string | null
@@ -96,6 +100,8 @@ export interface ConversationCreateRequest {
   solution_instance_id?: string | null
   permission_mode?: PermissionMode
   schedule?: ConversationSchedule | null
+  // 在 Fred 以外工具做出的项目目录中开启私聊：目录由宿主票据确定，不接受路径。
+  project?: { name: string; ticket: string }
 }
 
 // PATCH /conversations/:id 请求体。仅提供的字段会更新。
@@ -680,7 +686,7 @@ export interface LocalFileMetadata {
   member_id: string
   kind: 'attachment' | 'artifact'
   filename: string
-  /** 产物在会话目录中的相对路径（`/` 分隔，群聊以员工名开头）；附件为 null，旧版 Agent 不返回。 */
+  /** 产物在会话目录中的相对路径（`/` 分隔）；附件为 null，旧版 Agent 不返回。 */
   path?: string | null
   mime_type: string
   byte_size: number
