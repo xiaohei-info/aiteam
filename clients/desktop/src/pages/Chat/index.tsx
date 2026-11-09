@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import './Chat.css'
 import { useChatStore, type Message, type ConversationItem } from '../../stores/chat'
-import { employeeUnavailableMessage } from '../../lib/employeeAvailability'
+import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
 import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
 import { pickAndCacheFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
@@ -491,7 +491,7 @@ export default function Chat() {
       )
     } catch (error) {
       console.error('[Chat] submitPrompt failed:', error)
-      sendFailureRef.current = projectSendFailure(error)
+      sendFailureRef.current = projectSendFailure(error) ?? employeeSendFailure(error)
       updateMessageStatus(conversation.id, messageId, 'failed')
       return false
     }

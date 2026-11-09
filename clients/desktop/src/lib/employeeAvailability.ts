@@ -13,6 +13,12 @@ export function employeeUnavailableMessage(employee?: EmployeeAvailability): str
   return null
 }
 
+/** Agent 拒绝本轮（有被 @ 或接收的员工不可用）时给用户看的文字；其他错误返回 null。 */
+export function employeeSendFailure(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === 'employee_not_runnable' ? '有员工暂不可用，消息未发出' : null
+}
+
 export function unavailableNoticeKey(tenantId: string, memberId: string, employeeId: string, revision: string): string {
   return `aiteam:employee-unavailable:${JSON.stringify([tenantId, memberId, employeeId, revision])}`
 }
