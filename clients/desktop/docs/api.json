@@ -416,7 +416,7 @@
             "minLength": 1,
             "maxLength": 257,
             "pattern": "^[^./\\\\\\u0000-\\u001f\\u007f][^/\\\\\\u0000-\\u001f\\u007f]{0,127}(?:/[^./\\\\\\u0000-\\u001f\\u007f][^/\\\\\\u0000-\\u001f\\u007f]{0,127})?$",
-            "description": "受管工作目录相对 Agent 数据目录 workspaces/ 的路径，以 / 分隔：私聊为「会话名-短 ID」一段，群聊成员为「会话名-短 ID/员工名」两段；旧版目录为 conversation-<24 位十六进制> 一段。各段不以 . 开头、不含路径分隔符与控制字符；不返回本机绝对路径。"
+            "description": "受管工作目录相对 Agent 数据目录 workspaces/ 的路径，以 / 分隔：私聊和群聊都是「会话名-短 ID」一段（群聊成员共用，各行相同），换过员工的旧私聊为「会话名-短 ID/员工名」两段；旧版目录为 conversation-<24 位十六进制> 一段。各段不以 . 开头、不含路径分隔符与控制字符；不返回本机绝对路径。"
           },
           "has_files": {
             "type": "boolean",
@@ -2428,6 +2428,37 @@
           "updated_at"
         ],
         "properties": {
+          "project": {
+            "type": "object",
+            "required": [
+              "source",
+              "name",
+              "path"
+            ],
+            "properties": {
+              "source": {
+                "type": "string",
+                "description": "项目来源：codex、claude、claude_desktop 或 workbuddy。"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "创建时的项目名；不随会话改名变化。"
+              },
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$",
+                "description": "工作台中该项目的 ID（宿主签发票据时给出，不是路径）；早期创建的项目对话可能没有。"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "项目目录在本机的路径，即本会话的工作目录；只经本机 Agent 返回给本机界面，可通过 PUT .../project-folder 更换。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "存在时表示会话的工作目录是这个已有项目的目录。"
+          },
           "description": {
             "anyOf": [
               {
@@ -2699,6 +2730,29 @@
       "ConversationCreateRequest": {
         "type": "object",
         "properties": {
+          "project": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ticket"
+            ],
+            "description": "在 Fred 以外工具做出的项目目录中开启私聊；目录由宿主票据确定，不接受路径。缺省权限为 workspace-write。",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "项目名，仅用于显示。"
+              },
+              "ticket": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "桌面宿主签发的一次性项目票据。"
+              }
+            }
+          },
           "id": {
             "type": "string",
             "minLength": 1,
@@ -2924,6 +2978,22 @@
         },
         "additionalProperties": false,
         "description": "更新本地会话请求；未提供字段保持不变。"
+      },
+      "ConversationProjectFolderRequest": {
+        "type": "object",
+        "required": [
+          "ticket"
+        ],
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "桌面宿主在用户选好新目录后签发的一次性票据；不接受路径。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "更换项目对话的工作目录。"
       },
       "ConversationStateUpdateRequest": {
         "type": "object",
@@ -7997,7 +8067,7 @@
       "get": {
         "operationId": "listConversationWorkspaces",
         "summary": "列出会话工作目录",
-        "description": "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊含全部成员，包括已移出成员），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的直接子目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。",
+        "description": "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊每位成员一行，包括已移出成员；成员共用群文件夹，这些行的目录名相同），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。",
         "security": [
           {
             "bearerAuth": []
@@ -8013,7 +8083,7 @@
                 },
                 "examples": {
                   "group": {
-                    "summary": "群聊合成一个项目，包含已移出成员的目录",
+                    "summary": "群聊成员共用一个目录，已移出成员也保留一行",
                     "value": {
                       "data": [
                         {
@@ -8028,15 +8098,15 @@
                               "employee_id": "employee-1",
                               "role": "coordinator",
                               "removed": false,
-                              "workspace_key": "conversation-96acab21cdd5bd30977900a5",
+                              "workspace_key": "官网改版-96acab",
                               "has_files": true
                             },
                             {
                               "employee_id": "employee-2",
                               "role": "member",
                               "removed": true,
-                              "workspace_key": "conversation-f7dff870d94910103922329b",
-                              "has_files": false
+                              "workspace_key": "官网改版-96acab",
+                              "has_files": true
                             }
                           ]
                         }
@@ -9860,6 +9930,129 @@
                 "$ref": "#/components/headers/RequestId"
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/project-folder": {
+      "put": {
+        "operationId": "setConversationProjectFolder",
+        "summary": "更换项目目录",
+        "description": "把项目对话的工作目录换成用户在桌面宿主里新选的文件夹（项目搬家后使用）。目录只来自宿主票据；员工回复中不能更换。会话记录、记忆和权限不变。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationProjectFolderRequest"
+              },
+              "examples": {
+                "ticket": {
+                  "summary": "宿主票据",
+                  "value": {
+                    "ticket": "3f0c2a8e-5b8d-4c61-9d1e-2f7a0b6c4d11"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "本地会话 ID。"
+            },
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "description": "本地会话 ID。",
+            "example": "conversation-1"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "更换目录后的完整会话元数据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationEnvelope"
+                },
+                "examples": {
+                  "moved": {
+                    "summary": "已更换",
+                    "value": {
+                      "data": {
+                        "id": "conversation-1",
+                        "title": "今日工作摘要",
+                        "kind": "private",
+                        "labels": [
+                          "daily"
+                        ],
+                        "state": "active",
+                        "entry_employee_id": "employee-1",
+                        "coordinator_employee_id": null,
+                        "solution_instance_id": null,
+                        "tenant_id": "tenant-1",
+                        "member_id": "member-1",
+                        "schedule": null,
+                        "permission_mode": "workspace-write",
+                        "last_read_entry_id": null,
+                        "last_preview": null,
+                        "last_message_at": null,
+                        "unread_count": 0,
+                        "created_at": "2026-09-01T08:00:00.000Z",
+                        "updated_at": "2026-09-01T08:01:00.000Z",
+                        "project": {
+                          "source": "codex",
+                          "name": "my-app",
+                          "id": "0123456789abcdef",
+                          "path": "/Users/me/code/my-app"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -21637,11 +21830,25 @@
     "/api/agent/local-directories": {
       "get": {
         "operationId": "listLocalDirectories",
-        "summary": "列出当前成员授权的本地知识目录与绑定状态",
+        "summary": "列出本地目录：指定会话时只返回添加到该会话的目录及其绑定，未指定时返回当前成员登记的全部目录",
         "tags": [
           "local-directories"
         ],
-        "description": "列出当前成员授权的本地知识目录与绑定状态。仅当前已验证 JWT 身份的 tenant/member 可访问；不持久化源文档正文。",
+        "description": "列出本地目录：指定会话时只返回添加到该会话的目录及其绑定，未指定时返回当前成员登记的全部目录。仅当前已验证 JWT 身份的 tenant/member 可访问；不持久化源文档正文。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "本地会话 ID。"
+            },
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "description": "只返回添加到该会话的目录及其绑定；必须属于当前成员",
+            "example": "conversation-1"
+          }
+        ],
         "security": [
           {
             "bearerAuth": []
@@ -21688,7 +21895,7 @@
                               "path",
                               "revision",
                               "status",
-                              "bindings"
+                              "binding"
                             ],
                             "properties": {
                               "directory_id": {
@@ -21712,34 +21919,34 @@
                                 "type": "string",
                                 "description": "目录实时状态（ready 或不可用原因码）"
                               },
-                              "bindings": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "required": [
-                                    "employee_id",
-                                    "enabled",
-                                    "revision"
-                                  ],
-                                  "properties": {
-                                    "employee_id": {
-                                      "type": "string",
-                                      "description": "数字员工 ID"
+                              "binding": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "required": [
+                                      "enabled",
+                                      "revision"
+                                    ],
+                                    "properties": {
+                                      "enabled": {
+                                        "type": "boolean",
+                                        "description": "该目录当前是否添加在本会话中（false 为已移除）"
+                                      },
+                                      "revision": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "description": "本会话目录绑定的乐观并发版本号"
+                                      }
                                     },
-                                    "enabled": {
-                                      "type": "boolean",
-                                      "description": "是否启用该目录绑定"
-                                    },
-                                    "revision": {
-                                      "type": "integer",
-                                      "minimum": 1,
-                                      "description": "员工绑定乐观并发版本号"
-                                    }
+                                    "additionalProperties": false,
+                                    "description": "本会话与本地目录的绑定状态（会话内所有员工共用）"
                                   },
-                                  "additionalProperties": false,
-                                  "description": "数字员工与本地知识目录的绑定状态"
-                                },
-                                "description": "员工级绑定状态详情"
+                                  {
+                                    "type": "null",
+                                    "description": "允许为 null。"
+                                  }
+                                ],
+                                "description": "查询参数 conversation_id 指定会话中的绑定（enabled=false 为已移除，重新添加时用其 revision）；未指定会话时为 null"
                               }
                             },
                             "additionalProperties": false,
@@ -21776,13 +21983,10 @@
                             "path": "/Users/example/Documents/Specs",
                             "revision": 1,
                             "status": "ready",
-                            "bindings": [
-                              {
-                                "employee_id": "employee-1",
-                                "enabled": true,
-                                "revision": 1
-                              }
-                            ]
+                            "binding": {
+                              "enabled": true,
+                              "revision": 1
+                            }
                           }
                         ]
                       }
@@ -22048,14 +22252,14 @@
         }
       }
     },
-    "/api/agent/local-directories/{directory_id}/bindings/{employee_id}": {
+    "/api/agent/conversations/{conversation_id}/local-directories/{directory_id}": {
       "put": {
-        "operationId": "setLocalDirectoryBinding",
-        "summary": "绑定或解绑数字员工的本地知识目录权限",
+        "operationId": "setConversationLocalDirectoryBinding",
+        "summary": "把本地目录添加到本会话或从本会话移除（会话内所有员工共用）",
         "tags": [
           "local-directories"
         ],
-        "description": "绑定或解绑数字员工的本地知识目录权限。仅当前已验证 JWT 身份的 tenant/member 可访问；不持久化源文档正文。",
+        "description": "把本地目录添加到本会话或从本会话移除（会话内所有员工共用）。仅当前已验证 JWT 身份的 tenant/member 可访问；不持久化源文档正文。",
         "requestBody": {
           "required": true,
           "content": {
@@ -22068,20 +22272,20 @@
                 "properties": {
                   "enabled": {
                     "type": "boolean",
-                    "description": "true 为授权该员工检索此目录，false 为解除绑定"
+                    "description": "true 为把目录添加到本会话，false 为从本会话移除"
                   },
                   "expected_revision": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "员工绑定乐观并发版本号（首次绑定为 0）"
+                    "description": "本会话目录绑定乐观并发版本号（首次添加为 0）"
                   }
                 },
                 "additionalProperties": false,
-                "description": "员工目录绑定更新请求"
+                "description": "本会话目录绑定更新请求"
               },
               "examples": {
                 "bind": {
-                  "summary": "更新员工目录绑定",
+                  "summary": "把目录添加到本会话",
                   "value": {
                     "enabled": true,
                     "expected_revision": 0
@@ -22090,9 +22294,21 @@
               }
             }
           },
-          "description": "员工目录绑定更新请求"
+          "description": "本会话目录绑定更新请求"
         },
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "本地会话 ID。"
+            },
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "description": "会话 ID",
+            "example": "conversation-1"
+          },
           {
             "schema": {
               "type": "string",
@@ -22104,18 +22320,6 @@
             "required": true,
             "description": "本地知识目录 ID",
             "example": "dir_7f9a3e2c1b4d8f01a2c3d4e5"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "description": "授权员工/专家 ID。"
-            },
-            "in": "path",
-            "name": "employee_id",
-            "required": true,
-            "description": "数字员工 ID",
-            "example": "employee-1"
           }
         ],
         "security": [
@@ -22125,7 +22329,7 @@
         ],
         "responses": {
           "200": {
-            "description": "更新后的员工绑定状态。",
+            "description": "更新后的本会话目录绑定状态。",
             "content": {
               "application/json": {
                 "schema": {
@@ -22137,15 +22341,15 @@
                     "data": {
                       "type": "object",
                       "required": [
-                        "employee_id",
+                        "conversation_id",
                         "directory_id",
                         "enabled",
                         "revision"
                       ],
                       "properties": {
-                        "employee_id": {
+                        "conversation_id": {
                           "type": "string",
-                          "description": "数字员工 ID"
+                          "description": "会话 ID"
                         },
                         "directory_id": {
                           "type": "string",
@@ -22158,11 +22362,11 @@
                         "revision": {
                           "type": "integer",
                           "minimum": 1,
-                          "description": "更新后的员工绑定版本号"
+                          "description": "更新后的本会话目录绑定版本号"
                         }
                       },
                       "additionalProperties": false,
-                      "description": "员工绑定更新结果"
+                      "description": "本会话目录绑定更新结果"
                     }
                   },
                   "additionalProperties": false,
@@ -22173,7 +22377,7 @@
                     "summary": "绑定已更新",
                     "value": {
                       "data": {
-                        "employee_id": "employee-1",
+                        "conversation_id": "conversation-1",
                         "directory_id": "dir_7f9a3e2c1b4d8f01a2c3d4e5",
                         "enabled": true,
                         "revision": 1

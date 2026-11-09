@@ -53,18 +53,18 @@ test("backfill finds each old artifact's folder by content; anything unmatched g
   }
 });
 
-test("backfill puts group chat artifacts under the stable employee workspace folder, including removed members", async () => {
+test("backfill finds group chat artifacts by their path in the shared folder, older member subfolders included", async () => {
   const f = fixture();
   try {
     f.store.createConversation({ id: "group", kind: "group", coordinatorEmployeeId: "lead", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
     f.store.replaceProjections([
       { employee_id: "lead", tenant_id: "t", member_id: "m", version: "1", handle: "lead", display_name: "产品经理", revoked: false, synced_at: new Date().toISOString() },
     ], [], []);
-    for (const [employee, workspace] of [["lead", "lead-dir"], ["gone", "gone-dir"]] as const) {
+    for (const [employee, workspace] of [["lead", "group-dir"], ["gone", "group-dir"]] as const) {
       f.store.upsertConversationParticipant({ conversation_id: "group", employee_id: employee, role: employee === "lead" ? "coordinator" : "member", session_file: "", workspace: join(f.workspaces, workspace), pi_session_id: null, employee_version: "1" });
     }
-    f.write("lead-dir", "docs/plan.md", "lead plan");
-    f.write("gone-dir", "plan.md", "gone plan");
+    f.write("group-dir", "lead-dir/docs/plan.md", "lead plan");
+    f.write("group-dir", "gone-dir/plan.md", "gone plan");
     const lead = f.artifact("group", "plan.md", "lead plan");
     const gone = f.artifact("group", "plan.md", "gone plan");
 

@@ -34,7 +34,7 @@ const NAV_ITEMS: { icon: LucideIcon; path: string; label: string; shortcut: stri
 export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
-  const account = useAgentAuthStore((state) => state.account)
+  const account = useAgentAuthStore((state) => state.account ?? state.connectingAccount)
   const { conversations, groups, setActiveConvId, setActiveGroupId } = useChatStore()
   useThemeStore((state) => state.theme)
   const [collapsed, setCollapsed] = useState(false)

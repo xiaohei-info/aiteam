@@ -28,6 +28,8 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['DELETE', '/api/agent/conversations/{conversation_id}'],
   ['GET', '/api/agent/conversations/{conversation_id}/state'],
   ['PUT', '/api/agent/conversations/{conversation_id}/state'],
+  // 项目搬家后更换项目对话的工作目录；只带宿主票据。
+  ['PUT', '/api/agent/conversations/{conversation_id}/project-folder'],
   ['GET', '/api/agent/conversations/{conversation_id}/context'],
   ['PATCH', '/api/agent/conversations/{conversation_id}/context'],
   // 「开启新上下文」；缺这一项时客户端在发请求前就拒绝，按钮点击后无任何请求到达 Agent。
@@ -109,7 +111,8 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/local-directories'],
   ['POST', '/api/agent/local-directories'],
   ['POST', '/api/agent/local-directories/challenges'],
-  ['PUT', '/api/agent/local-directories/{directory_id}/bindings/{employee_id}'],
+  // 检索目录按会话开关：同一员工的其他会话不受影响。
+  ['PUT', '/api/agent/conversations/{conversation_id}/local-directories/{directory_id}'],
   ['DELETE', '/api/agent/local-directories/{directory_id}'],
   ['POST', '/api/agent/local-directory-citations/{citation_id}/verify'],
 ]

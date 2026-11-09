@@ -10,6 +10,8 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod project_path_policy;
 mod project_runner;
 mod secure_session;
 
@@ -35,6 +37,8 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![
             select_local_knowledge_directory,
+            authorize_project_workspace,
+            select_project_folder,
             get_agent_base_url,
             file_access::local_file_access_status,
             file_access::dismiss_file_access_startup,
@@ -116,6 +120,55 @@ async fn select_local_knowledge_directory(
     {
         let _ = (app, challenge);
         Err("本地目录检索尚不支持此平台".into())
+    }
+}
+
+#[tauri::command]
+async fn authorize_project_workspace(
+    app: tauri::AppHandle,
+    projects: tauri::State<'_, agent_projects::AgentProjectsState>,
+    challenge: String,
+    source: String,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        serde_json::to_value(
+            local_directory_host::authorize_project_workspace(
+                app,
+                projects.inner().clone(),
+                challenge,
+                source,
+                project_id,
+            )
+            .await?,
+        )
+        .map_err(|_| "invalid_response".into())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, projects, challenge, source, project_id);
+        Err("此平台暂不支持把这类项目交给员工".into())
+    }
+}
+
+#[tauri::command]
+async fn select_project_folder(
+    app: tauri::AppHandle,
+    challenge: String,
+    default_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        serde_json::to_value(
+            local_directory_host::select_project_folder(app, challenge, default_path).await?,
+        )
+        .map_err(|_| "invalid_response".into())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, challenge, default_path);
+        Err("此平台暂不支持更换项目目录".into())
     }
 }
 

@@ -12,6 +12,7 @@ import TopBar from './TopBar'
 import ManagerUnavailableNotice from './ManagerUnavailableNotice'
 import AgentDetailPanel from '../Chat/AgentDetailPanel'
 import GroupDetailPanel from '../Chat/GroupDetailPanel'
+import { useAgentAuthStore } from '../../stores/agentAuth'
 import { useChatStore } from '../../stores/chat'
 
 /** workbench 轮询间隔：刷新会话列表/未读数 */
@@ -22,8 +23,9 @@ interface LayoutProps {
 }
 
 /** 周期性刷新会话列表与未读数；页面隐藏时暂停，重新可见时立即刷新一次。 */
-function useWorkbenchPolling(refresh: () => Promise<void>) {
+function useWorkbenchPolling(refresh: () => Promise<void>, enabled: boolean) {
   useEffect(() => {
+    if (!enabled) return
     let timer: ReturnType<typeof setInterval> | null = null
 
     const start = () => {
@@ -51,21 +53,23 @@ function useWorkbenchPolling(refresh: () => Promise<void>) {
       stop()
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [enabled]) // eslint-disable-line react-hooks/exhaustive-deps
 }
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
+  // 连接中布局已展示但还没有 token，会话数据等登录完成再加载。
+  const isAuthenticated = useAgentAuthStore((s) => s.isAuthenticated)
   const loadAgentsAndConversations = useChatStore((s) => s.loadAgentsAndConversations)
   const refreshConversations = useChatStore((s) => s.refreshConversations)
   const showPanel = location.pathname.startsWith('/chat') || location.pathname.startsWith('/group-chat')
   const isGroupChat = location.pathname.startsWith('/group-chat')
 
   useEffect(() => {
-    loadAgentsAndConversations()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    if (isAuthenticated) loadAgentsAndConversations()
+  }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useWorkbenchPolling(refreshConversations)
+  useWorkbenchPolling(refreshConversations, isAuthenticated)
 
   return (
     <div className="app-shell relative flex h-[100dvh] overflow-hidden">

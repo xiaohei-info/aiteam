@@ -128,12 +128,12 @@ class HindsightClient:
                             (f"hindsight-bank:{ctx.tenant_id}:{employee_id}",))
             yield
 
-    def ensure_bank(self, ctx: TenantContext, *, employee_id: str) -> None:
+    def ensure_bank(self, ctx: TenantContext, *, employee_id: str, memory_scope: str | None = None) -> None:
         from .hindsight_credentials import derive_hindsight_bank_id
         settings = self._settings
         if not settings.base_url or not settings.token:
             raise HindsightUnavailable("Hindsight bank provisioning is not configured")
-        bank = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
+        bank = derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id, memory_scope)
         client = self._client or httpx.Client(timeout=10.0, follow_redirects=False)
         headers = {"Authorization": f"Bearer {settings.token}"}
         target = f"{settings.base_url.rstrip('/')}/v1/default/banks/{quote(bank, safe='')}"
@@ -200,18 +200,24 @@ class HindsightClient:
         memory_id: str | None = None,
         idempotency_key: str | None = None,
         params: dict[str, Any] | None = None,
+        memory_scope: str | None = None,
     ) -> dict:
         settings = self._settings
         # Validate the complete service contract before constructing a transport or
         # making an outbound request.  Hindsight must never be contacted unauthenticated.
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (settings.base_url, settings.token, path)
+        base_url = settings.base_url
+        if not (
+            isinstance(base_url, str) and base_url.strip()
+            and isinstance(settings.token, str) and settings.token.strip()
+            and isinstance(path, str) and path.strip()
         ):
             raise HindsightUnavailable(
                 "HINDSIGHT_URL, HINDSIGHT_SERVICE_TOKEN and operation paths must be configured"
             )
-        client = self._client or httpx.Client(base_url=settings.base_url.rstrip("/"), timeout=60.0)
+        if memory_scope is not None and settings.bank_id_mode != "scoped" and "/v1/default/" not in path:
+            # The legacy bank name has no scope; reaching it would mix conversation memory.
+            raise HindsightUnavailable("Conversation memory requires a scoped Hindsight bank")
+        client = self._client or httpx.Client(base_url=base_url.rstrip("/"), timeout=60.0)
         headers = {
             "X-Tenant-ID": ctx.tenant_id,
             "X-Member-ID": ctx.user_id,
@@ -225,7 +231,7 @@ class HindsightClient:
             from .hindsight_credentials import derive_hindsight_bank_id
 
             bank_id = derive_hindsight_bank_id(
-                ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id,
+                ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id, memory_scope,
             )
         else:
             bank_id = f"tenant_{ctx.tenant_id}_member_{ctx.user_id}_employee_{employee_id}"
@@ -238,7 +244,8 @@ class HindsightClient:
                 memory_id=quote(memory_id or "", safe=""),
             )
             if native:
-                self.ensure_bank(ctx, employee_id=employee_id)
+                scope = {"memory_scope": memory_scope} if memory_scope is not None else {}
+                self.ensure_bank(ctx, employee_id=employee_id, **scope)
             if native and method == "DELETE":
                 # Hindsight exposes reversible invalidation (PATCH), not a per-memory
                 # DELETE endpoint.  Keep the Manager delete contract destructive to
@@ -247,7 +254,7 @@ class HindsightClient:
                 payload = {"state": "invalidated", "reason": "deleted by Manager"}
             response = client.request(
                 method,
-                f"{self._settings.base_url.rstrip('/')}/{target.lstrip('/')}",
+                f"{base_url.rstrip('/')}/{target.lstrip('/')}",
                 json=payload,
                 params=params,
                 headers=headers,
@@ -265,21 +272,24 @@ class HindsightClient:
             if self._client is None:
                 client.close()
 
-    def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
+    def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int, memory_scope: str | None = None) -> dict:
         return self._request(ctx, self._settings.recall_path, {
             "query": query, "max_tokens": max(256, min(limit * 256, 8192)),
-        }, employee_id=employee_id)
+        }, employee_id=employee_id, memory_scope=memory_scope)
 
-    def retain(self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict) -> dict:
+    def retain(
+        self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict, memory_scope: str | None = None,
+    ) -> dict:
         context = metadata.get("context") if isinstance(metadata.get("context"), str) else None
-        item = {"content": content}
+        item: dict[str, Any] = {"content": content}
         if context:
             item["context"] = context
         # Governance retain is still append-only; document_id is never an
         # authority to replace an existing native document.
         item["metadata"] = metadata
+        identity = f"{employee_id}:scope:{memory_scope}" if memory_scope is not None else employee_id
         operation_id = hashlib.sha256(
-            f"{ctx.tenant_id}:{ctx.user_id}:{employee_id}:"
+            f"{ctx.tenant_id}:{ctx.user_id}:{identity}:"
             f"{content}:{json.dumps(metadata, sort_keys=True, default=str)}".encode()
         ).hexdigest()
         operation_id = (
@@ -287,9 +297,10 @@ class HindsightClient:
             f"{operation_id[16:20]}-{operation_id[20:32]}"
         )
         from .hindsight_operation_policy import scoped_retain_body
+        scope = {"memory_scope": memory_scope} if memory_scope is not None else {}
         payload = scoped_retain_body({"items": [item], "async": True, "operation_id": operation_id},
-                                     tenant_id=ctx.tenant_id, member_id=ctx.user_id, employee_id=employee_id)
-        return self._request(ctx, self._settings.retain_path, payload, employee_id=employee_id)
+                                     tenant_id=ctx.tenant_id, member_id=ctx.user_id, employee_id=employee_id, **scope)
+        return self._request(ctx, self._settings.retain_path, payload, employee_id=employee_id, memory_scope=memory_scope)
 
     def stats(self, ctx: TenantContext, *, employee_id: str) -> dict:
         path = self._settings.stats_path or _derive_stats_path(self._settings.list_path)

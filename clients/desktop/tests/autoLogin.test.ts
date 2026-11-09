@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   AUTO_LOGIN_STORAGE_KEY,
+  canAttemptAutoLogin,
   endLaunchAutoLogin,
   readAutoLoginPreference,
   resetLaunchAutoLoginForTest,
@@ -49,6 +50,17 @@ test('ineligible checks do not use up the launch attempt', () => {
   resetLaunchAutoLoginForTest()
   assert.equal(shouldAutoLogin({ ...ready, hasSavedCredentials: false }), false)
   assert.equal(shouldAutoLogin(ready), true)
+})
+
+test('checking whether auto login is possible does not use up the launch attempt', () => {
+  resetLaunchAutoLoginForTest()
+  const storage = memoryStorage()
+  assert.equal(canAttemptAutoLogin(storage), false, 'the switch defaults to off')
+  writeAutoLoginPreference(true, storage)
+  assert.equal(canAttemptAutoLogin(storage), true)
+  assert.equal(canAttemptAutoLogin(storage), true)
+  assert.equal(shouldAutoLogin(ready), true)
+  assert.equal(canAttemptAutoLogin(storage), false, 'the attempt has been taken')
 })
 
 test('stores only the switch, defaulting to off', () => {

@@ -46,6 +46,16 @@
   white-space: nowrap;
 }
 
+.topbar-connecting {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .topbar-back {
   display: flex;
   width: 30px;

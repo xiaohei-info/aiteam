@@ -125,6 +125,7 @@ async function main() {
   cpSync(join(ROOT, "deploy", "agent", "CLIENT-INTEGRATION.md"), join(packageRoot, "CLIENT-INTEGRATION.md"));
   if (process.platform !== "win32") execFileSync("chmod", ["755", join(packageRoot, "bin", "start-agent.sh")], { env: childEnvironment() });
   mkdirSync(join(packageRoot, "config"), { recursive: true });
+  cpSync(join(ROOT, "shared", "project-sensitive-paths.json"), join(packageRoot, "config", "project-sensitive-paths.json"));
 
   const config = prepareConfig(options);
   materializeJwks(config, packageRoot);

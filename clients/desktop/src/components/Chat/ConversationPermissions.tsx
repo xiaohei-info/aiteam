@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useMergeRefs } from '@floating-ui/react'
-import { ChevronDown, ShieldCheck, Zap } from 'lucide-react'
+import { invoke } from '@tauri-apps/api/core'
+import { ChevronDown, FolderCog, FolderOpen, LoaderCircle, ShieldCheck, Zap } from 'lucide-react'
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
 import { openFilePrivacySettings } from '../../lib/fileAccess'
-import { directoryEmployeeIdOf, permissionSummary } from '../../lib/conversationPermissions'
-import type { ConversationMetadata } from '../../api/agent/types'
+import { permissionSummary } from '../../lib/conversationPermissions'
+import { describeProjectFolderError } from '../../lib/projectConversation'
+import type { ConversationMetadata, PermissionMode } from '../../api/agent/types'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import { PopoverPortal } from '../Popover/PopoverLayer'
@@ -21,8 +23,8 @@ interface ConversationPermissionsProps {
 const grants = ['读取和修改工作区外的文件', '执行本机命令', '访问网络']
 
 /**
- * 聊天输入框下方的「权限」入口：一个按钮汇总状态，面板内分「本会话的权限」「员工可检索的目录」「系统层」三段。
- * 会话权限与目录检索仍是两项独立设置，切换其一不影响另一项。
+ * 聊天输入框下方的「权限」入口：一个按钮汇总状态，面板内分「本会话的目录」「本会话的权限」「系统层」三段。
+ * 「本会话的目录」把工作目录和本会话添加的目录放在一起；「本会话的权限」三档对这些目录同样生效。都只对本会话生效。
  */
 export function ConversationPermissions({ conversationId, generating, ensureConversation }: ConversationPermissionsProps) {
   const [metadata, setMetadata] = useState<ConversationMetadata | null>(null)
@@ -31,6 +33,8 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   const [confirm, setConfirm] = useState(false)
   const [accepted, setAccepted] = useState<boolean[]>(grants.map(() => false))
   const [saving, setSaving] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const [folderError, setFolderError] = useState('')
   const [attempt, setAttempt] = useState(0)
   const permissionRevision = useRef(0)
   const activeId = useRef(conversationId)
@@ -39,10 +43,11 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
   const modeTitleId = useId()
+  const foldersTitleId = useId()
   useEffect(() => {
     let cancelled = false
     const revision = permissionRevision.current
-    setConfirm(false); setMetadata(null); setError('')
+    setConfirm(false); setMetadata(null); setError(''); setFolderError('')
     if (conversationId.startsWith('emp_')) return
     agentApi.getConversation(conversationId)
       .then(result => { if (!cancelled && permissionRevision.current === revision) setMetadata(result) })
@@ -52,13 +57,13 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   }, [conversationId, generating, attempt])
   useEffect(() => { setOpen(false) }, [conversationId])
 
-  const handlePermission = async (full: boolean) => {
+  const handlePermission = async (next: PermissionMode) => {
     if (saving) return
     const sourceId = conversationId
     setSaving(true); setError('')
     try {
       const conversation = await ensureConversation()
-      const updated = await agentApi.updateConversation(conversation.id, { permission_mode: full ? 'full-access' : 'read-only' })
+      const updated = await agentApi.updateConversation(conversation.id, { permission_mode: next })
       if (activeId.current === sourceId || activeId.current === conversation.id) {
         permissionRevision.current += 1
         setMetadata(updated); setConfirm(false)
@@ -66,19 +71,20 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     } catch { if (activeId.current === sourceId) setError('权限更新失败，请重试') }
     finally { setSaving(false) }
   }
-  const full = metadata?.permission_mode === 'full-access'
+  const mode: PermissionMode = metadata?.permission_mode ?? 'read-only'
+  const full = mode === 'full-access'
+  const projectPath = metadata?.project?.path
   const group = metadata?.kind === 'group'
-  const directoryEmployeeId = directoryEmployeeIdOf(conversationId, metadata)
-  const directories = useConversationDirectories(directoryEmployeeId)
-  const { busy: directoriesBusy, cancelRemove } = directories
+  const directories = useConversationDirectories(conversationId, ensureConversation)
+  const { busy: directoriesBusy } = directories
   const modeDisabled = saving || generating || (!metadata && !conversationId.startsWith('emp_'))
 
   // 目录操作进行中（如原生选择器未关闭）不收起面板，保证结果反馈能回到面板里。
   const closePanel = useCallback(() => {
-    if (directoriesBusy) return
-    setOpen(false); cancelRemove()
+    if (directoriesBusy || moving) return
+    setOpen(false)
     window.requestAnimationFrame(() => triggerRef.current?.focus())
-  }, [directoriesBusy, cancelRemove])
+  }, [directoriesBusy, moving])
   const panelRef = useDialogFocus<HTMLDivElement>({ active: open })
   // 面板贴在按钮上方左对齐，渲染到 body 并跟随按钮位置（见 useAnchoredPopover）；焦点仍由 useDialogFocus 管。
   const popover = useAnchoredPopover({ open, placement: 'top-start', fit: { maxWidth: 400, maxHeight: 560 } })
@@ -101,6 +107,20 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     if (open) { closePanel(); return }
     directories.refresh(); setOpen(true)
   }
+  // 项目搬家后：宿主弹出文件夹选择框并签发一次性票据，Agent 凭票据更换工作目录；前端从不提交路径。
+  const relocateProject = async () => {
+    if (!metadata || !projectPath || moving || generating) return
+    const sourceId = metadata.id
+    setMoving(true); setFolderError('')
+    try {
+      const challenge = await agentApi.createLocalDirectoryChallenge()
+      const { ticket } = await invoke<{ ticket: string }>('select_project_folder', { challenge, defaultPath: projectPath })
+      const updated = await agentApi.setConversationProjectFolder(sourceId, ticket)
+      if (activeId.current === sourceId) { permissionRevision.current += 1; setMetadata(updated) }
+    } catch (err) {
+      if (activeId.current === sourceId) setFolderError(describeProjectFolderError(err))
+    } finally { setMoving(false) }
+  }
   const chooseFullAccess = () => {
     if (full) return
     setAccepted(grants.map(() => false)); setConfirm(true)
@@ -117,11 +137,11 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? panelId : undefined}
-          aria-label={`权限：${permissionSummary(full, directories.enabledCount)}`}
+          aria-label={`权限：${permissionSummary(mode, directories.enabledCount)}`}
           onClick={togglePanel}
         >
           {full ? <Zap size={14} aria-hidden="true" /> : <ShieldCheck size={14} aria-hidden="true" />}
-          <span>{permissionSummary(full, directories.enabledCount)}</span>
+          <span>{permissionSummary(mode, directories.enabledCount)}</span>
           <ChevronDown size={13} className="cperm-chevron" aria-hidden="true" />
         </button>
         {open && <PopoverPortal><div
@@ -134,23 +154,47 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
           tabIndex={-1}
           onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing) { event.preventDefault(); event.stopPropagation(); closePanel() } }}
         >
+          <section className="cperm-section" aria-labelledby={foldersTitleId}>
+            <div className="cdir-section-head">
+              <span id={foldersTitleId}>本会话的目录</span>
+              {directories.enabledCount > 0 && <span>另加 {directories.enabledCount} 个</span>}
+            </div>
+            <div className="cperm-folder-block">
+              <div className="cperm-folder" title={projectPath ?? undefined}>
+                <FolderOpen size={16} aria-hidden="true" />
+                <div className="cperm-folder-meta">
+                  <span>{projectPath ? '工作目录（项目所在文件夹）' : '工作目录'}</span>
+                  <code>{projectPath ?? (group ? '全群共用的文件夹' : '由 AIFred 管理')}</code>
+                </div>
+                {projectPath && <button type="button" className="cdir-add" disabled={moving || generating} onClick={() => void relocateProject()}>
+                  {moving ? <LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" /> : <FolderCog size={14} aria-hidden="true" />}
+                  更换目录
+                </button>}
+              </div>
+              {folderError && <p className="cdir-notice err" role="alert"><span>{folderError}</span></p>}
+            </div>
+            <ConversationDirectories controller={directories} generating={generating} />
+          </section>
           <section className="cperm-section" aria-labelledby={modeTitleId}>
             <div className="cdir-section-head"><span id={modeTitleId}>本会话的权限</span></div>
             <div className="cperm-modes" role="radiogroup" aria-labelledby={modeTitleId}>
-              <button type="button" role="radio" aria-checked={!full} className="cperm-mode" disabled={modeDisabled} data-dialog-initial-focus={!full || undefined} onClick={() => { if (full) void handlePermission(false) }}>
+              <button type="button" role="radio" aria-checked={mode === 'read-only'} className="cperm-mode" disabled={modeDisabled} data-dialog-initial-focus={mode === 'read-only' || undefined} onClick={() => { if (mode !== 'read-only') void handlePermission('read-only') }}>
                 <span className="cperm-radio" aria-hidden="true" />
-                <span className="cperm-mode-text"><strong>只读</strong><small>员工只能读取工作区内的文件</small></span>
+                <span className="cperm-mode-text"><strong>只读</strong><small>只能读文件</small></span>
+              </button>
+              <button type="button" role="radio" aria-checked={mode === 'workspace-write'} className="cperm-mode" disabled={modeDisabled} data-dialog-initial-focus={mode === 'workspace-write' || undefined} onClick={() => { if (mode !== 'workspace-write') void handlePermission('workspace-write') }}>
+                <span className="cperm-radio" aria-hidden="true" />
+                <span className="cperm-mode-text"><strong>工作区可写</strong><small>可读写，操作前需确认，不联网</small></span>
               </button>
               <button type="button" role="radio" aria-checked={full} className="cperm-mode risky" disabled={modeDisabled} data-dialog-initial-focus={full || undefined} onClick={chooseFullAccess}>
                 <span className="cperm-radio" aria-hidden="true" />
-                <span className="cperm-mode-text"><strong>完全访问<em>风险较高</em></strong><small>执行本机命令、读写任意位置、访问网络 · 仅对本会话生效，需逐项确认</small></span>
+                <span className="cperm-mode-text"><strong>完全访问<em>风险较高</em></strong><small>不受限，可联网</small></span>
               </button>
             </div>
-            {generating && <p className="cperm-hint">回复生成中，暂不能切换会话权限。</p>}
+            {generating && <p className="cperm-hint">回复中，暂不能修改</p>}
           </section>
-          <ConversationDirectories controller={directories} employeeId={directoryEmployeeId} group={group} generating={generating} />
           <div className="cperm-system">
-            <span>系统层：桌面、文稿等受保护位置被系统拦截时，需为 AIFred 开启「完全磁盘访问权限」。</span>
+            <span>桌面、文稿需开启完全磁盘访问</span>
             <button type="button" className="chat-link-button" onClick={openSystemSettings}>打开系统设置</button>
           </div>
         </div></PopoverPortal>}
@@ -158,11 +202,11 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
     </div>
     {error && <p role="alert">{error} <button type="button" onClick={() => setAttempt(value => value + 1)}>重试</button></p>}
     {confirm && <ChatDialog title="授权完全访问" onClose={() => { if (!saving) setConfirm(false) }}>
-      <p className="chat-tools-note">为当前会话开放以下全部权限。开启后，助手执行本机命令和读写文件无需逐次确认；调用外部连接器等其他工具仍会请求你的批准。</p>
+      <p className="chat-tools-note">仅对本会话生效，可随时改回。开启后员工运行命令、读写文件不再逐次确认，外部连接器仍需你批准。</p>
       {grants.map((grant, index) => <label className="chat-permission-grant" key={grant}><input type="checkbox" checked={accepted[index]} disabled={saving} onChange={event => setAccepted(previous => previous.map((value, i) => i === index ? event.target.checked : value))} />{grant}</label>)}
-      <p className="chat-tools-note">此开关只放开本会话的沙箱限制，不等同于 macOS 的“完全磁盘访问权限”；若员工读写桌面、文稿等受保护目录被系统拦截，请在系统设置中为 AIFred 开启该权限。<button type="button" className="chat-link-button" onClick={openSystemSettings}>打开系统设置</button> 选回「只读」即恢复只读权限。</p>
+      <p className="chat-tools-note">桌面、文稿等受保护位置还需在系统设置里开启「完全磁盘访问权限」。<button type="button" className="chat-link-button" onClick={openSystemSettings}>打开系统设置</button></p>
       {error && <p role="alert">{error}</p>}
-      <footer><button type="button" disabled={saving} onClick={() => setConfirm(false)}>取消</button><button type="button" disabled={saving || !accepted.every(Boolean)} onClick={() => void handlePermission(true)}>{saving ? '授权中…' : '授权全部并开启'}</button></footer>
+      <footer><button type="button" disabled={saving} onClick={() => setConfirm(false)}>取消</button><button type="button" disabled={saving || !accepted.every(Boolean)} onClick={() => void handlePermission('full-access')}>{saving ? '授权中…' : '授权全部并开启'}</button></footer>
     </ChatDialog>}
   </div>
 }

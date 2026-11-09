@@ -161,6 +161,18 @@ test("roster uses only real participants, keeps revoked identity and never retur
   } finally { await http.close(); await fixture.close(); }
 });
 
+test("roster marks an employee whose model is unavailable as not mentionable", async () => {
+  const fixture = await createFixture();
+  seedGroup(fixture);
+  const experts = ["coord", "worker", "outsider"].map((id) => ({ employee_id: id, tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: id, handle: id, revoked: false, status: "active", synced_at: timestamp, ...(id === "worker" ? { availability_reason: "employee_dependency_unavailable" } : {}) }));
+  fixture.store.replaceProjections(experts, [], experts.map((expert) => ({ ...expert, snapshot_version: "1", tool_policy: { allowed_tools: [] } })));
+  const { http, request } = await serve(fixture);
+  try {
+    const roster = await request("/conversations/group/participants");
+    assert.deepEqual(roster.data.participants.map((item: any) => [item.employee_id, item.available]), [["coord", true], ["worker", false]]);
+  } finally { await http.close(); await fixture.close(); }
+});
+
 test("full-text search scans beyond display limits, redacts before slicing, and binds all cursor filters", async () => {
   const fixture = await createFixture();
   seedGroup(fixture);

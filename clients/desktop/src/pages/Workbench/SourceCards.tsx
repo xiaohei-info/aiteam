@@ -1,6 +1,6 @@
-/** 顶部来源卡片：按来源统计项目数并切换筛选。 */
+/** 顶部来源卡片：按来源统计项目数并切换筛选。只显示扫描出项目的平台（见 shownSources）。 */
 import { Cpu, LayoutDashboard, MonitorOff, TriangleAlert } from 'lucide-react'
-import { DEEPSEEK, PROJECT_SOURCES, type ProjectSource, type SourceFilter, type SourceState } from './projects'
+import { DEEPSEEK, type ProjectSource, type SourceFilter, type SourceState } from './projects'
 import SourceBadge, { type SourceKey } from './SourceBadge'
 import styles from './index.module.css'
 
@@ -32,7 +32,7 @@ function sourceStatusText(state: SourceState | undefined, loading: boolean, hint
   return state.truncated ? '仅扫描最近的会话' : hint
 }
 
-export default function SourceCards({ source, states, loading, totalProjects, fileCount, employeeCount, countOf, onSelect }: {
+export default function SourceCards({ source, states, loading, totalProjects, fileCount, employeeCount, countOf, shown, showDeepSeek, onSelect }: {
   source: SourceFilter
   states: Partial<Record<ProjectSource, SourceState>>
   loading: { fred: boolean; local: boolean }
@@ -40,6 +40,8 @@ export default function SourceCards({ source, states, loading, totalProjects, fi
   fileCount: number
   employeeCount: number
   countOf: (key: SourceKey) => number
+  shown: readonly ProjectSource[]
+  showDeepSeek: boolean
   onSelect: (next: SourceFilter) => void
 }) {
   const isLoading = loading.fred || loading.local
@@ -49,7 +51,7 @@ export default function SourceCards({ source, states, loading, totalProjects, fi
       <strong>{totalProjects}<small> 个项目</small></strong>
       <span className={styles.sourceCardHint} title={`${fileCount} 个文件 · ${employeeCount} 位员工`}>{isLoading ? '读取中…' : `${fileCount} 个文件`}</span>
     </button>
-    {PROJECT_SOURCES.map(key => {
+    {shown.map(key => {
       const state = states[key]
       const sourceLoading = key === 'fred' ? loading.fred : loading.local
       const unavailable = !sourceLoading && state && state.status !== 'ready'
@@ -60,10 +62,10 @@ export default function SourceCards({ source, states, loading, totalProjects, fi
         <span className={`${styles.sourceCardHint} ${state?.status === 'error' && !sourceLoading ? styles.sourceCardError : ''}`} title={`${status} · ${SOURCE_DESCRIPTIONS[key]}`}>{status}</span>
       </button>
     })}
-    <button type="button" className={`${styles.sourceCard} ${source === DEEPSEEK ? styles.sourceCardActive : ''}`} aria-pressed={source === DEEPSEEK} onClick={() => onSelect(DEEPSEEK)}>
+    {showDeepSeek && <button type="button" className={`${styles.sourceCard} ${source === DEEPSEEK ? styles.sourceCardActive : ''}`} aria-pressed={source === DEEPSEEK} onClick={() => onSelect(DEEPSEEK)}>
       <span className={styles.sourceCardTop}><SourceBadge source={DEEPSEEK} /><Cpu size={14} /></span>
-      <strong>{isLoading ? '—' : countOf(DEEPSEEK)}<small> 个项目</small></strong>
+      <strong>{countOf(DEEPSEEK)}<small> 个项目</small></strong>
       <span className={styles.sourceCardHint} title={SOURCE_DESCRIPTIONS.deepseek}>{SOURCE_HINTS.deepseek}</span>
-    </button>
+    </button>}
   </section>
 }

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import './Chat.css'
 import { useChatStore, type Message, type ConversationItem } from '../../stores/chat'
-import { employeeUnavailableMessage } from '../../lib/employeeAvailability'
+import { employeeSendFailure, employeeUnavailableMessage } from '../../lib/employeeAvailability'
+import { projectSendFailure } from '../../lib/projectConversation'
 import { useAgentAuthStore } from '../../stores/agentAuth'
 import { pickAndCacheFile, readCachedFileBlob, type CachedFile } from '../../lib/fileCache'
 import {
@@ -177,6 +178,7 @@ export default function Chat() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [newSessionError, setNewSessionError] = useState<string | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
+  const sendFailureRef = useRef<string | null>(null)
   const [pendingInitialMessage, setPendingInitialMessage] = useState<PendingInitialMessage | null>(null)
   const [messageLoadAttempt, setMessageLoadAttempt] = useState(0)
   // 开启新上下文后递增,让 ConversationStatus 重新挂载并重新读取上下文用量。
@@ -478,6 +480,7 @@ export default function Chat() {
       }
     }
 
+    sendFailureRef.current = null
     try {
       await submitSingleChatPrompt(
         conversation.id,
@@ -488,6 +491,7 @@ export default function Chat() {
       )
     } catch (error) {
       console.error('[Chat] submitPrompt failed:', error)
+      sendFailureRef.current = projectSendFailure(error) ?? employeeSendFailure(error)
       updateMessageStatus(conversation.id, messageId, 'failed')
       return false
     }
@@ -519,7 +523,7 @@ export default function Chat() {
     try {
       const conversation = await ensureConversation(activeConvId)
       const sent = await submitMessage(conversation, text, files)
-      if (!sent) setSendError('发送失败，请重试。')
+      if (!sent) setSendError(sendFailureRef.current ?? '发送失败，请重试。')
       return sent
     } catch (error) {
       console.error('[Chat] createConversation failed:', error)
@@ -760,12 +764,13 @@ export default function Chat() {
           getAvatarFallback(conv?.agentName ?? '助手'),
         )}
         name={conv?.agentName ?? '助手'}
-        subtitle={`${activeEmployeePresence.label} · ${activeEmployeePresence.lastSeenLabel}`}
+        subtitle={`${conv?.projectName ? `项目：${conv.projectName} · ` : ''}${activeEmployeePresence.label} · ${activeEmployeePresence.lastSeenLabel}`}
         onMoreClick={toggleDetail}
         onFilesClick={() => setFilesConversationId(activeConvId)}
       />
 
       {filesConversationId === activeConvId && <ChatDialog title="会话文件目录" onClose={() => setFilesConversationId(null)}>
+        {conv?.projectName && <p className="chat-tools-note">这个对话直接修改项目目录里的文件，改动不会列在这里。可以到工作台查看项目文件。</p>}
         {activeConvId.startsWith('emp_') ? <p className="chat-tools-note">暂无生成文件</p> : <ConversationFiles conversationId={activeConvId} />}
       </ChatDialog>}
       {readSyncError && <div className="chat-read-notice" role="alert">{readSyncError}</div>}

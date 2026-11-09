@@ -34,10 +34,10 @@ class MemoryProtocolFacade:
         self._memory = memory_service
 
     @staticmethod
-    def _bank(ctx: TenantContext, employee_id: str) -> str:
+    def _bank(ctx: TenantContext, employee_id: str, memory_scope: str | None) -> str:
         from .hindsight_credentials import derive_hindsight_bank_id
 
-        return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
+        return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id, memory_scope)
 
     @staticmethod
     def _limit(payload: dict[str, Any]) -> int:
@@ -53,6 +53,7 @@ class MemoryProtocolFacade:
         *,
         ctx: TenantContext,
         employee_id: str,
+        memory_scope: str | None = None,
     ) -> Response:
         raw_path = request.scope.get("raw_path", b"")
         match = _BANK_PATH.fullmatch(path)
@@ -67,13 +68,14 @@ class MemoryProtocolFacade:
         # The plugin needs a bank-shaped URL.  It is a protocol placeholder only:
         # MemoryService derives the real bank from the authenticated tenant/member
         # and the fixed employee session below.
-        actual_bank = self._bank(ctx, employee_id)
+        actual_bank = self._bank(ctx, employee_id, memory_scope)
+        scope = {"memory_scope": memory_scope} if memory_scope is not None else {}
         if operation == "profile":
             if request.headers.get("content-length") not in (None, "0"):
                 raise Forbidden("Hindsight profile does not accept a body")
             # Calling the canonical service authorizer makes profile availability
             # obey the same current employee grant and memory policy as recall.
-            self._memory.runtime_context(ctx, employee_id=employee_id)
+            self._memory.runtime_context(ctx, employee_id=employee_id, **scope)
             result = {
                 "bank_id": actual_bank,
                 "name": actual_bank,
@@ -97,6 +99,7 @@ class MemoryProtocolFacade:
                 employee_id=employee_id,
                 query=payload["query"],
                 limit=self._limit(payload),
+                **scope,
             )
             return self._json(result)
 
@@ -119,6 +122,7 @@ class MemoryProtocolFacade:
                     key: item[key] for key in ("context", "timestamp", "document_id", "update_mode", "tags", "entities")
                     if key in item
                 }},
+                **scope,
             )
             if not isinstance(ack, dict) or not isinstance(ack.get("operation_id"), str):
                 raise HindsightUnavailable("Manager memory retain returned an invalid acknowledgement")

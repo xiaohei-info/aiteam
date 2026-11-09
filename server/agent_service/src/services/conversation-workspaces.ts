@@ -86,13 +86,17 @@ export class ConversationWorkspaceService {
     }));
     // Legacy conversations without participant rows only have the conversation-level workspace.
     if (conversation.workspace) candidates.push({ employee_id: conversation.entry_employee_id, role: "entry", removed: false, path: conversation.workspace });
+    // A group's employees share one folder: one row per employee, the folder scanned once.
     const seen = new Set<string>();
+    const hasFiles = new Map<string, boolean>();
     const out: ConversationWorkspaceOut[] = [];
     for (const { path, ...candidate } of candidates) {
       const key = await managedWorkspaceKey(path, root);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push({ ...candidate, workspace_key: key, has_files: await hasProjectFile(join(root, key), budget) });
+      const row = JSON.stringify([candidate.employee_id, key]);
+      if (!key || seen.has(row)) continue;
+      seen.add(row);
+      if (!hasFiles.has(key)) hasFiles.set(key, await hasProjectFile(join(root, key), budget));
+      out.push({ ...candidate, workspace_key: key, has_files: hasFiles.get(key)! });
     }
     return out;
   }

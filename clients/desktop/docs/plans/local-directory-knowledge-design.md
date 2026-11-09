@@ -26,6 +26,9 @@
 
 - 直接检索源目录，不恢复旧 `device:` 副本知识库，不维护第二份持久正文库。
 - 应用级目录授权与员工级绑定共同约束访问；增加成员级目录登记，隔离同一设备上的不同账号和租户。
+  - **2026-11-09 修订**：绑定从「员工级」改为「会话 + 员工」级。目录登记仍按成员保存（选过的文件夹所有会话都能看到），是否检索由每个会话单独开关，同一员工的其他会话不受影响；删除会话时一并删除它的绑定。见 6.2。
+  - **2026-11-09 三次修订（见 `plans/conversation-folders.md`）**：绑定只按会话，不再分员工。群聊添加的目录全群可用，包括之后加入的成员；检索工具的引用校验不变。
+  - **2026-11-09 二次修订（见 `plans/conversation-folders.md`）**：每个会话只列出添加到本会话的目录（`GET /local-directories?conversation_id=` 只返回本会话有绑定的目录），移除只关掉本会话的绑定，不再撤销成员级授权。添加的目录和工作目录合在权限面板「本会话的目录」区展示；除检索工具外，员工的 bash/read/write/edit 也能按本会话权限档读写这些目录（macOS Seatbelt 规则追加这些目录的读、写许可；其他平台有添加目录时拒绝执行）。根目录、用户主目录和与 Agent 数据重叠的目录不会开放给编码工具。
 - 使用专用只读工具 `local_dir_search`、`local_dir_read`。
 - 本文只定义设计，不表示接口、工具、界面或安装包已经具备这些能力。
 
@@ -177,11 +180,13 @@ Tauri 在启动 Agent 时显式提供宿主授权通道配置；不得在配置�
 | `revision` | 资源版本 |
 | `created_at`, `revoked_at` | 生命周期 |
 
-### 6.2 员工绑定 `local_directory_binding`
+### 6.2 会话目录 `local_directory_conversation_folder`
+
+2026-11-09 起取代员工级表 `local_directory_binding` 和中间版本的 `local_directory_conversation_binding`。升级时，员工级表中已开启的绑定复制到该员工现有的每个会话（私聊按入口员工，群聊按在册成员）；中间版本的多行合并成一行，只要有一位员工开着就算开启。然后删除两张旧表。之后新建的会话默认不绑定。
 
 | 字段 | 含义 |
 |---|---|
-| `tenant_id`, `member_id`, `employee_id`, `directory_id` | 复合唯一绑定 |
+| `tenant_id`, `member_id`, `conversation_id`, `directory_id` | 复合主键；一个会话一行，会话内所有员工共用 |
 | `enabled` | 是否启用 |
 | `revision` | 绑定版本 |
 | `updated_at` | 更新时间 |
@@ -320,7 +325,7 @@ Tauri 在启动 Agent 时显式提供宿主授权通道配置；不得在配置�
 | 方法与路径 | 用途 |
 |---|---|
 | `GET /api/agent/local-knowledge-directories` | 查询当前成员的资料目录资源、有效状态和绑定 |
-| `PUT /api/agent/local-knowledge-directories/{directory_id}/bindings/{employee_id}` | 以 `{enabled, expected_revision}` 幂等启停绑定 |
+| `PUT /api/agent/local-knowledge-directories/{directory_id}/bindings/{employee_id}` | 以 `{enabled, expected_revision}` 幂等启停绑定（已改为按会话，实际路径 `PUT /api/agent/conversations/{conversation_id}/local-directories/{directory_id}`） |
 | `DELETE /api/agent/local-knowledge-directories/{directory_id}` | 注销当前成员的目录资源，撤销绑定与临时引用；不删除源文件 |
 
 实际实现的路径是 `/api/agent/local-directories`（含 `challenges`、注册、绑定和撤销）和 `POST /api/agent/local-directory-citations/{citation_id}/verify`，见 [接口核对表](../api-audit.md)。2026-10-19 新增拟定接口 `GET /api/agent/local-directories/{directory_id}/entries?path=&q=&cursor=`：只返回名称，用于回答“目录下有什么”和提供群聊 @文件 的候选（方案文档 6.4 节）。

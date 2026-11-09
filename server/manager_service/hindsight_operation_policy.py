@@ -117,7 +117,7 @@ def parse_operation_body(operation: str, body: bytes) -> dict:
 CONTRIBUTOR_METADATA_KEY = "contributor_member_id"
 
 
-def scoped_retain_body(body: dict, *, tenant_id: str, member_id: str, employee_id: str) -> dict:
+def scoped_retain_body(body: dict, *, tenant_id: str, member_id: str, employee_id: str, memory_scope: str | None = None) -> dict:
     """Retry-stable append-only document identities, never caller-selected overwrite targets.
 
     The digest includes the complete accepted request: changing content under a
@@ -127,7 +127,8 @@ def scoped_retain_body(body: dict, *, tenant_id: str, member_id: str, employee_i
     caller-supplied contributor: member-scoped memory views depend on it.
     """
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    digest = hashlib.sha256(f"{tenant_id}:{member_id}:{employee_id}:{canonical}".encode()).hexdigest()
+    identity = f"{employee_id}:scope:{memory_scope}" if memory_scope is not None else employee_id
+    digest = hashlib.sha256(f"{tenant_id}:{member_id}:{identity}:{canonical}".encode()).hexdigest()
     operation = str(UUID(digest[:32]))
     items = []
     for index, source in enumerate(body["items"]):

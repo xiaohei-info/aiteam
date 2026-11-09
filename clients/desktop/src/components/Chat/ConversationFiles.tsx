@@ -65,6 +65,7 @@ export default function ConversationFiles({ conversationId }: { conversationId: 
       filename: file.filename,
       mimeType: file.mime_type,
       data: Array.from(new Uint8Array(await blob.arrayBuffer())),
+      cacheKey: key,
     })
     cachedPaths.current.set(key, cached.rel_path)
     return cached.rel_path

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Path as FastAPIPath, Request, Response
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -20,8 +21,10 @@ from .hindsight_lease_repository import HindsightLeaseRepository
 from .memory_protocol_facade import MemoryProtocolFacade
 from .memory_retention_service import build_memory_retention_service
 from .schemas_hindsight import (
+    MEMORY_SCOPE_PATTERN,
     HindsightLeaseRevocationOut,
     HindsightMemoryRuntimeConfigOut,
+    HindsightMemoryRuntimeConfigRequest,
     HindsightRuntimeConfigOut,
     HindsightRuntimeConfigRequest,
 )
@@ -152,15 +155,18 @@ def build_hindsight_router(verifier) -> APIRouter:
         operation_id="manager_memory_runtime_config",
     )
     async def memory_runtime_config(
-        body: HindsightRuntimeConfigRequest,
+        body: HindsightMemoryRuntimeConfigRequest,
         request: Request,
         response: Response,
         claims: TokenClaims = Depends(require),
     ) -> Envelope[HindsightMemoryRuntimeConfigOut]:
         response.headers["Cache-Control"] = "no-store"
         ctx = tenant_context_from(claims)
-        context = _memory_service(request).runtime_context(ctx, employee_id=body.employee_id)
+        scope = {"memory_scope": body.memory_scope} if body.memory_scope is not None else {}
+        context = _memory_service(request).runtime_context(ctx, employee_id=body.employee_id, **scope)
         base_url = f"{str(request.base_url).rstrip('/')}/api/manager/hindsight/employees/{quote(body.employee_id, safe='')}"
+        if body.memory_scope is not None:
+            base_url = f"{base_url}/scopes/{body.memory_scope}"
         return Envelope[HindsightMemoryRuntimeConfigOut](data=HindsightMemoryRuntimeConfigOut(
             base_url=base_url,
             bank_id=context["bank_id"],
@@ -169,6 +175,26 @@ def build_hindsight_router(verifier) -> APIRouter:
             client_protocol="aiteam-memory-v1",
             retention_mode=context["retention_mode"],
         ))
+
+    @router.api_route(
+        "/employees/{employee_id}/scopes/{memory_scope}/{path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def scoped_memory_protocol_proxy(
+        employee_id: str,
+        memory_scope: Annotated[str, FastAPIPath(pattern=MEMORY_SCOPE_PATTERN)],
+        request: Request,
+        path: str,
+        claims: TokenClaims = Depends(require),
+    ) -> Response:
+        return await _memory_facade(request).proxy(
+            request,
+            path,
+            ctx=tenant_context_from(claims),
+            employee_id=employee_id,
+            memory_scope=memory_scope,
+        )
 
     @router.api_route(
         "/employees/{employee_id}/{path:path}",

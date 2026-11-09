@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -44,12 +44,39 @@ export interface ControlledResourceLoader extends ResourceLoader {
 
 export type MemoryStatusActivity = "retaining" | "retained" | "retain-queued" | "retain-failed";
 
-export function hindsightStateDir(agentDir: string, workspace: string): string {
-  return join(agentDir, "hindsight", createHash("sha256").update(resolve(workspace)).digest("hex").slice(0, 32));
+/**
+ * Several sessions can share one folder (project conversations on one project, the employees of a
+ * group), and each must keep its own queue and config: their state follows a scope, not the folder.
+ */
+export function hindsightStateDir(agentDir: string, workspace: string, stateScope?: string): string {
+  const key = stateScope ? `project-conversation:${stateScope}` : resolve(workspace);
+  return join(agentDir, "hindsight", createHash("sha256").update(key).digest("hex").slice(0, 32));
 }
 
-export function hindsightConfigPath(agentDir: string, workspace: string, lease?: HindsightRuntimeConfig): string {
-  const root = join(hindsightStateDir(agentDir, workspace), "config");
+/** State scope of one employee in one group: the group's folder is shared, the employee's queue is not. */
+export function groupMemberStateScope(conversationId: string, employeeId: string): string {
+  return createHash("sha256").update(JSON.stringify(["group-member-v1", conversationId, employeeId])).digest("hex").slice(0, 32);
+}
+
+/**
+ * The plugin tags memories and filters recall by the name of its cwd. A group member from before
+ * the shared folder keeps its old subfolder's name as a pinned project ID, so what it already
+ * retained stays recallable. Members who joined later have no pin and use their state folder's name.
+ */
+const MEMBER_PROJECT_PIN_FILE = "member-project-id";
+
+export function pinMemberProject(agentDir: string, stateScope: string, folderName: string): void {
+  const stateDir = hindsightStateDir(agentDir, "", stateScope);
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(stateDir, MEMBER_PROJECT_PIN_FILE), folderName, { mode: 0o600 });
+}
+
+function pinnedMemberProject(stateDir: string): string | undefined {
+  try { return readFileSync(join(stateDir, MEMBER_PROJECT_PIN_FILE), "utf8").trim() || undefined; } catch { return undefined; }
+}
+
+export function hindsightConfigPath(agentDir: string, workspace: string, lease?: HindsightRuntimeConfig, stateScope?: string): string {
+  const root = join(hindsightStateDir(agentDir, workspace, stateScope), "config");
   // Legacy config is never loaded. Each current lease owns its generated file so
   // an older lifecycle's reload/shutdown cannot borrow a replacement's queue/key.
   const scope = lease ? createHash("sha256").update(JSON.stringify([
@@ -59,9 +86,9 @@ export function hindsightConfigPath(agentDir: string, workspace: string, lease?:
 }
 
 /** Remove only the state directory derived for this Agent workspace. */
-export function removeHindsightState(agentDir: string, workspace: string): void {
+export function removeHindsightState(agentDir: string, workspace: string, stateScope?: string): void {
   const stateRoot = resolve(agentDir, "hindsight");
-  const stateDir = resolve(hindsightStateDir(agentDir, workspace));
+  const stateDir = resolve(hindsightStateDir(agentDir, workspace, stateScope));
   if (dirname(stateDir) !== stateRoot || !/^[0-9a-f]{32}$/.test(basename(stateDir))) return;
   rmSync(stateDir, { recursive: true, force: true });
 }
@@ -100,8 +127,9 @@ export function createControlledResourceLoader(
   const leaseConfig = hindsightRuntimeConfig ? normalizeHindsightRuntimeConfig(hindsightRuntimeConfig, managerUrl) : undefined;
   const memoryPolicy = authorization ? getMemoryPolicy(authorization.snapshot, leaseConfig) : undefined;
   const baseUrl = leaseConfig?.base_url;
-  const stateDir = hindsightStateDir(agentDir, workspace);
-  const configDir = dirname(dirname(hindsightConfigPath(agentDir, workspace, leaseConfig)));
+  const stateScope = authorization?.memoryScope ?? authorization?.hindsightStateScope;
+  const stateDir = hindsightStateDir(agentDir, workspace, stateScope);
+  const configDir = dirname(dirname(hindsightConfigPath(agentDir, workspace, leaseConfig, stateScope)));
   const leaseEnvName = leaseConfig ? hindsightLeaseEnvName(configDir) : undefined;
   if (authorization && memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName) {
     const queueScope = createHash("sha256").update(JSON.stringify([
@@ -109,11 +137,15 @@ export function createControlledResourceLoader(
       authorization.employeeId, leaseConfig.bank_id, leaseConfig.client_protocol, leaseConfig.policy_revision,
       leaseConfig.lease_id, leaseConfig.version, memoryPolicy.autoRetain,
     ])).digest("hex").slice(0, 32);
-    materializeHindsightConfig(configDir, stateDir, memoryPolicy, baseUrl, leaseConfig, leaseEnvName, queueScope);
+    const projectPin = authorization.hindsightStateScope ? pinnedMemberProject(stateDir) : undefined;
+    materializeHindsightConfig(configDir, stateDir, memoryPolicy, baseUrl, leaseConfig, leaseEnvName, queueScope, projectPin);
   }
   const lifecycle = memoryPolicy?.enabled && baseUrl && leaseConfig && leaseEnvName
     ? createHindsightFactory(configDir, memoryPolicy, leaseEnvName, leaseConfig.token, {
       authorization, approvalService, conversationId, sessionId, onAccessDenied, onMemoryStatus,
+      // The plugin writes .pi/hindsight/ under its cwd and tags memories with the folder name, so a
+      // session sharing its folder points it at its own state folder instead.
+      ...(stateScope ? { pluginCwd: stateDir } : {}),
     })
     : undefined;
   const rag = authorization && ragToolNames(authorization.snapshot, managerUrl).length ? createRagMcpFactory(authorization, managerUrl) : undefined;
@@ -250,8 +282,13 @@ function createHindsightFactory(
     sessionId?: string;
     onAccessDenied?: (error: unknown) => void;
     onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void;
+    pluginCwd?: string;
   } = {},
 ) {
+  // Inherits instead of spreading: Pi's context getters must stay lazy to keep their stale-session checks.
+  const pluginCtx = <T extends { cwd: string }>(ctx: T): T => contextOptions.pluginCwd
+    ? Object.create(ctx, { cwd: { value: contextOptions.pluginCwd, enumerable: true } })
+    : ctx;
   const lifecycle = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => createMemoryLifecycle(configDir)));
   const deps = {
     ...lifecycle.deps,
@@ -278,7 +315,7 @@ function createHindsightFactory(
               ...tool,
               parameters: properties ? { ...parameters, properties } : tool.parameters,
               execute: async (id, params, signal, onUpdate, ctx) => {
-                const invoke = () => tool.execute(id, { ...(params as Record<string, unknown>), bank: undefined }, signal, onUpdate, ctx);
+                const invoke = () => tool.execute(id, { ...(params as Record<string, unknown>), bank: undefined }, signal, onUpdate, pluginCtx(ctx));
                 try {
                   if (tool.name !== "hindsight_retain" || !contextOptions.approvalService || !contextOptions.authorization || !contextOptions.conversationId || !contextOptions.sessionId) return await invoke();
                   const caller = contextOptions.authorization.caller;
@@ -313,7 +350,7 @@ function createHindsightFactory(
     });
     registerTools(restrictedPi, deps);
     pi.on("session_start", async (_event, ctx) => {
-      context = ctx;
+      context = pluginCtx(ctx);
       // Config reload must use the Agent-controlled directory; runtime events retain
       // the real workspace context for session identity and UI.
       const initialization = withHindsightLeaseEnvironment(leaseEnvName, leaseToken, () => withAgentHindsightEnvironment(() => lifecycle.initialize({ ...ctx, cwd: configDir })));
@@ -321,7 +358,7 @@ function createHindsightFactory(
     });
     pi.on("context", async (event, ctx) => {
       const messages = event.messages.filter((message) => !injectedMessages.has(message));
-      const runtime = snapshotRuntime(ctx);
+      const runtime = snapshotRuntime(pluginCtx(ctx));
       const config = deps.getConfig();
       if (!runtime || !config.enabled || !config.recall.enabled || !isMemorySetupComplete(config, runtime.cwd)) return { messages };
       // A fresh SDK policy means no reuse of its 60s recall cache across Manager
@@ -347,7 +384,7 @@ function createHindsightFactory(
     if (policy.autoRetain) pi.on("agent_end", async (event, ctx) => {
       try {
         contextOptions.onMemoryStatus?.("retaining");
-        const result = await lifecycle.retain(event, ctx);
+        const result = await lifecycle.retain(event, pluginCtx(ctx));
         contextOptions.onMemoryStatus?.(result.remaining > 0 ? "retain-queued" : "retained", result.remaining);
       } catch (error) {
         contextOptions.onMemoryStatus?.("retain-failed");
@@ -358,7 +395,7 @@ function createHindsightFactory(
     pi.on("session_shutdown", async (_event, ctx) => shutdown(ctx));
   };
   const shutdown = async (ctx?: ExtensionContext) => {
-    if (ctx) context = ctx;
+    if (ctx) context = pluginCtx(ctx);
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = context ? lifecycle.shutdown(context) : Promise.resolve();
     return shutdownPromise;
@@ -382,6 +419,7 @@ function materializeHindsightConfig(
   runtimeConfig: HindsightRuntimeConfig,
   leaseEnvName: string,
   queueScope: string,
+  projectPin?: string,
 ): void {
   mkdirSync(join(configDir, ".pi"), { recursive: true, mode: 0o700 });
   chmodSync(configDir, 0o700);
@@ -393,7 +431,7 @@ function materializeHindsightConfig(
   const config = {
     enabled: true,
     setupComplete: true,
-    scope: { mode: "isolated-bank", projectIdStrategy: "basename", includeSharedObservations: false },
+    scope: { mode: "isolated-bank", projectIdStrategy: "basename", includeSharedObservations: false, ...(projectPin ? { projectId: projectPin } : {}) },
     hindsight: {
       baseUrl,
       timeoutMs: 1_000,

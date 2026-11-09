@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, relative } from "node:path";
+import { isAbsolute, relative } from "node:path";
 import { scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import type { AgentSqliteStore, UnplacedArtifact } from "../storage/sqlite.js";
 
@@ -45,19 +45,16 @@ interface Candidate extends WorkspaceFile { artifactPath: string }
 async function workspaceFiles(store: Store, root: string, tenantId: string, memberId: string, conversationId: string): Promise<Candidate[]> {
   const conversation = store.listOwnedConversationWorkspaces(tenantId, memberId).find((item) => item.id === conversationId);
   if (!conversation) return [];
-  const group = conversation.kind === "group" || conversation.coordinator_employee_id !== null;
-  const workspaces = conversation.participants.map((participant) => ({ employeeId: participant.employee_id as string | null, path: participant.workspace }));
-  if (conversation.workspace) workspaces.push({ employeeId: conversation.entry_employee_id, path: conversation.workspace });
+  const workspaces = conversation.participants.map((participant) => participant.workspace);
+  if (conversation.workspace) workspaces.push(conversation.workspace);
   const seen = new Set<string>();
   const out: Candidate[] = [];
   for (const workspace of workspaces) {
-    const resolved = inside(workspace.path, root);
+    const resolved = inside(workspace, root);
     if (!resolved || seen.has(resolved)) continue;
     seen.add(resolved);
-    const prefix = group && workspace.employeeId
-      ? `${basename(workspace.path)}/`
-      : "";
-    for (const [path, file] of await scanWorkspaceFiles(resolved)) out.push({ ...file, artifactPath: `${prefix}${path}` });
+    // A group's shared folder lists its members' older subfolders in the path already.
+    for (const [path, file] of await scanWorkspaceFiles(resolved)) out.push({ ...file, artifactPath: path });
   }
   return out.sort((a, b) => a.artifactPath.localeCompare(b.artifactPath));
 }

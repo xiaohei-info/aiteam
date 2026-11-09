@@ -48,6 +48,7 @@ import {
   participantRoster,
   type GroupMember,
 } from '../lib/groupRoster'
+import { latestEmployeeConversations } from '../lib/projectConversation'
 import { rememberEmployeeConversation, type WorkbenchEmployee } from '../lib/employeeConversationMap'
 import { classifyRequestError, type RequestErrorInfo } from '../lib/requestError'
 import { notifyConversationCompleted } from '../lib/systemNotifications'
@@ -95,6 +96,8 @@ export interface ConversationItem {
   summaryAvailability?: ConversationSummaryAvailability
   // 自动化任务的执行会话,列表上标「自动化」。
   automationTaskId?: string | null
+  // 从工作台交给员工继续做的项目对话：工作目录是这个项目的目录，上下文和记忆独立。
+  projectName?: string | null
   _employeeId?: string  // 内部字段:始终为 entry_employee_id,发消息时使用
 }
 
@@ -243,6 +246,7 @@ function buildConversationItems(
         lastMessageAt: summary.lastMessageAt,
         summaryAvailability: summary.availability,
         automationTaskId: c.automation_task_id ?? null,
+        projectName: c.project?.name ?? null,
         _employeeId: employeeId,
       }
       // 刚建、还没消息的会话按更新时间排，不沉到列表底部。
@@ -553,16 +557,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         get().workbenchEmployees.map((employee) => [employee.employeeId, employee]),
       )
       const existingConvs = get().conversations
-      const empToConv = new Map<string, ConversationMetadata>()
-      const groupConvs: ConversationMetadata[] = []
-      for (const c of convsRes.conversations) {
-        if (c.kind === 'group') { groupConvs.push(c); continue }
-        if (c.entry_employee_id) {
-          // 同一员工可能有多个会话,取最新更新的那个作为主会话。
-          const cur = empToConv.get(c.entry_employee_id)
-          if (!cur || Date.parse(c.updated_at) > Date.parse(cur.updated_at)) empToConv.set(c.entry_employee_id, c)
-        }
-      }
+      // 同一员工可能有多个会话,取最新更新的那个作为主会话。
+      const empToConv = latestEmployeeConversations(convsRes.conversations)
+      const groupConvs = convsRes.conversations.filter((c) => c.kind === 'group')
 
       const conversations = buildConversationItems(convsRes.conversations, expertsRes.experts, existingConvs)
 
@@ -658,15 +655,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const existingEmployeesById = new Map(
         get().workbenchEmployees.map((employee) => [employee.employeeId, employee]),
       )
-      const empToConv = new Map<string, ConversationMetadata>()
-      const groupConvs: ConversationMetadata[] = []
-      for (const c of convsRes.conversations) {
-        if (c.kind === 'group') { groupConvs.push(c); continue }
-        if (c.entry_employee_id) {
-          const cur = empToConv.get(c.entry_employee_id)
-          if (!cur || Date.parse(c.updated_at) > Date.parse(cur.updated_at)) empToConv.set(c.entry_employee_id, c)
-        }
-      }
+      // 同一员工可能有多个会话,取最新更新的那个作为主会话。
+      const empToConv = latestEmployeeConversations(convsRes.conversations)
+      const groupConvs = convsRes.conversations.filter((c) => c.kind === 'group')
       const existingConvs = get().conversations
       const existingGroups = get().groups
       const workbenchEmployees: WorkbenchEmployee[] = experts.map((e) => {

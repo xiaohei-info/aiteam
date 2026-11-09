@@ -6,7 +6,7 @@
  */
 import { useCallback, useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { CheckCheck, ChevronRight, MessageSquare, Pin, PinOff, Plus, Search, Trash2, Users, Zap } from 'lucide-react'
+import { CheckCheck, ChevronRight, Code2, MessageSquare, Pin, PinOff, Plus, Search, Trash2, Users, Zap } from 'lucide-react'
 import './Panel.css'
 import { useChatStore } from '../../stores/chat'
 // Phase 2 起本地 SQLite 已经不再被业务侧读写(见 docs/archive/api-agent-migration.md §3.6)。
@@ -683,6 +683,7 @@ export default function Panel() {
                     {/* 自动化任务每个任务一个执行会话：头像右下角的闪电角标标出来源（和侧栏「自动化」入口同一图标），
                         避免看成多出来的普通对话。只用角标、不在名称行再加文字标签，名称行留给名称和时间。 */}
                     {conv.automationTaskId && <span className="panel-conv-auto-mark" role="img" aria-label="自动化任务的执行记录" title="自动化任务的执行记录"><Zap size={9} strokeWidth={2.6} fill="currentColor" aria-hidden="true" /></span>}
+                    {!conv.automationTaskId && conv.projectName && <span className="panel-conv-auto-mark" role="img" aria-label={`接着做项目 ${conv.projectName}`} title={`接着做项目 ${conv.projectName}`}><Code2 size={9} strokeWidth={2.4} /></span>}
                   </div>
                   <div className="panel-conv-body">
                     <div className="panel-conv-row">

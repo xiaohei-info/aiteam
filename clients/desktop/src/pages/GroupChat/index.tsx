@@ -12,6 +12,7 @@ import {
 } from '../../lib/chatAttachmentUpload'
 import { blobToBase64 } from '../../lib/messageSender'
 import { submitGroupPrompt } from '../../lib/groupPrompt'
+import { employeeSendFailure } from '../../lib/employeeAvailability'
 import type { GroupMember } from '../../stores/chat'
 import { agentApi, AgentApiError } from '../../api/agent'
 import { globalActivityCollector } from '../../lib/globalActivityCollector'
@@ -69,6 +70,7 @@ export default function GroupChat() {
   const [memberPopup, setMemberPopup] = useState<{ member: GroupMember; anchor: { x: number; y: number } } | null>(null)
   const [filesConversationId, setFilesConversationId] = useState<string | null>(null)
   const [readSyncError, setReadSyncError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
   const [flashMsgId, setFlashMsgId] = useState<string | null>(null)
   const msgRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -123,7 +125,7 @@ export default function GroupChat() {
     return () => { cancelled = true }
   }, [lastEntryId, activeGroupId, group?.unread, appFocused, activeMessagesLoading]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => setReadSyncError(null), [activeGroupId])
+  useEffect(() => { setReadSyncError(null); setSendError(null) }, [activeGroupId])
 
   // 全局历史搜索通过真实 entry.id 定位；entries 加载完成后滚动并短暂闪烁。
   useEffect(() => {
@@ -158,6 +160,7 @@ export default function GroupChat() {
     const attachmentIds = uploadedAttachmentIds(files)
     if (attachmentIds.length !== files.length) return false
 
+    setSendError(null)
     const userMsgId = crypto.randomUUID()
     appendMessage(activeGroupId, {
       id: userMsgId,
@@ -190,6 +193,7 @@ export default function GroupChat() {
       })
     } catch (err) {
       console.error('[GroupChat] submitPrompt failed:', err)
+      setSendError(employeeSendFailure(err) ?? '发送失败，请重试。')
       updateMessageStatus(activeGroupId, userMsgId, 'failed')
       return false
     }
@@ -386,7 +390,9 @@ export default function GroupChat() {
             anchor={<ContextResetToolButton reset={contextReset} generating={generatingConvIds.has(activeGroupId)} hasContext={segmentMessages.length > 0} />}
           />
         )}
-        helper={<div className="chat-composer-footer">
+        helper={<>
+          {sendError && <p className="chat-input-error" role="alert">{sendError}</p>}
+          <div className="chat-composer-footer">
           <ConversationPermissions
             conversationId={activeGroupId}
             generating={generatingConvIds.has(activeGroupId)}
@@ -397,7 +403,8 @@ export default function GroupChat() {
             conversationId={activeGroupId}
             generating={generatingConvIds.has(activeGroupId)}
           />
-        </div>}
+          </div>
+        </>}
       />
 
       {memberPopup && (

@@ -1,59 +1,72 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { CircleAlert, CircleCheck, Folder, FolderOpen, FolderPlus, LoaderCircle, Trash2 } from 'lucide-react'
+import { CircleAlert, CircleCheck, FolderOpen, FolderPlus, LoaderCircle, X } from 'lucide-react'
 import './ChatTools.css'
 import './ConversationDirectories.css'
 import { agentApi, AgentApiError, isRevisionConflict } from '../../api/agent'
 import type { LocalDirectory } from '../../api/agent'
 import { invokeErrorText, localDirectoryApiErrorText, statusLabel } from './localDirectoryErrors'
+import { isDraftConversation } from '../../lib/conversationPermissions'
 
 /**
- * 对话窗口内的本地目录授权：选目录与「允许当前员工检索」一步完成。
+ * 本会话添加的目录：和工作目录一样按本会话的权限读写，员工也能用检索工具查其中的资料。
+ * 每个会话只看到自己添加的目录，群聊里所有员工共用；移除只关掉本会话的绑定，不影响其他会话，也不删除文件夹。
  * 目录授权、绑定都只走本机 Agent，不依赖企业 Manager / NAS 连接。
- * 状态放在权限按钮所在的组件里，面板收起时按钮仍能汇总已开启的目录数。
+ * 状态放在权限按钮所在的组件里，面板收起时按钮仍能汇总添加的目录数。
+ *
+ * conversationId 以 `emp_` 开头时是还没创建的草稿会话：没有目录，添加前先 ensureConversation 建会话。
  */
-export function useConversationDirectories(employeeId: string | null) {
+export function useConversationDirectories(conversationId: string, ensureConversation: () => Promise<{ id: string }>) {
   const [supported, setSupported] = useState(false)
   const [directories, setDirectories] = useState<LocalDirectory[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
-  // 移除授权对所有员工生效，需二次确认；同一时间只会有一个目录处于待确认态。
-  const [pendingRemoveId, setPendingRemoveId] = useState('')
   const activeRef = useRef(true)
   const busyRef = useRef(false)
+  const savedId = isDraftConversation(conversationId) ? undefined : conversationId
+  // 切换会话后丢弃上一个会话迟到的列表结果。
+  const savedIdRef = useRef(savedId)
+  savedIdRef.current = savedId
 
   useEffect(() => {
     activeRef.current = true
     return () => { activeRef.current = false }
   }, [])
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (id = savedIdRef.current) => {
+    // 草稿会话还没有添加任何目录。
+    if (!id) { setDirectories([]); return }
     setLoading(true); setError('')
     try {
-      const payload = await agentApi.listLocalDirectories()
-      if (activeRef.current) setDirectories(payload.directories)
+      const payload = await agentApi.listLocalDirectories(id)
+      if (activeRef.current && savedIdRef.current === id) setDirectories(payload.directories)
     } catch (err) {
-      if (activeRef.current) setError(localDirectoryApiErrorText(err))
+      if (activeRef.current && savedIdRef.current === id) setError(localDirectoryApiErrorText(err))
     } finally {
       if (activeRef.current) setLoading(false)
     }
   }, [])
 
-  // 旧版内嵌 Agent 没有本地目录接口时隐藏目录段；就绪后静默读取一次用于展示已授权数量。
+  // 旧版内嵌 Agent 没有本地目录接口时隐藏目录列表。
   useEffect(() => {
     let active = true
     agentApi.supportsLocalDirectories().then(ok => {
       if (!active) return
       setSupported(ok)
-      if (ok) void load()
     }).catch(() => { if (active) setSupported(false) })
     return () => { active = false }
-  }, [load])
+  }, [])
+  // 每个会话的目录各不相同：换会话（含草稿建成正式会话）时重新读取。
+  useEffect(() => {
+    if (!supported) return
+    setDirectories([]); setFeedback('')
+    void load(savedId)
+  }, [supported, savedId, load])
 
-  const bindingOf = (directory: LocalDirectory) => directory.bindings.find(item => item.employee_id === employeeId)
-  const enabledCount = employeeId ? directories.filter(directory => bindingOf(directory)?.enabled).length : 0
+  // 列表里也有本会话移除过的目录（enabled=false，留着 revision 供重新添加），只展示开着的。
+  const added = directories.filter(directory => directory.binding?.enabled)
 
   async function run(task: () => Promise<void>) {
     if (busyRef.current) return
@@ -64,7 +77,7 @@ export function useConversationDirectories(employeeId: string | null) {
       if (!activeRef.current) return
       if (err instanceof AgentApiError && isRevisionConflict(err)) {
         await load()
-        setError('授权刚被其他窗口修改，列表已刷新，请重试。')
+        setError('目录刚被其他窗口修改，列表已刷新，请重试。')
       } else if (err instanceof AgentApiError) setError(localDirectoryApiErrorText(err))
       else setError(invokeErrorText(err))
     } finally {
@@ -73,86 +86,55 @@ export function useConversationDirectories(employeeId: string | null) {
     }
   }
 
-  const toggle = (directory: LocalDirectory) => run(async () => {
-    if (!employeeId) return
-    setPendingRemoveId('')
-    const binding = bindingOf(directory)
-    const enabled = !binding?.enabled
-    await agentApi.setLocalDirectoryBinding(directory.directory_id, employeeId, enabled, binding?.revision ?? 0)
-    if (!activeRef.current) return
-    setFeedback(enabled ? `已允许当前员工检索「${directory.display_name}」。` : `已取消检索「${directory.display_name}」，在途访问立即中止。`)
-    await load()
-  })
-
   const addDirectory = () => run(async () => {
-    if (!employeeId) return
-    setPendingRemoveId('')
     const challenge = await agentApi.createLocalDirectoryChallenge()
     const selection = await invoke<{ ticket: string }>('select_local_knowledge_directory', { challenge })
     const registered = await agentApi.registerLocalDirectory(selection.ticket)
-    // 刚授权的目录立即对当前员工生效，省去再去员工详情绑定的一步。
-    await agentApi.setLocalDirectoryBinding(registered.directory_id, employeeId, true, 0)
+    // 只加到本会话；其他会话看不到。
+    const { id } = await ensureConversation()
+    const current = directories.find(directory => directory.directory_id === registered.directory_id)
+    const binding = current?.binding
+    if (!binding?.enabled) await agentApi.setLocalDirectoryBinding(id, registered.directory_id, true, binding?.revision ?? 0)
     if (!activeRef.current) return
-    setFeedback(`已授权「${registered.display_name}」，之后在私聊里提问时会自动查找其中的资料。`)
-    await load()
+    setFeedback(`已添加「${registered.display_name}」。员工可以在本会话里按上面的权限读写它，也能检索其中的资料。`)
+    await load(id)
   })
 
-  const remove = (directory: LocalDirectory) => {
-    // 两段式确认：第一次点击进入待确认态，再次点击才真正移除。
-    if (pendingRemoveId !== directory.directory_id) { setPendingRemoveId(directory.directory_id); return }
-    setPendingRemoveId('')
-    void run(async () => {
-      await agentApi.revokeLocalDirectory(directory.directory_id)
-      if (!activeRef.current) return
-      setFeedback(`已移除「${directory.display_name}」，所有员工都不能再检索它，在途检索已中止。`)
-      await load()
-    })
-  }
+  const remove = (directory: LocalDirectory) => run(async () => {
+    const binding = directory.binding
+    if (!binding?.enabled) return
+    const { id } = await ensureConversation()
+    await agentApi.setLocalDirectoryBinding(id, directory.directory_id, false, binding.revision)
+    if (!activeRef.current) return
+    setFeedback(`已从本会话移除「${directory.display_name}」。文件夹本身不会被删除，其他会话不受影响。`)
+    await load(id)
+  })
 
   /** 面板展开时清掉上一次的反馈并刷新列表。 */
-  const refresh = () => { setFeedback(''); setPendingRemoveId(''); if (supported) void load() }
-  const cancelRemove = useCallback(() => setPendingRemoveId(''), [])
+  const refresh = () => { setFeedback(''); if (supported) void load() }
 
-  return { supported, directories, loading, busy, error, feedback, pendingRemoveId, enabledCount, bindingOf, toggle, addDirectory, remove, refresh, cancelRemove }
+  return { supported, added, loading, busy, error, feedback, enabledCount: added.length, addDirectory, remove, refresh }
 }
 
 export type ConversationDirectoriesController = ReturnType<typeof useConversationDirectories>
 
 interface ConversationDirectoriesProps {
   controller: ConversationDirectoriesController
-  /** 当前会话的入口员工；尚无员工信息时不渲染。 */
-  employeeId: string | null
-  /** 群聊不检索目录：目录段置灰并说明，不隐藏。 */
-  group: boolean
   generating: boolean
 }
 
-/** 权限面板里的「员工可检索的目录」一段。 */
-export function ConversationDirectories({ controller, employeeId, group, generating }: ConversationDirectoriesProps) {
-  const { supported, directories, loading, busy, error, feedback, pendingRemoveId, enabledCount, bindingOf, toggle, addDirectory, remove } = controller
-  const titleId = useId()
-  if (!supported || (!employeeId && !group)) return null
+/** 权限面板「本会话的目录」区里，工作目录下面的「添加的目录」列表。 */
+export function ConversationDirectories({ controller, generating }: ConversationDirectoriesProps) {
+  const { supported, added, loading, busy, error, feedback, addDirectory, remove } = controller
+  if (!supported) return null
 
-  if (group || !employeeId) return <section className="cperm-section cdir-section disabled" aria-labelledby={titleId}>
-    <div className="cdir-section-head"><span id={titleId}>员工可检索的目录</span></div>
-    <p className="cperm-hint">群聊暂不支持目录检索。目录只在和员工的私聊里生效。</p>
-  </section>
-
-  return <section className="cperm-section cdir-section" aria-labelledby={titleId}>
-    <div className="cdir-section-head">
-      <span id={titleId}>员工可检索的目录（对当前员工生效）</span>
-      {directories.length > 0 && <span>{enabledCount} / {directories.length} 已开启</span>}
-    </div>
-
-    {loading && !directories.length ? <p className="cdir-loading" role="status"><LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" />正在读取目录…</p>
-      : !directories.length ? <p className="cdir-empty">还没有授权目录。添加一个文件夹，当前员工就能在私聊里用到其中的资料。</p>
-      : <ul className="cdir-list">
-        {directories.map(directory => {
-          const enabled = Boolean(bindingOf(directory)?.enabled)
+  return <div className="cdir-added">
+    {loading && !added.length ? <p className="cdir-loading" role="status"><LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" />正在读取目录…</p>
+      : added.length > 0 && <ul className="cdir-list" aria-label="本会话添加的目录">
+        {added.map(directory => {
           const ready = directory.status === 'ready'
-          const confirming = pendingRemoveId === directory.directory_id
-          return <li key={directory.directory_id} className={`cdir-item${enabled ? ' enabled' : ''}${ready ? '' : ' unavailable'}`}>
-            <span className="cdir-icon">{enabled ? <FolderOpen size={16} aria-hidden="true" /> : <Folder size={16} aria-hidden="true" />}</span>
+          return <li key={directory.directory_id} className={`cdir-item enabled${ready ? '' : ' unavailable'}`}>
+            <span className="cdir-icon"><FolderOpen size={16} aria-hidden="true" /></span>
             <div className="cdir-meta">
               <div className="cdir-name">
                 <strong title={directory.display_name}>{directory.display_name}</strong>
@@ -162,37 +144,27 @@ export function ConversationDirectories({ controller, employeeId, group, generat
             </div>
             <button
               type="button"
-              className={`cdir-remove${confirming ? ' confirm' : ''}`}
+              className="cdir-remove"
               disabled={busy}
-              title="移除授权（所有员工都将不能再检索该目录）"
-              aria-label={confirming ? `确认移除 ${directory.display_name} 的授权，所有员工都将无法检索` : `移除 ${directory.display_name} 的授权`}
-              onClick={() => remove(directory)}
+              title="从本会话移除（不删除文件夹，不影响其他会话）"
+              aria-label={`从本会话移除 ${directory.display_name}`}
+              onClick={() => void remove(directory)}
             >
-              <Trash2 size={14} aria-hidden="true" />{confirming && '确认移除？'}
+              <X size={14} aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              role="switch"
-              className="cdir-switch"
-              aria-checked={enabled}
-              aria-label={`允许当前员工检索 ${directory.display_name}`}
-              disabled={busy || (!ready && !enabled)}
-              onClick={() => void toggle(directory)}
-            />
           </li>
         })}
       </ul>}
 
     {feedback && <p className="cdir-notice ok" role="status"><CircleCheck size={15} aria-hidden="true" /><span>{feedback}</span></p>}
     {error && <p className="cdir-notice err" role="alert"><CircleAlert size={15} aria-hidden="true" /><span>{error}</span></p>}
-    {generating && <p className="cperm-hint">回复生成中，目录开关的改动从下一条消息生效。</p>}
+    {generating && <p className="cperm-hint">下条消息起生效</p>}
 
     <div className="cdir-footer">
       <button type="button" className="cdir-add" disabled={busy} onClick={() => void addDirectory()}>
         {busy ? <LoaderCircle size={14} className="cdir-spinner" aria-hidden="true" /> : <FolderPlus size={14} aria-hidden="true" />}
         添加目录
       </button>
-      <span className="cperm-hint">只检索纯文本资料（txt、md、csv、json、log），内容不上传；命中的片段和文件名会随消息发给模型。</span>
     </div>
-  </section>
+  </div>
 }

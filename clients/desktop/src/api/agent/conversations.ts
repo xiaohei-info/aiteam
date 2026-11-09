@@ -124,6 +124,19 @@ export function updateConversation(
   })
 }
 
+// 项目搬家后，把项目对话的工作目录换成用户在桌面宿主里新选的文件夹；只传宿主票据，不传路径。
+export function setConversationProjectFolder(
+  client: AgentApiClient,
+  conversationId: string,
+  ticket: string,
+): Promise<ConversationMetadata> {
+  return client.request<ConversationMetadata>({
+    method: 'PUT',
+    path: `/api/agent/conversations/${encodeURIComponent(conversationId)}/project-folder`,
+    body: { ticket },
+  })
+}
+
 // 标记已读:把最后已读 entry id 写回服务端。旧栈的 workbench/state {mark_read} 对应。
 export function markConversationRead(
   client: AgentApiClient,

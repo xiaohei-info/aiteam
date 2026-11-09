@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { segmentOutcomeSummary, usdDecimal, usdUnits, type SegmentOutcomeSummary, type UsageSummary } from "../usage.js";
 import { WorkRecordRepository } from "./work-records.js";
 import { ConversationFailureStore } from "./conversation-failures.js";
+import { LocalDirectoryStore } from "./local-directories.js";
 import { ContextSegmentStore, type SegmentOutcomeBucket, type SegmentOwner } from "./context-segments.js";
 import type { SkillSigningKeyMetadata } from "../skills.js";
 import { decodeReadCursor, encodeReadCursor, InvalidReadCursorError, readCursorScope } from "./read-cursor.js";
@@ -92,6 +93,11 @@ export interface ConversationRecord {
   scheduleBlockReason?: string | null;
   permissionMode?: ConversationPermissionMode;
   lastReadEntryId?: string | null;
+  /** Set once at creation: `workspace` is a borrowed project folder the Agent must never delete. */
+  projectSource?: string | null;
+  projectName?: string | null;
+  /** The workbench's id for the project, from the host ticket; insert-only like the other project columns. */
+  projectId?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -115,6 +121,8 @@ export interface ConversationMetadata {
   schedule_retry_at?: string | null;
   permission_mode: ConversationPermissionMode;
   last_read_entry_id: string | null;
+  /** Present when the conversation works in an existing project's folder; `path` is that folder on this machine. */
+  project?: { source: string; name: string; id?: string; path: string };
   created_at: string;
   updated_at: string;
 }
@@ -419,6 +427,9 @@ interface ConversationRow {
   schedule_generation: number;
   permission_mode: ConversationPermissionMode;
   last_read_entry_id: string | null;
+  project_source: string | null;
+  project_name: string | null;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -438,6 +449,7 @@ export class AgentSqliteStore {
   readonly workRecords: WorkRecordRepository;
   readonly contextSegments: ContextSegmentStore;
   readonly conversationFailures: ConversationFailureStore;
+  readonly localDirectories: LocalDirectoryStore;
   private readonly instanceId = randomUUID();
 
   constructor(path: string) {
@@ -474,6 +486,9 @@ export class AgentSqliteStore {
         schedule_generation INTEGER NOT NULL DEFAULT 0,
         permission_mode TEXT NOT NULL DEFAULT 'read-only' CHECK (permission_mode IN ('read-only', 'workspace-write', 'full-access')),
         last_read_entry_id TEXT,
+        project_source TEXT,
+        project_name TEXT,
+        project_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -653,6 +668,9 @@ export class AgentSqliteStore {
       "ALTER TABLE conversation ADD COLUMN schedule_generation INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE conversation ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'read-only'",
       "ALTER TABLE conversation ADD COLUMN last_read_entry_id TEXT",
+      "ALTER TABLE conversation ADD COLUMN project_source TEXT",
+      "ALTER TABLE conversation ADD COLUMN project_name TEXT",
+      "ALTER TABLE conversation ADD COLUMN project_id TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN member_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claim_token TEXT",
       "ALTER TABLE usage_summary_outbox ADD COLUMN claimed_at TEXT",
@@ -688,6 +706,8 @@ export class AgentSqliteStore {
     this.workRecords = new WorkRecordRepository(this.db, (summary, cost) => this.upsertUsageSummary(summary, cost));
     this.contextSegments = new ContextSegmentStore(this.db, (owner, buckets) => this.publishSegmentOutcomes(owner, buckets));
     this.conversationFailures = new ConversationFailureStore(this.db);
+    // After the conversation tables exist: migrating old employee-wide bindings reads them.
+    this.localDirectories = new LocalDirectoryStore(this.db);
     this.moveRootLocalFiles();
     this.cleanupAttachmentRoot();
     this.cleanupAvatarRoot();
@@ -731,13 +751,13 @@ export class AgentSqliteStore {
   }
 
   listScheduledConversations(): ConversationRecord[] {
-    const rows = this.db.prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
+    const rows = this.db.prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, project_source, project_name, project_id, created_at, updated_at FROM conversation WHERE schedule_json IS NOT NULL AND tenant_id IS NOT NULL AND member_id IS NOT NULL").all() as unknown as ConversationRow[];
     return rows.map((row) => this.withScheduleRetry(this.toConversation(row)));
   }
 
   getConversation(id: string): ConversationRecord | undefined {
     const row = this.db
-      .prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, created_at, updated_at FROM conversation WHERE id = ?")
+      .prepare("SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id, coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, project_source, project_name, project_id, created_at, updated_at FROM conversation WHERE id = ?")
       .get(id) as ConversationRow | undefined;
     return row ? this.withScheduleRetry(this.toConversation(row)) : undefined;
   }
@@ -771,7 +791,7 @@ export class AgentSqliteStore {
     }
     const rows = this.db.prepare(`
       SELECT id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id,
-             coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, created_at, updated_at
+             coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, project_source, project_name, project_id, created_at, updated_at
       FROM conversation
       WHERE (? IS NULL OR (updated_at, id) < (?, ?))
         AND (? IS NULL OR tenant_id = ?) AND (? IS NULL OR member_id = ?)
@@ -793,11 +813,13 @@ export class AgentSqliteStore {
     this.db.prepare(`
       INSERT INTO conversation (
         id, session_file, workspace, title, description, orchestration_json, kind, labels_json, state, entry_employee_id,
-        coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        coordinator_employee_id, solution_ref, tenant_id, member_id, schedule_json, schedule_generation, permission_mode, last_read_entry_id, project_source, project_name, project_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         session_file = excluded.session_file,
-        workspace = excluded.workspace,
+        -- The project columns are insert-only and a project's folder never changes here, so no
+        -- later save can turn a borrowed folder into a managed one the Agent would delete.
+        workspace = CASE WHEN conversation.project_source IS NULL THEN excluded.workspace ELSE conversation.workspace END,
         title = excluded.title,
         description = excluded.description,
         orchestration_json = excluded.orchestration_json,
@@ -821,6 +843,7 @@ export class AgentSqliteStore {
       record.coordinatorEmployeeId ?? null, record.solutionRef ?? null,
       record.tenantId ?? null, record.memberId ?? null,
       scheduleJson, scheduleGeneration, record.permissionMode ?? "read-only", record.lastReadEntryId ?? null,
+      record.projectSource ?? null, record.projectName ?? null, record.projectId ?? null,
       record.createdAt ?? now, record.updatedAt ?? now,
     );
   }
@@ -874,6 +897,7 @@ export class AgentSqliteStore {
       }
       this.automation.conversationDeleted(id);
       this.conversationFailures.deleteConversation(id);
+      this.localDirectories.deleteConversation(id);
       this.db.prepare("DELETE FROM conversation WHERE id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_participant_session WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM conversation_entry_source WHERE conversation_id = ?").run(id);
@@ -899,20 +923,21 @@ export class AgentSqliteStore {
 
   /**
    * Owner-scoped conversations with every participant workspace path, removed members included,
-   * newest first. Desktop workbench input only; paths never leave the Agent process.
+   * newest first. Desktop workbench input only; paths never leave the Agent process. Project
+   * conversations are left out: they own no folder and the project is already listed at its source.
    */
   listOwnedConversationWorkspaces(tenantId: string, memberId: string): OwnedConversationWorkspaces[] {
     // SAFETY: the selected columns are exactly the row fields declared on OwnedConversationWorkspaces.
     const conversations = this.db.prepare(`
       SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at
-      FROM conversation WHERE tenant_id = ? AND member_id = ?
+      FROM conversation WHERE tenant_id = ? AND member_id = ? AND project_source IS NULL
       ORDER BY updated_at DESC, id DESC
     `).all(tenantId, memberId) as unknown as Array<Omit<OwnedConversationWorkspaces, "participants">>;
     // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id; role is CHECK-constrained.
     const participants = this.db.prepare(`
       SELECT p.conversation_id, p.employee_id, p.role, p.workspace, p.removed_at
       FROM conversation_participant_session p JOIN conversation c ON c.id = p.conversation_id
-      WHERE c.tenant_id = ? AND c.member_id = ?
+      WHERE c.tenant_id = ? AND c.member_id = ? AND c.project_source IS NULL
       ORDER BY p.conversation_id, CASE p.role WHEN 'coordinator' THEN 0 ELSE 1 END, p.employee_id
     `).all(tenantId, memberId) as unknown as Array<ConversationWorkspaceParticipant & { conversation_id: string }>;
     const byConversation = new Map<string, ConversationWorkspaceParticipant[]>();
@@ -929,7 +954,7 @@ export class AgentSqliteStore {
     // SAFETY: the selected columns are exactly the declared row fields.
     const conversations = this.db.prepare(`
       SELECT id, kind, title, entry_employee_id, coordinator_employee_id, workspace, updated_at, tenant_id, member_id, created_at
-      FROM conversation ORDER BY created_at, id
+      FROM conversation WHERE project_source IS NULL ORDER BY created_at, id
     `).all() as unknown as Array<Omit<OwnedConversationWorkspaces, "participants"> & { tenant_id: string | null; member_id: string | null; created_at: string }>;
     // SAFETY: the selected columns are exactly ConversationWorkspaceParticipant plus conversation_id.
     const participants = this.db.prepare(`
@@ -971,12 +996,41 @@ export class AgentSqliteStore {
   }
 
   /** Points every row at the moved folder and drops the pending move, in one transaction. */
+  /**
+   * Points a project conversation at the project's new folder. Source and name stay: they record
+   * where the project came from. Returns undefined for a conversation that is not a project.
+   */
+  relocateProject(id: string, workspace: string, projectId: string): ConversationMetadata | undefined {
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const changed = this.db.prepare("UPDATE conversation SET workspace = ?, project_id = ?, updated_at = ? WHERE id = ? AND project_source IS NOT NULL").run(workspace, projectId, now, id).changes;
+      if (changed) this.db.prepare("UPDATE conversation_participant_session SET workspace = ?, updated_at = ? WHERE conversation_id = ?").run(workspace, now, id);
+      this.db.exec("COMMIT");
+      return changed ? this.getConversationMetadata(id) : undefined;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
   finishWorkspaceMove(oldPath: string, newPath: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("UPDATE conversation SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
       this.db.prepare("UPDATE conversation_participant_session SET workspace = ? WHERE workspace = ?").run(newPath, oldPath);
       this.db.prepare("DELETE FROM workspace_move WHERE old_path = ?").run(oldPath);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** Points a group's rows at its shared folder; only the given member subfolders change, so a legacy folder still waiting to move stays. */
+  shareGroupFolder(conversationId: string, folder: string, memberPaths: readonly string[]): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const conversation = this.db.prepare("UPDATE conversation SET workspace = ? WHERE id = ? AND workspace = ?");
+      const participant = this.db.prepare("UPDATE conversation_participant_session SET workspace = ? WHERE conversation_id = ? AND workspace = ?");
+      for (const path of memberPaths) {
+        conversation.run(folder, conversationId, path);
+        participant.run(folder, conversationId, path);
+      }
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
@@ -1946,6 +2000,9 @@ export class AgentSqliteStore {
       scheduleGeneration: row.schedule_generation,
       permissionMode: normalizePermissionMode(row.permission_mode),
       lastReadEntryId: row.last_read_entry_id,
+      projectSource: row.project_source,
+      projectName: row.project_name,
+      projectId: row.project_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1972,6 +2029,7 @@ export class AgentSqliteStore {
       ...(record.scheduleRetryAt ? { schedule_retry_at: record.scheduleRetryAt } : {}),
       permission_mode: normalizePermissionMode(record.permissionMode),
       last_read_entry_id: record.lastReadEntryId ?? null,
+      ...(record.projectSource ? { project: { source: record.projectSource, name: record.projectName ?? "", ...(record.projectId ? { id: record.projectId } : {}), path: record.workspace } } : {}),
       created_at: record.createdAt ?? new Date(0).toISOString(),
       updated_at: record.updatedAt ?? new Date(0).toISOString(),
     };

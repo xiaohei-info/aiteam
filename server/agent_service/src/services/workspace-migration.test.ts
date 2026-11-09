@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { hindsightStateDir } from "../pi/resources.js";
+import { groupMemberStateScope, hindsightStateDir } from "../pi/resources.js";
 import { AgentSqliteStore } from "../storage/sqlite.js";
 import { conversationFolderBase } from "../workspace-layout.js";
 import { migrateWorkspaceLayout } from "./workspace-migration.js";
@@ -78,11 +78,12 @@ test("legacy folders move to conversation-named folders with their files, memory
 
     const groupDir = join(f.workspaces, `前端招聘组-${short("group")}`);
     assert.deepEqual(f.workspacesOf("group"), [
-      ["lead", join(groupDir, "产品经理")],
-      ["dev-a", join(groupDir, "工程师")],
-      ["dev-b", join(groupDir, `工程师-${short("dev-b")}`)],
-      ["gone", join(groupDir, "gone")],
+      ["lead", groupDir],
+      ["dev-a", groupDir],
+      ["dev-b", groupDir],
+      ["gone", groupDir],
     ]);
+    assert.equal(readFileSync(join(groupDir, "工程师", "index.html"), "utf8"), "a", "each member's older files stay in its own subfolder");
     assert.equal(readFileSync(join(groupDir, `工程师-${short("dev-b")}`, "index.html"), "utf8"), "b");
     for (const path of [titled, untitled, lead, devA, devB, gone]) assert.ok(!existsSync(path), path);
 
@@ -159,7 +160,44 @@ test("a new member of a group whose folders were moved lands in the same convers
     f.member("group", "dev-a", "member", f.folder(legacy("group:dev-a"), { "x.md": "x" }));
 
     assert.deepEqual(f.migrate(), { moved: 1, pending: 0 });
-    assert.deepEqual(f.workspacesOf("group"), [["lead", join(groupDir, "产品经理")], ["dev-a", join(groupDir, "工程师")]]);
+    assert.deepEqual(f.workspacesOf("group"), [["lead", groupDir], ["dev-a", groupDir]]);
+    assert.equal(readFileSync(join(groupDir, "工程师", "x.md"), "utf8"), "x");
+  } finally {
+    f.close();
+  }
+});
+
+test("group member subfolders stay on disk while every member moves to the shared folder, keeping its memory state", () => {
+  const f = fixture();
+  try {
+    f.store.createConversation({ id: "group", kind: "group", title: "招聘组", coordinatorEmployeeId: "lead", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+    const groupDir = join(f.workspaces, "招聘组-123456");
+    const lead = f.folder("招聘组-123456/design-team", { "plan.md": "plan", ".pi/hindsight/retain-cursors.json": "{\"cursor\":1}" });
+    const dev = f.folder("招聘组-123456/工程师", { "index.html": "x" });
+    f.member("group", "lead", "coordinator", lead);
+    f.member("group", "dev-a", "member", dev);
+    mkdirSync(join(hindsightStateDir(f.agentDir, lead), "config"), { recursive: true });
+    // A private chat that changed hands keeps its employee subfolders.
+    f.store.createConversation({ id: "chat", title: "私聊", entryEmployeeId: "dev-a", sessionFile: "", workspace: "", tenantId: "t", memberId: "m" });
+    const chatFolder = f.folder("私聊-abcdef/工程师", { "a.md": "a" });
+    f.member("chat", "dev-a", "member", chatFolder);
+
+    assert.deepEqual(f.migrate(), { moved: 0, pending: 0 });
+    assert.deepEqual(f.workspacesOf("group"), [["lead", groupDir], ["dev-a", groupDir]]);
+    assert.deepEqual(f.workspacesOf("chat"), [["dev-a", chatFolder]]);
+    assert.equal(readFileSync(join(lead, "plan.md"), "utf8"), "plan");
+    assert.equal(readFileSync(join(dev, "index.html"), "utf8"), "x");
+
+    const state = hindsightStateDir(f.agentDir, "", groupMemberStateScope("group", "lead"));
+    assert.ok(existsSync(join(state, "config")), "memory state follows the member");
+    assert.ok(!existsSync(hindsightStateDir(f.agentDir, lead)));
+    assert.equal(readFileSync(join(state, ".pi", "hindsight", "retain-cursors.json"), "utf8"), "{\"cursor\":1}", "retain cursors move so old turns are not retained again");
+    assert.equal(existsSync(join(lead, ".pi", "hindsight")), false);
+    assert.equal(readFileSync(join(state, "member-project-id"), "utf8"), "design-team", "the old folder name stays the member's project tag");
+
+    assert.deepEqual(f.migrate(), { moved: 0, pending: 0 }, "a second start has nothing to do");
+    assert.deepEqual(f.workspacesOf("group"), [["lead", groupDir], ["dev-a", groupDir]]);
+    assert.equal(readFileSync(join(state, "member-project-id"), "utf8"), "design-team");
   } finally {
     f.close();
   }

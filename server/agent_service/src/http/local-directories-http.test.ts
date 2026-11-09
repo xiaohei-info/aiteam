@@ -27,6 +27,7 @@ async function setup() {
     status: async () => undefined,
     challenge: async () => "challenge-1",
     consume: async () => ({ canonical_path: "/private/test/kb", display_name: "资料", root_identity: "1:99" }),
+    consumeProject: async () => ({ canonical_path: "/private/test/project", source: "codex", project_id: "0123456789abcdef" }),
     check: async () => "epoch:1",
     list: async () => ({ authority: "epoch:1", entries: [{ name: "spec.txt", directory: false }], partial: false }),
     read: async () => { await onRead?.(); return { authority: "epoch:1", content_version: "version-1", text: "sensitive-http-citation-evidence" }; },
@@ -64,8 +65,9 @@ async function setup() {
     return body.data;
   };
   const prefix = "/api/agent/local-directories";
+  const bindingPath = (directoryId: string) => `/api/agent/conversations/directory-http/local-directories/${directoryId}`;
   return {
-    ...fixture, host, service, request, data, prefix, seed,
+    ...fixture, host, service, request, data, prefix, seed, bindingPath,
     blockRead() {
       let enter!: () => void;
       let release!: () => void;
@@ -88,9 +90,15 @@ test("six real JWT-authenticated local-directory HTTP responses match OpenAPI an
   try {
     const challenge = await f.data(await f.request(`${f.prefix}/challenges`, "POST"), `${f.prefix}/challenges`, "post", 201);
     const registered = await f.data(await f.request(f.prefix, "POST", { ticket: challenge.challenge }), f.prefix, "post", 201);
-    const bindingPath = `${f.prefix}/${registered.directory_id}/bindings/emp-1`;
-    await f.data(await f.request(bindingPath, "PUT", { enabled: true, expected_revision: 0 }), `${f.prefix}/{directory_id}/bindings/{employee_id}`, "put", 200);
-    await f.data(await f.request(f.prefix), f.prefix, "get", 200);
+    const bindingPath = f.bindingPath(registered.directory_id);
+    const bound = await f.data(await f.request(bindingPath, "PUT", { enabled: true, expected_revision: 0 }), "/api/agent/conversations/{conversation_id}/local-directories/{directory_id}", "put", 200);
+    assert.equal(bound.conversation_id, "directory-http");
+    const listed = await f.data(await f.request(`${f.prefix}?conversation_id=directory-http`), f.prefix, "get", 200);
+    assert.deepEqual(listed.directories[0].binding, { enabled: true, revision: 1 });
+    assert.equal((await f.data(await f.request(f.prefix), f.prefix, "get", 200)).directories[0].binding, null);
+    // The older per-employee routes no longer exist.
+    assert.equal((await f.request(`${f.prefix}/${registered.directory_id}/bindings/emp-1`, "PUT", { enabled: true, expected_revision: 0 })).status, 404);
+    assert.equal((await f.request(`${bindingPath}/bindings/emp-1`, "PUT", { enabled: true, expected_revision: 0 })).status, 404);
     const stale = await f.request(bindingPath, "PUT", { enabled: false, expected_revision: 0 });
     assert.equal(stale.status, 409);
     assert.match(stale.headers.get("content-type")!, /application\/problem\+json/);
@@ -108,7 +116,7 @@ test("real HTTP checks current policy again after the controlled read resolves a
   const f = await setup();
   try {
     const directory = await f.data(await f.request(f.prefix, "POST", { ticket: "ticket" }), f.prefix, "post", 201);
-    assert.equal((await f.request(`${f.prefix}/${directory.directory_id}/bindings/emp-1`, "PUT", { enabled: true, expected_revision: 0 })).status, 200);
+    assert.equal((await f.request(f.bindingPath(directory.directory_id), "PUT", { enabled: true, expected_revision: 0 })).status, 200);
     const id = await f.citation();
     const verify = f.service.verifyCitation.bind(f.service);
     f.service.verifyCitation = async (...args) => {
@@ -127,7 +135,7 @@ for (const action of ["unbind", "logout", "policy", "revoke"] as const) {
     const f = await setup();
     try {
       const directory = await f.data(await f.request(f.prefix, "POST", { ticket: "ticket" }), f.prefix, "post", 201);
-      const bind = `${f.prefix}/${directory.directory_id}/bindings/emp-1`;
+      const bind = f.bindingPath(directory.directory_id);
       assert.equal((await f.request(bind, "PUT", { enabled: true, expected_revision: 0 })).status, 200);
       const id = await f.citation();
       const blocked = f.blockRead();

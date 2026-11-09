@@ -22,7 +22,7 @@ export async function createFixture() {
   for (const id of ["c1", "conversation-1", "conversation-2"]) {
     store.createConversation({ id, sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
   }
-  const createHost = (model = faux.getModel(), managerClient?: ManagerClient, resourceLoaderFactory: SessionHostOptions["resourceLoaderFactory"] = (_conversationId: string, _authorization?: SessionAuthorization, _workspace?: string, _agentDir?: string) => createControlledResourceLoader("test system prompt")) =>
+  const createHost = (model = faux.getModel(), managerClient?: ManagerClient, resourceLoaderFactory: SessionHostOptions["resourceLoaderFactory"] = (_conversationId: string, _authorization?: SessionAuthorization, _workspace?: string, _agentDir?: string) => createControlledResourceLoader("test system prompt"), sandbox?: SessionHostOptions["sandbox"]) =>
     new SessionHost({
       cwdRoot: join(dataRoot, "workspaces"),
       agentDir: join(dataRoot, "pi"),
@@ -32,6 +32,7 @@ export async function createFixture() {
       model,
       managerClient,
       resourceLoaderFactory,
+      sandbox,
     });
   const host = createHost();
   return {

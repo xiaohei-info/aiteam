@@ -201,3 +201,38 @@ def test_retention_stream_cannot_extend_deadline_by_dripping_small_chunks(monkey
     native = HindsightClient(settings, client=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"items":[]}))))
     with pytest.raises(HindsightUnavailable, match="timed out"):
         native.retention_request("fixture-bank", "memories/list")
+
+
+def test_scoped_recall_provisions_and_reaches_only_the_scoped_bank():
+    scope = "d" * 32
+    scoped = derive_hindsight_bank_id("tenant-a", "u", "employee-a", None, scope)
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/profile"):
+            return httpx.Response(200, json={"bank_id": scoped})
+        return httpx.Response(200, json={"results": []})
+
+    client = HindsightClient(
+        HindsightSettings("http://hindsight", "secret", "/v1/default/banks/{bank_id}/memories/recall", "/retain", "/delete"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    client.recall(TenantContext(tenant_id="tenant-a", user_id="u", roles=[]),
+                  employee_id="employee-a", query="hello", limit=1, memory_scope=scope)
+
+    assert paths and all(f"/banks/{scoped}/" in path for path in paths)
+    assert BANK != scoped
+
+
+def test_legacy_bank_routes_refuse_a_memory_scope_without_contacting_hindsight():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("Hindsight must not be contacted")
+
+    client = HindsightClient(
+        HindsightSettings("http://hindsight", "secret", "/legacy/recall", "/legacy/retain", "/legacy/delete"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(HindsightUnavailable):
+        client.recall(TenantContext(tenant_id="tenant-a", user_id="u", roles=[]),
+                      employee_id="employee-a", query="hello", limit=1, memory_scope="d" * 32)

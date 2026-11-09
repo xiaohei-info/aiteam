@@ -20,12 +20,12 @@ export function resolveTalentEmployees(templateId: string, experts: ExpertProjec
     && (expert.source_template_id === templateId || ids.has(expert.employee_id)))
 }
 
-/** 该员工已有的真实会话（排除 `emp_` 占位）；没有则返回 null，由调用方新建。 */
+/** 该员工已有的真实会话（排除 `emp_` 占位和项目对话）；没有则返回 null，由调用方新建。 */
 export function findEmployeeConversationId(
-  conversations: ReadonlyArray<{ id: string; _employeeId?: string }>,
+  conversations: ReadonlyArray<{ id: string; _employeeId?: string; projectName?: string | null }>,
   employeeId: string,
 ): string | null {
-  return conversations.find(conv => conv._employeeId === employeeId && !conv.id.startsWith('emp_'))?.id ?? null
+  return conversations.find(conv => conv._employeeId === employeeId && !conv.projectName && !conv.id.startsWith('emp_'))?.id ?? null
 }
 
 export type TalentChatTarget =

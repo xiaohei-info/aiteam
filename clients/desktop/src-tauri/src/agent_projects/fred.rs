@@ -5,9 +5,9 @@ use super::*;
 /// Longest segment of a workspace key, in characters; same as the Agent's rule.
 const MAX_KEY_SEGMENT_CHARS: usize = 128;
 
-/// Fred's `workspace_key`: the folder's path below `workspaces/`. One segment for a private chat
-/// (`<会话名>-<短 ID>`, or a legacy `conversation-<24 hex>`), two for a group member
-/// (`<会话名>-<短 ID>/<员工名>`). No segment starts with a dot or holds a separator or control
+/// Fred's `workspace_key`: the folder's path below `workspaces/`. One segment for a private chat or
+/// a group's shared folder (`<会话名>-<短 ID>`, or a legacy `conversation-<24 hex>`), two for a
+/// private chat that changed employee (`<会话名>-<短 ID>/<员工名>`). No segment starts with a dot or holds a separator or control
 /// character, so a key never leaves the root. Mirrors `WORKSPACE_KEY_PATTERN` in the Agent.
 pub(super) fn valid_workspace_key(key: &str) -> bool {
     let segments: Vec<&str> = key.split('/').collect();

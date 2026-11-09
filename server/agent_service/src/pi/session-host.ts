@@ -3,7 +3,7 @@ import { appLogger, makeRequestContext, requestContext, safeError } from "../obs
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
   createBashToolDefinition,
@@ -36,9 +36,11 @@ import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./w
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
-import { isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
+import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
+import { ConversationWriteQueue } from "./conversation-write-queue.js";
+import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
-import { conversationFolder, conversationFolderBase, employeeFolder } from "../workspace-layout.js";
+import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
 import { ApprovalService, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
@@ -180,7 +182,14 @@ export interface SessionAuthorization {
   generation?: number;
   localDirectoryCapabilityRevision?: string;
   localDirectoryPromptGuidance?: string;
+  /** Project conversations only: selects the conversation's own memory bank and state. */
+  memoryScope?: string;
+  /** Group members only: keeps this employee's memory state apart in the shared folder; the memory bank stays the employee's. */
+  hindsightStateScope?: string;
 }
+
+/** Tools that change the shared folder of a group; reads never wait. */
+const SHARED_FOLDER_WRITE_TOOLS = new Set(["bash", "write", "edit"]);
 
 export interface SessionHostOptions {
   cwdRoot: string;
@@ -257,6 +266,12 @@ interface SessionRecord {
   activeSnapshotVersion?: string;
   capabilitySignature?: string;
   hindsightWorkspaces: Set<string>;
+  /** The workspace is a borrowed project folder: never created, chmodded, scanned or deleted. */
+  borrowedWorkspace: boolean;
+  /** Group chats: the other employees work in the same folder, so writes take turns. */
+  sharedWorkspace: boolean;
+  /** Folders the user added to this conversation; the coding tools reach them under the conversation permission. */
+  extraRoots?: string[];
   contextOperation?: Promise<void>;
   // 无活跃会话时上一次读到的上下文状态；会话记录末条和授权不变时复用，轮询不必重建会话。
   contextCache?: { key: string; leafId: string | null; value: ConversationContext };
@@ -305,6 +320,7 @@ export class SessionHost {
   private readonly listeners = new Map<string, Set<Subscriber>>();
   private readonly delivery: GroupMessageDeliveryService;
   readonly approvalService: ApprovalService;
+  private readonly writeQueue = new ConversationWriteQueue();
   private readonly executionAuthorization: ExecutionAuthorizationRegistry;
   readonly localDirectoryService: LocalDirectoryService;
   private readonly runtimeLeaseCache: RuntimeLeaseCache<RuntimeProviderConfig>;
@@ -436,6 +452,25 @@ export class SessionHost {
       await record.sessionReady?.catch(() => undefined);
       await this.disposeSession(record);
       this.records.delete(key);
+    }
+    return updated;
+  }
+
+  /**
+   * Points a project conversation at the project's new folder between turns. Cached sessions are
+   * dropped so the next turn opens the same Pi session file with the new folder as its cwd; the
+   * memory scope follows the conversation id and does not change.
+   */
+  async relocateProject(conversationId: string, workspace: string, projectId: string): Promise<ConversationMetadata | undefined> {
+    // Checked synchronously with the write below, so no prompt can start in between.
+    this.assertConversationIdle(conversationId);
+    const updated = this.options.store.relocateProject(conversationId, workspace, projectId);
+    if (!updated) return undefined;
+    for (const [key, record] of [...this.records.entries()]) {
+      if (record.conversationId !== conversationId) continue;
+      this.records.delete(key);
+      await record.sessionReady?.catch(() => undefined);
+      await this.disposeSession(record);
     }
     return updated;
   }
@@ -722,14 +757,15 @@ export class SessionHost {
       // The Manager retain route ignores Idempotency-Key; it is sent for traceability only.
       const ack = await client.memoryRetain(caller, authorization.employeeId, transcript.content, {
         source: "context_reset",
-        conversation_id: record.conversationId,
+        // Manager only ever sees a project conversation's opaque scope.
+        ...(authorization.memoryScope ? {} : { conversation_id: record.conversationId }),
         context_id: contextId,
         message_count: messages.length,
         truncated: transcript.truncated,
         // Lets the employee tell lessons from successes. Flat strings; absent keeps legacy bytes unchanged.
         ...(evaluation?.outcome ? { outcome: evaluation.outcome } : {}),
         ...(evaluation?.outcome && evaluation.reasons.length ? { outcome_reasons: evaluation.reasons.join(",") } : {}),
-      }, `context-reset:${contextId}`);
+      }, `context-reset:${contextId}`, authorization.memoryScope);
       return { reason: "saved", operationId: ack.operationId };
     } catch (error) {
       this.invalidateExecutionMaterial(authorization, error);
@@ -805,13 +841,24 @@ export class SessionHost {
       await record.session?.abort().catch(() => undefined);
       await record.promptPromise?.catch(() => undefined);
       await this.disposeSession(record);
-      for (const workspace of record.hindsightWorkspaces) removeHindsightState(this.options.agentDir, workspace);
+      if (!indexed.projectSource) for (const workspace of record.hindsightWorkspaces) removeHindsightState(this.options.agentDir, workspace);
       this.records.delete(this.recordKey(record.conversationId, record.employeeId));
     }
-    for (const participant of participants) if (participant.workspace) removeHindsightState(this.options.agentDir, participant.workspace);
-    if (indexed.workspace) removeHindsightState(this.options.agentDir, indexed.workspace);
-    const paths = [indexed.sessionFile, indexed.workspace, ...participants.flatMap((participant) => [participant.session_file, participant.workspace])];
-    for (const path of paths) {
+    const sessionFiles = [indexed.sessionFile, ...participants.map((participant) => participant.session_file)];
+    let workspaces: string[] = [];
+    if (indexed.projectSource) {
+      // The folder is the user's project and other conversations may share its Hindsight-free path:
+      // only this conversation's own state goes.
+      removeHindsightState(this.options.agentDir, indexed.workspace, projectMemoryScope(conversationId));
+    } else {
+      for (const participant of participants) {
+        if (participant.workspace) removeHindsightState(this.options.agentDir, participant.workspace);
+        removeHindsightState(this.options.agentDir, participant.workspace, groupMemberStateScope(conversationId, participant.employee_id));
+      }
+      if (indexed.workspace) removeHindsightState(this.options.agentDir, indexed.workspace);
+      workspaces = [...new Set([indexed.workspace, ...participants.map((participant) => participant.workspace)])];
+    }
+    for (const path of [...sessionFiles, ...workspaces]) {
       if (!path) continue;
       this.assertManagedPathEither(path, this.options.sessionDir, this.options.cwdRoot);
       rmSync(path, { recursive: true, force: true });
@@ -999,11 +1046,16 @@ export class SessionHost {
     const participant = resolvedEmployeeId
       ? this.options.store.getConversationParticipant(conversationId, resolvedEmployeeId)
       : undefined;
-    const workspace = participant?.workspace || indexed.workspace || this.newWorkspace(indexed, conversationId, resolvedEmployeeId);
-    this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
-    mkdirSync(workspace, { recursive: true, mode: 0o700 });
-    this.assertManagedPath(workspace, this.options.cwdRoot);
-    chmodSync(workspace, 0o700);
+    const workspace = indexed.projectSource
+      ? indexed.workspace
+      : participant?.workspace || indexed.workspace || this.newWorkspace(indexed, conversationId, resolvedEmployeeId);
+    // History stays readable when a project folder disappears, so it is only checked before a run.
+    if (!indexed.projectSource) {
+      this.assertManagedLexicalPath(workspace, this.options.cwdRoot);
+      mkdirSync(workspace, { recursive: true, mode: 0o700 });
+      this.assertManagedPath(workspace, this.options.cwdRoot);
+      chmodSync(workspace, 0o700);
+    }
 
     let sessionManager: SessionManager;
     const existingSessionFile = participant?.session_file || this.legacySessionFile(indexed, resolvedEmployeeId);
@@ -1050,6 +1102,8 @@ export class SessionHost {
       listeners: new Set(),
       eventSequence: 0,
       hindsightWorkspaces: new Set([workspace]),
+      borrowedWorkspace: Boolean(indexed.projectSource),
+      sharedWorkspace: !indexed.projectSource && (indexed.kind === "group" || Boolean(indexed.coordinatorEmployeeId)),
     };
     this.records.set(key, record);
     return record;
@@ -1058,6 +1112,13 @@ export class SessionHost {
   /** Root of the managed per-conversation working directories. */
   get workspaceRoot(): string {
     return this.options.cwdRoot;
+  }
+
+  /** Canonical Agent data folders; an external project folder must not overlap them. */
+  get runtimeRoots(): string[] {
+    return [this.options.cwdRoot, this.options.agentDir, this.options.sessionDir].map((path) => {
+      try { return realpathSync(path); } catch { return resolve(path); } // created on first use
+    });
   }
 
   private recordKey(conversationId: string, employeeId?: string): string {
@@ -1111,21 +1172,32 @@ export class SessionHost {
           permissionMode: record.permissionMode,
           background: authorization.background,
         })
-      : { revision: "none", tools: [] as ("local_dir_search" | "local_dir_read")[] };
+      : { revision: "none", tools: [] as ("local_dir_search" | "local_dir_read")[], roots: [] as string[] };
+    if (record.borrowedWorkspace && !options.skipSandbox) {
+      if (!isAllowedProjectFolder(record.workspace, this.runtimeRoots)) throw new ProjectWorkspaceUnavailableError();
+      assertProjectWorkspace(record.workspace);
+    }
+    // Added folders become writable under workspace-write, so never open the home folder, "/" or
+    // anything overlapping the Agent's own data (database, sessions, workspaces).
+    const extraRoots = authorization && this.hasCodingTools(authorization.snapshot)
+      ? localDirectoryCapability.roots.filter((root) => isAllowedProjectFolder(root, this.runtimeRoots))
+      : [];
     if (authorization) {
       authorization.localDirectoryCapabilityRevision = localDirectoryCapability.revision;
-      authorization.localDirectoryPromptGuidance = localDirectoryCapability.tools.length > 0
-        ? LOCAL_DIRECTORY_PROMPT_GUIDANCE
-        : undefined;
+      const guidance = [
+        localDirectoryCapability.tools.length > 0 ? LOCAL_DIRECTORY_PROMPT_GUIDANCE : "",
+        conversationFoldersHint(extraRoots, record.permissionMode),
+      ].filter(Boolean).join("\n\n");
+      authorization.localDirectoryPromptGuidance = guidance || undefined;
     }
     const capabilitySignature = authorization
-      ? `${authorization.snapshot.version}:${record.permissionMode}:${localDirectoryCapability.revision}`
+      ? `${authorization.snapshot.version}:${record.permissionMode}:${localDirectoryCapability.revision}:${extraRoots.join("|")}`
       : `anonymous:${record.permissionMode}`;
     // Sandbox availability is re-verified on every real prompt path, even when a
     // context-only poll (skipSandbox) created the cached session earlier.
     if (!options.skipSandbox && authorization && (this.hasCodingTools(authorization.snapshot) || localDirectoryCapability.tools.length > 0)) {
       if (!this.options.sandbox) throw new Error("Coding and local directory tools require a configured local sandbox");
-      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
+      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode, extraRoots);
     }
     if (record.session && record.capabilitySignature !== capabilitySignature) {
       // Never dispose a session that is actively prompting; per-call
@@ -1150,8 +1222,9 @@ export class SessionHost {
     await resourceLoader.reload();
     if (!options.skipSandbox && authorization && (this.hasCodingTools(authorization.snapshot) || localDirectoryCapability.tools.length > 0)) {
       if (!this.options.sandbox) throw new Error("Coding and local directory tools require a configured local sandbox");
-      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode);
+      await this.options.sandbox.assertAvailable(record.workspace, record.permissionMode, extraRoots);
     }
+    record.extraRoots = extraRoots;
     const allowPeerMention = Boolean(authorization?.peerMentionAllowed);
     const customTools = this.toolsFor(authorization, allowPeerMention, record, record.workspace, undefined, localDirectoryCapability.tools);
     if (authorization) {
@@ -1195,7 +1268,7 @@ export class SessionHost {
     for (const toolName of localDirectoryToolNames) allowed.add(toolName);
     if (allowDelegation && authorization.peerMentionAllowed) allowed.add("mention_employee");
     const operations = this.options.sandbox && workspace
-      ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode)
+      ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode, record?.extraRoots ?? [])
       : undefined;
     const codingTools = operations && workspace
       ? [
@@ -1288,7 +1361,10 @@ export class SessionHost {
         ...(record.employeeId ? { participantEmployeeId: record.employeeId } : {}),
         sessionId: record.sessionManager.getSessionId(),
         snapshotVersion: authorization.snapshot.snapshot_version,
-        permissionRevision: `${authorization.snapshot.version}:${record.permissionMode}`,
+        // Adding or removing a conversation folder voids earlier approvals.
+        permissionRevision: record.extraRoots?.length
+          ? `${authorization.snapshot.version}:${record.permissionMode}:folders:${createHash("sha256").update(record.extraRoots.join("\0")).digest("hex").slice(0, 16)}`
+          : `${authorization.snapshot.version}:${record.permissionMode}`,
         toolCallId,
         promptReceiptRef: record.activePromptReceipt,
         toolName: tool.name,
@@ -1297,7 +1373,10 @@ export class SessionHost {
         permissionMode: record.permissionMode,
         expiresAt: authorizationExpiry(authorization),
         signal,
-      }, () => execute(toolCallId, params, signal, onUpdate, context)) as ReturnType<ToolDefinition["execute"]>,
+      // Queued after approval, so a request waiting for the user never holds up the other employees.
+      }, () => record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
+        ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, params, signal, onUpdate, context))
+        : execute(toolCallId, params, signal, onUpdate, context)) as ReturnType<ToolDefinition["execute"]>,
     } as ToolDefinition;
   }
 
@@ -1355,7 +1434,7 @@ export class SessionHost {
     const generation = caller.tenantId
       ? ((this.executionAuthorization.get(caller.tenantId, memberId) ?? this.executionAuthorization.register(caller))?.generation ?? 0)
       : 0;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient, generation };
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient, generation, ...(metadata?.project ? { memoryScope: projectMemoryScope(record.conversationId) } : {}), ...(record.sharedWorkspace ? { hindsightStateScope: groupMemberStateScope(record.conversationId, employeeId) } : {}) };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -1387,15 +1466,6 @@ export class SessionHost {
     await controlled?.shutdown?.();
   }
 
-  /** Group chats keep each employee's files under its name so two `README.md` never collide. */
-  private artifactPrefix(record: SessionRecord): string {
-    const metadata = this.options.store.getConversationMetadata(record.conversationId);
-    if (!record.employeeId || !(metadata?.kind === "group" || metadata?.coordinator_employee_id)) return "";
-    // The workspace folder is fixed when created and already includes a unique suffix.
-    // Do not derive artifact paths from the mutable employee display name.
-    return `${basename(record.workspace)}/`;
-  }
-
   private saveLongReply(record: SessionRecord, authorization: SessionAuthorization | undefined, entries: readonly SessionEntry[]): void {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
@@ -1412,7 +1482,7 @@ export class SessionHost {
     const expert = record.employeeId ? this.options.store.listLoadedExperts(tenantId, memberId, true).find((item) => item.employee_id === record.employeeId) : undefined;
     const name = `${safePathSegment(title || expert?.display_name, record.employeeId ?? "reply")}-${replyStamp(entry.timestamp)}`;
     const taken = new Set(this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact").map((item) => item.path));
-    const folder = `${this.artifactPrefix(record)}回复/`;
+    const folder = "回复/";
     let path = `${folder}${name}.md`;
     for (let index = 2; taken.has(path); index += 1) path = `${folder}${name}-${index}.md`;
     try {
@@ -1429,11 +1499,13 @@ export class SessionHost {
   private async captureWorkspaceArtifacts(record: SessionRecord, authorization: SessionAuthorization | undefined, before: Map<string, WorkspaceFile>): Promise<void> {
     const tenantId = authorization?.caller.tenantId;
     const memberId = authorization?.caller.userId ?? authorization?.caller.callerId;
-    if (!tenantId || !memberId) return;
+    if (!tenantId || !memberId || record.borrowedWorkspace) return;
+    // A group's turns scan the same folder and can finish together: read the stored artifacts after
+    // the scan, with no await until the loop ends, so the same file is never captured twice.
+    const files = await scanWorkspaceFiles(record.workspace);
     let existing = this.options.store.listOwnedLocalFiles(record.conversationId, tenantId, memberId, "artifact");
-    const prefix = this.artifactPrefix(record);
-    for (const [pathFromRoot, current] of await scanWorkspaceFiles(record.workspace)) {
-      const previous = before.get(pathFromRoot);
+    for (const [path, current] of files) {
+      const previous = before.get(path);
       if (previous && previous.size === current.size && previous.mtimeMs === current.mtimeMs) continue;
       if (current.size > MAX_LOCAL_FILE_BYTES) continue;
       let data: Buffer;
@@ -1444,7 +1516,6 @@ export class SessionHost {
         continue;
       }
       if (data.byteLength > MAX_LOCAL_FILE_BYTES || (IMAGE_MIMES.has(current.mimeType) && !hasImageSignature(current.mimeType, data)) || containsLikelySecret(data, current.mimeType)) continue;
-      const path = `${prefix}${pathFromRoot}`;
       const sha256 = createHash("sha256").update(data).digest("hex");
       // One artifact per path: an edited file replaces its previous copy instead of piling up.
       const older = existing.filter((item) => item.path === path);
@@ -1455,7 +1526,7 @@ export class SessionHost {
           tenantId,
           memberId,
           kind: "artifact",
-          filename: basename(pathFromRoot),
+          filename: basename(path),
           path,
           mimeType: current.mimeType,
           data,
@@ -1541,7 +1612,7 @@ export class SessionHost {
     record.activeMessage = undefined;
     record.activeReply = { authorization, entriesBefore };
     // Start the bounded async baseline scan without delaying Session initialization or aborts.
-    const workspaceBeforePromise = scanWorkspaceFiles(record.workspace);
+    const workspaceBeforePromise = record.borrowedWorkspace ? Promise.resolve(new Map<string, WorkspaceFile>()) : scanWorkspaceFiles(record.workspace);
     let unsubscribeSource: (() => void) | undefined;
     let sourceCapture = Promise.resolve();
     let settled = false;
@@ -1850,14 +1921,23 @@ export class SessionHost {
         const config = await authorization.managerClient.pullMemoryRuntimeConfig(
           authorization.caller,
           authorization.employeeId,
+          authorization.memoryScope,
         );
         authorization.hindsightExpiresAt = jwtExpiry(authorization.caller);
         return config;
       } catch (error) {
+        // A Manager without scope support answers 422. Run without memory: falling back would
+        // write this project conversation into the employee's shared bank.
+        if (authorization.memoryScope && error instanceof ManagerValidationError) {
+          appLogger.log("warn", "project_conversation.memory_scope_unsupported", { ...safeError(error), employee_id: authorization.employeeId });
+          return undefined;
+        }
         this.invalidateExecutionMaterial(authorization, error);
         throw error;
       }
     }
+    // The fallbacks below can only reach the shared bank.
+    if (authorization.memoryScope) return undefined;
     // Older ManagerClient implementations remain readable while the desktop
     // package rolls forward. The production HttpManagerClient above always uses
     // the JWT-backed protocol adapter.
@@ -2094,15 +2174,13 @@ export class SessionHost {
     const displayName = (id: string | null | undefined) => id ? experts.find((expert) => expert.employee_id === id)?.display_name : undefined;
     const group = indexed.kind === "group" || Boolean(indexed.coordinatorEmployeeId);
     const participants = group ? store.listConversationParticipants(conversationId, { includeRemoved: true }) : [];
-    const shared = participants.map((participant) => participant.workspace).find((path) => path && dirname(dirname(resolve(path))) === root);
-    const conversationDir = shared ? dirname(resolve(shared)) : conversationFolder(
+    const shared = participants.map((participant) => groupFolderOf(participant.workspace, root)).find(Boolean);
+    return shared ?? conversationFolder(
       root,
       conversationFolderBase({ title: indexed.title, employeeName: displayName(indexed.coordinatorEmployeeId ?? indexed.entryEmployeeId ?? employeeId), createdAt: indexed.createdAt }),
       conversationId,
       (path) => store.workspaceInUse(path),
     );
-    if (!group || !employeeId) return conversationDir;
-    return employeeFolder(conversationDir, displayName(employeeId), employeeId, (path) => store.workspaceInUse(path));
   }
 }
 
@@ -2321,4 +2399,15 @@ function replyStamp(timestamp: string): string {
   const date = Number.isFinite(parsed.getTime()) ? parsed : new Date();
   const two = (value: number) => String(value).padStart(2, "0");
   return `${two(date.getMonth() + 1)}${two(date.getDate())}-${two(date.getHours())}${two(date.getMinutes())}`;
+}
+
+/** Tells the employee where the folders added to this conversation are and what it may do there. */
+export function conversationFoldersHint(roots: readonly string[], mode: ConversationPermissionMode): string {
+  if (roots.length === 0) return "";
+  const access = mode === "read-only"
+    ? "You may read them; do not modify them."
+    : mode === "workspace-write"
+      ? "You may read and modify files in them under the same rules as the working folder."
+      : "They are the user's own folders; change them only when the task asks for it.";
+  return [`The user added these folders to this conversation. Use absolute paths to reach them. ${access}`, ...roots.map((root) => `- ${root}`)].join("\n");
 }

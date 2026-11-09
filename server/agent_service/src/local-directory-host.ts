@@ -11,10 +11,14 @@ delete process.env.AITEAM_LOCAL_HOST_SOCKET;
 delete process.env.AITEAM_LOCAL_HOST_TOKEN;
 
 export interface HostDirectory { canonical_path: string; display_name: string; root_identity: string }
+/** `project_id` is the workbench id of the project (16 hex characters), never a path. */
+export interface HostProject { canonical_path: string; source: string; project_id: string }
 export interface DirectoryHost {
   status(): Promise<void>;
   challenge(owner: DirectoryOwner): Promise<string>;
   consume(owner: DirectoryOwner, ticket: string): Promise<HostDirectory>;
+  /** Redeems a workbench project ticket; knowledge directory tickets are not accepted here, nor the reverse. */
+  consumeProject(owner: DirectoryOwner, ticket: string): Promise<HostProject>;
   check(resource: DirectoryResource): Promise<string>;
   list(resource: DirectoryResource, relative: string): Promise<{ authority: string; entries: { name: string; directory: boolean }[]; partial: boolean }>;
   read(resource: DirectoryResource, relative: string): Promise<{ authority: string; text: string; content_version: string }>;
@@ -37,6 +41,12 @@ export class NativeDirectoryHost implements DirectoryHost {
   async consume(owner: DirectoryOwner, ticket: string): Promise<HostDirectory> {
     const data = await this.request("consume", { tenant_id: owner.tenantId, member_id: owner.memberId, ticket });
     return { canonical_path: stringField(data, "canonical_path"), display_name: stringField(data, "display_name"), root_identity: stringField(data, "root_identity") };
+  }
+  async consumeProject(owner: DirectoryOwner, ticket: string): Promise<HostProject> {
+    const data = await this.request("consume_project", { tenant_id: owner.tenantId, member_id: owner.memberId, ticket });
+    const projectId = stringField(data, "project_id");
+    if (!/^[0-9a-f]{16}$/u.test(projectId)) throw new LocalDirectoryError("authorization_unavailable");
+    return { canonical_path: stringField(data, "canonical_path"), source: stringField(data, "source"), project_id: projectId };
   }
   async check(resource: DirectoryResource): Promise<string> {
     return stringField(await this.request("check", this.location(resource)), "authority");

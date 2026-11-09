@@ -86,7 +86,7 @@ export class ConversationReadService {
         handle: expert ? safeText(expert.handle, 256) : null,
         ...employeeDisplay(expert),
         role: participant.role === "coordinator" ? "coordinator" as const : "participant" as const,
-        available: Boolean(expert && !expert.revoked && (expert.status === undefined || expert.status === "active") && snapshots.some((snapshot) => snapshot.employee_id === expert.employee_id && snapshot.version === expert.version)),
+        available: Boolean(expert && !expert.revoked && !expert.availability_reason && (expert.status === undefined || expert.status === "active") && snapshots.some((snapshot) => snapshot.employee_id === expert.employee_id && snapshot.version === expert.version)),
       };
     });
     return { data: { conversation_id: conversationId, participants, employee_count: participants.length } };

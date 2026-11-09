@@ -72,14 +72,14 @@ test("route handlers project exactly the documented external response fields", a
   };
   const projections = {
     register: async () => resource,
-    bind: async (_caller: unknown, _dir: string, _emp: string, _enabled: boolean, expectedRevision: number): Promise<DirectoryBinding> => {
+    bind: async (_caller: unknown, _conversation: string, _dir: string, _enabled: boolean, expectedRevision: number): Promise<DirectoryBinding> => {
       if (expectedRevision !== 0 && expectedRevision !== 3) throw new LocalDirectoryError("revision_conflict");
-      return { employee_id: "emp-1", directory_id: "dir-1", enabled: true, revision: 4 };
+      return { conversation_id: "conv-1", directory_id: "dir-1", enabled: true, revision: 4 };
     },
     list: async () => ({
       available: true,
       formats: [".txt", ".md"],
-      directories: [{ directory_id: resource.directory_id, display_name: resource.display_name, path: resource.canonical_path, revision: resource.revision, status: "ready", bindings: [{ employee_id: "emp-1", directory_id: "dir-1", enabled: true, revision: 2 }] }],
+      directories: [{ directory_id: resource.directory_id, display_name: resource.display_name, path: resource.canonical_path, revision: resource.revision, status: "ready", binding: { conversation_id: "conv-1", directory_id: "dir-1", enabled: true, revision: 2 } }],
     }),
   };
   registerLocalDirectoryRoutes(router, {
@@ -90,7 +90,7 @@ test("route handlers project exactly the documented external response fields", a
     revoke: () => undefined,
     verifyCitation: async () => verifiedPayload,
     assertCitationCurrent: () => undefined,
-    capabilityState: async () => ({ revision: "x", tools: [] }),
+    capabilityState: async () => ({ revision: "x", tools: [], roots: [] }),
   } as never);
 
   // 1. POST /challenges: 201 with { challenge }.
@@ -106,18 +106,20 @@ test("route handlers project exactly the documented external response fields", a
   assert.equal(registered.status, 201);
   assert.deepEqual(Object.keys((registered.body as { data: Record<string, unknown> }).data).sort(), ["canonical_path", "created_at", "directory_id", "display_name", "revision"]);
 
+  // The employee-wide binding route is gone; bindings are per conversation.
+  assert.equal(routes.has("PUT /api/agent/local-directories/:directory_id/bindings/:employee_id"), false);
   // 3. PUT /bind: 200 with the full binding projection, and stale expected_revision maps to 409.
-  await routes.get("PUT /api/agent/local-directories/:directory_id/bindings/:employee_id")!.handler("bind", undefined, undefined, { params: { directory_id: "dir-1", employee_id: "emp-1" } });
+  await routes.get("PUT /api/agent/conversations/:conversation_id/local-directories/:directory_id")!.handler("bind", undefined, undefined, { params: { conversation_id: "conv-1", directory_id: "dir-1", employee_id: "emp-1" } });
   const bound = sent.at(-1)!;
   assert.equal(bound.status, 200);
-  assert.deepEqual((bound.body as { data: Record<string, unknown> }).data, { employee_id: "emp-1", directory_id: "dir-1", enabled: true, revision: 4 });
+  assert.deepEqual((bound.body as { data: Record<string, unknown> }).data, { conversation_id: "conv-1", directory_id: "dir-1", enabled: true, revision: 4 });
 
   // Stale expected_revision triggers revision_conflict -> HTTP 409.
   const staleRouter = makeRouter({ read: async () => ({ enabled: false, expected_revision: 99 }) });
   registerLocalDirectoryRoutes(staleRouter.router, { bind: projections.bind } as never);
   await assert.rejects(
     async () => {
-      await staleRouter.routes.get("PUT /api/agent/local-directories/:directory_id/bindings/:employee_id")!.handler(undefined, undefined, undefined, { params: { directory_id: "dir-1", employee_id: "emp-1" } });
+      await staleRouter.routes.get("PUT /api/agent/conversations/:conversation_id/local-directories/:directory_id")!.handler(undefined, undefined, undefined, { params: { conversation_id: "conv-1", directory_id: "dir-1", employee_id: "emp-1" } });
     },
     (error: unknown) => error instanceof LocalDirectoryError && mapLocalDirectoryError(error).status === 409 && mapLocalDirectoryError(error).code === "local_directory_revision_conflict",
   );
@@ -126,8 +128,8 @@ test("route handlers project exactly the documented external response fields", a
   await routes.get("GET /api/agent/local-directories")!.handler(undefined, undefined, undefined, undefined);
   const listed = sent.at(-1)!;
   assert.equal(listed.status, 200);
-  const directory = (listed.body as { data: { directories: Array<{ bindings: Array<Record<string, unknown>> }> } }).data.directories[0]!;
-  assert.deepEqual(Object.keys(directory.bindings[0]!).sort(), ["employee_id", "enabled", "revision"]);
+  const directory = (listed.body as { data: { directories: Array<{ binding: Record<string, unknown> | null }> } }).data.directories[0]!;
+  assert.deepEqual(Object.keys(directory.binding!).sort(), ["enabled", "revision"]);
 
   // 5. DELETE /:directory_id: 200 with { revoked, directory_id }.
   await routes.get("DELETE /api/agent/local-directories/:directory_id")!.handler(undefined, undefined, undefined, { params: { directory_id: "dir-1" } });

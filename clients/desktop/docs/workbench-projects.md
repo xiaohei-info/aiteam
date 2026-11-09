@@ -16,7 +16,7 @@
 
 | 来源 | 读取位置 | 什么算一个项目 |
 |---|---|---|
-| Fred | 本机 Agent 接口 `GET /api/agent/workspaces` 返回会话的 `workspace_key`，宿主按 key 列出 `<agent-data>/workspaces/` 下的目录（私聊 `<会话名>-<短 ID>`，群聊成员 `<会话名>-<短 ID>/<员工名>`，旧版 `conversation-<24 位十六进制>`） | 一个会话的工作目录算一个项目。群聊中每个员工的目录是一个子文件夹，已移出群聊的成员的目录也保留 |
+| Fred | 本机 Agent 接口 `GET /api/agent/workspaces` 返回会话的 `workspace_key`，宿主按 key 列出 `<agent-data>/workspaces/` 下的目录（私聊和群聊都是 `<会话名>-<短 ID>`，换过员工的旧私聊为 `<会话名>-<短 ID>/<员工名>`，旧版 `conversation-<24 位十六进制>`） | 一个会话的工作目录算一个项目。群聊成员共用一个目录，老群里原来的员工文件夹是其中的普通子文件夹，已移出成员的文件也保留 |
 | Codex | `$CODEX_HOME`（默认 `~/.codex`）下的 `sessions/`、`archived_sessions/` | 见下方「Codex / Claude 规则」 |
 | Claude Code | `$CLAUDE_CONFIG_DIR`（默认 `~/.claude`）下的 `projects/` | 同上 |
 | Claude 桌面版 | Code 标签页沿用 Claude Code 的会话记录；Cowork 读 `local-agent-mode-sessions/`（可用 `COWORK_SESSIONS_DIR` 覆盖） | Code 标签页同上；Cowork 会话的 `outputs/` 直接算 |
@@ -86,6 +86,8 @@
 
 `GET /api/agent/workspaces`：返回当前用户拥有的、磁盘上有项目文件的会话工作目录，只返回 `workspace_key` 和会话信息，不返回路径。契约见 `docs/api.json`，前端白名单见 `src/api/agent/contract.ts`。
 
+`POST /api/agent/conversations` 的 `project` 字段用于把项目交给员工继续做；`PUT /api/agent/conversations/{conversation_id}/project-folder { ticket }` 在项目搬家后更换项目对话的工作目录。见第 7 节。
+
 ### 4.2 桌面宿主命令
 
 | 命令 | 作用 |
@@ -97,6 +99,8 @@
 | `start_project { source, projectId, dir, fileId, consent }` | 运行一个单元；`dir` 只接受宿主自己识别出的子文件夹 |
 | `stop_project` / `project_run_status` | 停止运行，或查询状态和日志 |
 | `get_dependency_source` / `set_dependency_source` | 读取或保存依赖下载源 |
+| `authorize_project_workspace { challenge, source, projectId }` | 为 Fred 以外的项目签发一次性票据（30 秒），仅 macOS |
+| `select_project_folder { challenge, defaultPath }` | 弹出文件夹选择框，为项目的新位置签发一次性票据（30 秒，来源固定为 `folder`），不记录文件访问授权，仅 macOS |
 
 常见错误码及前端提示见 `src/pages/Workbench/projects.ts` 中的 `ERROR_MESSAGES`。
 
@@ -109,7 +113,8 @@
 | 随包 npm | `scripts/build-agent-package.mjs`，解压到随包 Agent 的 `runtime/npm/` |
 | 页面 | `src/pages/Workbench/`：`index.tsx`、`api.ts`、`projects.ts`、`preview.ts` |
 | Agent 接口 | `server/agent_service/src/services/conversation-workspaces.ts`、`http/conversation-workspace-schemas.ts` |
-| 测试 | `tests/workbenchProjects.test.ts`，以及上述 Rust 模块内的单元测试 |
+| 交给员工继续做 | 前端 `src/lib/projectConversation.ts`、`src/pages/Workbench/ProjectDevelopDialog.tsx`；宿主 `src-tauri/src/local_directory_host.rs`；Agent `server/agent_service/src/pi/project-conversation.ts` |
+| 测试 | `tests/workbenchProjects.test.ts`、`tests/projectConversation.test.ts`，以及上述 Rust 模块内的单元测试 |
 
 ## 6. 风险与已知限制
 
@@ -118,3 +123,30 @@
 - 完全通过 shell 命令写出来的项目，Codex 和 Claude 的规则识别不到，因为判断依据是会话记录里的文件写入。
 - Python 依赖系统的 `python3`。Windows，或者没装 Xcode 命令行工具的 Mac，可能没有 python3。后续可以考虑随包带 `uv`；uv 不读 `pip.conf`，到时需要重新设计「跟随系统配置」和代理的处理方式。
 - 本机没有 Claude 桌面版 Cowork 的数据，这部分按公开资料实现，还没有在真实数据上验证。
+
+## 7. 继续对话与交给员工继续做
+
+- **Fred 项目**：详情页只有「继续对话」，回到做出这个项目的原会话接着聊，不新建对话。
+- **其他来源**（Codex、Claude、Claude 桌面版、WorkBuddy）：详情页有「交给员工继续做」。选一位员工并确认对话名（默认项目名，可以改），就会开启一个新的私聊，工作目录是这个项目的目录。
+
+- **已交给员工的项目归到 Fred**：宿主签票据时带上工作台的项目 ID（路径哈希，不是路径），Agent 存进项目对话，`project.id` 随会话元数据返回。工作台据此把这个项目显示为 Fred 项目，标注「原来自 xxx」，员工显示接手的员工，按钮变成「继续对话」，回到最近的项目对话。文件和运行仍按原来源交给宿主。
+- **来源卡片**：只显示扫描出项目的平台，0 个项目和读取中的不显示；读取失败的保留，以便看到原因。DeepSeek 卡片同样只在有项目时显示。
+
+以下说明针对「交给员工继续做」开启的项目对话。设计依据见 `docs/plans/workbench-project-conversation.md`。
+
+- **工作目录与权限**：输入框下方「权限」面板显示工作目录（项目文件夹路径，来自会话详情的 `project.path`），权限分「只读 / 工作区可写 / 完全访问」三档，默认「工作区可写」，只能读写项目目录，运行命令和改文件前会请用户确认。这些设置只对本会话生效。
+- **工作目录和添加的目录合在「本会话的目录」区**：项目目录就是工作目录，不必再添加。另外添加的目录只在本会话可见，和工作目录一样按本会话权限档读写，员工也能检索其中的资料（见 `plans/conversation-folders.md`）。
+- **上下文**：每个对话有自己的 Pi Session，同一员工的不同对话互不可见。
+- **记忆**：员工有一份共同记忆，每个项目对话另有一份独立记忆，两者互不影响。Manager 只看到对话 ID 派生的不透明摘要，看不到对话 ID、项目名或路径。Manager 不支持时，这个对话不启用记忆，不会写入共同记忆。
+- **并发**：多个对话可以同时做同一个目录，系统提示会告诉员工文件可能被其他对话改动。
+- **目录来源**：前端只传宿主票据，不传路径。宿主按来源和项目 ID 重新解析目录，并拒绝根目录、用户主目录和 Fred 数据目录，所以项目对话不会用到 Fred 会话的目录。
+- **删除**：删除项目对话只删会话记录和本地记忆状态，不删项目目录。
+- **目录失效与更换**：项目目录被删除或移动后，发送消息返回 `409 project_workspace_unavailable`，历史消息仍可查看。用户在「权限」面板点「更换目录」，宿主弹出文件夹选择框并签发来源为 `folder` 的票据，Agent 凭票据重新检查目录后改写工作目录和 `project.id`（按新路径重新计算，工作台能重新认出这个项目）。会话记录、记忆、权限、`project.source` 和 `project.name` 不变；员工回复中不能更换；旧目录不会被动。`folder` 票据只能用来更换目录，不能新建项目对话，工作台票据也不能用来更换目录。
+- **工作台列表**：项目对话不会作为新项目出现。「和某员工对话」也不会打开项目对话。
+
+已知限制：
+
+- 只支持 macOS，因为宿主私有通道目前只有 macOS 实现。
+- 删除项目对话后，Hindsight 中的独立 bank 不会被删除。它不再有入口可访问，有限保留期仍会清理其中的记忆；无限保留时会一直留存。
+- 项目对话的记忆不进入企业端记忆管理页面，管理员无法查看或单独删除。
+- 项目对话的改动不进入「会话文件目录」，要到工作台查看项目文件。

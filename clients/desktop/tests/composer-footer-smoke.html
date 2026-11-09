@@ -20,7 +20,7 @@ localStorage.clear()
 const conversationId = 'c-1'
 agentApi.getConversation = async () => ({ id: conversationId, kind: 'direct', title: '高级全栈开发', permission_mode: params.get('mode') ?? 'full-access', entry_employee_id: 'e-1' })
 agentApi.supportsLocalDirectories = async () => true
-agentApi.listLocalDirectories = async () => ({ directories: [{ directory_id: 'd-1', display_name: '项目', path: '/Users/demo/project', revision: 1, status: 'ready', bindings: [{ employee_id: 'e-1', enabled: true, revision: 1 }] }] })
+agentApi.listLocalDirectories = async () => ({ directories: [{ directory_id: 'd-1', display_name: '项目', path: '/Users/demo/project', revision: 1, status: 'ready', binding: { enabled: true, revision: 1 } }] })
 agentApi.getConversationContext = async () => ({ model: 'demo', used_tokens: 32200, context_window: 128000, percentage: 25 })
 agentApi.getWorkRecords = async () => ({ data: [], page: { next_cursor: null } })
 

@@ -32,6 +32,7 @@ class FakeDirectoryHost implements DirectoryHost {
   private pending = new Map<string, { owner: DirectoryOwner; receipt: HostDirectory }>();
 
   async status(): Promise<void> {}
+  async consumeProject(): Promise<{ canonical_path: string; source: string; project_id: string }> { throw new LocalDirectoryError("unauthorized"); }
   async challenge(owner: DirectoryOwner): Promise<string> {
     const id = `ticket-${++this.nextTicket}`;
     this.pending.set(id, {
@@ -222,7 +223,7 @@ test("LocalDirectoryService enforces member/employee/turn isolation, Chinese key
     const service = new LocalDirectoryService(store, host, identities, () => true);
     const challenge = await service.challenge(callerA);
     const registered = await service.register(callerA, challenge);
-    await service.bind(callerA, registered.directory_id, "emp-1", true, 0);
+    await service.bind(callerA, "conv-1", registered.directory_id, true, 0);
 
     const exec: DirectoryExecution = {
       caller: callerA,
@@ -234,6 +235,30 @@ test("LocalDirectoryService enforces member/employee/turn isolation, Chinese key
       generation: identityA.generation,
       permissionMode: "read-only",
     };
+
+    // A binding belongs to one conversation: the same employee elsewhere has no directory tools.
+    store.createConversation({ id: "conv-2", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
+    assert.deepEqual(service.tools(exec), ["local_dir_search", "local_dir_read"]);
+    assert.deepEqual(service.tools({ ...exec, conversationId: "conv-2" }), []);
+    assert.equal((await service.capabilityState({ ...exec, conversationId: "conv-2" })).tools.length, 0);
+    await assert.rejects(() => service.search({ ...exec, conversationId: "conv-2" }, "发布计划"), /unauthorized/);
+    // Only the conversation's owner can add a folder, and only to a conversation that exists.
+    await assert.rejects(() => service.bind(callerA, "conv-missing", registered.directory_id, true, 0), /unauthorized/);
+    await assert.rejects(() => service.bind(callerB, "conv-1", registered.directory_id, false, 1), /unauthorized/);
+    await assert.rejects(() => service.list(callerB, "conv-1"), /unauthorized/);
+    // The list carries the requested conversation's bindings only.
+    assert.deepEqual((await service.list(callerA, "conv-1")).directories[0]?.binding, { conversation_id: "conv-1", directory_id: registered.directory_id, enabled: true, revision: 1 });
+    // A folder added to conv-1 is not listed in conv-2 at all; without a conversation every registered folder is listed.
+    assert.deepEqual((await service.list(callerA, "conv-2")).directories, []);
+    assert.deepEqual((await service.list(callerA)).directories.map((row) => [row.directory_id, row.binding]), [[registered.directory_id, null]]);
+    // capabilityState reports the enabled folder as a root only in its own conversation (the fake path does not exist on disk).
+    assert.deepEqual((await service.capabilityState({ ...exec, conversationId: "conv-2" })).roots, []);
+    // Folders follow the conversation in full-access too (only the search tools drop out); background runs get none.
+    const fullAccess = await service.capabilityState({ ...exec, permissionMode: "full-access" });
+    assert.deepEqual(fullAccess.tools, []);
+    assert.ok(fullAccess.revision.startsWith(`policy:${registered.directory_id}:`), fullAccess.revision);
+    assert.equal((await service.capabilityState({ ...exec, background: true })).revision, "disabled:background");
+    assert.equal((await service.capabilityState({ ...exec, caller: callerB })).revision, "disabled:unauthorized");
 
     // Full-access mode and background tasks are denied.
     await assert.rejects(() => service.search({ ...exec, permissionMode: "full-access" }, "发布计划"), /unauthorized/);
@@ -294,7 +319,7 @@ test("verifyCitation re-checks current authorization and is tracked by revocatio
     store.createConversation({ id: "conv-v", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
     const service = new LocalDirectoryService(store, host, identities, () => true);
     const registered = await service.register(caller, await service.challenge(caller));
-    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    await service.bind(caller, "conv-v", registered.directory_id, true, 0);
     const exec: DirectoryExecution = {
       caller, employeeId: "emp-1", conversationId: "conv-v", sessionId: "sess-v", turnId: "turn-v",
       snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",
@@ -304,10 +329,10 @@ test("verifyCitation re-checks current authorization and is tracked by revocatio
     assert.ok(await service.verifyCitation(caller, citationId));
 
     // Unbind mid-session: invalidate() drops the handle for the tool AND the UI probe.
-    await service.bind(caller, registered.directory_id, "emp-1", false, 1);
+    await service.bind(caller, "conv-v", registered.directory_id, false, 1);
     await assert.rejects(() => service.verifyCitation(caller, citationId), /citation_expired|unauthorized/);
     await assert.rejects(() => service.read(exec, citationId), /citation_expired|unauthorized/);
-    await service.bind(caller, registered.directory_id, "emp-1", true, 2);
+    await service.bind(caller, "conv-v", registered.directory_id, true, 2);
 
     // Employee policy no longer lists the operation: both paths must fail even
     // though the handle itself is still live (fresh re-registration path).
@@ -344,7 +369,7 @@ test("search registers citations only for returned items so >512 hits stay reada
     store.createConversation({ id: "conv-f", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
     const service = new LocalDirectoryService(store, host, identities, () => true);
     const registered = await service.register(caller, await service.challenge(caller));
-    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    await service.bind(caller, "conv-f", registered.directory_id, true, 0);
     const exec: DirectoryExecution = {
       caller, employeeId: "emp-1", conversationId: "conv-f", sessionId: "sess-f", turnId: "turn-f",
       snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",
@@ -380,7 +405,7 @@ test("search snippets anchor at the real original-text hit even under NFKC lengt
     store.createConversation({ id: "conv-n", tenantId: "tenant-1", memberId: "member-1", entryEmployeeId: "emp-1", permissionMode: "read-only" });
     const service = new LocalDirectoryService(store, host, identities, () => true);
     const registered = await service.register(caller, await service.challenge(caller));
-    await service.bind(caller, registered.directory_id, "emp-1", true, 0);
+    await service.bind(caller, "conv-n", registered.directory_id, true, 0);
     const exec: DirectoryExecution = {
       caller, employeeId: "emp-1", conversationId: "conv-n", sessionId: "sess-n", turnId: "turn-n",
       snapshotVersion: "snap-1", generation: identity.generation, permissionMode: "read-only",

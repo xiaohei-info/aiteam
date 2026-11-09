@@ -16,6 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 HINDSIGHT_CLIENT_PROTOCOL = "aiteam-memory-v1"
 
 
+MEMORY_SCOPE_PATTERN = "^[0-9a-f]{32}$"
+
+
 class HindsightRuntimeConfigRequest(BaseModel):
     """Request a lease for the employee selected by Manager snapshot auth."""
 
@@ -31,6 +34,16 @@ class HindsightRuntimeConfigRequest(BaseModel):
     rotate: bool = Field(
         default=False,
         description="Revoke the current lease for this employee before issuing a new one",
+    )
+
+
+class HindsightMemoryRuntimeConfigRequest(HindsightRuntimeConfigRequest):
+    """Protocol adapter context; only this endpoint accepts a conversation scope."""
+
+    memory_scope: str | None = Field(
+        default=None,
+        pattern=MEMORY_SCOPE_PATTERN,
+        description="Opaque digest selecting a conversation's separate memory; absent selects the employee's shared memory.",
     )
 
 

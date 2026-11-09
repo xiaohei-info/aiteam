@@ -50,9 +50,13 @@ class MemoryNotContributed(Forbidden):
 
 
 class MemoryBackend(Protocol):
-    def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict: ...
+    def recall(
+        self, ctx: TenantContext, *, employee_id: str, query: str, limit: int, memory_scope: str | None = None
+    ) -> dict: ...
 
-    def retain(self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict) -> dict: ...
+    def retain(
+        self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict, memory_scope: str | None = None
+    ) -> dict: ...
 
     def list(
         self, ctx: TenantContext, *, employee_id: str, query: str | None, limit: int, offset: int
@@ -77,7 +81,7 @@ class MemoryService:
         self._retention = retention_service
         self._member_reader = member_reader
 
-    def runtime_context(self, ctx: TenantContext, *, employee_id: str) -> dict[str, Any]:
+    def runtime_context(self, ctx: TenantContext, *, employee_id: str, memory_scope: str | None = None) -> dict[str, Any]:
         """Return only protocol metadata after canonical memory authorization.
 
         The bank is derived here for the Hindsight-compatible profile response;
@@ -87,7 +91,7 @@ class MemoryService:
         policy = self._authorize_runtime(ctx, employee_id)
         normalized = normalize_policy(policy)
         return {
-            "bank_id": self._bank(ctx, employee_id),
+            "bank_id": self._bank(ctx, employee_id, memory_scope),
             "allowed_operations": list(normalized["allowed_operations"]),
             "policy_revision": policy.get("revision") if isinstance(policy.get("revision"), int) else 0,
             "retention_mode": "fact_only" if is_retention_guarded(policy) else "unlimited",
@@ -108,30 +112,33 @@ class MemoryService:
             self._authorize(ctx, employee_id=employee_id, operation="retain")
         return policy
 
-    def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int) -> dict:
+    def recall(self, ctx: TenantContext, *, employee_id: str, query: str, limit: int, memory_scope: str | None = None) -> dict:
         snapshot = self._authorize(ctx, employee_id=employee_id, operation="recall")
         policy = snapshot.memory_policy
         if self._retention is not None and is_retention_guarded(policy):
             body = self._retention.recall_body(policy, {"query": query, "max_tokens": min(8192, max(256, limit * 256))})
-            bank = self._bank(ctx, employee_id)
+            bank = self._bank(ctx, employee_id, memory_scope)
             raw = self._retention.backend.retention_request(bank, "memories/recall", method="POST", payload=body)
             self._retention.filter_recall(ctx, employee_id=employee_id, bank_id=bank, policy=policy, response=raw)
             self._unchanged_policy(ctx, snapshot, operation="recall")
             return self._retention.filter_recall(ctx, employee_id=employee_id, bank_id=bank, policy=policy, response=raw)
-        raw = self._backend.recall(ctx, employee_id=employee_id, query=query, limit=limit)
+        # A backend without scope support raises here rather than reading the shared bank.
+        scope = {"memory_scope": memory_scope} if memory_scope is not None else {}
+        raw = self._backend.recall(ctx, employee_id=employee_id, query=query, limit=limit, **scope)
         self._unchanged_policy(ctx, snapshot, operation="recall")
         return sanitize_metadata(raw)
 
     def retain(
-        self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict
+        self, ctx: TenantContext, *, employee_id: str, content: str, metadata: dict, memory_scope: str | None = None
     ) -> dict:
         snapshot = self._authorize(ctx, employee_id=employee_id, operation="retain")
+        scope = {"memory_scope": memory_scope} if memory_scope is not None else {}
         if self._retention is not None:
             from .hindsight_operation_policy import scoped_retain_body
-            bank = self._bank(ctx, employee_id)
+            bank = self._bank(ctx, employee_id, memory_scope)
             body = scoped_retain_body({"items": [{"content": content, "metadata": sanitize_metadata(metadata)}]},
-                                      tenant_id=ctx.tenant_id, member_id=ctx.user_id, employee_id=employee_id)
-            self._retention.backend.ensure_bank(ctx, employee_id=employee_id)
+                                      tenant_id=ctx.tenant_id, member_id=ctx.user_id, employee_id=employee_id, **scope)
+            self._retention.backend.ensure_bank(ctx, employee_id=employee_id, **scope)
             body = self._retention.prepare(ctx, employee_id=employee_id, bank_id=bank, policy=snapshot.memory_policy, body=body)
             self._unchanged_policy(ctx, snapshot, operation="retain")
             raw = self._retention.backend.retention_request(bank, "memories", method="POST", payload=body)
@@ -143,6 +150,7 @@ class MemoryService:
             employee_id=employee_id,
             content=content,
             metadata=sanitize_metadata(metadata),
+            **scope,
         ))
 
     def list(
@@ -527,9 +535,9 @@ class MemoryService:
             raise Forbidden("Memory policy changed during the operation")
 
     @staticmethod
-    def _bank(ctx, employee_id):
+    def _bank(ctx, employee_id, memory_scope=None):
         from .hindsight_credentials import derive_hindsight_bank_id
-        return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id)
+        return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, employee_id, ctx.enterprise_id, memory_scope)
 
 
 def build_memory_service(

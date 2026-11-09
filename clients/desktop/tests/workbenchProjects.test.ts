@@ -19,8 +19,11 @@ import {
   isExpanded,
   localSourceStates,
   needsPolling,
+  projectHandoffs,
   projectRunnerKind,
   PROJECT_SOURCES,
+  shownSources,
+  withHandoffs,
   runnableUnitCount,
   consentScriptLine,
   runPhaseText,
@@ -37,7 +40,7 @@ import {
   type TreeNode,
 } from '../src/pages/Workbench/projects.ts'
 import { parseCsv, sandboxedHtml, svgDataUrl } from '../src/pages/Workbench/preview.ts'
-import type { ConversationWorkspaces, ExpertProjection } from '../src/api/agent/types.ts'
+import type { ConversationMetadata, ConversationWorkspaces, ExpertProjection } from '../src/api/agent/types.ts'
 
 const KEY_A = 'conversation-aaaaaaaaaaaaaaaaaaaaaaaa'
 const KEY_B = 'conversation-bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -335,4 +338,69 @@ test('download sources: labels and custom address checks match the host', () => 
     assert.ok(sourceUrlError(bad), bad)
   }
   assert.match(sourceUrlError('https://user:secret@pip.example.com/simple') ?? '', /账号密码/)
+})
+
+const projectConversation = (id: string, updated: string, extra: Partial<ConversationMetadata> = {}) => ({
+  id, kind: 'chat', entry_employee_id: 'e1', updated_at: updated, last_message_at: null,
+  project: { source: 'codex', name: 'snake-game', id: '0123456789abcdef' }, ...extra,
+} as ConversationMetadata)
+
+test('外部项目交给员工后归到 Fred，按钮回到最近的项目对话', () => {
+  const handoffs = projectHandoffs([
+    projectConversation('older', '2026-11-01T00:00:00Z'),
+    projectConversation('newer', '2026-11-05T00:00:00Z'),
+    projectConversation('legacy', '2026-11-09T00:00:00Z', { project: { source: 'codex', name: 'x' } }),
+    projectConversation('group', '2026-11-09T00:00:00Z', { kind: 'group' }),
+    projectConversation('plain', '2026-11-09T00:00:00Z', { project: null }),
+  ], experts)
+  assert.equal(handoffs.length, 1, '没有项目 ID 的早期对话、群聊、普通对话都不算')
+  assert.equal(handoffs[0].conversationId, 'newer')
+
+  const local = fromLocalProject(localProject())
+  const other = fromLocalProject(localProject({ id: 'fedcba9876543210', name: 'other' }))
+  const [adopted, untouched] = withHandoffs([local, other], handoffs)
+  assert.equal(adopted.source, 'fred')
+  assert.equal(adopted.origin, 'codex')
+  assert.equal(adopted.conversationId, 'newer')
+  assert.equal(adopted.employeeName, '小研')
+  assert.equal(adopted.key, local.key, '选中状态不跳')
+  assert.equal(adopted.parts[0].source, 'codex', '文件和运行仍按原来源交给宿主')
+  assert.equal(adopted.location, local.location)
+  assert.equal(adopted.updatedAt, Date.parse('2026-11-05T00:00:00Z'))
+  assert.equal(untouched, other)
+  assert.equal(filterProjects([adopted, untouched], { source: 'fred', employee: '', query: '' }).length, 1)
+  assert.equal(filterProjects([adopted, untouched], { source: 'codex', employee: '', query: '' })[0], untouched)
+  assert.equal(filterProjects([adopted], { source: 'all', employee: '', query: 'codex' }).length, 1, '还能按原来源搜到')
+})
+
+test('来源卡片只显示扫描出项目的平台，读取失败的保留', () => {
+  const counts: Record<string, number> = { fred: 2, codex: 0, claude: 3, claude_desktop: 0, workbuddy: 0 }
+  const countOf = (source: string) => counts[source] ?? 0
+  const ready = { fred: false, local: false }
+  assert.deepEqual(shownSources(countOf, {}, ready), ['fred', 'claude'])
+  assert.deepEqual(shownSources(countOf, { workbuddy: { source: 'workbuddy', status: 'error', count: 0, truncated: false, message: '读取失败' } }, ready), ['fred', 'claude', 'workbuddy'])
+  assert.deepEqual(shownSources(countOf, {}, { fred: false, local: true }), ['fred'], '读取中的不显示')
+})
+
+
+test('a group sharing one folder is one part with no employee label, older member folders as subfolders', () => {
+  const shared = '官网改版-96acab'
+  const group: ConversationWorkspaces = {
+    conversation_id: 'group-shared',
+    kind: 'group',
+    title: '官网改版',
+    entry_employee_id: null,
+    coordinator_employee_id: 'e2',
+    updated_at: '2026-11-09T00:00:00Z',
+    workspaces: [
+      { employee_id: 'e2', role: 'coordinator', removed: false, workspace_key: shared, has_files: true },
+      { employee_id: 'e3', role: 'member', removed: true, workspace_key: shared, has_files: true },
+    ],
+  }
+  assert.deepEqual(fredWorkspaceKeys([group]), [shared], '共用目录只列一次')
+  const [project] = fredProjects([group], [workspace(shared, [file('s1', 'index.html'), file('s2', '设计师/logo.svg')])], experts)
+  assert.equal(project.parts.length, 1)
+  assert.equal(project.parts[0].label, null, '不按员工分')
+  assert.equal(project.parts[0].removed, false, '有成员移出不代表目录被移出')
+  assert.deepEqual(buildFileTree(project).map(node => node.name).sort(), ['index.html', '设计师'].sort())
 })
