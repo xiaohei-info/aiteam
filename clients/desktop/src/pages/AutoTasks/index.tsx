@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { CalendarClock, Check, ChevronRight, Clock3, ExternalLink, LoaderCircle, Pause, Play, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { agentApi, AgentApiError, type AutomationTask, type Connector, type TaskCategory, type TaskRun, type TaskSchedule } from '../../api/agent'
-import type { ExpertProjection } from '../../api/agent/types'
+import type { ExpertProjection, PermissionMode } from '../../api/agent/types'
+import { PERMISSION_MODE_LABELS } from '../../lib/conversationPermissions'
 import styles from './index.module.css'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
 
@@ -12,6 +13,7 @@ type Draft = {
   category: TaskCategory
   employeeId: string
   connectorIds: string[]
+  permissionMode: PermissionMode
   mode: TaskSchedule['mode']
   timezone: string
   time: string
@@ -23,6 +25,11 @@ type Draft = {
 
 const categoryLabels: Record<TaskCategory | 'all', string> = { all: '全部分类', report: '报告', monitor: '监控', reminder: '提醒', other: '其他' }
 const statusLabels: Record<string, string> = { active: '启用中', paused: '已暂停', completed: '已完成', queued: '等待执行', blocked: '已阻塞', running: '执行中', succeeded: '执行成功', error: '执行失败', aborted: '已中止', unknown: '结果待核实', skipped: '已跳过' }
+const permissionOptions: Array<{ value: PermissionMode; label: string; hint: string; recommended?: boolean }> = [
+  { value: 'full-access', label: PERMISSION_MODE_LABELS['full-access'], recommended: true, hint: '无需审批，可联网、可执行命令，适合抓取数据、生成文件等需要自动完成的任务。风险较高。' },
+  { value: 'workspace-write', label: PERMISSION_MODE_LABELS['workspace-write'], hint: '只能写任务工作目录，命令不能联网；命令仍需审批。' },
+  { value: 'read-only', label: PERMISSION_MODE_LABELS['read-only'], hint: '默认。只读取已有内容，不修改文件；命令需要审批。' },
+]
 const runModes: Array<[TaskSchedule['mode'], string]> = [['daily', '每天'], ['weekly', '每周'], ['monthly', '每月'], ['interval', '固定间隔'], ['once', '单次']]
 
 function localDateTime(value: string) {
@@ -33,7 +40,7 @@ function localDateTime(value: string) {
 
 function defaultDraft(): Draft {
   return {
-    name: '', prompt: '', category: 'other', employeeId: '', connectorIds: [], mode: 'daily',
+    name: '', prompt: '', category: 'other', employeeId: '', connectorIds: [], permissionMode: 'read-only', mode: 'daily',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', time: '09:00', weekday: 1,
     dayOfMonth: 1, intervalMinutes: 60, startAt: localDateTime(new Date(Date.now() + 3_600_000).toISOString()),
   }
@@ -44,7 +51,7 @@ function draftFromTask(task: AutomationTask): Draft {
   const rule = task.schedule
   return {
     ...draft, name: task.name, prompt: task.prompt ?? '', category: task.category,
-    employeeId: task.employee_id ?? '', connectorIds: task.connector_ids,
+    employeeId: task.employee_id ?? '', connectorIds: task.connector_ids, permissionMode: task.permission_mode ?? 'read-only',
     ...(rule ? { mode: rule.mode, timezone: rule.timezone } : {}),
     ...(rule && 'time' in rule ? { time: rule.time.slice(0, 5) } : {}),
     ...(rule?.mode === 'weekly' ? { weekday: rule.weekday } : {}),
@@ -183,12 +190,13 @@ export default function Tasks() {
         if (draft.prompt !== before.prompt) body.prompt = draft.prompt.trim()
         if (draft.category !== before.category) body.category = draft.category
         if (draft.employeeId !== before.employeeId) body.employee_id = draft.employeeId
+        if (draft.permissionMode !== before.permissionMode) body.permission_mode = draft.permissionMode
         if (JSON.stringify(draft.connectorIds) !== JSON.stringify(before.connectorIds)) body.connector_ids = draft.connectorIds
         if (JSON.stringify(schedule) !== JSON.stringify(selected.schedule)) body.schedule = schedule
         const updated = await agentApi.updateAutomationTask(selected.task_id, body, selected.etag)
         setSelected(updated); setEditing(false); await openTask(updated)
       } else {
-        const created = await agentApi.createAutomationTask({ name: draft.name.trim(), prompt: draft.prompt.trim(), category: draft.category, employee_id: draft.employeeId, connector_ids: draft.connectorIds, schedule }, crypto.randomUUID())
+        const created = await agentApi.createAutomationTask({ name: draft.name.trim(), prompt: draft.prompt.trim(), category: draft.category, employee_id: draft.employeeId, connector_ids: draft.connectorIds, schedule, permission_mode: draft.permissionMode }, crypto.randomUUID())
         setSelected(created); setEditing(false); await openTask(created)
       }
       await loadTasks()
@@ -253,12 +261,14 @@ export default function Tasks() {
 
 function TaskForm({ draft, experts, connectors, selected, busy, onChange, onSubmit, onCancel }: { draft: Draft; experts: ExpertProjection[]; connectors: Connector[]; selected: AutomationTask | null; busy: boolean; onChange: <K extends keyof Draft>(key: K, value: Draft[K]) => void; onSubmit: (event: FormEvent) => void; onCancel: () => void }) {
   const dialogRef = useDialogFocus<HTMLElement>()
+  // SAFETY: useDialogFocus is generic over the element but returns a RefObject typed for HTMLElement; the ref is attached to this <form>.
   return <form ref={dialogRef as unknown as Ref<HTMLFormElement>} className={styles.taskForm} onSubmit={onSubmit}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{selected ? '编辑任务' : '新建任务'}</span><h2>{selected ? selected.name : '创建自动化任务'}</h2></div><button type="button" className={styles.iconButton} disabled={busy} onClick={onCancel} aria-label="关闭"><X size={17} /></button></div>
     <fieldset className={styles.formFields} disabled={busy}><legend className={styles.visuallyHidden}>任务配置</legend>
     <label>任务名称<input placeholder="例如：每周销售报告" required maxLength={120} value={draft.name} onChange={event => onChange('name', event.target.value)} /></label>
     <label>执行指令<textarea placeholder="描述要完成的工作、使用的资料和期望的输出…" required maxLength={20_000} rows={6} value={draft.prompt} onChange={event => onChange('prompt', event.target.value)} /></label>
     <div className={styles.formGrid}><label>任务分类<select value={draft.category} onChange={event => onChange('category', event.target.value as TaskCategory)}>{Object.entries(categoryLabels).filter(([key]) => key !== 'all').map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>执行员工<select required value={draft.employeeId} onChange={event => { onChange('employeeId', event.target.value); onChange('connectorIds', []) }}><option value="">请选择员工</option>{experts.map(expert => <option key={expert.employee_id} value={expert.employee_id}>{expert.display_name}</option>)}</select></label></div>
     <fieldset><legend>使用的连接器</legend>{draft.employeeId && !connectors.length && <p className={styles.formHint}>该员工暂无可用连接器，可不选择继续创建。</p>}{connectors.map(connector => <label className={styles.checkbox} key={connector.connector_id}><input type="checkbox" checked={draft.connectorIds.includes(connector.connector_id)} disabled={connector.status !== 'enabled'} onChange={event => onChange('connectorIds', event.target.checked ? [...draft.connectorIds, connector.connector_id] : draft.connectorIds.filter(id => id !== connector.connector_id))} />{connector.display_name}</label>)}</fieldset>
+    <fieldset><legend>执行权限</legend>{permissionOptions.map(option => <label className={styles.checkbox} key={option.value}><input type="radio" name="permissionMode" checked={draft.permissionMode === option.value} onChange={() => onChange('permissionMode', option.value)} /><span><strong>{option.label}{option.recommended ? '（定时任务推荐）' : ''}</strong><span className={styles.formHint}> {option.hint}</span></span></label>)}{draft.permissionMode === 'full-access' && <div className={styles.warningBox} role="alert">完全访问会关闭文件与网络隔离：任务运行时无需逐次确认，可以联网、在本机任意位置读写文件并执行命令。请只对你信任的指令和员工开启，并确认指令内容不会误删或外泄本机数据。</div>}{draft.permissionMode !== 'full-access' && <p className={styles.formHint}>定时任务无人值守。需要执行命令时仍要审批，审批 10 分钟无人处理会中止本次运行；{draft.permissionMode === 'workspace-write' ? '工作区可写模式下命令也不能联网。' : '只读模式下命令不能联网，也不能写文件。'}需要联网抓取数据的任务请选择完全访问。</p>}</fieldset>
     <div className={styles.formGrid}><label>执行频率<select value={draft.mode} onChange={event => onChange('mode', event.target.value as TaskSchedule['mode'])}>{runModes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>时区<input required value={draft.timezone} onChange={event => onChange('timezone', event.target.value)} placeholder="Asia/Shanghai" /></label></div>
     {['daily', 'weekly', 'monthly'].includes(draft.mode) && <label>当地执行时间<input required type="time" step="1" value={draft.time} onChange={event => onChange('time', event.target.value)} /></label>}
     {draft.mode === 'weekly' && <label>星期<select value={draft.weekday} onChange={event => onChange('weekday', Number(event.target.value))}>{'一二三四五六日'.split('').map((day, index) => <option key={day} value={index + 1}>周{day}</option>)}</select></label>}
