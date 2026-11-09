@@ -31,6 +31,7 @@ from .member_service import GrantService, MemberDeptService
 from .memory_service import MemoryService, build_memory_service
 from .memory_retention_service import build_memory_retention_service
 from .openapi_schemas import MemoryResultOut, MemoryWriteAckOut
+from .schemas_hindsight import MEMORY_SCOPE_PATTERN
 from .repository_member import GrantRepository, MemberDeptRepository
 from .snapshot_service import build_snapshot_service
 
@@ -46,6 +47,11 @@ class MemoryRetainIn(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"x-max-body-bytes": _MAX_MEMORY_BODY_BYTES})
     employee_id: str = Field(min_length=1, max_length=_MAX_MEMORY_ID_CHARS)
     content: str = Field(min_length=1, max_length=131072)
+    memory_scope: str | None = Field(
+        default=None,
+        pattern=MEMORY_SCOPE_PATTERN,
+        description="对话独立记忆的不透明摘要；缺省写入员工共同记忆。",
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="写入 Hindsight 的附加元数据；JSON UTF-8 序列化后最大 64 KiB。",
@@ -316,9 +322,10 @@ def build_memory_items_router(verifier) -> APIRouter:
         _body_limit: None = Depends(_bounded_memory_body),
         claims: TokenClaims = Depends(require),
     ) -> Envelope[MemoryWriteAckOut]:
+        scope = {"memory_scope": body.memory_scope} if body.memory_scope is not None else {}
         data = _service(request).retain(
             tenant_context_from(claims), employee_id=body.employee_id,
-            content=body.content, metadata=body.metadata,
+            content=body.content, metadata=body.metadata, **scope,
         )
         return Envelope[MemoryWriteAckOut](data=MemoryWriteAckOut.model_validate(data))
 

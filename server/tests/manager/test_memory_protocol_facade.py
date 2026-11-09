@@ -78,3 +78,56 @@ def test_profile_authorizes_through_memory_service_and_uses_derived_bank():
     assert response.status_code == 200
     assert response.json()["bank_id"] == derive_hindsight_bank_id("tenant-1", "member-1", "employee-1")
     assert memory.calls == [("runtime", {"employee_id": "employee-1"})]
+
+
+SCOPE = "a" * 32
+
+
+def _scoped_app(memory) -> FastAPI:
+    app = FastAPI()
+    install_exception_handlers(app)
+    facade = MemoryProtocolFacade(memory)  # type: ignore[arg-type]
+
+    @app.api_route("/memory/{employee_id}/{memory_scope}/{path:path}", methods=["GET", "POST"])
+    async def proxy(request: Request, employee_id: str, memory_scope: str, path: str):
+        return await facade.proxy(
+            request,
+            path,
+            ctx=TenantContext(tenant_id="tenant-1", user_id="member-1"),
+            employee_id=employee_id,
+            memory_scope=memory_scope,
+        )
+
+    return app
+
+
+class _ScopedMemory:
+    def __init__(self):
+        self.calls: list[tuple[str, str | None]] = []
+
+    def runtime_context(self, ctx, *, employee_id, memory_scope=None):
+        self.calls.append(("runtime", memory_scope))
+        return {}
+
+    def recall(self, ctx, *, employee_id, query, limit, memory_scope=None):
+        self.calls.append(("recall", memory_scope))
+        return {"results": []}
+
+    def retain(self, ctx, *, employee_id, content, metadata, memory_scope=None):
+        self.calls.append(("retain", memory_scope))
+        return {"success": True, "async": True, "operation_id": "op-1"}
+
+
+def test_scoped_operations_stay_on_the_scope_and_ignore_the_plugin_bank():
+    memory = _ScopedMemory()
+    client = TestClient(_scoped_app(memory))
+    base = f"/memory/employee-1/{SCOPE}/v1/default/banks/attacker-bank"
+    headers = {"Content-Type": "application/json"}
+
+    profile = client.get(f"{base}/profile")
+    assert client.post(f"{base}/memories/recall", headers=headers, json={"query": "q", "max_tokens": 256}).status_code == 200
+    assert client.post(f"{base}/memories", headers=headers, json={"items": [{"content": "one"}]}).status_code == 200
+
+    assert profile.json()["bank_id"] == derive_hindsight_bank_id("tenant-1", "member-1", "employee-1", None, SCOPE)
+    assert profile.json()["bank_id"] != derive_hindsight_bank_id("tenant-1", "member-1", "employee-1")
+    assert memory.calls == [("runtime", SCOPE), ("recall", SCOPE), ("retain", SCOPE)]

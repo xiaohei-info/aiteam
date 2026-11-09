@@ -151,3 +151,25 @@ def test_lease_store_expiry_is_fail_closed():
     now[0] += timedelta(seconds=31)
     with pytest.raises(Exception, match="expired or revoked"):
         store.resolve(lease.token, bank_id="bank")
+
+
+def test_shared_employee_bank_is_unchanged_by_memory_scope_support():
+    import hashlib
+
+    expected = "aiteam-" + hashlib.sha256(b"enterprise-1:employee-1").hexdigest()[:32]
+    assert derive_hindsight_bank_id("tenant-1", "member-1", "employee-1", "enterprise-1") == expected
+    assert derive_hindsight_bank_id("tenant-1", "member-2", "employee-1", "enterprise-1", None) == expected
+
+
+def test_conversation_scope_gets_a_separate_bank_per_scope_member_and_employee():
+    base = ("tenant-1", "member-1", "employee-1", "enterprise-1")
+    shared = derive_hindsight_bank_id(*base)
+    first = derive_hindsight_bank_id(*base, "a" * 32)
+    assert len({
+        shared,
+        first,
+        derive_hindsight_bank_id(*base, "b" * 32),
+        derive_hindsight_bank_id("tenant-1", "member-2", "employee-1", "enterprise-1", "a" * 32),
+        derive_hindsight_bank_id("tenant-1", "member-1", "employee-2", "enterprise-1", "a" * 32),
+    }) == 5
+    assert first == derive_hindsight_bank_id(*base, "a" * 32)

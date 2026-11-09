@@ -387,20 +387,28 @@ class HindsightRuntimeService:
 
 
 def derive_hindsight_bank_id(
-    tenant_id: str, member_id: str, employee_id: str, enterprise_id: str | None = None,
+    tenant_id: str,
+    member_id: str,
+    employee_id: str,
+    enterprise_id: str | None = None,
+    memory_scope: str | None = None,
 ) -> str:
     """Derive the enterprise-private employee bank an Agent lease may select.
 
-    ``member_id`` remains in the call signature for wire/backward compatibility;
-    it is intentionally not part of the storage scope.  Members authorized to
-    the same digital employee share that employee's long-term memory, while the
-    lease itself remains member-authenticated.
+    Without ``memory_scope``, ``member_id`` is intentionally not part of the
+    storage scope: members authorized to the same digital employee share that
+    employee's long-term memory, while the lease stays member-authenticated.
+
+    ``memory_scope`` selects a separate bank for one local conversation.  It is
+    an opaque digest chosen by the Agent, so the member is part of this bank: a
+    scope value can never reach another member's memory.
     """
 
     enterprise_scope = enterprise_id or tenant_id
-    digest = hashlib.sha256(
-        f"{enterprise_scope}:{employee_id}".encode()
-    ).hexdigest()[:32]
+    seed = f"{enterprise_scope}:{employee_id}"
+    if memory_scope is not None:
+        seed = f"{seed}:member:{member_id}:scope:{memory_scope}"
+    digest = hashlib.sha256(seed.encode()).hexdigest()[:32]
     return f"aiteam-{digest}"
 
 

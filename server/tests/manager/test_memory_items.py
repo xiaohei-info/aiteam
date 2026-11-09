@@ -786,3 +786,175 @@ def test_guarded_member_list_filters_by_stamped_contributor():
     assert "OTHER_SECRET" not in json.dumps(result)
     summary = service.summary(_ctx(), employee_id="employee-a")
     assert (summary["own_count"], summary["others_count"], summary["unattributed_count"]) == (1, 1, 1)
+
+
+MEMORY_SCOPE = "c" * 32
+
+
+def _scoped_bank(ctx: TenantContext, scope: str | None = MEMORY_SCOPE) -> str:
+    from manager_service.hindsight_credentials import derive_hindsight_bank_id
+
+    return derive_hindsight_bank_id(ctx.tenant_id, ctx.user_id, "employee-a", ctx.enterprise_id, scope)
+
+
+def test_retained_retain_and_recall_use_only_the_scoped_bank():
+    snapshot = Mock()
+    snapshot.generate.return_value = _snapshot()
+    snapshot.generate.return_value.memory_policy = {
+        "enabled": True, "allowed_operations": ["recall", "retain"], "retention_guarded": True, "revision": 1,
+    }
+    banks: list[str] = []
+    ensured: list[str | None] = []
+    filtered: list[str] = []
+
+    class Backend:
+        def ensure_bank(self, _ctx, *, employee_id, memory_scope=None):
+            ensured.append(memory_scope)
+
+        def retention_request(self, bank, suffix, **kwargs):
+            banks.append(bank)
+            return {"success": True, "bank_id": bank, "operation_id": "op", "results": []}
+
+    class Retention:
+        backend = Backend()
+
+        def require_ready(self, _policy):
+            return None
+
+        def prepare(self, _ctx, *, bank_id, body, **kwargs):
+            filtered.append(bank_id)
+            return body
+
+        def validate_retain_response(self, body, response, bank_id):
+            filtered.append(bank_id)
+
+        def recall_body(self, _policy, body):
+            return body
+
+        def filter_recall(self, _ctx, *, bank_id, **kwargs):
+            filtered.append(bank_id)
+            return {"results": []}
+
+    service = MemoryService(snapshot=snapshot, backend=Mock(), retention_service=Retention())
+    ctx = _ctx()
+    service.retain(ctx, employee_id="employee-a", content="project fact", metadata={}, memory_scope=MEMORY_SCOPE)
+    service.recall(ctx, employee_id="employee-a", query="fact", limit=2, memory_scope=MEMORY_SCOPE)
+
+    scoped = _scoped_bank(ctx)
+    assert ensured == [MEMORY_SCOPE]
+    assert set(banks) == {scoped} and set(filtered) == {scoped}
+    assert _scoped_bank(ctx, None) not in banks
+
+
+def test_retain_identity_differs_between_scopes_for_identical_content():
+    from manager_service.hindsight_operation_policy import scoped_retain_body
+
+    def body(**scope):
+        return scoped_retain_body(
+            {"items": [{"content": "same", "metadata": {}}]},
+            tenant_id="t", member_id="m", employee_id="e", **scope,
+        )
+
+    shared, first, second = body(), body(memory_scope="a" * 32), body(memory_scope="b" * 32)
+    assert len({shared["operation_id"], first["operation_id"], second["operation_id"]}) == 3
+    assert body() == shared
+
+
+def test_unguarded_backend_receives_the_scope_and_shared_calls_stay_unscoped():
+    snapshot = Mock()
+    snapshot.generate.return_value = _snapshot()
+    backend = Mock()
+    backend.recall.return_value = {"results": []}
+    service = MemoryService(snapshot=snapshot, backend=backend)
+
+    service.recall(_ctx(), employee_id="employee-a", query="q", limit=1, memory_scope=MEMORY_SCOPE)
+    service.recall(_ctx(), employee_id="employee-a", query="q", limit=1)
+
+    assert backend.recall.call_args_list[0].kwargs["memory_scope"] == MEMORY_SCOPE
+    assert "memory_scope" not in backend.recall.call_args_list[1].kwargs
+
+
+def _hindsight_route_client(service):
+    from manager_service.app import router as manager_router
+    from manager_service.operator_catalog import FakeOperatorCatalogClient
+    from manager_service.routes_hindsight import build_hindsight_router
+    from shared.app_factory import create_app
+    from shared.config import Settings
+    from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
+
+    verifier, signer = make_inmem_verifier_and_signer()
+    app = create_app(Settings(tier="manager", service_name="m", db_url="postgresql://fake/fake"), manager_router)
+    app.state._operator_catalog = FakeOperatorCatalogClient()
+    app.state._memory_service = service
+    app.include_router(build_hindsight_router(verifier))
+    token = sign_inmem_token(signer, "tenant-a", ["member"], user_id="member-a")
+    return TestClient(app), {"Authorization": f"Bearer {token}"}
+
+
+class _RuntimeMemory:
+    def __init__(self):
+        self.calls: list[tuple[str, str | None]] = []
+
+    def runtime_context(self, ctx, *, employee_id, memory_scope=None):
+        self.calls.append(("runtime", memory_scope))
+        return {"bank_id": "aiteam-" + "a" * 32, "allowed_operations": ["recall"], "policy_revision": 1, "retention_mode": "unlimited"}
+
+    def recall(self, ctx, *, employee_id, query, limit, memory_scope=None):
+        self.calls.append(("recall", memory_scope))
+        return {"results": []}
+
+
+def test_memory_runtime_config_route_scopes_the_adapter_url():
+    memory = _RuntimeMemory()
+    client, headers = _hindsight_route_client(memory)
+    url = "/api/manager/hindsight/memory-runtime-config"
+    shared = client.post(url, headers=headers, json={"employee_id": "employee-a"})
+    scoped = client.post(url, headers=headers, json={"employee_id": "employee-a", "memory_scope": MEMORY_SCOPE})
+
+    assert shared.status_code == 200 and scoped.status_code == 200
+    assert shared.json()["data"]["base_url"].endswith("/employees/employee-a")
+    assert scoped.json()["data"]["base_url"].endswith(f"/employees/employee-a/scopes/{MEMORY_SCOPE}")
+    assert memory.calls == [("runtime", None), ("runtime", MEMORY_SCOPE)]
+
+
+def test_scoped_protocol_route_reaches_the_scope_and_rejects_malformed_values():
+    memory = _RuntimeMemory()
+    client, headers = _hindsight_route_client(memory)
+    json_headers = {**headers, "Content-Type": "application/json"}
+    prefix = "/api/manager/hindsight/employees/employee-a"
+    recall = "v1/default/banks/attacker/memories/recall"
+
+    ok = client.post(f"{prefix}/scopes/{MEMORY_SCOPE}/{recall}", headers=json_headers, json={"query": "q", "max_tokens": 256})
+    assert ok.status_code == 200
+    assert memory.calls == [("recall", MEMORY_SCOPE)]
+
+    memory.calls.clear()
+    for bad in ("short", "C" * 32, "g" * 32):
+        response = client.post(f"{prefix}/scopes/{bad}/{recall}", headers=json_headers, json={"query": "q", "max_tokens": 256})
+        assert response.status_code in (403, 422), bad
+    bad_config = client.post("/api/manager/hindsight/memory-runtime-config", headers=headers,
+                             json={"employee_id": "employee-a", "memory_scope": "../other"})
+    assert bad_config.status_code == 422
+    assert memory.calls == []
+
+
+def test_retain_route_passes_the_scope_and_rejects_malformed_values():
+    service = Mock()
+    service.retain.return_value = {"success": True, "async": True, "operation_id": "op-1"}
+    client, headers = _route_client(service)
+
+    scoped = client.post("/api/manager/memories/retain", headers=headers, json={
+        "employee_id": "employee-a", "content": "project fact", "memory_scope": MEMORY_SCOPE,
+    })
+    shared = client.post("/api/manager/memories/retain", headers=headers, json={
+        "employee_id": "employee-a", "content": "shared fact",
+    })
+    invalid = client.post("/api/manager/memories/retain", headers=headers, json={
+        "employee_id": "employee-a", "content": "x", "memory_scope": "../other",
+    })
+
+    assert scoped.status_code == 201 and shared.status_code == 201
+    assert invalid.status_code == 422
+    assert service.retain.call_args_list[0].kwargs["memory_scope"] == MEMORY_SCOPE
+    assert "memory_scope" not in service.retain.call_args_list[1].kwargs
+    assert service.retain.call_count == 2
