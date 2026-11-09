@@ -25,12 +25,12 @@ export class LocalSandbox {
   private readonly provider = new LocalSandboxProvider(this.context, LOCAL_PROVIDER_CONFIG);
 
   /** Run the provider's real backend selection/probe; no environment flag participates. */
-  async isAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only"): Promise<boolean> {
+  async isAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): Promise<boolean> {
     if (mode === "full-access") return true;
     try {
       const confined = this.provider.confine(["true"], this.policy(workspaceRoot, undefined, mode));
       if (confined.enforcement !== "full") return false;
-      const argv = networkIsolatedArgv(confined.argv, resolve(workspaceRoot));
+      const argv = networkIsolatedArgv(confined.argv, resolve(workspaceRoot), extraBoundary(extraRoots, mode));
       return (await run(argv, resolve(workspaceRoot), { onData: () => undefined })).exitCode === 0;
     } catch (error) {
       if (error instanceof SandboxUnavailableError) return false;
@@ -38,38 +38,42 @@ export class LocalSandbox {
     }
   }
 
-  async assertAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only"): Promise<void> {
+  async assertAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): Promise<void> {
     if (mode === "full-access") return;
-    if (!(await this.isAvailable(workspaceRoot, mode))) throw new SandboxUnavailableError(mode, "No functional local sandbox backend is available");
+    if (!(await this.isAvailable(workspaceRoot, mode, extraRoots))) throw new SandboxUnavailableError(mode, "No functional local sandbox backend is available");
   }
 
-  operations(workspaceRoot: string, sessionId?: string, mode: ConversationPermissionMode = "read-only"): SandboxOperations {
+  /** `extraRoots` are folders the user added to this conversation: same read/write rules as the workspace. */
+  operations(workspaceRoot: string, sessionId?: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): SandboxOperations {
     if (mode === "full-access") return this.unconfinedOperations(workspaceRoot);
     const root = canonicalPath(resolve(workspaceRoot));
     const policy = this.policy(root, sessionId, mode);
+    const extras = extraRoots.map((path) => canonicalPath(resolve(path)));
+    const boundary = extraBoundary(extras, mode);
+    const inside = (path: string) => assertWorkspacePath(path, root, extras);
     const readOnly = mode === "read-only";
     const rejectWrite = () => { throw new Error("当前会话为只读权限，请切换到工作区可写或完全访问"); };
     return {
       bash: {
         exec: async (command, cwd, options) => {
-          const actualCwd = assertWorkspacePath(cwd, root);
+          const actualCwd = inside(cwd);
           const confined = this.provider.confine(["bash", "-c", command], policy);
           if (confined.enforcement !== "full") throw new SandboxUnavailableError(policy.mode, "Sandbox backend provides only partial enforcement");
-          return run(networkIsolatedArgv(confined.argv, root), actualCwd, options);
+          return run(networkIsolatedArgv(confined.argv, root, boundary), actualCwd, options);
         },
       },
       read: {
-        readFile: (path) => readFile(assertWorkspacePath(path, root)),
-        access: async (path) => access(assertWorkspacePath(path, root), constants.R_OK),
+        readFile: (path) => readFile(inside(path)),
+        access: async (path) => access(inside(path), constants.R_OK),
       },
       write: {
-        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(assertWorkspacePath(path, root), content),
-        mkdir: readOnly ? rejectWrite : async (path) => { await mkdir(assertWorkspacePath(path, root), { recursive: true }); },
+        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(inside(path), content),
+        mkdir: readOnly ? rejectWrite : async (path) => { await mkdir(inside(path), { recursive: true }); },
       },
       edit: {
-        readFile: (path) => readFile(assertWorkspacePath(path, root)),
-        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(assertWorkspacePath(path, root), content),
-        access: async (path) => access(assertWorkspacePath(path, root), readOnly ? constants.R_OK : constants.R_OK | constants.W_OK),
+        readFile: (path) => readFile(inside(path)),
+        writeFile: readOnly ? rejectWrite : (path, content) => writeFile(inside(path), content),
+        access: async (path) => access(inside(path), readOnly ? constants.R_OK : constants.R_OK | constants.W_OK),
       },
     };
   }
@@ -96,9 +100,19 @@ export class LocalSandbox {
  * network isolation at this final spawn seam so a successful filesystem probe
  * cannot be reported ready while the child still has ambient network access.
  */
-export function networkIsolatedArgv(argv: string[], workspaceRoot?: string): string[] {
+export interface ExtraBoundary { roots: readonly string[]; writable: boolean }
+
+function extraBoundary(roots: readonly string[], mode: ConversationPermissionMode): ExtraBoundary {
+  return { roots: roots.map((path) => canonicalPath(resolve(path))), writable: mode === "workspace-write" };
+}
+
+export function networkIsolatedArgv(argv: string[], workspaceRoot?: string, extra: ExtraBoundary = { roots: [], writable: false }): string[] {
   const separator = argv.indexOf("--");
   if (separator < 1) throw new SandboxUnavailableError("workspace-write", "Sandbox runner did not return a command separator");
+  // Only the Seatbelt profile can be extended with more folders; elsewhere fail closed.
+  if (extra.roots.length > 0 && !(process.platform === "darwin" && argv[0]?.endsWith("sandbox-exec"))) {
+    throw new SandboxUnavailableError("workspace-write", "This sandbox backend cannot grant access to additional conversation folders");
+  }
 
   if (process.platform === "linux") {
     if (argv[0] === "bwrap") return [...argv.slice(0, separator), "--unshare-net", ...argv.slice(separator)];
@@ -111,7 +125,7 @@ export function networkIsolatedArgv(argv: string[], workspaceRoot?: string): str
     const profile = profileIndex >= 0 ? argv[profileIndex + 1] : undefined;
     if (!profile) throw new SandboxUnavailableError("workspace-write", "Seatbelt profile is missing");
     const hardened = [...argv];
-    hardened[profileIndex + 1] = `${profile} (deny network*)${workspaceRoot ? macosReadBoundary(workspaceRoot) : ""}`;
+    hardened[profileIndex + 1] = `${profile} (deny network*)${workspaceRoot ? macosReadBoundary(workspaceRoot, extra.roots) : ""}${macosExtraWrites(extra)}`;
     return hardened;
   }
 
@@ -119,22 +133,29 @@ export function networkIsolatedArgv(argv: string[], workspaceRoot?: string): str
 }
 
 /** Seatbelt filesystem providers constrain writes only. Restrict data reads too. */
-export function macosReadBoundary(workspaceRoot: string): string {
+export function macosReadBoundary(workspaceRoot: string, extraRoots: readonly string[] = []): string {
   const quote = (value: string) => JSON.stringify(value);
   // Minimal dependencies of the runtimes the Agent launches. /usr/bin/python3 is
   // a shim that resolves libxcrun and the toolchain python from whichever
   // developer directory is active (CommandLineTools or Xcode.app). Xcode's
   // xcrun/xcodebuild helpers load DVT* frameworks from SharedFrameworks. The
   // read-only scopes below stay far away from user data and the rest of /Library.
-  const roots = ["/System/Library", "/System/Volumes/Preboot", "/usr", "/bin", "/sbin", "/Library/Apple", "/Library/Frameworks/Python.framework", "/opt", "/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode.app/Contents/SharedFrameworks", "/Applications/Xcode.app/Contents/Frameworks", dirname(realpathSync(process.execPath)), canonicalPath(resolve(workspaceRoot))];
+  const roots = ["/System/Library", "/System/Volumes/Preboot", "/usr", "/bin", "/sbin", "/Library/Apple", "/Library/Frameworks/Python.framework", "/opt", "/Library/Developer/CommandLineTools", "/Applications/Xcode.app/Contents/Developer", "/Applications/Xcode.app/Contents/SharedFrameworks", "/Applications/Xcode.app/Contents/Frameworks", dirname(realpathSync(process.execPath)), canonicalPath(resolve(workspaceRoot)), ...extraRoots];
   // dyld needs the root directory itself; this literal does not grant its children.
   return ` (deny file-read-data) (allow file-read-data (literal "/") ${roots.map((path) => `(subpath ${quote(path)})`).join(" ")} (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random") (literal "/private/etc/localtime"))`;
 }
 
-/** Resolve a tool path through its nearest existing parent, rejecting symlink escapes. */
-export function assertWorkspacePath(path: string, workspaceRoot: string): string {
+/** Appended after the provider's `(deny file-write*)`, so these later allows win for the added folders only. */
+export function macosExtraWrites(extra: ExtraBoundary): string {
+  if (!extra.writable || extra.roots.length === 0) return "";
+  return ` (allow file-write* ${extra.roots.map((path) => `(subpath ${JSON.stringify(path)})`).join(" ")})`;
+}
+
+/** Resolve a tool path through its nearest existing parent, rejecting symlink escapes.
+ * Relative paths resolve against the workspace; the result must lie in the workspace or an added folder. */
+export function assertWorkspacePath(path: string, workspaceRoot: string, extraRoots: readonly string[] = []): string {
   const absolute = resolve(workspaceRoot, path);
-  const root = canonicalPath(resolve(workspaceRoot));
+  const roots = [canonicalPath(resolve(workspaceRoot)), ...extraRoots.map((root) => canonicalPath(resolve(root)))];
   let existing = absolute;
   const suffix: string[] = [];
   while (!existsSync(existing)) {
@@ -144,8 +165,8 @@ export function assertWorkspacePath(path: string, workspaceRoot: string): string
     existing = parent;
   }
   const candidate = resolve(realpathSync(existing), ...suffix.reverse());
-  const escaped = relative(root, candidate);
-  if (escaped.startsWith("..") || isAbsolute(escaped)) throw new Error("Path escapes the session workspace");
+  const within = (root: string) => { const rest = relative(root, candidate); return !rest.startsWith("..") && !isAbsolute(rest); };
+  if (!roots.some(within)) throw new Error("Path escapes the session workspace");
   return candidate;
 }
 

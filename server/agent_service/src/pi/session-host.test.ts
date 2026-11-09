@@ -8,6 +8,7 @@ import { createFixture } from "../test-fixture.js";
 import { createControlledResourceLoader, hindsightStateDir } from "./resources.js";
 import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import { appLogger } from "../observability.js";
+import { LocalSandbox } from "./sandbox.js";
 import { resetTranscript, SessionHost } from "./session-host.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -911,7 +912,7 @@ test("captured artifacts keep their folder, skip dependencies, and an edited fil
   }
 });
 
-test("new working folders are named after the conversation; group members get a subfolder each", async () => {
+test("new working folders are named after the conversation; group members share one", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
   const short = (id: string) => createHash("sha256").update(id).digest("hex").slice(0, 6);
@@ -930,9 +931,10 @@ test("new working folders are named after the conversation; group members get a 
     const groupDir = join(root, `招聘_评审-${short("named-group")}`);
     assert.deepEqual(
       fixture.store.listConversationParticipants("named-group").map((item) => [item.employee_id, item.workspace]),
-      [["coordinator", join(groupDir, "产品经理")], ["worker", join(groupDir, "工程师")]],
+      [["coordinator", groupDir], ["worker", groupDir]],
     );
-    assert.ok(existsSync(join(groupDir, "工程师")));
+    assert.ok(existsSync(groupDir));
+    assert.equal(existsSync(join(groupDir, "工程师")), false, "no per-employee subfolder");
 
     fixture.store.createConversation({ id: "named-chat", title: "热门AI项目总结", tenantId: "tenant-1", memberId: "member-1", sessionFile: "", workspace: "" });
     fixture.faux.setResponses([fauxAssistantMessage("ok")]);
@@ -949,7 +951,7 @@ test("new working folders are named after the conversation; group members get a 
   }
 });
 
-test("group chat artifacts sit under the employee's name", async () => {
+test("group chat artifacts use their path in the shared folder", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
   try {
@@ -968,7 +970,7 @@ test("group chat artifacts sit under the employee's name", async () => {
       return fauxAssistantMessage("done");
     }]);
     await host.prompt("artifact-group", "写计划", undefined, caller);
-    assert.deepEqual(fixture.store.listOwnedLocalFiles("artifact-group", "tenant-1", "member-1", "artifact").map((item) => item.path), [`${basename(workspace)}/plan.md`]);
+    assert.deepEqual(fixture.store.listOwnedLocalFiles("artifact-group", "tenant-1", "member-1", "artifact").map((item) => item.path), ["plan.md"]);
     await host.dispose();
   } finally {
     await fixture.close();
@@ -1024,7 +1026,7 @@ test("a reply over 2000 characters is also saved as a Markdown artifact and link
   }
 });
 
-test("a failed run saves no reply file, and group replies sit under the employee's name", async () => {
+test("a failed run saves no reply file, and group replies go in one folder named by employee", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
   const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
@@ -1045,8 +1047,7 @@ test("a failed run saves no reply file, and group replies sit under the employee
     await host.prompt("reply-group", "成功", undefined, caller);
     const paths = fixture.store.listOwnedLocalFiles("reply-group", "tenant-1", "member-1", "artifact").map((item) => item.path);
     assert.equal(paths.length, 1);
-    const workspacePrefix = basename(fixture.store.listConversationParticipants("reply-group")[0]!.workspace);
-    assert.match(paths[0]!, new RegExp(`^${workspacePrefix}/回复/产品经理-\\d{4}-\\d{4}\\.md$`, "u"), "group replies use the stable employee workspace folder");
+    assert.match(paths[0]!, /^回复\/产品经理-\d{4}-\d{4}\.md$/u, "the file name says which employee replied");
     await host.dispose();
   } finally {
     await fixture.close();
@@ -1489,6 +1490,38 @@ test("group resetContext resets only participants with a Session and shares one 
     fixture.faux.setResponses([fauxAssistantMessage("新话题回复")]);
     await host.prompt("reset-group", "新话题", undefined, caller);
     assert.equal(contexts.some((context) => context.includes("旧话题")), false, "group context must not carry pre-reset messages");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("group members working at once share one folder and take turns running commands", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  try {
+    const log = join(fixture.dataRoot, "turns.log");
+    const snapshot = (employee_id: string, tool: string) => ({ employee_id, version: "1", snapshot_version: `snapshot-${employee_id}`, display_name: employee_id, persona: "Worker", tool_policy: { allowed_tools: [tool] } });
+    fixture.store.replaceProjections(
+      ["coordinator", "a", "b"].map((employee_id) => ({ employee_id, tenant_id: "tenant-1", version: "1", handle: employee_id, display_name: employee_id, revoked: false, synced_at: now })),
+      [],
+      [snapshot("coordinator", "delegate_employee"), snapshot("a", "bash"), snapshot("b", "bash")],
+    );
+    fixture.store.createConversation({ id: "queue-group", sessionFile: "", workspace: "", coordinatorEmployeeId: "coordinator", permissionMode: "full-access" });
+    const host = fixture.createHost(undefined, undefined, undefined, new LocalSandbox());
+    const command = `echo start "$(pwd)" >> '${log}'; sleep 0.3; echo end "$(pwd)" >> '${log}'`;
+    fixture.faux.setResponses([
+      fauxAssistantMessage(["a", "b"].map((employee_id, index) => fauxToolCall("delegate_employee", { employee_id, task: `task-${index}` }, { id: `delegate-${index}` })), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("bash", { command }, { id: "bash-1" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("bash", { command }, { id: "bash-2" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+      fauxAssistantMessage("done"),
+      fauxAssistantMessage("coordinator result"),
+    ]);
+    await host.prompt("queue-group", "delegate", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    const lines = readFileSync(log, "utf8").trim().split("\n");
+    assert.deepEqual(lines.map((line) => line.split(" ")[0]), ["start", "end", "start", "end"], "one employee at a time");
+    assert.equal(new Set(lines.map((line) => line.slice(line.indexOf(" ") + 1))).size, 1, "both ran in the shared folder");
     await host.dispose();
   } finally {
     await fixture.close();

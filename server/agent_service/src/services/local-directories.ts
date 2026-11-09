@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { posix } from "node:path";
 import { isVerifiedCaller, type AuthenticatedCaller } from "../http/auth.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { DirectoryHost } from "../local-directory-host.js";
-import { LocalDirectoryError, LocalDirectoryStore, type DirectoryOwner, type DirectoryResource } from "../storage/local-directories.js";
+import { LocalDirectoryError, type LocalDirectoryStore, type DirectoryOwner, type DirectoryResource } from "../storage/local-directories.js";
 import type { AgentSqliteStore, FrozenSnapshot } from "../storage/sqlite.js";
 
 export const LOCAL_DIRECTORY_TOOLS = ["local_dir_search", "local_dir_read"] as const;
@@ -49,7 +50,7 @@ interface Citation {
   id: string; context: DirectoryExecution; owner: DirectoryOwner; resource: DirectoryResource;
   title: string; relative: string; snippet: string; version: string; authority: string; bindingRevision: number; expires: number;
 }
-interface ActiveTask { owner: DirectoryOwner; employeeId: string; directoryIds: Set<string>; controller: AbortController }
+interface ActiveTask { owner: DirectoryOwner; conversationId: string; employeeId: string; directoryIds: Set<string>; controller: AbortController }
 interface Hit { title: string; relative_path: string; content_version: string; snippet: string; offset: number; score: number }
 interface DeliveredHit { citation_id: string; title: string; relative_path: string; content_version: string; snippet: string; offset: number }
 interface Candidate extends Hit { resource: DirectoryResource; authority: string; bindingRevision: number }
@@ -98,22 +99,29 @@ export class LocalDirectoryService {
   constructor(private readonly store: AgentSqliteStore, private readonly host: DirectoryHost,
     private readonly identities: ExecutionAuthorizationRegistry,
     private readonly verified: (caller: AuthenticatedCaller) => boolean = isVerifiedCaller) {
-    this.resources = new LocalDirectoryStore(store.db);
+    this.resources = store.localDirectories;
   }
 
   owner(caller: AuthenticatedCaller): DirectoryOwner {
     if (!this.verified(caller) || !caller.tenantId || !caller.userId || !Number.isFinite(caller.claims?.exp) || (caller.claims!.exp! * 1000) <= Date.now()) return fail("unauthorized");
     return { tenantId: caller.tenantId, memberId: caller.userId };
   }
-  async list(caller: AuthenticatedCaller) {
+  /**
+   * With `conversationId`: only the folders added to that conversation (any binding row, so a
+   * removed folder keeps its revision for re-adding; the UI shows the enabled ones). Without it:
+   * every folder the member registered, with no binding.
+   */
+  async list(caller: AuthenticatedCaller, conversationId?: string) {
     const owner = this.owner(caller);
-    const rows = this.resources.list(owner);
+    if (conversationId !== undefined) this.ownedConversation(owner, conversationId);
+    const rows = this.resources.list(owner)
+      .filter((row) => conversationId === undefined || this.resources.binding(owner, row.directory_id, conversationId) !== undefined);
     let available = true;
     try { await this.host.status(); } catch { available = false; }
     return { available, formats: [...FORMATS], directories: await Promise.all(rows.map(async (row) => {
       let status = "ready";
       try { await this.host.check(row); } catch (error) { status = error instanceof LocalDirectoryError ? error.code : "authorization_unavailable"; }
-      return { directory_id: row.directory_id, display_name: row.display_name, path: row.canonical_path, revision: row.revision, status, bindings: this.resources.bindings(owner, row.directory_id) };
+      return { directory_id: row.directory_id, display_name: row.display_name, path: row.canonical_path, revision: row.revision, status, binding: conversationId === undefined ? null : this.resources.binding(owner, row.directory_id, conversationId) ?? null };
     })) };
   }
   async challenge(caller: AuthenticatedCaller): Promise<string> { return this.host.challenge(this.owner(caller)); }
@@ -123,11 +131,23 @@ export class LocalDirectoryService {
     this.owner(caller);
     return this.resources.register(owner, receipt);
   }
-  async bind(caller: AuthenticatedCaller, id: string, employee: string, enabled: boolean, revision: number) {
+  async consumeProjectTicket(caller: AuthenticatedCaller, ticket: string) {
     const owner = this.owner(caller);
-    if (enabled) { this.employee(owner, employee); await this.host.check(this.resources.get(owner, id)); this.owner(caller); }
-    const result = this.resources.bind(owner, id, employee, enabled, revision);
-    this.invalidate(owner, id, employee);
+    const project = await this.host.consumeProject(owner, ticket);
+    this.owner(caller);
+    return project;
+  }
+  /** Adds (enabled) or removes a folder for the whole conversation: every employee in it shares the choice. */
+  async bind(caller: AuthenticatedCaller, conversationId: string, id: string, enabled: boolean, revision: number) {
+    const owner = this.owner(caller);
+    this.ownedConversation(owner, conversationId);
+    if (enabled) {
+      await this.host.check(this.resources.get(owner, id));
+      this.owner(caller);
+      this.ownedConversation(owner, conversationId);
+    }
+    const result = this.resources.bind(owner, id, conversationId, enabled, revision);
+    this.invalidate(owner, id, conversationId);
     return result;
   }
   revoke(caller: AuthenticatedCaller, id: string): void {
@@ -135,40 +155,52 @@ export class LocalDirectoryService {
     this.resources.revoke(owner, id);
     this.invalidate(owner, id);
   }
-  invalidate(owner: DirectoryOwner, id?: string, employee?: string): void {
+  invalidate(owner: DirectoryOwner, id?: string, conversationId?: string): void {
     for (const task of this.tasks) {
       if (task.owner.tenantId === owner.tenantId && task.owner.memberId === owner.memberId
-        && (!employee || task.employeeId === employee)
+        && (!conversationId || task.conversationId === conversationId)
         && (!id || task.directoryIds.size === 0 || task.directoryIds.has(id))) {
         task.controller.abort(new LocalDirectoryError("unauthorized"));
       }
     }
     for (const [key, value] of this.citations) {
-      if (value.owner.tenantId === owner.tenantId && value.owner.memberId === owner.memberId && (!id || value.resource.directory_id === id) && (!employee || value.context.employeeId === employee)) this.citations.delete(key);
+      if (value.owner.tenantId === owner.tenantId && value.owner.memberId === owner.memberId && (!id || value.resource.directory_id === id) && (!conversationId || value.context.conversationId === conversationId)) this.citations.delete(key);
     }
   }
-  async capabilityState(context: Omit<DirectoryExecution, "sessionId" | "turnId">): Promise<{ revision: string; tools: LocalDirectoryTool[] }> {
+  /**
+   * `tools`: the search tools, when the employee's policy allows them and a folder is reachable.
+   * `roots`: the folders enabled in this conversation that the host still vouches for; the
+   * session also opens them to the coding tools under the conversation permission, regardless
+   * of whether the search tools are configured.
+   */
+  async capabilityState(context: Omit<DirectoryExecution, "sessionId" | "turnId">): Promise<{ revision: string; tools: LocalDirectoryTool[]; roots: string[] }> {
     try {
-      const snapshot = this.authorize({ ...context, sessionId: "probe", turnId: "probe" });
-      const configured = localDirectoryTools(snapshot);
-      if (configured.length === 0) return { revision: "disabled:policy", tools: [] };
+      // Folders follow the conversation in every permission mode; the search tools keep their own
+      // stricter rules (no full-access, matching snapshot), so a failed tool check only drops tools.
       const owner = this.owner(context.caller);
+      if (context.background) return { revision: "disabled:background", tools: [], roots: [] };
+      this.participant(this.ownedConversation(owner, context.conversationId), context.employeeId);
+      let configured: LocalDirectoryTool[] = [];
+      try { configured = localDirectoryTools(this.authorize({ ...context, sessionId: "probe", turnId: "probe" })); } catch { configured = []; }
       const parts: string[] = [];
+      const roots: string[] = [];
+      let reachable = 0;
       for (const resource of this.resources.list(owner)) {
-        const binding = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId && row.enabled);
+        const binding = this.enabledBinding(owner, resource, context);
         if (!binding) continue;
         try {
           const authority = await this.host.check(resource);
           parts.push(`${resource.directory_id}:${resource.revision}:${binding.revision}:${authority}`);
+          reachable += 1;
+          if (existsSync(resource.canonical_path)) roots.push(resource.canonical_path);
         } catch {
           parts.push(`${resource.directory_id}:${resource.revision}:${binding.revision}:unavailable`);
         }
       }
-      const active = parts.filter((part) => !part.endsWith(":unavailable"));
-      if (active.length === 0) return { revision: `inactive:${parts.join(",")}`, tools: [] };
-      return { revision: `active:${parts.join(",")}`, tools: configured };
+      const state = configured.length === 0 ? "policy" : reachable === 0 ? "inactive" : "active";
+      return { revision: `${state}:${parts.join(",")}`, tools: state === "active" ? configured : [], roots };
     } catch {
-      return { revision: "disabled:unauthorized", tools: [] };
+      return { revision: "disabled:unauthorized", tools: [], roots: [] };
     }
   }
   tools(context: DirectoryExecution): LocalDirectoryTool[] {
@@ -177,8 +209,7 @@ export class LocalDirectoryService {
       const configured = localDirectoryTools(snapshot);
       if (configured.length === 0) return [];
       const owner = this.owner(context.caller);
-      const hasBound = this.resources.list(owner).some((resource) =>
-        this.resources.bindings(owner, resource.directory_id).some((row) => row.employee_id === context.employeeId && row.enabled));
+      const hasBound = this.resources.list(owner).some((resource) => this.enabledBinding(owner, resource, context));
       return hasBound ? configured : [];
     } catch { return []; }
   }
@@ -188,6 +219,21 @@ export class LocalDirectoryService {
     const snapshot = this.store.listSnapshots(owner.tenantId, owner.memberId).find((row) => row.employee_id === id && row.tenant_id === owner.tenantId && row.member_id === owner.memberId && row.version === expert.version);
     return snapshot ?? fail("unauthorized");
   }
+  private enabledBinding(owner: DirectoryOwner, resource: DirectoryResource, context: Pick<DirectoryExecution, "conversationId">) {
+    const binding = this.resources.binding(owner, resource.directory_id, context.conversationId);
+    return binding?.enabled ? binding : undefined;
+  }
+  private ownedConversation(owner: DirectoryOwner, conversationId: string) {
+    const conversation = this.store.getConversationMetadata(conversationId);
+    if (!conversation || conversation.tenant_id !== owner.tenantId || conversation.member_id !== owner.memberId) return fail("unauthorized");
+    return conversation;
+  }
+  /** Private chats bind their entry employee; groups bind an active participant. */
+  private participant(conversation: { id: string; kind: string; entry_employee_id: string | null }, employeeId: string): void {
+    if (conversation.kind === "group") {
+      if (!this.store.listConversationParticipants(conversation.id).some((row) => row.employee_id === employeeId)) fail("unauthorized");
+    } else if (conversation.entry_employee_id !== employeeId) fail("unauthorized");
+  }
   private authorize(context: DirectoryExecution, tool?: LocalDirectoryTool): FrozenSnapshot {
     const owner = this.owner(context.caller);
     const identity = this.identities.get(owner.tenantId, owner.memberId);
@@ -195,9 +241,7 @@ export class LocalDirectoryService {
     if (context.background || !["read-only", "workspace-write"].includes(context.permissionMode)) return fail("unauthorized");
     const conversation = this.store.getConversationMetadata(context.conversationId);
     if (!conversation || conversation.tenant_id !== owner.tenantId || conversation.member_id !== owner.memberId || conversation.permission_mode !== context.permissionMode) return fail("unauthorized");
-    if (conversation.kind === "group") {
-      if (!this.store.listConversationParticipants(context.conversationId).some((row) => row.employee_id === context.employeeId)) return fail("unauthorized");
-    } else if (conversation.entry_employee_id !== context.employeeId) return fail("unauthorized");
+    this.participant(conversation, context.employeeId);
     const snapshot = this.employee(owner, context.employeeId);
     if (snapshot.snapshot_version !== context.snapshotVersion || (tool && !localDirectoryTools(snapshot).includes(tool))) return fail("unauthorized");
     return snapshot;
@@ -207,23 +251,23 @@ export class LocalDirectoryService {
     this.authorize(context, tool);
     const owner = this.owner(context.caller);
     const current = this.resources.get(owner, resource.directory_id);
-    const binding = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId);
+    const binding = this.resources.binding(owner, resource.directory_id, context.conversationId);
     if (current.revision !== resource.revision || !binding?.enabled || binding.revision !== bindingRevision) return fail("unauthorized");
     const actual = await this.host.check(resource);
     if (taskSignal?.aborted) return fail("cancelled");
     // Recheck local state after IPC yields: a revoke may have completed meanwhile.
     this.authorize(context, tool);
     this.resources.get(owner, resource.directory_id);
-    const after = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId);
+    const after = this.resources.binding(owner, resource.directory_id, context.conversationId);
     if (!after?.enabled || after.revision !== bindingRevision || (authority !== undefined && authority !== actual)) return fail("unauthorized");
     return actual;
   }
-  private trackTask<T>(owner: DirectoryOwner, employeeId: string, signal: AbortSignal | undefined, fn: (task: ActiveTask, combined: AbortSignal) => Promise<T>): Promise<T> {
+  private trackTask<T>(owner: DirectoryOwner, conversationId: string, employeeId: string, signal: AbortSignal | undefined, fn: (task: ActiveTask, combined: AbortSignal) => Promise<T>): Promise<T> {
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     if (signal?.aborted) return Promise.reject(new LocalDirectoryError("cancelled"));
     signal?.addEventListener("abort", onAbort, { once: true });
-    const task: ActiveTask = { owner, employeeId, directoryIds: new Set(), controller };
+    const task: ActiveTask = { owner, conversationId, employeeId, directoryIds: new Set(), controller };
     this.tasks.add(task);
     return fn(task, controller.signal).finally(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -235,7 +279,7 @@ export class LocalDirectoryService {
     if (!query.trim() || query.length > 512 || !Number.isInteger(limit) || limit < 1 || limit > 15) return fail("invalid_query");
     const terms = [...new Set(query.normalize("NFKC").toLocaleLowerCase("zh-CN").split(/\s+/u).filter(Boolean))];
     const owner = this.owner(context.caller);
-    return this.trackTask(owner, context.employeeId, signal, async (task, combined) => {
+    return this.trackTask(owner, context.conversationId, context.employeeId, signal, async (task, combined) => {
       const deadline = Date.now() + 5_000;
       const coverage = { files_examined: 0, files_skipped: 0, entries_examined: 0, bytes_read: 0 };
       let partial = false;
@@ -246,7 +290,7 @@ export class LocalDirectoryService {
         return Date.now() < deadline && coverage.files_examined + coverage.files_skipped < 2000 && coverage.entries_examined < 8000 && coverage.bytes_read < 32 * 1024 * 1024;
       };
       for (const resource of this.resources.list(owner)) {
-        const binding = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId && row.enabled);
+        const binding = this.enabledBinding(owner, resource, context);
         if (!binding) continue;
         task.directoryIds.add(resource.directory_id);
         const authority = await this.check(context, resource, binding.revision, undefined, "local_dir_search", combined);
@@ -312,7 +356,7 @@ export class LocalDirectoryService {
     const expected = citation.context;
     if (expected.caller.tenantId !== context.caller.tenantId || expected.caller.userId !== context.caller.userId || expected.employeeId !== context.employeeId || expected.sessionId !== context.sessionId || expected.turnId !== context.turnId || expected.conversationId !== context.conversationId) return fail("unauthorized");
     const owner = this.owner(context.caller);
-    return this.trackTask(owner, context.employeeId, signal, async (task, combined) => {
+    return this.trackTask(owner, context.conversationId, context.employeeId, signal, async (task, combined) => {
       task.directoryIds.add(citation.resource.directory_id);
       await this.check(context, citation.resource, citation.bindingRevision, citation.authority, "local_dir_read", combined);
       const source = await this.host.read(citation.resource, citation.relative);
@@ -358,7 +402,7 @@ export class LocalDirectoryService {
     const context: DirectoryExecution = { ...citation.context, caller };
     this.authorize(context, "local_dir_read");
     const resource = this.resources.get(owner, citation.resource.directory_id);
-    const binding = this.resources.bindings(owner, resource.directory_id).find((row) => row.employee_id === context.employeeId);
+    const binding = this.resources.binding(owner, resource.directory_id, context.conversationId);
     if (resource.revision !== citation.resource.revision || !binding?.enabled || binding.revision !== citation.bindingRevision) return fail("unauthorized");
     return citation;
   }

@@ -1,6 +1,7 @@
 import { registerAutomationRoutes, CalendarRuleSchema, AUTOMATION_OPERATION_DOCS, AUTOMATION_PARAMETER_EXAMPLES } from "./automation-tasks.js";
 import { registerLocalDirectoryRoutes, mapLocalDirectoryError, LOCAL_DIRECTORY_OPERATION_DOCS, LOCAL_DIRECTORY_PARAMETER_EXAMPLES } from "./local-directories.js";
 import { LocalDirectoryError } from "../storage/local-directories.js";
+import { assertProjectWorkspace, isAllowedProjectFolder, ProjectWorkspaceUnavailableError } from "../pi/project-conversation.js";
 import { registerContextSegmentRoutes, mapContextSegmentError, parseSegmentEvaluation, ContextSegmentSchema, SegmentEvaluationProperties, EVALUATION_FIELDS, CONTEXT_SEGMENT_OPERATION_DOCS, CONTEXT_SEGMENT_PARAMETER_EXAMPLES } from "./context-segments.js";
 import { ContextSegmentError } from "../storage/context-segments.js";
 import { registerEmployeeMemoryRoutes, EmployeeMemoryError, EMPLOYEE_MEMORY_OPERATION_DOCS, EMPLOYEE_MEMORY_PARAMETER_EXAMPLES } from "./employee-memories.js";
@@ -195,6 +196,12 @@ const ConversationMetadata = Type.Object({
   schedule_block_reason: Type.Optional(Type.String({ maxLength: 96, description: "调度被阻塞的安全原因；不会包含凭据。" })),
   schedule_retry_at: Type.Optional(Type.String({ format: "date-time", description: "待重试的本地调度 occurrence。" })),
   permission_mode: PermissionMode,
+  project: Type.Optional(Type.Object({
+    source: Type.String({ description: "项目来源：codex、claude、claude_desktop 或 workbuddy。" }),
+    name: Type.String({ maxLength: 200, description: "创建时的项目名；不随会话改名变化。" }),
+    id: Type.Optional(Type.String({ pattern: "^[0-9a-f]{16}$", description: "工作台中该项目的 ID（宿主签发票据时给出，不是路径）；早期创建的项目对话可能没有。" })),
+    path: Type.String({ minLength: 1, description: "项目目录在本机的路径，即本会话的工作目录；只经本机 Agent 返回给本机界面，可通过 PUT .../project-folder 更换。" }),
+  }, { additionalProperties: false, description: "存在时表示会话的工作目录是这个已有项目的目录。" })),
   last_read_entry_id: Type.Union([Type.String(), Type.Null()], { description: "最后读取的 entry_ref；旧存储可能是 raw Pi ID，歧义/失效时按未读处理。" }),
   last_preview: Type.Union([Type.String({ maxLength: 200 }), Type.Null()], { description: "最新可见 user/assistant 的脱敏短文本；排除 thinking/tool/internal，图片为占位符，无消息为 null。" }),
   last_message_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "最新可见 user/assistant 消息时间；无可见消息或旧消息时间缺失为 null。改名、已读、工具事件不改变此值。" }),
@@ -213,6 +220,10 @@ const ConversationCreateRequest = Type.Object({
   solution_instance_id: Type.Optional(Type.Union([Type.String({ minLength: 1, description: "已授权方案实例 ID；仅群聊可使用。" }), Type.Null()])),
   permission_mode: Type.Optional(PermissionMode),
   schedule: Type.Optional(Type.Union([Type.Ref("ConversationScheduleInput"), Type.Null()], { description: "定时执行配置；null 表示不启用调度。" })),
+  project: Type.Optional(Type.Object({
+    name: Type.String({ minLength: 1, maxLength: 200, description: "项目名，仅用于显示。" }),
+    ticket: Type.String({ minLength: 1, maxLength: 256, description: "桌面宿主签发的一次性项目票据。" }),
+  }, { additionalProperties: false, description: "在 Fred 以外工具做出的项目目录中开启私聊；目录由宿主票据确定，不接受路径。缺省权限为 workspace-write。" })),
 }, { $id: "ConversationCreateRequest", additionalProperties: false, description: "创建本地会话请求；群聊的 coordinator/solution 引用必须来自当前成员的本地授权投影。" });
 const ConversationUpdateRequest = Type.Object({
   title: Type.Optional(Type.Union([Type.String({ maxLength: 200, description: "会话标题。" }), Type.Null()])),
@@ -224,6 +235,9 @@ const ConversationUpdateRequest = Type.Object({
   schedule: Type.Optional(Type.Union([Type.Ref("ConversationScheduleInput"), Type.Null()], { description: "定时执行配置；null 表示移除调度。" })),
   last_read_entry_id: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 256, description: "推荐传 entry_ref；兼容该会话内唯一 raw Pi ID。跨会话/歧义/非法引用 422，写入规范化 entry_ref；null 清空。" }), Type.Null()])),
 }, { $id: "ConversationUpdateRequest", additionalProperties: false, description: "更新本地会话请求；未提供字段保持不变。" });
+const ConversationProjectFolderRequest = Type.Object({
+  ticket: Type.String({ minLength: 1, maxLength: 200, description: "桌面宿主在用户选好新目录后签发的一次性票据；不接受路径。" }),
+}, { $id: "ConversationProjectFolderRequest", additionalProperties: false, description: "更换项目对话的工作目录。" });
 const ConversationStateUpdateRequest = Type.Object({ state: Type.Ref("ConversationState") }, { $id: "ConversationStateUpdateRequest", additionalProperties: false, description: "更新会话状态请求。" });
 const GrantSyncRequest = Type.Object({ tenant_id: Type.String({ minLength: 1, maxLength: 200, description: "企业租户 ID；必须与当前 access token 一致。" }), member_id: Type.String({ minLength: 1, maxLength: 200, description: "当前成员 ID；必须与当前 access token 一致。" }), known_versions: Type.Optional(Type.Record(Type.String({ minLength: 1, description: "投影键（通常为 employee/solution ID）。" }), Type.String({ minLength: 1, description: "本地已知版本。" }), { maxProperties: 256, description: "投影键到本地版本的映射；省略表示从头获取。" })) }, { $id: "GrantSyncRequest", additionalProperties: false, description: "授权配置增量同步请求；服务端只接受与当前身份匹配的 tenant_id/member_id。" });
 const EmployeeAvatarRequest = Type.Object({
@@ -728,7 +742,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
@@ -902,6 +916,7 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   replaceConversation: { description: "兼容 PUT 的部分更新；未提供字段保持不变。", request: { patch: { summary: "兼容 PUT 的部分更新", value: { title: "更新后的标题" } } }, responses: { "200": { description: "更新后的本地会话元数据；当前 PUT 仍按部分更新处理。", examples: { updated: { summary: "更新成功", value: { data: EXAMPLE_CONVERSATION } } } } } },
   deleteConversation: { responses: { "200": { description: "会话删除结果；关联的本地附件和产物也会被删除。", examples: { deleted: { summary: "删除成功", value: { data: { deleted: true } } } } } } },
   getConversationState: { responses: { "200": { description: "持久化 state 与瞬时 prompting 状态。", examples: { state: { summary: "运行状态", value: { data: { conversation_id: "conversation-1", state: "active", prompting: false, failures: [] } } } } } } },
+  setConversationProjectFolder: { request: { ticket: { summary: "宿主票据", value: { ticket: "3f0c2a8e-5b8d-4c61-9d1e-2f7a0b6c4d11" } } }, responses: { "200": { description: "更换目录后的完整会话元数据。", examples: { moved: { summary: "已更换", value: { data: { ...EXAMPLE_CONVERSATION, permission_mode: "workspace-write", project: { source: "codex", name: "my-app", id: "0123456789abcdef", path: "/Users/me/code/my-app" } } } } } } } },
   setConversationState: { request: { state: { summary: "目标状态", value: { state: "paused" } } }, responses: { "200": { description: "状态更新后的完整会话元数据。", examples: { paused: { summary: "暂停成功", value: { data: { ...EXAMPLE_CONVERSATION, state: "paused" } } } } } } },
   getConversationContext: { responses: { "200": { description: "当前模型和上下文使用情况。", examples: { context: { summary: "上下文状态", value: { data: { conversation_id: "conversation-1", employee_id: "employee-1", model: { provider: "provider-1", id: "model-1", name: "Model One" }, used_tokens: 120, context_window: 128000, percentage: 9, thinking_level: "medium", available_thinking_levels: ["off", "low", "medium", "high"], prompting: false } } } } } } },
   resetConversationContext: { request: { default: { summary: "默认：保存记忆，失败时不重置", value: {} }, proceed: { summary: "用户确认后忽略保存失败", value: { on_memory_failure: "proceed" } }, skipMemory: { summary: "不保存记忆直接重置", value: { save_memory: false } }, unresolved: { summary: "记为未解决并开启", value: { outcome: "unresolved", outcome_reasons: ["missing_info"], outcome_note: "缺少报价单", follow_up: true } } }, responses: { "200": { description: "重置结果；记忆保存失败时 reset=false 且 confirmation_required=true。", examples: {
@@ -1391,6 +1406,7 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/conversations/:conversation_id/context", (_request, response, caller, fastifyRequest) => this.getConversationContext(response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("getConversationContext", { summary: "获取会话上下文状态", description: "返回当前本地 Pi 会话的模型、上下文 token 使用量、窗口、百分比和思考档位；不返回会话正文或凭据。", params: ConversationParams, response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound") } }));
     this.registerRoute("PATCH", "/api/agent/conversations/:conversation_id/context", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("updateConversationContext", { summary: "更新会话思考档位", description: "更新当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
     this.registerRoute("POST", "/api/agent/conversations/:conversation_id/context/reset", (request, response, caller, fastifyRequest) => this.resetConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("resetConversationContext", { summary: "开启新上下文", description: "清空当前成员本地会话的模型上下文并保留可见历史；重置前把旧上下文交给 Manager 记忆保存。保存临时失败时默认不重置，用户确认后用 on_memory_failure=proceed 重试；策略不允许或无内容时直接重置。上下文已重置且无新对话时返回上一次结果（already_reset=true）。群聊只重置本群内各参与者的上下文。", params: ConversationParams, body: Type.Ref("ConversationContextResetRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextResetEnvelope")), 403: problemResponse("Forbidden"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict") } }));
+    this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/project-folder", (request, response, caller, fastifyRequest) => this.relocateConversationProject(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationProjectFolder", { summary: "更换项目目录", description: "把项目对话的工作目录换成用户在桌面宿主里新选的文件夹（项目搬家后使用）。目录只来自宿主票据；员工回复中不能更换。会话记录、记忆和权限不变。", params: ConversationParams, body: Type.Ref("ConversationProjectFolderRequest"), response: { 200: jsonResponse(Type.Ref("ConversationEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
     this.registerRoute("PUT", "/api/agent/conversations/:conversation_id/thinking-level", (request, response, caller, fastifyRequest) => this.updateConversationContext(request, response, (fastifyRequest?.params as { conversation_id: string }).conversation_id, caller!), routeSchema("setConversationThinkingLevel", { summary: "设置会话思考档位", description: "设置当前成员本地会话的思考档位，并应用到后续 Pi 提示。", params: ConversationParams, body: Type.Ref("ConversationThinkingLevelRequest"), response: { 200: jsonResponse(Type.Ref("ConversationContextEnvelope")), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
 
     const promptHeaders = Type.Object({ "Idempotency-Key": Type.String({ minLength: 1, maxLength: 256 }) }, { additionalProperties: true });
@@ -1510,7 +1526,7 @@ export class AgentHttpServer {
       if (!caller!.tenantId) throw new HttpProblem(401, "unauthenticated", "Authenticated tenant is required");
       const data = await this.conversationWorkspaces.list(caller!.tenantId, caller!.userId ?? caller!.callerId);
       this.writeJson(response, 200, { data, page: { next_cursor: null, has_more: false } });
-    }, routeSchema("listConversationWorkspaces", { summary: "列出会话工作目录", description: "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊含全部成员，包括已移出成员），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的直接子目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。", response: { 200: jsonResponse(Type.Ref("ConversationWorkspaceListEnvelope")) } }));
+    }, routeSchema("listConversationWorkspaces", { summary: "列出会话工作目录", description: "供桌面工作台使用：返回当前成员每个会话的受管工作目录名（群聊每位成员一行，包括已移出成员；成员共用群文件夹，这些行的目录名相同），以及目录内是否有非空文件。只返回 Agent 数据目录 workspaces/ 下的目录名，不返回本机绝对路径、文件名或文件内容，不创建 Session，不上传。", response: { 200: jsonResponse(Type.Ref("ConversationWorkspaceListEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/work-records", (request, response, caller) => {
       this.writeJson(response, 200, this.workRecords.history(caller!, new URL(request.url ?? "/", "http://localhost").searchParams));
     }, routeSchema("listWorkRecords", { summary: "读取本机员工工作历史", description: "owner 隔离的实际 promptParticipant 观察及明确 provenance 的旧 Pi 历史，不是 Run/Task 执行状态机。按 occurred_at DESC/稳定创建序号 DESC，before 向更早翻页。精确 UTC [window_start,window_end)；未知旧时间为 null、不虚构开始/结束/用量。meta.after 保持第一页水位，随后轮询已看到记录的终态更新。正文摘要仅从 Pi 读取脱敏，不保存第二份正文，不上传。", querystring: WorkHistoryQuery, response: { 200: jsonResponse(Type.Ref("WorkHistoryEnvelope")) } }));
@@ -1756,7 +1772,8 @@ export class AgentHttpServer {
     const entryEmployeeId = this.optionalString(body.entry_employee_id, "entry_employee_id");
     let coordinatorEmployeeId = this.optionalString(body.coordinator_employee_id, "coordinator_employee_id");
     const solutionRef = this.optionalString(body.solution_instance_id, "solution_instance_id");
-    const permissionMode = parsePermissionMode(body.permission_mode);
+    const permissionMode = body.project !== undefined && body.permission_mode === undefined ? "workspace-write" : parsePermissionMode(body.permission_mode);
+    if (body.project !== undefined && (kind === "group" || !entryEmployeeId)) throw new HttpProblem(422, "invalid_project", "A project conversation is a private chat with one employee");
     const memberId = caller.userId ?? caller.callerId;
     const id = typeof body.id === "string" && body.id.length > 0 ? body.id : randomUUID();
     let schedule = null;
@@ -1802,11 +1819,14 @@ export class AgentHttpServer {
 
     if (coordinatorEmployeeId || solutionRef) throw new HttpProblem(422, "invalid_conversation_collaboration", "Only group conversations accept coordinator or solution references");
     if (entryEmployeeId) this.requireAuthorizedEmployee(entryEmployeeId, caller);
+    // Last, so that a request rejected above does not use up a one-time project ticket.
+    const project = body.project === undefined ? {} : await this.resolveConversationProject(body.project, caller);
     this.options.store.createConversation({
       id, title, kind, labels, state: "active", schedule,
       entryEmployeeId, coordinatorEmployeeId, solutionRef, permissionMode,
       tenantId: caller.tenantId,
       memberId,
+      ...project,
     });
     try {
       await this.options.host.initializeConversationParticipants(id, caller);
@@ -1815,6 +1835,54 @@ export class AgentHttpServer {
       throw error;
     }
     this.writeJson(response, 201, { data: this.conversationReads.metadata(id, caller) });
+  }
+
+  /** The folder comes from a host ticket, never from the request. */
+  private async resolveConversationProject(value: unknown, caller: AuthenticatedCaller): Promise<{ workspace: string; projectSource: string; projectName: string; projectId: string }> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpProblem(422, "invalid_project", "project must be an object");
+    // SAFETY: checked to be a non-array object above; every field is validated below.
+    const input = value as Record<string, unknown>;
+    const projectName = this.stringField(input.name, "project.name", 200).trim();
+    const { ticket } = input;
+    if (!projectName || typeof ticket !== "string" || !ticket || Object.keys(input).some((key) => key !== "name" && key !== "ticket")) {
+      throw new HttpProblem(422, "invalid_project", "project needs a name and a host ticket");
+    }
+    const project = await this.redeemProjectTicket(ticket, caller, (source) => EXTERNAL_PROJECT_SOURCES.has(source));
+    return { workspace: project.canonical_path, projectSource: project.source, projectName, projectId: project.project_id };
+  }
+
+  /** Redeems a host ticket and checks the folder again; `sourceAllowed` keeps workbench and folder-picker tickets apart. */
+  private async redeemProjectTicket(ticket: string, caller: AuthenticatedCaller, sourceAllowed: (source: string) => boolean) {
+    let project;
+    try {
+      project = await this.options.host.localDirectoryService.consumeProjectTicket(caller, ticket);
+    } catch (error) {
+      if (error instanceof LocalDirectoryError && error.code !== "authorization_unavailable") throw new HttpProblem(409, "project_ticket_invalid", "Project authorization expired; try again");
+      throw error;
+    }
+    if (!sourceAllowed(project.source) || !isAllowedProjectFolder(project.canonical_path, this.options.host.runtimeRoots)) {
+      throw new HttpProblem(422, "project_folder_not_allowed", "This folder cannot be used as a project");
+    }
+    assertProjectWorkspace(project.canonical_path);
+    return project;
+  }
+
+  /** A project that moved on disk: the conversation follows it to the folder the user picked in the host. */
+  private async relocateConversationProject(request: IncomingMessage, response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
+    const body = await this.readJson(request);
+    const { ticket } = body;
+    if (typeof ticket !== "string" || !ticket || Object.keys(body).some((key) => key !== "ticket")) throw new HttpProblem(422, "invalid_project", "A host ticket is required");
+    this.requireOwnedConversation(conversationId, caller);
+    if (!this.options.store.getConversation(conversationId)?.projectSource) throw new HttpProblem(422, "invalid_project", "Only a project conversation has a project folder");
+    // Refused before the one-time ticket is used; checked again together with the write.
+    this.options.host.assertConversationIdle(conversationId);
+    const project = await this.redeemProjectTicket(ticket, caller, (source) => source === PICKED_PROJECT_SOURCE);
+    if (!(await this.options.host.relocateProject(conversationId, project.canonical_path, project.project_id))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    this.writeJson(response, 200, { data: this.conversationReads.metadata(conversationId, caller) });
+  }
+
+  private assertProjectAvailable(conversation: { projectSource?: string | null; workspace: string }): void {
+    if (conversation.projectSource) assertProjectWorkspace(conversation.workspace);
   }
 
   private resolvePromptTargets(conversation: ReturnType<AgentSqliteStore["getConversation"]>, caller: AuthenticatedCaller, mentions: string[]): string[] {
@@ -1883,6 +1951,7 @@ export class AgentHttpServer {
       || (current.orchestration && (["coordinator_employee_id", "entry_employee_id", "solution_instance_id"].some(key => key in body) || (patch.kind && patch.kind !== "group")))) {
       throw new HttpProblem(422, "invalid_group_configuration", "Group configuration is immutable after creation");
     }
+    if (current.project && patch.kind && patch.kind !== current.kind) throw new HttpProblem(422, "invalid_project", "A project conversation stays a private chat");
     if (body.description !== undefined || body.orchestration !== undefined) {
       const orchestration = this.resolveGroupConfiguration(conversationId, current, { description: patch.description, orchestration: body.orchestration });
       if (orchestration) patch.orchestration = orchestration;
@@ -2430,6 +2499,7 @@ export class AgentHttpServer {
     if (this.options.host.readEntries(conversationId, caller).some((item) => visibleHistoryText(item.entry))) {
       throw new HttpProblem(409, "conversation_not_empty", "Conversation already has messages");
     }
+    this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, []));
     const receipt = this.options.store.reservePrompt({ conversationId, callerId, key, fingerprint: INTRODUCTION_PROMPT_TYPE });
     if (!receipt.isNew) return this.writeReceipt(response, conversationId, key, receipt.state);
@@ -2459,6 +2529,7 @@ export class AgentHttpServer {
     if (new Set(attachmentIds).size !== attachmentIds.length) throw new HttpProblem(422, "invalid_attachment_ids", "attachment_ids must not contain duplicates");
     const mentions = payload.mentions === undefined ? [] : this.stringArray(payload.mentions, "mentions", 16);
     if (mentions.length > 0 && conversation.kind !== "group") throw new HttpProblem(422, "invalid_mentions", "mentions are only supported for group conversations");
+    this.assertProjectAvailable(conversation);
     this.assertRunnableTargets(caller, this.resolvePromptTargets(conversation, caller, mentions));
     // Fingerprint IDs, not mutable attachment bytes, so completed/accepted retries can return their receipt.
     const fingerprint = createHash("sha256").update(JSON.stringify({ text, images, attachment_ids: attachmentIds, mentions })).digest("hex");
@@ -2908,6 +2979,7 @@ export class AgentHttpServer {
     else if (error instanceof IdempotencyConflictError) problem = { status: 409, code: "idempotency_conflict", detail: error.message };
     else if (error instanceof IdempotencyUnknownError) problem = { status: 409, code: "idempotency_unknown", detail: error.message };
     else if (error instanceof ConversationBusyError) problem = { status: 409, code: "conversation_busy", detail: error.message };
+    else if (error instanceof ProjectWorkspaceUnavailableError) problem = { status: 409, code: "project_workspace_unavailable", detail: error.message };
     else if (error instanceof EventCursorStaleError) problem = { status: 409, code: "stale_cursor", detail: error.message };
     else if (error instanceof InvalidEventCursorError || error instanceof InvalidReadCursorError) problem = { status: 422, code: "invalid_cursor", detail: error.message };
     else if (error instanceof GroupCreationError) problem = { status: error.status, code: error.code, detail: error.message };
@@ -3063,6 +3135,10 @@ function projectOrgNode(value: unknown, visibleEmployees: ReadonlySet<string>, r
     children,
   };
 }
+
+const EXTERNAL_PROJECT_SOURCES = new Set(["codex", "claude", "claude_desktop", "workbuddy"]);
+/** Source the host gives a folder the user picked to relocate a project; never accepted when creating one. */
+const PICKED_PROJECT_SOURCE = "folder";
 
 function parsePermissionMode(value: unknown): ConversationPermissionMode {
   if (value === undefined) return "read-only";

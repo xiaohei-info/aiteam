@@ -8,11 +8,10 @@ import type { LocalDirectoryService } from "../services/local-directories.js";
 const str = (description: string, options: Record<string, unknown> = {}) => Type.String({ description, ...options });
 const obj = <T extends TProperties>(properties: T, description: string) => Type.Object(properties, { additionalProperties: false, description });
 
-const DirectoryEmployeeBinding = obj({
-  employee_id: str("数字员工 ID"),
-  enabled: Type.Boolean({ description: "是否启用该目录绑定" }),
-  revision: Type.Integer({ minimum: 1, description: "员工绑定乐观并发版本号" }),
-}, "数字员工与本地知识目录的绑定状态");
+const DirectoryConversationBinding = obj({
+  enabled: Type.Boolean({ description: "该目录当前是否添加在本会话中（false 为已移除）" }),
+  revision: Type.Integer({ minimum: 1, description: "本会话目录绑定的乐观并发版本号" }),
+}, "本会话与本地目录的绑定状态（会话内所有员工共用）");
 
 const LocalDirectoryResource = obj({
   directory_id: str("本地知识目录稳定 ID"),
@@ -20,7 +19,7 @@ const LocalDirectoryResource = obj({
   path: str("当前成员在桌面设置页可见的本地规范路径"),
   revision: Type.Integer({ minimum: 1, description: "目录授权乐观并发版本号" }),
   status: str("目录实时状态（ready 或不可用原因码）"),
-  bindings: Type.Array(DirectoryEmployeeBinding, { description: "员工级绑定状态详情" }),
+  binding: Type.Union([DirectoryConversationBinding, Type.Null()], { description: "查询参数 conversation_id 指定会话中的绑定（enabled=false 为已移除，重新添加时用其 revision）；未指定会话时为 null" }),
 }, "受控本地知识目录资源（不含源文档内容）");
 
 const LocalDirectoryListPayload = obj({
@@ -42,11 +41,11 @@ const RegisteredDirectoryResource = obj({
 }, "已注册的本地知识目录记录");
 
 const BindingUpdateResource = obj({
-  employee_id: str("数字员工 ID"),
+  conversation_id: str("会话 ID"),
   directory_id: str("本地知识目录 ID"),
   enabled: Type.Boolean({ description: "更新后的绑定状态" }),
-  revision: Type.Integer({ minimum: 1, description: "更新后的员工绑定版本号" }),
-}, "员工绑定更新结果");
+  revision: Type.Integer({ minimum: 1, description: "更新后的本会话目录绑定版本号" }),
+}, "本会话目录绑定更新结果");
 
 const RevokeDirectoryResource = obj({
   revoked: Type.Boolean({ description: "是否已撤销" }),
@@ -75,9 +74,12 @@ const problem = (description: string) => ({ content: { "application/problem+json
 
 const DirectoryParams = obj({ directory_id: str("本地知识目录 ID", { minLength: 1 }) }, "目录路径参数");
 const BindingParams = obj({
+  conversation_id: str("会话 ID", { minLength: 1 }),
   directory_id: str("本地知识目录 ID", { minLength: 1 }),
-  employee_id: str("数字员工 ID", { minLength: 1 }),
-}, "目录员工绑定路径参数");
+}, "会话内目录绑定路径参数");
+const ListQuery = obj({
+  conversation_id: Type.Optional(str("只返回添加到该会话的目录及其绑定；必须属于当前成员", { minLength: 1 })),
+}, "本地知识目录列表查询参数");
 const CitationParams = obj({ citation_id: str("引用句柄 ID", { minLength: 1 }) }, "引用句柄路径参数");
 
 type Handler = (request: IncomingMessage, response: ServerResponse, caller?: AuthenticatedCaller, fastifyRequest?: FastifyRequest) => void | Promise<void>;
@@ -130,8 +132,9 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
   router.register(
     "GET",
     prefix,
-    async (_req, res, caller) => {
-      const result = await service.list(caller!);
+    async (_req, res, caller, fastify) => {
+      const conversationId = (fastify?.query as { conversation_id?: string } | undefined)?.conversation_id;
+      const result = await service.list(caller!, conversationId || undefined);
       router.send(res, 200, {
         data: {
           available: result.available,
@@ -142,12 +145,12 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
             path: directory.path,
             revision: directory.revision,
             status: directory.status,
-            bindings: directory.bindings.map((binding) => ({ employee_id: binding.employee_id, enabled: binding.enabled, revision: binding.revision })),
+            binding: directory.binding ? { enabled: directory.binding.enabled, revision: directory.binding.revision } : null,
           })),
         },
       });
     },
-    schema("listLocalDirectories", "列出当前成员授权的本地知识目录与绑定状态", envelope(LocalDirectoryListPayload)),
+    schema("listLocalDirectories", "列出本地目录：指定会话时只返回添加到该会话的目录及其绑定，未指定时返回当前成员登记的全部目录", envelope(LocalDirectoryListPayload), { querystring: ListQuery }),
   );
 
   router.register(
@@ -191,22 +194,22 @@ export function registerLocalDirectoryRoutes(router: Router, service: LocalDirec
 
   router.register(
     "PUT",
-    `${prefix}/:directory_id/bindings/:employee_id`,
+    "/api/agent/conversations/:conversation_id/local-directories/:directory_id",
     async (req, res, caller, fastify) => {
-      const params = fastify?.params as { directory_id: string; employee_id: string };
+      const params = fastify?.params as { conversation_id: string; directory_id: string };
       const body = await router.read(req);
       if (typeof body.enabled !== "boolean") throw new LocalDirectoryError("invalid_request");
       const expectedRevision = body.expected_revision === undefined ? 0 : Number(body.expected_revision);
       if (!Number.isInteger(expectedRevision) || expectedRevision < 0) throw new LocalDirectoryError("invalid_request");
-      const updated = await service.bind(caller!, params.directory_id, params.employee_id, body.enabled, expectedRevision);
-      router.send(res, 200, { data: { employee_id: updated.employee_id, directory_id: updated.directory_id, enabled: updated.enabled, revision: updated.revision } });
+      const updated = await service.bind(caller!, params.conversation_id, params.directory_id, body.enabled, expectedRevision);
+      router.send(res, 200, { data: { conversation_id: updated.conversation_id, directory_id: updated.directory_id, enabled: updated.enabled, revision: updated.revision } });
     },
-    schema("setLocalDirectoryBinding", "绑定或解绑数字员工的本地知识目录权限", envelope(BindingUpdateResource), {
+    schema("setConversationLocalDirectoryBinding", "把本地目录添加到本会话或从本会话移除（会话内所有员工共用）", envelope(BindingUpdateResource), {
       params: BindingParams,
       body: obj({
-        enabled: Type.Boolean({ description: "true 为授权该员工检索此目录，false 为解除绑定" }),
-        expected_revision: Type.Optional(Type.Integer({ minimum: 0, description: "员工绑定乐观并发版本号（首次绑定为 0）" })),
-      }, "员工目录绑定更新请求"),
+        enabled: Type.Boolean({ description: "true 为把目录添加到本会话，false 为从本会话移除" }),
+        expected_revision: Type.Optional(Type.Integer({ minimum: 0, description: "本会话目录绑定乐观并发版本号（首次添加为 0）" })),
+      }, "本会话目录绑定更新请求"),
     }),
   );
 
@@ -250,11 +253,7 @@ const exampleDirectory = {
   path: "/Users/example/Documents/Specs",
   revision: 1,
   status: "ready",
-  bindings: [{
-    employee_id: "employee-1",
-    enabled: true,
-    revision: 1,
-  }],
+  binding: { enabled: true, revision: 1 },
 };
 
 const exampleCitation = {
@@ -282,7 +281,7 @@ const exampleRegistered = {
 };
 
 const exampleBinding = {
-  employee_id: "employee-1",
+  conversation_id: "conversation-1",
   directory_id: exampleDirectory.directory_id,
   enabled: true,
   revision: 1,
@@ -329,16 +328,16 @@ export const LOCAL_DIRECTORY_OPERATION_DOCS = {
       },
     },
   },
-  setLocalDirectoryBinding: {
+  setConversationLocalDirectoryBinding: {
     request: {
       bind: {
-        summary: "更新员工目录绑定",
+        summary: "把目录添加到本会话",
         value: { enabled: true, expected_revision: 0 },
       },
     },
     responses: {
       "200": {
-        description: "更新后的员工绑定状态。",
+        description: "更新后的本会话目录绑定状态。",
         examples: { updated: { summary: "绑定已更新", value: { data: exampleBinding } } },
       },
     },

@@ -362,6 +362,32 @@ test("HttpManagerClient pulls memory protocol metadata and reuses the caller JWT
   assert.doesNotMatch(String(request?.init.body), /bank_id|token|lease/);
 });
 
+test("HttpManagerClient sends a memory scope and accepts only the adapter for that exact scope", async () => {
+  const scope = "b".repeat(32);
+  const adapter = (baseUrl: string) => new HttpManagerClient("https://manager.test", async () => new Response(JSON.stringify({ data: {
+    base_url: baseUrl,
+    bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    allowed_operations: ["recall", "retain"],
+    policy_revision: 3,
+    client_protocol: HINDSIGHT_CLIENT_PROTOCOL,
+    retention_mode: "unlimited",
+  } }), { status: 200 }));
+  const shared = "https://manager.test/api/manager/hindsight/employees/employee-1";
+  const scoped = `${shared}/scopes/${scope}`;
+
+  let body = "";
+  const recording = new HttpManagerClient("https://manager.test", async (_input, init) => {
+    body = String(init?.body);
+    return new Response(JSON.stringify({ data: { base_url: scoped, bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", allowed_operations: ["recall"], policy_revision: 1, client_protocol: HINDSIGHT_CLIENT_PROTOCOL, retention_mode: "unlimited" } }), { status: 200 });
+  });
+  assert.equal((await recording.pullMemoryRuntimeConfig(caller, "employee-1", scope)).base_url, scoped);
+  assert.equal(JSON.parse(body).memory_scope, scope);
+
+  await assert.rejects(adapter(shared).pullMemoryRuntimeConfig(caller, "employee-1", scope), /memory adapter URL/);
+  await assert.rejects(adapter(`${shared}/scopes/${"c".repeat(32)}`).pullMemoryRuntimeConfig(caller, "employee-1", scope), /memory adapter URL/);
+  await assert.rejects(adapter(scoped).pullMemoryRuntimeConfig(caller, "employee-1"), /memory adapter URL/);
+});
+
 test("Hindsight lease normalization rejects direct upstream URLs, extra fields, and expiry", () => {
   const valid = {
     base_url: "/api/manager/hindsight", bank_id: "aiteam-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", token: "opaque", lease_id: "lease-1", version: 1,

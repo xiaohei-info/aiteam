@@ -101,6 +101,25 @@ test("group workspaces merge into one conversation and keep removed members", as
   }
 });
 
+test("group members sharing one folder list one row each with the same key", async () => {
+  const fixture = await createFixture();
+  try {
+    const shared = join(fixture.dataRoot, "workspaces", "官网改版-96acab");
+    writeTree(shared, { "index.html": "x" });
+    fixture.store.createConversation({ id: "group", kind: "group", coordinatorEmployeeId: "coord", tenantId: "tenant-1", memberId: "member-1" });
+    participant(fixture, "group", "coord", "coordinator", shared);
+    participant(fixture, "group", "worker", "member", shared);
+
+    const group = (await list(fixture)).body.data.find((item: any) => item.conversation_id === "group");
+    assert.deepEqual(group.workspaces, [
+      { employee_id: "coord", role: "coordinator", removed: false, workspace_key: "官网改版-96acab", has_files: true },
+      { employee_id: "worker", role: "member", removed: false, workspace_key: "官网改版-96acab", has_files: true },
+    ]);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("workspaces named after the conversation return their path below the root as the key", async () => {
   const fixture = await createFixture();
   try {

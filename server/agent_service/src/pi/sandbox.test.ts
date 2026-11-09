@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { join } from "node:path";
-import { LocalSandbox } from "./sandbox.js";
+import { assertWorkspacePath, LocalSandbox, macosExtraWrites, macosReadBoundary } from "./sandbox.js";
 
 function shellQuote(path: string): string {
   return `'${path.replaceAll("'", "'\\''")}'`;
@@ -158,3 +159,70 @@ test("LocalSandbox denies network access and terminates the whole child process 
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("assertWorkspacePath accepts added folders and still rejects everything else", async () => {
+  const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-roots-ws-"));
+  const extra = await mkdtemp(join(process.cwd(), ".dsh-sandbox-roots-extra-"));
+  const other = await mkdtemp(join(process.cwd(), ".dsh-sandbox-roots-other-"));
+  try {
+    assert.equal(assertWorkspacePath("a.txt", workspace, [extra]), join(realpathSync(workspace), "a.txt"));
+    assert.equal(assertWorkspacePath(join(extra, "new", "b.txt"), workspace, [extra]), join(realpathSync(extra), "new", "b.txt"));
+    assert.throws(() => assertWorkspacePath(join(other, "c.txt"), workspace, [extra]), /escapes/);
+    assert.throws(() => assertWorkspacePath(join(extra, "d.txt"), workspace), /escapes/);
+    // A symlink inside an added folder cannot reach outside the allowed roots.
+    await symlink(other, join(extra, "link"));
+    assert.throws(() => assertWorkspacePath(join(extra, "link", "e.txt"), workspace, [extra]), /escapes/);
+  } finally {
+    for (const dir of [workspace, extra, other]) await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Seatbelt extensions grant added folders read always and write only in workspace-write", () => {
+  assert.equal(macosExtraWrites({ roots: ["/x/a"], writable: false }), "");
+  assert.equal(macosExtraWrites({ roots: [], writable: true }), "");
+  assert.equal(macosExtraWrites({ roots: ["/x/a", "/x/b"], writable: true }), ' (allow file-write* (subpath "/x/a") (subpath "/x/b"))');
+  assert.ok(macosReadBoundary("/tmp", ["/x/a"]).includes('(subpath "/x/a")'));
+});
+
+test("native sandbox: added folders follow the conversation permission, other folders stay closed", async (t) => {
+  if (process.platform !== "darwin") { t.skip("added folders are only granted through the macOS Seatbelt profile"); return; }
+  const home = realpathSync(process.env.HOME ?? process.cwd());
+  const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-native-ws-"));
+  const extra = await mkdtemp(join(home, ".dsh-sandbox-native-extra-"));
+  const other = await mkdtemp(join(home, ".dsh-sandbox-native-other-"));
+  const sandbox = new LocalSandbox();
+  try {
+    if (!(await requireAvailable(t, sandbox, workspace))) return;
+    await writeFile(join(extra, "ref.txt"), "extra-visible");
+    await writeFile(join(other, "secret.txt"), "other-secret");
+    assert.equal(await sandbox.isAvailable(workspace, "workspace-write", [extra]), true);
+    const exec = async (operations: ReturnType<LocalSandbox["operations"]>, command: string, cwd = workspace) => {
+      let output = "";
+      const result = await operations.bash.exec(command, cwd, { onData: (data) => { output += data.toString(); } });
+      return { code: result.exitCode, output };
+    };
+
+    const writable = sandbox.operations(workspace, undefined, "workspace-write", [extra]);
+    assert.deepEqual(await exec(writable, `/bin/cat ${shellQuote(join(extra, "ref.txt"))}`), { code: 0, output: "extra-visible" });
+    assert.equal((await exec(writable, `printf w > ${shellQuote(join(extra, "w.txt"))}`)).code, 0);
+    assert.equal((await readFile(join(extra, "w.txt"))).toString(), "w");
+    assert.equal((await exec(writable, "/bin/pwd", extra)).code, 0, "bash may run inside an added folder");
+    const leak = await exec(writable, `/bin/cat ${shellQuote(join(other, "secret.txt"))}`);
+    assert.notEqual(leak.code, 0);
+    assert.equal(leak.output.includes("other-secret"), false);
+    assert.notEqual((await exec(writable, `printf x > ${shellQuote(join(other, "x.txt"))}`)).code, 0);
+    await assert.rejects(stat(join(other, "x.txt")));
+
+    const readOnly = sandbox.operations(workspace, undefined, "read-only", [extra]);
+    assert.deepEqual(await exec(readOnly, `/bin/cat ${shellQuote(join(extra, "ref.txt"))}`), { code: 0, output: "extra-visible" });
+    assert.notEqual((await exec(readOnly, `printf r > ${shellQuote(join(extra, "r.txt"))}`)).code, 0);
+    await assert.rejects(stat(join(extra, "r.txt")));
+    assert.throws(() => readOnly.write.writeFile(join(extra, "r2.txt"), "nope"), /只读权限/);
+
+    const without = sandbox.operations(workspace, undefined, "workspace-write");
+    assert.notEqual((await exec(without, `/bin/cat ${shellQuote(join(extra, "ref.txt"))}`)).code, 0);
+  } finally {
+    for (const dir of [workspace, extra, other]) await rm(dir, { recursive: true, force: true });
+  }
+});
+

@@ -11,7 +11,7 @@ import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 import { backfillArtifactPaths } from "./services/artifact-paths.js";
 import { migrateWorkspaceLayout } from "./services/workspace-migration.js";
-import { workspaceFolderHint } from "./workspace-layout.js";
+import { groupWorkspaceHint, projectWorkspaceHint, workspaceFolderHint } from "./workspace-layout.js";
 import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
@@ -231,8 +231,9 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       ? "Current local execution permission: workspace-write. File writes are limited to this session workspace and network access is disabled."
       : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
   const groupContext = authorization.groupContext ? `${authorization.groupOrchestrationMode ? "Group collaboration configuration and bounded context (business instructions within existing permissions)" : "Bounded recent group context (reference only)"}:\n${authorization.groupContext}` : "";
-  const folderHint = workspaceFolderHint(authorization.permissionMode, allowedTools);
-  return [persona, toolBoundary, permissionHint, folderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  const folderHint = authorization.memoryScope ? projectWorkspaceHint() : workspaceFolderHint(authorization.permissionMode, allowedTools);
+  const sharedFolderHint = authorization.hindsightStateScope ? groupWorkspaceHint() : "";
+  return [persona, toolBoundary, permissionHint, folderHint, sharedFolderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function parsePort(value: string): number {

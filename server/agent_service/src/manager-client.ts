@@ -162,7 +162,8 @@ export interface ManagerClient {
   pullSpeechRuntimeConfig?(caller: AuthenticatedCaller, model?: string): Promise<RuntimeProviderConfig>;
   pullHindsightRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, rotate?: boolean): Promise<HindsightRuntimeConfig>;
   /** Fetches protocol metadata only; the Agent reuses the caller JWT. */
-  pullMemoryRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig>;
+  /** With `memoryScope`, the returned bank is the conversation's own, never the employee's shared one. */
+  pullMemoryRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, memoryScope?: string): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
@@ -179,7 +180,7 @@ export interface ManagerClient {
   memorySummary?(caller: AuthenticatedCaller, employeeId: string, scope?: MemoryScope): Promise<MemorySummary>;
   memoryDelete?(caller: AuthenticatedCaller, employeeId: string, memoryId: string, idempotencyKey?: string): Promise<void>;
   /** Employee-scoped retain through the Manager facade; Manager re-checks the fresh memory policy. */
-  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string): Promise<MemoryRetainAck>;
+  memoryRetain?(caller: AuthenticatedCaller, employeeId: string, content: string, metadata?: Record<string, unknown>, idempotencyKey?: string, memoryScope?: string): Promise<MemoryRetainAck>;
   /** Enterprise knowledge bases the member can read in the current tenant. */
   listKnowledgeSpaces?(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
@@ -264,14 +265,14 @@ export class HttpManagerClient implements ManagerClient {
     return normalizeHindsightRuntimeConfig(this.unwrap(response), this.baseUrl);
   }
 
-  async pullMemoryRuntimeConfig(caller: AuthenticatedCaller, employeeId: string): Promise<HindsightRuntimeConfig> {
+  async pullMemoryRuntimeConfig(caller: AuthenticatedCaller, employeeId: string, memoryScope?: string): Promise<HindsightRuntimeConfig> {
     if (!caller.accessToken) throw new ManagerUnavailableError("Agent caller token is unavailable for memory protocol adapter");
     const response = await this.request(
       "/api/manager/hindsight/memory-runtime-config",
       caller,
-      { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL },
+      { employee_id: employeeId, client_protocol: HINDSIGHT_CLIENT_PROTOCOL, ...(memoryScope ? { memory_scope: memoryScope } : {}) },
     );
-    const descriptor = normalizeManagerMemoryRuntimeConfig(this.unwrap(response), this.baseUrl);
+    const descriptor = normalizeManagerMemoryRuntimeConfig(this.unwrap(response), this.baseUrl, memoryScope);
     const issuedAt = new Date().toISOString();
     const expiry = typeof caller.claims?.exp === "number" && Number.isFinite(caller.claims.exp)
       ? new Date(caller.claims.exp * 1_000).toISOString()
@@ -392,8 +393,8 @@ export class HttpManagerClient implements ManagerClient {
     await this.request(`/api/manager/memories/${encodeURIComponent(memoryId)}`, caller, undefined, { employee_id: employeeId }, "DELETE", idempotencyKey);
   }
 
-  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown> = {}, idempotencyKey?: string): Promise<MemoryRetainAck> {
-    const response = await this.requestResponse("/api/manager/memories/retain", caller, { employee_id: employeeId, content, metadata }, undefined, "POST", idempotencyKey);
+  async memoryRetain(caller: AuthenticatedCaller, employeeId: string, content: string, metadata: Record<string, unknown> = {}, idempotencyKey?: string, memoryScope?: string): Promise<MemoryRetainAck> {
+    const response = await this.requestResponse("/api/manager/memories/retain", caller, { employee_id: employeeId, content, metadata, ...(memoryScope ? { memory_scope: memoryScope } : {}) }, undefined, "POST", idempotencyKey);
     // A 2xx without a usable acknowledgement may still have been accepted, so it is not reported as an outage.
     let value: { success?: unknown; operation_id?: unknown };
     try {
@@ -719,7 +720,7 @@ function normalizeSolution(value: unknown, tenantId?: string, memberId?: string)
   return { ...raw, solution_instance_id: id, display_name: typeof raw.display_name === "string" ? raw.display_name : id, version, ...(tenantId ? { tenant_id: tenantId } : {}), ...(memberId ? { member_id: memberId } : (typeof raw.member_id === "string" ? { member_id: raw.member_id } : {})) };
 }
 
-export function normalizeManagerMemoryRuntimeConfig(value: unknown, managerUrl?: string): ManagerMemoryRuntimeConfig {
+export function normalizeManagerMemoryRuntimeConfig(value: unknown, managerUrl?: string, memoryScope?: string): ManagerMemoryRuntimeConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid memory runtime config");
   const raw = value as Record<string, unknown>;
   const allowed = new Set(["base_url", "bank_id", "allowed_operations", "policy_revision", "client_protocol", "retention_mode"]);
@@ -738,7 +739,9 @@ export function normalizeManagerMemoryRuntimeConfig(value: unknown, managerUrl?:
   try {
     const parsed = new URL(raw.base_url, managerUrl);
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash
-      || !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(parsed.pathname.replace(/\/$/u, ""))) throw new Error("invalid memory adapter URL");
+      || !/^\/api\/manager\/hindsight\/employees\/[^/]+(?:\/scopes\/[0-9a-f]{32})?$/u.test(parsed.pathname.replace(/\/$/u, ""))
+      // The adapter must serve exactly the requested memory: a scoped session never accepts the shared bank, nor the reverse.
+      || (parsed.pathname.replace(/\/$/u, "").split("/scopes/")[1] ?? "") !== (memoryScope ?? "")) throw new Error("invalid memory adapter URL");
     if (managerUrl && parsed.origin !== new URL(managerUrl).origin) throw new Error("memory adapter URL is not Manager-owned");
     baseUrl = parsed.toString().replace(/\/$/u, "");
   } catch {
@@ -776,7 +779,7 @@ export function normalizeHindsightRuntimeConfig(value: unknown, managerUrl?: str
   try {
     const parsed = new URL(baseUrlValue as string, managerUrl);
     const normalizedPath = parsed.pathname.replace(/\/$/u, "");
-    if (normalizedPath !== "/api/manager/hindsight" && !/^\/api\/manager\/hindsight\/employees\/[^/]+$/u.test(normalizedPath)) throw new Error("invalid facade URL");
+    if (normalizedPath !== "/api/manager/hindsight" && !/^\/api\/manager\/hindsight\/employees\/[^/]+(?:\/scopes\/[0-9a-f]{32})?$/u.test(normalizedPath)) throw new Error("invalid facade URL");
     if (managerUrl) {
       const manager = new URL(managerUrl);
       if (parsed.origin !== manager.origin) throw new Error("facade URL is not Manager-owned");
