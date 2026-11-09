@@ -463,7 +463,11 @@ enum BundledMapSync {
 /// The copies in the app data directory are the editor's working copies, so each follows its shipped map: edits made in
 /// the packaged editor survive until a build ships a different map, which then replaces them (the old file is backed up).
 /// Each map has its own marker, written last, so an interrupted sync is retried on the next launch.
-fn sync_bundled_map(map_dir: &Path, file: &str, bundled_map: &[u8]) -> Result<BundledMapSync, String> {
+fn sync_bundled_map(
+    map_dir: &Path,
+    file: &str,
+    bundled_map: &[u8],
+) -> Result<BundledMapSync, String> {
     let hash = hex::encode(Sha256::digest(bundled_map));
     let map_path = map_dir.join(file);
     let marker_path = map_dir.join(bundled_map_marker(file));
@@ -476,7 +480,8 @@ fn sync_bundled_map(map_dir: &Path, file: &str, bundled_map: &[u8]) -> Result<Bu
         }
     });
     if existing.is_some() && applied.as_deref().map(str::trim) == Some(hash.as_str()) {
-        fs::write(&marker_path, format!("{hash}\n")).map_err(|e| format!("写入地图标记失败: {e}"))?;
+        fs::write(&marker_path, format!("{hash}\n"))
+            .map_err(|e| format!("写入地图标记失败: {e}"))?;
         return Ok(BundledMapSync::Unchanged);
     }
     let outcome = match &existing {
@@ -515,7 +520,8 @@ fn sync_bundled_maps(
     let manifest_path = map_dir.join("manifest.json");
     if default_seeded || !manifest_path.is_file() {
         let result = match bundled_manifest {
-            Some(bytes) => fs::write(&manifest_path, bytes).map_err(|e| format!("写入 manifest.json 失败: {e}")),
+            Some(bytes) => fs::write(&manifest_path, bytes)
+                .map_err(|e| format!("写入 manifest.json 失败: {e}")),
             None => write_manifest(map_dir, DEFAULT_ACTIVE_MAP, now_epoch_ms()).map(|_| ()),
         };
         if let Err(reason) = result {
@@ -542,7 +548,8 @@ fn resolve_map_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         let maps: Vec<(&str, Vec<u8>)> = BUNDLED_MAPS
             .iter()
             .filter_map(|file| {
-                read_embedded_asset(app, &format!("assets/office/map/{file}")).map(|bytes| (*file, bytes))
+                read_embedded_asset(app, &format!("assets/office/map/{file}"))
+                    .map(|bytes| (*file, bytes))
             })
             .collect();
         let manifest = read_embedded_asset(app, "assets/office/map/manifest.json");
@@ -1101,10 +1108,16 @@ mod tests {
         sync_bundled_map(&dir, BIZ, b"map-v2").unwrap();
         fs::write(dir.join(BIZ), b"edited").unwrap();
         // Same bundled map on the next launch: the edit is kept.
-        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(), BundledMapSync::Unchanged);
+        assert_eq!(
+            sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(),
+            BundledMapSync::Unchanged
+        );
         assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"edited");
         // A new build ships a different map: it wins and the edit is backed up.
-        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v3").unwrap(), BundledMapSync::Replaced);
+        assert_eq!(
+            sync_bundled_map(&dir, BIZ, b"map-v3").unwrap(),
+            BundledMapSync::Replaced
+        );
         assert_eq!(fs::read(dir.join(BIZ)).unwrap(), b"map-v3");
         assert_eq!(fs::read(dir.join(format!("{BIZ}.bak"))).unwrap(), b"edited");
     }
@@ -1113,7 +1126,10 @@ mod tests {
     fn an_identical_copy_only_gets_a_marker() {
         let dir = temp_map_dir();
         fs::write(dir.join(BIZ), b"map-v2").unwrap();
-        assert_eq!(sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(), BundledMapSync::Unchanged);
+        assert_eq!(
+            sync_bundled_map(&dir, BIZ, b"map-v2").unwrap(),
+            BundledMapSync::Unchanged
+        );
         assert!(!dir.join(format!("{BIZ}.bak")).exists());
         assert_eq!(marker_of(&dir, BIZ), hex::encode(Sha256::digest(b"map-v2")));
     }
@@ -1134,7 +1150,12 @@ mod tests {
         let maps = [(BIZ, valid_map("商务")), (OLD, valid_map("旧版"))];
         sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
         let listed = list_shared_maps_in_dir(&dir).unwrap();
-        let files: Vec<&str> = listed["files"].as_array().unwrap().iter().map(|f| f["file"].as_str().unwrap()).collect();
+        let files: Vec<&str> = listed["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["file"].as_str().unwrap())
+            .collect();
         assert_eq!(files, vec![BIZ, OLD]);
         assert_eq!(listed["activeFile"], BIZ);
     }
@@ -1145,16 +1166,28 @@ mod tests {
         let dir = temp_map_dir();
         let old_bundled = valid_map("旧版");
         fs::write(dir.join(OLD), valid_map("旧版-已编辑")).unwrap();
-        fs::write(dir.join(LEGACY_BUNDLED_MAP_MARKER), format!("{}\n", hex::encode(Sha256::digest(&old_bundled)))).unwrap();
+        fs::write(
+            dir.join(LEGACY_BUNDLED_MAP_MARKER),
+            format!("{}\n", hex::encode(Sha256::digest(&old_bundled))),
+        )
+        .unwrap();
         write_manifest(&dir, OLD, 1).unwrap();
 
         let manifest = format!(r#"{{"activeMap":"{BIZ}"}}"#);
         let maps = [(BIZ, valid_map("商务")), (OLD, old_bundled)];
         sync_bundled_maps(&dir, &maps, Some(manifest.as_bytes())).unwrap();
 
-        assert_eq!(fs::read(dir.join(OLD)).unwrap(), valid_map("旧版-已编辑"), "legacy marker still protects the edit");
+        assert_eq!(
+            fs::read(dir.join(OLD)).unwrap(),
+            valid_map("旧版-已编辑"),
+            "legacy marker still protects the edit"
+        );
         assert!(!dir.join(format!("{OLD}.bak")).exists());
-        assert_eq!(active_of(&dir), BIZ, "the business map becomes active once it is seeded");
+        assert_eq!(
+            active_of(&dir),
+            BIZ,
+            "the business map becomes active once it is seeded"
+        );
     }
 
     #[test]

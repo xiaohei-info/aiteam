@@ -567,7 +567,9 @@ mod tests {
         assert!(!allowed("/Users/a/Library/Keychains"), "Keychains");
         assert!(!allowed("/Users/a/.aws"), "cloud credentials");
         assert!(!allowed("/System/Library"), "inside protected data");
-        assert!(!allowed("/Users/a/Library/Application Support/com.aiteam.desktop/agent"));
+        assert!(!allowed(
+            "/Users/a/Library/Application Support/com.aiteam.desktop/agent"
+        ));
     }
 
     #[test]
