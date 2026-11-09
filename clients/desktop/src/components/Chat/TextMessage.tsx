@@ -11,6 +11,7 @@ import ContextMenu from './ContextMenu'
 import AttachmentBar from './AttachmentBar'
 import LocalFileLink from './LocalFileLink'
 import { isLocalFileUrl, localPathFromHref } from '../../lib/localFileLink'
+import { shouldHighlightCode } from '../../lib/codeHighlight'
 import type { MessageAttachment } from '../../stores/chat'
 
 interface TextMessageProps {
@@ -66,6 +67,9 @@ export default function TextMessage({
                 const match = /language-(\w+)/.exec(className || '')
                 const isBlock = match || (typeof children === 'string' && (children as string).includes('\n'))
                 if (isBlock) {
+                  const code = String(children).replace(/\n$/, '')
+                  // 超大代码块（如整页 HTML）同步高亮会卡住主线程，退化为纯文本。
+                  if (!shouldHighlightCode(code)) return <pre className="tm-code-plain"><code>{code}</code></pre>
                   return (
                     <SyntaxHighlighter
                       style={oneDark}
@@ -73,7 +77,7 @@ export default function TextMessage({
                       PreTag="div"
                       customStyle={{ borderRadius: 6, fontSize: '0.82em', margin: '6px 0' }}
                     >
-                      {String(children).replace(/\n$/, '')}
+                      {code}
                     </SyntaxHighlighter>
                   )
                 }

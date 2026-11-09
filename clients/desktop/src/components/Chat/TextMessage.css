@@ -148,3 +148,17 @@
   0%, 100% { opacity: 0.4; transform: translateY(0); }
   50%       { opacity: 1.0; transform: translateY(-3px); }
 }
+
+/* 超大代码块不做语法高亮时的纯文本样式，视觉上与 oneDark 代码块保持一致。 */
+.tm-md .tm-code-plain {
+  margin: 6px 0;
+  padding: 1em;
+  border-radius: 6px;
+  background: #282c34;
+  color: #abb2bf;
+  font-size: 0.82em;
+  line-height: 1.5;
+  overflow: auto;
+  max-height: 480px;
+}
+.tm-md .tm-code-plain code { font-family: inherit; white-space: pre; background: none; padding: 0; }
