@@ -9,7 +9,8 @@ interface ArtifactRef {
   mime_type?: string
 }
 
-/** Copies a generated file into the desktop file cache and returns its cache path. */
+/** Copies a generated file into the desktop file cache and returns its cache path.
+ *  Keyed by the file ID, so repeated opens or reveals overwrite one copy instead of adding new ones. */
 async function cacheArtifact(conversationId: string, file: ArtifactRef): Promise<string> {
   const blob = await agentApi.downloadFile(conversationId, 'artifact', file.id)
   const cached = await invoke<CachedFile>('cache_conversation_file', {
@@ -18,6 +19,7 @@ async function cacheArtifact(conversationId: string, file: ArtifactRef): Promise
     filename: file.filename,
     mimeType: file.mime_type || blob.type || 'application/octet-stream',
     data: Array.from(new Uint8Array(await blob.arrayBuffer())),
+    cacheKey: `artifact:${file.id}`,
   })
   return cached.rel_path
 }

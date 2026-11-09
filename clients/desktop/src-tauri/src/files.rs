@@ -187,6 +187,51 @@ pub fn cache_file(
     })
 }
 
+/// Name of the local copy of a conversation file. With a `cache_key` (the file's stable id)
+/// the name is the same on every call, so opening or revealing one file reuses one copy;
+/// without it a random suffix keeps repeated sends of the same filename apart.
+fn conversation_cache_name(file_name: &str, cache_key: Option<&str>) -> String {
+    let suffix = match cache_key {
+        Some(key) => crate::agent_projects::file_id(key),
+        None => uuid::Uuid::new_v4().simple().to_string()[..8].to_string(),
+    };
+    match file_name.rfind('.') {
+        Some(i) => format!("{}_{}.{}", &file_name[..i], suffix, &file_name[i + 1..]),
+        None => format!("{file_name}_{suffix}"),
+    }
+}
+
+/// Writes a keyed copy through a temporary sibling and a rename, so a reader never sees a
+/// half-written file and an existing copy (or a planted symlink) is replaced, not followed.
+fn write_conversation_copy(dest: &Path, data: &[u8], replace: bool) -> Result<(), String> {
+    if !replace {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dest)
+            .map_err(|error| error.to_string())?;
+        return file.write_all(data).map_err(|error| error.to_string());
+    }
+    let temp = dest.with_file_name(format!(
+        ".{}.{}.tmp",
+        dest.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("cache"),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let written = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| file.write_all(data))
+        .and_then(|()| std::fs::rename(&temp, dest));
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn cache_conversation_file(
     app: tauri::AppHandle,
@@ -195,6 +240,7 @@ pub fn cache_conversation_file(
     filename: String,
     mime_type: String,
     data: Vec<u8>,
+    cache_key: Option<String>,
 ) -> Result<CachedFile, String> {
     validate_path_segment(&user_id, "user id")?;
     validate_path_segment(&chat_id, "chat id")?;
@@ -208,11 +254,8 @@ pub fn cache_conversation_file(
         .filter(|name| !name.is_empty())
         .ok_or_else(|| "File has no valid name".to_string())?
         .to_string();
-    let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let cached_name = match file_name.rfind('.') {
-        Some(i) => format!("{}_{}.{}", &file_name[..i], suffix, &file_name[i + 1..]),
-        None => format!("{file_name}_{suffix}"),
-    };
+    let cache_key = cache_key.filter(|key| !key.is_empty());
+    let cached_name = conversation_cache_name(&file_name, cache_key.as_deref());
 
     let app_data = app
         .path()
@@ -228,14 +271,7 @@ pub fn cache_conversation_file(
     }
 
     let dest = canonical_dest_dir.join(&cached_name);
-    let mut dest_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&dest)
-        .map_err(|error| error.to_string())?;
-    dest_file
-        .write_all(&data)
-        .map_err(|error| error.to_string())?;
+    write_conversation_copy(&dest, &data, cache_key.is_some())?;
 
     let rel_path = format!("{user_id}/{chat_id}/file/{cached_name}");
     let abs_path = dest.to_string_lossy().to_string();
@@ -978,7 +1014,8 @@ fn mime_for_ext(ext: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_cached_path_from_root, validate_cached_relative_path, validate_path_segment,
+        conversation_cache_name, resolve_cached_path_from_root, validate_cached_relative_path,
+        validate_path_segment, write_conversation_copy,
     };
     use std::path::Path;
 
@@ -1005,6 +1042,61 @@ mod tests {
                 "expected valid segment: {valid:?}"
             );
         }
+    }
+
+    #[test]
+    fn keyed_conversation_copies_reuse_one_file_and_keep_the_latest_content() {
+        let dir = create_test_directory("keyed-copy");
+        let first = conversation_cache_name("简报.md", Some("artifact:a1"));
+        assert_eq!(
+            first,
+            conversation_cache_name("简报.md", Some("artifact:a1"))
+        );
+        assert_ne!(
+            first,
+            conversation_cache_name("简报.md", Some("artifact:a2"))
+        );
+        assert!(first.starts_with("简报_") && first.ends_with(".md"));
+
+        let dest = dir.join(&first);
+        write_conversation_copy(&dest, b"old", true).expect("first write");
+        write_conversation_copy(&dest, b"new", true).expect("second write replaces");
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from(&first)]);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+
+        let unkeyed = [
+            conversation_cache_name("简报.md", None),
+            conversation_cache_name("简报.md", None),
+        ];
+        assert_ne!(unkeyed[0], unkeyed[1]);
+        write_conversation_copy(&dir.join(&unkeyed[0]), b"x", false).expect("unkeyed write");
+        assert!(write_conversation_copy(&dir.join(&unkeyed[0]), b"y", false).is_err());
+
+        std::fs::remove_dir_all(&dir).expect("remove test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keyed_copy_replaces_a_planted_symlink_instead_of_writing_through_it() {
+        use std::os::unix::fs::symlink;
+
+        let dir = create_test_directory("keyed-symlink");
+        let outside = create_test_directory("keyed-outside");
+        let target = outside.join("target.txt");
+        std::fs::write(&target, b"keep").unwrap();
+        let dest = dir.join(conversation_cache_name("a.txt", Some("artifact:x")));
+        symlink(&target, &dest).unwrap();
+
+        write_conversation_copy(&dest, b"cache", true).expect("replace symlink");
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(!dest.symlink_metadata().unwrap().file_type().is_symlink());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]
