@@ -2485,6 +2485,8 @@ export class AgentHttpServer {
       const snapshot = expert ? this.options.store.listSnapshots(caller.tenantId, caller.userId ?? caller.callerId).find((item) => item.employee_id === employeeId && item.version === expert.version) : undefined;
       if (!expert || !snapshot) throw new HttpProblem(403, "employee_not_authorized", "Conversation requires a locally authorized employee snapshot");
       if (typeof expert.status === "string" && expert.status !== "active") throw new HttpProblem(409, "employee_not_runnable", "Manager has not activated this expert");
+      // Same rule the session host applies; checking here keeps a fan-out from returning 202 and then silently skipping this employee.
+      if (expert.availability_reason) throw new HttpProblem(409, "employee_not_runnable", expert.availability_reason === "employee_dependency_unavailable" ? "Employee model or provider is unavailable" : "Employee is unavailable");
     }
   }
 

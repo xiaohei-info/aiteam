@@ -375,6 +375,12 @@ test("Agent prompt rejects an explicitly inactive expert before reserving the id
     assert.equal(blocked.status, 409);
     assert.equal((await blocked.json() as { code: string }).code, "employee_not_runnable");
 
+    fixture.store.replaceProjections([{ ...projection, status: "active", availability_reason: "employee_dependency_unavailable" }], [], [snapshot]);
+    const dependencyBlocked = await request();
+    assert.equal(dependencyBlocked.status, 409);
+    assert.equal((await dependencyBlocked.json() as { code: string }).code, "employee_not_runnable");
+    assert.equal(fixture.store.getPromptReceipt("c1", "member-1", "inactive-prompt"), undefined);
+
     fixture.store.replaceProjections([{ ...projection, status: "active" }], [], [snapshot]);
     fixture.faux.setResponses([fauxAssistantMessage("ok")]);
     assert.equal((await request()).status, 202);
