@@ -132,7 +132,8 @@ export class AutomationTaskService {
     const owner = ownerOf(caller), name = text(body.name, "task_name", 120), prompt = text(body.prompt, "prompt", 20_000);
     const category = this.category(body.category), employeeId = text(body.employee_id, "employee_id", 256), connectorIds = this.connectorIds(body.connector_ids ?? []);
     const permission = permissionMode(body.permission_mode);
-    const fingerprint = createHash("sha256").update(JSON.stringify({ name, prompt, category, employeeId, connectorIds, permission, schedule: taskSchedule(body.schedule, prompt, "fingerprint") })).digest("hex");
+    // The default permission is left out so requests started before permission_mode existed keep their fingerprint when retried.
+    const fingerprint = createHash("sha256").update(JSON.stringify({ name, prompt, category, employeeId, connectorIds, schedule: taskSchedule(body.schedule, prompt, "fingerprint"), ...(permission === "read-only" ? {} : { permission }) })).digest("hex");
     const db = this.store.db;
     const existing = db.prepare("SELECT * FROM automation_creation WHERE tenant_id = ? AND member_id = ? AND key = ?").get(owner.tenantId, owner.memberId, key!) as { task_id: string; conversation_id: string; fingerprint: string; completed: number; response_json: string | null } | undefined;
     if (existing && existing.fingerprint !== fingerprint) throw new AutomationError(409, "idempotency_key_reused", "Idempotency key was used with a different request");
@@ -171,7 +172,8 @@ export class AutomationTaskService {
     this.requireInitialized(id);
     const { conversation, task } = this.resolve(id, caller);
     if (!conversation) throw new AutomationError(409, "conversation_deleted", "Execution conversation was deleted");
-    if (["employee_id", "connector_ids", "prompt", "schedule", "permission_mode"].some(k => k in body) && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Pause or wait for the current execution before changing execution settings");
+    const changesExecution = ["employee_id", "connector_ids", "prompt", "schedule", "permission_mode"].some(k => k in body);
+    if (changesExecution && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Pause or wait for the current execution before changing execution settings");
     const current = this.get(id, caller), owner = ownerOf(caller);
     const permission = permissionMode(body.permission_mode, conversation.permissionMode ?? "read-only");
     const name = body.name === undefined ? current.name : text(body.name, "task_name", 120);
@@ -197,7 +199,7 @@ export class AutomationTaskService {
     try {
       this.store.automation.transaction(() => {
         this.checkVersion(id, caller, etag);
-        if (switching && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Task started during the edit");
+        if (changesExecution && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Task started during the edit");
         const row = task ?? this.materialize(id, caller);
         if (switching) { this.store.updateConversation(conversation.id, { schedule: null }); this.store.automation.bind(id, nextId); }
         this.store.automation.update({ ...row, name, category, conversation_id: nextId, connector_ids: JSON.stringify(ids) });

@@ -64,7 +64,7 @@ export function registerAutomationRoutes(router: Router, service: AutomationTask
 }
 
 const exampleInput = { name: "每日简报", prompt: "汇总项目进度", category: "report", employee_id: "employee-1", connector_ids: [], schedule: { mode: "daily", timezone: "Asia/Shanghai", time: "09:00:00" } };
-const exampleTask = { ...exampleInput, task_id: "e5c06741-cdf0-4132-9b29-ab2969bc11b3", prompt_summary: "汇总项目进度", employee: { employee_id: "employee-1", display_name: "研究员" }, connectors: [], status: "active", block_reason: null, conversation_id: "13c7d450-703f-497e-85c2-4d8f6dc35d6b", target_kind: "private", origin: "automation", etag: '\"1-2\"', last_run_at: null, last_run: null, next_run_at: "2026-09-23T01:00:00.000Z", created_by: "member-1", created_at: "2026-09-22T00:00:00.000Z", updated_at: "2026-09-22T00:00:00.000Z" };
+const exampleTask = { ...exampleInput, task_id: "e5c06741-cdf0-4132-9b29-ab2969bc11b3", prompt_summary: "汇总项目进度", employee: { employee_id: "employee-1", display_name: "研究员" }, connectors: [], status: "active", block_reason: null, conversation_id: "13c7d450-703f-497e-85c2-4d8f6dc35d6b", permission_mode: "read-only", target_kind: "private", origin: "automation", etag: '\"1-2\"', last_run_at: null, last_run: null, next_run_at: "2026-09-23T01:00:00.000Z", created_by: "member-1", created_at: "2026-09-22T00:00:00.000Z", updated_at: "2026-09-22T00:00:00.000Z" };
 const example = (value: unknown) => ({ sample: { summary: "示例", value } });
 const responseExample = (value: unknown) => ({ description: "当前成员的本地任务资源。", examples: example(value) });
 const { prompt: _prompt, ...exampleListTask } = exampleTask;

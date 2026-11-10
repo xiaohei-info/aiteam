@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFixture } from "../test-fixture.js";
 import { AgentHttpServer } from "./server.js";
 import { ScheduleService, validateSchedule } from "../schedule.js";
+import { taskSchedule } from "../services/automation-tasks.js";
 
 async function start() {
   const fixture = await createFixture();
@@ -180,5 +182,33 @@ test("a task's execution permission defaults to read-only, can be chosen, change
     // Editing other fields leaves the permission alone.
     const renamed = await f.call(`automation-tasks/${wide.data.task_id}`, "PATCH", { name: "改名" }, { "If-Match": switched.data.etag });
     assert.equal(renamed.data.permission_mode, "full-access");
+  } finally { await f.finish(); }
+});
+
+test("a permission change is refused when a run starts between the first check and the write", async () => {
+  const f = await start();
+  try {
+    const created = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "race" });
+    assert.equal(created.status, 201, JSON.stringify(created.payload));
+    const original = f.host.isPrompting.bind(f.host);
+    let checks = 0;
+    // Idle at the first check, running by the time the edit is written.
+    f.host.isPrompting = (id: string) => (id === created.data.conversation_id ? ++checks > 1 : original(id));
+    const edit = await f.call(`automation-tasks/${created.data.task_id}`, "PATCH", { permission_mode: "full-access" }, { "If-Match": created.data.etag });
+    assert.equal(edit.status, 409);
+    assert.equal(edit.payload.code, "task_busy");
+    assert.equal(f.store.getConversation(created.data.conversation_id)?.permissionMode, "read-only");
+  } finally { await f.finish(); }
+});
+
+test("a creation retried with the default permission keeps the fingerprint it had before permission_mode existed", async () => {
+  const f = await start();
+  try {
+    const first = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "compat" });
+    assert.equal(first.status, 201, JSON.stringify(first.payload));
+    const fingerprint = (f.store.db.prepare("SELECT fingerprint FROM automation_creation WHERE key = ?").get("compat") as { fingerprint: string }).fingerprint;
+    const body = input();
+    const legacy = createHash("sha256").update(JSON.stringify({ name: body.name, prompt: body.prompt, category: body.category, employeeId: body.employee_id, connectorIds: body.connector_ids, schedule: taskSchedule(body.schedule, body.prompt, "fingerprint") })).digest("hex");
+    assert.equal(fingerprint, legacy);
   } finally { await f.finish(); }
 });
