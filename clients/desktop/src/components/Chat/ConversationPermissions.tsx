@@ -5,7 +5,7 @@ import { ChevronDown, FolderCog, FolderOpen, FolderSearch, LoaderCircle, ShieldC
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
 import { openFilePrivacySettings } from '../../lib/fileAccess'
-import { conversationWorkspaceKey, isDraftConversation, permissionSummary } from '../../lib/conversationPermissions'
+import { conversationWorkspaceKey, FULL_ACCESS_GRANTS as grants, isDraftConversation, permissionSummary } from '../../lib/conversationPermissions'
 import { isMacUserAgent } from '../../lib/projectConversation'
 import { describeProjectFolderError } from '../../lib/projectConversation'
 import type { ConversationMetadata, PermissionMode } from '../../api/agent/types'
@@ -29,8 +29,6 @@ function FolderPath({ path, fallback }: { path?: string; fallback: string }) {
   const cut = last > 0 ? Math.max(trimmed.lastIndexOf('/', last - 1), trimmed.lastIndexOf('\\', last - 1)) + 1 : 0
   return <code className="cperm-path"><span className="cperm-path-head">{trimmed.slice(0, cut)}</span><span className="cperm-path-tail">{trimmed.slice(cut)}</span></code>
 }
-const grants = ['读取和修改工作区外的文件', '执行本机命令', '访问网络']
-
 /**
  * 聊天输入框下方的「权限」入口：一个按钮汇总状态，面板内分「本会话的目录」「本会话的权限」「系统层」三段。
  * 「本会话的目录」把工作目录和本会话添加的目录放在一起；「本会话的权限」三档对这些目录同样生效。都只对本会话生效。

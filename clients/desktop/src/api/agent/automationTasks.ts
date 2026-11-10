@@ -1,5 +1,5 @@
 import type { ServiceApiClient } from './client'
-import type { Page } from './types'
+import type { Page, PermissionMode } from './types'
 
 export type TaskCategory = 'report' | 'monitor' | 'reminder' | 'other'
 export type TaskStatus = 'active' | 'paused' | 'completed'
@@ -50,6 +50,8 @@ export interface AutomationTask {
   connector_ids: string[]
   connectors?: Connector[]
   schedule: TaskSchedule | null
+  /** 执行会话权限；无人值守的定时任务只有 full-access 不需要逐次审批且可联网。 */
+  permission_mode: PermissionMode
   status: TaskStatus
   block_reason: string | null
   conversation_id: string | null
@@ -92,6 +94,7 @@ export function createAutomationTask(client: ServiceApiClient, body: {
   employee_id: string
   connector_ids: string[]
   schedule: TaskSchedule
+  permission_mode?: PermissionMode
 }, idempotencyKey: string): Promise<AutomationTask> {
   return client.request<AutomationTask>({ method: 'POST', path: base, body, idempotencyKey })
 }
@@ -103,6 +106,7 @@ export function updateAutomationTask(client: ServiceApiClient, taskId: string, b
   employee_id: string
   connector_ids: string[]
   schedule: TaskSchedule
+  permission_mode: PermissionMode
 }>, etag: string): Promise<AutomationTask> {
   return client.request<AutomationTask>({ method: 'PATCH', path: `${base}/${encodeURIComponent(taskId)}`, body, headers: { 'If-Match': etag } })
 }

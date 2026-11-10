@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { CalendarClock, Check, ChevronRight, Clock3, ExternalLink, LoaderCircle, Pause, Play, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, X, Zap } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { agentApi, AgentApiError, type AutomationTask, type Connector, type TaskCategory, type TaskRun, type TaskSchedule } from '../../api/agent'
-import type { ExpertProjection } from '../../api/agent/types'
+import type { ExpertProjection, PermissionMode } from '../../api/agent/types'
+import { ChatDialog } from '../../components/Chat/ChatDialog'
+import { FULL_ACCESS_GRANTS, PERMISSION_MODE_LABELS } from '../../lib/conversationPermissions'
 import styles from './index.module.css'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
 
@@ -12,6 +14,7 @@ type Draft = {
   category: TaskCategory
   employeeId: string
   connectorIds: string[]
+  permissionMode: PermissionMode
   mode: TaskSchedule['mode']
   timezone: string
   time: string
@@ -23,6 +26,11 @@ type Draft = {
 
 const categoryLabels: Record<TaskCategory | 'all', string> = { all: '全部分类', report: '报告', monitor: '监控', reminder: '提醒', other: '其他' }
 const statusLabels: Record<string, string> = { active: '启用中', paused: '已暂停', completed: '已完成', queued: '等待执行', blocked: '已阻塞', running: '执行中', succeeded: '执行成功', error: '执行失败', aborted: '已中止', unknown: '结果待核实', skipped: '已跳过' }
+const permissionOptions: Array<{ value: PermissionMode; label: string; hint: string; recommended?: boolean }> = [
+  { value: 'full-access', label: PERMISSION_MODE_LABELS['full-access'], recommended: true, hint: '无需审批，可联网、可执行命令，适合抓取数据、生成文件等需要自动完成的任务。风险较高。' },
+  { value: 'workspace-write', label: PERMISSION_MODE_LABELS['workspace-write'], hint: '只能写任务工作目录，命令不能联网；命令仍需审批。' },
+  { value: 'read-only', label: PERMISSION_MODE_LABELS['read-only'], hint: '默认。只读取已有内容，不修改文件；命令需要审批。' },
+]
 const runModes: Array<[TaskSchedule['mode'], string]> = [['daily', '每天'], ['weekly', '每周'], ['monthly', '每月'], ['interval', '固定间隔'], ['once', '单次']]
 
 function localDateTime(value: string) {
@@ -33,7 +41,7 @@ function localDateTime(value: string) {
 
 function defaultDraft(): Draft {
   return {
-    name: '', prompt: '', category: 'other', employeeId: '', connectorIds: [], mode: 'daily',
+    name: '', prompt: '', category: 'other', employeeId: '', connectorIds: [], permissionMode: 'read-only', mode: 'daily',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai', time: '09:00', weekday: 1,
     dayOfMonth: 1, intervalMinutes: 60, startAt: localDateTime(new Date(Date.now() + 3_600_000).toISOString()),
   }
@@ -44,7 +52,7 @@ function draftFromTask(task: AutomationTask): Draft {
   const rule = task.schedule
   return {
     ...draft, name: task.name, prompt: task.prompt ?? '', category: task.category,
-    employeeId: task.employee_id ?? '', connectorIds: task.connector_ids,
+    employeeId: task.employee_id ?? '', connectorIds: task.connector_ids, permissionMode: task.permission_mode ?? 'read-only',
     ...(rule ? { mode: rule.mode, timezone: rule.timezone } : {}),
     ...(rule && 'time' in rule ? { time: rule.time.slice(0, 5) } : {}),
     ...(rule?.mode === 'weekly' ? { weekday: rule.weekday } : {}),
@@ -77,6 +85,7 @@ function scheduleLabel(rule: TaskSchedule | null) {
 }
 
 function errorMessage(error: unknown) {
+  if (error instanceof AgentApiError && error.code === 'task_busy') return '任务正在执行，现在不能修改执行指令、员工、连接器、周期或执行权限。请等本次执行结束后再试。'
   if (error instanceof AgentApiError && error.status === 409) return '任务已被其他操作更新，请刷新后重试。'
   return error instanceof Error ? error.message : '请求失败，请重试。'
 }
@@ -183,12 +192,13 @@ export default function Tasks() {
         if (draft.prompt !== before.prompt) body.prompt = draft.prompt.trim()
         if (draft.category !== before.category) body.category = draft.category
         if (draft.employeeId !== before.employeeId) body.employee_id = draft.employeeId
+        if (draft.permissionMode !== before.permissionMode) body.permission_mode = draft.permissionMode
         if (JSON.stringify(draft.connectorIds) !== JSON.stringify(before.connectorIds)) body.connector_ids = draft.connectorIds
         if (JSON.stringify(schedule) !== JSON.stringify(selected.schedule)) body.schedule = schedule
         const updated = await agentApi.updateAutomationTask(selected.task_id, body, selected.etag)
         setSelected(updated); setEditing(false); await openTask(updated)
       } else {
-        const created = await agentApi.createAutomationTask({ name: draft.name.trim(), prompt: draft.prompt.trim(), category: draft.category, employee_id: draft.employeeId, connector_ids: draft.connectorIds, schedule }, crypto.randomUUID())
+        const created = await agentApi.createAutomationTask({ name: draft.name.trim(), prompt: draft.prompt.trim(), category: draft.category, employee_id: draft.employeeId, connector_ids: draft.connectorIds, schedule, permission_mode: draft.permissionMode }, crypto.randomUUID())
         setSelected(created); setEditing(false); await openTask(created)
       }
       await loadTasks()
@@ -252,13 +262,23 @@ export default function Tasks() {
 }
 
 function TaskForm({ draft, experts, connectors, selected, busy, onChange, onSubmit, onCancel }: { draft: Draft; experts: ExpertProjection[]; connectors: Connector[]; selected: AutomationTask | null; busy: boolean; onChange: <K extends keyof Draft>(key: K, value: Draft[K]) => void; onSubmit: (event: FormEvent) => void; onCancel: () => void }) {
+  const [confirmFull, setConfirmFull] = useState(false)
+  const [accepted, setAccepted] = useState<boolean[]>(FULL_ACCESS_GRANTS.map(() => false))
   const dialogRef = useDialogFocus<HTMLElement>()
+  // 完全访问关闭了文件与网络隔离，且任务无人值守：必须逐项确认后才写进草稿。
+  const choosePermission = (value: PermissionMode) => {
+    if (value === 'full-access' && draft.permissionMode !== 'full-access') { setAccepted(FULL_ACCESS_GRANTS.map(() => false)); setConfirmFull(true); return }
+    onChange('permissionMode', value)
+  }
+  // SAFETY: useDialogFocus is generic over the element but returns a RefObject typed for HTMLElement; the ref is attached to this <form>.
   return <form ref={dialogRef as unknown as Ref<HTMLFormElement>} className={styles.taskForm} onSubmit={onSubmit}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{selected ? '编辑任务' : '新建任务'}</span><h2>{selected ? selected.name : '创建自动化任务'}</h2></div><button type="button" className={styles.iconButton} disabled={busy} onClick={onCancel} aria-label="关闭"><X size={17} /></button></div>
+    {selected?.last_run?.status === 'running' && <div className={styles.warningBox} role="status">任务正在执行。执行指令、员工、连接器、周期和执行权限现在无法修改，请等本次执行结束后再改；名称和分类不受影响。</div>}
     <fieldset className={styles.formFields} disabled={busy}><legend className={styles.visuallyHidden}>任务配置</legend>
     <label>任务名称<input placeholder="例如：每周销售报告" required maxLength={120} value={draft.name} onChange={event => onChange('name', event.target.value)} /></label>
     <label>执行指令<textarea placeholder="描述要完成的工作、使用的资料和期望的输出…" required maxLength={20_000} rows={6} value={draft.prompt} onChange={event => onChange('prompt', event.target.value)} /></label>
     <div className={styles.formGrid}><label>任务分类<select value={draft.category} onChange={event => onChange('category', event.target.value as TaskCategory)}>{Object.entries(categoryLabels).filter(([key]) => key !== 'all').map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>执行员工<select required value={draft.employeeId} onChange={event => { onChange('employeeId', event.target.value); onChange('connectorIds', []) }}><option value="">请选择员工</option>{experts.map(expert => <option key={expert.employee_id} value={expert.employee_id}>{expert.display_name}</option>)}</select></label></div>
     <fieldset><legend>使用的连接器</legend>{draft.employeeId && !connectors.length && <p className={styles.formHint}>该员工暂无可用连接器，可不选择继续创建。</p>}{connectors.map(connector => <label className={styles.checkbox} key={connector.connector_id}><input type="checkbox" checked={draft.connectorIds.includes(connector.connector_id)} disabled={connector.status !== 'enabled'} onChange={event => onChange('connectorIds', event.target.checked ? [...draft.connectorIds, connector.connector_id] : draft.connectorIds.filter(id => id !== connector.connector_id))} />{connector.display_name}</label>)}</fieldset>
+    <fieldset><legend>执行权限</legend>{permissionOptions.map(option => <label className={styles.checkbox} key={option.value}><input type="radio" name="permissionMode" checked={draft.permissionMode === option.value} onChange={() => choosePermission(option.value)} /><span><strong>{option.label}{option.recommended ? '（定时任务推荐）' : ''}</strong><span className={styles.formHint}> {option.hint}</span></span></label>)}{draft.permissionMode === 'full-access' && <div className={styles.warningBox} role="alert">完全访问会关闭文件与网络隔离：任务运行时无需逐次确认，可以联网、在本机任意位置读写文件并执行命令。请只对你信任的指令和员工开启，并确认指令内容不会误删或外泄本机数据。</div>}{draft.permissionMode !== 'full-access' && <div className={styles.warningBox} role="status">定时任务无人值守，没有人点审批。选择此权限后，任务只要需要执行命令，就会在 10 分钟后失败并中止本次运行；{draft.permissionMode === 'workspace-write' ? '命令也不能联网。' : '命令不能联网，也不能写文件。'}需要联网抓取数据或执行命令的任务请选择完全访问；只读取、总结已有内容的任务可以保持当前选择。</div>}</fieldset>
     <div className={styles.formGrid}><label>执行频率<select value={draft.mode} onChange={event => onChange('mode', event.target.value as TaskSchedule['mode'])}>{runModes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>时区<input required value={draft.timezone} onChange={event => onChange('timezone', event.target.value)} placeholder="Asia/Shanghai" /></label></div>
     {['daily', 'weekly', 'monthly'].includes(draft.mode) && <label>当地执行时间<input required type="time" step="1" value={draft.time} onChange={event => onChange('time', event.target.value)} /></label>}
     {draft.mode === 'weekly' && <label>星期<select value={draft.weekday} onChange={event => onChange('weekday', Number(event.target.value))}>{'一二三四五六日'.split('').map((day, index) => <option key={day} value={index + 1}>周{day}</option>)}</select></label>}
@@ -268,9 +288,15 @@ function TaskForm({ draft, experts, connectors, selected, busy, onChange, onSubm
     <p className={styles.formHint}>计划预览：{draft.mode === 'once' ? '按所选时间执行一次' : draft.mode === 'interval' ? `每 ${draft.intervalMinutes} 分钟执行` : `${runModes.find(([mode]) => mode === draft.mode)?.[1]} ${draft.time}`} · {draft.timezone}。单次与间隔起始时间使用本机时区。</p>
     </fieldset>
     <div className={styles.formActions}><button className={styles.secondaryButton} type="button" disabled={busy} onClick={onCancel}>取消</button><button className={styles.saveButton} type="submit" disabled={busy}>{busy ? <><LoaderCircle size={15} className={styles.saveSpinner} />保存中…</> : <><Check size={15} strokeWidth={2.4} />保存任务</>}</button></div>
+    {confirmFull && <ChatDialog title="授权完全访问" onClose={() => setConfirmFull(false)}>
+      <p className="chat-tools-note">该任务无人值守，开启后每次定时运行都不再逐次确认：员工可以执行命令、读写文件并联网。可随时在编辑里改回。</p>
+      {FULL_ACCESS_GRANTS.map((grant, index) => <label className="chat-permission-grant" key={grant}><input type="checkbox" checked={accepted[index]} onChange={event => setAccepted(previous => previous.map((value, i) => i === index ? event.target.checked : value))} />{grant}</label>)}
+      <p className="chat-tools-note">桌面、文稿等受保护位置还需在系统设置里开启「完全磁盘访问权限」。</p>
+      <footer><button type="button" onClick={() => setConfirmFull(false)}>取消</button><button type="button" disabled={!accepted.every(Boolean)} onClick={() => { onChange('permissionMode', 'full-access'); setConfirmFull(false) }}>授权全部并开启</button></footer>
+    </ChatDialog>}
   </form>
 }
 
 function TaskDetail({ task, runs, runCursor, busy, confirmDelete, onEdit, onAction, onConfirmDelete, onLoadMoreRuns, onOpenConversation }: { task: AutomationTask; runs: TaskRun[]; runCursor: string | null; busy: boolean; confirmDelete: boolean; onEdit: () => void; onAction: (action: 'enable' | 'pause' | 'delete') => void; onConfirmDelete: (value: boolean) => void; onLoadMoreRuns: () => void; onOpenConversation: () => void }) {
-  return <div className={styles.detailPanel}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{categoryLabels[task.category]}</span><h2>{task.name}</h2></div><StatusPill status={task.status} /></div><p className={styles.detailPrompt}>{task.prompt ?? task.prompt_summary}</p><div className={styles.detailMeta}><div><span>执行员工</span><strong>{task.employee?.display_name ?? '员工不可用'}</strong></div><div><span>执行周期</span><strong>{scheduleLabel(task.schedule)}</strong></div><div><span>下一次执行</span><strong>{formatDate(task.next_run_at)}</strong></div></div>{task.block_reason && <div className={styles.warningBox}>当前无法执行：{task.block_reason}</div>}<div className={styles.detailActions}><button className={styles.primaryButton} type="button" disabled={busy} onClick={onEdit}><Zap size={14} />编辑</button>{task.status !== 'completed' && task.schedule && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => onAction(task.status === 'active' ? 'pause' : 'enable')}>{task.status === 'active' ? <><Pause size={14} />暂停</> : <><Play size={14} />启用</>}</button>}{task.conversation_id && <button className={styles.secondaryButton} type="button" onClick={onOpenConversation}><ExternalLink size={14} />打开会话</button>}<button className={styles.dangerButton} type="button" disabled={busy} onClick={() => onConfirmDelete(true)}><Trash2 size={14} />删除</button></div>{confirmDelete && <div className={styles.confirmBox} role="alert"><p>删除后会停止后续调度，但已有会话和运行记录会保留。确定删除？</p><div><button className={styles.secondaryButton} type="button" onClick={() => onConfirmDelete(false)}>取消</button><button className={styles.dangerButton} type="button" disabled={busy} onClick={() => onAction('delete')}>确认删除</button></div></div>}<div className={styles.runsHeader}><h3>运行记录</h3><span>{runs.length} 条</span></div>{!runs.length ? <p className={styles.formHint}>暂无关联的运行记录。</p> : <div className={styles.runsList}>{runs.map(run => <article className={styles.runItem} key={run.run_id}><div><StatusPill status={run.status} /><span>{formatDate(run.scheduled_at)}</span></div>{run.result_summary && <p>{run.result_summary}</p>}{run.error_code && <small>{run.error_code}</small>}{run.conversation_id && <button type="button" onClick={onOpenConversation}>查看执行会话</button>}</article>)}</div>}{runCursor && <button className={styles.loadMore} type="button" disabled={busy} onClick={onLoadMoreRuns}>更多运行记录</button>}</div>
+  return <div className={styles.detailPanel}><div className={styles.detailHeader}><div><span className={styles.detailEyebrow}>{categoryLabels[task.category]}</span><h2>{task.name}</h2></div><StatusPill status={task.status} /></div><p className={styles.detailPrompt}>{task.prompt ?? task.prompt_summary}</p><div className={styles.detailMeta}><div><span>执行员工</span><strong>{task.employee?.display_name ?? '员工不可用'}</strong></div><div><span>执行周期</span><strong>{scheduleLabel(task.schedule)}</strong></div><div><span>执行权限</span><strong>{PERMISSION_MODE_LABELS[task.permission_mode ?? 'read-only']}</strong></div><div><span>下一次执行</span><strong>{formatDate(task.next_run_at)}</strong></div></div>{task.block_reason && <div className={styles.warningBox}>当前无法执行：{task.block_reason}</div>}<div className={styles.detailActions}><button className={styles.primaryButton} type="button" disabled={busy} onClick={onEdit}><Zap size={14} />编辑</button>{task.status !== 'completed' && task.schedule && <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => onAction(task.status === 'active' ? 'pause' : 'enable')}>{task.status === 'active' ? <><Pause size={14} />暂停</> : <><Play size={14} />启用</>}</button>}{task.conversation_id && <button className={styles.secondaryButton} type="button" onClick={onOpenConversation}><ExternalLink size={14} />打开会话</button>}<button className={styles.dangerButton} type="button" disabled={busy} onClick={() => onConfirmDelete(true)}><Trash2 size={14} />删除</button></div>{confirmDelete && <div className={styles.confirmBox} role="alert"><p>删除后会停止后续调度，但已有会话和运行记录会保留。确定删除？</p><div><button className={styles.secondaryButton} type="button" onClick={() => onConfirmDelete(false)}>取消</button><button className={styles.dangerButton} type="button" disabled={busy} onClick={() => onAction('delete')}>确认删除</button></div></div>}<div className={styles.runsHeader}><h3>运行记录</h3><span>{runs.length} 条</span></div>{!runs.length ? <p className={styles.formHint}>暂无关联的运行记录。</p> : <div className={styles.runsList}>{runs.map(run => <article className={styles.runItem} key={run.run_id}><div><StatusPill status={run.status} /><span>{formatDate(run.scheduled_at)}</span></div>{run.result_summary && <p>{run.result_summary}</p>}{run.error_code && <small>{run.error_code}</small>}{run.conversation_id && <button type="button" onClick={onOpenConversation}>查看执行会话</button>}</article>)}</div>}{runCursor && <button className={styles.loadMore} type="button" disabled={busy} onClick={onLoadMoreRuns}>更多运行记录</button>}</div>
 }
