@@ -22,6 +22,22 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail("validation_error", "Expected an object");
   return value as Record<string, unknown>;
 }
+/** Parse a JSON column this service wrote itself; a corrupt value surfaces as a typed error, not a raw SyntaxError. */
+function parseStored<T>(raw: string, what: string): T {
+  try {
+    // SAFETY: callers pass columns written by this service with the matching shape.
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new AutomationError(500, "stored_data_invalid", `Stored ${what} is not valid JSON`);
+  }
+}
+const PERMISSION_MODES = ["read-only", "workspace-write", "full-access"] as const;
+type PermissionMode = (typeof PERMISSION_MODES)[number];
+/** An absent value keeps the safe default; callers pick anything wider explicitly. */
+function permissionMode(value: unknown, fallback: PermissionMode = "read-only"): PermissionMode {
+  if (value === undefined) return fallback;
+  return PERMISSION_MODES.find(mode => mode === value) ?? fail("invalid_permission_mode", "permission_mode must be read-only, workspace-write, or full-access");
+}
 function onlyKeys(value: Record<string, unknown>, keys: string[]): void {
   if (Object.keys(value).some(key => !keys.includes(key))) fail("validation_error", "Unsupported field");
 }
@@ -82,7 +98,7 @@ export class AutomationTaskService {
     const consumed = Boolean(schedule?.one_shot && last?.receipt_key && last.schedule_id === schedule.schedule_id && last.scheduled_at === schedule.at && !conversation?.scheduleRetryAt);
     const finished = consumed && last && !["running", "queued", "blocked"].includes(last.status);
     const status = finished ? "completed" : schedule?.enabled || (consumed && last?.status === "running") ? "active" : "paused";
-    const connectorIds: string[] = task ? JSON.parse(task.connector_ids) : [];
+    const connectorIds: string[] = task ? parseStored<string[]>(task.connector_ids, "connector_ids") : [];
     let available: ReturnType<AutomationTaskService["connectors"]> = [];
     if (connectorIds.length) { try { available = this.connectors(caller, employeeId ?? undefined); } catch (error) { if (!(error instanceof AutomationError)) throw error; } }
     const blockReason = !schedule ? "configuration_required" : conversation?.scheduleBlockReason ?? (connectorIds.some(id => !available.some(c => c.connector_id === id && c.status === "enabled")) ? "connector_unavailable" : null) ?? (this.authorization && !this.authorization.resolve(owner.tenantId, owner.memberId, { requireAccessToken: true }) ? "authorization_required" : null);
@@ -91,6 +107,7 @@ export class AutomationTaskService {
       prompt: schedule?.prompt_template ?? "", prompt_summary: (schedule?.prompt_template ?? "").slice(0, 240),
       employee_id: employeeId, employee: employee ? { employee_id: employee.employee_id, display_name: employee.display_name } : null,
       connector_ids: connectorIds, connectors: available.filter(c => connectorIds.includes(c.connector_id)), schedule: publicSchedule(schedule),
+      permission_mode: conversation?.permissionMode ?? "read-only",
       status, block_reason: blockReason, conversation_id: conversation?.id ?? null, target_kind: conversation?.kind === "group" ? "group" : "private",
       origin: task ? "automation" : "conversation", etag: `"${task?.revision ?? 0}-${conversation?.scheduleGeneration ?? 0}"`,
       last_run_at: last?.started_at ?? null, last_run: last, next_run_at: schedule && !task?.deleted_at ? nextScheduleAt(schedule) : null,
@@ -110,15 +127,17 @@ export class AutomationTaskService {
   }
 
   async create(body: Record<string, unknown>, caller: AuthenticatedCaller, key: string | undefined) {
-    onlyKeys(body, ["name", "prompt", "category", "employee_id", "connector_ids", "schedule"]);
+    onlyKeys(body, ["name", "prompt", "category", "employee_id", "connector_ids", "schedule", "permission_mode"]);
     if (!key || !/^[\x21-\x7e]{1,128}$/.test(key)) fail("idempotency_key_required", "Idempotency-Key is required (1–128 printable characters)");
     const owner = ownerOf(caller), name = text(body.name, "task_name", 120), prompt = text(body.prompt, "prompt", 20_000);
     const category = this.category(body.category), employeeId = text(body.employee_id, "employee_id", 256), connectorIds = this.connectorIds(body.connector_ids ?? []);
-    const fingerprint = createHash("sha256").update(JSON.stringify({ name, prompt, category, employeeId, connectorIds, schedule: taskSchedule(body.schedule, prompt, "fingerprint") })).digest("hex");
+    const permission = permissionMode(body.permission_mode);
+    // The default permission is left out so requests started before permission_mode existed keep their fingerprint when retried.
+    const fingerprint = createHash("sha256").update(JSON.stringify({ name, prompt, category, employeeId, connectorIds, schedule: taskSchedule(body.schedule, prompt, "fingerprint"), ...(permission === "read-only" ? {} : { permission }) })).digest("hex");
     const db = this.store.db;
     const existing = db.prepare("SELECT * FROM automation_creation WHERE tenant_id = ? AND member_id = ? AND key = ?").get(owner.tenantId, owner.memberId, key!) as { task_id: string; conversation_id: string; fingerprint: string; completed: number; response_json: string | null } | undefined;
     if (existing && existing.fingerprint !== fingerprint) throw new AutomationError(409, "idempotency_key_reused", "Idempotency key was used with a different request");
-    if (existing?.completed && existing.response_json) return JSON.parse(existing.response_json) as ReturnType<AutomationTaskService["get"]>;
+    if (existing?.completed && existing.response_json) return parseStored<ReturnType<AutomationTaskService["get"]>>(existing.response_json, "creation response");
     this.employee(employeeId, caller);
     validateConnectorSelection(this.store, owner, employeeId, connectorIds);
     const configured = taskSchedule(body.schedule, prompt, "pending");
@@ -130,7 +149,7 @@ export class AutomationTaskService {
       if (!existing) this.store.automation.transaction(() => {
         const now = new Date().toISOString();
         db.prepare("INSERT INTO automation_creation(tenant_id, member_id, key, fingerprint, task_id, conversation_id) VALUES (?, ?, ?, ?, ?, ?)").run(owner.tenantId, owner.memberId, key!, fingerprint, id, conversationId);
-        this.store.createConversation({ id: conversationId, tenantId: owner.tenantId, memberId: owner.memberId, title: name, kind: "private", entryEmployeeId: employeeId, permissionMode: "read-only", schedule: null });
+        this.store.createConversation({ id: conversationId, tenantId: owner.tenantId, memberId: owner.memberId, title: name, kind: "private", entryEmployeeId: employeeId, permissionMode: permission, schedule: null });
         this.store.automation.insert({ id, tenant_id: owner.tenantId, member_id: owner.memberId, name, category, conversation_id: conversationId, connector_ids: JSON.stringify(connectorIds), revision: 1, created_at: now, updated_at: now, deleted_at: null });
       });
       await this.host.initializeConversationParticipants(conversationId, caller);
@@ -148,13 +167,15 @@ export class AutomationTaskService {
   }
 
   async patch(id: string, body: Record<string, unknown>, caller: AuthenticatedCaller, etag: string | undefined) {
-    onlyKeys(body, ["name", "prompt", "category", "employee_id", "connector_ids", "schedule"]);
+    onlyKeys(body, ["name", "prompt", "category", "employee_id", "connector_ids", "schedule", "permission_mode"]);
     this.checkVersion(id, caller, etag);
     this.requireInitialized(id);
     const { conversation, task } = this.resolve(id, caller);
     if (!conversation) throw new AutomationError(409, "conversation_deleted", "Execution conversation was deleted");
-    if (["employee_id", "connector_ids", "prompt", "schedule"].some(k => k in body) && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Pause or wait for the current execution before changing execution settings");
+    const changesExecution = ["employee_id", "connector_ids", "prompt", "schedule", "permission_mode"].some(k => k in body);
+    if (changesExecution && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Pause or wait for the current execution before changing execution settings");
     const current = this.get(id, caller), owner = ownerOf(caller);
+    const permission = permissionMode(body.permission_mode, conversation.permissionMode ?? "read-only");
     const name = body.name === undefined ? current.name : text(body.name, "task_name", 120);
     const category = body.category === undefined ? current.category : this.category(body.category);
     const ids = body.connector_ids === undefined ? current.connector_ids : this.connectorIds(body.connector_ids);
@@ -171,17 +192,18 @@ export class AutomationTaskService {
     const switching = employeeId !== current.employee_id;
     if (switching) {
       nextId = randomUUID();
-      this.store.createConversation({ id: nextId, tenantId: owner.tenantId, memberId: owner.memberId, title: name, kind: "private", entryEmployeeId: employeeId, permissionMode: conversation.permissionMode, schedule: null });
+      this.store.createConversation({ id: nextId, tenantId: owner.tenantId, memberId: owner.memberId, title: name, kind: "private", entryEmployeeId: employeeId, permissionMode: permission, schedule: null });
       try { await this.host.initializeConversationParticipants(nextId, caller); }
       catch (error) { await this.host.delete(nextId, owner.tenantId, owner.memberId); throw error; }
     }
     try {
       this.store.automation.transaction(() => {
         this.checkVersion(id, caller, etag);
-        if (switching && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Task started during the edit");
+        if (changesExecution && this.host.isPrompting(conversation.id)) throw new AutomationError(409, "task_busy", "Task started during the edit");
         const row = task ?? this.materialize(id, caller);
         if (switching) { this.store.updateConversation(conversation.id, { schedule: null }); this.store.automation.bind(id, nextId); }
         this.store.automation.update({ ...row, name, category, conversation_id: nextId, connector_ids: JSON.stringify(ids) });
+        if (!switching && permission !== (conversation.permissionMode ?? "read-only")) this.store.updateConversation(nextId, { permissionMode: permission });
         if (switching || body.schedule !== undefined || body.prompt !== undefined) this.store.updateConversation(nextId, { schedule: schedule ? { ...schedule } : null });
       });
     } catch (error) { if (switching) await this.host.delete(nextId, owner.tenantId, owner.memberId); throw error; }
@@ -234,11 +256,13 @@ export class AutomationTaskService {
   }
   private runRows(id: string, caller: AuthenticatedCaller, limit = -1) {
     const owner = ownerOf(caller);
+    // SAFETY: the row shape below is exactly the columns this SELECT returns.
     const rows = this.store.db.prepare(`SELECT o.*, r.state AS receipt_state, r.failure_code FROM schedule_occurrence o
       LEFT JOIN idempotency_receipt r ON r.conversation_id = o.conversation_id AND r.caller_id = o.caller_id AND r.idempotency_key = o.receipt_key
       WHERE o.tenant_id = ? AND o.member_id = ? AND (o.conversation_id IN (SELECT conversation_id FROM automation_binding WHERE task_id = ?) OR o.conversation_id = ?)
       ORDER BY o.scheduled_at DESC, o.id DESC LIMIT ?`).all(owner.tenantId, owner.memberId, id, id, limit) as unknown as Array<{ id: string; conversation_id: string; scheduled_at: string; schedule_id: string; receipt_key: string | null; receipt_state: string | null; reason: string | null; failure_code: string | null }>;
     return rows.map(row => {
+      // SAFETY: the row shape below is the subset of work_record columns this method reads.
       const work = this.store.db.prepare("SELECT * FROM work_record WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND prompt_receipt = ?").all(row.conversation_id, owner.tenantId, owner.memberId, row.receipt_key) as unknown as Array<{ id: string; outcome: string; started_at: number | null; ended_at: number | null }>;
       const results = work.map(w => w.outcome);
       const status = results.includes("active") ? "running" : results.includes("unknown") ? "unknown" : results.includes("error") ? "error" : results.includes("aborted") ? "aborted" : results.length && results.every(r => r === "succeeded") ? "succeeded" : row.reason === "overlap_skip" ? "skipped" : row.reason ? "blocked" : row.receipt_state === "accepted" ? "running" : "unknown";

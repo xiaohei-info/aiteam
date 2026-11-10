@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -5,6 +6,7 @@ import { createFixture } from "../test-fixture.js";
 import { AgentHttpServer } from "./server.js";
 import { ScheduleService, validateSchedule } from "../schedule.js";
 import { ApprovalExpiredError } from "../approval-service.js";
+import { taskSchedule } from "../services/automation-tasks.js";
 
 async function start() {
   const fixture = await createFixture();
@@ -160,5 +162,69 @@ test("a scheduled run whose approval expired is listed as an error with the spec
     for (let i = 0; i < 100 && runs.data[0]?.error_code === undefined; i++) { await new Promise(r => setTimeout(r, 10)); runs = await f.call(`automation-tasks/${task.task_id}/runs`); }
     assert.equal(runs.data[0].error_code, "approval_expired", JSON.stringify(runs.data));
     assert.equal(runs.data[0].status, "error");
+  } finally { await f.finish(); }
+});
+
+test("a task's execution permission defaults to read-only, can be chosen, changed, and survives an employee switch", async () => {
+  const f = await start();
+  try {
+    const plain = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "plain" });
+    assert.equal(plain.status, 201, JSON.stringify(plain.payload));
+    assert.equal(plain.data.permission_mode, "read-only");
+    assert.equal(f.store.getConversation(plain.data.conversation_id)?.permissionMode, "read-only");
+
+    const wide = await f.call("automation-tasks", "POST", { ...input(), name: "联网抓取", permission_mode: "full-access" }, { "Idempotency-Key": "wide" });
+    assert.equal(wide.status, 201, JSON.stringify(wide.payload));
+    assert.equal(wide.data.permission_mode, "full-access");
+    assert.equal(f.store.getConversation(wide.data.conversation_id)?.permissionMode, "full-access");
+
+    // The same key with a different permission is a different request.
+    assert.equal((await f.call("automation-tasks", "POST", { ...input(), permission_mode: "full-access" }, { "Idempotency-Key": "plain" })).status, 409);
+
+    const bad = await f.call("automation-tasks", "POST", { ...input(), permission_mode: "root" }, { "Idempotency-Key": "bad" });
+    assert.equal(bad.status, 422);
+
+    const patched = await f.call(`automation-tasks/${plain.data.task_id}`, "PATCH", { permission_mode: "workspace-write" }, { "If-Match": plain.data.etag });
+    assert.equal(patched.status, 200, JSON.stringify(patched.payload));
+    assert.equal(patched.data.permission_mode, "workspace-write");
+    assert.equal(f.store.getConversation(plain.data.conversation_id)?.permissionMode, "workspace-write");
+
+    // Switching employee opens a new conversation that keeps the chosen permission.
+    const switched = await f.call(`automation-tasks/${wide.data.task_id}`, "PATCH", { employee_id: "e2" }, { "If-Match": wide.data.etag });
+    assert.equal(switched.status, 200, JSON.stringify(switched.payload));
+    assert.notEqual(switched.data.conversation_id, wide.data.conversation_id);
+    assert.equal(switched.data.permission_mode, "full-access");
+
+    // Editing other fields leaves the permission alone.
+    const renamed = await f.call(`automation-tasks/${wide.data.task_id}`, "PATCH", { name: "改名" }, { "If-Match": switched.data.etag });
+    assert.equal(renamed.data.permission_mode, "full-access");
+  } finally { await f.finish(); }
+});
+
+test("a permission change is refused when a run starts between the first check and the write", async () => {
+  const f = await start();
+  try {
+    const created = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "race" });
+    assert.equal(created.status, 201, JSON.stringify(created.payload));
+    const original = f.host.isPrompting.bind(f.host);
+    let checks = 0;
+    // Idle at the first check, running by the time the edit is written.
+    f.host.isPrompting = (id: string) => (id === created.data.conversation_id ? ++checks > 1 : original(id));
+    const edit = await f.call(`automation-tasks/${created.data.task_id}`, "PATCH", { permission_mode: "full-access" }, { "If-Match": created.data.etag });
+    assert.equal(edit.status, 409);
+    assert.equal(edit.payload.code, "task_busy");
+    assert.equal(f.store.getConversation(created.data.conversation_id)?.permissionMode, "read-only");
+  } finally { await f.finish(); }
+});
+
+test("a creation retried with the default permission keeps the fingerprint it had before permission_mode existed", async () => {
+  const f = await start();
+  try {
+    const first = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "compat" });
+    assert.equal(first.status, 201, JSON.stringify(first.payload));
+    const fingerprint = (f.store.db.prepare("SELECT fingerprint FROM automation_creation WHERE key = ?").get("compat") as { fingerprint: string }).fingerprint;
+    const body = input();
+    const legacy = createHash("sha256").update(JSON.stringify({ name: body.name, prompt: body.prompt, category: body.category, employeeId: body.employee_id, connectorIds: body.connector_ids, schedule: taskSchedule(body.schedule, body.prompt, "fingerprint") })).digest("hex");
+    assert.equal(fingerprint, legacy);
   } finally { await f.finish(); }
 });
