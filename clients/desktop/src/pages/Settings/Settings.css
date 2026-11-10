@@ -485,6 +485,30 @@
   font-size: 12px;
 }
 
+.settings-build-info {
+  display: grid;
+  margin: 8px 0 0;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.settings-build-info > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.settings-build-info dt {
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.settings-build-info dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  user-select: text;
+}
+
 .settings-logout {
   display: flex;
   width: 100%;

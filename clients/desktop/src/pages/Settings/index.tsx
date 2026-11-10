@@ -18,6 +18,7 @@ import {
 } from '../../lib/systemNotifications'
 import { isOutcomeBubbleMuted, setOutcomeBubbleMuted } from '../../lib/contextOutcomeBubble'
 import { openPortal, PORTALS } from '../../lib/portals'
+import { BUILD_INFO_ROWS } from '../../lib/buildInfo'
 
 // 暂不在设置里展示的入口（仍保留在 PORTALS 中，与 external_links.rs 保持一致）。
 const HIDDEN_PORTAL_KEYS: ReadonlySet<string> = new Set(['agent-user'])
@@ -261,7 +262,14 @@ export default function Settings() {
               <p>当前客户端不读取、保存或回显手工 API Key，也不支持覆盖服务地址。</p>
             </div>
             {advancedOpen && <ApplicationLogs />}
-            <p className="settings-about-copy">AI Team Desktop v0.1.0</p>
+            <dl className="settings-build-info" aria-label="版本信息">
+              {BUILD_INFO_ROWS.map((row) => (
+                <div key={row.label}>
+                  <dt>{row.label}</dt>
+                  <dd>{row.value}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         </details>
 

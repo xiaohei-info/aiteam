@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, loadEnv, type ProxyOptions } from 'vite'
@@ -11,6 +13,30 @@ import { officeEditorVitePlugin } from './scripts/office-editor-middleware.mjs'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const host = process.env.TAURI_DEV_HOST
+
+function git(...args: string[]): string {
+  try {
+    return execFileSync('git', args, { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return ''
+  }
+}
+// 只统计已跟踪文件的改动：未跟踪的构建产物 / 文档不应让提交号显示为 dirty
+function buildCommit(): string {
+  const commit = git('rev-parse', '--short=8', 'HEAD')
+  if (!commit) return 'unknown'
+  return git('status', '--porcelain', '--untracked-files=no') ? `${commit}-dirty` : commit
+}
+function readPackageVersion(): string {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path.join(__dirname, 'package.json'), 'utf8'))
+    const version = (parsed as { version?: unknown }).version
+    return typeof version === 'string' ? version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+const packageVersion = readPackageVersion()
 function logProxyTarget(target: string): NonNullable<ProxyOptions['configure']> {
   return (proxy) => {
     proxy.on('proxyReq', (outgoing) => {
@@ -42,6 +68,11 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), officeEditorVitePlugin({ aiteamRoot: __dirname })],
     clearScreen: false,
+    define: {
+      __APP_VERSION__: JSON.stringify(packageVersion),
+      __APP_COMMIT__: JSON.stringify(buildCommit()),
+      __APP_BUILT_AT__: JSON.stringify(new Date().toISOString()),
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),
