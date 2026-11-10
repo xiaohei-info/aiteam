@@ -9,6 +9,7 @@ import { createControlledResourceLoader, hindsightStateDir } from "./resources.j
 import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
 import { appLogger } from "../observability.js";
 import { LocalSandbox } from "./sandbox.js";
+import { ApprovalExpiredError, ApprovalService } from "../approval-service.js";
 import { resetTranscript, SessionHost } from "./session-host.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -1522,6 +1523,78 @@ test("group members working at once share one folder and take turns running comm
     const lines = readFileSync(log, "utf8").trim().split("\n");
     assert.deepEqual(lines.map((line) => line.split(" ")[0]), ["start", "end", "start", "end"], "one employee at a time");
     assert.equal(new Set(lines.map((line) => line.slice(line.indexOf(" ") + 1))).size, 1, "both ran in the shared folder");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+async function expiringApprovalFixture() {
+  const fixture = await createFixture();
+  fixture.store.replaceProjections([
+    { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+  ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["bash"] } }]);
+  fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1", permissionMode: "read-only" });
+  const host = new SessionHost({
+    cwdRoot: join(fixture.dataRoot, "workspaces"), agentDir: join(fixture.dataRoot, "pi"), sessionDir: join(fixture.dataRoot, "sessions"),
+    store: fixture.store, modelRuntime: fixture.modelRuntime, model: fixture.faux.getModel(),
+    resourceLoaderFactory: (_id, auth) => createControlledResourceLoader("test system prompt", undefined, auth),
+    sandbox: new LocalSandbox(),
+    approvalService: new ApprovalService(fixture.store, { ttlMs: 1_000 }),
+  });
+  const bash = (id: string) => fauxAssistantMessage(fauxToolCall("bash", { command: "echo hi" }, { id }), { stopReason: "toolUse" });
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  return { fixture, host, bash, caller };
+}
+
+test("a scheduled run whose tool approval expires is aborted and recorded as a failure", async () => {
+  const { fixture, host, bash, caller } = await expiringApprovalFixture();
+  try {
+    // The model would retry and then invent an answer; only the first call may be reached.
+    fixture.faux.setResponses([bash("bash-1"), bash("bash-2"), fauxAssistantMessage("here are example figures")]);
+    await assert.rejects(
+      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
+      (error: unknown) => error instanceof ApprovalExpiredError && /定时任务调用 bash 需要审批/.test(error.message),
+    );
+    const approvals = fixture.store.listOwnedApprovalRecords("conversation-1", "tenant-1", "member-1", true);
+    assert.equal(approvals.length, 1, "no retry after the expiry");
+    const failures = fixture.store.conversationFailures.list("conversation-1");
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.error_code, "approval_expired");
+    assert.match(failures[0]!.error_message, /定时任务/);
+    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an interactive run keeps handing an expired approval back to the model", async () => {
+  const { fixture, host, bash, caller } = await expiringApprovalFixture();
+  try {
+    fixture.faux.setResponses([bash("bash-1"), fauxAssistantMessage("could not run it")]);
+    await host.prompt("conversation-1", "run it", undefined, caller);
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1"), []);
+    assert.match(JSON.stringify(await host.entries("conversation-1")), /could not run it/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("several tool calls expiring in one scheduled turn record a single failure", async () => {
+  const { fixture, host, caller } = await expiringApprovalFixture();
+  try {
+    const twoCalls = fauxAssistantMessage([fauxToolCall("bash", { command: "echo a" }, { id: "bash-a" }), fauxToolCall("bash", { command: "echo b" }, { id: "bash-b" })], { stopReason: "toolUse" });
+    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("here are example figures")]);
+    await assert.rejects(
+      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
+      (error: unknown) => error instanceof ApprovalExpiredError,
+    );
+    const failures = fixture.store.conversationFailures.list("conversation-1");
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.error_code, "approval_expired");
+    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
     await host.dispose();
   } finally {
     await fixture.close();
