@@ -45,7 +45,7 @@ pnpm tauri:build:mac:installer
 pnpm tauri:build:mac:installer --debug
 ```
 
-默认输出目录分别为 `src-tauri/target-fresh/release/bundle/dmg/` 和 `src-tauri/target-fresh/debug/bundle/dmg/`。请选择文件名以 **`_release_with-helper.dmg`** 或 **`_debug_with-helper.dmg`** 结尾的安装包。
+默认输出目录分别为 `src-tauri/target-fresh.noindex/release/bundle/dmg/` 和 `src-tauri/target-fresh.noindex/debug/bundle/dmg/`。请选择文件名以 **`_release_with-helper.dmg`** 或 **`_debug_with-helper.dmg`** 结尾的安装包。
 
 打开后卷名为 **`AIFred Installer`**，其中包含应用、Applications 快捷方式、`修复应用无法打开.command` 和 `安装说明.txt`。脚本会清除下载隔离标记并重新进行本地临时签名，不等同于 Developer ID 签名或 Apple 公证；具体限制见下方说明。
 
@@ -83,22 +83,22 @@ Debug 安装包可以独立运行，不需要启动前端开发服务器；Rust 
 
 ```bash
 # Release
-CARGO_TARGET_DIR="$PWD/src-tauri/target-fresh" pnpm tauri build --bundles dmg
+CARGO_TARGET_DIR="$PWD/src-tauri/target-fresh.noindex" pnpm tauri build --bundles dmg
 
 # Debug
-CARGO_TARGET_DIR="$PWD/src-tauri/target-fresh" pnpm tauri build --debug --bundles dmg
+CARGO_TARGET_DIR="$PWD/src-tauri/target-fresh.noindex" pnpm tauri build --debug --bundles dmg
 ```
 
 `CARGO_TARGET_DIR=...` 必须与 `pnpm` 命令在同一行，只对该次命令生效。对应产物分别位于：
 
 ```text
-src-tauri/target-fresh/release/bundle/dmg/
-src-tauri/target-fresh/release/bundle/macos/
-src-tauri/target-fresh/debug/bundle/dmg/
-src-tauri/target-fresh/debug/bundle/macos/
+src-tauri/target-fresh.noindex/release/bundle/dmg/
+src-tauri/target-fresh.noindex/release/bundle/macos/
+src-tauri/target-fresh.noindex/debug/bundle/dmg/
+src-tauri/target-fresh.noindex/debug/bundle/macos/
 ```
 
-`src-tauri/target-fresh/` 已加入项目 `.gitignore`，避免大量编译文件显示为未跟踪文件。若另选缓存目录，也需添加对应忽略规则。如果再次移动项目，新的缓存目录也可能需要清理。
+`src-tauri/target-fresh.noindex/` 已加入项目 `.gitignore`，避免大量编译文件显示为未跟踪文件。若另选缓存目录，也需添加对应忽略规则。如果再次移动项目，新的缓存目录也可能需要清理。
 
 **方式二：清理默认目录的旧 Debug 缓存，再使用默认命令。**
 
@@ -109,7 +109,7 @@ cargo clean --manifest-path src-tauri/Cargo.toml \
 pnpm tauri build --debug --bundles dmg
 ```
 
-这里 Cargo 的 `dev` profile 对应 Debug 构建。清理只删除指定目录的构建缓存，不删除源码，也不影响 `target-fresh/` 中的产物。若需清理默认目录的 Release 缓存，将 `--profile dev` 改为 `--profile release`。
+这里 Cargo 的 `dev` profile 对应 Debug 构建。清理只删除指定目录的构建缓存，不删除源码，也不影响 `target-fresh.noindex/` 中的产物。若需清理默认目录的 Release 缓存，将 `--profile dev` 改为 `--profile release`。
 
 ### 带安装说明和临时放行工具的 DMG
 
@@ -123,13 +123,13 @@ pnpm tauri:build:mac:installer
 pnpm tauri:build:mac:installer --debug
 ```
 
-命令先通过 `pnpm tauri build --bundles app` 构建应用，再用 macOS `hdiutil` 生成并校验 DMG。默认使用 `src-tauri/target-fresh/`，也可通过 `CARGO_TARGET_DIR` 指定目录。仅支持本机架构，不接受 `--target` 或自定义 Tauri 配置参数。
+命令先通过 `pnpm tauri build --bundles app` 构建应用，再用 macOS `hdiutil` 生成并校验 DMG。默认使用 `src-tauri/target-fresh.noindex/`，也可通过 `CARGO_TARGET_DIR` 指定目录。仅支持本机架构，不接受 `--target` 或自定义 Tauri 配置参数。
 
 默认产物路径（Apple Silicon，当前版本）：
 
 ```text
-src-tauri/target-fresh/release/bundle/dmg/AIFred_0.1.0_aarch64_release_with-helper.dmg
-src-tauri/target-fresh/debug/bundle/dmg/AIFred_0.1.0_aarch64_debug_with-helper.dmg
+src-tauri/target-fresh.noindex/release/bundle/dmg/AIFred_0.1.0_aarch64_release_with-helper.dmg
+src-tauri/target-fresh.noindex/debug/bundle/dmg/AIFred_0.1.0_aarch64_debug_with-helper.dmg
 ```
 
 打开 DMG 后，顶层包含：

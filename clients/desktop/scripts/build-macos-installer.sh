@@ -20,7 +20,7 @@ for ARG in "$@"; do
 done
 
 # Avoid stale absolute paths in the old target directory after a project move.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target-fresh}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/src-tauri/target-fresh.noindex}"
 case "$CARGO_TARGET_DIR" in
   /*) ;;
   *) export CARGO_TARGET_DIR="$ROOT/$CARGO_TARGET_DIR" ;;
