@@ -73,8 +73,12 @@ export function isPasswordResetRequired(error: unknown): boolean {
   const code = candidate.problem?.code ?? candidate.code
   const detail = candidate.problem?.detail ?? candidate.message
 
-  if (candidate.status !== 403 || code !== 'forbidden' || typeof detail !== 'string') {
+  if (candidate.status !== 403 || typeof detail !== 'string') {
     return false
+  }
+  // Manager returns code "password_reset_required" / "password_expired" (not "forbidden").
+  if (code === 'password_reset_required' || code === 'password_expired') {
+    return true
   }
   return /password(?:\s+expired[^;]*)?;?\s*reset required|password reset required/i.test(detail)
 }
