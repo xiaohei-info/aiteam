@@ -2,6 +2,7 @@ import { calendarOccurrence, validateCalendar, type CalendarRule } from "./sched
 import { createHash } from "node:crypto";
 import { encodeScope } from "./runtime-lease-cache.js";
 import type { AuthenticatedCaller } from "./http/auth.js";
+import { ApprovalExpiredError } from "./approval-service.js";
 import { PreExecutionAuthorizationError, type SessionHost } from "./pi/session-host.js";
 import { IdempotencyConflictError, IdempotencyUnknownError, ScheduleRevisionConflictError, type AgentSqliteStore, type ConversationRecord } from "./storage/sqlite.js";
 import type { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
@@ -177,7 +178,7 @@ export class ScheduleService {
           }
           return;
         }
-        this.store.markUnknown(conversation.id, caller.callerId, key, receipt.ownerInstance, undefined, { code: "execution_failed", detail: safeScheduleFailure(error) });
+        this.store.markUnknown(conversation.id, caller.callerId, key, receipt.ownerInstance, undefined, { code: error instanceof ApprovalExpiredError ? "approval_expired" : "execution_failed", detail: safeScheduleFailure(error) });
       },
     ).finally(() => clearInterval(heartbeat));
     return true;

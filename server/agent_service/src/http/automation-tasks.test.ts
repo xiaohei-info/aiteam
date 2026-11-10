@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { createFixture } from "../test-fixture.js";
 import { AgentHttpServer } from "./server.js";
 import { ScheduleService, validateSchedule } from "../schedule.js";
+import { ApprovalExpiredError } from "../approval-service.js";
 import { taskSchedule } from "../services/automation-tasks.js";
 
 async function start() {
@@ -146,6 +147,21 @@ test("past one-shot creation fails without orphan rows; completed creation repla
     const replay = await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "replay-grant" });
     assert.equal(replay.status, 201); assert.deepEqual(replay.data, created.data);
     assert.equal((await f.call("automation-tasks", "POST", input(), { "Idempotency-Key": "new-grant" })).status, 403);
+  } finally { await f.finish(); }
+});
+
+test("a scheduled run whose approval expired is listed as an error with the specific cause", async () => {
+  const f = await start();
+  try {
+    const at = Date.now() + 10_000;
+    const { data: task } = await f.call("automation-tasks", "POST", { ...input(), schedule: { mode: "once", timezone: "UTC", run_at: new Date(at).toISOString() } }, { "Idempotency-Key": "expiry" });
+    const host = { isPrompting: () => false, prompt: async () => { throw new ApprovalExpiredError("定时任务调用 bash 需要审批，但在有效期内无人处理，已中止本次运行。"); } };
+    const scheduler = new ScheduleService(f.store, host as never);
+    await scheduler.tick(at - 1); assert.equal(await scheduler.tick(at + 1), 1);
+    let runs = await f.call(`automation-tasks/${task.task_id}/runs`);
+    for (let i = 0; i < 100 && runs.data[0]?.error_code === undefined; i++) { await new Promise(r => setTimeout(r, 10)); runs = await f.call(`automation-tasks/${task.task_id}/runs`); }
+    assert.equal(runs.data[0].error_code, "approval_expired", JSON.stringify(runs.data));
+    assert.equal(runs.data[0].status, "error");
   } finally { await f.finish(); }
 });
 
