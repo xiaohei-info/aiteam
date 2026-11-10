@@ -1581,3 +1581,22 @@ test("an interactive run keeps handing an expired approval back to the model", a
     await fixture.close();
   }
 });
+
+test("several tool calls expiring in one scheduled turn record a single failure", async () => {
+  const { fixture, host, caller } = await expiringApprovalFixture();
+  try {
+    const twoCalls = fauxAssistantMessage([fauxToolCall("bash", { command: "echo a" }, { id: "bash-a" }), fauxToolCall("bash", { command: "echo b" }, { id: "bash-b" })], { stopReason: "toolUse" });
+    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("here are example figures")]);
+    await assert.rejects(
+      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
+      (error: unknown) => error instanceof ApprovalExpiredError,
+    );
+    const failures = fixture.store.conversationFailures.list("conversation-1");
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.error_code, "approval_expired");
+    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});

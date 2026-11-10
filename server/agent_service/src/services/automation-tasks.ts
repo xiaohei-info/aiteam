@@ -243,7 +243,8 @@ export class AutomationTaskService {
       const results = work.map(w => w.outcome);
       const status = results.includes("active") ? "running" : results.includes("unknown") ? "unknown" : results.includes("error") ? "error" : results.includes("aborted") ? "aborted" : results.length && results.every(r => r === "succeeded") ? "succeeded" : row.reason === "overlap_skip" ? "skipped" : row.reason ? "blocked" : row.receipt_state === "accepted" ? "running" : "unknown";
       return { run_id: row.id, conversation_id: row.conversation_id, schedule_id: row.schedule_id, scheduled_at: row.scheduled_at, receipt_key: row.receipt_key,
-        status: row.reason === "conversation_deleted" ? "unknown" : status,
+        // An unattended approval that expired is a failure with a known cause, whatever state the aborted work record ended in.
+        status: row.reason === "conversation_deleted" ? "unknown" : row.failure_code === "approval_expired" && status !== "running" ? "error" : status,
         started_at: work.some(w => w.started_at !== null) ? new Date(Math.min(...work.flatMap(w => w.started_at === null ? [] : [w.started_at]))).toISOString() : null,
         finished_at: work.length && work.every(w => w.ended_at !== null) ? new Date(Math.max(...work.map(w => w.ended_at!))).toISOString() : null,
         error_code: row.reason ?? row.failure_code, result_summary: work.length ? new WorkRecordReadService(this.store, this.host).resultSummary(work.at(-1)!.id, caller) : null, work_record_ids: work.map(w => w.id) };

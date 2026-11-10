@@ -1394,7 +1394,7 @@ export class SessionHost {
       return await run();
     } catch (error) {
       if (!record.activeBackground || !(error instanceof ApprovalExpiredError) || record.aborting) throw error;
-      const failure = new ApprovalExpiredError(`定时任务调用 ${toolName} 需要审批，但 10 分钟内无人处理，已中止本次运行。请把该对话的权限调高，或在审批提示出现时及时处理。`);
+      const failure = new ApprovalExpiredError(`定时任务调用 ${toolName} 需要审批，但在有效期内无人处理，已中止本次运行。请把该对话的权限调高，或在审批提示出现时及时处理。`);
       record.backgroundApprovalFailure ??= failure;
       // Not awaited: abort() waits for this very tool call to finish.
       void record.session?.abort().catch(() => undefined);
