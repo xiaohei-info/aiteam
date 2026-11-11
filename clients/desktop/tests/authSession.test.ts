@@ -137,6 +137,30 @@ test('only the documented forbidden reset details enter forced password reset', 
   }
 })
 
+test("Manager 的 password_reset_required / password_expired 错误码进入强制改密", () => {
+  for (const code of ['password_reset_required', 'password_expired']) {
+    // Manager 会同时给出错误码和 detail；错误码本身就必须足够判断。
+    assert.equal(isPasswordResetRequired({
+      status: 403,
+      code,
+      problem: { code, detail: 'password expired (90d); reset required' },
+    }), true)
+    assert.equal(isPasswordResetRequired({ status: 403, code, problem: { code } }), true)
+  }
+
+  // 只有通用 forbidden 才允许靠 detail 文案判断：其他 403 即使提到改密也不该进重置流程。
+  assert.equal(isPasswordResetRequired({
+    status: 403,
+    code: 'permission_denied',
+    problem: { code: 'permission_denied', detail: 'password reset required' },
+  }), false)
+  assert.equal(isPasswordResetRequired({
+    status: 403,
+    code: 'forbidden',
+    problem: { code: 'forbidden', detail: 'password reset required' },
+  }), true)
+})
+
 test('public credential failures do not invalidate the pending reset flow', () => {
   assert.equal(shouldInvalidateSessionOnUnauthorized(401, null), false)
   assert.equal(shouldInvalidateSessionOnUnauthorized(401, ''), false)
