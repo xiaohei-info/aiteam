@@ -27,6 +27,12 @@ tokio = { version = "1", features = ["time"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Windows: DPAPI wraps the auth vault master key (src/secure_session.rs); a Job Object ends the Agent
+# tree on exit or crash (src/agent.rs); url turns a path into the file:// URL Node needs for --import.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
+url = "2"
+
 [dev-dependencies]
 # Match the URLPattern engine used by tauri-plugin-http 2.5.9.
 regex = "1"

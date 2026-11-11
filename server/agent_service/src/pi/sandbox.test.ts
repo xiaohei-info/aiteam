@@ -19,6 +19,7 @@ async function requireAvailable(t: { skip: (message?: string) => void }, sandbox
 }
 
 test("LocalSandbox confines a harmless command and denies writes outside its workspace", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-test-"));
   const outside = join(process.env.HOME ?? process.cwd(), `.dsh-sandbox-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const sandbox = new LocalSandbox();
@@ -104,7 +105,9 @@ test("LocalSandbox removes control-plane endpoint and credential aliases", async
   }
 });
 
-test("LocalSandbox applies read-only, workspace-write, and full-access modes", async () => {
+test("LocalSandbox applies read-only, workspace-write, and full-access modes", async (t) => {
+  // Windows runs every mode unconfined (no confined backend), so the mode-specific rejections do not apply.
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-permissions-"));
   const outside = join(process.env.HOME ?? process.cwd(), `.dsh-sandbox-permission-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const sandbox = new LocalSandbox();
@@ -126,6 +129,7 @@ test("LocalSandbox applies read-only, workspace-write, and full-access modes", a
 });
 
 test("LocalSandbox denies network access and terminates the whole child process group", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-test-"));
   const sandbox = new LocalSandbox();
   const server = createServer((_request, response) => response.end("must-not-be-reached"));

@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod agent;
 mod agent_projects;
 mod diagnostics;
@@ -17,11 +17,13 @@ mod secure_session;
 
 pub fn run() {
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.manage(agent::AgentState::default()).setup(|app| {
         agent::setup(app)?;
         // After `agent::setup` takes the single-instance lock: any recorded run is a
-        // leftover of a killed instance, not of one still running.
+        // leftover of a killed instance, not of one still running. Windows records no
+        // process start time, so there is nothing to match and nothing to end there.
+        #[cfg(target_os = "macos")]
         project_runner::end_leftovers(app.handle());
         Ok(())
     });
@@ -95,7 +97,7 @@ pub fn run() {
                 _app.state::<project_runner::ProjectRunnerState>()
                     .stop_all();
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             if matches!(
                 _event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
@@ -173,14 +175,14 @@ async fn select_project_folder(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[tauri::command]
 async fn get_agent_base_url(state: tauri::State<'_, agent::AgentState>) -> Result<String, String> {
     agent::get_agent_base_url(state).await
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
 fn get_agent_base_url() -> Result<String, String> {
-    Err("当前内嵌 Agent 包仅支持 Apple Silicon macOS".into())
+    Err("当前内嵌 Agent 包仅支持 Apple Silicon macOS 与 64 位 Windows".into())
 }

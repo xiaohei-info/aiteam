@@ -46,7 +46,7 @@ const sessionDir = join(dataRoot, "sessions");
 const managerUrl = process.env.AITEAM_MANAGER_URL?.trim();
 const sandbox = new LocalSandbox();
 mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
-if (environment === "production") await sandbox.assertAvailable(cwdRoot);
+if (environment === "production" && process.platform !== "win32") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // Before any session runs: legacy folders move to the conversation-named layout, then artifacts
@@ -127,7 +127,7 @@ const http = new AgentHttpServer({
   skillCache,
   localReady: async () => {
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
-    return sandbox.isAvailable(cwdRoot);
+    return process.platform === "win32" ? true : sandbox.isAvailable(cwdRoot);
   },
   runtimeReady: () => managerClient !== undefined || configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),

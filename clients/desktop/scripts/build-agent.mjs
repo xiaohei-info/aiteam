@@ -4,11 +4,12 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { hostAgentTarget } from './agent-target.mjs'
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = path.resolve(desktopRoot, '../..')
-const target = `${process.platform}-${process.arch}`
-if (target !== 'darwin-arm64') throw new Error(`The desktop app bundles a darwin-arm64 Agent; build on Apple Silicon (host=${target}).`)
+// The package bundles a native Node runtime and native modules, so it is built on the platform it ships for.
+const target = hostAgentTarget()
 
 const git = (...args) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
 const agentPackageJson = path.join(repoRoot, 'server/agent_service/package.json')

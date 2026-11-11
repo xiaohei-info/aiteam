@@ -1,14 +1,21 @@
-//! Packaged macOS Agent lifecycle. The child owns its database and chooses its port.
+//! Packaged Agent lifecycle (macOS ARM64 and Windows x64). The child owns its database and chooses its port.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::{fs::OpenOptionsExt, process::CommandExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Manager;
+
+const RUNTIME: &str = if cfg!(windows) { "runtime/node.exe" } else { "runtime/node" };
 
 #[derive(Default)]
 pub struct AgentState(Mutex<Runtime>);
@@ -16,28 +23,80 @@ pub struct AgentState(Mutex<Runtime>);
 #[derive(Default)]
 struct Runtime {
     child: Option<Child>,
+    #[cfg(windows)]
+    job: Option<job::Job>,
     result: Option<Result<String, String>>,
-    // An OS lock is released on crash as well as normal exit; never delete its file.
     instance_lock: Option<File>,
     agent_dir: Option<PathBuf>,
     root: Option<PathBuf>,
 }
 
+#[cfg(windows)]
+mod job {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    pub struct Job(HANDLE);
+    unsafe impl Send for Job {}
+    impl Job {
+        pub fn adopt(child: &Child) -> Option<Job> {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() { return None; }
+                let job = Job(handle);
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(handle, JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<c_void>(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
+                if ok == 0 || AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0 { return None; }
+                Some(job)
+            }
+        }
+        pub fn terminate(&self) { unsafe { TerminateJobObject(self.0, 1); } }
+    }
+    impl Drop for Job {
+        fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
+    }
+}
+
+#[cfg(unix)]
 fn acquire_instance_lock(root: &Path) -> Result<File, String> {
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(root.join("desktop.lock"))
-        .map_err(|e| e.to_string())?;
-    // SAFETY: file owns a valid descriptor and remains alive for the app lifetime.
+    let file = OpenOptions::new().create(true).truncate(false).read(true).write(true)
+        .open(root.join("desktop.lock")).map_err(|e| e.to_string())?;
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("AIFred 已在运行，请使用已打开的窗口".into());
     }
     Ok(file)
 }
+
+#[cfg(windows)]
+fn acquire_instance_lock(root: &Path) -> Result<File, String> {
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    OpenOptions::new().create(true).truncate(false).read(true).write(true).share_mode(0)
+        .open(root.join("desktop.lock"))
+        .map_err(|_| "AIFred 已在运行，请使用已打开的窗口".to_string())
+}
+
+#[cfg(windows)]
+fn import_specifier(path: &Path) -> OsString {
+    url::Url::from_file_path(path).map(|u| OsString::from(u.as_str())).unwrap_or_else(|_| path.as_os_str().to_owned())
+}
+#[cfg(not(windows))]
+fn import_specifier(path: &Path) -> OsString { path.as_os_str().to_owned() }
+
+const INHERITED_ENV: &[&str] = if cfg!(windows) {
+    &["PATH","PATHEXT","SystemRoot","WINDIR","ComSpec","TEMP","TMP","USERNAME","USERPROFILE","HOMEDRIVE","HOMEPATH","APPDATA","LOCALAPPDATA"]
+} else {
+    &["HOME","USER","LOGNAME","PATH","TMPDIR","LANG"]
+};
 
 fn copy_config_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
@@ -121,7 +180,7 @@ fn incomplete_enterprise_config(path: &Path) -> Option<(&'static str, &'static s
 }
 
 fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
-    if !agent.join("config/agent.env").is_file() || !agent.join("runtime/node").is_file() {
+    if !agent.join("config/agent.env").is_file() || !agent.join(RUNTIME).is_file() {
         return Err("未安装新版本机 Agent 包及企业公共配置".into());
     }
     let config = prepare_config(agent, root)?;
@@ -144,20 +203,22 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
         fs::rename(log, log.with_extension("previous.log")).map_err(|e| e.to_string())?;
     }
     crate::diagnostics::host_event(root, "agent.starting", "info");
-    let mut command = Command::new(agent.join("runtime/node"));
+    let mut command = Command::new(agent.join(RUNTIME));
     command.env_clear();
-    for key in ["HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG"] {
+    for key in INHERITED_ENV {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
     }
+    // The private directory-authority channel is a macOS Unix-socket feature.
+    #[cfg(target_os = "macos")]
     if let Some(channel) = crate::local_directory_host::config() {
         command.env("AITEAM_LOCAL_HOST_SOCKET", channel.socket);
         command.env("AITEAM_LOCAL_HOST_TOKEN", channel.token);
     }
     command
         .arg("--import")
-        .arg(agent.join("node_modules/tsx/dist/esm/index.mjs"))
+        .arg(import_specifier(&agent.join("node_modules/tsx/dist/esm/index.mjs")))
         .arg(agent.join("bin/start-agent.mjs"))
         .arg("--config")
         .arg(config)
@@ -167,8 +228,12 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
         .current_dir(agent)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    // CREATE_NO_WINDOW: no console flashes up for the headless Node process or its children.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
     let mut child = command
         .spawn()
         .map_err(|e| format!("无法启动随包 Node runtime: {e}"))?;
@@ -179,6 +244,15 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
         crate::diagnostics::capture_child(stderr, log.to_path_buf());
     }
     Ok(child)
+}
+
+/// Keep the freshly spawned Agent and, on Windows, the job that lets `stop` end its whole tree.
+fn track(runtime: &mut Runtime, child: Child) {
+    #[cfg(windows)]
+    {
+        runtime.job = job::Job::adopt(&child);
+    }
+    runtime.child = Some(child);
 }
 
 #[derive(Deserialize)]
@@ -296,6 +370,7 @@ async fn wait_until_ready(
 }
 
 impl Runtime {
+    #[cfg(unix)]
     fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
             let group = -(child.id() as i32);
@@ -315,6 +390,24 @@ impl Runtime {
                 libc::kill(group, libc::SIGKILL);
             }
             let _ = child.wait();
+        }
+    }
+
+    // Windows has no SIGTERM for a windowless child: ending the job stops the Agent together with
+    // the bash/tool processes it started. agent-port.json is removed here because a killed Agent cannot.
+    #[cfg(windows)]
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            match self.job.take() {
+                Some(job) => job.terminate(),
+                None => {
+                    let _ = child.kill();
+                }
+            }
+            let _ = child.wait();
+            if let Some(root) = &self.root {
+                let _ = fs::remove_file(root.join("agent-data/agent-port.json"));
+            }
         }
     }
 }
@@ -340,6 +433,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         runtime.agent_dir = Some(agent.clone());
         runtime.root = Some(root.clone());
     }
+    #[cfg(target_os = "macos")]
     if let Err(error) = crate::local_directory_host::start(app.handle().clone()) {
         crate::diagnostics::host_event_fields(
             &root,
@@ -350,7 +444,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }
     let log = root.join("agent.log");
     match launch(&agent, &root, &log) {
-        Ok(child) => state.0.lock().unwrap().child = Some(child),
+        Ok(child) => track(&mut state.0.lock().unwrap(), child),
         Err(error) => {
             crate::diagnostics::host_event(&root, "agent.launch_failed", "error");
             state.0.lock().unwrap().result = Some(Err(error));
@@ -405,7 +499,7 @@ pub async fn get_agent_base_url(state: tauri::State<'_, AgentState>) -> Result<S
                 runtime.stop();
                 match launch(&agent, &root, &root.join("agent.log")) {
                     Ok(child) => {
-                        runtime.child = Some(child);
+                        track(&mut runtime, child);
                         runtime.result = None;
                     }
                     Err(error) => {
@@ -501,7 +595,7 @@ mod tests {
         )
         .unwrap();
         // A non-executable placeholder proves the refusal happens before spawning.
-        fs::write(agent.join("runtime/node"), "not-executed").unwrap();
+        fs::write(agent.join(RUNTIME), "not-executed").unwrap();
         fs::write(
             agent.join("manifest.json"),
             "{\"target\":\"darwin-arm64\"}\n",
@@ -598,14 +692,17 @@ mod tests {
         )
         .unwrap();
         let state = AgentState::default();
-        state.0.lock().unwrap().child = Some(
-            launch(
+        {
+            let child = launch(
                 &repository.join("resources/agent"),
                 &root,
                 &root.join("agent.log"),
             )
-            .unwrap(),
-        );
+            .unwrap();
+            let mut runtime = state.0.lock().unwrap();
+            runtime.root = Some(root.clone());
+            track(&mut runtime, child);
+        }
         tauri::async_runtime::block_on(async {
             let result =
                 wait_until_ready(&state, &root.join("agent-data/agent-port.json"), &root).await;
@@ -658,7 +755,7 @@ mod tests {
 
         // Public keys generated solely for this isolated smoke test. No Manager
         // login, development auth bypass or changes to the delivered config.
-        let generated = Command::new(agent.join("runtime/node")).args(["-e", r#"
+        let generated = Command::new(agent.join(RUNTIME)).args(["-e", r#"
             const { generateKeyPairSync } = require('node:crypto');
             const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey;
             const ed = generateKeyPairSync('ed25519').publicKey;
@@ -677,7 +774,12 @@ mod tests {
         for iteration in 0..2 {
             let child = launch(&agent, &root, &log).unwrap();
             let pid = child.id();
-            state.0.lock().unwrap().child = Some(child);
+            {
+                // Same path as production: the job and the data root are what `stop` relies on.
+                let mut runtime = state.0.lock().unwrap();
+                runtime.root = Some(root.clone());
+                track(&mut runtime, child);
+            }
             let result =
                 tauri::async_runtime::block_on(wait_until_ready(&state, &port_file, &root));
             if result.is_err() {
@@ -700,11 +802,15 @@ mod tests {
                 !port_file.exists(),
                 "graceful shutdown must remove agent-port.json"
             );
+            // On Windows `stop` waits on the child handle, so reaping is already guaranteed there.
+            #[cfg(unix)]
             assert_eq!(
                 unsafe { libc::kill(pid as i32, 0) },
                 -1,
                 "child must be reaped"
             );
+            #[cfg(windows)]
+            let _ = pid;
             // Use the bundled Node SQLite implementation; the desktop no longer
             // links a second SQLite runtime after the remote legacy cleanup.
             let script = if iteration == 0 {
@@ -712,7 +818,7 @@ mod tests {
             } else {
                 "const {DatabaseSync}=require('node:sqlite'); const db=new DatabaseSync(process.argv[1]); if(db.prepare('SELECT value FROM desktop_smoke').get().value !== 'preserved') process.exit(1); db.close();"
             };
-            let result = Command::new(agent.join("runtime/node"))
+            let result = Command::new(agent.join(RUNTIME))
                 .args(["-e", script])
                 .arg(root.join("agent-data/agent.sqlite"))
                 .output()

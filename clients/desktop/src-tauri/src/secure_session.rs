@@ -174,6 +174,54 @@ fn write_atomic_private(target: &Path, bytes: &[u8]) -> Result<(), String> {
     write_result
 }
 
+/// Marks a master key file wrapped with Windows DPAPI (current-user scope).
+const DPAPI_PREFIX: &str = "dpapi:";
+
+fn key_from_bytes(bytes: &[u8]) -> Option<[u8; MASTER_KEY_LEN]> {
+    <[u8; MASTER_KEY_LEN]>::try_from(bytes).ok()
+}
+
+/// On-disk form of the master key. Unix relies on the 0600 file in a 0700 directory. Windows has no
+/// mode bits, so the key is wrapped with DPAPI: a copied `master.key` cannot be opened by another
+/// Windows account or on another machine.
+fn seal_master_key(key: &[u8; MASTER_KEY_LEN]) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        dpapi::protect(key).map(|blob| format!("{DPAPI_PREFIX}{}", hex::encode(blob)))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(hex::encode(key))
+    }
+}
+
+/// Reads a stored master key. The flag asks the caller to rewrite it sealed: a plaintext key left by
+/// an earlier Windows build. `None` means the file is unusable here (corrupt, or a DPAPI blob that
+/// belongs to another user or machine) and a new key is generated, as for any corrupt key file.
+fn unseal_master_key(raw: &[u8]) -> Option<([u8; MASTER_KEY_LEN], bool)> {
+    let text = String::from_utf8_lossy(raw).trim().to_string();
+    if let Some(sealed) = text.strip_prefix(DPAPI_PREFIX) {
+        #[cfg(windows)]
+        {
+            let blob = hex::decode(sealed).ok()?;
+            return dpapi::unprotect(&blob)
+                .ok()
+                .and_then(|bytes| key_from_bytes(&bytes))
+                .map(|key| (key, false));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = sealed;
+            return None;
+        }
+    }
+    let plain = hex::decode(&text)
+        .ok()
+        .and_then(|decoded| key_from_bytes(&decoded))
+        .or_else(|| key_from_bytes(raw))?;
+    Some((plain, cfg!(windows)))
+}
+
 fn load_or_create_master_key(vault_dir: &Path) -> Result<[u8; MASTER_KEY_LEN], String> {
     ensure_vault_dir(vault_dir)?;
     let key_path = vault_dir.join(MASTER_KEY_FILE_NAME);
@@ -181,17 +229,13 @@ fn load_or_create_master_key(vault_dir: &Path) -> Result<[u8; MASTER_KEY_LEN], S
     if key_path.exists() {
         let raw = fs::read(&key_path)
             .map_err(|error| format!("failed to read sandbox master key: {error}"))?;
-        let trimmed = String::from_utf8_lossy(&raw).trim().to_string();
-        if let Ok(decoded) = hex::decode(&trimmed) {
-            if decoded.len() == MASTER_KEY_LEN {
-                let mut key = [0u8; MASTER_KEY_LEN];
-                key.copy_from_slice(&decoded);
-                return Ok(key);
+        if let Some((key, reseal)) = unseal_master_key(&raw) {
+            if reseal {
+                // Best effort: the plaintext key still works, so a failed upgrade must not block login.
+                if let Ok(sealed) = seal_master_key(&key) {
+                    let _ = write_atomic_private(&key_path, sealed.as_bytes());
+                }
             }
-        }
-        if raw.len() == MASTER_KEY_LEN {
-            let mut key = [0u8; MASTER_KEY_LEN];
-            key.copy_from_slice(&raw);
             return Ok(key);
         }
     }
@@ -200,9 +244,87 @@ fn load_or_create_master_key(vault_dir: &Path) -> Result<[u8; MASTER_KEY_LEN], S
     let mut key = [0u8; MASTER_KEY_LEN];
     rng.fill(&mut key)
         .map_err(|_| "failed to generate sandbox master key".to_string())?;
-    let encoded = hex::encode(key);
-    write_atomic_private(&key_path, encoded.as_bytes())?;
+    write_atomic_private(&key_path, seal_master_key(&key)?.as_bytes())?;
     Ok(key)
+}
+
+#[cfg(windows)]
+mod dpapi {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    /// Binds the blob to this app, so another program of the same user cannot unwrap it by accident.
+    const ENTROPY: &[u8] = b"com.aiteam.desktop/auth-vault/master-key";
+
+    pub(super) fn protect(data: &[u8]) -> Result<Vec<u8>, String> {
+        run(data, true)
+    }
+
+    pub(super) fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
+        run(data, false)
+    }
+
+    fn blob(bytes: &[u8]) -> Result<CRYPT_INTEGER_BLOB, String> {
+        let len = u32::try_from(bytes.len()).map_err(|_| "DPAPI input is too large".to_string())?;
+        Ok(CRYPT_INTEGER_BLOB {
+            cbData: len,
+            pbData: bytes.as_ptr() as *mut u8,
+        })
+    }
+
+    fn run(data: &[u8], protect: bool) -> Result<Vec<u8>, String> {
+        let input = blob(data)?;
+        let entropy = blob(ENTROPY)?;
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: ptr::null_mut(),
+        };
+        // SAFETY: `input` and `entropy` borrow live slices that DPAPI only reads during the call;
+        // `output` is written by DPAPI with a LocalAlloc buffer that is freed below.
+        let ok = unsafe {
+            if protect {
+                CryptProtectData(
+                    &input,
+                    ptr::null(),
+                    &entropy,
+                    ptr::null(),
+                    ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            } else {
+                CryptUnprotectData(
+                    &input,
+                    ptr::null_mut(),
+                    &entropy,
+                    ptr::null(),
+                    ptr::null(),
+                    CRYPTPROTECT_UI_FORBIDDEN,
+                    &mut output,
+                )
+            }
+        };
+        if ok == 0 || output.pbData.is_null() {
+            return Err(if protect {
+                "DPAPI failed to protect the vault key"
+            } else {
+                "DPAPI failed to unprotect the vault key"
+            }
+            .to_string());
+        }
+        let len = output.cbData as usize;
+        // SAFETY: on success `output` holds `cbData` bytes owned by us until LocalFree; the buffer is
+        // zeroed (it may hold the plaintext key) and freed exactly once.
+        unsafe {
+            let bytes = std::slice::from_raw_parts(output.pbData, len).to_vec();
+            ptr::write_bytes(output.pbData, 0, len);
+            LocalFree(output.pbData as _);
+            Ok(bytes)
+        }
+    }
 }
 
 fn derive_record_key(
@@ -740,6 +862,73 @@ mod tests {
 
     fn temp_vault_dir() -> PathBuf {
         std::env::temp_dir().join(format!("aifred-vault-test-{}", Uuid::new_v4()))
+    }
+
+    #[test]
+    fn master_key_is_stable_and_stored_in_the_platform_form() {
+        let vault_dir = temp_vault_dir();
+        let first = load_or_create_master_key(&vault_dir).expect("create key");
+        let second = load_or_create_master_key(&vault_dir).expect("reload key");
+        assert_eq!(first, second);
+        let stored =
+            fs::read_to_string(vault_dir.join(MASTER_KEY_FILE_NAME)).expect("read key file");
+        assert_eq!(stored.starts_with(DPAPI_PREFIX), cfg!(windows));
+        assert_eq!(
+            stored.contains(&hex::encode(first)),
+            !cfg!(windows),
+            "Windows must not store the key in plaintext"
+        );
+        let _ = fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn legacy_plaintext_key_keeps_working_and_is_resealed_only_on_windows() {
+        let vault_dir = temp_vault_dir();
+        ensure_vault_dir(&vault_dir).expect("vault dir");
+        let legacy = [7u8; MASTER_KEY_LEN];
+        fs::write(vault_dir.join(MASTER_KEY_FILE_NAME), hex::encode(legacy))
+            .expect("write legacy key");
+        assert_eq!(
+            load_or_create_master_key(&vault_dir).expect("load legacy key"),
+            legacy
+        );
+        let stored =
+            fs::read_to_string(vault_dir.join(MASTER_KEY_FILE_NAME)).expect("read key file");
+        assert_eq!(stored.starts_with(DPAPI_PREFIX), cfg!(windows));
+        // Still the same key after the Windows upgrade, so existing vault records stay readable.
+        assert_eq!(
+            load_or_create_master_key(&vault_dir).expect("reload"),
+            legacy
+        );
+        let _ = fs::remove_dir_all(&vault_dir);
+    }
+
+    #[test]
+    fn unusable_key_files_are_replaced_instead_of_trusted() {
+        assert!(unseal_master_key(b"not a key").is_none());
+        assert!(unseal_master_key(b"dpapi:zz").is_none());
+        #[cfg(not(windows))]
+        assert!(
+            unseal_master_key(format!("{DPAPI_PREFIX}{}", "00".repeat(200)).as_bytes()).is_none()
+        );
+        assert_eq!(
+            unseal_master_key(&[9u8; MASTER_KEY_LEN]).map(|(key, _)| key),
+            Some([9u8; MASTER_KEY_LEN])
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_round_trip_and_tamper_rejection() {
+        let sealed = dpapi::protect(&[1u8; MASTER_KEY_LEN]).expect("protect");
+        assert_ne!(sealed, vec![1u8; MASTER_KEY_LEN]);
+        assert_eq!(
+            dpapi::unprotect(&sealed).expect("unprotect"),
+            vec![1u8; MASTER_KEY_LEN]
+        );
+        let mut tampered = sealed.clone();
+        *tampered.last_mut().unwrap() ^= 0xff;
+        assert!(dpapi::unprotect(&tampered).is_err());
     }
 
     #[test]
