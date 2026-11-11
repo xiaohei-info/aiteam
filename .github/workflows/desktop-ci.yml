@@ -132,3 +132,38 @@ jobs:
       - name: Audit Rust dependencies
         working-directory: clients/desktop/src-tauri
         run: cargo audit
+
+  # Windows 宿主：Linux job 从不编译 `#[cfg(windows)]` 分支（Job Object、DPAPI、
+  # Windows 单实例锁、file:// import）。这里在 windows-2022 上至少保证宿主能编译、
+  # lib 测试能过、clippy 无警告。
+  windows-rust:
+    name: 桌面端 Rust 检查（Windows）
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop/src-tauri -> target
+
+      # 与 Linux job 一致：随包 Agent 不入库，给 Tauri 资源配置留一个空目录即可。
+      - name: Prepare resource directory for compile checks
+        run: mkdir src-tauri/resources/agent
+
+      - name: Check
+        working-directory: clients/desktop/src-tauri
+        run: cargo check --locked --all-targets
+
+      - name: Test
+        working-directory: clients/desktop/src-tauri
+        run: cargo test --locked --lib
+
+      - name: Clippy
+        working-directory: clients/desktop/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings

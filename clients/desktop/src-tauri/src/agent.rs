@@ -79,10 +79,22 @@ fn acquire_instance_lock(root: &Path) -> Result<File, String> {
 
 #[cfg(windows)]
 fn acquire_instance_lock(root: &Path) -> Result<File, String> {
-    fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    OpenOptions::new().create(true).truncate(false).read(true).write(true).share_mode(0)
-        .open(root.join("desktop.lock"))
-        .map_err(|_| "AIFred 已在运行，请使用已打开的窗口".to_string())
+    fs::create_dir_all(root).map_err(|error| format!("无法创建实例锁目录 {}：{error}", root.display()))?;
+    let lock_path = root.join("desktop.lock");
+    match OpenOptions::new().create(true).truncate(false).read(true).write(true).share_mode(0).open(&lock_path) {
+        Ok(file) => Ok(file),
+        Err(error) => {
+            // `share_mode(0)` makes this open fail with ERROR_SHARING_VIOLATION only when another
+            // AIFred already holds the lock. Every other failure is a real environment problem
+            // (permissions, path, disk) and must not be reported as "already running".
+            const ERROR_SHARING_VIOLATION: i32 = 32;
+            if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) {
+                Err("AIFred 已在运行，请使用已打开的窗口".into())
+            } else {
+                Err(format!("无法创建或打开实例锁 {}：{error}", lock_path.display()))
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -93,7 +105,10 @@ fn import_specifier(path: &Path) -> OsString {
 fn import_specifier(path: &Path) -> OsString { path.as_os_str().to_owned() }
 
 const INHERITED_ENV: &[&str] = if cfg!(windows) {
-    &["PATH","PATHEXT","SystemRoot","WINDIR","ComSpec","TEMP","TMP","USERNAME","USERPROFILE","HOMEDRIVE","HOMEPATH","APPDATA","LOCALAPPDATA"]
+    // `ProgramFiles` / `ProgramFiles(x86)` are how Pi's `getShellConfig()` locates
+    // `Git\\bin\\bash.exe`; without them the bash tool only resolves when bash happens to be on
+    // PATH. `SystemRoot`/`WINDIR`/`ComSpec` keep cmd and the Node runtime working.
+    &["PATH","PATHEXT","SystemRoot","WINDIR","ComSpec","TEMP","TMP","USERNAME","USERPROFILE","HOMEDRIVE","HOMEPATH","APPDATA","LOCALAPPDATA","ProgramFiles","ProgramFiles(x86)"]
 } else {
     &["HOME","USER","LOGNAME","PATH","TMPDIR","LANG"]
 };
@@ -250,7 +265,22 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
 fn track(runtime: &mut Runtime, child: Child) {
     #[cfg(windows)]
     {
-        runtime.job = job::Job::adopt(&child);
+        match job::Job::adopt(&child) {
+            Some(job) => runtime.job = Some(job),
+            None => {
+                // Without the job, `stop` can only end the Agent itself; the bash/tool processes it
+                // spawned would survive. Record it so a lingering process tree is diagnosable.
+                runtime.job = None;
+                if let Some(root) = &runtime.root {
+                    crate::diagnostics::host_event_fields(
+                        root,
+                        "agent.job_adopt_failed",
+                        "warn",
+                        serde_json::json!({ "pid": child.id() }),
+                    );
+                }
+            }
+        }
     }
     runtime.child = Some(child);
 }

@@ -5,6 +5,10 @@ export function isDraftConversation(conversationId: string): boolean {
   return conversationId.startsWith('emp_')
 }
 
+export function isWindowsUserAgent(userAgent: string): boolean {
+  return /Windows|Win32|Win64|WOW64/.test(userAgent)
+}
+
 export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   'read-only': '只读',
   'workspace-write': '工作区可写',

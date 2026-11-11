@@ -37,8 +37,11 @@ export class LocalSandbox {
   /** Run the provider's real backend selection/probe; no environment flag participates. */
   async isAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): Promise<boolean> {
     if (mode === "full-access") return true;
-    // Windows has no functional confined sandbox backend (no network isolation, no read boundary,
-    // `true` does not exist as a command). All modes run unconfined there — danger-full-access.
+    // Windows: the provider does declare a single-candidate `windows-acl` chain
+    // (`STATIC_ENFORCEMENT["windows-acl"] = "full"`, backend package shipped), but the same
+    // package's README states Windows has no runner, and the probe below runs `true`, which is not
+    // a command on Windows — so that chain is unverified here. Run unconfined rather than claim
+    // isolation we cannot prove; the per-call approval gates are unchanged.
     if (process.platform === "win32") return true;
     try {
       const confined = this.provider.confine(["true"], this.policy(workspaceRoot, undefined, mode));
@@ -57,10 +60,24 @@ export class LocalSandbox {
     if (!(await this.isAvailable(workspaceRoot, mode, extraRoots))) throw new SandboxUnavailableError(mode, "No functional local sandbox backend is available");
   }
 
+  /**
+   * Whether the bash tool has a usable shell on this platform. Windows resolves Git Bash through
+   * Pi's `getShellConfig()`, which throws when none is installed; readiness checks this instead of
+   * letting the first bash call fail.
+   */
+  isShellAvailable(): boolean {
+    try {
+      shellPrefix();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** `extraRoots` are folders the user added to this conversation: same read/write rules as the workspace. */
   operations(workspaceRoot: string, sessionId?: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): SandboxOperations {
     if (mode === "full-access") return this.unconfinedOperations(workspaceRoot);
-    // Windows: no confined backend available — all modes run unconfined (danger-full-access).
+    // Windows: no verified confined backend — all modes run unconfined (danger-full-access).
     if (process.platform === "win32") return this.unconfinedOperations(workspaceRoot);
     const root = canonicalPath(resolve(workspaceRoot));
     const policy = this.policy(root, sessionId, mode);

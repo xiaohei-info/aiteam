@@ -5,7 +5,7 @@ import { ChevronDown, FolderCog, FolderOpen, FolderSearch, LoaderCircle, ShieldC
 import './ChatTools.css'
 import { agentApi } from '../../api/agent'
 import { openFilePrivacySettings } from '../../lib/fileAccess'
-import { conversationWorkspaceKey, FULL_ACCESS_GRANTS as grants, isDraftConversation, permissionSummary } from '../../lib/conversationPermissions'
+import { conversationWorkspaceKey, FULL_ACCESS_GRANTS as grants, isDraftConversation, isWindowsUserAgent, permissionSummary } from '../../lib/conversationPermissions'
 import { isMacUserAgent } from '../../lib/projectConversation'
 import { describeProjectFolderError } from '../../lib/projectConversation'
 import type { ConversationMetadata, PermissionMode } from '../../api/agent/types'
@@ -21,9 +21,27 @@ interface ConversationPermissionsProps {
   generating: boolean
   ensureConversation: () => Promise<{ id: string }>
 }
+/**
+ * 档位说明。Windows 没有已验证的沙箱后端：三档都不隔离文件与网络，只有逐次审批的严格程度不同，
+ * 所以说明必须写实际行为，避免用户按 macOS 的预期理解「只读」。
+ */
+function modeDescription(mode: PermissionMode, windows: boolean): string {
+  if (windows) {
+    return mode === 'read-only'
+      ? '不隔离文件与网络；命令需确认，写操作被拒'
+      : mode === 'workspace-write'
+        ? '不隔离文件与网络；命令与写操作需确认'
+        : '不隔离文件与网络；命令与写操作不再确认'
+  }
+  return mode === 'read-only'
+    ? '只能读文件'
+    : mode === 'workspace-write'
+      ? '可读写，操作前需确认，不联网'
+      : '不受限，可联网'
+}
+
 /** 路径过长时在中间省略：开头尽量多留，结尾固定保留最后两段，鼠标悬停看全路径。 */
-function FolderPath({ path, fallback }: { path?: string; fallback: string }) {
-  if (!path) return <code>{fallback}</code>
+function FolderPath({ path, fallback }: { path?: string; fallback: string }) {  if (!path) return <code>{fallback}</code>
   const trimmed = path.replace(/[\\/]+$/, '')
   const last = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
   const cut = last > 0 ? Math.max(trimmed.lastIndexOf('/', last - 1), trimmed.lastIndexOf('\\', last - 1)) + 1 : 0
@@ -157,6 +175,7 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
   }
   const canReveal = Boolean(managedFolder || (projectPath && metadata?.project?.id))
   const revealLabel = isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件夹中显示'
+  const windows = isWindowsUserAgent(navigator.userAgent)
   const chooseFullAccess = () => {
     if (full) return
     setAccepted(grants.map(() => false)); setConfirm(true)
@@ -221,17 +240,18 @@ export function ConversationPermissions({ conversationId, generating, ensureConv
             <div className="cperm-modes" role="radiogroup" aria-labelledby={modeTitleId}>
               <button type="button" role="radio" aria-checked={mode === 'read-only'} className="cperm-mode" disabled={modeDisabled} data-dialog-initial-focus={mode === 'read-only' || undefined} onClick={() => { if (mode !== 'read-only') void handlePermission('read-only') }}>
                 <span className="cperm-radio" aria-hidden="true" />
-                <span className="cperm-mode-text"><strong>只读</strong><small>只能读文件</small></span>
+                <span className="cperm-mode-text"><strong>只读</strong><small>{modeDescription('read-only', windows)}</small></span>
               </button>
               <button type="button" role="radio" aria-checked={mode === 'workspace-write'} className="cperm-mode" disabled={modeDisabled} data-dialog-initial-focus={mode === 'workspace-write' || undefined} onClick={() => { if (mode !== 'workspace-write') void handlePermission('workspace-write') }}>
                 <span className="cperm-radio" aria-hidden="true" />
-                <span className="cperm-mode-text"><strong>工作区可写</strong><small>可读写，操作前需确认，不联网</small></span>
+                <span className="cperm-mode-text"><strong>工作区可写</strong><small>{modeDescription('workspace-write', windows)}</small></span>
               </button>
               <button type="button" role="radio" aria-checked={full} className="cperm-mode risky" disabled={modeDisabled} data-dialog-initial-focus={full || undefined} onClick={chooseFullAccess}>
                 <span className="cperm-radio" aria-hidden="true" />
-                <span className="cperm-mode-text"><strong>完全访问<em>风险较高</em></strong><small>不受限，可联网</small></span>
+                <span className="cperm-mode-text"><strong>完全访问<em>风险较高</em></strong><small>{modeDescription('full-access', windows)}</small></span>
               </button>
             </div>
+            {windows && <p className="cperm-hint">Windows 上暂不提供文件与网络隔离，三档只影响逐次确认</p>}
             {generating && <p className="cperm-hint">回复中，暂不能修改</p>}
           </section>
           <div className="cperm-system">

@@ -127,7 +127,11 @@ const http = new AgentHttpServer({
   skillCache,
   localReady: async () => {
     for (const path of [dataRoot, agentDir, cwdRoot, sessionDir]) accessSync(path, constants.R_OK | constants.W_OK);
-    return process.platform === "win32" ? true : sandbox.isAvailable(cwdRoot);
+    // Windows has no verified sandbox backend (see LocalSandbox), so there readiness is the bash
+    // tool's shell: it needs Git Bash, and a machine without it must report not-ready here rather
+    // than fail on the first bash call.
+    if (process.platform === "win32") return sandbox.isShellAvailable();
+    return sandbox.isAvailable(cwdRoot);
   },
   runtimeReady: () => managerClient !== undefined || configured.runtime.getAvailableSnapshot().length > 0,
   spaRoot: process.env.AITEAM_AGENT_SPA_ROOT ?? join(process.cwd(), "web/agent/dist"),

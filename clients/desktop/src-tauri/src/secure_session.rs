@@ -195,31 +195,67 @@ fn seal_master_key(key: &[u8; MASTER_KEY_LEN]) -> Result<String, String> {
     }
 }
 
+/// Why a stored master key could not be read. The two cases need different user guidance:
+/// a corrupt file only needs a fresh sign-in, while a foreign DPAPI blob means the profile moved
+/// and every saved account must be re-added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MasterKeyUnsealFailure {
+    /// The file is not a key this build can read (garbage, wrong length, bad hex, truncated blob).
+    Corrupt,
+    /// The file is a well-formed DPAPI blob this Windows account/machine cannot open: it was
+    /// written by another account, or copied here from another machine.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    ForeignDpapi,
+}
+
 /// Reads a stored master key. The flag asks the caller to rewrite it sealed: a plaintext key left by
-/// an earlier Windows build. `None` means the file is unusable here (corrupt, or a DPAPI blob that
-/// belongs to another user or machine) and a new key is generated, as for any corrupt key file.
-fn unseal_master_key(raw: &[u8]) -> Option<([u8; MASTER_KEY_LEN], bool)> {
+/// an earlier Windows build. `Err` means the file is unusable here and a new key is generated.
+fn unseal_master_key(raw: &[u8]) -> Result<([u8; MASTER_KEY_LEN], bool), MasterKeyUnsealFailure> {
     let text = String::from_utf8_lossy(raw).trim().to_string();
     if let Some(sealed) = text.strip_prefix(DPAPI_PREFIX) {
         #[cfg(windows)]
         {
-            let blob = hex::decode(sealed).ok()?;
-            return dpapi::unprotect(&blob)
-                .ok()
-                .and_then(|bytes| key_from_bytes(&bytes))
-                .map(|key| (key, false));
+            let blob = hex::decode(sealed).map_err(|_| MasterKeyUnsealFailure::Corrupt)?;
+            return match dpapi::unprotect(&blob) {
+                Ok(bytes) => match key_from_bytes(&bytes) {
+                    Some(key) => Ok((key, false)),
+                    None => Err(MasterKeyUnsealFailure::Corrupt),
+                },
+                // A blob this build wrote but cannot open is bound to another Windows account or
+                // another machine; a merely truncated file is reported as `Corrupt` above.
+                Err(_) => Err(MasterKeyUnsealFailure::ForeignDpapi),
+            };
         }
         #[cfg(not(windows))]
         {
             let _ = sealed;
-            return None;
+            return Err(MasterKeyUnsealFailure::Corrupt);
         }
     }
     let plain = hex::decode(&text)
         .ok()
         .and_then(|decoded| key_from_bytes(&decoded))
-        .or_else(|| key_from_bytes(raw))?;
-    Some((plain, cfg!(windows)))
+        .or_else(|| key_from_bytes(raw))
+        .ok_or(MasterKeyUnsealFailure::Corrupt)?;
+    Ok((plain, cfg!(windows)))
+}
+
+/// Record why the master key was replaced. Without this, a profile moved between accounts or
+/// machines silently invalidates every saved account with no trace after the fact.
+fn log_master_key_replaced(vault_dir: &Path, failure: MasterKeyUnsealFailure) {
+    // `vault_dir` is always `<app data dir>/auth-vault` (see `resolve_vault_dir`), so its parent is
+    // the diagnostics root. Best effort: login must not fail because the log could not be written.
+    let Some(root) = vault_dir.parent() else { return };
+    let code = match failure {
+        MasterKeyUnsealFailure::Corrupt => "master_key_corrupt",
+        MasterKeyUnsealFailure::ForeignDpapi => "dpapi_foreign_user_or_machine",
+    };
+    crate::diagnostics::host_event_fields(
+        root,
+        "auth.master_key_replaced",
+        "error",
+        serde_json::json!({ "code": code }),
+    );
 }
 
 fn load_or_create_master_key(vault_dir: &Path) -> Result<[u8; MASTER_KEY_LEN], String> {
@@ -229,14 +265,17 @@ fn load_or_create_master_key(vault_dir: &Path) -> Result<[u8; MASTER_KEY_LEN], S
     if key_path.exists() {
         let raw = fs::read(&key_path)
             .map_err(|error| format!("failed to read sandbox master key: {error}"))?;
-        if let Some((key, reseal)) = unseal_master_key(&raw) {
-            if reseal {
-                // Best effort: the plaintext key still works, so a failed upgrade must not block login.
-                if let Ok(sealed) = seal_master_key(&key) {
-                    let _ = write_atomic_private(&key_path, sealed.as_bytes());
+        match unseal_master_key(&raw) {
+            Ok((key, reseal)) => {
+                if reseal {
+                    // Best effort: the plaintext key still works, so a failed upgrade must not block login.
+                    if let Ok(sealed) = seal_master_key(&key) {
+                        let _ = write_atomic_private(&key_path, sealed.as_bytes());
+                    }
                 }
+                return Ok(key);
             }
-            return Ok(key);
+            Err(failure) => log_master_key_replaced(vault_dir, failure),
         }
     }
 
@@ -905,16 +944,29 @@ mod tests {
 
     #[test]
     fn unusable_key_files_are_replaced_instead_of_trusted() {
-        assert!(unseal_master_key(b"not a key").is_none());
-        assert!(unseal_master_key(b"dpapi:zz").is_none());
+        assert_eq!(unseal_master_key(b"not a key"), Err(MasterKeyUnsealFailure::Corrupt));
+        assert_eq!(unseal_master_key(b"dpapi:zz"), Err(MasterKeyUnsealFailure::Corrupt));
         #[cfg(not(windows))]
-        assert!(
-            unseal_master_key(format!("{DPAPI_PREFIX}{}", "00".repeat(200)).as_bytes()).is_none()
+        assert_eq!(
+            unseal_master_key(format!("{DPAPI_PREFIX}{}", "00".repeat(200)).as_bytes()),
+            Err(MasterKeyUnsealFailure::Corrupt)
         );
         assert_eq!(
             unseal_master_key(&[9u8; MASTER_KEY_LEN]).map(|(key, _)| key),
-            Some([9u8; MASTER_KEY_LEN])
+            Ok([9u8; MASTER_KEY_LEN])
         );
+    }
+
+    #[test]
+    fn master_key_replacement_is_recorded_in_the_diagnostics_log() {
+        let root = std::env::temp_dir().join(format!("aifred-vault-root-{}", Uuid::new_v4()));
+        let vault_dir = root.join(VAULT_DIR_NAME);
+        fs::create_dir_all(&vault_dir).unwrap();
+        log_master_key_replaced(&vault_dir, MasterKeyUnsealFailure::ForeignDpapi);
+        let log = fs::read_to_string(root.join("logs/desktop.jsonl")).unwrap();
+        assert!(log.contains("auth.master_key_replaced"), "{log}");
+        assert!(log.contains("dpapi_foreign_user_or_machine"), "{log}");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(windows)]
@@ -929,6 +981,21 @@ mod tests {
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 0xff;
         assert!(dpapi::unprotect(&tampered).is_err());
+    }
+
+    // A DPAPI blob this build cannot open is a moved profile (another Windows account or machine),
+    // not a corrupt file: the two need different user guidance, so the unseal path must keep them
+    // apart. Only Windows can produce a real blob, so this contract is checked by the Windows CI.
+    #[cfg(windows)]
+    #[test]
+    fn an_unopenable_dpapi_blob_is_reported_as_foreign_not_corrupt() {
+        let sealed = dpapi::protect(&[3u8; MASTER_KEY_LEN]).expect("protect");
+        let mut tampered = sealed;
+        *tampered.last_mut().unwrap() ^= 0xff;
+        assert!(matches!(
+            unseal_master_key(format!("{DPAPI_PREFIX}{}", hex::encode(&tampered)).as_bytes()),
+            Err(MasterKeyUnsealFailure::ForeignDpapi)
+        ));
     }
 
     #[test]
