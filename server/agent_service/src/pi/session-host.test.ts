@@ -10,7 +10,7 @@ import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutErro
 import { appLogger } from "../observability.js";
 import { LocalSandbox } from "./sandbox.js";
 import { ApprovalExpiredError, ApprovalService } from "../approval-service.js";
-import { resetTranscript, SessionHost } from "./session-host.js";
+import { resetTranscript, SessionHost, type GlobalActivityEvent } from "./session-host.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { serializePiEvent } from "./event-sse.js";
@@ -1595,6 +1595,47 @@ test("several tool calls expiring in one scheduled turn record a single failure"
     assert.equal(failures.length, 1);
     assert.equal(failures[0]!.error_code, "approval_expired");
     assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SessionHost broadcasts prompt_started and prompt_settled on the global activity bus", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper" }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost();
+    const events: GlobalActivityEvent[] = [];
+    const unsubscribe = host.subscribeGlobal((event) => { events.push(event) });
+    fixture.faux.setResponses([fauxAssistantMessage("简报已生成")]);
+    await host.prompt("conversation-1", "生成简报", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    unsubscribe();
+
+    assert.equal(events.length, 2);
+    const started = events[0]!;
+    assert.equal(started.type, "prompt_started");
+    assert.equal(started.conversation_id, "conversation-1");
+    assert.equal(started.employee_id, "employee-1");
+    assert.equal(started.tenant_id, "tenant-1");
+    assert.equal(started.member_id, "member-1");
+    assert.equal(started.source_type, "human");
+    assert.equal(started.background, false);
+    assert.ok(Date.parse(started.started_at) > 0);
+
+    const settled = events[1]!;
+    assert.equal(settled.type, "prompt_settled");
+    assert.equal(settled.conversation_id, "conversation-1");
+    assert.equal(settled.employee_id, "employee-1");
+    assert.equal(settled.tenant_id, "tenant-1");
+    assert.equal(settled.member_id, "member-1");
+    assert.equal(settled.outcome, "succeeded");
+    assert.equal(settled.last_preview, "简报已生成");
+    assert.equal(settled.assistant_message_count, 1);
+    assert.ok(Date.parse(settled.last_message_at) > 0);
     await host.dispose();
   } finally {
     await fixture.close();
