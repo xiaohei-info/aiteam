@@ -11627,6 +11627,73 @@
         ]
       }
     },
+    "/api/agent/events": {
+      "get": {
+        "operationId": "subscribeGlobalActivity",
+        "summary": "订阅全局活动信号",
+        "description": "返回本机当前成员所有会话的轻量活动信号（prompt_started / prompt_settled），只携带会话与员工标识及列表摘要字段，不携带会话正文。前端用它做列表补丁与按需订阅会话事件流。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "全局活动 SSE 流。每条事件使用 `event: activity`，`data` 行携带一个 JSON 对象。",
+            "headers": {
+              "Cache-Control": {
+                "description": "禁止缓存和代理转换。",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-transform"
+                }
+              },
+              "Connection": {
+                "description": "保持 SSE 长连接。",
+                "schema": {
+                  "type": "string",
+                  "example": "keep-alive"
+                }
+              },
+              "X-Accel-Buffering": {
+                "description": "关闭 Nginx 缓冲。",
+                "schema": {
+                  "type": "string",
+                  "example": "no"
+                }
+              },
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE 事件流文本；`data` 行的 JSON 结构为 GlobalActivityEvent。"
+                },
+                "examples": {
+                  "promptStarted": {
+                    "summary": "新提示开始（不携带正文）",
+                    "value": "event: activity\ndata: {\"type\":\"prompt_started\",\"conversation_id\":\"conversation-1\",\"employee_id\":\"employee-1\",\"tenant_id\":\"tenant-1\",\"member_id\":\"member-1\",\"source_type\":\"human\",\"background\":false,\"started_at\":\"2026-11-11T06:00:00.000Z\"}\n"
+                  },
+                  "promptSettled": {
+                    "summary": "提示结束（携带列表摘要字段）",
+                    "value": "event: activity\ndata: {\"type\":\"prompt_settled\",\"conversation_id\":\"conversation-1\",\"employee_id\":\"employee-1\",\"tenant_id\":\"tenant-1\",\"member_id\":\"member-1\",\"outcome\":\"succeeded\",\"last_preview\":\"简报已生成\",\"last_message_at\":\"2026-11-11T06:00:30.000Z\",\"assistant_message_count\":1}\n"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/agent/conversations/{conversation_id}/entries": {
       "get": {
         "operationId": "listConversationEntries",

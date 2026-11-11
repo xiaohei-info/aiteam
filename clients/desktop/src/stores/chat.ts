@@ -18,6 +18,7 @@
 import { create } from 'zustand'
 import type { CachedFile } from '../lib/fileCache'
 import { agentApi, AgentApiError } from '../api/agent'
+import type { GlobalActivityEvent } from '../api/agent/globalEvents'
 import { skillDisplayNames } from '../lib/skillDisplay'
 import { useAgentAuthStore } from './agentAuth'
 import { useApprovalStore } from './approvals'
@@ -38,6 +39,7 @@ import {
   type PiStreamCallbacks,
 } from '../lib/piConverters'
 import { applyLocalFailures, describeFailure, settledFailure, type LocalFailure, type ReplyFailure } from '../lib/replyFailure'
+import { patchActivityItem } from '../lib/conversationActivityPatch'
 import {
   createSettleTracker,
   type SettleTracker,
@@ -499,6 +501,8 @@ interface ChatStore {
   abortStream: (convId: string) => Promise<void>
   // 挂回 UI 侧的兼容函数,新栈无 runId 概念,只是转发到 startAssistantStream。
   resumeAssistantStream: (convId: string) => void
+  // 全局活动信号：服务端在任意 prompt 开始/结束时广播。
+  applyGlobalActivity: (event: GlobalActivityEvent) => void
   // 会话置顶切换：只写内存 + localStorage，不调用服务端 PATCH。
   togglePinConversation: (convId: string) => void
 }
@@ -1675,6 +1679,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!convId) return
     if (subscriptions.has(convId)) return
     get().startAssistantStream(convId)
+  },
+
+  // 全局活动信号：服务端在任意 prompt 开始/结束时广播（见 GET /api/agent/events）。
+  // - 正在查看的会话：按需订阅它的会话 SSE，让新消息自动出现（定时任务无需手动刷新）。
+  // - 列表：用信号里的摘要字段补丁对应项，避免为一条提示做全量列表刷新。
+  applyGlobalActivity: (event) => {
+    const state = get()
+    const isActive = event.conversation_id === state.activeConvId || event.conversation_id === state.activeGroupId
+
+    if (event.type === 'prompt_started') {
+      if (isActive && !subscriptions.has(event.conversation_id)) {
+        get().startAssistantStream(event.conversation_id)
+      }
+      return
+    }
+
+    // prompt_settled：正在查看且没有活跃订阅（任务在后台结束）时，直接对齐一次 entries。
+    if (isActive && !subscriptions.has(event.conversation_id)) {
+      get().refreshActiveEntries(event.conversation_id)
+    }
+
+    const lastMessageAt = event.last_message_at ? Date.parse(event.last_message_at) : Number.NaN
+    if (!Number.isFinite(lastMessageAt)) return
+    const exists = state.conversations.some((c) => c.id === event.conversation_id)
+      || state.groups.some((g) => g.id === event.conversation_id)
+
+    set((s) => {
+      const patch = { conversationId: event.conversation_id, event, isActive, formatTime: relativeTime }
+      return {
+        conversations: patchActivityItem(s.conversations, patch),
+        groups: patchActivityItem(s.groups, patch),
+      }
+    })
+
+    if (!exists) {
+      // 列表里没有这个会话（例如从未打开过的自动化会话）：拉一次完整列表补上。
+      get().refreshConversations().catch(console.error)
+    }
   },
 
   // 会话置顶切换(A2.2):内存 map 立刻更新 + 落 localStorage 持久化。

@@ -46,6 +46,7 @@ import type {
 } from './types'
 import { deleteFile, listFiles, uploadFile } from './files'
 import { subscribeConversationEvents } from './events'
+import { subscribeGlobalActivity } from './globalEvents'
 import {
   createAutomationTask,
   deleteAutomationTask,
@@ -245,6 +246,9 @@ export const agentApi = {
   // 独立选择 fetch 实现并读取 __agentToken。返回的 handle 支持 close() 与 lastEventId 快照。
   subscribeEvents: (options: Parameters<typeof subscribeConversationEvents>[0]) =>
     subscribeConversationEvents(options),
+  // 全局活动信号:一条连接覆盖当前成员所有会话,只携带唤醒信号,不携带正文。
+  subscribeGlobalActivity: (options: Parameters<typeof subscribeGlobalActivity>[0]) =>
+    subscribeGlobalActivity(options),
 }
 
 export { AgentApiClient, AgentApiError }
@@ -260,3 +264,4 @@ export type {
   RegisteredLocalDirectory,
 } from './localDirectories'
 export { isRevisionConflict, LOCAL_DIRECTORIES_PATH } from './localDirectories'
+export type { GlobalActivityEvent, GlobalActivitySubscribeOptions, GlobalActivitySubscription } from './globalEvents'

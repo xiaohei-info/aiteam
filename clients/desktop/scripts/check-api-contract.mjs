@@ -6,7 +6,12 @@ import ts from 'typescript'
 import { documentedRoutes, isDocumentedRequest } from '../src/api/agent/contract.ts'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const spec = JSON.parse(readFileSync(path.join(root, 'docs/api.json'), 'utf8'))
+let spec
+try {
+  spec = JSON.parse(readFileSync(path.join(root, 'docs/api.json'), 'utf8'))
+} catch (error) {
+  throw new Error(`无法解析 8783 契约快照 docs/api.json：${error instanceof Error ? error.message : String(error)}`, { cause: error })
+}
 const excluded = new Set(['GET /api/agent/grants/snapshots'])
 const verbs = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'])
 const operations = Object.entries(spec.paths).flatMap(([route, item]) => Object.entries(item)
@@ -34,6 +39,7 @@ function sources(directory) {
 const networkFiles = new Set([
   'src/api/agent/client.ts', // documented client itself
   'src/api/agent/events.ts', // SSE streaming transport
+  'src/api/agent/globalEvents.ts', // global activity SSE streaming transport
   'src/lib/fileCache.ts', // asset:// local attachment reads, not HTTP
   // User-configured NAS / Manager knowledge service: its paths are not part of the
   // 8783 Agent contract, so it keeps a dedicated, credentials-scoped transport.
@@ -115,7 +121,7 @@ for (const file of sources(path.join(root, 'src'))) {
   }
   visit(source)
   // SSE has a separate streaming transport, but uses the same method/path guard.
-  if (relative === 'src/api/agent/events.ts') {
+  if (relative === 'src/api/agent/events.ts' || relative === 'src/api/agent/globalEvents.ts') {
     for (const template of expand(declarations.get('path'))) record('GET', template, declarations.get('path'))
     assert.match(source.text, /isDocumentedRequest\('GET', path\)/)
   }

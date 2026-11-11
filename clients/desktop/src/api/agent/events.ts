@@ -459,3 +459,6 @@ export function __resetSubscriptionsForTest(): void {
 
 // 暴露最小工具给单测:直接使用 SSE 帧解析。
 export const __testables = { createSseFrameStream }
+
+// 供全局活动通道复用同一套 SSE 帧解析实现。
+export { createSseFrameStream }
