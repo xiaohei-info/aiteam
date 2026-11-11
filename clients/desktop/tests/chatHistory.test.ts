@@ -913,3 +913,30 @@ test('正在查看的会话收到开始信号时按需订阅会话事件流', as
     await store.getState().abortStream('conv-a')
   }
 })
+
+test('reconciliation 的运行中快照与已持久化回复共用一条气泡', () => {
+  let onEvent: (event: any) => void = () => {}
+  const store = chatStore({
+    abortConversation: async () => {},
+    getConversationState: async () => ({ prompting: true }),
+    subscribeEvents: (options: any) => { onEvent = options.onEvent; return { close() {} } },
+  })
+  store.setState({ activeConvId: 'c', activeConvMessages: [], activeConvRawItems: [] })
+  store.getState().startAssistantStream('c')
+  onEvent({
+    type: 'reconciliation', schema_version: '2', conversation_id: 'c', state: 'active', prompting: true,
+    entries: [{ id: 'e1', entry_ref: 'ref-e1', type: 'message', work_id: 'w1', source_employee_id: 'emp',
+      message: { role: 'assistant', content: [{ type: 'text', text: '部分回答' }] } }],
+    active_runs: [{ work_id: 'w1', source_employee_id: 'emp', source_employee_display_name: '员工甲', status: 'thinking',
+      message: { role: 'assistant', content: [{ type: 'text', text: '部分回答' }] } }],
+  })
+  const afterReconciliation = store.getState().activeConvMessages.filter((m: any) => m.role === 'assistant')
+  assert.equal(afterReconciliation.length, 1)
+  assert.equal(afterReconciliation[0].workId, 'w1')
+  assert.equal(afterReconciliation[0].content, '部分回答')
+  onEvent({ type: 'message_update', conversation_id: 'c', assistantMessageEvent: { type: 'text_delta', delta: '更多' } })
+  const afterDelta = store.getState().activeConvMessages.filter((m: any) => m.role === 'assistant')
+  assert.equal(afterDelta.length, 1)
+  assert.equal(afterDelta[0].content, '部分回答更多')
+  store.getState().abortStream('c')
+})
