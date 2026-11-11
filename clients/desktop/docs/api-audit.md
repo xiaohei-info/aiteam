@@ -46,6 +46,7 @@
 | PUT | `/api/agent/conversations/{conversation_id}/thinking-level` | setConversationThinkingLevel | 文档允许，当前未调用 |  |
 | POST | `/api/agent/conversations/{conversation_id}/prompt` | promptConversation | 已核对调用 | `src/api/agent/conversations.ts:194` |
 | GET | `/api/agent/conversations/{conversation_id}/events` | subscribeConversationEvents | 已核对调用 | `src/api/agent/events.ts:185` |
+| GET | `/api/agent/events` | subscribeGlobalActivity | 已核对调用 | `src/api/agent/globalEvents.ts:81`（全局活动信号，只携带会话标识与列表摘要，不携带正文） |
 | GET | `/api/agent/conversations/{conversation_id}/entries` | listConversationEntries | 已核对调用 | `src/api/agent/conversations.ts:251`<br>`src/api/agent/index.ts:102` |
 | GET | `/api/agent/conversations/{conversation_id}/participants` | listConversationParticipants | 已核对调用 | `src/api/agent/customGroups.ts:38`<br>`src/api/agent/customGroups.ts:56`<br>`src/api/agent/observations.ts:7` |
 | GET | `/api/agent/messages/search` | searchMessages | 已核对调用 | `src/api/agent/observations.ts:8` |
