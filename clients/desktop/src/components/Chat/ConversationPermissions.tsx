@@ -41,7 +41,8 @@ function modeDescription(mode: PermissionMode, windows: boolean): string {
 }
 
 /** 路径过长时在中间省略：开头尽量多留，结尾固定保留最后两段，鼠标悬停看全路径。 */
-function FolderPath({ path, fallback }: { path?: string; fallback: string }) {  if (!path) return <code>{fallback}</code>
+function FolderPath({ path, fallback }: { path?: string; fallback: string }) {
+  if (!path) return <code>{fallback}</code>
   const trimmed = path.replace(/[\\/]+$/, '')
   const last = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
   const cut = last > 0 ? Math.max(trimmed.lastIndexOf('/', last - 1), trimmed.lastIndexOf('\\', last - 1)) + 1 : 0
