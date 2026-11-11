@@ -10,7 +10,11 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+// The shared policy is consumed only by the macOS local-directory channel today; the Windows
+// host will use it when it implements that channel. Keep it compiled (and covered by the
+// Windows policy test) without tripping `clippy -D warnings` in the meantime.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod project_path_policy;
 mod project_runner;
 mod secure_session;
