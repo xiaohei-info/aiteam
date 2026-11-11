@@ -44,7 +44,6 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   // 人才市场发起的空单聊：员工先自我介绍（随包 Agent 需包含 feat/agent-skill-names-self-intro）。
   ['POST', '/api/agent/conversations/{conversation_id}/introduction'],
   ['GET', '/api/agent/conversations/{conversation_id}/events'],
-  ['GET', '/api/agent/events'],
   ['GET', '/api/agent/conversations/{conversation_id}/entries'],
   ['GET', '/api/agent/conversations/{conversation_id}/participants'],
   // Group member/orchestration editing (aiteam#90) ships in the bundled Agent package since source 6f8ec811; still

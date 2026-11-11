@@ -203,18 +203,15 @@ async function runStream(reg: Registration): Promise<void> {
 
   const url = await buildEventsUrl(reg.conversationId, reg.lastEventId)
   const correlation = newRequestCorrelation()
-  const token = getToken()
   const headers: Record<string, string> = {
     Accept: 'text/event-stream',
     'X-Request-ID': correlation.request_id,
     traceparent: correlation.traceparent,
-    // v2 才会返回 active_runs/facts。否则拿不到运行中快照，占位气泡没有 work_id/身份，
-    // 与 reconciliation 里已持久化的回复条目匹配不上，会出现两条重复气泡。
-    'X-Aiteam-Reconciliation-Version': '2',
     // 双保险:同时传 after 参数和 Last-Event-ID,服务端规定 after 优先。
     ...(reg.lastEventId ? { 'Last-Event-ID': reg.lastEventId } : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
   const logResponse = logDevRequest('AgentSse', { method: 'GET', url, hasBody: false, requestId: correlation.request_id, traceId: correlation.trace_id })
 
   let res: Response
@@ -462,6 +459,3 @@ export function __resetSubscriptionsForTest(): void {
 
 // 暴露最小工具给单测:直接使用 SSE 帧解析。
 export const __testables = { createSseFrameStream }
-
-// 供全局活动通道复用同一套 SSE 帧解析实现。
-export { createSseFrameStream }

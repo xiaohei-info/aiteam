@@ -692,8 +692,8 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    // 87 with GET /api/agent/events (全局活动信号，供桌面端做列表补丁与按需订阅)。
-    assert.equal(frontendOperations.length, 87);
+    // 86 with PUT /api/agent/conversations/{conversation_id}/project-folder (relocating a project conversation).
+    assert.equal(frontendOperations.length, 86);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -1106,65 +1106,6 @@ test("Agent context reset records the segment outcome, tags memory, and segments
   } finally {
     await http.close();
     await host.dispose();
-    await fixture.close();
-  }
-});
-
-test("GET /api/agent/events streams owner-scoped global activity signals", async () => {
-  const fixture = await createFixture();
-  const http = new AgentHttpServer({
-    host: fixture.host,
-    store: fixture.store,
-    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
-  });
-  await http.listen(0);
-  const address = http.server.address();
-  assert(address && typeof address === "object");
-  const base = `http://127.0.0.1:${address.port}`;
-  try {
-    fixture.store.replaceProjections([
-      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
-    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper" }]);
-    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
-
-    const response = await fetch(`${base}/api/agent/events`, { headers: { Authorization: "Bearer test", Accept: "text/event-stream" } });
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
-    assert.ok(response.body);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffered = "";
-    const received: Array<Record<string, unknown>> = [];
-    const collect = async () => {
-      while (received.length < 2) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        buffered += decoder.decode(value, { stream: true });
-        const frames = buffered.split("\n\n");
-        buffered = frames.pop() ?? "";
-        for (const frame of frames) {
-          const data = frame.split("\n").find((line) => line.startsWith("data: "));
-          if (data) received.push(JSON.parse(data.slice("data: ".length)) as Record<string, unknown>);
-        }
-      }
-    };
-    const collecting = collect();
-    fixture.faux.setResponses([fauxAssistantMessage("简报已生成")]);
-    await fixture.host.prompt("conversation-1", "生成简报", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
-    await Promise.race([
-      collecting,
-      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("timed out waiting for activity events")), 10_000)),
-    ]);
-
-    assert.equal(received.length, 2);
-    assert.equal(received[0]!.type, "prompt_started");
-    assert.equal(received[0]!.conversation_id, "conversation-1");
-    assert.equal(received[1]!.type, "prompt_settled");
-    assert.equal(received[1]!.conversation_id, "conversation-1");
-    assert.equal(received[1]!.last_preview, "简报已生成");
-    await reader.cancel();
-  } finally {
-    await http.close();
     await fixture.close();
   }
 });

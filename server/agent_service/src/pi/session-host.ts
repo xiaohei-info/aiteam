@@ -229,38 +229,6 @@ interface Subscriber {
   queued: PiEventEnvelope[];
 }
 
-/**
- * 全局活动信号：只携带“哪个会话有动静”的最小信息，不携带正文。
- *
- * 用途：让前端在不预先订阅某个会话 SSE 的前提下，感知到该会话有新消息产生，
- * 从而触发列表项补丁、并按需订阅该会话的事件流。正文仍然只走 per-conversation SSE
- * 与 /entries，符合本地优先与窄通信面。
- */
-export type GlobalActivityEvent =
-  | {
-      type: "prompt_started";
-      conversation_id: string;
-      employee_id: string | null;
-      tenant_id: string | null;
-      member_id: string | null;
-      source_type: string;
-      background: boolean;
-      started_at: string;
-    }
-  | {
-      type: "prompt_settled";
-      conversation_id: string;
-      employee_id: string | null;
-      tenant_id: string | null;
-      member_id: string | null;
-      outcome: string;
-      last_preview: string | null;
-      last_message_at: string;
-      assistant_message_count: number;
-    };
-
-export type GlobalActivityListener = (event: GlobalActivityEvent) => void;
-
 interface SessionRecord {
   conversationId: string;
   employeeId?: string;
@@ -354,7 +322,6 @@ export class SessionAuthorizationError extends Error {
 export class SessionHost {
   private readonly records = new Map<string, SessionRecord>();
   private readonly listeners = new Map<string, Set<Subscriber>>();
-  private readonly globalListeners = new Set<GlobalActivityListener>();
   private readonly delivery: GroupMessageDeliveryService;
   readonly approvalService: ApprovalService;
   private readonly writeQueue = new ConversationWriteQueue();
@@ -404,29 +371,6 @@ export class SessionHost {
       listeners.delete(subscriber);
       if (listeners.size === 0) this.listeners.delete(conversationId);
     };
-  }
-
-  /**
-   * 订阅全局活动信号（不按会话分路）。返回取消订阅函数。
-   *
-   * 与 per-conversation 的 `subscribe` 不同，这是给前端做“唤醒”用的：一条 SSE 连接即可
-   * 知道本机有会话产生新消息，再按需去订阅具体会话 / 刷新列表。
-   */
-  subscribeGlobal(listener: GlobalActivityListener): () => void {
-    this.globalListeners.add(listener);
-    return () => {
-      this.globalListeners.delete(listener);
-    };
-  }
-
-  private publishGlobal(event: GlobalActivityEvent): void {
-    for (const listener of [...this.globalListeners]) {
-      try {
-        listener(event);
-      } catch (error) {
-        appLogger.log("warn", "global_activity_listener_failed", safeError(error));
-      }
-    }
   }
 
   async prompt(conversationId: string, text: string, images?: ImageContent[], caller?: AuthenticatedCaller, mentions?: string[], deliveryOptions?: PromptDeliveryOptions): Promise<string | undefined> {
@@ -1679,16 +1623,6 @@ export class SessionHost {
     record.aborting = false;
     record.backgroundApprovalFailure = undefined;
     record.activeBackground = authorization?.background === true;
-    this.publishGlobal({
-      type: "prompt_started",
-      conversation_id: record.conversationId,
-      employee_id: record.employeeId ?? null,
-      tenant_id: owner?.tenantId ?? null,
-      member_id: owner?.memberId ?? null,
-      source_type: command.source.type,
-      background: authorization?.background === true,
-      started_at: new Date(startedAt).toISOString(),
-    });
     record.activeToolCallId = command.toolCallId;
     record.activePromptReceipt = command.idempotencyKey ?? command.logicalMessageId;
     record.activeSnapshotVersion = authorization?.snapshot.snapshot_version;
@@ -1828,19 +1762,6 @@ export class SessionHost {
         record.activeMessage = undefined;
         record.activeReply = undefined;
         record.reconcile = undefined;
-        const replyEntries = this.replyEntries(record, entriesBefore);
-        const hasAssistantMessage = replyEntries.some((entry) => entry.type === "message" && entry.message.role === "assistant");
-        this.publishGlobal({
-          type: "prompt_settled",
-          conversation_id: record.conversationId,
-          employee_id: record.employeeId ?? null,
-          tenant_id: owner?.tenantId ?? null,
-          member_id: owner?.memberId ?? null,
-          outcome: observedWorkOutcome(stopReason, settled, record.aborting, failed),
-          last_preview: hasAssistantMessage ? this.latestAssistantText(replyEntries).slice(0, 200) : null,
-          last_message_at: new Date().toISOString(),
-          assistant_message_count: replyEntries.filter((entry) => entry.type === "message" && entry.message.role === "assistant").length,
-        });
         const baseline = await workspaceBeforePromise;
         // The async baseline may finish after Session initialization. Exclude files whose scan
         // observation proves they appeared during this run, otherwise the first capture sees them as old.
