@@ -179,7 +179,8 @@ jobs:
         working-directory: web
         timeout-minutes: 20
         run: |
-          .github/scripts/apt-with-fallback.sh --refresh-only
+          "$GITHUB_WORKSPACE/.github/scripts/apt-with-fallback.sh" \
+            --refresh-only
           for attempt in 1 2 3; do
             pnpm exec playwright install --with-deps chromium && exit 0
             echo "::warning::Playwright install failed (attempt ${attempt}/3)"

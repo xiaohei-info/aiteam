@@ -101,7 +101,7 @@ jobs:
       - name: Install Tauri system dependencies
         timeout-minutes: 20
         run: |
-          .github/scripts/apt-with-fallback.sh \
+          "$GITHUB_WORKSPACE/.github/scripts/apt-with-fallback.sh" \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libwebkit2gtk-4.1-dev \
