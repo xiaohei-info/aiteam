@@ -15,7 +15,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
-const RUNTIME: &str = if cfg!(windows) { "runtime/node.exe" } else { "runtime/node" };
+const RUNTIME: &str = if cfg!(windows) {
+    "runtime/node.exe"
+} else {
+    "runtime/node"
+};
 
 #[derive(Default)]
 pub struct AgentState(Mutex<Runtime>);
@@ -48,29 +52,50 @@ mod job {
         pub fn adopt(child: &Child) -> Option<Job> {
             unsafe {
                 let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if handle.is_null() { return None; }
+                if handle.is_null() {
+                    return None;
+                }
                 let job = Job(handle);
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
                 info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let ok = SetInformationJobObject(handle, JobObjectExtendedLimitInformation,
+                let ok = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
                     (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<c_void>(),
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
-                if ok == 0 || AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0 { return None; }
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 || AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) == 0
+                {
+                    return None;
+                }
                 Some(job)
             }
         }
-        pub fn terminate(&self) { unsafe { TerminateJobObject(self.0, 1); } }
+        pub fn terminate(&self) {
+            unsafe {
+                TerminateJobObject(self.0, 1);
+            }
+        }
     }
     impl Drop for Job {
-        fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
     }
 }
 
 #[cfg(unix)]
 fn acquire_instance_lock(root: &Path) -> Result<File, String> {
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    let file = OpenOptions::new().create(true).truncate(false).read(true).write(true)
-        .open(root.join("desktop.lock")).map_err(|e| e.to_string())?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join("desktop.lock"))
+        .map_err(|e| e.to_string())?;
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Err("AIFred 已在运行，请使用已打开的窗口".into());
     }
@@ -79,9 +104,17 @@ fn acquire_instance_lock(root: &Path) -> Result<File, String> {
 
 #[cfg(windows)]
 fn acquire_instance_lock(root: &Path) -> Result<File, String> {
-    fs::create_dir_all(root).map_err(|error| format!("无法创建实例锁目录 {}：{error}", root.display()))?;
+    fs::create_dir_all(root)
+        .map_err(|error| format!("无法创建实例锁目录 {}：{error}", root.display()))?;
     let lock_path = root.join("desktop.lock");
-    match OpenOptions::new().create(true).truncate(false).read(true).write(true).share_mode(0).open(&lock_path) {
+    match OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(&lock_path)
+    {
         Ok(file) => Ok(file),
         Err(error) => {
             // `share_mode(0)` makes this open fail with ERROR_SHARING_VIOLATION only when another
@@ -91,7 +124,10 @@ fn acquire_instance_lock(root: &Path) -> Result<File, String> {
             if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) {
                 Err("AIFred 已在运行，请使用已打开的窗口".into())
             } else {
-                Err(format!("无法创建或打开实例锁 {}：{error}", lock_path.display()))
+                Err(format!(
+                    "无法创建或打开实例锁 {}：{error}",
+                    lock_path.display()
+                ))
             }
         }
     }
@@ -99,18 +135,38 @@ fn acquire_instance_lock(root: &Path) -> Result<File, String> {
 
 #[cfg(windows)]
 fn import_specifier(path: &Path) -> OsString {
-    url::Url::from_file_path(path).map(|u| OsString::from(u.as_str())).unwrap_or_else(|_| path.as_os_str().to_owned())
+    url::Url::from_file_path(path)
+        .map(|u| OsString::from(u.as_str()))
+        .unwrap_or_else(|_| path.as_os_str().to_owned())
 }
 #[cfg(not(windows))]
-fn import_specifier(path: &Path) -> OsString { path.as_os_str().to_owned() }
+fn import_specifier(path: &Path) -> OsString {
+    path.as_os_str().to_owned()
+}
 
 const INHERITED_ENV: &[&str] = if cfg!(windows) {
     // `ProgramFiles` / `ProgramFiles(x86)` are how Pi's `getShellConfig()` locates
     // `Git\\bin\\bash.exe`; without them the bash tool only resolves when bash happens to be on
     // PATH. `SystemRoot`/`WINDIR`/`ComSpec` keep cmd and the Node runtime working.
-    &["PATH","PATHEXT","SystemRoot","WINDIR","ComSpec","TEMP","TMP","USERNAME","USERPROFILE","HOMEDRIVE","HOMEPATH","APPDATA","LOCALAPPDATA","ProgramFiles","ProgramFiles(x86)"]
+    &[
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "WINDIR",
+        "ComSpec",
+        "TEMP",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+    ]
 } else {
-    &["HOME","USER","LOGNAME","PATH","TMPDIR","LANG"]
+    &["HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG"]
 };
 
 fn copy_config_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -233,7 +289,9 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
     }
     command
         .arg("--import")
-        .arg(import_specifier(&agent.join("node_modules/tsx/dist/esm/index.mjs")))
+        .arg(import_specifier(
+            &agent.join("node_modules/tsx/dist/esm/index.mjs"),
+        ))
         .arg(agent.join("bin/start-agent.mjs"))
         .arg("--config")
         .arg(config)

@@ -245,7 +245,9 @@ fn unseal_master_key(raw: &[u8]) -> Result<([u8; MASTER_KEY_LEN], bool), MasterK
 fn log_master_key_replaced(vault_dir: &Path, failure: MasterKeyUnsealFailure) {
     // `vault_dir` is always `<app data dir>/auth-vault` (see `resolve_vault_dir`), so its parent is
     // the diagnostics root. Best effort: login must not fail because the log could not be written.
-    let Some(root) = vault_dir.parent() else { return };
+    let Some(root) = vault_dir.parent() else {
+        return;
+    };
     let code = match failure {
         MasterKeyUnsealFailure::Corrupt => "master_key_corrupt",
         MasterKeyUnsealFailure::ForeignDpapi => "dpapi_foreign_user_or_machine",
@@ -944,8 +946,14 @@ mod tests {
 
     #[test]
     fn unusable_key_files_are_replaced_instead_of_trusted() {
-        assert_eq!(unseal_master_key(b"not a key"), Err(MasterKeyUnsealFailure::Corrupt));
-        assert_eq!(unseal_master_key(b"dpapi:zz"), Err(MasterKeyUnsealFailure::Corrupt));
+        assert_eq!(
+            unseal_master_key(b"not a key"),
+            Err(MasterKeyUnsealFailure::Corrupt)
+        );
+        assert_eq!(
+            unseal_master_key(b"dpapi:zz"),
+            Err(MasterKeyUnsealFailure::Corrupt)
+        );
         #[cfg(not(windows))]
         assert_eq!(
             unseal_master_key(format!("{DPAPI_PREFIX}{}", "00".repeat(200)).as_bytes()),
