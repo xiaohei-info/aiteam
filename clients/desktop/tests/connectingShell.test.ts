@@ -19,17 +19,13 @@ const STUB = `import React from 'react';
 const Stub = ({ children }) => React.createElement('div', { 'data-stub': __NAME__ }, children);
 export default Stub;
 export const useNetworkStatus = () => true;
-export const useGlobalActivity = () => {};
 export const createSafeDiagnostic = () => null;
 export const classifyBackendStartupFailure = () => ({});
 export const isBackendStartupConfigurationError = () => false;
 export const initializeAgentRuntime = () => globalThis.__shellTest.backend();
 export const isTauri = () => true;
 export class AgentApiClient {}
-export const useManagerReachability = Object.assign(
-  () => false,
-  { getState: () => ({ unavailable: false }), subscribe: () => () => {}, setState: () => {} },
-);
+export const useManagerReachability = () => false;
 export const MANAGER_UNAVAILABLE_NOTICE = '';
 export const useTopBarOverrideValue = () => null;
 export const isGlobalSearchShortcut = () => false;

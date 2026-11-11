@@ -6,7 +6,6 @@ import ConversationHistorySearch from './components/Layout/ConversationHistorySe
 import GlobalShortcuts from './components/Layout/GlobalShortcuts'
 import { useAgentAuthStore } from './stores/agentAuth'
 import { useNetworkStatus } from './hooks/useNetwork'
-import { useGlobalActivity } from './hooks/useGlobalActivity'
 import OfflineOverlay from './components/OfflineOverlay'
 import GrantsSyncNotice from './components/GrantsSyncNotice'
 import RechargePromptDialog from './components/Billing/RechargePromptDialog'
@@ -201,7 +200,6 @@ export default function App() {
   const sessionGeneration = useAgentAuthStore((s) => s.sessionGeneration)
   const restoreAgentSession = useAgentAuthStore((s) => s.restoreSession)
   const isOnline = useNetworkStatus()
-  useGlobalActivity()
   const [backendReady, setBackendReady] = useState(false)
   const [backendStage, setBackendStage] = useState<BackendStartupStage>('health')
   const [backendFailure, setBackendFailure] = useState<BackendStartupFailure | null>(null)

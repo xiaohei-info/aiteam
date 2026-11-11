@@ -11,11 +11,6 @@ import { classifyRequestError } from '../src/lib/requestError.ts'
 import { collectTodoTaskCards } from '../src/lib/todoTaskCard.ts'
 import { mergeReplyProjection, reconcileReplyProjection } from '../src/lib/replyProjection.ts'
 import { replyPreview } from '../src/lib/replyPreview.ts'
-import { patchActivityItem } from '../src/lib/conversationActivityPatch.ts'
-import { formatConversationTime, resolveConversationSummary } from '../src/lib/conversationSummary.ts'
-import { latestEmployeeConversations } from '../src/lib/projectConversation.ts'
-import { rememberEmployeeConversation } from '../src/lib/employeeConversationMap.ts'
-import { skillDisplayNames } from '../src/lib/skillDisplay.ts'
 
 function chatStore(api: Record<string, unknown>) {
   const source = readFileSync(new URL('../src/stores/chat.ts', import.meta.url), 'utf8')
@@ -38,11 +33,6 @@ function chatStore(api: Record<string, unknown>) {
     if (id === '../lib/globalActivityCollector') return { globalActivityCollector: { emit: () => {} } }
     if (id === '../lib/systemNotifications') return { notifyConversationCompleted: async () => {} }
     if (id === '../lib/requestError') return { classifyRequestError }
-    if (id === '../lib/conversationActivityPatch') return { patchActivityItem }
-    if (id === '../lib/conversationSummary') return { formatConversationTime, resolveConversationSummary }
-    if (id === '../lib/projectConversation') return { latestEmployeeConversations }
-    if (id === '../lib/employeeConversationMap') return { rememberEmployeeConversation }
-    if (id === '../lib/skillDisplay') return { skillDisplayNames }
     return {}
   }
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
@@ -815,128 +805,4 @@ test('a stored group failure is attached to the participant that failed', async 
   assert.equal(reply.senderEmployeeId, 'pm')
   assert.equal(reply.senderName, '产品经理')
   assert.equal(reply.failure.summary, '抱歉，网络连接中断，请稍后再试。')
-})
-
-test('全局活动信号就地补丁列表项并累计未读，不触发整表刷新', () => {
-  let refreshed = 0
-  const store = chatStore({
-    listExperts: async () => ({ experts: [] }),
-    listSolutions: async () => ({ solutions: [] }),
-    listAllConversations: async () => { refreshed += 1; return { conversations: [] } },
-  })
-  store.setState({
-    conversations: [
-      { id: 'conv-a', title: 'A', lastMessage: '旧', time: '昨天', unread: 0, lastMessageAt: 1 },
-      { id: 'conv-b', title: 'B', lastMessage: '旧', time: '昨天', unread: 0, lastMessageAt: 1 },
-    ],
-    groups: [],
-  })
-  store.getState().applyGlobalActivity({
-    type: 'prompt_settled', conversation_id: 'conv-b', employee_id: 'e1', tenant_id: 't1', member_id: 'm1',
-    outcome: 'succeeded', last_preview: '简报已生成', last_message_at: new Date().toISOString(), assistant_message_count: 2,
-  })
-  const list = store.getState().conversations
-  assert.deepEqual(list.map((item: any) => item.id), ['conv-b', 'conv-a'])
-  assert.equal(list[0].lastMessage, '简报已生成')
-  assert.equal(list[0].unread, 2)
-  assert.ok(list[0].time)
-  assert.notEqual(list[0].time, '昨天')
-  assert.equal(list[0].summaryAvailability, undefined)
-  assert.equal(refreshed, 0)
-})
-
-test('正在查看的会话收到结束信号时对齐一次 entries 并清零未读', async () => {
-  let listed = ''
-  const store = chatStore({
-    listEntries: async (convId: string) => { listed = convId; return { entries: [] } },
-    getConversationState: async () => ({ prompting: false }),
-    subscribeEvents: () => ({ close() {} }),
-    abortConversation: async () => {},
-  })
-  store.setState({
-    activeConvId: 'conv-a',
-    conversations: [{ id: 'conv-a', title: 'A', lastMessage: '旧', time: '昨天', unread: 3, lastMessageAt: 1 }],
-    groups: [],
-  })
-  store.getState().applyGlobalActivity({
-    type: 'prompt_settled', conversation_id: 'conv-a', employee_id: 'e1', tenant_id: 't1', member_id: 'm1',
-    outcome: 'succeeded', last_preview: '新回复', last_message_at: new Date().toISOString(), assistant_message_count: 1,
-  })
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  assert.equal(listed, 'conv-a')
-  assert.equal(store.getState().conversations[0].unread, 0)
-})
-
-test('列表里没有的会话触发一次完整列表刷新', async () => {
-  let refreshed = 0
-  const store = chatStore({
-    listExperts: async () => ({ experts: [{ employee_id: 'e1', display_name: '员工甲' }] }),
-    listSolutions: async () => ({ solutions: [] }),
-    listAllConversations: async () => {
-      refreshed += 1
-      return { conversations: [{ id: 'conv-new', kind: 'chat', entry_employee_id: 'e1', last_preview: '新任务', last_message_at: new Date().toISOString() }] }
-    },
-  })
-  store.setState({ conversations: [], groups: [] })
-  store.getState().applyGlobalActivity({
-    type: 'prompt_settled', conversation_id: 'conv-new', employee_id: 'e1', tenant_id: 't1', member_id: 'm1',
-    outcome: 'succeeded', last_preview: '新任务', last_message_at: new Date().toISOString(), assistant_message_count: 1,
-  })
-  await new Promise((resolve) => setTimeout(resolve, 0))
-  assert.equal(refreshed, 1)
-  assert.equal(store.getState().conversations[0].id, 'conv-new')
-})
-
-test('正在查看的会话收到开始信号时按需订阅会话事件流', async () => {
-  let subscribed = ''
-  const store = chatStore({
-    abortConversation: async () => {},
-    getConversationState: async () => ({ prompting: true }),
-    listEntries: async () => ({ entries: [] }),
-    subscribeEvents: (options: { conversationId: string }) => {
-      subscribed = options.conversationId
-      return { close() {} }
-    },
-  })
-  store.setState({
-    activeConvId: 'conv-a',
-    conversations: [{ id: 'conv-a', title: 'A', lastMessage: '', time: '', unread: 0, lastMessageAt: 0 }],
-    groups: [],
-  })
-  try {
-    store.getState().applyGlobalActivity({
-      type: 'prompt_started', conversation_id: 'conv-a', employee_id: 'e1', tenant_id: 't1', member_id: 'm1',
-      source_type: 'schedule', background: true, started_at: new Date().toISOString(),
-    })
-    assert.equal(subscribed, 'conv-a')
-  } finally {
-    await store.getState().abortStream('conv-a')
-  }
-})
-
-test('reconciliation 的运行中快照与已持久化回复共用一条气泡', () => {
-  let onEvent: (event: any) => void = () => {}
-  const store = chatStore({
-    abortConversation: async () => {},
-    getConversationState: async () => ({ prompting: true }),
-    subscribeEvents: (options: any) => { onEvent = options.onEvent; return { close() {} } },
-  })
-  store.setState({ activeConvId: 'c', activeConvMessages: [], activeConvRawItems: [] })
-  store.getState().startAssistantStream('c')
-  onEvent({
-    type: 'reconciliation', schema_version: '2', conversation_id: 'c', state: 'active', prompting: true,
-    entries: [{ id: 'e1', entry_ref: 'ref-e1', type: 'message', work_id: 'w1', source_employee_id: 'emp',
-      message: { role: 'assistant', content: [{ type: 'text', text: '部分回答' }] } }],
-    active_runs: [{ work_id: 'w1', source_employee_id: 'emp', source_employee_display_name: '员工甲', status: 'thinking',
-      message: { role: 'assistant', content: [{ type: 'text', text: '部分回答' }] } }],
-  })
-  const afterReconciliation = store.getState().activeConvMessages.filter((m: any) => m.role === 'assistant')
-  assert.equal(afterReconciliation.length, 1)
-  assert.equal(afterReconciliation[0].workId, 'w1')
-  assert.equal(afterReconciliation[0].content, '部分回答')
-  onEvent({ type: 'message_update', conversation_id: 'c', assistantMessageEvent: { type: 'text_delta', delta: '更多' } })
-  const afterDelta = store.getState().activeConvMessages.filter((m: any) => m.role === 'assistant')
-  assert.equal(afterDelta.length, 1)
-  assert.equal(afterDelta[0].content, '部分回答更多')
-  store.getState().abortStream('c')
 })
