@@ -36,14 +36,6 @@ fn path(base: &str, rest: &str) -> String {
     Path::new(base).join(rest).to_string_lossy().into_owned()
 }
 
-/// `display_path` renders a home-relative folder with the native separator.
-fn display(rest: &str) -> String {
-    let path = rest
-        .split('/')
-        .fold(PathBuf::new(), |acc, part| acc.join(part));
-    format!("~/{}", path.display())
-}
-
 fn lines(values: &[Value]) -> Cursor<Vec<u8>> {
     let mut text = String::new();
     for value in values {
@@ -434,7 +426,13 @@ fn scan_finds_projects_from_every_source_on_disk() {
         &app.join("claude-code-sessions/acct/org/local_1.json"),
         &json!({ "cliSessionId": "s-tab", "title": "桌面端网页" }).to_string(),
     );
-    let storage = cowork.join("org/acct/agent/local_2");
+    // Discovery walks the tree component by component, so it rebuilds the path with native
+    // separators; joining these segments one at a time keeps the fixture in the same shape.
+    let storage = cowork
+        .join("org")
+        .join("acct")
+        .join("agent")
+        .join("local_2");
     write(
         &cowork.join("org/acct/agent/local_2.json"),
         &json!({ "cliSessionId": "s-cowork", "title": "Cowork 周报" }).to_string(),
@@ -487,8 +485,15 @@ fn scan_finds_projects_from_every_source_on_disk() {
         })
         .collect();
     found.sort();
-    let cowork_location = display(
-        "Library/Application Support/Claude/local-agent-mode-sessions/org/acct/agent/local_2/outputs",
+    // The fixture keeps the POSIX separators inside its first literal segment, so the expected
+    // location is derived from the fixture path rather than from a hand-written separator.
+    let cowork_location = format!(
+        "~/{}",
+        storage
+            .join("outputs")
+            .strip_prefix(&home)
+            .unwrap()
+            .display()
     );
     assert_eq!(
         found,
