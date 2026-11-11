@@ -171,9 +171,22 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
 
+      # `--with-deps` runs apt internally, so a mirror outage hangs this
+      # step too. Make apt reachable first (the helper rewrites sources if
+      # needed, and those changes persist for the rest of the job), then
+      # retry the browser install.
       - name: Install Playwright Chromium
         working-directory: web
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 20
+        run: |
+          .github/scripts/apt-with-fallback.sh --refresh-only
+          for attempt in 1 2 3; do
+            pnpm exec playwright install --with-deps chromium && exit 0
+            echo "::warning::Playwright install failed (attempt ${attempt}/3)"
+            sleep 20
+          done
+          echo "::error::Playwright Chromium could not be installed"
+          exit 1
 
       # The Playwright webServer starts the real Node Agent via
       # `pnpm --dir server/agent_service start`; install its tsx/runtime

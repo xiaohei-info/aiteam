@@ -95,10 +95,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub runners sometimes cannot resolve the default Ubuntu mirrors,
+      # which makes this step hang for nearly an hour. The helper bounds each
+      # attempt, retries, and falls back to a public mirror.
       - name: Install Tauri system dependencies
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
+          .github/scripts/apt-with-fallback.sh \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libwebkit2gtk-4.1-dev \
