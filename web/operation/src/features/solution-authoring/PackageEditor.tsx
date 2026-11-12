@@ -1,5 +1,10 @@
-/** 方案正文：查看与编辑。依据（来源片段）只读，编辑时原样保留。 */
-import { useState, type ReactNode } from "react";
+/**
+ * 方案正文：查看与编辑。依据（来源片段）只读，编辑时原样保留。
+ *
+ * 编辑中的内容只存在这个组件里：服务端数据刷新（轮询、别的动作、版本冲突后重拉）不会清掉它，
+ * 只有保存成功或使用者主动放弃才丢弃。
+ */
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -14,13 +19,23 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { Evidence, EvidenceSource, GeneratedExpert, GeneratedSolution } from "./types";
 
+export interface SaveFailure {
+  message: string;
+  /** 草稿在编辑期间被别人改过（版本不一致）。 */
+  conflict: boolean;
+}
+
 interface Props {
   solution: GeneratedSolution;
+  /** 服务端当前版本；开始编辑时记下，保存时带上。 */
+  version: number;
   evidenceSources: Record<string, EvidenceSource>;
   canEdit: boolean;
   busy: boolean;
-  /** 返回错误文案；成功返回 null。 */
-  onSave: (next: GeneratedSolution) => Promise<string | null>;
+  /** `baseVersion` 是这次修改所基于的版本。成功返回 null。 */
+  onSave: (next: GeneratedSolution, baseVersion: number) => Promise<SaveFailure | null>;
+  /** 进入 / 退出编辑时通知页面，用来锁住会改动正文的其它操作。 */
+  onEditingChange: (editing: boolean) => void;
 }
 
 function EvidenceList({ items, sources }: { items: Evidence[]; sources: Record<string, EvidenceSource> }): ReactNode {
@@ -55,17 +70,32 @@ function validate(solution: GeneratedSolution): string | null {
   return null;
 }
 
-export function PackageEditor({ solution, evidenceSources, canEdit, busy, onSave }: Props): ReactNode {
+export function PackageEditor({ solution, version, evidenceSources, canEdit, busy, onSave, onEditingChange }: Props): ReactNode {
   const [draft, setDraft] = useState<GeneratedSolution | null>(null);
+  const [baseVersion, setBaseVersion] = useState(version);
   const [tagsText, setTagsText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
   const editing = draft !== null;
   const current = draft ?? solution;
 
+  useEffect(() => {
+    onEditingChange(editing);
+    return () => onEditingChange(false);
+  }, [editing, onEditingChange]);
+
   function startEditing() {
     setDraft(structuredClone(solution));
+    setBaseVersion(version);
     setTagsText(solution.tags.join("，"));
     setError(null);
+    setConflict(false);
+  }
+
+  function stopEditing() {
+    setDraft(null);
+    setError(null);
+    setConflict(false);
   }
 
   function setExpert(key: string, changes: Partial<GeneratedExpert>) {
@@ -87,9 +117,11 @@ export function PackageEditor({ solution, evidenceSources, canEdit, busy, onSave
     const problem = validate(next);
     if (problem) { setError(problem); return; }
     setError(null);
-    const failure = await onSave(next);
-    if (failure) setError(failure);
-    else setDraft(null);
+    // 冲突后再保存是使用者明确选择的「覆盖」：改用服务端最新版本。
+    const failure = await onSave(next, conflict ? version : baseVersion);
+    if (!failure) { stopEditing(); return; }
+    setConflict(failure.conflict);
+    if (!failure.conflict) setError(failure.message);
   }
 
   const coordinator = current.experts.find((expert) => expert.key === current.coordinator_key);
@@ -167,10 +199,17 @@ export function PackageEditor({ solution, evidenceSources, canEdit, busy, onSave
         </VStack>
 
         {error && <Banner status="error" title={error} />}
+        {editing && conflict && (
+          <Banner
+            status="warning"
+            title="保存失败：草稿在你编辑期间被其他人改动过"
+            description="你的修改还在上面，没有丢失。可以用你的内容覆盖保存，也可以放弃修改查看最新内容。"
+          />
+        )}
         {editing && (
           <HStack gap={2}>
-            <Button label="保存" onClick={() => void save()} isLoading={busy} />
-            <Button label="取消" variant="ghost" onClick={() => { setDraft(null); setError(null); }} isDisabled={busy} />
+            <Button label={conflict ? "覆盖保存" : "保存"} onClick={() => void save()} isLoading={busy} />
+            <Button label={conflict ? "放弃我的修改" : "取消"} variant="ghost" onClick={stopEditing} isDisabled={busy} />
           </HStack>
         )}
       </VStack>

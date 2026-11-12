@@ -16,13 +16,17 @@ interface Props {
   sources: SourceDocument[];
   canEdit: boolean;
   hasContent: boolean;
+  /** 正文正在编辑：重新生成会整体替换正文，先锁住。 */
+  isContentLocked: boolean;
   busy: boolean;
   onUpload: (files: File[]) => void;
-  onDelete: (sourceId: string) => void;
+  onDelete: (source: SourceDocument) => void;
+  /** 已有正文时由页面先弹确认。 */
   onGenerate: () => void;
 }
 
-export function SourcesPanel({ sources, canEdit, hasContent, busy, onUpload, onDelete, onGenerate }: Props): ReactNode {
+export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, busy, onUpload, onDelete, onGenerate }: Props): ReactNode {
+  const generateHint = sources.length === 0 ? "请先上传至少一份资料" : isContentLocked ? "请先保存或取消正文修改" : undefined;
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
@@ -57,8 +61,8 @@ export function SourcesPanel({ sources, canEdit, hasContent, busy, onUpload, onD
               <Button
                 label={hasContent ? "重新生成" : "开始生成"}
                 onClick={onGenerate}
-                isDisabled={busy || sources.length === 0}
-                tooltip={sources.length === 0 ? "请先上传至少一份资料" : hasContent ? "会整体替换当前正文与敏感项" : undefined}
+                isDisabled={busy || sources.length === 0 || isContentLocked}
+                tooltip={generateHint}
               />
             </HStack>
           )}
@@ -79,7 +83,7 @@ export function SourcesPanel({ sources, canEdit, hasContent, busy, onUpload, onD
                   </HStack>
                 </VStack>
                 {canEdit && (
-                  <Button label={`删除 ${source.file_name}`} isIconOnly={false} variant="ghost" onClick={() => onDelete(source.source_id)} isDisabled={busy}>
+                  <Button label={`删除 ${source.file_name}`} isIconOnly={false} variant="ghost" onClick={() => onDelete(source)} isDisabled={busy}>
                     删除
                   </Button>
                 )}

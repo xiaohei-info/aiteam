@@ -102,6 +102,8 @@ export interface DraftDetail extends DraftSummary {
   prompt_version: string;
   usage: Record<string, number>;
   review_note: string;
+  /** 发布已开始（含中途失败）：不能再驳回，只能重试发布。 */
+  publish_started: boolean;
   sources: SourceDocument[];
   findings: Finding[];
   open_finding_count: number;

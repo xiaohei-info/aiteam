@@ -55,7 +55,7 @@ function detail(overrides: Partial<DraftDetail> = {}): DraftDetail {
       evidence: [{ chunk_id: "s1-c1" }],
     },
     evidence_sources: { "s1-c1": { source_name: "质量手册.md", locator: "第 1 段", excerpt: "来料检验流程……", origin: "image", low_confidence: true } },
-    warnings: [], prompt_version: "v1", usage: { total_tokens: 100 }, review_note: "",
+    warnings: [], prompt_version: "v1", usage: { total_tokens: 100 }, review_note: "", publish_started: false,
     sources: [{ source_id: "s-1", file_name: "质量手册.md", size_bytes: 2048, status: "parsed", error_code: null, chunk_count: 3, image_count: 1, warnings: ["text_truncated"], created_at: "2026-11-12T08:01:00Z" }],
     findings,
     open_finding_count: findings.filter((item) => item.status === "open").length,
@@ -363,20 +363,160 @@ describe("DraftDetailPage", () => {
     expect(calls.find((call) => call.path.endsWith("/generate"))!.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("编辑正文时带上所基于的版本；版本冲突给出提示并重新拉取", async () => {
+  it("版本冲突时保留未保存的修改并提示；覆盖保存改用最新版本", async () => {
     let gets = 0;
+    let puts = 0;
     const calls = mockApi({
-      [`GET ${BASE}/${DRAFT_ID}`]: () => { gets += 1; return json(detail({ findings: [] })); },
-      [`PUT ${BASE}/${DRAFT_ID}/package`]: () => json({ status: 409, code: "conflict", title: "Conflict", detail: "draft was modified by someone else; reload and retry" }, 409),
+      // 第二次拉取：别人已经把草稿改到了版本 4。
+      [`GET ${BASE}/${DRAFT_ID}`]: () => { gets += 1; return json(detail({ findings: [], version: gets === 1 ? 3 : 4 })); },
+      [`PUT ${BASE}/${DRAFT_ID}/package`]: () => {
+        puts += 1;
+        if (puts === 1) return json({ status: 409, code: "conflict", title: "Conflict", detail: "draft was modified by someone else; reload and retry" }, 409);
+        return json(detail({ findings: [], version: 5 }));
+      },
     });
     renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
     fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(/modified by someone else/)).length).toBeGreaterThan(0);
-    const put = calls.find((call) => call.method === "PUT")!;
-    expect(put.body).toMatchObject({ version: 3, package: { display_name: "新名称", coordinator_key: "lead" } });
+
+    expect(await screen.findByText(/草稿在你编辑期间被其他人改动过/)).toBeInTheDocument();
     await waitFor(() => expect(gets).toBe(2));
+    // 重新拉取后编辑器没有被重建：输入的内容还在。
+    expect(screen.getByLabelText(/方案名称/)).toHaveValue("新名称");
+    expect(calls.filter((call) => call.method === "PUT")[0]!.body).toMatchObject({ version: 3, package: { display_name: "新名称", coordinator_key: "lead" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "覆盖保存" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "覆盖保存" })).not.toBeInTheDocument());
+    expect(calls.filter((call) => call.method === "PUT")[1]!.body).toMatchObject({ version: 4, package: { display_name: "新名称" } });
+    expect(screen.getByRole("button", { name: "编辑正文" })).toBeInTheDocument();
+  });
+
+  it("保存被拒绝（非冲突）时显示原因并保留修改", async () => {
+    mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [] })),
+      [`PUT ${BASE}/${DRAFT_ID}/package`]: () => json({ status: 422, code: "validation_error", title: "Unprocessable", detail: "evidence may only cite source excerpts that belong to this draft" }, 422),
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText(/evidence may only cite/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/方案名称/)).toHaveValue("新名称");
+    expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
+  });
+
+  it("正文编辑期间锁住处理敏感项、提交审核与重新生成；取消后恢复", async () => {
+    const calls = mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [{ ...PHONE_FINDING }] })) });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    for (const name of ["脱敏", "从正文删除", "确认可公开", "提交审核", "重新生成"]) {
+      expect(isDisabled(screen.getByRole("button", { name }))).toBe(true);
+    }
+    expect(screen.getByText(/请先保存或取消修改，再处理敏感项/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "脱敏" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);
+    expect(screen.queryByText(/无法恢复/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: "脱敏" }))).toBe(false));
+    expect(isDisabled(screen.getByRole("button", { name: "重新生成" }))).toBe(false);
+  });
+
+  it("重新生成需要二次确认；取消不发请求", async () => {
+    const calls = mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [] })),
+      [`POST ${BASE}/${DRAFT_ID}/generate`]: () => json({ job_id: "j-1", status: "queued" }, 202),
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成" }));
+    expect(await screen.findByText(/当前正文、人工修改和已处理的敏感项都会被替换/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "确认重新生成" })).not.toBeInTheDocument());
+    expect(calls.some((call) => call.path.endsWith("/generate"))).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认重新生成" }));
+    await waitFor(() => expect(calls.filter((call) => call.path.endsWith("/generate"))).toHaveLength(1));
+  });
+
+  it("批量上传部分失败后仍刷新清单，并汇总成功与失败", async () => {
+    let gets = 0;
+    const uploaded = { source_id: "s-2", file_name: "新资料.md", size_bytes: 6, status: "parsed" as const, error_code: null, chunk_count: 1, image_count: 0, warnings: [], created_at: "2026-11-12T08:06:00Z" };
+    const calls = mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => {
+        gets += 1;
+        const base = detail({ status: "draft", package: null, findings: [] });
+        return json(gets === 1 ? base : { ...base, sources: [...base.sources, uploaded] });
+      },
+      [`POST ${BASE}/${DRAFT_ID}/sources`]: (call) => {
+        const name = ((call.body as FormData).get("file") as File).name;
+        if (name === "旧版.doc") return json({ status: 422, code: "validation_error", title: "Unprocessable", detail: ".doc 需先另存为新格式" }, 422);
+        return json(uploaded, 201);
+      },
+    });
+    renderDetail();
+    const input = await screen.findByLabelText("选择资料文件");
+    fireEvent.change(input, { target: { files: [new File(["内容"], "新资料.md"), new File(["x"], "旧版.doc"), new File(["内容2"], "另一份.md")] } });
+
+    expect(await screen.findByText("已上传 2 个，1 个失败")).toBeInTheDocument();
+    expect(screen.getByText(/旧版\.doc（\.doc 需先另存为新格式）/)).toBeInTheDocument();
+    // 失败不是 409，也照样重新拉取：已入库的文件出现在清单里；失败的那个不挡住后面的。
+    expect(calls.filter((call) => call.path.endsWith("/sources"))).toHaveLength(3);
+    expect(gets).toBe(2);
+    expect(within(screen.getByRole("list", { name: "资料清单" })).getByText("新资料.md")).toBeInTheDocument();
+  });
+
+  it("删除资料需要二次确认", async () => {
+    const calls = mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [] })),
+      [`DELETE ${BASE}/${DRAFT_ID}/sources/s-1`]: () => new Response(null, { status: 204 }),
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "删除 质量手册.md" }));
+    expect(await screen.findByText(/「质量手册\.md」的原件会被删除/)).toBeInTheDocument();
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(1));
+  });
+
+  it("已通过 / 已发布的草稿只有管理员能归档；发布开始后不能驳回", async () => {
+    const approved = () => json(detail({ status: "approved", findings: [] }));
+    mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: approved });
+    const operator = renderDetail("system_operator");
+    await screen.findByText("审核已通过，等待管理员发布");
+    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+    operator.unmount();
+
+    mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: approved });
+    const admin = renderDetail("system_admin");
+    expect(await screen.findByRole("button", { name: "归档" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "驳回" })).toBeInTheDocument();
+    expect(screen.queryByText("上一次发布没有完成")).not.toBeInTheDocument();
+    admin.unmount();
+
+    // 发布中途失败：状态仍是已通过，但不能再驳回，只能重试发布。
+    mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "approved", findings: [], publish_started: true })) });
+    const midway = renderDetail("system_admin");
+    expect(await screen.findByText("上一次发布没有完成")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "驳回" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发布到目录" })).toBeInTheDocument();
+    midway.unmount();
+
+    mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "published", findings: [], publish_started: true, published_solution_id: "sa-abc" })) });
+    renderDetail("system_operator");
+    await screen.findByRole("link", { name: "查看目录项" });
+    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+  });
+
+  it("操作记录是合法的列表结构", async () => {
+    mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [] })) });
+    renderDetail();
+    const list = await screen.findByRole("list", { name: "操作记录" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(1);
+    expect(items[0]!.parentElement).toBe(list);
   });
 
   it("归档需要二次确认，成功后回到列表", async () => {
