@@ -431,7 +431,7 @@ def _extract_xlsx(data: bytes, limits: ParseLimits) -> _Extracted:
 # ---- pdf ----
 
 def _extract_pdf(data: bytes, limits: ParseLimits) -> _Extracted:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     out = _Extracted()
     try:
@@ -441,7 +441,7 @@ def _extract_pdf(data: bytes, limits: ParseLimits) -> _Extracted:
         pages = list(reader.pages)
     except SourceParseError:
         raise
-    except Exception as exc:  # noqa: BLE001 — PyPDF2 对损坏文件抛的异常类型不固定
+    except Exception as exc:  # noqa: BLE001 — pypdf 对损坏文件抛的异常类型不固定
         raise SourceParseError("corrupt_file", "PDF 无法打开") from exc
     if len(pages) > limits.max_pdf_pages:
         pages = pages[:limits.max_pdf_pages]

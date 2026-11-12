@@ -21,10 +21,21 @@ from pydantic import ValidationError
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.envelope import ProblemFieldError
 from shared.contracts.platform_provider import PlatformModelRef
-from shared.errors import Conflict, InvalidTransition, NotFound, RequestTooLarge, ValidationProblem
-from shared.solution_authoring.parsing import SourceParseError, parse_source
+from shared.errors import (
+    Conflict,
+    Forbidden,
+    InvalidTransition,
+    NotFound,
+    RequestTooLarge,
+    ValidationProblem,
+)
+from shared.solution_authoring.isolated_parse import parse_source_isolated
+from shared.solution_authoring.parsing import SourceParseError
 from shared.solution_authoring.schemas import GeneratedSolution
-from shared.solution_authoring.sensitive_scan import REDACTION_PLACEHOLDER, redact_solution
+from shared.solution_authoring.sensitive_scan import (
+    REDACTION_PLACEHOLDER,
+    redact_solution,
+)
 
 from .catalog_schemas import (
     CatalogEntryResponse,
@@ -54,6 +65,7 @@ from .solution_authoring_schemas import (
 from .solution_authoring_storage import SourceFileStore, sha256_hex
 
 EDITABLE_STATUSES = ("draft", "ready_for_review", "rejected")  # 可增删资料、可发起生成
+REVIEWED_STATUSES = ("approved", "published")  # 只有审核人能归档
 CONTENT_STATUSES = ("ready_for_review", "rejected")  # 可编辑正文、处理敏感项、提交审核
 MAX_SOURCES = 20
 MAX_SOURCE_BYTES = 20 * 1024 * 1024
@@ -140,19 +152,26 @@ class SolutionAuthoringService:
             events=self._repo.list_events(draft_id), job=self._repo.latest_job(draft_id),
         )
 
-    def archive_draft(self, draft_id: str, actor_id: str) -> None:
-        """归档并删除资料原件。已发布的方案仍留在目录里，不受影响。"""
+    def archive_draft(self, draft_id: str, actor_id: str, *, can_archive_reviewed: bool = False) -> None:
+        """归档并删除资料原件。已发布的方案仍留在目录里，不受影响。
+
+        `can_archive_reviewed`：调用方是否有审核权（system_admin）；没有时不能归档已审核通过 / 已发布的草稿。
+        """
 
         def decide(draft: DraftRow, _findings: list[FindingRow]) -> DraftChange:
             if draft.status == "generating":
                 raise InvalidTransition("a draft cannot be archived while it is generating")
             if draft.status == "archived":
                 return DraftChange()
+            # 审核通过 / 已开始发布的草稿会删掉审计依据（原件），只允许审核人归档。
+            if not can_archive_reviewed and (draft.status in REVIEWED_STATUSES or draft.publish_state):
+                raise Forbidden("only a system_admin can archive an approved or published draft")
             return DraftChange(changes={"status": "archived"}, event=("archived", ""))
 
         self._repo.update_draft(draft_id, actor_id, decide)
-        self._repo.purge_sources(draft_id)
+        # 先删文件再删行：删文件失败时行还在，重试归档（已归档分支）会再清一遍，不留孤儿文件。
         self._store.delete_draft(draft_id)
+        self._repo.purge_sources(draft_id)
 
     # ---- 资料 ----
 
@@ -165,7 +184,8 @@ class SolutionAuthoringService:
         if draft.status not in EDITABLE_STATUSES:
             raise InvalidTransition(f"sources cannot be changed while the draft is {draft.status}")
         try:
-            parsed = parse_source("s0", name, data)
+            # 不可信文件在子进程里解析（超时 / 资源上限），解析库出问题不拖垮 API 进程。
+            parsed = parse_source_isolated("s0", name, data)
         except SourceParseError as exc:
             raise ValidationProblem(
                 str(exc), errors=[ProblemFieldError(loc=["body", "file"], message=str(exc), type=exc.code)],
@@ -297,6 +317,9 @@ class SolutionAuthoringService:
         def decide(draft: DraftRow, _findings: list[FindingRow]) -> DraftChange:
             if draft.status not in ("in_review", "approved"):
                 raise InvalidTransition(f"only a draft in review or approved can be rejected (current: {draft.status})")
+            if draft.publish_state:
+                # 发布已开始：部分专家可能已经对企业可见。驳回会让它们失去归属，只能重试发布把它完成。
+                raise InvalidTransition("publishing has already started for this draft; retry the publish instead of rejecting it")
             # 理由可能引用正文，只存在草稿上，不进审计事件摘要。
             return DraftChange(changes={"status": "rejected", "review_note": reason}, event=("rejected", ""))
 

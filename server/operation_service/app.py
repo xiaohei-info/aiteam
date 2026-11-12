@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
+from shared.body_limit import BodyLimit
 from shared.auth import RS256TokenVerifier, require_claims
 from shared.auth.session import SessionAwareTokenVerifier
 from shared.config import load_settings
@@ -26,6 +27,7 @@ from .routes_admin import build_admin_router
 from .platform_provider_service import install_relay_token_lifecycle_lifespan, newapi_urls
 from .solution_authoring_dependencies import build_generation_job_executor, worker_concurrency, worker_enabled
 from .solution_authoring_jobs import install_solution_authoring_worker_lifespan
+from .solution_authoring_service import MAX_SOURCE_BYTES
 
 # 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
 # 从该表加载/落库——故迁移必须先于 build_operation_auth_service 执行（fail-fast；/readyz 绿
@@ -77,7 +79,10 @@ async def whoami(claims: TokenClaims = Depends(require_claims(_verifier))) -> En
     return Envelope[TokenClaims](data=claims)
 
 
-app = create_app(settings, router)
+# 行业文档生成的上传在读请求体前就按大小拦截（单文件上限 + 1 MiB 的 multipart 开销余量）。
+app = create_app(settings, router, body_limits=(
+    BodyLimit("/api/operation/solution-authoring/", MAX_SOURCE_BYTES + 1024 * 1024),
+))
 # 系统账号认证服务 + 受保护端点共享验签器（挂 app.state 供业务路由运行时读取）。
 app.state._operation_auth = _auth
 app.state._token_verifier = _verifier

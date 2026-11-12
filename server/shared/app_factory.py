@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
-from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
+from shared.body_limit import BodyLimit, BodySizeLimitMiddleware
 from shared.config import Settings
 from shared.errors import NotFound, ServiceUnavailable, install_exception_handlers
 from shared.observability import RequestContextMiddleware, RequestMetrics, configure_logging
@@ -137,7 +139,7 @@ class HealthResponse(BaseModel):
     service: str = Field(description="服务名称。")
 
 
-def create_app(settings: Settings, router: APIRouter) -> FastAPI:
+def create_app(settings: Settings, router: APIRouter, *, body_limits: Sequence[BodyLimit] = ()) -> FastAPI:
     if settings.is_production and os.getenv("AITEAM_COMPOSE_MODE") == "1":
         raise ValueError("production control-plane Docker Compose is unsupported; use the local/systemd deployment")
     if settings.is_production and settings.expose_public_docs:
@@ -161,6 +163,9 @@ def create_app(settings: Settings, router: APIRouter) -> FastAPI:
     # retained.
     app.state.metrics = RequestMetrics()
 
+    if body_limits:
+        # 先加的在内侧：让 413 也经过 RequestContextMiddleware，带 request_id、进指标。
+        app.add_middleware(BodySizeLimitMiddleware, limits=tuple(body_limits))
     app.add_middleware(RequestContextMiddleware)
     install_exception_handlers(app)
     # Apply the shared OpenAPI policy after router inclusion; the wrapper defers

@@ -10,15 +10,37 @@ import pytest
 from operation_service.catalog_gateway import CatalogManagerGateway
 from operation_service.catalog_repository import CatalogRepository
 from operation_service.catalog_service import CatalogService
-from operation_service.solution_authoring_jobs import MAX_ATTEMPTS, GenerationJobExecutor
-from operation_service.solution_authoring_repository import MemorySolutionAuthoringRepository
+from operation_service.solution_authoring_jobs import (
+    MAX_ATTEMPTS,
+    GenerationJobExecutor,
+)
+from operation_service.solution_authoring_repository import (
+    MemorySolutionAuthoringRepository,
+)
 from operation_service.solution_authoring_schemas import DraftCreate, PackageUpdate
 from operation_service.solution_authoring_service import SolutionAuthoringService
-from operation_service.solution_authoring_storage import SourceFileStore
+from operation_service.solution_authoring_storage import (
+    SourceFileStore,
+    SourceStorageError,
+)
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.platform_provider import PlatformModelRef
-from shared.errors import Conflict, InvalidTransition, NotFound, RequestTooLarge, ServiceUnavailable, ValidationProblem
-from shared.solution_authoring.runner import FauxModelConfig, GenerateOutcome, PiWorkerRunner, RecognizeOutcome, WorkerError
+from shared.errors import (
+    Conflict,
+    Forbidden,
+    InvalidTransition,
+    NotFound,
+    RequestTooLarge,
+    ServiceUnavailable,
+    ValidationProblem,
+)
+from shared.solution_authoring.runner import (
+    FauxModelConfig,
+    GenerateOutcome,
+    PiWorkerRunner,
+    RecognizeOutcome,
+    WorkerError,
+)
 from shared.solution_authoring.schemas import (
     AgentFinding,
     AuthoringResult,
@@ -525,6 +547,11 @@ def test_a_publish_that_fails_midway_can_be_retried_without_duplicates(env):
         env.service.publish(draft_id, "admin")
     assert env.service.get_draft(draft_id).status == "approved"
 
+    # 部分专家已发布：不能再驳回（否则已发布的专家失去归属），只能重试发布。
+    with pytest.raises(InvalidTransition):
+        env.service.reject(draft_id, "admin", "想改一下")
+    assert env.service.get_draft(draft_id).status == "approved"
+
     env.catalog.publish_template = real_publish  # type: ignore[method-assign]
     published = env.service.publish(draft_id, "admin")
     solution_id = published.published_solution_id
@@ -561,6 +588,40 @@ def test_archive_deletes_source_files_but_not_while_generating(env):
     env.service.archive_draft(draft_id, "op1")
     assert env.files() == [] and env.service.list_drafts() == []
     assert env.service.get_draft(draft_id).status == "archived"
+
+
+def test_only_a_reviewer_can_archive_an_approved_or_published_draft(env):
+    draft_id = env.generated()
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    with pytest.raises(Forbidden):
+        env.service.archive_draft(draft_id, "op1")
+    env.service.publish(draft_id, "admin")
+    with pytest.raises(Forbidden):
+        env.service.archive_draft(draft_id, "op1")
+    assert env.service.get_draft(draft_id).status == "published" and env.files() != []
+    env.service.archive_draft(draft_id, "admin", can_archive_reviewed=True)
+    assert env.service.get_draft(draft_id).status == "archived" and env.files() == []
+
+
+def test_a_failed_file_cleanup_keeps_the_rows_so_a_retry_finishes_it(env, monkeypatch):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    real_delete = env.store.delete_draft
+
+    def broken(_draft_id: str) -> None:
+        raise SourceStorageError("disk unavailable")
+
+    monkeypatch.setattr(env.store, "delete_draft", broken)
+    with pytest.raises(SourceStorageError):
+        env.service.archive_draft(draft_id, "op1")
+    assert env.service.get_draft(draft_id).status == "archived"
+    assert len(env.repo.list_sources(draft_id)) == 1 and len(env.files()) == 1  # 行与文件都还在，没有孤儿
+
+    monkeypatch.setattr(env.store, "delete_draft", real_delete)
+    env.service.archive_draft(draft_id, "op1")
+    assert env.repo.list_sources(draft_id) == [] and env.files() == []
 
 
 # ---- 真实 Node worker（假模型）全链路 ----

@@ -9,7 +9,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Header, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Header,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
@@ -85,13 +94,14 @@ def get_draft(
 @router.delete(
     "/drafts/{draft_id}", summary="归档草稿", operation_id="operation_solution_authoring_draft_archive",
     status_code=status.HTTP_204_NO_CONTENT,
-    description="归档草稿并删除其资料原件。生成进行中不可归档；已发布到目录的方案不受影响。",
+    description="归档草稿并删除其资料原件。生成进行中不可归档；已审核通过或已发布的草稿只有 system_admin 能归档；已发布到目录的方案不受影响。",
 )
 def archive_draft(
     draft_id: UUID,
     claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
 ) -> Response:
-    service.archive_draft(str(draft_id), claims.user_id)
+    reviewer = PlatformRole.SYSTEM_ADMIN.value in claims.roles
+    service.archive_draft(str(draft_id), claims.user_id, can_archive_reviewed=reviewer)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

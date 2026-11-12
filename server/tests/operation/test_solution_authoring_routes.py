@@ -8,7 +8,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from operation_service.solution_authoring_dependencies import get_solution_authoring_service
+from operation_service.solution_authoring_dependencies import (
+    get_solution_authoring_service,
+)
 from run import get_app
 from shared.contracts.enums import EnterpriseRole, PlatformRole
 from tests.operation.auth_helpers import operation_test_token
@@ -219,6 +221,20 @@ def test_archive_returns_204_and_hides_the_draft(client, env):
     archived = client.delete(f"{BASE}/drafts/{draft_id}", headers=_auth())
     assert archived.status_code == 204 and archived.content == b""
     assert client.get(f"{BASE}/drafts", headers=_auth()).json()["data"] == []
+    assert env.files() == []
+
+
+def test_archiving_an_approved_draft_needs_the_reviewer_role(client, env):
+    draft_id = _generated(client, env)
+    url = f"{BASE}/drafts/{draft_id}"
+    for item in client.get(url, headers=_auth()).json()["data"]["findings"]:
+        resolution = "redact" if item["field_path"] else "acknowledge"
+        client.post(f"{url}/findings/{item['finding_id']}/resolve", json={"resolution": resolution}, headers=_auth())
+    assert client.post(f"{url}/submit-review", headers=_auth()).status_code == 200
+    assert client.post(f"{url}/approve", json={"note": ""}, headers=_auth(ADMIN, "admin")).status_code == 200
+    _problem(client.delete(url, headers=_auth()), 403, "forbidden")
+    assert env.files() != []
+    assert client.delete(url, headers=_auth(ADMIN, "admin")).status_code == 204
     assert env.files() == []
 
 

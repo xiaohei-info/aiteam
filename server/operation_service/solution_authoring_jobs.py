@@ -20,8 +20,13 @@ from typing import Any, Protocol
 
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.errors import AppError
-from shared.solution_authoring.parsing import ParseLimits, SourceParseError, parse_source
-from shared.solution_authoring.prompts import PROMPT_VERSION, generate_system_prompt, generate_task_prompt
+from shared.solution_authoring.isolated_parse import parse_source_isolated
+from shared.solution_authoring.parsing import ParseLimits, SourceParseError
+from shared.solution_authoring.prompts import (
+    PROMPT_VERSION,
+    generate_system_prompt,
+    generate_task_prompt,
+)
 from shared.solution_authoring.recognizers import (
     ImageRecognizer,
     NoopImageRecognizer,
@@ -40,7 +45,12 @@ from shared.solution_authoring.schemas import AuthoringUsage, ImageAsset, Source
 
 from .solution_authoring_findings import IMAGE_UNRECOGNIZED, initial_findings
 from .solution_authoring_models import ModelConfigResolver
-from .solution_authoring_repository import DraftChange, FindingRow, JobRow, SolutionAuthoringRepository
+from .solution_authoring_repository import (
+    DraftChange,
+    FindingRow,
+    JobRow,
+    SolutionAuthoringRepository,
+)
 from .solution_authoring_storage import SourceFileStore, SourceStorageError
 
 logger = logging.getLogger(__name__)
@@ -84,7 +94,7 @@ class _Lease:
         self.lost = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="solution-authoring-lease", daemon=True)
 
-    def __enter__(self) -> "_Lease":
+    def __enter__(self) -> _Lease:
         self._thread.start()
         return self
 
@@ -194,7 +204,7 @@ class GenerationJobExecutor:
         for source in self._repo.list_sources(job.draft_id):
             try:
                 data = self._store.read(source.storage_key, source.sha256)
-                parsed = parse_source(f"s{source.seq}", source.file_name, data, self._parse_limits)
+                parsed = parse_source_isolated(f"s{source.seq}", source.file_name, data, self._parse_limits)
             except SourceStorageError as exc:
                 raise _JobFailure("source_unavailable", f"source document #{source.seq} is missing or corrupted in storage") from exc
             except SourceParseError as exc:

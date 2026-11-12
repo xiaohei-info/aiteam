@@ -19,6 +19,8 @@ pytest-cov>=5.0
 python-multipart>=0.0.20
 # Manager knowledge intake supports PDF text extraction in the LightRAG pipeline.
 PyPDF2>=3.0,<4
+# Operation 行业文档生成解析不可信 PDF：用仍在维护的 pypdf（PyPDF2 已停更）；Manager 迁移另行处理。
+pypdf>=6,<8
 
 # Custom SKILL.md frontmatter validation (safe, bounded; Pi SDK unchanged).
 PyYAML==6.0.3
