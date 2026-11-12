@@ -206,11 +206,13 @@ def test_edit_resolve_review_and_publish_over_http(client, env):
     _problem(client.post(f"{url}/reject", json={"note": " "}, headers=_auth(ADMIN, "admin")), 422, "validation_error")
     approved = client.post(f"{url}/approve", json={"note": "可以发布"}, headers=_auth(ADMIN, "admin"))
     assert approved.status_code == 200 and approved.json()["data"]["status"] == "approved"
+    assert approved.json()["data"]["publish_started"] is False
 
     published = client.post(f"{url}/publish", headers=_auth(ADMIN, "admin"))
     assert published.status_code == 200
     data = published.json()["data"]
     assert data["status"] == "published" and data["published_solution_id"].startswith("sa-")
+    assert data["publish_started"] is True
     assert PHONE not in published.text
     assert [event["actor_id"] for event in data["events"]][-3:] == ["admin", "admin", "admin"]
     _problem(client.post(f"{url}/publish", headers=_auth(ADMIN, "admin")), 409, "invalid_transition")

@@ -15,7 +15,13 @@ from shared.contracts.platform_provider import PlatformModelRef
 from shared.solution_authoring.prompts import MAX_SUPPLEMENT_CHARS
 from shared.solution_authoring.schemas import GeneratedSolution
 
-from .solution_authoring_repository import DraftRow, EventRow, FindingRow, JobRow, SourceRow
+from .solution_authoring_repository import (
+    DraftRow,
+    EventRow,
+    FindingRow,
+    JobRow,
+    SourceRow,
+)
 
 DraftStatus = Literal[
     "draft", "generating", "ready_for_review", "in_review", "approved", "published", "rejected", "archived",
@@ -78,7 +84,7 @@ class SourceOut(_Strict):
     created_at: datetime
 
     @classmethod
-    def of(cls, row: SourceRow) -> "SourceOut":
+    def of(cls, row: SourceRow) -> SourceOut:
         return cls(
             source_id=row.source_id, file_name=row.file_name, size_bytes=row.size_bytes, status=row.status,  # type: ignore[arg-type]
             error_code=row.error_code, chunk_count=row.chunk_count, image_count=row.image_count,
@@ -98,7 +104,7 @@ class JobOut(_Strict):
     finished_at: datetime | None = None
 
     @classmethod
-    def of(cls, row: JobRow) -> "JobOut":
+    def of(cls, row: JobRow) -> JobOut:
         return cls(
             job_id=row.job_id, status=row.status, attempt=row.attempt, error_code=row.error_code,  # type: ignore[arg-type]
             error_message=row.error_message, usage=_int_values(row.usage), created_at=row.created_at,
@@ -120,7 +126,7 @@ class FindingOut(_Strict):
     created_at: datetime
 
     @classmethod
-    def of(cls, row: FindingRow) -> "FindingOut":
+    def of(cls, row: FindingRow) -> FindingOut:
         return cls(
             finding_id=row.finding_id, kind=row.kind, origin=row.origin, field_path=row.field_path,  # type: ignore[arg-type]
             masked=row.masked, locator=row.locator, note=row.note, status=row.status,  # type: ignore[arg-type]
@@ -135,7 +141,7 @@ class EventOut(_Strict):
     created_at: datetime
 
     @classmethod
-    def of(cls, row: EventRow) -> "EventOut":
+    def of(cls, row: EventRow) -> EventOut:
         return cls(action=row.action, actor_id=row.actor_id, summary=row.summary, created_at=row.created_at)
 
 
@@ -166,7 +172,7 @@ class DraftOut(_Strict):
     updated_at: datetime
 
     @classmethod
-    def of(cls, row: DraftRow) -> "DraftOut":
+    def of(cls, row: DraftRow) -> DraftOut:
         return cls(**_draft_fields(row))
 
 
@@ -178,6 +184,7 @@ class DraftDetailOut(DraftOut):
     prompt_version: str
     usage: dict[str, int] = Field(default_factory=dict)
     review_note: str
+    publish_started: bool = Field(default=False, description="发布是否已开始（含中途失败）。为 true 时不能再驳回，只能重试发布")
     sources: list[SourceOut] = Field(default_factory=list)
     findings: list[FindingOut] = Field(default_factory=list)
     open_finding_count: int
@@ -187,7 +194,7 @@ class DraftDetailOut(DraftOut):
     @classmethod
     def assemble(
         cls, row: DraftRow, *, sources: list[SourceRow], findings: list[FindingRow], events: list[EventRow], job: JobRow | None,
-    ) -> "DraftDetailOut":
+    ) -> DraftDetailOut:
         return cls(
             **_draft_fields(row),
             supplement=row.supplement,
@@ -197,6 +204,7 @@ class DraftDetailOut(DraftOut):
             prompt_version=row.prompt_version,
             usage=_int_values(row.usage),
             review_note=row.review_note,
+            publish_started=bool(row.publish_state),
             sources=[SourceOut.of(item) for item in sources],
             findings=[FindingOut.of(item) for item in findings],
             open_finding_count=sum(1 for item in findings if item.status == "open"),

@@ -531,7 +531,7 @@ def test_a_publish_that_fails_midway_can_be_retried_without_duplicates(env):
     draft_id = env.generated()
     _resolve_all(env, draft_id)
     env.service.submit_review(draft_id, "op1")
-    env.service.approve(draft_id, "admin", "")
+    assert env.service.approve(draft_id, "admin", "").publish_started is False
 
     real_publish = env.catalog.publish_template
     calls: list[str] = []
@@ -545,7 +545,8 @@ def test_a_publish_that_fails_midway_can_be_retried_without_duplicates(env):
     env.catalog.publish_template = flaky  # type: ignore[method-assign]
     with pytest.raises(Conflict):
         env.service.publish(draft_id, "admin")
-    assert env.service.get_draft(draft_id).status == "approved"
+    midway = env.service.get_draft(draft_id)
+    assert (midway.status, midway.publish_started, midway.published_solution_id) == ("approved", True, None)
 
     # 部分专家已发布：不能再驳回（否则已发布的专家失去归属），只能重试发布。
     with pytest.raises(InvalidTransition):
