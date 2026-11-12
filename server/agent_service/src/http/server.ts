@@ -1115,6 +1115,7 @@ export class AgentHttpServer {
   private requests = 0;
   private errors = 0;
   private readonly promptWorkers = new Set<Promise<void>>();
+  private readonly sseResponses = new Set<ServerResponse>();
   private readonly fetchImpl: typeof fetch;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly conversationReads: ConversationReadService;
@@ -1346,6 +1347,11 @@ export class AgentHttpServer {
   async close(): Promise<void> {
     await this.options.host.abortAll();
     await Promise.allSettled([...this.promptWorkers]);
+    // SSE 响应不会自行结束，Fastify close 会一直等它们断开。进程退出时先由服务端
+    // 主动结束，客户端读到流结束后按各自的重连策略处理。
+    for (const response of [...this.sseResponses]) {
+      if (!response.writableEnded) response.end();
+    }
     await this.app.close();
   }
 
@@ -2717,6 +2723,7 @@ export class AgentHttpServer {
     // fills its bounded queue, while subscribe still installs its listener
     // before delivering live events.
     response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
+    this.trackSseResponse(response);
     let unsubscribe: (() => void) | undefined;
     const close = () => {
       if (closed) return;
@@ -2785,6 +2792,12 @@ export class AgentHttpServer {
     }
   }
 
+  /** 登记仍在连接的 SSE 响应，供 `close()` 主动结束；响应关闭时自动移除。 */
+  private trackSseResponse(response: ServerResponse): void {
+    this.sseResponses.add(response);
+    response.once("close", () => this.sseResponses.delete(response));
+  }
+
   /**
    * 全局活动信号 SSE：一条连接覆盖当前成员的所有会话。
    *
@@ -2797,6 +2810,7 @@ export class AgentHttpServer {
     const memberId = caller.userId ?? caller.callerId ?? null;
     let closed = false;
     response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
+    this.trackSseResponse(response);
     response.write(": connected\n\n");
     // 全局流多数时间没有事件；定时写注释行，避免代理/负载均衡因空闲断开连接，
     // 同时让半开连接尽快暴露为写错误。

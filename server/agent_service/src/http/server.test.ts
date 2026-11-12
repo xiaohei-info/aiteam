@@ -1201,3 +1201,50 @@ test("GET /api/agent/events sends periodic keep-alive comments while idle", asyn
     await fixture.close();
   }
 });
+
+test("close() ends open SSE streams instead of waiting for clients to disconnect", async () => {
+  const fixture = await createFixture();
+  fixture.store.replaceProjections([{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString(), model_policy: { model: "test" } }], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: [] } }]);
+  fixture.store.updateConversation("c1", { entryEmployeeId: "employee-1" });
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const readers: Array<ReadableStreamDefaultReader<Uint8Array>> = [];
+  try {
+    // 客户端保持连接不动：这正是桌面端常驻的全局流。
+    for (const path of ["/api/agent/events", "/api/agent/conversations/c1/events"]) {
+      const response = await fetch(`${base}${path}`, { headers: { Authorization: "Bearer test", Accept: "text/event-stream" } });
+      assert.equal(response.status, 200, path);
+      assert.ok(response.body);
+      const reader = response.body.getReader();
+      const first = await reader.read();
+      assert.match(new TextDecoder().decode(first.value), /: connected/u);
+      readers.push(reader);
+    }
+
+    const closed = await Promise.race([
+      http.close().then(() => "closed" as const),
+      new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 3_000)),
+    ]);
+    assert.equal(closed, "closed", "关闭服务不应被未断开的 SSE 连接拖住");
+
+    // 服务端主动结束后，客户端读到流结束，而不是继续挂着。
+    for (const reader of readers) {
+      const end = await Promise.race([
+        (async () => { for (;;) { const r = await reader.read(); if (r.done) return "done" as const; } })().catch(() => "done" as const),
+        new Promise<"open">((resolve) => setTimeout(() => resolve("open"), 3_000)),
+      ]);
+      assert.equal(end, "done");
+    }
+  } finally {
+    for (const reader of readers) await reader.cancel().catch(() => undefined);
+    await http.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
