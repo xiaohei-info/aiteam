@@ -1080,6 +1080,8 @@ export interface AgentHttpServerOptions {
   skillCache?: SkillCache;
   /** Injected for deterministic upstream transcription tests. */
   fetch?: typeof fetch;
+  /** Idle-connection keep-alive interval for the global activity SSE stream. Defaults to 25s. */
+  globalActivityKeepAliveMs?: number;
 }
 
 export class HttpProblem extends Error {
@@ -2796,6 +2798,13 @@ export class AgentHttpServer {
     let closed = false;
     response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
     response.write(": connected\n\n");
+    // 全局流多数时间没有事件；定时写注释行，避免代理/负载均衡因空闲断开连接，
+    // 同时让半开连接尽快暴露为写错误。
+    const keepAlive = setInterval(() => {
+      if (closed || response.writableEnded) return;
+      response.write(": keep-alive\n\n");
+    }, this.options.globalActivityKeepAliveMs ?? 25_000);
+    keepAlive.unref?.();
     const unsubscribe = this.options.host.subscribeGlobal((event) => {
       if (closed || response.writableEnded) return;
       // The bus is process-wide; only this caller's own conversations are signalled.
@@ -2805,6 +2814,7 @@ export class AgentHttpServer {
     const close = () => {
       if (closed) return;
       closed = true;
+      clearInterval(keepAlive);
       unsubscribe();
     };
     request.once("close", close);

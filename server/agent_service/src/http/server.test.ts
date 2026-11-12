@@ -1168,3 +1168,36 @@ test("GET /api/agent/events streams owner-scoped global activity signals", async
     await fixture.close();
   }
 });
+
+test("GET /api/agent/events sends periodic keep-alive comments while idle", async () => {
+  const fixture = await createFixture();
+  const http = new AgentHttpServer({
+    host: fixture.host,
+    store: fixture.store,
+    authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }),
+    globalActivityKeepAliveMs: 20,
+  });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/agent/events`, { headers: { Authorization: "Bearer test", Accept: "text/event-stream" } });
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const deadline = Date.now() + 5_000;
+    while (!buffered.includes(": keep-alive") && Date.now() < deadline) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+    }
+    assert.match(buffered, /: connected/u);
+    assert.match(buffered, /: keep-alive/u);
+    await reader.cancel();
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
