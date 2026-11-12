@@ -12,7 +12,8 @@
  *   - 只携带"哪个会话有动静"的最小信号,不携带会话正文。
  *   - 前端用它做列表补丁与按需订阅(per-conversation SSE),正文仍走会话流 / /entries。
  *
- * 断线使用指数退避重连;重连成功后由上层触发一次列表刷新,补齐断连期间可能漏掉的信号。
+ * 断线(网络错误、HTTP 非 2xx)与服务端正常结束(EOF,如 Agent 重启、代理空闲关闭)都使用指数退避重连;
+ * 重连成功后由上层触发一次列表刷新,补齐断连期间可能漏掉的信号。
  */
 import { isDocumentedRequest } from './contract'
 import { AgentApiError } from './client'
@@ -55,7 +56,7 @@ export interface GlobalActivitySubscribeOptions {
   onConnected?: () => void
   // 网络级错误(HTTP 非 2xx 除 401 之外,或 stream 中断)。可选;默认走内部退避重连。
   onError?: (err: Error) => void
-  // 服务端主动关闭(stream 正常 end)。可选。
+  // 服务端正常结束了这条流(EOF)。仅作通知,订阅仍会按退避策略自动重连。可选。
   onClose?: () => void
   // 用于测试。桌面使用原生 HTTP,浏览器使用全局 fetch。
   fetchImpl?: typeof fetch
@@ -176,7 +177,7 @@ async function runOnce(rt: GlobalRuntime, onEvent: (event: GlobalActivityEvent) 
       const { done, value } = await reader.read()
       if (done) break
       if (!value) continue
-      // 服务端会下发 event:activity 与 keep-alive 注释行。
+      // 服务端会下发 event:activity 与周期性 keep-alive 注释行(注释行不会产生帧,直接忽略)。
       if (value.event && value.event !== 'activity' && value.event !== 'message') continue
       if (!value.data) continue
       let parsed: GlobalActivityEvent
@@ -230,13 +231,27 @@ export function subscribeGlobalActivity(options: GlobalActivitySubscribeOptions)
     }
   }
 
+  const waitBeforeRetry = async () => {
+    // 连接稳定足够久后再断开,视为一次新的故障,退避从头开始。
+    if (rt.connectedAt && Date.now() - rt.connectedAt >= STABLE_MS) rt.retryDelayMs = INITIAL_RETRY_MS
+    rt.connectedAt = null
+    recordApplicationLog('warn', 'global_activity.reconnecting', { duration_ms: rt.retryDelayMs })
+    const delay = rt.retryDelayMs
+    rt.retryDelayMs = Math.min(MAX_RETRY_MS, Math.round(rt.retryDelayMs * 2))
+    await new Promise<void>((resolve) => {
+      rt.retryTimer = setTimeout(resolve, delay + Math.random() * 250)
+    })
+    rt.retryTimer = null
+  }
+
   void (async () => {
     while (!rt.closed) {
       try {
         await runOnce(rt, options.onEvent, options.onConnected)
-        // 服务端正常关闭:通知并结束(不自动重连,避免无限空拉)。
-        if (!rt.closed) options.onClose?.()
-        return
+        if (rt.closed || rt.controller.signal.aborted) return
+        // 服务端正常结束流(Agent 重启、代理空闲关闭等)。流一旦结束就收不到实时信号,
+        // 必须重连;重连成功后的 onConnected 会触发上层刷新列表,补齐断连期间的信号。
+        options.onClose?.()
       } catch (err) {
         if (rt.closed || rt.controller.signal.aborted) return
         // 401 已派发事件;交给 auth store,不再重连。
@@ -244,15 +259,9 @@ export function subscribeGlobalActivity(options: GlobalActivitySubscribeOptions)
         // URL 配置错误不会随重试恢复;停止,避免永久重连。
         if (err instanceof AgentApiError && err.code === API_URL_SECURITY_ERROR_CODE) return
         options.onError?.(err instanceof Error ? err : new Error(String(err)))
-        if (rt.connectedAt && Date.now() - rt.connectedAt >= STABLE_MS) rt.retryDelayMs = INITIAL_RETRY_MS
-        recordApplicationLog('warn', 'global_activity.reconnecting', { duration_ms: rt.retryDelayMs })
-        const delay = rt.retryDelayMs
-        rt.retryDelayMs = Math.min(MAX_RETRY_MS, Math.round(rt.retryDelayMs * 2))
-        await new Promise<void>((resolve) => {
-          rt.retryTimer = setTimeout(resolve, delay + Math.random() * 250)
-        })
-        rt.retryTimer = null
       }
+      if (rt.closed) return
+      await waitBeforeRetry()
     }
   })()
 
