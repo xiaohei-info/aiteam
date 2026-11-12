@@ -341,6 +341,10 @@ hash -r 2>/dev/null || true
 (cd server/agent_service && pnpm install --frozen-lockfile 2>&1 || fail "Agent pnpm install failed: check network / registry")
 # Verify the secure login seam against a local synthetic Manager before starting services.
 (cd server/agent_service && pnpm check && pnpm exec tsx --test --test-concurrency=1 src/http/auth.test.ts src/http/manager-jwks.test.ts) || fail "Agent authentication checks failed"
+# The solution-authoring worker is another independent package (own lockfile). Operation
+# spawns it from source per generation job and refuses to start it without node_modules/tsx,
+# so sync its lockfile here too; otherwise "generate" fails with worker_unavailable.
+(cd server/solution_authoring_worker && pnpm install --frozen-lockfile 2>&1 || fail "Solution authoring worker pnpm install failed: check network / registry")
 (cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
 (cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
 rm -rf "${PNPM_SHIM_DIR}"
