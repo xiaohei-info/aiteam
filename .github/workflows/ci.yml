@@ -270,9 +270,12 @@ jobs:
         # baseline 已抬到整仓 94%（#234 补齐后），门可安全点亮。
         # 该步不含 continue-on-error：diff-cover 是硬门槛，低于阈值必须 block PR。
         # 棘轮（总覆盖不退化）仍在下方保留为额外兜底。
-        working-directory: head
+        # 必须在 head/server 下运行：coverage.xml 里的路径相对 server/（.coveragerc 的
+        # relative_files），在仓库根目录读它时 diff-cover 匹配不到任何改动行，会输出
+        # “No lines with coverage information in this diff” 并直接通过（门槛空转）。
+        working-directory: head/server
         run: |
-          diff-cover server/coverage.xml \
+          diff-cover coverage.xml \
             --compare-branch=${{ github.event.pull_request.base.sha }} \
             --fail-under=90
 
