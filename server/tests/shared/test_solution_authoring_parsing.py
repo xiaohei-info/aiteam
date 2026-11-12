@@ -8,9 +8,19 @@ import zipfile
 import pytest
 from PIL import Image
 
-from shared.solution_authoring.parsing import ParseLimits, SourceParseError, parse_source
-
-from tests.shared.solution_authoring_fixtures import docx_bytes, png_bytes, pptx_bytes, scanned_pdf_bytes, text_pdf_bytes, xlsx_bytes
+from shared.solution_authoring.parsing import (
+    ParseLimits,
+    SourceParseError,
+    parse_source,
+)
+from tests.shared.solution_authoring_fixtures import (
+    docx_bytes,
+    png_bytes,
+    pptx_bytes,
+    scanned_pdf_bytes,
+    text_pdf_bytes,
+    xlsx_bytes,
+)
 
 
 def _error_code(name: str, data: bytes, limits: ParseLimits | None = None) -> str:
@@ -159,14 +169,24 @@ def test_zip_with_too_many_entries_is_rejected():
     assert _error_code("a.docx", docx_bytes(["x"], images=[png_bytes()] * 3), ParseLimits(max_zip_entries=2)) == "archive_too_large"
 
 
-def test_xml_with_entity_declaration_is_rejected():
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])  # UTF-16 下按字节找不到 `<!DOCTYPE`，必须由解析器拒绝
+def test_xml_with_entity_declaration_is_rejected(encoding):
+    document = (
+        f'<?xml version="1.0" encoding="{encoding}"?><!DOCTYPE d [<!ENTITY a "aaaa">]>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p><w:r><w:t>&a;</w:t></w:r></w:p></w:body></w:document>"
+    )
     payload = io.BytesIO()
     with zipfile.ZipFile(payload, "w") as archive:
-        archive.writestr(
-            "word/document.xml",
-            '<?xml version="1.0"?><!DOCTYPE d [<!ENTITY a "aaaa">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&a;</w:t></w:r></w:p></w:body></w:document>',
-        )
+        archive.writestr("word/document.xml", document.encode(encoding))
     assert _error_code("a.docx", payload.getvalue()) == "unsafe_xml"
+
+
+def test_malformed_xml_is_reported_as_corrupt():
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("word/document.xml", b"<w:document")
+    assert _error_code("a.docx", payload.getvalue()) == "corrupt_file"
 
 
 def test_oversized_image_pixels_are_rejected_for_standalone_and_skipped_when_embedded():

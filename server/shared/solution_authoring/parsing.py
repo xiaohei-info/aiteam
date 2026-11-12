@@ -16,6 +16,9 @@ from html.parser import HTMLParser
 from pathlib import PurePosixPath
 from xml.etree import ElementTree
 
+from defusedxml import DefusedXmlException
+from defusedxml.ElementTree import fromstring as safe_fromstring
+
 from .schemas import ImageAsset, SourceChunk
 
 TEXT_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".csv"})
@@ -265,10 +268,11 @@ def _read_xml(archive: zipfile.ZipFile, name: str) -> ElementTree.Element | None
     if info.file_size > _MAX_XML_ENTRY_BYTES:
         raise SourceParseError("archive_too_large", "文档内部条目超过上限")
     raw = archive.read(info)
-    if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
-        raise SourceParseError("unsafe_xml", "文档包含不允许的 XML 声明")
     try:
-        return ElementTree.fromstring(raw)
+        # 由解析器本身拒绝 DTD / 实体声明：按字节查找 `<!DOCTYPE` 会被 UTF-16 等编码绕过。
+        return safe_fromstring(raw, forbid_dtd=True)
+    except DefusedXmlException as exc:
+        raise SourceParseError("unsafe_xml", "文档包含不允许的 XML 声明") from exc
     except ElementTree.ParseError as exc:
         raise SourceParseError("corrupt_file", "文档内部结构损坏") from exc
 

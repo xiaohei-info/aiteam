@@ -21,6 +21,8 @@ python-multipart>=0.0.20
 PyPDF2>=3.0,<4
 # Operation 行业文档生成解析不可信 PDF：用仍在维护的 pypdf（PyPDF2 已停更）；Manager 迁移另行处理。
 pypdf>=6,<8
+# Operation 行业文档生成解析不可信 Office XML：由解析器拒绝 DTD / 实体声明。
+defusedxml>=0.7.1,<0.8
 
 # Custom SKILL.md frontmatter validation (safe, bounded; Pi SDK unchanged).
 PyYAML==6.0.3
