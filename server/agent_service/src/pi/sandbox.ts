@@ -9,9 +9,19 @@ import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import type { EditOperations } from "@earendil-works/pi-coding-agent";
 import type { ReadOperations } from "@earendil-works/pi-coding-agent";
 import type { WriteOperations } from "@earendil-works/pi-coding-agent";
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import type { ConversationPermissionMode } from "../storage/sqlite.js";
 
 const LOCAL_PROVIDER_CONFIG = { runnerCommand: [], runnerFailureSignatures: [], probeTimeoutMs: 5_000 };
+
+/**
+ * The shell prefix Pi would use for a bash tool call. Pi resolves Git Bash on Windows and /bin/bash
+ * elsewhere, so the unconfined path must reuse that resolution instead of assuming `bash` is on PATH.
+ */
+function shellPrefix(): string[] {
+  const { shell, args } = getShellConfig();
+  return [shell, ...args];
+}
 
 export interface SandboxOperations {
   bash: BashOperations;
@@ -27,6 +37,12 @@ export class LocalSandbox {
   /** Run the provider's real backend selection/probe; no environment flag participates. */
   async isAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): Promise<boolean> {
     if (mode === "full-access") return true;
+    // Windows: the provider does declare a single-candidate `windows-acl` chain
+    // (`STATIC_ENFORCEMENT["windows-acl"] = "full"`, backend package shipped), but the same
+    // package's README states Windows has no runner, and the probe below runs `true`, which is not
+    // a command on Windows — so that chain is unverified here. Run unconfined rather than claim
+    // isolation we cannot prove; the per-call approval gates are unchanged.
+    if (process.platform === "win32") return true;
     try {
       const confined = this.provider.confine(["true"], this.policy(workspaceRoot, undefined, mode));
       if (confined.enforcement !== "full") return false;
@@ -40,12 +56,29 @@ export class LocalSandbox {
 
   async assertAvailable(workspaceRoot: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): Promise<void> {
     if (mode === "full-access") return;
+    if (process.platform === "win32") return;
     if (!(await this.isAvailable(workspaceRoot, mode, extraRoots))) throw new SandboxUnavailableError(mode, "No functional local sandbox backend is available");
+  }
+
+  /**
+   * Whether the bash tool has a usable shell on this platform. Windows resolves Git Bash through
+   * Pi's `getShellConfig()`, which throws when none is installed; readiness checks this instead of
+   * letting the first bash call fail.
+   */
+  isShellAvailable(): boolean {
+    try {
+      shellPrefix();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** `extraRoots` are folders the user added to this conversation: same read/write rules as the workspace. */
   operations(workspaceRoot: string, sessionId?: string, mode: ConversationPermissionMode = "read-only", extraRoots: readonly string[] = []): SandboxOperations {
     if (mode === "full-access") return this.unconfinedOperations(workspaceRoot);
+    // Windows: no verified confined backend — all modes run unconfined (danger-full-access).
+    if (process.platform === "win32") return this.unconfinedOperations(workspaceRoot);
     const root = canonicalPath(resolve(workspaceRoot));
     const policy = this.policy(root, sessionId, mode);
     const extras = extraRoots.map((path) => canonicalPath(resolve(path)));
@@ -81,7 +114,9 @@ export class LocalSandbox {
   private unconfinedOperations(workspaceRoot: string): SandboxOperations {
     const cwd = resolve(workspaceRoot);
     return {
-      bash: { exec: (command, actualCwd, options) => run(["bash", "-c", command], resolve(actualCwd || cwd), options) },
+      // Pi resolves Git Bash on Windows itself (getShellConfig); the POSIX `bash -c` prefix is only
+      // valid where bash is on PATH, which Windows does not guarantee.
+      bash: { exec: (command, actualCwd, options) => run([...shellPrefix(), command], resolve(actualCwd || cwd), options) },
       read: { readFile: (path) => readFile(resolve(path)), access: async (path) => access(resolve(path), constants.R_OK) },
       write: { writeFile: (path, content) => writeFile(resolve(path), content), mkdir: async (path) => { await mkdir(resolve(path), { recursive: true }); } },
       edit: { readFile: (path) => readFile(resolve(path)), writeFile: (path, content) => writeFile(resolve(path), content), access: async (path) => access(resolve(path), constants.R_OK | constants.W_OK) },

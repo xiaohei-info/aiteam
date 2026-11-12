@@ -1,4 +1,5 @@
 import { restoreAgentNode } from './agent-runtime.mjs'
+import { DESKTOP_AGENT_TARGETS, agentRuntimePath, hostAgentTarget } from './agent-target.mjs'
 import { createHash } from 'node:crypto'
 import { accessSync, constants, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -51,7 +52,11 @@ export function agentConfigState(directory) {
   }
 }
 
-export function checkAgentPackage(directory) {
+/**
+ * Validate an extracted Agent package. `target` pins the platform the package must be built for (the host when
+ * importing or launching); without it any desktop-supported target is accepted, which keeps fixtures portable.
+ */
+export function checkAgentPackage(directory, { target } = {}) {
   const manifestPath = path.join(directory, 'manifest.json')
   let manifest
   try {
@@ -59,17 +64,22 @@ export function checkAgentPackage(directory) {
   } catch {
     throw new Error(`Agent manifest is missing or unreadable: ${manifestPath}`)
   }
-  if (manifest.schema_version !== 1 || manifest.product !== 'aiteam-agent' || manifest.target !== 'darwin-arm64') {
-    throw new Error('This desktop integration requires an aiteam-agent darwin-arm64 package (manifest schema 1)')
+  const supported = Object.keys(DESKTOP_AGENT_TARGETS)
+  if (manifest.schema_version !== 1 || manifest.product !== 'aiteam-agent' || !supported.includes(manifest.target)) {
+    throw new Error(`This desktop integration requires an aiteam-agent ${supported.join(' or ')} package (manifest schema 1)`)
   }
+  if (target && manifest.target !== target) {
+    throw new Error(`Agent package is built for ${manifest.target}, but this desktop build needs ${target}`)
+  }
+  const runtime = agentRuntimePath(manifest.target)
   if (manifest.capabilities?.reconciliation !== 2 || manifest.capabilities?.active_run_snapshots !== true || manifest.capabilities?.facts_state !== true) {
     throw new Error('Agent package is outdated: reconciliation v2 with active run and facts state snapshots is required. Run pnpm agent:build to rebuild it from server/agent_service.')
   }
   restoreAgentNode(directory, manifest)
-  for (const file of ['runtime/node', 'bin/start-agent.mjs', 'dist/main.js', 'node_modules/tsx/dist/esm/index.mjs', 'config/agent.env']) {
+  for (const file of [runtime, 'bin/start-agent.mjs', 'dist/main.js', 'node_modules/tsx/dist/esm/index.mjs', 'config/agent.env']) {
     accessSync(path.join(directory, file), constants.R_OK)
   }
-  accessSync(path.join(directory, 'runtime/node'), constants.X_OK)
+  accessSync(path.join(directory, runtime), constants.X_OK)
   // The workbench runs Node projects with `runtime/node runtime/npm/bin/npm-cli.js`.
   if (!existsSync(path.join(directory, BUNDLED_NPM_CLI))) {
     throw new Error(`Agent package has no bundled npm (${BUNDLED_NPM_CLI}). Run pnpm agent:build to rebuild it from server/agent_service.`)
@@ -86,7 +96,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   try {
     const directory = path.join(root, 'src-tauri/resources/agent')
-    const manifest = checkAgentPackage(directory)
+    // `tauri dev` launches the bundled runtime on this machine, so the package must match the host.
+    const manifest = checkAgentPackage(directory, { target: hostAgentTarget() })
     console.log(`Agent package ready: ${manifest.version}, ${manifest.target}, configured=${manifest.configured}`)
     if (!manifest.configured) {
       const state = agentConfigState(directory)

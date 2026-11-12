@@ -22,6 +22,20 @@ fn write(path: &Path, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// Fixture homes use this platform's native absolute form: `Path::is_absolute` only accepts a
+/// native path, so a POSIX `/Users/me` can never resolve on Windows.
+fn home_dir() -> &'static str {
+    if cfg!(windows) {
+        r"C:\Users\me"
+    } else {
+        "/Users/me"
+    }
+}
+
+fn path(base: &str, rest: &str) -> String {
+    Path::new(base).join(rest).to_string_lossy().into_owned()
+}
+
 fn lines(values: &[Value]) -> Cursor<Vec<u8>> {
     let mut text = String::new();
     for value in values {
@@ -219,8 +233,11 @@ fn project_info_reads_package_names_and_the_readme_summary() {
 }
 
 fn codex_meta(extra: Value) -> Value {
-    let mut payload =
-        json!({ "id": "thread-1", "timestamp": "2026-10-01T10:00:00Z", "cwd": "/Users/me" });
+    let mut payload = json!({
+        "id": "thread-1",
+        "timestamp": "2026-10-01T10:00:00Z",
+        "cwd": home_dir(),
+    });
     payload
         .as_object_mut()
         .unwrap()
@@ -236,16 +253,32 @@ fn codex_change(status: &str, changes: Value) -> Value {
 
 #[test]
 fn codex_records_written_files_models_and_the_first_prompt() {
+    let home = home_dir();
+    let mut completed = serde_json::Map::new();
+    completed.insert(
+        "game/index.html".to_string(),
+        json!({ "type": "add", "content": "<html>" }),
+    );
+    completed.insert(
+        path(home, "game/old.js"),
+        json!({
+            "type": "update",
+            "unified_diff": "",
+            "move_path": path(home, "game/main.js"),
+        }),
+    );
+    completed.insert(path(home, "game/tmp.txt"), json!({ "type": "delete" }));
+    let mut failed = serde_json::Map::new();
+    failed.insert(
+        path(home, "game/broken.js"),
+        json!({ "type": "add", "content": "x" }),
+    );
     let session = parse_codex(lines(&[
         codex_meta(json!({})),
         json!({ "type": "turn_context", "payload": { "model": "gpt-5.5" } }),
         json!({ "type": "event_msg", "payload": { "type": "user_message", "turn_id": "t1", "message": "做一个贪吃蛇小游戏\n要能暂停" } }),
-        codex_change("completed", json!({
-            "game/index.html": { "type": "add", "content": "<html>" },
-            "/Users/me/game/old.js": { "type": "update", "unified_diff": "", "move_path": "/Users/me/game/main.js" },
-            "/Users/me/game/tmp.txt": { "type": "delete" },
-        })),
-        codex_change("failed", json!({ "/Users/me/game/broken.js": { "type": "add", "content": "x" } })),
+        codex_change("completed", Value::Object(completed)),
+        codex_change("failed", Value::Object(failed)),
     ]))
     .unwrap();
     assert_eq!(session.id, "thread-1");
@@ -260,30 +293,33 @@ fn codex_records_written_files_models_and_the_first_prompt() {
         .map(|(path, model)| (path.as_str(), model.as_deref()))
         .collect();
     writes.sort();
+    let index = path(home, "game/index.html");
+    let main = path(home, "game/main.js");
     assert_eq!(
         writes,
         [
-            ("/Users/me/game/index.html", Some("gpt-5.5")),
-            ("/Users/me/game/main.js", Some("gpt-5.5"))
+            (index.as_str(), Some("gpt-5.5")),
+            (main.as_str(), Some("gpt-5.5"))
         ]
     );
     assert!(parse_codex(lines(&[codex_meta(json!({ "thread_source": "subagent" }))])).is_none());
 }
 
 fn claude_line(kind: &str, message: Value) -> Value {
-    json!({ "type": kind, "sessionId": "c1", "cwd": "/Users/me/app",
+    json!({ "type": kind, "sessionId": "c1", "cwd": path(home_dir(), "app"),
         "timestamp": "2026-10-01T10:00:00Z", "message": message })
 }
 
 #[test]
 fn claude_records_only_file_tools_that_succeeded() {
+    let app = path(home_dir(), "app");
     let session = parse_claude(lines(&[
         claude_line("user", json!({ "content": "做个落地页" })),
         claude_line(
             "assistant",
             json!({ "model": "claude-opus-5-5", "content": [
             { "type": "tool_use", "id": "w1", "name": "Write", "input": { "file_path": "site/index.html", "content": "x" } },
-            { "type": "tool_use", "id": "w2", "name": "Write", "input": { "file_path": "/Users/me/app/site/bad.html", "content": "x" } },
+            { "type": "tool_use", "id": "w2", "name": "Write", "input": { "file_path": path(&app, "site/bad.html"), "content": "x" } },
             { "type": "tool_use", "id": "b1", "name": "Bash", "input": { "command": "ls" } }] }),
         ),
         claude_line(
@@ -301,7 +337,7 @@ fn claude_records_only_file_tools_that_succeeded() {
     assert_eq!(
         session.writes,
         [(
-            "/Users/me/app/site/index.html".to_string(),
+            path(&app, "site/index.html"),
             Some("claude-opus-5-5".to_string())
         )]
     );
@@ -390,7 +426,13 @@ fn scan_finds_projects_from_every_source_on_disk() {
         &app.join("claude-code-sessions/acct/org/local_1.json"),
         &json!({ "cliSessionId": "s-tab", "title": "桌面端网页" }).to_string(),
     );
-    let storage = cowork.join("org/acct/agent/local_2");
+    // Discovery walks the tree component by component, so it rebuilds the path with native
+    // separators; joining these segments one at a time keeps the fixture in the same shape.
+    let storage = cowork
+        .join("org")
+        .join("acct")
+        .join("agent")
+        .join("local_2");
     write(
         &cowork.join("org/acct/agent/local_2.json"),
         &json!({ "cliSessionId": "s-cowork", "title": "Cowork 周报" }).to_string(),
@@ -443,14 +485,34 @@ fn scan_finds_projects_from_every_source_on_disk() {
         })
         .collect();
     found.sort();
+    // The fixture keeps the POSIX separators inside its first literal segment, so the expected
+    // location is derived from the fixture path rather than from a hand-written separator.
+    let cowork_location = format!(
+        "~/{}",
+        storage
+            .join("outputs")
+            .strip_prefix(&home)
+            .unwrap()
+            .display()
+    );
     assert_eq!(
         found,
         [
             (AgentSource::Codex, "~/game", "贪吃蛇小游戏", "Codex"),
             (AgentSource::Claude, "~/site", "做网页", "Claude Code"),
-            (AgentSource::ClaudeDesktop, "~/Library/Application Support/Claude/local-agent-mode-sessions/org/acct/agent/local_2/outputs", "Cowork 周报", "Claude"),
+            (
+                AgentSource::ClaudeDesktop,
+                cowork_location.as_str(),
+                "Cowork 周报",
+                "Claude"
+            ),
             (AgentSource::ClaudeDesktop, "~/tab", "桌面端网页", "Claude"),
-            (AgentSource::Workbuddy, "~/WorkBuddy/2026-10-28-21-36-00", "销售看板", "数据师"),
+            (
+                AgentSource::Workbuddy,
+                "~/WorkBuddy/2026-10-28-21-36-00",
+                "销售看板",
+                "数据师"
+            ),
         ]
     );
     let game = projects

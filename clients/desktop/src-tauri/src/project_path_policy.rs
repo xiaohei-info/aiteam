@@ -153,6 +153,9 @@ pub fn is_allowed_project_folder(path: &Path, home: &Path, runtime_roots: &[Path
 mod tests {
     use super::is_allowed_project_folder;
 
+    // The macOS table is selected for every non-Windows host, and its fixtures are POSIX-only:
+    // `Path::is_absolute` rejects `/Users/alice` on Windows, where the Windows table applies.
+    #[cfg(unix)]
     #[test]
     fn macos_policy_rejects_sensitive_trees_and_ancestors() {
         let home = std::path::Path::new("/Users/alice");
@@ -186,6 +189,44 @@ mod tests {
         ));
         assert!(!is_allowed_project_folder(
             std::path::Path::new("/"),
+            home,
+            &runtime
+        ));
+    }
+
+    // Windows roots are drive-relative and also carry their 8.3 short names.
+    #[cfg(windows)]
+    #[test]
+    fn windows_policy_rejects_sensitive_trees_and_short_names() {
+        let home = std::path::Path::new(r"C:\Users\alice");
+        let runtime = vec![std::path::PathBuf::from(r"C:\Users\alice\Work")];
+        assert!(is_allowed_project_folder(
+            std::path::Path::new(r"C:\Users\alice\Documents\app"),
+            home,
+            &runtime
+        ));
+        assert!(!is_allowed_project_folder(
+            std::path::Path::new(r"C:\Users\alice\.ssh"),
+            home,
+            &runtime
+        ));
+        assert!(!is_allowed_project_folder(
+            std::path::Path::new(r"C:\Users\alice\.ssh\keys"),
+            home,
+            &runtime
+        ));
+        assert!(!is_allowed_project_folder(
+            std::path::Path::new(r"C:\Windows\System32"),
+            home,
+            &runtime
+        ));
+        assert!(!is_allowed_project_folder(
+            std::path::Path::new(r"C:\WINDOW~1\System32"),
+            home,
+            &runtime
+        ));
+        assert!(!is_allowed_project_folder(
+            std::path::Path::new(r"C:\Users\alice"),
             home,
             &runtime
         ));

@@ -19,6 +19,7 @@ async function requireAvailable(t: { skip: (message?: string) => void }, sandbox
 }
 
 test("LocalSandbox confines a harmless command and denies writes outside its workspace", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-test-"));
   const outside = join(process.env.HOME ?? process.cwd(), `.dsh-sandbox-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const sandbox = new LocalSandbox();
@@ -104,7 +105,9 @@ test("LocalSandbox removes control-plane endpoint and credential aliases", async
   }
 });
 
-test("LocalSandbox applies read-only, workspace-write, and full-access modes", async () => {
+test("LocalSandbox applies read-only, workspace-write, and full-access modes", async (t) => {
+  // Windows runs every mode unconfined (no confined backend), so the mode-specific rejections do not apply.
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-permissions-"));
   const outside = join(process.env.HOME ?? process.cwd(), `.dsh-sandbox-permission-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const sandbox = new LocalSandbox();
@@ -125,7 +128,32 @@ test("LocalSandbox applies read-only, workspace-write, and full-access modes", a
   }
 });
 
+// Windows 契约：provider 声明了 `windows-acl` 单候选链，但其 README 说 Windows 没有 runner，
+// 且本机探测用 `true`（Windows 无此命令），所以这条链未被验证。契约是「所有档位都不隔离」，
+// 而不是「探测失败」——写成正向断言，避免以后被当成待修复的 skip。
+// 只断言不依赖 bash 的部分：没装 Git Bash 的 Windows 机器上 bash 工具本来就用不了。
+test("Windows 上所有权限档位都可用且不做隔离", async (t) => {
+  if (process.platform !== "win32") { t.skip("仅 Windows 断言无隔离契约"); return; }
+  const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-win-ws-"));
+  const outside = join(process.cwd(), `.dsh-sandbox-win-outside-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const sandbox = new LocalSandbox();
+  try {
+    for (const mode of ["read-only", "workspace-write", "full-access"] as const) {
+      assert.equal(await sandbox.isAvailable(workspace, mode), true, `${mode} 必须可用`);
+      await sandbox.assertAvailable(workspace, mode);
+    }
+    // 只读档在 Windows 也不拦写：拿不到文件隔离，只剩逐次审批（见 approval-service）。
+    const readOnly = sandbox.operations(workspace, undefined, "read-only");
+    await readOnly.write.writeFile(outside, "windows-unconfined");
+    assert.equal((await readFile(outside)).toString(), "windows-unconfined");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { force: true });
+  }
+});
+
 test("LocalSandbox denies network access and terminates the whole child process group", async (t) => {
+  if (process.platform === "win32") return t.skip("Windows runs all permission modes unconfined");
   const workspace = await mkdtemp(join(process.cwd(), ".dsh-sandbox-test-"));
   const sandbox = new LocalSandbox();
   const server = createServer((_request, response) => response.end("must-not-be-reached"));
@@ -224,5 +252,16 @@ test("native sandbox: added folders follow the conversation permission, other fo
   } finally {
     for (const dir of [workspace, extra, other]) await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("LocalSandbox 报告 bash shell 是否可解析", () => {
+  const sandbox = new LocalSandbox();
+  // 本机（macOS/Linux）一定有 /bin/bash；Windows 上取决于是否装了 Git Bash，具体值由 Windows
+  // 环境决定，这里只保证它返回一个明确的布尔值而不是抛错。
+  if (process.platform === "win32") {
+    assert.equal(typeof sandbox.isShellAvailable(), "boolean");
+    return;
+  }
+  assert.equal(sandbox.isShellAvailable(), true);
 });
 

@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod agent;
 mod agent_projects;
 mod diagnostics;
@@ -10,18 +10,24 @@ mod local_directory_host;
 #[cfg(target_os = "macos")]
 mod local_directory_reader;
 mod office_editor;
+// The shared policy is consumed only by the macOS local-directory channel today; the Windows
+// host will use it when it implements that channel. Keep it compiled (and covered by the
+// Windows policy test) without tripping `clippy -D warnings` in the meantime.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod project_path_policy;
 mod project_runner;
 mod secure_session;
 
 pub fn run() {
     let builder = tauri::Builder::default();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let builder = builder.manage(agent::AgentState::default()).setup(|app| {
         agent::setup(app)?;
         // After `agent::setup` takes the single-instance lock: any recorded run is a
-        // leftover of a killed instance, not of one still running.
+        // leftover of a killed instance, not of one still running. Windows records no
+        // process start time, so there is nothing to match and nothing to end there.
+        #[cfg(target_os = "macos")]
         project_runner::end_leftovers(app.handle());
         Ok(())
     });
@@ -95,7 +101,7 @@ pub fn run() {
                 _app.state::<project_runner::ProjectRunnerState>()
                     .stop_all();
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             if matches!(
                 _event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
@@ -173,14 +179,14 @@ async fn select_project_folder(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[tauri::command]
 async fn get_agent_base_url(state: tauri::State<'_, agent::AgentState>) -> Result<String, String> {
     agent::get_agent_base_url(state).await
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[tauri::command]
 fn get_agent_base_url() -> Result<String, String> {
-    Err("当前内嵌 Agent 包仅支持 Apple Silicon macOS".into())
+    Err("当前内嵌 Agent 包仅支持 Apple Silicon macOS 与 64 位 Windows".into())
 }

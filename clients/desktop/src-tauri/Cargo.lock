@@ -38,8 +38,10 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-store",
  "tokio",
+ "url",
  "urlpattern 0.3.0",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

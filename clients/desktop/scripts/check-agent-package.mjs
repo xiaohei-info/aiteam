@@ -3,16 +3,18 @@ import { createPublicKey } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { hostAgentTarget } from './agent-target.mjs'
 import { BUNDLED_NPM_CLI, agentConfigState, checkAgentPackage, parseAgentEnv } from './check-agent.mjs'
 
 // Release gate: a DMG must carry a real enterprise config. The shipped template has a
 // placeholder Manager origin and empty public keys, so the packaged Agent refuses to
 // start and the client only sees an opaque BACKEND_HEALTH_TIMEOUT.
 const agent = fileURLToPath(new URL('../src-tauri/resources/agent/', import.meta.url))
-for (const file of ['runtime/node', BUNDLED_NPM_CLI, 'bin/start-agent.mjs', 'node_modules/tsx/dist/esm/index.mjs', 'config/agent.env']) {
-  assert.ok(existsSync(path.join(agent, file)), `缺少新版 Agent 包文件：${file}。请将完整 macOS 包放入 src-tauri/resources/agent/。`)
+for (const file of [BUNDLED_NPM_CLI, 'bin/start-agent.mjs', 'node_modules/tsx/dist/esm/index.mjs', 'config/agent.env']) {
+  assert.ok(existsSync(path.join(agent, file)), `缺少新版 Agent 包文件：${file}。请用 pnpm agent:import 导入与本机平台一致的完整 Agent 包。`)
 }
-const manifest = checkAgentPackage(agent)
+// The installer is built on, and ships for, this host's platform; the bundled runtime is checked against it.
+const manifest = checkAgentPackage(agent, { target: hostAgentTarget() })
 // A template package can still be built for internal debugging, but only when the
 // operator accepts that the Agent will not start until a local agent.env exists.
 const templatePackage = !manifest.configured
