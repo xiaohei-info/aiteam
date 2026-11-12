@@ -4,7 +4,7 @@ import { createFauxModelHandle } from "./model.js";
 import type { Budget, GenerateJob, RecognizeJob, SourceChunk } from "./protocol.js";
 import type { RunOptions } from "./run.js";
 
-export const BUDGET: Budget = { max_turns: 12, max_tool_calls: 40, max_total_tokens: 1_000_000, timeout_ms: 20_000, max_submit_attempts: 3 };
+export const BUDGET: Budget = { max_turns: 12, max_tool_calls: 40, max_total_tokens: 1_000_000, timeout_ms: 20_000, max_submit_attempts: 3, retry_base_delay_ms: 0 };
 
 export function chunk(id: string, text: string, overrides: Partial<SourceChunk> = {}): SourceChunk {
   return { chunk_id: id, source_id: "s1", source_name: "质量手册.docx", locator: "第 1 段", text, origin: "text", low_confidence: false, ...overrides };

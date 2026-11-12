@@ -25,7 +25,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-from .schemas import PROTOCOL_VERSION, AuthoringResult, AuthoringUsage, ImageAsset, RecognizedImage, SourceChunk
+from .schemas import (
+    PROTOCOL_VERSION,
+    AuthoringResult,
+    AuthoringUsage,
+    ImageAsset,
+    RecognizedImage,
+    SourceChunk,
+)
 
 ApiProtocol = Literal["openai-completions", "openai-responses", "anthropic-messages"]
 InputMode = Literal["text", "image"]
@@ -112,6 +119,10 @@ class AuthoringBudget(_Strict):
     max_total_tokens: int = Field(default=2_000_000, ge=1, le=100_000_000)
     timeout_ms: int = Field(default=900_000, ge=1, le=3_600_000)
     max_submit_attempts: int = Field(default=4, ge=1, le=20)
+    # 模型临时错误（限流、5xx、网络中断）由 worker 内的 Pi 会话按指数退避重试；额度 / 计费类错误不重试。
+    # 每次重试是新的一轮，仍计入轮数 / token / 超时预算。
+    model_retries: int = Field(default=3, ge=0, le=5)
+    retry_base_delay_ms: int = Field(default=2000, ge=0, le=60_000)
 
 
 @dataclass(frozen=True)

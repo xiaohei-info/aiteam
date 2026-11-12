@@ -177,6 +177,55 @@ test("generate: a model error is reported without leaking the key", async () => 
   assert.match(output.error_message, /\[redacted\]/);
 });
 
+const modelError = (message: string) => fauxAssistantMessage("", { stopReason: "error", errorMessage: message });
+
+/** 记录每次模型调用，便于断言重试次数。 */
+function counted(steps: FauxResponseStep[]): { steps: FauxResponseStep[]; calls: () => number } {
+  let calls = 0;
+  return {
+    steps: steps.map((step): FauxResponseStep => (context, ...rest) => {
+      calls += 1;
+      return typeof step === "function" ? (step as any)(context, ...rest) : step;
+    }),
+    calls: () => calls,
+  };
+}
+
+test("generate: a transient model error (503) is retried and the run still succeeds", async () => {
+  const script = counted([modelError("503 service unavailable"), read("s1-c1", "s1-c2"), call("submit_solution", validSolution())]);
+  const output = await runJob(generateJob(), scripted(script.steps));
+  succeeded<GenerateResult>(output);
+  assert.equal(script.calls(), 3);
+});
+
+test("generate: quota / billing errors are not retried", async () => {
+  const script = counted([modelError("429 insufficient_quota"), read("s1-c1"), call("submit_solution", validSolution())]);
+  const output = failed(await runJob(generateJob(), scripted(script.steps)));
+  assert.equal(output.error_code, "model_error");
+  assert.equal(script.calls(), 1);
+});
+
+test("generate: retries are bounded by model_retries", async () => {
+  const script = counted(Array.from({ length: 6 }, () => modelError("502 bad gateway")));
+  const output = failed(await runJob(generateJob({ budget: { ...BUDGET, model_retries: 2 } }), scripted(script.steps)));
+  assert.equal(output.error_code, "model_error");
+  assert.equal(script.calls(), 3);
+
+  const none = counted(Array.from({ length: 3 }, () => modelError("502 bad gateway")));
+  failed(await runJob(generateJob({ budget: { ...BUDGET, model_retries: 0 } }), scripted(none.steps)));
+  assert.equal(none.calls(), 1);
+});
+
+test("generate: the time limit also cuts off a retry backoff", async () => {
+  const started = Date.now();
+  const output = failed(await runJob(
+    generateJob({ budget: { ...BUDGET, timeout_ms: 300, retry_base_delay_ms: 60_000 } }),
+    scripted([modelError("503 service unavailable"), read("s1-c1")]),
+  ));
+  assert.equal(output.error_code, "timeout");
+  assert.ok(Date.now() - started < 5000);
+});
+
 test("recognize: refuses a model without image input", async () => {
   const output = failed(await runJob(recognizeJob(["i1"], { model: { kind: "faux", input: ["text"] } }), { allowFaux: true }));
   assert.equal(output.error_code, "vision_unsupported");
@@ -193,7 +242,7 @@ test("recognize: each image gets its own session, the image itself, and only rec
   const output = await runJob(recognizeJob(["i1", "i2", "i3"]), scripted([
     inspect(call("submit_recognition", { blocks: [{ text: "来料检验流程图：收货 → 检验 → 入库", kind: "chart", confidence: 0.82 }, { text: "模糊的页脚", kind: "text", confidence: 0.3 }] })),
     inspect(call("report_unreadable", { reason: "空白页" })),
-    inspect(fauxAssistantMessage("", { stopReason: "error", errorMessage: "upstream 500" })),
+    inspect(fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 bad request: unsupported image" })),
   ]));
   const result = succeeded<RecognizeResult>(output);
   assert.deepEqual(result.images.map((image) => [image.image_id, image.status, image.reason]), [

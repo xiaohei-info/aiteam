@@ -44,7 +44,7 @@ function createRecognizeTools(state: ImageState): ToolDefinition[] {
 
 async function recognizeOne(job: RecognizeJob, image: ImageInput, handle: ModelHandle, workDir: string, guard: RunGuard): Promise<RecognizedImage> {
   const state: ImageState = {};
-  const session = await createIsolatedSession({ handle, workDir, systemPrompt: job.system_prompt, tools: createRecognizeTools(state) });
+  const session = await createIsolatedSession({ handle, workDir, systemPrompt: job.system_prompt, tools: createRecognizeTools(state), budget: job.budget });
   const watch = guard.watch(session);
   const unrecognized = (reason: string): RecognizedImage => ({ image_id: image.image_id, status: "unrecognized", blocks: [], reason });
   try {

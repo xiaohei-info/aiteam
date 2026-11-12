@@ -151,7 +151,7 @@ export function createGenerateTools(chunks: readonly SourceChunk[], state: Gener
 export async function runGenerate(job: GenerateJob, handle: ModelHandle, workDir: string, guard: RunGuard): Promise<GenerateResult> {
   const state: GenerateState = { findings: [], seen: new Set() };
   const session = await createIsolatedSession({
-    handle, workDir, systemPrompt: job.system_prompt, tools: createGenerateTools(job.chunks, state),
+    handle, workDir, systemPrompt: job.system_prompt, tools: createGenerateTools(job.chunks, state), budget: job.budget,
   });
   let failedSubmits = 0;
   const watch = guard.watch(session, {

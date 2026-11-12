@@ -16,6 +16,7 @@ from .schemas import AuthoringUsage, ImageAsset, RecognizedImage, SourceChunk
 
 # 这些失败与具体图片无关，重试别的图片也没有意义：直接让整个任务失败。
 _FATAL_CODES = frozenset({"vision_unsupported", "invalid_job", "faux_not_allowed", "worker_unavailable"})
+_RECOGNIZE_RETRIES = 2
 _KIND_PREFIX = {"text": "", "table": "[表格] ", "chart": "[图表] "}
 
 
@@ -79,7 +80,9 @@ class VisionImageRecognizer:
         for start in range(0, len(images), size):
             batch = images[start:start + size]
             budget = AuthoringBudget(
-                max_turns=len(batch) * 3,
+                # 每张图正常 1–2 轮，再给临时错误的重试留出轮数。
+                max_turns=len(batch) * (3 + _RECOGNIZE_RETRIES),
+                model_retries=_RECOGNIZE_RETRIES,
                 max_tool_calls=len(batch) * 3,
                 max_total_tokens=len(batch) * self._limits.tokens_per_image,
                 timeout_ms=min(len(batch) * self._limits.timeout_ms_per_image, 3_600_000),

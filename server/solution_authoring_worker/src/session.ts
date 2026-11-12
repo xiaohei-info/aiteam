@@ -20,13 +20,19 @@ import {
 import type { ModelHandle } from "./model.js";
 import { EMPTY_USAGE, JobError, type Budget, type ErrorCode, type Usage } from "./protocol.js";
 
+export const DEFAULT_MODEL_RETRIES = 3;
+export const DEFAULT_RETRY_BASE_DELAY_MS = 2000;
+const MAX_RETRY_DELAY_MS = 30_000;
+
 export async function createIsolatedSession(options: {
   handle: ModelHandle;
   workDir: string;
   systemPrompt: string;
   tools: ToolDefinition[];
+  budget: Budget;
 }): Promise<AgentSession> {
-  const { handle, workDir, systemPrompt, tools } = options;
+  const { handle, workDir, systemPrompt, tools, budget } = options;
+  const maxRetries = budget.model_retries ?? DEFAULT_MODEL_RETRIES;
   const loader = new DefaultResourceLoader({
     cwd: workDir,
     agentDir: workDir,
@@ -48,8 +54,19 @@ export async function createIsolatedSession(options: {
     thinkingLevel: handle.thinkingLevel,
     resourceLoader: loader,
     sessionManager: SessionManager.inMemory(workDir),
-    // 自动重试与上下文压缩都会在预算守卫之外调用模型：关掉，失败重试交给宿主的任务层。
-    settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
+    // 上下文压缩会在预算守卫之外调用模型：关掉。
+    // 自动重试只对临时错误（限流、5xx、网络中断）生效，额度 / 计费类错误不重试；重试是新的一轮，
+    // 会触发 turn_start 与 message_end，所以仍在轮数 / token / 超时预算之内；守卫中止时 abort() 也会打断退避等待。
+    // SDK 层自己的重试关掉，避免两层叠加。
+    settingsManager: SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: {
+        enabled: maxRetries > 0,
+        maxRetries,
+        baseDelayMs: budget.retry_base_delay_ms ?? DEFAULT_RETRY_BASE_DELAY_MS,
+        provider: { maxRetries: 0, maxRetryDelayMs: MAX_RETRY_DELAY_MS },
+      },
+    }),
     customTools: tools,
     tools: names,
   });

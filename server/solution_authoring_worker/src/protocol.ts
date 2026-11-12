@@ -39,6 +39,10 @@ const BudgetSchema = Type.Object({
   max_total_tokens: positive(100_000_000),
   timeout_ms: positive(3_600_000),
   max_submit_attempts: positive(20),
+  /** 模型临时错误（限流、5xx、网络中断）的重试次数；每次重试都是新的一轮，仍计入轮数 / token / 超时预算。 */
+  model_retries: Type.Optional(Type.Integer({ minimum: 0, maximum: 5 })),
+  /** 重试退避的基数，第 n 次等待 base × 2^(n-1)。 */
+  retry_base_delay_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 60_000 })),
 }, strict);
 
 const ChunkSchema = Type.Object({

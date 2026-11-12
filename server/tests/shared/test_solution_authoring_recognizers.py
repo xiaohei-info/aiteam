@@ -10,8 +10,18 @@ from shared.solution_authoring.recognizers import (
     VisionLimits,
     chunks_from_recognition,
 )
-from shared.solution_authoring.runner import AuthoringBudget, FauxModelConfig, RecognizeOutcome, WorkerError
-from shared.solution_authoring.schemas import AuthoringUsage, ImageAsset, RecognizedBlock, RecognizedImage
+from shared.solution_authoring.runner import (
+    AuthoringBudget,
+    FauxModelConfig,
+    RecognizeOutcome,
+    WorkerError,
+)
+from shared.solution_authoring.schemas import (
+    AuthoringUsage,
+    ImageAsset,
+    RecognizedBlock,
+    RecognizedImage,
+)
 
 VISION = FauxModelConfig(input=["text", "image"])
 
@@ -67,7 +77,8 @@ def test_vision_batches_images_and_scales_the_budget_per_batch():
     limits = VisionLimits(batch_size=2, tokens_per_image=1000, timeout_ms_per_image=5000)
     outcome = VisionImageRecognizer(runner, VISION, limits).recognize(_images(5))
     assert runner.batches == [["s1-i1", "s1-i2"], ["s1-i3", "s1-i4"], ["s1-i5"]]
-    assert [(b.max_total_tokens, b.timeout_ms, b.max_turns) for b in runner.budgets] == [(2000, 10000, 6), (2000, 10000, 6), (1000, 5000, 3)]
+    assert [(b.max_total_tokens, b.timeout_ms, b.max_turns) for b in runner.budgets] == [(2000, 10000, 10), (2000, 10000, 10), (1000, 5000, 5)]
+    assert {b.model_retries for b in runner.budgets} == {2}
     assert [item.status for item in outcome.images] == ["recognized"] * 5
     assert (outcome.usage.total_tokens, outcome.usage.turns) == (300, 5)
 
