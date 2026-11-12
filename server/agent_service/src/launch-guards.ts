@@ -23,7 +23,11 @@ const SAFE_AGENT_URLS = new Set(["AITEAM_MANAGER_URL", "AITEAM_RAG_MCP_URL", "AI
 /** Shared case-insensitive credential-name policy for every Agent launch path. */
 export function isForbiddenAgentEnvironmentName(name: string): boolean {
   const upper = name.toUpperCase();
-  if (SAFE_AGENT_URLS.has(upper)) return false;
+  // PATH is not a credential: the trailing `*_PATH` rule targets key/credential files. Scrubbing PATH
+  // leaves the Agent unable to spawn anything — on Windows readiness resolves Git Bash through
+  // `where bash.exe`, so /readyz would report not-ready forever. Same exception as
+  // scripts/build-agent-package.mjs, which already keeps PATH in the build child environment.
+  if (upper === "PATH" || SAFE_AGENT_URLS.has(upper)) return false;
   if (FORBIDDEN_AGENT_CREDENTIAL_SET.has(upper)) return true;
   if (/(?:^|_)(?:API_KEY|APIKEY|PASSWORD|PASSWD|TOKEN|SECRET|SECRET_KEY|ENCRYPTION_KEY|MASTER_KEY|PEPPER|PRIVATE_KEY|ACCESS_KEY|ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN|CREDENTIAL|CREDENTIALS|CREDENTIAL_PATH|CREDENTIALS_FILE|CREDENTIAL_FILE|KEY_FILE|KEYFILE)$/u.test(upper)) return true;
   if (/(?:^|_)(?:URL|URI|DSN|CONNECTION_STRING|KEY_PATH|PATH)$/u.test(upper)) return true;
