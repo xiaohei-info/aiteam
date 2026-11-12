@@ -261,12 +261,7 @@ def mount_frontend(app: FastAPI, tier: str) -> None:
     # SPA 路由回退：只服务前端路由；保留后端路径继续返回 problem+json。
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa_fallback(request: Request, full_path: str) -> FileResponse:
-        reserved_namespace = (
-            full_path == "api"
-            or full_path.startswith("api/")
-            or full_path == "metrics"
-            or full_path.startswith("metrics/")
-        )
+        reserved_namespace = full_path in ("api", "metrics") or full_path.startswith(("api/", "metrics/"))
         if reserved_namespace or full_path.startswith(("healthz", "readyz", "docs", "redoc", "openapi.json")):
             # Keep both problem detail and the generated instance free from the
             # caller-controlled path (which may contain a token or prompt text).
