@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import MacWindowControls from './MacWindowControls'
 import {
   BookOpen,
   Building2,
@@ -111,27 +111,7 @@ export default function Sidebar() {
       <div className="relative z-10 flex h-full flex-col">
         <div data-tauri-drag-region className="relative z-10 h-12 flex-shrink-0">
           <div className="absolute left-4 top-1/2 flex -translate-y-1/2 items-center gap-[7px]">
-            <button
-              type="button"
-              onClick={() => getCurrentWindow().close()}
-              className="h-[12px] w-[12px] flex-shrink-0 cursor-pointer rounded-full border border-[#e0443e]/40 bg-[#ff5f57] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-colors duration-150 hover:bg-[#ff3b30]"
-              title="关闭"
-              aria-label="关闭窗口"
-            />
-            <button
-              type="button"
-              onClick={() => getCurrentWindow().minimize()}
-              className="h-[12px] w-[12px] flex-shrink-0 cursor-pointer rounded-full border border-[#dea123]/40 bg-[#febc2e] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-colors duration-150 hover:bg-[#f5a623]"
-              title="最小化"
-              aria-label="最小化窗口"
-            />
-            <button
-              type="button"
-              onClick={() => getCurrentWindow().toggleMaximize()}
-              className="h-[12px] w-[12px] flex-shrink-0 cursor-pointer rounded-full border border-[#1aab29]/40 bg-[#28c840] shadow-[inset_0_1px_0_rgba(255,255,255,0.2)] transition-colors duration-150 hover:bg-[#1db934]"
-              title="最大化"
-              aria-label="切换窗口最大化"
-            />
+            <MacWindowControls />
           </div>
         </div>
 

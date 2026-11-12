@@ -553,6 +553,11 @@ button {
   color: inherit;
 }
 
+:root[data-window-chrome="windows"] .topbar {
+  /* 给右上角自绘的 ─ ▢ ✕ 窗口控件留位置，避免与搜索/设置按钮重叠。 */
+  padding-right: 164px;
+}
+
 .app-window {
   position: relative;
   height: 100dvh;

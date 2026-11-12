@@ -12,6 +12,7 @@ import GrantsSyncNotice from './components/GrantsSyncNotice'
 import RechargePromptDialog from './components/Billing/RechargePromptDialog'
 import ApprovalDialog from './components/Approvals/ApprovalDialog'
 import BackendStartupScreen from './components/AppRecovery/BackendStartupScreen'
+import WindowsWindowControls from './components/Layout/WindowsWindowControls'
 import { createSafeDiagnostic, type SafeDiagnostic } from './lib/appDiagnostics'
 import {
   classifyBackendStartupFailure,
@@ -251,6 +252,7 @@ export default function App() {
     return (
       <>
         <GlobalShortcuts />
+        <WindowsWindowControls />
         <BackendStartupScreen
           diagnostic={backendDiagnostic}
           failure={backendFailure}
@@ -270,6 +272,7 @@ export default function App() {
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}
       >
         <GlobalShortcuts />
+        <WindowsWindowControls />
         <div style={{ fontSize: 14, opacity: 0.7 }}>正在恢复登录状态…</div>
       </div>
     )
@@ -278,6 +281,7 @@ export default function App() {
   return (
     <div className="app-window">
       <GlobalShortcuts />
+      <WindowsWindowControls />
       {!isOnline && <OfflineOverlay />}
       {isAuthenticated && <CommandPalette />}
       {isAuthenticated && <GrantsSyncNotice key={sessionGeneration} />}
