@@ -14,16 +14,17 @@
 随包 Agent 不入库（`src-tauri/resources/` 在 `.gitignore` 里），从同一提交的后端源码构建，前后端版本由提交天然对齐：
 
 ```bash
-pnpm agent:build          # 构建 server/agent_service 与 web/agent，打成 darwin-arm64 包并导入 src-tauri/resources/agent
+pnpm agent:build          # 构建 server/agent_service 与 web/agent，按本机平台打包（darwin-arm64 / win32-x64）并导入 src-tauri/resources/agent
 pnpm agent:check          # 按 manifest 校验并还原 runtime/node，打印版本
 pnpm tauri dev
 pnpm tauri:build:mac:arm64
 ```
 
-- `agent:build`（`scripts/build-agent.mjs`）调用仓库根的 `scripts/build-agent-package.mjs`：在 `server/agent_service` 和 `web/` 执行 `pnpm install --frozen-lockfile` 并构建，产物放在仓库根 `dist/agent-packages/`，再交给 `agent:import` 导入。只能在 Apple Silicon macOS 上运行；额外参数原样传给打包脚本，例如 `pnpm agent:build --skip-build` 复用已有构建产物。
+- `agent:build`（`scripts/build-agent.mjs`）调用仓库根的 `scripts/build-agent-package.mjs`：在 `server/agent_service` 和 `web/` 执行 `pnpm install --frozen-lockfile` 并构建，产物放在仓库根 `dist/agent-packages/`，再交给 `agent:import` 导入。包内带原生 Node 和原生模块，只能在目标平台本机构建：Apple Silicon macOS 产出 darwin-arm64，Windows x64 产出 win32-x64（目标清单见 `scripts/agent-target.mjs`）；额外参数原样传给打包脚本，例如 `pnpm agent:build --skip-build` 复用已有构建产物。
 - 版本号为 `<agent_service 版本>-src.<提交号>`；`server/agent_service` 或 `web/` 有未提交改动时再加 `.dirty`，方便确认装的是哪份代码。
 - 也可以导入 GitHub Actions `agent-package` 工作流的产物：`pnpm agent:import <artifact.zip | package.tar.gz | 包目录>`。
-- 浏览器下载的产物带 macOS 隔离标记（`com.apple.quarantine`），解压出的每个文件都会继承；保留标记时系统会在首次启动前逐个检查 Node 和原生模块，Agent 30–60 秒打不出第一条日志，超过宿主 30 秒就绪上限。`agent:import` 会在替换随包目录前清除标记，清不干净直接报错。
+- 导入只接受与本机平台一致的包（`manifest.target` 必须等于本机 target），产物里是别的平台的包时直接报错。macOS 内层包是 `*-darwin-arm64.tar.gz`，Windows 是 `*-win32-x64.zip`；Windows 上用系统自带的 `System32\tar.exe`（bsdtar）解压，不依赖 unzip。
+- 浏览器下载的产物带下载来源标记，解压出的每个文件都会继承：macOS 是隔离标记 `com.apple.quarantine`，Windows 是 `Zone.Identifier` 备用数据流（Mark of the Web）。macOS 保留标记时系统会在首次启动前逐个检查 Node 和原生模块，Agent 30–60 秒打不出第一条日志，超过宿主 30 秒就绪上限；Windows 上 SmartScreen 和杀毒软件同样会按该标记额外扫描。`agent:import` 会在替换随包目录前清除标记（Windows 用 `Unblock-File`），清不干净直接报错。
 - 一步完成导入、清除隔离标记、`agent:check`、`check:agent-package` 并启动：`pnpm agent:integrate <artifact.zip | package.tar.gz | 包目录> --start`（不带 `--start` 只导入和检查）。
 - 导入时按 manifest 检查每个文件的大小与 SHA-256；Node 以 `runtime/node.gz` 存放，由 `agent:check` 还原并设置执行权限，桌面开发和构建会自动执行。完整目录由 Tauri 复制到 `AIFred.app/Contents/Resources/agent/`，包含 Node 运行时、原生依赖、启动器和配置，用户机器无需安装 Node。
 - 导入的包仍是配置模板（`configured=false`）时，会自动固化下一节的测试配置，导入后 manifest 为 `configured=true`、`config_source=provided`。Rust 构建会拒绝其他架构，避免生成无法运行的安装包。
