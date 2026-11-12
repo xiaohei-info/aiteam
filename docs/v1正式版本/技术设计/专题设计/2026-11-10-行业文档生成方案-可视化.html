@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>行业文档生成解决方案 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.mx{display:grid;grid-template-columns:130px repeat(2,1fr);gap:4px;text-align:center}
+.mx div{padding:6px;border-radius:4px;background:#f2f4f7}
+.mx .g{background:#e6f6ec;color:var(--ok)}.mx .r{background:#fdeceb;color:var(--bad);font-weight:600}.mx .h{background:#fff;font-weight:600}
+.bars div{height:14px;border-radius:3px;margin:4px 0;color:#fff;font-size:11px;padding-left:6px;line-height:14px}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>行业方案生成</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 服务端 AI Agent</a>
+<a href="#s5">5 前端要做什么</a>
+<a href="#s6">6 后端要做什么</a>
+<a href="#s7">7 运维要做什么</a>
+<a href="#s8">8 阶段与依赖</a>
+<a href="#s9">9 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>行业文档导入 → 自动生成解决方案 → 装载给 AI 员工 <small>2026-11-10 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：上传行业文档，AI 生成一份「专家组成 + 协作说明 + Skill + 知识种子 + 可运行制品」的方案，人工审核后发布；员工装载后，在客户电脑上缺环境能自己补、补不了就降级，不会卡死。</p>
+<div class="grid3">
+<div class="card"><b>两端同期</b><p class="note">运营端生成公共池方案；企业端生成企业私有方案；共用一个生成核心。</p></div>
+<div class="card"><b>两层方案池</b><p class="note">公共池（运营持有）+ 私有池（企业持有）。企业脱敏确认后，运营可读、提炼、复制进公共池。</p></div>
+<div class="card"><b>拆箱即用</b><p class="note">本机体检 → 私有目录自装运行时（用户确认）→ 分步引导 → 降级。运营端有镜像管理页。</p></div>
+</div>
+<div class="card" style="margin-top:14px"><b>服务端 AI Agent 生成内核<span class="tag">新</span></b><p class="note">理解 / 综合 / 分类 / 标注由部署在服务端的 AI Agent 承担；模型配置由宿主服务（Operator 平台模型 / Manager 企业授权模型）解析注入，两端共用同一个 Agent。Agent 不持有密钥、不写业务库、不触达用户机器。</p></div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:22%">现在的问题</th><th style="width:40%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>方案只能运营手工注册，行业资料多时做不过来</td><td>上传 Excel / PPT / Word / MD / HTML / TXT / 旧格式 / 网页 / 扫描件，AI 分析并生成方案草稿，附证据出处，人工审核后发布</td><td>运营、企业管理员</td></tr>
+<tr><td>企业只能「应用」平台方案，不能有自己的方案</td><td>企业用自己的文档生成私有方案；也可把平台方案复制成私有副本再改（平台模板始终只读）</td><td>企业管理员</td></tr>
+<tr><td>企业好的实践留在租户里，公共池得不到沉淀</td><td>企业确认脱敏并允许平台使用后，运营端读脱敏正文、提炼优化，审核后进入公共池，全程双侧审计</td><td>平台、其他企业</td></tr>
+<tr><td>方案只有文本（专家 + Prompt），拿到手还要自己配 Skill、知识、脚本</td><td>方案包新增部件清单：Skill、知识种子、连接器依赖、Web / 脚本制品，一起签名分发</td><td>企业成员</td></tr>
+<tr><td>客户电脑没有 Python 等环境，脚本跑不起来，现在只会失败</td><td>本机体检 + B/C/D 补救；运营端镜像页保证有可下载的运行时；覆盖缺口的方案不能发布</td><td>企业成员、客服</td></tr>
+<tr><td>文档含公司名、人名、金额，生成方案有泄密风险</td><td>自动扫描敏感项，未处理不能提交审核；企业端先脱敏再给运营看；进公共池需 system_admin 逐项确认</td><td>企业、平台</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>用户完全断网且无离线包、磁盘已满、被企业安全软件拦截下载时，仍会落到 C（分步引导）或 D（只用文本部件）。我们保证「不死路」，不保证「所有电脑都能跑脚本」。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">运营端 · 方案生成工作台</button>
+<button data-p="u2">运营端 · 运行环境镜像</button>
+<button data-p="u3">运营端 · 企业私有方案</button>
+<button data-p="u4">企业端 · 生成与共享</button>
+<button data-p="u5">企业端 · 复制副本与镜像设置</button>
+<button data-p="u6">用户桌面 · 环境体检与修复</button>
+<button data-p="u7">服务端 · Agent 生成过程</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 / 方案工作台 / 新建：制造业质量管理方案</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>① 文档（6）</h4>
+<div class="row"><span>质量手册.docx</span><span class="tag ok">已解析</span></div>
+<div class="row"><span>巡检记录.xlsx（3 个 sheet）</span><span class="tag ok">已解析</span></div>
+<div class="row"><span>培训课件.pptx</span><span class="tag ok">已解析</span></div>
+<div class="row"><span>旧版流程.doc</span><span class="tag">转换中</span></div>
+<div class="row"><span>https://…/标准.html</span><span class="tag ok">已抓取</span></div>
+<div class="row"><span>现场照片扫描.pdf</span><span class="tag warn">识别 32%</span></div>
+<p><span class="btn">+ 上传 / 添加链接</span></p></div>
+<div class="box" style="margin-top:10px"><h4>② 生成设置</h4>
+<p>模型 <span class="input">平台模型 A ▾</span></p>
+<p class="note">只列出你有权使用、已付费范围内的模型</p>
+<p>图片识别 <span class="input">OCR 服务 ▾</span> <span class="note">另一选项「多模态模型」，仅所选模型支持视觉时可选</span></p>
+<p>补充说明（只能追加，不能覆盖规则）</p>
+<div class="input" style="height:46px">重点覆盖来料检验和不合格品处理…</div>
+<p style="margin-top:8px"><span class="btn pri">开始生成</span></p></div>
+</div>
+<div>
+<div class="steps"><span class="done">解析</span><span class="done">分类部件</span><span class="done">生成</span><span class="cur">敏感扫描</span><span>待审核</span></div>
+<div class="box"><h4>③ 草稿：专家与协作</h4>
+<div class="row"><span><b>质检主管</b>（协调专家）</span><span class="tag gray">证据 4 处 ›</span></div>
+<div class="row"><span>来料检验专家</span><span class="tag gray">证据 6 处 ›</span></div>
+<div class="row"><span>不合格品处理专家</span><span class="tag gray">证据 3 处 ›</span></div>
+<p class="note">协作说明、交付要求可直接编辑；每条内容可点开看来自哪份文档第几段</p></div>
+<div class="box" style="margin-top:10px"><h4>④ 部件与环境需求</h4>
+<div class="row"><span>Skill：缺陷分类（文本）</span><span class="tag ok">就绪</span></div>
+<div class="row"><span>知识种子：质量手册（12 个切片）</span><span class="tag ok">就绪</span></div>
+<div class="row"><span>连接器依赖：ERP 查询（需密钥）</span><span class="tag warn">应用时需填</span></div>
+<div class="row"><span>脚本：SPC 报表.py　<span class="tag">Python ≥3.10</span><span class="tag">macOS arm64</span><span class="tag">Windows x64</span></span><span class="tag ok">镜像已覆盖</span></div></div>
+<div class="box" style="margin-top:10px"><h4>⑤ 敏感信息（3 项未处理）</h4>
+<div class="row"><span>公司名「○○精密」×14</span><span><span class="btn">替换</span> <span class="btn">删除</span> <span class="btn">仅内部</span></span></div>
+<div class="row"><span>金额「¥ 2,300,000」×2</span><span><span class="btn">替换</span> <span class="btn">删除</span> <span class="btn">仅内部</span></span></div>
+<div class="row"><span>人名「张**」×5</span><span><span class="btn">替换</span> <span class="btn">删除</span> <span class="btn">仅内部</span></span></div></div>
+<p style="margin-top:10px"><span class="btn dis">提交审核（还有 3 项敏感信息未处理）</span></p>
+</div></div></div></div>
+<p class="note">要点：每条生成内容可追溯到文档；敏感项不处理不能提交；脚本部件的环境需求由系统自动回填并检查镜像覆盖。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 / 运行环境镜像</b></div>
+<div class="body">
+<div class="grid2">
+<div class="box"><h4>覆盖矩阵（运行时 × 系统）</h4>
+<div class="mx">
+<div class="h"></div><div class="h">macOS arm64</div><div class="h">Windows x64</div>
+<div class="h">Python 3.11</div><div class="g">enabled</div><div class="g">enabled</div>
+<div class="h">Python 3.12</div><div class="g">enabled</div><div class="r">缺口</div>
+<div class="h">Node 20</div><div class="g">随包</div><div class="g">随包</div>
+</div>
+<p class="note">红格 = 有方案声明需要但没有可下载制品，相关方案将无法发布</p></div>
+<div class="box"><h4>运行时制品</h4>
+<div class="row"><span>python 3.11.9 · macOS arm64</span><span><span class="tag ok">enabled</span> <span class="tag gray">探测 2 分钟前 通过</span></span></div>
+<div class="row"><span>python 3.11.9 · Windows x64</span><span><span class="tag ok">enabled</span> <span class="tag gray">通过</span></span></div>
+<div class="row"><span>python 3.12.4 · macOS arm64</span><span><span class="tag ok">enabled</span></span></div>
+<div class="row"><span>python 3.10.x · …</span><span><span class="tag warn">deprecated</span> <span class="tag gray">被 2 个方案引用</span></span></div>
+<p><span class="btn pri">从上游导入</span> <span class="btn">启用</span> <span class="btn">停用</span></p></div>
+</div>
+<div class="grid2" style="margin-top:12px">
+<div class="box"><h4>依赖源</h4>
+<div class="row"><span>pip 平台镜像</span><span class="tag ok">延迟 84ms</span></div>
+<div class="row"><span>npm 平台镜像</span><span class="tag warn">延迟 1.2s</span></div>
+<p><span class="btn">立即探测</span></p></div>
+<div class="box"><h4>各企业回传汇总（近 7 天，无机器明细）</h4>
+<div class="bars"><div style="width:72%;background:#12a150">就绪 72%</div><div style="width:14%;background:#d98a00">已自动修复 14%</div><div style="width:9%;background:#7048e8">引导修复 9%</div><div style="width:5%;background:#d92d20">降级 5%</div></div>
+<p class="note">下载失败率、hash_mismatch、runtime_missing 等错误码占比，用于发现镜像问题</p></div>
+</div></div></div>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 / 企业私有方案（只读）</b></div>
+<div class="body">
+<table>
+<tr><th>企业</th><th>方案</th><th>版本</th><th>共享状态</th><th>操作</th></tr>
+<tr><td>企业 A</td><td>门店巡检方案</td><td>v3</td><td><span class="tag ok">已允许平台使用 · 已脱敏确认</span></td><td><span class="btn pri">提炼成平台草稿</span></td></tr>
+<tr><td>企业 B</td><td>合同审阅方案</td><td>v1</td><td><span class="tag gray">未共享（仅元数据）</span></td><td><span class="btn dis">不可读取</span></td></tr>
+<tr><td>企业 C</td><td>售后工单方案</td><td>v2</td><td><span class="tag warn">企业已撤销共享</span></td><td><span class="btn dis">不可读取</span></td></tr>
+</table>
+<div class="box" style="margin-top:12px"><h4>读取到的正文（已脱敏）预览</h4>
+<p>协调专家：<b>[部门A]</b> 巡检主管；每月向 <b>[公司A]</b> 总部汇报，预算上限 <b>[金额]</b>……</p>
+<p class="note">所有读取与复制都会记录：谁、何时、哪个企业哪个方案哪个版本；记录不含正文。企业端可查看这些记录。</p></div>
+</div></div>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 / 方案 / 用文档生成私有方案</b></div>
+<div class="body"><div class="cols">
+<div class="box"><h4>生成设置</h4>
+<p>模型 <span class="input">企业已授权模型 B ▾</span></p>
+<p class="note">仅列出本企业已付费、已授权的模型；用量计入本企业</p>
+<p>补充说明 <span class="input">（可选）</span></p>
+<p><span class="btn pri">开始生成</span></p></div>
+<div>
+<div class="box"><h4>敏感信息处理（owner / enterprise_admin）</h4>
+<div class="row"><span>含「仅内部」项 1 个</span><span class="tag warn">发布需第二位管理员确认</span></div>
+<div class="row"><span>脱敏预览：「○○精密」→ [公司A]</span><span class="btn">确认脱敏结果</span></div></div>
+<div class="box" style="margin-top:10px"><h4>共享给平台</h4>
+<div class="row"><span>允许平台读取脱敏后的正文，用于提炼优化</span><span class="tag">开关：关</span></div>
+<p class="note">打开前必须先确认脱敏结果。可随时关闭，关闭后平台不能再读取；已复制的脱敏草稿不受影响。</p></div>
+<p style="margin-top:10px"><span class="btn pri">发布私有方案</span> <span class="btn">授权给部门 / 成员</span></p>
+</div></div></div></div>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 / 方案目录与设置</b></div>
+<div class="body"><div class="grid2">
+<div class="box"><h4>平台方案（只读）</h4>
+<div class="row"><span>制造业质量管理 v2</span><span><span class="btn">应用</span> <span class="btn pri">复制成私有副本</span></span></div>
+<div class="row"><span>零售门店运营 v5</span><span><span class="btn">应用</span> <span class="btn pri">复制成私有副本</span></span></div>
+<h4 style="margin-top:12px">我的私有方案</h4>
+<div class="row"><span>制造业质量管理（副本，来自 v2）</span><span class="tag warn">平台已有 v3，可查看差异</span></div></div>
+<div class="box"><h4>运行环境镜像（设置）</h4>
+<p>运行时下载地址 <span class="input">https://mirror.corp/runtimes</span></p>
+<p>pip 源 <span class="input">https://pypi.corp/simple</span></p>
+<p>npm 源 <span class="input">https://npm.corp</span></p>
+<div class="row"><span>允许使用平台镜像</span><span class="tag ok">开</span></div>
+<div class="row"><span>允许直连官方上游</span><span class="tag ok">开（默认）</span></div>
+<p class="note">下载顺序：本机已有 → 企业镜像 → 平台镜像 → 官方上游。所有下载都校验目录里登记的 sha256。</p></div>
+</div></div></div>
+</div>
+
+<div class="pane" id="u6">
+<div class="grid3">
+<div class="win"><div class="bar"><b>B · 自动安装（需确认）</b></div><div class="body">
+<p><b>此方案的脚本需要 Python 3.11</b></p><p class="note">未在本机检测到可用的 Python。</p>
+<div class="box"><p>下载：python-3.11.9 (macOS arm64)<br>来源：企业镜像 · 大小 38 MB<br>sha256：9f2c…a41e</p>
+<p>将执行：<br>• 解压到 应用数据/runtimes/python/3.11.9<br>• python -m venv …<br>• pip install -r requirements.lock</p></div>
+<p class="note">不需要管理员权限，不修改系统环境。</p>
+<p><span class="btn pri">确认并安装</span> <span class="btn">取消</span></p></div></div>
+<div class="win"><div class="bar"><b>C · 分步引导</b></div><div class="body">
+<p><b>自动安装未成功（download_unreachable）</b></p>
+<div class="box"><p>1. 请 IT 部门放行 mirror.corp 与 files.pythonhosted.org<br>2. 或下载离线包 <span class="btn">复制链接</span><br>3. 放到 应用数据/offline/ 后点击重新检测</p></div>
+<p class="note">需要管理员权限的步骤只给指引，不会静默提权。</p>
+<p><span class="btn pri">重新检测</span> <span class="btn">暂时跳过</span></p></div></div>
+<div class="win"><div class="bar"><b>D · 降级运行</b></div><div class="body">
+<p><b>已启用 4 项，2 项暂不可用</b></p>
+<div class="box"><div class="row"><span>专家 / 协作</span><span class="tag ok">可用</span></div>
+<div class="row"><span>Skill / 知识</span><span class="tag ok">可用</span></div>
+<div class="row"><span>SPC 报表脚本</span><span class="tag bad">不可用：缺少 Python</span></div>
+<div class="row"><span>网页看板</span><span class="tag ok">可用</span></div></div>
+<p class="note">环境补好后会自动恢复，无需重新应用方案。</p>
+<p><span class="btn">查看原因</span></p></div></div>
+</div>
+</div>
+<p class="note">体检结果为 ready / fixable / blocked。回传给企业端和运营端的只有脱敏汇总（错误码计数、就绪人数），不含路径、日志、机器信息。</p>
+
+<div class="pane" id="u7">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>服务端 · Agent 生成过程（同一 Agent，模型配置由宿主注入）</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>模型配置（来自当前服务）</h4>
+<div class="row"><span>宿主</span><span class="tag op">Operator</span></div>
+<div class="row"><span>模型</span><span>平台模型 A</span></div>
+<div class="row"><span>额度</span><span>平台内部额度</span></div>
+<div class="row"><span>token</span><span class="tag gray">短期 · 不下发</span></div>
+</div>
+<div class="box" style="margin-top:10px"><h4>可用工具（最小权限）</h4>
+<div class="row"><span>文档分块读取 / 证据检索</span><span class="tag ok">可用</span></div>
+<div class="row"><span>网页抓取（防 SSRF）</span><span class="tag ok">可用</span></div>
+<div class="row"><span>图片识别（OCR / 多模态）/ 知识库检索</span><span class="tag ok">可用</span></div>
+<div class="row"><span>写业务库 / 触达用户机器</span><span class="tag bad">禁用</span></div>
+</div>
+</div>
+<div>
+<div class="steps"><span class="done">规划</span><span class="done">取证</span><span class="done">起草</span><span class="cur">自检</span><span>修订</span><span>输出</span></div>
+<div class="box"><h4>自检结果</h4>
+<div class="row"><span>SolutionPackage schema</span><span class="tag ok">通过</span></div>
+<div class="row"><span>证据覆盖（每条生成项有出处）</span><span class="tag ok">通过</span></div>
+<div class="row"><span>敏感标注完整</span><span class="tag ok">通过</span></div>
+<div class="row"><span>token 预算 80k / 100k</span><span class="tag ok">通过</span></div>
+</div>
+<div class="box" style="margin-top:10px"><h4>输出</h4>
+<p>SolutionPackage + components + requirements + evidence + sensitive_findings</p>
+<p class="note">不通过则定向重试；超过次数标记 failed，不落半成品。</p></div>
+</div>
+</div></div></div>
+<p class="note">Operator 与 Manager 共用同一个 Agent 定义与工具集，只是注入的模型配置、租户上下文、草稿落库位置不同。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界不变：不向用户机器入站；租户数据只在企业端；会话内容不上传。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 470" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="140" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="165" width="1090" height="150" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="187" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="330" width="1090" height="130" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="352" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="150" height="46" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 上传文档 / 链接</text><text x="40" y="86" fill="#667085">运营生成公共池方案</text>
+<rect x="215" y="50" width="170" height="46" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="225" y="70">② 生成核心 + 服务端 Agent</text><text x="225" y="86" fill="#667085">解析→Agent 分析→草稿→扫描</text>
+<rect x="420" y="50" width="150" height="46" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="430" y="70">③ 审核 → 发布</text><text x="430" y="86" fill="#667085">catalog_template</text>
+<rect x="30" y="100" width="190" height="40" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="118">镜像目录：运行时制品、依赖源</text><text x="40" y="133" fill="#667085">Ed25519 签名</text>
+<rect x="760" y="50" width="200" height="46" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">⑨ 提炼企业脱敏方案</text><text x="770" y="86" fill="#667085">复制为平台草稿 → 公共池</text>
+<rect x="760" y="100" width="200" height="40" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="118">汇总看板（错误码计数）</text>
+
+<rect x="30" y="205" width="170" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="225">④ 拉取方案 / 镜像目录</text><text x="40" y="241" fill="#667085">只读投影</text>
+<rect x="30" y="258" width="170" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="278">企业自己生成私有方案</text><text x="40" y="294" fill="#667085">enterprise_solution</text>
+<rect x="235" y="205" width="170" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="245" y="225">⑤ 应用方案 + 授权</text><text x="245" y="241" fill="#667085">employee / member_grant</text>
+<rect x="235" y="258" width="170" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="245" y="278">知识种子入库</text><text x="245" y="294" fill="#667085">走现有 knowledge intake</text>
+<rect x="440" y="205" width="200" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="450" y="225">企业镜像 / 下载策略</text><text x="450" y="241" fill="#667085">tenant 设置</text>
+<rect x="760" y="205" width="200" height="46" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="225">⑧ 脱敏 + 管理员确认</text><text x="770" y="241" fill="#667085">shared_with_platform</text>
+<rect x="760" y="258" width="200" height="40" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="276">访问审计（被谁读 / 复制）</text>
+
+<rect x="30" y="375" width="190" height="46" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="395">⑥ 主动同步授权配置</text><text x="40" y="411" fill="#667085">方案 + 快照冻结 + 镜像目录</text>
+<rect x="250" y="375" width="190" height="46" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="260" y="395">⑦ 本机体检 → B/C/D</text><text x="260" y="411" fill="#667085">下载 → 校验 → 建 venv</text>
+<rect x="470" y="375" width="170" height="46" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="480" y="395">AI 员工装载方案并运行</text><text x="480" y="411" fill="#667085">首次运行用户确认</text>
+<rect x="760" y="375" width="200" height="46" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="395">脱敏体检汇总上报</text><text x="770" y="411" fill="#667085">错误码计数，无机器明细</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M180 73 H215"/><path d="M385 73 H420"/>
+<path d="M495 96 V150 Q495 165 480 180 L200 215" stroke-dasharray="4 3"/>
+<path d="M200 228 H235"/>
+<path d="M130 251 V258" /><path d="M200 281 H235"/>
+<path d="M135 305 V345 Q135 360 130 375"/>
+<path d="M200 398 H250" stroke-dasharray="0"/>
+<path d="M440 398 H470"/>
+<path d="M640 398 H760"/>
+<path d="M860 375 V300 " stroke-dasharray="4 3"/>
+<path d="M860 205 V160 Q860 150 860 96"/>
+<path d="M760 120 Q700 120 700 160 Q700 175 650 190 L645 205" stroke-dasharray="4 3" opacity="0"/>
+</g>
+<text x="300" y="150" font-size="11" fill="#667085">Manager 主动拉（云侧服务调用）</text>
+<text x="1000" y="140" font-size="11" fill="#667085">Operator→Manager 读取</text>
+<text x="1000" y="156" font-size="11" fill="#667085">（仅脱敏、已共享）</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有三种：Operator↔Manager 服务间调用、Agent 主动访问 Manager、Agent 本机内部。没有任何入站到用户机器。</p>
+</div>
+
+<h3>3.2 生成流程（两端相同，数据落各自的库）</h3>
+<div class="flow">
+<div class="s"><b>上传</b>文件 / 链接 / 扫描件，限大小数量类型</div><div class="a">→</div>
+<div class="s"><b>解析</b>pptx/xlsx/docx/html/txt/pdf；旧格式先转换；网页防 SSRF；图片 / 扫描件识别（OCR 或多模态，见 3.6）</div><div class="a">→</div>
+<div class="s"><b>分块摘要</b>Agent 取证 + map-reduce，带来源定位，token 预算</div><div class="a">→</div>
+<div class="s"><b>综合生成</b>Agent 按平台提示词模板 + 补充说明；输出须通过 schema</div><div class="a">→</div>
+<div class="s"><b>部件分类</b>Agent 分类 Skill / 知识 / 连接器 / 制品</div><div class="a">→</div>
+<div class="s"><b>敏感扫描</b>规则 + Agent 标注</div><div class="a">→</div>
+<div class="s"><b>待审核</b>人工逐项处理</div>
+</div>
+<p class="note">任务状态：queued → parsing → analyzing → succeeded | failed（成功后草稿进入 ready_for_review）。失败不落半成品。日志和审计只记摘要，不记正文。</p>
+
+<h3>3.3 发布与装载给 AI 员工</h3>
+<div class="flow">
+<div class="s"><b>发布</b>版本不可变；公共池须通过镜像覆盖闸门</div><div class="a">→</div>
+<div class="s"><b>Manager 应用</b>展开 employee、部件；预检；选择授权部门 / 成员</div><div class="a">→</div>
+<div class="s"><b>Agent 同步</b>只拿到授权给本账号的方案，冻结快照</div><div class="a">→</div>
+<div class="s"><b>就绪检查</b>体检 + 补救；连接器密钥缺失给清单</div><div class="a">→</div>
+<div class="s"><b>运行</b>员工使用；脚本首次运行用户确认</div>
+</div>
+
+<h3>3.4 运营端提炼企业私有方案</h3>
+<div class="flow">
+<div class="s"><b>企业</b>生成或编辑私有方案</div><div class="a">→</div>
+<div class="s"><b>企业端脱敏</b>公司名 / 部门名 / 人名 / 金额 → 占位符</div><div class="a">→</div>
+<div class="s"><b>管理员确认</b>确认脱敏 + 打开「允许平台使用」</div><div class="a">→</div>
+<div class="s"><b>运营读取</b>服务间调用，仅返回脱敏正文</div><div class="a">→</div>
+<div class="s"><b>平台草稿</b>origin=promoted，记录来源</div><div class="a">→</div>
+<div class="s"><b>提炼优化 → 审核发布</b>system_admin</div>
+</div>
+<p class="note">Operator 不保存租户原文；两侧各留一条审计记录（不含正文）。企业关闭共享后不能再读，已复制的脱敏草稿保留。</p>
+
+<h3>3.5 环境体检与补救</h3>
+<div class="flow">
+<div class="s"><b>体检</b>实际执行验证版本，识别 macOS 假 Python</div><div class="a">→</div>
+<div class="s"><b>A</b>随包运行时满足 → 直接运行</div><div class="a">→</div>
+<div class="s"><b>B</b>下载到私有目录；展示地址 / 大小 / hash / 命令；用户确认；校验 sha256</div><div class="a">→</div>
+<div class="s"><b>C</b>B 失败或需管理员权限 → 分步指引 + 重新检测</div><div class="a">→</div>
+<div class="s"><b>D</b>降级，仅文本部件，说明原因</div>
+</div>
+<p class="note">下载源顺序：本机已有 → 企业镜像 → 平台镜像 → 官方上游（企业可禁用）；每级失败换下一级。目录登记的 sha256 对所有来源都生效。</p>
+
+<h3>3.6 图片识别：OCR 与多模态两种方案</h3>
+<p class="lead">独立图片、扫描 PDF、docx / pptx 内嵌图片，都先抽成图片，再经统一的 <code>ImageRecognizer</code> 接口识别，输出同构的 <code>RecognizedText</code>（文本块 + 来源定位 + 置信度 + 类型：文字 / 表格 / 图表）。分块、证据、敏感扫描、Agent 下游完全不感知用了哪种方案。识别放在「解析」阶段统一预处理，Agent 只读识别后的分块，工具 <code>recognize_image</code> 仅用于对低置信度图片按需补识别。</p>
+<div class="grid2">
+<div class="card"><b>方案 A：专用 OCR 服务</b> <span class="tag mg">不依赖模型视觉能力</span>
+<div class="flow">
+<div class="s"><b>预处理</b>纠偏 / 去噪 / 限尺寸</div><div class="a">→</div>
+<div class="s"><b>OCR 引擎</b>文本块 + 坐标 + 置信度</div><div class="a">→</div>
+<div class="s"><b>版面还原</b>段落 / 表格</div><div class="a">→</div>
+<div class="s"><b>分块</b>进入证据库</div>
+</div>
+<p class="note"><b>怎么部署：</b>自部署开源引擎（如 PaddleOCR / Tesseract），放在与文件转换同级的隔离 worker 或独立容器；也可接云 OCR（图片会出内网，等同方案 B 的保密约束）。</p>
+<p class="note"><b>优点：</b>单页成本低且稳定；可私有化，图片不出内网；输出确定、可复现；Agent 用任何文本模型即可。</p>
+<p class="note"><b>缺点：</b>只出文字，不理解图表 / 流程图 / 架构图的含义；表格与版面要额外还原；多一个服务要运维和扩容；手写、低质量扫描依赖引擎。</p>
+<p class="note"><b>适合：</b>扫描件、合同表格、文字为主的截图，保密要求高的企业。</p>
+</div>
+<div class="card"><b>方案 B：多模态模型识别</b> <span class="tag op">依赖模型视觉能力</span>
+<div class="flow">
+<div class="s"><b>预处理</b>分页 / 缩放 / 切图</div><div class="a">→</div>
+<div class="s"><b>视觉模型</b>宿主注入，转写 + 图表描述</div><div class="a">→</div>
+<div class="s"><b>结构化</b>输出 RecognizedText</div><div class="a">→</div>
+<div class="s"><b>分块</b>进入证据库</div>
+</div>
+<p class="note"><b>怎么实现：</b>复用 4.1 的模型配置注入，不新增服务。所选模型须在 <code>capabilities</code> 中声明 <code>supports_vision</code>（并在已授权、已付费范围内），宿主在创建任务时校验；不满足则此方案不可选。</p>
+<p class="note"><b>优点：</b>零新增运维；能读懂图表、流程图、架构图并输出语义描述；复杂版面和表格还原较好。</p>
+<p class="note"><b>缺点：</b>按图计 token，成本高；可能漏字或幻觉，须配置信度与抽检；速度慢，受模型限流；图片内容经 Relay 发往模型上游。</p>
+<p class="note"><b>适合：</b>流程图、架构图、统计图表、版面复杂的资料。</p>
+</div>
+</div>
+
+<table>
+<tr><th style="width:16%">对比项</th><th style="width:42%">A 专用 OCR 服务</th><th>B 多模态模型</th></tr>
+<tr><td>新增部署</td><td>需要（OCR worker / 容器 + 容量监控）</td><td>不需要</td></tr>
+<tr><td>文字准确率</td><td>印刷体高、稳定；手写依赖引擎</td><td>较高，但偶有漏字 / 幻觉</td></tr>
+<tr><td>图表 / 流程图语义</td><td>不支持，只得到零散文字</td><td>支持，输出结构与含义描述</td></tr>
+<tr><td>单页成本</td><td>低、可预估（自有算力）</td><td>较高，随图片大小与模型价格变化</td></tr>
+<tr><td>保密</td><td>私有化时图片不出内网；云 OCR 则出网</td><td>图片经 Relay 发往模型上游；企业端使用企业授权模型</td></tr>
+<tr><td>可复现</td><td>高</td><td>较低（温度、模型版本影响）</td></tr>
+<tr><td>对模型的要求</td><td>无</td><td>所选模型须支持视觉</td></tr>
+<tr><td>额度计入</td><td>自有算力，不计模型额度</td><td>运营端计平台额度；企业端计企业额度</td></tr>
+</table>
+
+<div class="callout"><b>两种方案共同遵守：</b>
+<ul style="margin:6px 0 0 18px;padding:0">
+<li>识别结果和文档一样是<strong>数据而非指令</strong>：图片里的文字可能带「忽略以上规则」之类内容，进入 Agent 前按同一套注入防护处理。</li>
+<li>识别出的文本<strong>必须再过敏感扫描与脱敏</strong>：图片里的公司名、人名、金额同样适用 D-D / D-I 的审核规则。</li>
+<li>置信度低于阈值的文本块标记 <code>low_confidence</code>，在审核页提示人工核对，不静默采用（即上文界面中的「识别 32%」）。</li>
+<li>单图识别失败不丢弃：记一条 <code>image_unrecognized</code> 发现项，由审核人处理；失败比例超过阈值则整个任务置 <code>failed</code>。</li>
+<li>限制：每任务图片数、单图像素与大小、PDF 页数；超限截断并记录。页数 / token 计入任务预算。</li>
+</ul></div>
+
+<h3>怎么选</h3>
+<div class="grid2">
+<div class="card"><b>选择方式</b><p class="note">宿主服务配置默认方案 <code>image_recognizer = ocr | vision</code>；创建任务时使用者可在「可用集合」内改选。方案 B 仅当所选模型支持视觉时才出现；方案 A 仅当宿主已部署 OCR 服务时才出现。</p></div>
+<div class="card"><b>建议</b><p class="note">接口统一、两种实现都做成可插拔；P0 用同一批真实资料对比准确率、成本、耗时后定默认。倾向：文字为主的扫描件走 A，图表类走 B；两者组合（按图片类型自动路由）作为后续优化，本期先做「二选一」。</p></div>
+</div>
+<p class="note">保密建议：企业端若标记保密级别较高，方案 B（及云 OCR）默认需要企业管理员显式允许「图片发送到所选模型 / 外部服务」，否则只能用私有化 OCR。</p>
+</section>
+
+<section id="s4">
+<h2>4 服务端 AI Agent 生成内核 <small>同一 Agent，模型配置由宿主服务注入</small></h2>
+<p class="lead">生成核心里「分段摘要 → 行业综合 → 部件分类 → 敏感标注」这些需要理解与判断的环节，由部署在服务端的 AI Agent 承担。Agent 是控制面内部的生成执行体，不是第四个端：不承载会话、不向用户机器入站、不持有跨租户真相、不接触用户本地数据。</p>
+
+<div class="grid3">
+<div class="card"><b>部署形态：Pi SDK，每任务一个 Node 子进程</b><p class="note">Agent 基于 Pi SDK（<code>server/solution_authoring_worker</code>）。宿主 <code>operation_service</code> / <code>manager_service</code> 的任务 worker 为每个任务起一个子进程：stdin 传任务与模型配置，stdout 收结果。不是独立服务，不监听端口，不新增跨系统通信面；只注册受控工具，不启用 bash / 文件工具。</p></div>
+<div class="card"><b>模型配置：宿主服务注入</b><p class="note">Operator 用平台模型目录 + 内部额度；Manager 用企业授权模型 + 企业额度。Agent 不发现、不持有密钥。</p></div>
+<div class="card"><b>两端共用</b><p class="note">同一 system prompt、工具集、输出 schema、预算策略；差别只在宿主注入与草稿落库位置。</p></div>
+</div>
+
+<h3>4.1 模型配置来源与注入</h3>
+<table>
+<tr><th style="width:16%">宿主</th><th style="width:34%">模型来源</th><th style="width:14%">额度</th><th>注入内容</th></tr>
+<tr><td><code>operation_service</code></td><td>平台 Provider / 模型目录（<code>platform_provider</code> / <code>platform_model</code>）+ 内部 NewAPI Relay</td><td>平台内部额度</td><td><code>base_url</code>、<code>api_protocol</code>、<code>model_id</code>、短期 relay token、能力参数、预算</td></tr>
+<tr><td><code>manager_service</code></td><td>Operator 平台目录只读投影 + 企业授权（<code>TenantProviderAccess</code> / <code>resolve_tenant_access</code>）</td><td>计入企业</td><td>同上，另带 <code>tenant_id</code> 与 <code>allowed_model_ids</code> 约束</td></tr>
+</table>
+<p class="note">使用者在前端选择的模型，只是「从宿主可用集合中指定一个」；宿主校验通过后注入。relay token 短期、限定 model/tenant、最小权限；日志与审计只记 <code>model_id</code> / <code>provider_code</code>，不记 token；密钥不下发到用户端 Agent，不写入草稿或方案包。</p>
+
+<h3>4.2 Agent 运行模型与边界</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 430" width="1100" style="max-width:100%">
+<defs><marker id="arA" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="205" rx="10" fill="#f1ecff" stroke="#c9b8ff"/>
+<text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">宿主服务（云侧控制面，Agent 内嵌，不是第四个端）</text>
+<rect x="30" y="50" width="250" height="70" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="45" y="72" font-size="12.5" font-weight="700">Operator 宿主</text><text x="45" y="90" font-size="11.5" fill="#667085">平台 Provider / 模型目录</text><text x="45" y="106" font-size="11.5" fill="#667085">+ 内部 NewAPI Relay（平台额度）</text>
+<rect x="310" y="50" width="250" height="70" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="325" y="72" font-size="12.5" font-weight="700">Manager 宿主</text><text x="325" y="90" font-size="11.5" fill="#667085">平台目录只读投影 + 企业授权</text><text x="325" y="106" font-size="11.5" fill="#667085">TenantProviderAccess（企业额度）</text>
+<rect x="620" y="50" width="280" height="70" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="635" y="72" font-size="12.5" font-weight="700">模型配置注入</text><text x="635" y="90" font-size="11.5" fill="#667085">base_url · api_protocol · model_id</text><text x="635" y="106" font-size="11.5" fill="#667085">短期 relay token · 能力参数 · 预算</text>
+<rect x="150" y="150" width="800" height="55" rx="8" fill="#eef2ff" stroke="#3b5bdb"/><text x="170" y="172" font-size="12.5" font-weight="700" fill="#3b5bdb">共享 Agent 生成内核（同一份 Agent 定义与工具集）</text><text x="170" y="190" font-size="11.5" fill="#475467">规划 → 取证 → 起草 → 自检 → 修订 → 输出（SolutionPackage + components + evidence + findings）</text>
+<rect x="150" y="250" width="800" height="55" rx="8" fill="#fff" stroke="#c9b8ff"/><text x="170" y="272" font-size="12" font-weight="700">工具集（最小权限）</text><text x="170" y="290" font-size="11.5" fill="#667085">文档分块读取 · 证据检索 · 受控网页抓取（防 SSRF） · 图片识别（OCR / 多模态） · 知识库检索 · schema 校验 · 敏感扫描 · 部件分类 · 预算查询</text>
+<rect x="150" y="340" width="380" height="55" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="165" y="362" font-size="12" font-weight="700">Operator 草稿表（oper 库）</text><text x="165" y="380" font-size="11.5" fill="#667085">公共池方案</text>
+<rect x="570" y="340" width="380" height="55" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="585" y="362" font-size="12" font-weight="700">Manager 草稿表（tenant / RLS）</text><text x="585" y="380" font-size="11.5" fill="#667085">企业私有方案</text>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#arA)">
+<path d="M155 120 L400 150"/><path d="M435 120 L500 150"/><path d="M760 120 L620 150"/>
+<path d="M550 205 L550 250"/><path d="M340 305 L340 340"/><path d="M760 305 L760 340"/>
+</g>
+</svg>
+<p class="note">实线 = 进程内调用 / 数据流。Agent 只返回结构化结果与证据，由宿主服务落库、记录审计；不写业务库、不触达用户机器、会话内容不上传。</p>
+</div>
+
+<h3>4.3 工具集与预算</h3>
+<div class="grid2">
+<div class="card"><b>工具集（最小权限）</b><p class="note">文档分块读取、证据检索与定位、受控网页抓取（防 SSRF）、图片识别补识别（按配置走 OCR 或多模态，见 3.6）、知识库检索（可选，限企业授权范围）、schema 校验器、敏感扫描器、部件分类器、预算查询。文档内容一律视为<strong>数据</strong>而非指令（防 prompt injection）。</p></div>
+<div class="card"><b>预算与失败</b><p class="note">单次任务最大步数、token 预算、超时；超限终止并标记 failed，不落半成品。输出必须通过 <code>SolutionPackage</code>（含 <code>components</code> / <code>requirements</code>）schema 校验，失败自动修复重试，仍失败进入死信与告警。</p></div>
+</div>
+</section>
+
+<section id="s5">
+<h2>5 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features</code> 已有 catalog、solutions、providers、skill-market 等；<code>web/manager/src/features</code> 已有 solutions、solution-apply、knowledge、settings 等；桌面端有 TalentMarket、Workbench 等页面。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">web/shared</span></td><td>两端同构的共享组件（新）：文档上传与链接添加、生成进度、证据面板、敏感项处理表、部件与环境需求展示、脱敏预览</td><td>P2a/b</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>方案工作台：新建、文档、模型选择、补充说明、草稿编辑、审核发布（新，接入现有 solutions / catalog）</td><td>P2a</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>运行环境镜像页（新）：运行时制品列表、覆盖矩阵、依赖源与探测、导入 / 启用 / 停用 / 弃用、回传汇总看板</td><td>P2c</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>企业私有方案页（新）：列表、共享状态、读取脱敏正文、提炼成平台草稿、访问记录；提示词模板管理</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>私有方案生成向导、敏感项处理、脱敏确认、共享给平台开关与访问记录（新）</td><td>P2b / P3</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>平台方案页增加「复制成私有副本」和版本差异提示；solution-apply 增加来源选择与就绪清单（连接器密钥）</td><td>P2b</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>设置页新增「运行环境镜像」：地址、策略开关、离线包位置</td><td>P2c</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>环境体检与修复弹窗（B 确认 / C 引导 / D 降级）、方案应用后的就绪状态展示、离线包导入入口</td><td>P2c</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">clients/desktop（Rust）</span></td><td>扩展 <code>project_runner</code>：运行时目录管理、下载、sha256 校验、解压、建 venv、体检、错误码映射；制品首次运行确认沿用现有</td><td>P2c / P4</td><td class="sz L">L</td></tr>
+<tr><td>全部</td><td>i18n、权限控制（按角色显隐）、Playwright 端到端用例、a11y</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s6">
+<h2>6 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>生成核心 <code>solution_authoring</code>（新）</b>：解析（补 pptx / xlsx；旧格式经 LibreOffice 转换）、安全抓取（SSRF 防护）、<b>图片识别 <code>ImageRecognizer</code>（OCR 与多模态两种实现，统一输出 <code>RecognizedText</code>）</b>、分块、敏感扫描与脱敏、提示词两层模板；由原 Manager 的 <code>document_parser</code> 抽出，知识入库改用共享实现</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>共享 Agent 运行时（新）</b>：Node <code>server/solution_authoring_worker</code>（Pi SDK）+ Python <code>shared/solution_authoring/runner.py</code>（起子进程、stdin / stdout 协议、超时）；Agent 流程（规划→取证→起草→自检→修订→输出）、工具集、模型配置注入接口、预算 / 步数、schema 自检与重试、失败死信；内嵌于 operation_service 与 manager_service</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更</b>：<code>SolutionPackage</code> 增加 components / requirements（注意现为 <code>extra=forbid</code>，须先升级 Manager 与 Agent）；运行时目录、环境汇总等新模型；制品与目录签名复用 Ed25519 机制</td><td>P2c</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>迁移（0018 起）：draft、job、source_document、finding、review_event、prompt_template、runtime_artifact、package_mirror、mirror_probe、env_report_rollup；路由、权限（system_admin / system_operator）、发布写 <code>catalog_template</code>、<b>镜像覆盖发布闸门</b>、从上游导入并签名、定时探测；<b>接入平台模型解析并注入 Agent</b></td><td>P2a / P2c</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>读取企业端脱敏方案（经 <code>manager_gateway</code>）、生成 promoted 草稿、审计；模型选择走平台模型目录与内部额度</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>迁移（0051 起，RLS）：同构的草稿表、<code>enterprise_solution</code>（origin / source_ref / confidentiality / shared_with_platform）、runtime 镜像设置、访问审计；复制副本；<code>apply_solution</code> 支持 <code>source=tenant</code> 与就绪清单；模型选择限定在企业已授权范围，<b>接入企业授权模型解析并注入 Agent</b>，用量计入企业</td><td>P2b</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>脱敏服务（占位符映射保留在企业端）、对 Operator 的 service ingress（仅脱敏、已共享）、授权配置同步附带私有方案与镜像目录投影、环境汇总向上汇报（复用 rollup）</td><td>P2c / P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>同步私有方案与镜像目录到本地投影；<code>/api/agent/environment/check|repair|report</code>；repair 需确认令牌；只上报脱敏汇总</td><td>P2c</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>制品（Web / 脚本）装载、哈希与签名校验、拒绝篡改；知识种子随方案触发入库</td><td>P4</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>异步任务：用「数据库任务表 + worker」，不引入消息总线；幂等键；统一 problem+json；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例（注入文本、恶意压缩包、SSRF）测试</td><td>随各期</td><td class="sz L">L</td></tr>
+</table>
+<div class="callout"><b>注意：</b>「Operator 不持久化租户原文」与「提炼草稿存在 oper 库」并不矛盾——草稿只含企业确认过的脱敏内容，属平台自有数据；设计文档 §6 已写明。</div>
+</section>
+
+<section id="s7">
+<h2>7 运维要做什么</h2>
+<table>
+<tr><th style="width:18%">事项</th><th>内容</th><th style="width:10%">需要谁</th></tr>
+<tr><td>任务 worker</td><td>Operator、Manager 各部署生成任务 worker；超时、并发、单次 token 上限；失败重试与死信</td><td>运维 / 后端</td></tr>
+<tr><td>文件转换沙箱</td><td>LibreOffice 无界面转换放隔离容器：无外网、限 CPU / 内存 / 时间 / 文件大小，处理不可信文件</td><td>运维</td></tr>
+<tr><td>网页抓取出口</td><td>走受控出口：禁止内网、云元数据、重定向绕过；限速与域名黑名单</td><td>运维 / 安全</td></tr>
+<tr><td>图片识别</td><td>方案 A：部署 OCR worker（隔离、限 CPU / 内存 / 单图时间，无外网），容量与排队监控；方案 B：无新增部署，监控视觉模型调用的 token 成本、失败率与限流；两方案统一限制图片数 / 像素 / 页数，识别耗时与低置信度比例纳入指标</td><td>运维 / 待决策</td></tr>
+<tr><td>对象存储</td><td>源文档（保留期可配）、运行时制品、离线包；访问控制、加密、备份</td><td>运维</td></tr>
+<tr><td>镜像基础设施</td><td>运行时制品托管（对象存储 / CDN）；pip、npm 代理服务（devpi / Verdaccio / Nexus）；TLS、容量、带宽、监控</td><td>待决策（人工讨论）</td></tr>
+<tr><td>签名密钥</td><td>目录与制品使用 Ed25519；私钥保管、轮换流程，公钥随授权配置分发；禁止下发对称密钥</td><td>运维 / 安全</td></tr>
+<tr><td>定时探测</td><td>镜像与依赖源每隔固定时间探测；失败告警，覆盖缺口告警</td><td>运维</td></tr>
+<tr><td>发布顺序</td><td>先升级 Manager 与 Agent（接受新字段），再让 Operator 发布带新字段的方案；桌面端随版本发布；CI 按端产出精简产物</td><td>发布负责人</td></tr>
+<tr><td>可观测</td><td>指标：任务时长与失败率、模型 token 成本、下载失败率、hash_mismatch 数、降级比例；日志带 request_id / tenant_id，不含文档内容与密钥</td><td>运维 / 后端</td></tr>
+<tr><td>额度与成本</td><td>企业生成用企业 Relay 额度，运营用平台内部额度；设单次与每日上限，避免失控</td><td>运营 / 财务</td></tr>
+<tr><td>数据保留与清理</td><td>源文档保留期、草稿归档、审计保留期、删除流程（含企业撤销共享后的处理说明）</td><td>运营 / 法务</td></tr>
+</table>
+</section>
+
+<section id="s8">
+<h2>8 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:22%">依赖</th><th style="width:26%">验收</th></tr>
+<tr><td>P0 验证</td><td>用 3 套真实资料验证解析覆盖率、生成通过 schema 的比例、可用度、成本；对比「确定性管线」与「服务端 Agent」的通过率、证据可追溯性与成本；便携 Python 在 macOS arm64 / Windows x64 下载、校验、建 venv 的耗时与失败率；<b>图片识别 A（OCR）与 B（多模态）对比：同一批扫描件、截图、图表，比较文字准确率、图表理解、单页成本、耗时、低置信度比例</b></td><td>样例资料、测试模型</td><td>结论回流设计；达标再进 P1</td></tr>
+<tr><td>P1 共享核心</td><td>解析、旧格式转换、抓取、图片识别（OCR 与多模态两种实现 + 统一接口）、扫描、提示词模板；共享 Agent 运行时（工具集、模型配置注入、预算 / 步数、schema 自检与重试）</td><td>P0</td><td>各格式测试、负例测试；Agent 输出通过率与预算超限测试</td></tr>
+<tr><td>P2a 运营端</td><td>草稿、审核发布、接入平台模型解析、工作台页面</td><td>P1</td><td>上传 → 发布 → 企业目录可见</td></tr>
+<tr><td>P2b 企业端</td><td>私有方案、复制副本、应用来源 tenant、接入企业授权模型解析、页面（与 P2a 并行）</td><td>P1</td><td>跨租户隔离；授权 → Agent 同步</td></tr>
+<tr><td>P2c 环境与镜像</td><td>契约变更、镜像页、企业镜像、体检与 B/C/D</td><td>契约获批（已批）、镜像托管选型</td><td>干净机器上无 Python 能下载、校验、运行；断网进 C/D；hash 不符被拒；缺口方案无法发布</td></tr>
+<tr><td>P3 跨端</td><td>脱敏确认、共享开关、运营读取与提炼、双侧审计</td><td>P2a、P2b</td><td>未共享不可读；撤销后不可读；审计两侧可查</td></tr>
+<tr><td>P4 制品</td><td>知识种子、连接器依赖、Web / 脚本制品、签名、首次运行确认</td><td>P2c</td><td>端到端真机：生成 → 审核 → 发布 → 应用 → 员工运行；篡改被拒</td></tr>
+</table>
+<p class="note">P2a 与 P2b 可并行；P2c 可与 P3 并行；P4 依赖 P2c。</p>
+</section>
+
+<section id="s9">
+<h2>9 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">两端同期</span><span class="tag ok">公共池 + 私有池</span><span class="tag ok">企业复制副本修改</span><span class="tag ok">运营读脱敏正文并确认</span><span class="tag ok">跨端读取契约获批</span><span class="tag ok">共享契约变更获批</span><span class="tag ok">B/C/D 都做</span><span class="tag ok">首次需要时下载</span><span class="tag ok">macOS arm64 + Windows x64</span><span class="tag ok">允许直连官方上游</span><span class="tag ok">运行时联网：仅首次确认</span><span class="tag ok">抓取与图片识别本期做</span><span class="tag ok">旧格式支持</span><span class="tag ok">服务端 AI Agent（两端共用）</span><span class="tag ok">模型配置由宿主服务注入</span><span class="tag ok">Agent 用 Pi SDK（每任务一个子进程）</span><span class="tag ok">首期：运营端纵切</span><span class="tag ok">图片识别首期做多模态</span></p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>P0 样例资料</td><td>提供 3 套真实行业资料（可先脱敏）；没有则先用公开资料</td><td><span class="tag bad">P0</span></td></tr>
+<tr><td>2</td><td>图片识别方案：A 专用 OCR 服务 / B 多模态模型（见 3.6）</td><td>两种都按统一接口实现；P0 对比后定默认。同时需定：OCR 引擎选哪个（自部署开源 or 云）、低置信度阈值、图片发往外部模型的保密规则</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>3</td><td>镜像托管：运行时放对象存储还是 CDN；pip / npm 代理用什么</td><td>讨论项。P0 可直接用官方上游；该项必须在 P2c 上线前定</td><td><span class="tag bad">P2c</span></td></tr>
+<tr><td>4</td><td>首批运行时与版本策略</td><td>建议 Python 3.11 / 3.12 两个小版本线，Node 沿用随包；新增版本由 system_admin 审批</td><td><span class="tag warn">P2c</span></td></tr>
+<tr><td>5</td><td>脚本风险控制（运行时不禁网后）</td><td>脚本部件强制 system_admin 逐文件审核 + 静态扫描；企业自生成的脚本须第二位管理员确认后才能授权给成员</td><td><span class="tag warn">P4</span></td></tr>
+<tr><td>6</td><td>脱敏确认由谁做</td><td>owner / enterprise_admin；含「仅内部」项时需第二人</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>7</td><td>撤销共享后的语义</td><td>撤销后不能再读；已复制的脱敏草稿保留，界面上明示。是否要求运营同时删除草稿？</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>8</td><td>数据保留期</td><td>源文档默认保留 30 天可配，草稿与审计另定</td><td><span class="tag warn">P2a</span></td></tr>
+<tr><td>9</td><td>生成成本上限</td><td>单次 token 上限 + 每日 / 每企业配额，超限提示</td><td><span class="tag warn">P1</span></td></tr>
+<tr><td>10</td><td>企业副本与平台升级</td><td>只提示「平台有新版本」并展示差异，不自动合并（已在非目标）</td><td><span class="tag gray">P2b</span></td></tr>
+<tr><td>11</td><td>Intel Mac / Linux</td><td>首期不支持；这些用户落入 C / D。是否需要排期？</td><td><span class="tag gray">后续</span></td></tr>
+<tr><td>12</td><td>提示词模板的维护</td><td>由运营端维护版本化模板；谁有权改（建议 system_admin），改动是否需要评测集回归</td><td><span class="tag warn">P1</span></td></tr>
+<tr><td>13</td><td>运营端调用平台模型的凭据</td><td>首期用运营端独占的内部 relay key（环境变量，在 NewAPI 侧限定模型与额度）；是否改为每任务签发短期 token 待定</td><td><span class="tag warn">P2a</span></td></tr>
+<tr><td>14</td><td>模型试跑 / 对比</td><td>是否提供「正式生成前试跑所选模型」的能力，消耗少量额度</td><td><span class="tag gray">P1</span></td></tr>
+<tr><td>15</td><td>Agent 预算与失败策略</td><td>默认最大步数、token 预算、超时；超限与失败的死信、重试与告警策略</td><td><span class="tag warn">P1</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#1（样例资料，开启 P0）、#3（镜像托管，决定 P2c 能否按期）、#5（脚本风险控制，决定 P4 的审核成本）、#13（Agent 运行时形态，决定 P1 的实现路径）。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.getElementById(b.dataset.p).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
