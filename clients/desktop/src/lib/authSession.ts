@@ -73,10 +73,12 @@ export function isPasswordResetRequired(error: unknown): boolean {
   const code = candidate.problem?.code ?? candidate.code
   const detail = candidate.problem?.detail ?? candidate.message
 
-  if (candidate.status !== 403 || code !== 'forbidden' || typeof detail !== 'string') {
-    return false
-  }
-  return /password(?:\s+expired[^;]*)?;?\s*reset required|password reset required/i.test(detail)
+  if (candidate.status !== 403) return false
+  // Manager 的首登/过期改密用的是自己的错误码，不再复用通用 forbidden；错误码本身已经足够判断。
+  if (code === 'password_reset_required' || code === 'password_expired') return true
+  // 只有通用 forbidden 才允许靠 detail 文案判断，避免把无关的 403 当成密码重置。
+  if (code !== 'forbidden' || typeof detail !== 'string') return false
+  return /password(?:\s+expired[^;]*)?;?\s*reset required/i.test(detail)
 }
 
 export function shouldInvalidateSessionOnUnauthorized(
