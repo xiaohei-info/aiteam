@@ -1,7 +1,34 @@
 # 桌面端 Windows x64 适配方案
 
-状态：待排期（2026-10-31 余飞确认：本轮只验收 macOS ARM64，Windows 后续适配）。
-基线：main `3a2f7964`。
+状态：**部分完成**。PR #183（2026-11-12）已落地平台抽象、构建脚本与 Windows CI 任务，但这些改动**都没有在 Windows 真机上验证过**。
+
+- 2026-10-31：余飞确认本轮只验收 macOS ARM64，Windows 后续适配（基线 main `3a2f7964`）。
+- 2026-11-12：PR #183 落地，逐项状态见下节。
+
+## #183 实施状态
+
+### 已完成
+
+| 方案步骤 | 落地内容 |
+| --- | --- |
+| 1 平台抽象 | `agent.rs` 按平台分流：Windows 用 Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）托管子进程，先走 Agent 正常退出、超时再结束 Job；单实例锁在 Windows 改用独占共享模式（`share_mode(0)`，靠 `ERROR_SHARING_VIOLATION` 判定「已在运行」）代替 `flock`；`secure_session.rs` 在 Windows 用 DPAPI 保护凭据库主密钥，并把 `Corrupt` / `ForeignDpapi` 分开诊断 |
+| 2 构建脚本 | 新增 `scripts/agent-target.mjs` 统一描述目标平台；`build-agent` / `import-agent` / `check-agent` / `check-agent-package` / `agent-runtime` / `quarantine` / `integrate-agent` 按目标平台工作；`quarantine` 在 Windows 上用 `Unblock-File` 清除 Zone.Identifier；`build.rs` 放开 `x86_64-pc-windows-msvc` 并按目标校验随包 manifest |
+| 4 CI | `desktop-ci.yml` 新增 `windows-2022` job：`cargo check --all-targets` / `cargo test --lib` / `cargo clippy --all-targets -- -D warnings` |
+
+附带修掉的 Windows 阻塞项：
+
+- `start-agent.cmd` 改用相对 specifier 引 tsx，绕开安装路径里的 `#` / `%` / 空格。
+- `src-tauri/icons/icon.ico` 换成真实多尺寸图标。
+- Agent 沙箱补齐 Windows 契约测试（原先只测 macOS 分支）。
+
+### 仍未完成
+
+- `scripts/dev-env.mjs` 仍断言 `process.platform === 'darwin'` —— Windows 上跑不了开发环境。
+- `scripts/office-editor-middleware.mjs` 未补 Windows 的打开方式。
+- 方案步骤 3 整体未做：窗口样式（透明 / Mica）、NSIS 打包、WebView2 引导。
+- 方案步骤 4 里的 `tauri build --no-bundle` 未在 Windows CI 跑（当前只跑 check / test / clippy）。
+- 方案步骤 5（Authenticode 签名）未做，证书未定。
+- 方案「验收」一节的 Windows 真机验收全部未做。
 
 ## 现状
 
