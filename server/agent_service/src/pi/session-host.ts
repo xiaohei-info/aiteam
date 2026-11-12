@@ -1809,6 +1809,21 @@ export class SessionHost {
           if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
         }
       } finally {
+        // Read what the global settle signal needs before the active state is cleared: the abort
+        // flag and the hidden checklist boundary are both reset below. A failure here must not skip
+        // artifact capture or session disposal.
+        let settledSignal: { outcome: ReturnType<typeof observedWorkOutcome>; lastPreview: string | null; assistantMessageCount: number } | undefined;
+        try {
+          const replyEntries = this.replyEntries(record, entriesBefore);
+          const assistantEntries = replyEntries.filter((entry) => entry.type === "message" && entry.message.role === "assistant");
+          settledSignal = {
+            outcome: observedWorkOutcome(stopReason, settled, record.aborting, failed),
+            lastPreview: assistantEntries.length > 0 ? this.latestAssistantText(replyEntries).slice(0, 200) : null,
+            assistantMessageCount: assistantEntries.length,
+          };
+        } catch (error) {
+          appLogger.log("warn", "global_activity.settle_signal_failed", { conversation_id: record.conversationId, error: error instanceof Error ? error.message : String(error) });
+        }
         // The model run is over before the bounded artifact post-processing finishes. Clear the
         // active state first so callers can change thinking level or start the next run while the
         // filesystem snapshot is being finalized.
@@ -1828,19 +1843,23 @@ export class SessionHost {
         record.activeMessage = undefined;
         record.activeReply = undefined;
         record.reconcile = undefined;
-        const replyEntries = this.replyEntries(record, entriesBefore);
-        const hasAssistantMessage = replyEntries.some((entry) => entry.type === "message" && entry.message.role === "assistant");
-        this.publishGlobal({
-          type: "prompt_settled",
-          conversation_id: record.conversationId,
-          employee_id: record.employeeId ?? null,
-          tenant_id: owner?.tenantId ?? null,
-          member_id: owner?.memberId ?? null,
-          outcome: observedWorkOutcome(stopReason, settled, record.aborting, failed),
-          last_preview: hasAssistantMessage ? this.latestAssistantText(replyEntries).slice(0, 200) : null,
-          last_message_at: new Date().toISOString(),
-          assistant_message_count: replyEntries.filter((entry) => entry.type === "message" && entry.message.role === "assistant").length,
-        });
+        if (settledSignal) {
+          try {
+            this.publishGlobal({
+              type: "prompt_settled",
+              conversation_id: record.conversationId,
+              employee_id: record.employeeId ?? null,
+              tenant_id: owner?.tenantId ?? null,
+              member_id: owner?.memberId ?? null,
+              outcome: settledSignal.outcome,
+              last_preview: settledSignal.lastPreview,
+              last_message_at: new Date().toISOString(),
+              assistant_message_count: settledSignal.assistantMessageCount,
+            });
+          } catch (error) {
+            appLogger.log("warn", "global_activity.publish_failed", { conversation_id: record.conversationId, error: error instanceof Error ? error.message : String(error) });
+          }
+        }
         const baseline = await workspaceBeforePromise;
         // The async baseline may finish after Session initialization. Exclude files whose scan
         // observation proves they appeared during this run, otherwise the first capture sees them as old.
