@@ -1,7 +1,7 @@
 /* 焦点样式交给 globals.css 的统一品牌 ring（不要在这里覆盖 outline/box-shadow）。 */
 .window-controls {
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-window-controls);
   top: 12px;
   right: 12px;
   display: flex;
