@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from 'react-router-dom'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import MacWindowControls from '../../components/Layout/MacWindowControls'
 import {
   User,
   Settings as SettingsIcon,
@@ -52,21 +52,7 @@ export default function Profile() {
       <aside className="relative flex flex-col w-[220px] border-r border-[var(--border)] bg-surface-1 pt-4">
         {/* Window controls */}
         <div data-tauri-drag-region className="flex items-center gap-[7px] px-[18px] mb-4 h-10">
-          <button
-            onClick={() => getCurrentWindow().close()}
-            className="w-[12px] h-[12px] rounded-full bg-[#ff5f57] hover:bg-[#ff3b30] transition-colors duration-150 cursor-pointer border border-[#e0443e]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
-            title="关闭"
-          />
-          <button
-            onClick={() => getCurrentWindow().minimize()}
-            className="w-[12px] h-[12px] rounded-full bg-[#febc2e] hover:bg-[#f5a623] transition-colors duration-150 cursor-pointer border border-[#dea123]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
-            title="最小化"
-          />
-          <button
-            onClick={() => getCurrentWindow().toggleMaximize()}
-            className="w-[12px] h-[12px] rounded-full bg-[#28c840] hover:bg-[#1db934] transition-colors duration-150 cursor-pointer border border-[#1aab29]/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
-            title="最大化"
-          />
+          <MacWindowControls />
         </div>
 
         {/* Back button */}

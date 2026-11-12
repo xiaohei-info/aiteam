@@ -1,0 +1,47 @@
+/* 焦点样式交给 globals.css 的统一品牌 ring（不要在这里覆盖 outline/box-shadow）。 */
+.window-controls {
+  position: fixed;
+  z-index: var(--z-window-controls);
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  display: flex;
+  width: 44px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: default;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.window-control:hover {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  color: var(--text-primary);
+}
+
+.window-control:active {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+.window-control-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.window-control-close:active {
+  background: #b2261a;
+  color: #ffffff;
+}
