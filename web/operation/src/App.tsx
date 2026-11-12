@@ -10,6 +10,7 @@ import { CatalogPage, CatalogDetailPage } from "./features/catalog";
 import { AccountsPage } from "./features/accounts";
 import { FinancePage } from "./features/finance";
 import { SolutionsPage } from "./features/solutions";
+import { DraftDetailPage, SolutionAuthoringPage } from "./features/solution-authoring";
 import { SystemHealthPage } from "./features/system-health";
 import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
 import { PlatformProvidersPage } from "./features/providers/PlatformProvidersPage";
@@ -31,6 +32,8 @@ export function App(): React.ReactNode {
         {/* 旧 /catalog 列表已拆分为 /experts + /industry-solutions，收藏夹重定向 */}
         <Route path="/catalog" element={<Navigate to="/experts" replace />} />
         <Route path="/catalog/:catalog_type/:template_id" element={<CatalogDetailPage />} />
+        <Route path="/solution-authoring" element={<SolutionAuthoringPage />} />
+        <Route path="/solution-authoring/:draft_id" element={<DraftDetailPage />} />
         <Route path="/finance" element={<FinancePage />} />
         <Route path="/solutions" element={<SolutionsPage />} />
         <Route path="/board" element={<BoardPage />} />

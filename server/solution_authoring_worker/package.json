@@ -1,0 +1,26 @@
+{
+  "name": "@aiteam/solution-authoring-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "行业文档生成的服务端 Agent（Pi SDK）。由控制面宿主按任务起子进程：stdin 收任务，stdout 回结果；不监听端口。",
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 src/*.test.ts",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "tsx": "4.19.2",
+    "typebox": "1.3.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3"
+  }
+}

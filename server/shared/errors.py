@@ -90,6 +90,14 @@ def _response(problem: Problem) -> JSONResponse:
     )
 
 
+def problem_response(exc: AppError, *, instance: str | None, request_id: str | None) -> JSONResponse:
+    """在异常处理器之外（如 ASGI 中间件）生成与 handler 同形的 problem+json 响应。"""
+    return _response(_to_problem(
+        status=exc.status, code=exc.code, title=exc.title, detail=exc.detail,
+        instance=instance, request_id=request_id, errors=exc.errors,
+    ))
+
+
 def install_exception_handlers(app: FastAPI) -> None:
     """挂载统一异常处理。各端共用，不自定义错误形态（02 §11.2）。"""
 
@@ -105,10 +113,7 @@ def install_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AppError)
     async def _handle_app_error(request: Request, exc: AppError):  # noqa: ANN202
-        return _response(_to_problem(
-            status=exc.status, code=exc.code, title=exc.title, detail=exc.detail,
-            instance=_instance(request), request_id=_request_id(request), errors=exc.errors,
-        ))
+        return problem_response(exc, instance=_instance(request), request_id=_request_id(request))
 
     @app.exception_handler(StarletteHTTPException)
     async def _handle_http_exception(request: Request, exc: StarletteHTTPException):  # noqa: ANN202

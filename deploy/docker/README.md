@@ -142,6 +142,11 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 | `MODEL_PRICING_URL` | Operator 公开模型价格源（仅补齐未知价格） | `https://models.dev/api.json` |
 | `NEWAPI_ADMIN_USER_ID` | Operation-only NewAPI 管理用户 ID | `1` |
 | `NEWAPI_ADMIN_TOKEN` | Operation-only NewAPI 管理 access token；禁止注入 Manager/Agent | `***` |
+| `SOLUTION_AUTHORING_RELAY_TOKEN` | Operation-only 行业文档生成调用模型用的内部 relay key；缺失时发起生成返回 503；禁止注入 Manager/Agent | `***` |
+| `SOLUTION_AUTHORING_STORAGE_DIR` | Operation 行业文档生成的资料原件目录，需持久化；production 缺失返回 503，dev/test 缺省落到系统临时目录 | `/var/lib/aiteam/solution-authoring` |
+| `SOLUTION_AUTHORING_RELAY_BASE_URL` | 可选；行业文档生成的模型中转地址覆盖，缺省用 `NEWAPI_PUBLIC_BASE_URL` | （留空） |
+| `SOLUTION_AUTHORING_WORKER_ENABLED` / `SOLUTION_AUTHORING_WORKER_CONCURRENCY` | 可选；生成任务执行器开关（`1/0`，配置了业务库与管理库连接时默认开启）与并发（1–4） | `1` / `1` |
+| `SOLUTION_AUTHORING_WORKER_DIR` / `SOLUTION_AUTHORING_NODE` | 可选；worker 目录与 node 可执行文件，缺省为 `server/solution_authoring_worker` 与 PATH 中的 node（需 Node ≥ 22.19） | （留空） |
 | `NEWAPI_DB_PASSWORD` / `NEWAPI_REDIS_PASSWORD` | NewAPI 专属 DB/Redis 密码 | `***` |
 | `NEWAPI_SESSION_SECRET` / `NEWAPI_CRYPTO_SECRET` | NewAPI 会话/数据库敏感字段加密材料 | `***` |
 | `AITEAM_MANAGER_DATA_ROOT` | Manager 持久化知识源根目录（Compose 挂载点） | `/app/data` |
@@ -170,6 +175,8 @@ docker run --rm aiteam-agent:0.1.0 sh -c \
 > Manager 与 Operation 在 Compose/ctl/CI 中使用独立 PostgreSQL databases（默认 `manager_control_db` 与 `oper`）；不要把两端 DSN 互换。NewAPI 是平台内部 AI Relay，`newapi` profile 会启动固定版本 NewAPI、独立 PostgreSQL 与 Redis，DB/Redis 不发布公网。`NEWAPI_URL`/`NEWAPI_ADMIN_BASE_URL` 只给 Operator 管理面使用；`NEWAPI_PUBLIC_BASE_URL` 是 Manager、Agent 和自定义客户端访问推理的唯一地址，不能填 `http://newapi:3000` 等 Docker 内部地址。上游 channel key 与管理 token 只由 Operator/NewAPI 持有；Manager/Agent 只能获得每 tenant 独立受限推理 token。`.env.*` 必须为 `0600`，生产启动器拒绝缺失/占位 secret。
 >
 > LightRAG 与 Hindsight 是 Manager-side 组件，Manager 业务页提供带认证的原生服务超链接。LightRAG 使用独立 PostgreSQL + pgvector 数据库/role，Manager 按 tenant 选择并持久化 workspace 与 endpoint `instance_id`；请求通过 `LIGHTRAG-WORKSPACE` header 选择 workspace，Compose 不设置全局 `POSTGRES_WORKSPACE`。生产校验中显式设置 `LIGHTRAG_IMAGE` 表示本机 profile，并要求运行时 `LIGHTRAG_DB_*`；不设置 image 时可使用远端 legacy URL/key、endpoint pool 或 disabled 模式，bootstrap 管理员字段由 `init-db.sh` 单独校验。Hindsight 使用 Manager 专属实例和 `HINDSIGHT_CP_ACCESS_KEY` 控制原生控制台。两者的 API/service key 不进入前端或超链接，登录凭据由对应组件的 secret 配置。bootstrap、校验、备份/恢复/升级/rollback 见对应运维 Runbook；变量名以各组件配置为准（**不读旧 `app/.env`、不用 `HERMES_WEBUI_*`）。
+>
+> 行业文档生成：Operation 按任务从源码启动 `server/solution_authoring_worker`（需 Node ≥ 22.19 与该目录下的 `pnpm install`）。源码部署由 `deploy/ci/run.sh` 安装依赖；**`Dockerfile.operation` 的运行时镜像目前没有 Node，也没有拷入 worker**，在镜像里发起生成会以 `worker_unavailable` 失败，其余功能不受影响。
 >
 > 原生控制台入口：Operator「大模型服务」页直接打开当前访问 host 的 `NEWAPI_PORT`（默认 9300）；Manager「知识库」和「记忆管理」页分别直接打开当前访问 host 的 `LIGHTRAG_PORT`（默认 9621）与 Hindsight UI（默认 9999）。三个服务均由组件自身登录页认证，超链接不会携带 token/密码。
 ---

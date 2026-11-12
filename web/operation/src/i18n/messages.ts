@@ -11,6 +11,7 @@ export const operationMessages: LocaleCatalog = {
     "operation.nav.skillMarket": "技能市场",
     "operation.nav.providers": "大模型服务",
     "operation.nav.industrySolutions": "行业解决方案",
+    "operation.nav.solutionAuthoring": "行业文档生成",
     "operation.nav.solutions": "行业方案统计",
     "operation.nav.board": "跨企业看板",
     "operation.nav.accounts": "账号管理",

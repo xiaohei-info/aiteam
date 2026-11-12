@@ -128,6 +128,7 @@ describe("operation shell config", () => {
       "skill-market",
       "providers",
       "industry-solutions",
+      "solution-authoring",
       "solutions",
       "finance",
       "board",

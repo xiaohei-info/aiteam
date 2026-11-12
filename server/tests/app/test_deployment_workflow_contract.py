@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -207,3 +206,14 @@ def test_taiyi_installs_independent_agent_lockfile_before_startup():
     assert script.index('export PATH="${PNPM_SHIM_DIR}:${PATH}"') < install
     assert install < script.index('rm -rf "${PNPM_SHIM_DIR}"')
     assert '|| fail "Agent pnpm install failed:' in script
+
+
+def test_taiyi_installs_solution_authoring_worker_lockfile_before_startup():
+    # Operation 按任务从源码启动 worker，缺 node_modules/tsx 时生成会报 worker_unavailable。
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    install = script.index('(cd server/solution_authoring_worker && pnpm install --frozen-lockfile')
+    assert script.index('git pull --ff-only origin') < install
+    assert script.index('export PATH="${PNPM_SHIM_DIR}:${PATH}"') < install
+    assert install < script.index('rm -rf "${PNPM_SHIM_DIR}"')
+    assert '|| fail "Solution authoring worker pnpm install failed:' in script
+    assert (ROOT / "server/solution_authoring_worker/pnpm-lock.yaml").is_file()
