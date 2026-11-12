@@ -5,6 +5,7 @@ import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { join } from "node:path";
+import { scrubAgentEnvironment } from "../launch-guards.js";
 import { assertWorkspacePath, LocalSandbox, macosExtraWrites, macosReadBoundary } from "./sandbox.js";
 
 function shellQuote(path: string): string {
@@ -263,5 +264,17 @@ test("LocalSandbox 报告 bash shell 是否可解析", () => {
     return;
   }
   assert.equal(sandbox.isShellAvailable(), true);
+});
+
+test("credential scrub keeps PATH so shell readiness stays resolvable", () => {
+  // main.ts scrubs the inherited environment before serving /readyz, and readiness on Windows is
+  // `isShellAvailable()`: a scrubbed PATH makes `where bash.exe` fail, so the Agent would report
+  // not-ready forever and the desktop would never connect.
+  const env = { ...process.env };
+  scrubAgentEnvironment(env);
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH");
+  assert.ok(pathKey, "the Agent environment lost PATH");
+  const originalPath = process.env[pathKey];
+  assert.equal(env[pathKey], originalPath);
 });
 

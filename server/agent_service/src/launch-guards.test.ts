@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
+import { assertAgentLaunchConfiguration, isForbiddenAgentEnvironmentName, scrubAgentEnvironment } from "./launch-guards.js";
 
 const production = {
   AITEAM_ENV: "production",
@@ -84,6 +84,21 @@ test("Agent credential policy is case-insensitive and preserves allowed local en
   assert.equal(env.PRIVATE_KEY, undefined);
   assert.equal(env.AITEAM_MANAGER_URL, "https://manager.example.test");
   assert.equal(env.AITEAM_RAG_MCP_URL, "https://manager.example.test/api/manager/rag/mcp");
+  assert.equal(env.AITEAM_AGENT_JWKS_PATH, "manager-jwks.json");
+});
+
+test("credential policy keeps PATH so the Agent can still spawn tools", () => {
+  // Scrubbing PATH used to break the bash tool and, on Windows, the readiness probe itself: the bash
+  // tool resolves Git Bash through `where bash.exe`, so a missing PATH made /readyz report not-ready.
+  for (const name of ["PATH", "Path", "path"]) assert.equal(isForbiddenAgentEnvironmentName(name), false, `${name} must survive the scrub`);
+  // AITEAM_AGENT_JWKS_PATH is public key material and stays whitelisted; other credential paths must go.
+  for (const name of ["PRIVATE_KEY_PATH", "VENDOR_CREDENTIAL_PATH", "HINDSIGHT_RECALL_PATH"]) assert.equal(isForbiddenAgentEnvironmentName(name), true, `${name} is a credential path`);
+
+  const env = { PATH: "/usr/local/bin:/usr/bin", Path: "C:\\Windows\\System32", PRIVATE_KEY_PATH: "key.pem", AITEAM_AGENT_JWKS_PATH: "manager-jwks.json" } as NodeJS.ProcessEnv;
+  scrubAgentEnvironment(env);
+  assert.equal(env.PATH, "/usr/local/bin:/usr/bin");
+  assert.equal(env.Path, "C:\\Windows\\System32");
+  assert.equal(env.PRIVATE_KEY_PATH, undefined);
   assert.equal(env.AITEAM_AGENT_JWKS_PATH, "manager-jwks.json");
 });
 
