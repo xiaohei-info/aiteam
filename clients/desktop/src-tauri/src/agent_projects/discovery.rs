@@ -2,6 +2,7 @@
 //! the cached scan that turns sessions into project summaries.
 
 use super::*;
+use std::ffi::OsString;
 
 pub(super) struct CacheEntry {
     pub(super) modified: Option<SystemTime>,
@@ -37,6 +38,38 @@ pub(super) fn env_dir(name: &str) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
+/// The current user's home directory.
+///
+/// Only looking at `HOME` broke every local source on Windows: Windows shells export `USERPROFILE`
+/// (or `HOMEDRIVE`+`HOMEPATH`) instead, and the `HOME` a Git Bash parent sets is a POSIX path such
+/// as `/c/Users/me`, which is not an absolute Windows path. The scan then failed with
+/// `home_unavailable` and the workbench reported “无法确定当前用户目录”.
+pub(super) fn home_dir() -> Option<PathBuf> {
+    home_dir_from(|name| std::env::var_os(name))
+}
+
+pub(super) fn home_dir_from(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let absolute = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    absolute("HOME")
+        .or_else(|| absolute("USERPROFILE"))
+        .or_else(|| {
+            // HOMEDRIVE is just `C:`, which is not absolute on its own, so join before checking.
+            let drive = env("HOMEDRIVE")?;
+            let directory = env("HOMEPATH")?;
+            let joined = PathBuf::from(format!(
+                "{}{}",
+                drive.to_string_lossy(),
+                directory.to_string_lossy()
+            ));
+            joined.is_absolute().then_some(joined)
+        })
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn claude_app_dir(home: &Path) -> Option<PathBuf> {
     Some(home.join("Library/Application Support/Claude"))
@@ -58,7 +91,7 @@ pub(super) fn claude_app_dir(home: &Path) -> Option<PathBuf> {
 
 impl Roots {
     pub(super) fn resolve() -> Result<Self, String> {
-        let home = env_dir("HOME").ok_or("home_unavailable")?;
+        let home = home_dir().ok_or("home_unavailable")?;
         let claude_app = claude_app_dir(&home);
         Ok(Self {
             codex: env_dir("CODEX_HOME").unwrap_or_else(|| home.join(".codex")),

@@ -744,3 +744,46 @@ fn conversation_named_workspaces_resolve_one_or_two_levels_without_links() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+fn home_from(pairs: &[(&str, &str)]) -> Option<PathBuf> {
+    home_dir_from(|name| {
+        pairs
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| std::ffi::OsString::from(value))
+    })
+}
+
+/// Windows shells export USERPROFILE (or HOMEDRIVE+HOMEPATH) instead of HOME, and the HOME a Git Bash
+/// parent sets is a POSIX path — a scan that only read HOME reported `home_unavailable` there.
+/// The precedence below is Windows-only: on Unix `/c/Users/me` itself is an absolute HOME and must win.
+#[cfg(windows)]
+#[test]
+fn home_falls_back_to_windows_variables() {
+    assert_eq!(
+        home_from(&[("HOME", "/c/Users/me"), ("USERPROFILE", home_dir())]),
+        Some(PathBuf::from(home_dir()))
+    );
+}
+
+#[test]
+fn home_ignores_empty_and_relative_values() {
+    assert_eq!(home_from(&[("HOME", "")]), None);
+    assert_eq!(home_from(&[("HOME", "relative/dir")]), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_home_variables_resolve_without_home() {
+    assert_eq!(
+        home_from(&[("USERPROFILE", r"C:\Users\me")]),
+        Some(PathBuf::from(r"C:\Users\me"))
+    );
+    assert_eq!(
+        home_from(&[("HOMEDRIVE", "C:"), ("HOMEPATH", r"\Users\me")]),
+        Some(PathBuf::from(r"C:\Users\me"))
+    );
+    // A Git Bash HOME is not an absolute Windows path and must not win over USERPROFILE.
+    assert_eq!(home_from(&[("HOME", "/c/Users/me")]), None);
+    assert!(super::home_dir().is_some(), "the local scan needs a home directory on Windows");
+}
