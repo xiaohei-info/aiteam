@@ -10,7 +10,7 @@ import { ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutErro
 import { appLogger } from "../observability.js";
 import { LocalSandbox } from "./sandbox.js";
 import { ApprovalExpiredError, ApprovalService } from "../approval-service.js";
-import { resetTranscript, SessionHost } from "./session-host.js";
+import { resetTranscript, SessionHost, type GlobalActivityEvent } from "./session-host.js";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { serializePiEvent } from "./event-sse.js";
@@ -1600,3 +1600,142 @@ test("several tool calls expiring in one scheduled turn record a single failure"
     await fixture.close();
   }
 });
+
+test("SessionHost broadcasts prompt_started and prompt_settled on the global activity bus", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper" }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost();
+    const events: GlobalActivityEvent[] = [];
+    const unsubscribe = host.subscribeGlobal((event) => { events.push(event) });
+    fixture.faux.setResponses([fauxAssistantMessage("简报已生成")]);
+    await host.prompt("conversation-1", "生成简报", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    unsubscribe();
+
+    assert.equal(events.length, 2);
+    const started = events[0]!;
+    assert.equal(started.type, "prompt_started");
+    assert.equal(started.conversation_id, "conversation-1");
+    assert.equal(started.employee_id, "employee-1");
+    assert.equal(started.tenant_id, "tenant-1");
+    assert.equal(started.member_id, "member-1");
+    assert.equal(started.source_type, "human");
+    assert.equal(started.background, false);
+    assert.ok(Date.parse(started.started_at) > 0);
+
+    const settled = events[1]!;
+    assert.equal(settled.type, "prompt_settled");
+    assert.equal(settled.conversation_id, "conversation-1");
+    assert.equal(settled.employee_id, "employee-1");
+    assert.equal(settled.tenant_id, "tenant-1");
+    assert.equal(settled.member_id, "member-1");
+    assert.equal(settled.outcome, "succeeded");
+    assert.equal(settled.last_preview, "简报已生成");
+    assert.equal(settled.assistant_message_count, 1);
+    assert.ok(Date.parse(settled.last_message_at) > 0);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("prompt_settled reports an aborted run as aborted", async () => {
+  const fixture = await createFixture();
+  try {
+    const slow = fauxProvider({
+      api: "aiteam-slow-api-settled",
+      provider: "aiteam-slow-settled",
+      models: [{ id: "aiteam-slow-settled-1", name: "AI Team Slow" }],
+      tokensPerSecond: 50,
+    });
+    fixture.modelRuntime.registerNativeProvider(slow.provider);
+    const slowHost = fixture.createHost(slow.getModel());
+    const events: GlobalActivityEvent[] = [];
+    const unsubscribe = slowHost.subscribeGlobal((event) => { events.push(event) });
+    slow.setResponses([fauxAssistantMessage("slow ".repeat(200))]);
+    const pending = slowHost.prompt("conversation-2", "start");
+    for (let attempt = 0; attempt < 20 && slowHost.activeRuns("conversation-2").length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(await slowHost.abort("conversation-2"), true);
+    await pending;
+    unsubscribe();
+    const settled = events.filter((event) => event.type === "prompt_settled");
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0]!.type === "prompt_settled" ? settled[0]!.outcome : undefined, "aborted");
+    await slowHost.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("prompt_settled preview and reply count ignore the hidden checklist turn", async () => {
+  const { fixture, host, caller } = await checklistFixture();
+  try {
+    const events: GlobalActivityEvent[] = [];
+    const unsubscribe = host.subscribeGlobal((event) => { events.push(event) });
+    fixture.faux.setResponses([
+      checklist("in_progress", "pending"),
+      fauxAssistantMessage("正式回复"),
+      fauxAssistantMessage([fauxText("hidden text"), fauxToolCall("todo_update", {
+        items: [{ id: "item-0", title: "Item 0", status: "completed" }, { id: "item-1", title: "Item 1", status: "completed" }],
+      })], { stopReason: "toolUse" }),
+    ]);
+    await host.prompt("conversation-1", "track this", undefined, caller);
+    unsubscribe();
+    const settled = events.find((event) => event.type === "prompt_settled");
+    assert(settled?.type === "prompt_settled");
+    assert.equal(settled.last_preview, "正式回复");
+    // The checklist tool-call message and the formal reply; the hidden turn is not counted.
+    assert.equal(settled.assistant_message_count, 2);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("prompt_settled reports a run aborted during a tool call as aborted", async () => {
+  const fixture = await createFixture();
+  try {
+    let release: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => { started = resolve; });
+    const blocker = defineTool({
+      name: "grep", label: "Blocker", description: "Test tool", parameters: Type.Object({}),
+      execute: async () => {
+        started?.();
+        await new Promise<void>((resolve) => { release = resolve; setTimeout(resolve, 3_000); });
+        return { content: [{ type: "text", text: "done" }], details: undefined };
+      },
+    });
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["grep"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = new SessionHost({
+      cwdRoot: join(fixture.dataRoot, "workspaces"), agentDir: join(fixture.dataRoot, "pi"), sessionDir: join(fixture.dataRoot, "sessions"),
+      store: fixture.store, modelRuntime: fixture.modelRuntime, model: fixture.faux.getModel(),
+      resourceLoaderFactory: (_id, auth) => createControlledResourceLoader("test system prompt", undefined, auth),
+      customTools: [blocker],
+    });
+    const events: GlobalActivityEvent[] = [];
+    const unsubscribe = host.subscribeGlobal((event) => { events.push(event) });
+    fixture.faux.setResponses([fauxAssistantMessage(fauxToolCall("grep", {}), { stopReason: "toolUse" }), fauxAssistantMessage("after")]);
+    const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+    const pending = host.prompt("conversation-1", "go", undefined, caller).catch(() => undefined);
+    await toolStarted;
+    assert.equal(await host.abort("conversation-1"), true);
+    release?.();
+    await pending;
+    unsubscribe();
+    const settled = events.filter((event) => event.type === "prompt_settled");
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0]!.type === "prompt_settled" ? settled[0]!.outcome : undefined, "aborted");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+

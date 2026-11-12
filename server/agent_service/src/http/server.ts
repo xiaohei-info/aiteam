@@ -744,6 +744,25 @@ const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].m
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
 const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
+const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
+  promptStarted: {
+    summary: "新提示开始（不携带正文）",
+    value: [
+      "event: activity",
+      'data: {"type":"prompt_started","conversation_id":"conversation-1","employee_id":"employee-1","tenant_id":"tenant-1","member_id":"member-1","source_type":"human","background":false,"started_at":"2026-11-11T06:00:00.000Z"}',
+      "",
+    ].join("\n"),
+  },
+  promptSettled: {
+    summary: "提示结束（携带列表摘要字段）",
+    value: [
+      "event: activity",
+      'data: {"type":"prompt_settled","conversation_id":"conversation-1","employee_id":"employee-1","tenant_id":"tenant-1","member_id":"member-1","outcome":"succeeded","last_preview":"简报已生成","last_message_at":"2026-11-11T06:00:30.000Z","assistant_message_count":1}',
+      "",
+    ].join("\n"),
+  },
+};
+
 const PI_EVENT_STREAM_DESCRIPTION = "订阅当前会话的本地 Pi 实时事件（SSE）；事件字段见 [PiSseEventData](#/components/schemas/PiSseEventData)，支持通过 X-Aiteam-Reconciliation-Version: 2 请求运行中快照。";
 
 const PI_EVENT_STREAM_EXAMPLES = {
@@ -1061,6 +1080,8 @@ export interface AgentHttpServerOptions {
   skillCache?: SkillCache;
   /** Injected for deterministic upstream transcription tests. */
   fetch?: typeof fetch;
+  /** Idle-connection keep-alive interval for the global activity SSE stream. Defaults to 25s. */
+  globalActivityKeepAliveMs?: number;
 }
 
 export class HttpProblem extends Error {
@@ -1390,6 +1411,26 @@ export class AgentHttpServer {
 
     this.registerRoute("GET", "/api/agent/ping", (_request, response) => this.writeJson(response, 200, { data: { pong: true } }), routeSchema("ping", { summary: "Agent 存活探针", description: "返回当前本地 Agent 的固定存活结果。", response: { 200: jsonResponse(Type.Ref("PingEnvelope")) } }), false);
     this.registerRoute("GET", "/api/agent/whoami", (_request, response, caller) => this.writeJson(response, 200, { data: caller!.claims ?? { user_id: caller!.userId ?? caller!.callerId, tenant_id: caller!.tenantId!, roles: caller!.roles ?? [] } }), routeSchema("whoami", { summary: "查看当前身份", description: "返回通过 JWT 与 Manager 服务端会话校验的当前成员身份声明。", response: { 200: jsonResponse(Type.Ref("ClaimsEnvelope")) } }));
+    this.registerRoute("GET", "/api/agent/events", (request, response, caller) => this.globalActivityStream(request, response, caller!), routeSchema("subscribeGlobalActivity", {
+      summary: "订阅全局活动信号",
+      description: "返回本机当前成员所有会话的轻量活动信号（prompt_started / prompt_settled），只携带会话与员工标识及列表摘要字段，不携带会话正文。前端用它做列表补丁与按需订阅会话事件流。",
+      response: {
+        200: {
+          description: "全局活动 SSE 流。每条事件使用 `event: activity`，`data` 行携带一个 JSON 对象。",
+          headers: {
+            "Cache-Control": { description: "固定为 no-cache, no-transform。", schema: { type: "string", example: "no-cache, no-transform" } },
+            Connection: { description: "保持 SSE 长连接。", schema: { type: "string", example: "keep-alive" } },
+            "X-Accel-Buffering": { description: "固定为 no，避免代理缓冲。", schema: { type: "string", example: "no" } },
+          },
+          content: {
+            "text/event-stream": {
+              schema: Type.String({ description: "SSE 事件流文本；`data` 行的 JSON 结构为 GlobalActivityEvent。" }),
+              examples: GLOBAL_ACTIVITY_STREAM_EXAMPLES,
+            },
+          },
+        },
+      },
+    }));
     this.registerRoute("GET", "/api/agent/conversations", (request, response, caller) => this.listConversations(response, new URL(request.url ?? "/", "http://localhost").searchParams, caller!), routeSchema("listConversations", { summary: "列出本地会话", description: "按当前成员列出本地会话，支持游标和条数限制。", querystring: ConversationQuery, response: { 200: jsonResponse(Type.Ref("ConversationListEnvelope")) } }));
     this.registerRoute("POST", "/api/agent/conversations/custom-group", (request, response, caller) => this.createCustomGroup(request, response, caller!), routeSchema("createCustomGroup", {
       summary: "自定义创建群聊", description: "指定当前用户授权成员和协调人，保存群简介及自动或自定义编排。创建不触发模型执行；固定客户端 ID 冲突返回 409，可读取原会话恢复。",
@@ -2742,6 +2783,42 @@ export class AgentHttpServer {
       connectedFenceWritten = true;
       response.write(": connected\n\n", () => { void reconcile(); });
     }
+  }
+
+  /**
+   * 全局活动信号 SSE：一条连接覆盖当前成员的所有会话。
+   *
+   * 与 per-conversation 的 `events` 不同，这里不做历史回放、不读会话正文，只把
+   * `SessionHost` 的全局信号按 owner 过滤后转发。前端用它感知“哪个会话有动静”，
+   * 再按需订阅具体会话或刷新列表。
+   */
+  private globalActivityStream(request: IncomingMessage, response: ServerResponse, caller: AuthenticatedCaller): void {
+    const tenantId = caller.tenantId ?? null;
+    const memberId = caller.userId ?? caller.callerId ?? null;
+    let closed = false;
+    response.writeHead(200, { "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
+    response.write(": connected\n\n");
+    // 全局流多数时间没有事件；定时写注释行，避免代理/负载均衡因空闲断开连接，
+    // 同时让半开连接尽快暴露为写错误。
+    const keepAlive = setInterval(() => {
+      if (closed || response.writableEnded) return;
+      response.write(": keep-alive\n\n");
+    }, this.options.globalActivityKeepAliveMs ?? 25_000);
+    keepAlive.unref?.();
+    const unsubscribe = this.options.host.subscribeGlobal((event) => {
+      if (closed || response.writableEnded) return;
+      // The bus is process-wide; only this caller's own conversations are signalled.
+      if (event.tenant_id !== tenantId || event.member_id !== memberId) return;
+      response.write(`event: activity\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(keepAlive);
+      unsubscribe();
+    };
+    request.once("close", close);
+    response.once("close", close);
   }
 
   private async waitForReceiptSettlement(conversationId: string, caller: AuthenticatedCaller, timeoutMs = 5_000): Promise<boolean> {
