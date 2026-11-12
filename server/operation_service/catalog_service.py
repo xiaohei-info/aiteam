@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 
 from pydantic import ValidationError
 
@@ -23,12 +24,14 @@ from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_respon
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
 from .catalog_schemas import (
+    CatalogDetailView,
     CatalogEntryResponse,
     PublishTemplateRequest,
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
     ExpertBinding,
+    ThinkingLevel,
 )
 
 _INITIAL_VERSION = "1"
@@ -38,10 +41,10 @@ _THINKING_LEVEL_ALIASES = {"none": "off", "basic": "low", "deep": "high"}
 _THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 
-def _normalize_thinking_level(value) -> str:
+def _normalize_thinking_level(value) -> ThinkingLevel:
     value = value.strip().lower() if isinstance(value, str) else ""
     value = _THINKING_LEVEL_ALIASES.get(value, value)
-    return value if value in _THINKING_LEVELS else "off"
+    return cast(ThinkingLevel, value) if value in _THINKING_LEVELS else "off"
 
 
 def _parse_platform_model_ref(value) -> PlatformModelRef:
@@ -173,10 +176,8 @@ def _normalize_coordinator_instructions(instructions: str) -> str:
     """Normalize optional natural-language collaboration instructions."""
     return (instructions or "").strip()
 
-def _to_detail_view(entry: CatalogEntry) -> "CatalogDetailView":
+def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
     """Construct a CatalogDetailView from a CatalogEntry, populating all payload fields."""
-    from .catalog_schemas import CatalogDetailView
-
     payload = entry.payload or {}
     return CatalogDetailView(
         **_profile_projection(payload),
@@ -280,6 +281,7 @@ class CatalogService:
                     ],
                     "coordinator_template_id": coordinator_id,
                     "coordinator_instructions": coordinator_instructions,
+                    "output_requirements": (req.output_requirements or "").strip(),
                     "expert_template_versions": template_versions,
                     "tags": req.tags,
                 },
@@ -520,7 +522,8 @@ class CatalogService:
             category=payload.get("category", ""),
             avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
             system_prompt=payload.get("system_prompt", ""),
-            platform_model_ref=payload.get("platform_model_ref"),
+            # payload 里是 JSON dict；Pydantic 在构造时校验并转换，缺失时照旧抛 ValidationError。
+            platform_model_ref=cast(PlatformModelRef, payload.get("platform_model_ref")),
             skill_ids=payload.get("skill_ids", []),
             platform_skill_refs=payload.get("platform_skill_refs", []),
             description=payload.get("description", ""),
@@ -579,6 +582,7 @@ class CatalogService:
             icon=payload.get("icon", ""),
             coordinator_template_id=payload.get("coordinator_template_id", ""),
             coordinator_instructions=payload.get("coordinator_instructions", ""),
+            output_requirements=payload.get("output_requirements", ""),
             experts=experts,
             tags=payload.get("tags", []),
         )

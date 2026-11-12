@@ -68,7 +68,9 @@ class RegisterExpertTemplateRequest(ExpertTemplateProfile):
     model_config = ConfigDict(extra="forbid")
 
     # 写入时套餐必须带周期；读取侧沿用 TemplatePricing，兼容周期加入前保存的套餐。
-    pricing: TemplatePricingInput | None = Field(default=None, description="计价信息；套餐必须带 billing_period；null 表示未提供")
+    pricing: TemplatePricingInput | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride] — 写入侧有意收窄
+        default=None, description="计价信息；套餐必须带 billing_period；null 表示未提供",
+    )
     template_id: str | None = Field(
         default=None,
         min_length=1,
@@ -130,6 +132,9 @@ class RegisterSolutionTemplateRequest(BaseModel):
     )
     coordinator_instructions: str = Field(
         default="", max_length=4000, description="可选的自然语言协作说明，不是执行状态机或安全策略",
+    )
+    output_requirements: str = Field(
+        default="", max_length=4000, description="可选的方案交付要求；随方案包下发（SolutionPackage.output_requirements）",
     )
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 

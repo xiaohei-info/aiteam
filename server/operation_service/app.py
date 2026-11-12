@@ -21,8 +21,11 @@ from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
+from .routes_solution_authoring import router as solution_authoring_router
 from .routes_admin import build_admin_router
 from .platform_provider_service import install_relay_token_lifecycle_lifespan, newapi_urls
+from .solution_authoring_dependencies import build_generation_job_executor, worker_concurrency, worker_enabled
+from .solution_authoring_jobs import install_solution_authoring_worker_lifespan
 
 # 先加载配置并应用运营库迁移，再构建认证。迁移含 operation_signing_key 表，且签名密钥要
 # 从该表加载/落库——故迁移必须先于 build_operation_auth_service 执行（fail-fast；/readyz 绿
@@ -90,6 +93,8 @@ app.include_router(catalog_pull_router)
 app.include_router(catalog_router)
 app.include_router(rollup_router)
 app.include_router(skill_market_router)
+# 行业文档生成（上传资料 → 服务端 Pi Agent 生成草稿 → 审核 → 发布到目录）。
+app.include_router(solution_authoring_router)
 # ---- 功能补全：S01 账号管理 + S03 方案统计 + S04 财务管理 + 系统健康 ----
 app.include_router(build_admin_router(_verifier))
 # 前端静态托管（含 SPA fallback catch-all）必须在所有 API 路由 include 之后最后挂载（#257）。
@@ -99,3 +104,6 @@ mount_frontend(app, settings.tier)
 # outages never make /readyz fail and are handled by receipt backoff.
 if settings.db_url and settings.admin_db_url:
     install_relay_token_lifecycle_lifespan(app)
+# 行业文档生成的任务执行器同样跑在本进程里：默认随持久化库启用，可用环境变量显式开关。
+if worker_enabled():
+    install_solution_authoring_worker_lifespan(app, build_generation_job_executor, concurrency=worker_concurrency())
