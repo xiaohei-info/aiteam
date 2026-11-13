@@ -6,7 +6,7 @@ import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Grid } from "@astryxdesign/core/Grid";
 import { HStack } from "@astryxdesign/core/HStack";
 import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
-import { Selector } from "@astryxdesign/core/Selector";
+import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
@@ -15,7 +15,7 @@ import { AvatarFileInput, AvatarPreview } from "./AvatarFileInput";
 import { ExpertProfileSummary } from "./ExpertProfileSummary";
 import { ExpertProfileFields } from "./register/ExpertProfileFields";
 import { profileFromItem, type ProfileErrors } from "./profile";
-import { labelToVisibleScope, visibilityLabel } from "./types";
+import { scopeText } from "./types";
 import type { CatalogItem } from "./types";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
 import type { InternalSkill } from "../skill-market/types";
@@ -52,9 +52,8 @@ interface TemplateOverviewProps {
   editing: boolean;
   canWrite: boolean;
   profileErrors?: ProfileErrors;
-  visibilityChanging: boolean;
   onChange: (next: CatalogItem) => void;
-  onVisibilityChange: (next: "public" | "enterprise" | "hidden") => void;
+  onAdjustScope: () => void;
 }
 
 function SkillNames({ refs, legacyIds = [] }: { refs: CatalogItem["platform_skill_refs"]; legacyIds?: string[] }): ReactNode {
@@ -230,11 +229,8 @@ function SolutionDetailSections({ draft, onChange, editing }: {
   );
 }
 
-export function TemplateOverview({ item, draft, editing, canWrite, profileErrors, visibilityChanging, onChange, onVisibilityChange }: TemplateOverviewProps): ReactNode {
+export function TemplateOverview({ item, draft, editing, canWrite, profileErrors, onChange, onAdjustScope }: TemplateOverviewProps): ReactNode {
   const isExpert = item.catalog_type === "expert_template";
-  const visible = visibilityLabel(item.visible_scope);
-  const visibilityText = visible === "public" ? "公开" : visible === "enterprise" ? "企业可见" : "隐藏";
-
   return (
     <VStack gap={5}>
       <Card>
@@ -242,22 +238,11 @@ export function TemplateOverview({ item, draft, editing, canWrite, profileErrors
           <MetadataListItem label="模板 ID"><Text>{item.template_id}</Text></MetadataListItem>
           <MetadataListItem label="类型"><Text>{isExpert ? "专家模板" : "行业方案"}</Text></MetadataListItem>
           <MetadataListItem label="状态"><Badge label={item.status === "published" ? "已发布" : item.status === "unpublished" ? "已下架" : "草稿"} variant={item.status === "published" ? "success" : item.status === "unpublished" ? "neutral" : "warning"} /></MetadataListItem>
-          <MetadataListItem label="可见范围">
-            {canWrite && editing ? (
-              <Selector
-                label="可见范围"
-                isLabelHidden
-                value={visible}
-                onChange={(value) => onVisibilityChange(value as "public" | "enterprise" | "hidden")}
-                options={[
-                  { value: "public", label: "公开" },
-                  { value: "enterprise", label: "企业可见" },
-                  { value: "hidden", label: "隐藏" },
-                ]}
-                isDisabled={visibilityChanging}
-                width={180}
-              />
-            ) : <Text>{visibilityText}</Text>}
+          <MetadataListItem label="发布范围">
+            <HStack gap={2} align="center">
+              <Text>{scopeText(item.visible_scope)}</Text>
+              {canWrite && item.status === "published" && <Button label="调整范围" variant="ghost" size="sm" onClick={onAdjustScope} />}
+            </HStack>
           </MetadataListItem>
         </MetadataList>
       </Card>
@@ -267,8 +252,4 @@ export function TemplateOverview({ item, draft, editing, canWrite, profileErrors
         : <SolutionDetailSections draft={draft} onChange={onChange} editing={editing} />}
     </VStack>
   );
-}
-
-export function visibilityScopeFor(label: "public" | "enterprise" | "hidden"): Record<string, unknown> {
-  return labelToVisibleScope(label);
 }

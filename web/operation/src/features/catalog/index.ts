@@ -6,7 +6,7 @@ export type {
   CatalogItem,
   CatalogItemType,
   CatalogStatus,
-  VisibilityLabel,
+  VisibleScope,
   ExpertBinding,
   RegisterExpertTemplate,
   RegisterSolutionTemplate,

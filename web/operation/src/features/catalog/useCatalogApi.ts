@@ -21,6 +21,7 @@ import type {
   CatalogItemType,
   RegisterExpertTemplate,
   RegisterSolutionTemplate,
+  VisibleScope,
 } from "./types";
 import type { ExpertTemplateProfile } from "./profile";
 
@@ -62,13 +63,17 @@ export interface CatalogApi {
     template_id: string,
     changes: Record<string, unknown>,
   ) => Promise<CatalogItem | null>;
-  publish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
+  publish: (catalog_type: CatalogItemType, template_id: string, scope?: VisibleScope) => Promise<CatalogItem | null>;
   unpublish: (catalog_type: CatalogItemType, template_id: string) => Promise<CatalogItem | null>;
   setVisibility: (
     catalog_type: CatalogItemType,
     template_id: string,
-    visible_scope: Record<string, unknown>,
+    visible_scope: VisibleScope,
   ) => Promise<CatalogItem | null>;
+  /** 发布范围可选的行业 / 标签（取自现有企业资料）。 */
+  scopeOptions: () => Promise<{ industries: string[]; tags: string[] }>;
+  /** 预计可见企业数。 */
+  scopePreview: (scope: VisibleScope) => Promise<number>;
   save: (
     catalog_type: CatalogItemType,
     template_id: string,
@@ -124,8 +129,10 @@ export function useCatalogApi(): CatalogApi {
   );
 
   const publish = useCallback(
-    (catalog_type: CatalogItemType, template_id: string): Promise<CatalogItem | null> =>
-      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, { body: {} }),
+    (catalog_type: CatalogItemType, template_id: string, scope?: VisibleScope): Promise<CatalogItem | null> =>
+      client.post<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/publish`, {
+        body: scope ? { visible_scope: scope } : {},
+      }),
     [client],
   );
 
@@ -139,11 +146,24 @@ export function useCatalogApi(): CatalogApi {
     (
       catalog_type: CatalogItemType,
       template_id: string,
-      visible_scope: Record<string, unknown>,
+      visible_scope: VisibleScope,
     ): Promise<CatalogItem | null> =>
       client.put<CatalogItem>(`${BASE}/${catalog_type}/${template_id}/visibility`, {
         body: { visible_scope },
       }),
+    [client],
+  );
+
+  const scopeOptions = useCallback(
+    async (): Promise<{ industries: string[]; tags: string[] }> =>
+      (await client.get<{ industries: string[]; tags: string[] }>(`${BASE}/scope-options`)) ?? { industries: [], tags: [] },
+    [client],
+  );
+
+  const scopePreview = useCallback(
+    async (scope: VisibleScope): Promise<number> =>
+      (await client.post<{ visible_enterprise_count: number }>(`${BASE}/scope-preview`, { body: scope }))
+        ?.visible_enterprise_count ?? 0,
     [client],
   );
 
@@ -167,8 +187,10 @@ export function useCatalogApi(): CatalogApi {
       publish,
       unpublish,
       setVisibility,
+      scopeOptions,
+      scopePreview,
       save,
     }),
-    [list, get, registerExpert, registerSolution, updateEntry, publish, unpublish, setVisibility, save],
+    [list, get, registerExpert, registerSolution, updateEntry, publish, unpublish, setVisibility, scopeOptions, scopePreview, save],
   );
 }
