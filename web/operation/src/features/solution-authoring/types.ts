@@ -9,6 +9,15 @@ export type FindingResolution = "redact" | "remove" | "accept_public" | "acknowl
 
 export interface ModelRef { provider_id: string; model_id: string; }
 
+/** 列表用的最近一次生成任务概要（不含错误详情）。 */
+export interface JobBrief {
+  status: JobStatus;
+  error_code: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface DraftSummary {
   draft_id: string;
   title: string;
@@ -21,6 +30,13 @@ export interface DraftSummary {
   updated_by: string;
   created_at: string;
   updated_at: string;
+  latest_job: JobBrief | null;
+}
+
+export interface DraftList {
+  drafts: DraftSummary[];
+  /** 生成执行器是否启用；为 false 时排队的任务不会被执行。服务端没给时按可用处理。 */
+  workerAvailable: boolean;
 }
 
 export interface Evidence { chunk_id: string; quote?: string; }
@@ -94,7 +110,7 @@ export interface EvidenceSource {
 
 export interface ReviewEvent { action: string; actor_id: string; summary: string; created_at: string; }
 
-export interface DraftDetail extends DraftSummary {
+export interface DraftDetail extends Omit<DraftSummary, "latest_job"> {
   supplement: string;
   package: GeneratedSolution | null;
   evidence_sources: Record<string, EvidenceSource>;

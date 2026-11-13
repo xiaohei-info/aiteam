@@ -1,6 +1,6 @@
 /** 状态、错误码等到中文文案的映射。未知取值原样显示，不吞掉。 */
 import type { BadgeVariant } from "@astryxdesign/core/Badge";
-import type { DraftStatus, FindingStatus, GeneratedSolution, JobStatus } from "./types";
+import type { DraftStatus, DraftSummary, FindingStatus, GeneratedSolution, JobStatus } from "./types";
 
 const DRAFT_STATUS: Record<DraftStatus, { label: string; variant: BadgeVariant }> = {
   draft: { label: "待生成", variant: "neutral" },
@@ -48,6 +48,7 @@ const JOB_ERRORS: Record<string, string> = {
   worker_output_too_large: "生成结果过大。请减少资料后重试。",
   worker_protocol_error: "生成进程返回了无法识别的结果。请重试。",
   internal_error: "生成时发生内部错误。请重试。",
+  cancelled: "生成已被取消。",
 };
 
 export function jobError(code: string | null): string {
@@ -136,6 +137,7 @@ const EVENT_ACTIONS: Record<string, string> = {
   generation_requested: "发起生成",
   generation_succeeded: "生成完成",
   generation_failed: "生成失败",
+  generation_cancelled: "取消生成",
   package_edited: "编辑正文",
   finding_redacted: "脱敏处理",
   finding_removed: "删除敏感内容",
@@ -146,7 +148,7 @@ const EVENT_ACTIONS: Record<string, string> = {
   rejected: "审核驳回",
   publish_started: "开始发布",
   published: "发布到目录",
-  archived: "归档",
+  archived: "删除草稿",
 };
 
 export function eventAction(action: string): string {
@@ -163,4 +165,29 @@ export function formatTime(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+/** 排队超过这个时间仍没开始，列表提示「疑似卡住」。 */
+export const STALLED_AFTER_MS = 10 * 60 * 1000;
+
+/** 草稿在列表里的「生成情况」：只在需要提醒时返回文案。 */
+export function generationNote(
+  draft: Pick<DraftSummary, "status" | "latest_job">, workerAvailable: boolean, now: number = Date.now(),
+): { text: string; tone: "error" | "warning" | "secondary" } | null {
+  const job = draft.latest_job;
+  if (draft.status === "generating" && job) {
+    if (job.status === "queued") {
+      const waited = now - new Date(job.created_at).getTime();
+      if (!workerAvailable) return { text: "生成服务未启用，任务不会被执行", tone: "warning" };
+      if (waited > STALLED_AFTER_MS) return { text: "排队时间过长，疑似卡住，可取消后重试", tone: "warning" };
+      return { text: "排队中", tone: "secondary" };
+    }
+    return { text: jobStatus(job.status), tone: "secondary" };
+  }
+  if (draft.status !== "generating" && job?.status === "failed") {
+    return job.error_code === "cancelled"
+      ? { text: "生成已取消", tone: "secondary" }
+      : { text: "上次生成失败", tone: "error" };
+  }
+  return null;
 }

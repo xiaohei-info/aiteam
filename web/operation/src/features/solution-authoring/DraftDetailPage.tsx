@@ -39,6 +39,7 @@ const EDITING_HINT = "请先保存或取消正文修改";
 /** 需要二次确认的动作：都会删除或整体替换内容，或对企业可见。 */
 type Confirm =
   | { kind: "archive" }
+  | { kind: "cancel" }
   | { kind: "publish" }
   | { kind: "regenerate" }
   | { kind: "deleteSource"; source: SourceDocument };
@@ -60,6 +61,12 @@ function confirmCopy(pending: Confirm | null): ConfirmCopy {
       description: "会用资料重新生成整份方案：当前正文、人工修改和已处理的敏感项都会被替换，无法恢复。",
     };
   }
+  if (pending?.kind === "cancel") {
+    return {
+      title: "取消生成", action: "确认取消", isDestructive: true,
+      description: "停止当前的生成任务。已有的正文会保留，之后可以重新发起生成。",
+    };
+  }
   if (pending?.kind === "deleteSource") {
     return {
       title: "删除资料", action: "确认删除", isDestructive: true,
@@ -67,8 +74,8 @@ function confirmCopy(pending: Confirm | null): ConfirmCopy {
     };
   }
   return {
-    title: "归档草稿", action: "确认归档", isDestructive: true,
-    description: "归档后草稿从列表移除，已上传的资料原件会被删除。已发布到目录的方案不受影响。",
+    title: "删除草稿", action: "确认删除", isDestructive: true,
+    description: "草稿会从列表移除，已上传的资料原件会被删除，无法恢复。已发布到目录的方案不受影响。",
   };
 }
 
@@ -158,7 +165,7 @@ export function DraftDetailPage(): ReactNode {
   const canEditContent = CONTENT_STATUSES.includes(detail.status) && detail.package !== null;
   // 与后端一致：已通过 / 已发布（或发布已开始）的草稿只有管理员能归档；发布开始后不能驳回。
   const reviewed = detail.status === "approved" || detail.status === "published" || detail.publish_started;
-  const canArchive = detail.status !== "generating" && detail.status !== "archived" && (isAdmin || !reviewed);
+  const canArchive = detail.status !== "archived" && (isAdmin || !reviewed);
   const canReject = isAdmin && (detail.status === "in_review" || (detail.status === "approved" && !detail.publish_started));
   const job = detail.latest_job;
   const copy = confirmCopy(confirm);
@@ -210,8 +217,17 @@ export function DraftDetailPage(): ReactNode {
   async function confirmAction() {
     const pending = confirm;
     if (!pending) return;
+    if (pending.kind === "cancel") {
+      await run(() => api.cancelGeneration(draftId!), "取消生成失败");
+      setConfirm(null);
+      return;
+    }
     if (pending.kind === "archive") {
-      const failure = await run(() => api.archive(draftId!), "归档失败");
+      // 生成中的草稿不能直接删除：先取消再删除。
+      const failure = await run(async () => {
+        if (detail?.status === "generating") await api.cancelGeneration(draftId!);
+        await api.archive(draftId!);
+      }, "删除失败");
       setConfirm(null);
       if (!failure) navigate(LIST_PATH);
       return;
@@ -260,7 +276,8 @@ export function DraftDetailPage(): ReactNode {
           {isAdmin && detail.status === "approved" && (
             <Button label="发布到目录" onClick={() => setConfirm({ kind: "publish" })} isDisabled={busy} />
           )}
-          {canArchive && <Button label="归档" variant="ghost" onClick={() => setConfirm({ kind: "archive" })} isDisabled={busy} />}
+          {detail.status === "generating" && <Button label="取消生成" variant="secondary" onClick={() => setConfirm({ kind: "cancel" })} isDisabled={busy} />}
+          {canArchive && <Button label="删除" variant="ghost" onClick={() => setConfirm({ kind: "archive" })} isDisabled={busy} />}
         </HStack>
       </HStack>
 
@@ -271,7 +288,9 @@ export function DraftDetailPage(): ReactNode {
         <Banner status="info" title={job ? jobStatus(job.status) : "排队中"} description="生成通常需要几分钟，页面会自动刷新；可以先离开，稍后回来查看。" />
       )}
       {detail.status !== "generating" && job?.status === "failed" && (
-        <Banner status="error" title="上一次生成失败" description={jobError(job.error_code)} />
+        job.error_code === "cancelled"
+          ? <Banner status="info" title="上一次生成已取消" />
+          : <Banner status="error" title="上一次生成失败" description={jobError(job.error_code)} />
       )}
       {detail.status === "rejected" && detail.review_note && <Banner status="warning" title="审核被驳回" description={detail.review_note} />}
       {!isAdmin && detail.status === "in_review" && <Banner status="info" title="等待管理员审核" />}
