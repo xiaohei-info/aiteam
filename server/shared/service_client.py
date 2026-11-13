@@ -247,7 +247,11 @@ class ServiceClient:
             body = {}
         detail = body.get("detail") or body.get("title") or f"upstream {resp.status_code}"
         err_cls = _STATUS_TO_ERROR.get(resp.status_code, AppError)
-        raise err_cls(detail)
+        err = err_cls(detail)
+        code = body.get("code") if isinstance(body, dict) else None
+        if isinstance(code, str) and code:
+            err.code = code  # 保留对端 problem+json 的业务 code，调用方可据此区分同状态码的不同原因
+        raise err
 
     def get(
         self,

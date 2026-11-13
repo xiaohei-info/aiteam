@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal
 
+from shared.errors import NotFound
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_SCOPE_ITEMS = 10
@@ -73,3 +74,9 @@ def scope_allows(raw: Any, *, industry: str | None, tags: Iterable[str]) -> bool
     if industry and industry in scope.industries:
         return True
     return bool(set(tags) & set(scope.tags))
+
+
+class TemplateOutOfScope(NotFound):
+    """模板存在且已发布，但不在该企业的发布范围内（与“未发布 / 不存在”区分，供 Manager 对账）。"""
+
+    code = "template_out_of_scope"

@@ -130,7 +130,7 @@ def test_pull_expert_template_success(client):
         },
     )
 
-    result = catalog_client.pull_expert_template(template_id="tpl-cmo")
+    result = catalog_client.pull_expert_template(template_id="tpl-cmo", tenant_id="t-1")
     assert isinstance(result, ExpertTemplateDetail)
     assert result.template_id == "tpl-cmo"
     assert result.version == "1"
@@ -164,7 +164,7 @@ def test_pull_expert_template_with_version(client):
         },
     )
 
-    result = catalog_client.pull_expert_template(template_id="tpl-cmo", version="2")
+    result = catalog_client.pull_expert_template(template_id="tpl-cmo", version="2", tenant_id="t-1")
     assert result.version == "2"
 
     # 验证请求带 version 参数
@@ -183,7 +183,7 @@ def test_pull_expert_template_not_found(client):
     )
 
     with pytest.raises(NotFound):
-        catalog_client.pull_expert_template(template_id="ghost")
+        catalog_client.pull_expert_template(template_id="ghost", tenant_id="t-1")
 
 
 def test_pull_expert_template_unauthorized(client):
@@ -197,7 +197,7 @@ def test_pull_expert_template_unauthorized(client):
     )
 
     with pytest.raises(Unauthorized):
-        catalog_client.pull_expert_template(template_id="tpl-cmo")
+        catalog_client.pull_expert_template(template_id="tpl-cmo", tenant_id="t-1")
 
 
 # ---- pull_solution_package ----
@@ -228,7 +228,7 @@ def test_pull_solution_package_success(client):
         },
     )
 
-    result = catalog_client.pull_solution_package(solution_id="sol-marketing")
+    result = catalog_client.pull_solution_package(solution_id="sol-marketing", tenant_id="t-1")
     assert isinstance(result, SolutionPackage)
     assert result.solution_id == "sol-marketing"
     assert result.version == "1"
@@ -247,7 +247,7 @@ def test_pull_solution_package_not_found(client):
     )
 
     with pytest.raises(NotFound):
-        catalog_client.pull_solution_package(solution_id="ghost")
+        catalog_client.pull_solution_package(solution_id="ghost", tenant_id="t-1")
 
 
 # ---- list_expert_templates ----
@@ -281,7 +281,7 @@ def test_list_expert_templates_success(client):
         },
     )
 
-    result = catalog_client.list_expert_templates()
+    result = catalog_client.list_expert_templates(tenant_id="t-1")
     assert len(result) == 2
     assert all(isinstance(item, ExpertTemplateDetail) for item in result)
     assert result[0].template_id == "tpl-cmo"
@@ -298,7 +298,7 @@ def test_list_expert_templates_empty(client):
         {"data": []},
     )
 
-    result = catalog_client.list_expert_templates()
+    result = catalog_client.list_expert_templates(tenant_id="t-1")
     assert result == []
 
 
@@ -323,7 +323,7 @@ def test_list_solution_packages_success(client):
         },
     )
 
-    result = catalog_client.list_solution_packages()
+    result = catalog_client.list_solution_packages(tenant_id="t-1")
     assert len(result) == 1
     assert isinstance(result[0], SolutionPackage)
     assert result[0].solution_id == "sol-marketing"
@@ -339,5 +339,5 @@ def test_list_solution_packages_empty(client):
         {"data": []},
     )
 
-    result = catalog_client.list_solution_packages()
+    result = catalog_client.list_solution_packages(tenant_id="t-1")
     assert result == []
