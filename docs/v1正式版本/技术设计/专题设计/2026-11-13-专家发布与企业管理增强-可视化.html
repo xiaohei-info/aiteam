@@ -293,7 +293,7 @@ svg text{font-family:inherit}
 <p class="note">✓ 至少 8 位　✓ 含字母和数字　✗ 不能与当前密码相同</p>
 <div class="row" style="margin-top:6px"><span>确认新密码</span></div><div class="input">••••••••••</div>
 <p style="margin-top:8px"><span class="btn dis">确定</span> <span class="btn">取消</span></p>
-<p class="note">成功后提示「密码已更新，其他设备需要重新登录」；当前页面保持登录。当前密码输错会计入登录失败次数。</p></div>
+<p class="note">成功后提示「密码已更新，其他设备需要重新登录」；当前页面保持登录。当前密码 15 分钟内输错 5 次后会被暂时拒绝。普通成员也能看到企业名称；已开通的企业在管理员填写名称前先显示企业代码。</p></div>
 </div></div></div></div>
 <p class="note">要点：企业名称和账号操作合在顶栏一个菜单里，替换原来孤零零的「退出登录」按钮；不新增页面。密码规则以现有复杂度校验为准，示意图里的规则仅为示例。</p>
 </div>
@@ -355,7 +355,7 @@ svg text{font-family:inherit}
 <p><b>R3：发布范围收窄 → 范围外企业的员工停用</b></p>
 <div class="flow">
 <div class="s"><b>运营改范围</b>去掉「零售」行业</div><div class="a">→</div>
-<div class="s"><b>notify 提示</b>scope_changed；Manager 按 tenant 重新 pull（没收到也会在刷新时对账）</div><div class="a">→</div>
+<div class="s"><b>notify 提示</b>visibility_changed（契约已有）；Manager 逐个受影响 tenant 重新 pull 并对账（管理员打开人才市场时再对账一次兜底）</div><div class="a">→</div>
 <div class="s"><b>Manager 停用</b>相关员工 paused + 不在发布范围</div><div class="a">→</div>
 <div class="s"><b>Agent sync</b>拿不到快照，员工标为不可用；本机历史保留</div><div class="a">→</div>
 <div class="s"><b>站内通知</b>企业管理员收到被停用员工清单；范围恢复时自动恢复并再通知</div>
@@ -419,7 +419,7 @@ svg text{font-family:inherit}
 <tr><td><span class="tag mg">manager_service</span></td><td><b>R4</b> 替换 owner 凭据时在同一事务里吊销该负责人的全部会话，并删除其 passkey 等二次验证凭据、解绑第三方登录</td><td>P1</td><td class="sz S">S</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td><b>R2 R3</b> 拉目录时带 tenant；删除按模型白名单隐藏模板的过滤和从模板取模型的逻辑；范围对账：不可见模板的员工置 paused 并记 <code>status_reason</code>（<span class="tag">新</span>），启用返回 409；重新可见时自动恢复；停用 / 恢复发站内通知（新增内部投递方法）</td><td>P2</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td><b>R6</b> <code>RecruitExpertRequest.model_policy</code>（必填）、<code>ApplySolutionRequest.expert_models</code>（<span class="tag">新</span>）；招募事务前统一校验，失败返回 <code>422 model_required / model_unavailable</code> 且零写入；员工 PUT 不允许清空模型</td><td>P1</td><td class="sz M">M</td></tr>
-<tr><td><span class="tag mg">manager_service</span></td><td><b>R8 R9</b> <code>POST /api/auth/password</code>（<span class="tag">新</span>，需登录，校验当前密码，成功后吊销其他会话）；<code>/api/auth/session</code> 加 <code>has_password</code>；企业设置响应加只读 <code>enterprise_code</code></td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R8 R9</b> <code>POST /api/auth/password</code>（<span class="tag">新</span>，需登录，校验当前密码，成功后吊销其他会话），15 分钟内输错 5 次暂时拒绝；新增只读 <code>GET /api/manager/me</code>（<span class="tag">新</span>：企业名称、企业代码、打码账号、角色、是否有密码、密码规则）；开通时把企业名称写入企业设置</td><td>P1</td><td class="sz S">S</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td><b>R7</b> <code>POST /employees/{id}/copy</code>（<span class="tag">新</span>）；employee 表加 <code>origin</code> 和 <code>copied_from_employee_id</code>；同时复制 prompt、技能绑定和头像</td><td>P2</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag mg">manager_service</span></td><td><b>R5</b> <code>POST /api/manager/tenants/{id}/status</code>（<span class="tag">新</span>）；登录、验签、sync、知识库窄通道都检查 <code>tenant_registry.status</code>（带缓存）；保留期过后清理租户数据</td><td>P3</td><td class="sz L">L</td></tr>
 <tr><td><span class="tag ag">agent_service（Node）</span></td><td>收到 tenant_deleted / tenant_closed 时停止 sync，不删除本地数据</td><td>P3</td><td class="sz S">S</td></tr>
@@ -440,9 +440,9 @@ svg text{font-family:inherit}
 <tr><td><code>enterprise_account</code></td><td>新增 industry、tags、deleted_at；<code>operation_status</code> 增加 deleting / deleted</td><td>Operator 库（CHECK 约束）</td><td class="sz M">中</td></tr>
 <tr><td><code>employee.origin / copied_from_employee_id</code></td><td>新增列和复制接口</td><td>Manager 库、员工 OpenAPI</td><td class="sz M">中</td></tr>
 <tr><td>招募 / 应用方案请求</td><td>新增必填模型字段（应用方案时已招募专家可选）；新错误码 <code>model_required</code> / <code>model_unavailable</code></td><td>Manager 北向 API（与 web/manager 同发）</td><td class="sz M">中</td></tr>
-<tr><td>设置新密码接口（新）</td><td><code>POST /api/auth/password</code>；<code>has_password</code>；错误码 <code>old_password_incorrect</code></td><td>Manager <code>/api/auth/*</code>（Agent 同前缀）</td><td class="sz L">高</td></tr>
+<tr><td>设置新密码接口（新）</td><td><code>POST /api/auth/password</code>；<code>GET /api/manager/me</code>（只读）；错误码 <code>old_password_incorrect</code>、<code>too_many_attempts</code>；<code>/api/auth/session</code> 不改</td><td>Manager <code>/api/auth/*</code>（Agent 同前缀）</td><td class="sz L">高</td></tr>
 <tr><td>租户暂停 / 封禁联动</td><td><code>tenant_registry.status</code> 增加 suspended / banned；错误码 <code>tenant_suspended</code> / <code>tenant_banned</code></td><td>Manager 全部入口、Agent、桌面端</td><td class="sz L">高</td></tr>
-<tr><td>范围停用</td><td><code>employee.status_reason</code>；notify 增加 <code>scope_changed</code>；方案详情 pull 增加 <code>hidden_expert_count</code>；错误码 <code>template_out_of_scope</code></td><td>Manager 库、Operator ↔ Manager 契约</td><td class="sz M">中</td></tr>
+<tr><td>范围停用</td><td><code>employee.status_reason</code>；notify 沿用已有 <code>visibility_changed</code>；方案详情 pull 增加 <code>hidden_expert_count</code>；错误码 <code>template_out_of_scope</code></td><td>Manager 库、Operator ↔ Manager 契约</td><td class="sz M">中</td></tr>
 <tr><td>草稿取消接口、<code>DraftOut.latest_job</code></td><td>Operator 内部接口</td><td>Operator</td><td class="sz S">低</td></tr>
 </table>
 <div class="callout red"><b>高风险（2026-11-13 已确认）：</b>标「高」的属于共享契约 / 北向 API 变更，已按 AGENTS.md §8 确认。建议发布顺序：<b>先升级下游再发布上游</b>。R2：先 Manager（招募必选模型）→ Operator 去掉模型 → 删除契约字段；R3：先 Operator（参数可选）→ Manager → 再把 Operator 参数改为必需；R5：先 Manager 状态端点和入口检查（默认 active，行为不变）→ Agent / 桌面端识别新错误码 → 最后开放 Operator 删除入口。</div>
