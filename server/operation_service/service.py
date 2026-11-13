@@ -24,6 +24,7 @@ from shared.errors import Conflict, NotFound
 from .admin_repository import AdminRepository
 from .manager_gateway import ManagerGateway
 from .onboarding_receipt import (
+    BootstrapReceiptExpired,
     build_onboarding_receipt_store,
     canonical_request_fingerprint,
     normalize_idempotency_key,
@@ -128,7 +129,7 @@ class ProvisioningService:
         if receipt.state == "completed" and receipt.safe_response is not None:
             return EnterpriseProvisioned(
                 **receipt.safe_response,
-                owner_bootstrap_secret=receipt.bootstrap_secret,
+                owner_bootstrap_secret=self._replayable_secret(receipt),
             )
 
         # Resume exactly the body/IDs/secret persisted before any fanout.  This
@@ -254,11 +255,20 @@ class ProvisioningService:
         for ref in refs:
             self._platform_providers.validate_model_ref(ref, require_published=True)
 
+    def _replayable_secret(self, receipt) -> str:
+        """重放已完成回执时取回明文；超过保留期则清掉密文并要求重新发起。"""
+        if receipt.secret_expired(self._onboarding_receipts.clock()):
+            self._onboarding_receipts.expire_secret(receipt.idempotency_key)
+            raise BootstrapReceiptExpired("the one-time secret of this request has expired; reset again")
+        return receipt.bootstrap_secret
+
     def reset_owner_bootstrap(
         self,
         enterprise_id: str,
         *,
         idempotency_key: str | None = None,
+        actor_id: str | None = None,
+        actor_name: str | None = None,
     ) -> OwnerBootstrapResetResult:
         account = self._repo.get(enterprise_id)  # NotFound -> 404
         raw_key = normalize_idempotency_key(idempotency_key)
@@ -278,10 +288,10 @@ class ProvisioningService:
         if receipt.state == "completed" and receipt.safe_response is not None:
             return OwnerBootstrapResetResult(
                 **receipt.safe_response,
-                owner_bootstrap_secret=receipt.bootstrap_secret,
+                owner_bootstrap_secret=self._replayable_secret(receipt),
             )
 
-        self._manager.sync_owner_bootstrap(
+        synced = self._manager.sync_owner_bootstrap(
             OwnerBootstrapSync(
                 tenant_id=receipt.tenant_id,
                 owner_phone=receipt.owner_phone,
@@ -305,4 +315,19 @@ class ProvisioningService:
             receipt.idempotency_key,
             result.model_dump(mode="json", exclude={"owner_bootstrap_secret"}),
         )
+        self._audit_owner_reset(receipt.enterprise_id, synced, actor_id=actor_id, actor_name=actor_name)
         return result
+
+    def _audit_owner_reset(
+        self, enterprise_id: str, synced: dict | None, *, actor_id: str | None, actor_name: str | None,
+    ) -> None:
+        """记一条审计：谁重置了哪家企业的负责人凭据、清掉了多少会话 / passkey / 第三方登录。不含任何凭据。"""
+        if self._admin is None:
+            return
+        cleared = synced.get("cleared") if isinstance(synced, dict) else None
+        detail = "reset owner credentials"
+        if isinstance(cleared, dict):
+            detail += ": " + ", ".join(f"{key}={cleared[key]}" for key in ("sessions", "passkeys", "oauth") if key in cleared)
+        self._admin.record_audit(
+            enterprise_id, "owner_bootstrap_reset", detail, actor_id=actor_id, actor_name=actor_name, severity="warning",
+        )

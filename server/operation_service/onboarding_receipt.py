@@ -13,7 +13,9 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -21,6 +23,12 @@ from cryptography.fernet import Fernet, InvalidToken
 from shared.errors import Conflict, ServiceUnavailable, ValidationProblem
 
 _MAX_KEY_LENGTH = 256
+# 已完成回执里的一次性明文只保留这么久；之后重放同一幂等键不再返回明文。
+SECRET_RETENTION = timedelta(hours=24)
+
+
+class BootstrapReceiptExpired(Conflict):
+    status, code, title = 409, "bootstrap_receipt_expired", "Bootstrap receipt expired"
 
 
 def normalize_idempotency_key(value: str | None) -> str:
@@ -54,14 +62,30 @@ class OnboardingReceipt:
     enterprise_name: str
     enterprise_code: str | None
     owner_phone: str
-    bootstrap_secret_ciphertext: str
+    bootstrap_secret_ciphertext: str | None
     _cipher: _SecretCipher = field(repr=False, compare=False)
     safe_response: dict[str, Any] | None = None
+    completed_at: datetime | None = None
 
     @property
     def bootstrap_secret(self) -> str:
         """Decrypt only for the short-lived fanout call; never retain plaintext."""
+        if self.bootstrap_secret_ciphertext is None:
+            raise BootstrapReceiptExpired("the one-time secret of this request is no longer available; reset again")
         return self._cipher.decrypt(self.bootstrap_secret_ciphertext)
+
+    def secret_expired(self, now: datetime) -> bool:
+        """已完成的回执超过保留期（或密文已被清掉）后，明文不可再取。`prepared` 回执续跑要用，永不过期。"""
+        if self.state != "completed":
+            return False
+        if self.bootstrap_secret_ciphertext is None:
+            return True
+        completed = self.completed_at
+        if completed is None:
+            return False
+        if completed.tzinfo is None:
+            completed = completed.replace(tzinfo=UTC)
+        return now >= completed + SECRET_RETENTION
 
 
 class _SecretCipher:
@@ -90,10 +114,11 @@ class _SecretCipher:
 
 
 class InMemoryOnboardingReceiptStore:
-    def __init__(self):
+    def __init__(self, clock: Callable[[], datetime] | None = None):
         self._rows: dict[str, OnboardingReceipt] = {}
         self._cipher = _SecretCipher(allow_ephemeral=True)
         self._lock = threading.RLock()
+        self.clock = clock or (lambda: datetime.now(UTC))
 
     def reserve(
         self,
@@ -136,14 +161,22 @@ class InMemoryOnboardingReceiptStore:
             if existing is None:
                 raise ServiceUnavailable("Operator onboarding receipt disappeared")
             self._rows[idempotency_key] = replace(
-                existing, state="completed", safe_response=dict(safe_response)
+                existing, state="completed", safe_response=dict(safe_response), completed_at=self.clock()
             )
+
+    def expire_secret(self, idempotency_key: str) -> None:
+        """清掉已完成回执里的密文（幂等）。"""
+        with self._lock:
+            existing = self._rows.get(idempotency_key)
+            if existing is not None and existing.state == "completed":
+                self._rows[idempotency_key] = replace(existing, bootstrap_secret_ciphertext=None)
 
 
 class PgOnboardingReceiptStore:
-    def __init__(self, dsn: str):
+    def __init__(self, dsn: str, clock: Callable[[], datetime] | None = None):
         self._dsn = dsn
         self._cipher = _SecretCipher(allow_ephemeral=False)
+        self.clock = clock or (lambda: datetime.now(UTC))
 
     @staticmethod
     def _row_to_receipt(row, cipher: _SecretCipher) -> OnboardingReceipt:
@@ -163,6 +196,7 @@ class PgOnboardingReceiptStore:
             bootstrap_secret_ciphertext=row[9],
             _cipher=cipher,
             safe_response=response,
+            completed_at=row[10],
         )
 
     def reserve(self, **kwargs) -> OnboardingReceipt:
@@ -228,6 +262,21 @@ class PgOnboardingReceiptStore:
         except (pg_errors.Error, OSError) as exc:
             raise ServiceUnavailable("Operator onboarding receipt database is unavailable") from exc
 
+    def expire_secret(self, idempotency_key: str) -> None:
+        """清掉已完成回执里的密文（幂等）。"""
+        import psycopg
+        from psycopg import errors as pg_errors
+
+        try:
+            with psycopg.connect(self._dsn, autocommit=True) as conn:
+                conn.execute(
+                    "UPDATE onboarding_receipt SET bootstrap_secret_ciphertext=NULL "
+                    "WHERE idempotency_key=%s AND state='completed'",
+                    (idempotency_key,),
+                )
+        except (pg_errors.Error, OSError) as exc:
+            raise ServiceUnavailable("Operator onboarding receipt database is unavailable") from exc
+
 
 def build_onboarding_receipt_store(repository) -> InMemoryOnboardingReceiptStore | PgOnboardingReceiptStore:
     existing = getattr(repository, "_onboarding_receipt_store", None)
@@ -240,6 +289,8 @@ def build_onboarding_receipt_store(repository) -> InMemoryOnboardingReceiptStore
 
 
 __all__ = [
+    "BootstrapReceiptExpired",
+    "SECRET_RETENTION",
     "InMemoryOnboardingReceiptStore",
     "OnboardingReceipt",
     "PgOnboardingReceiptStore",
