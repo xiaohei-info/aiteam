@@ -9,3 +9,4 @@ export type {
   Tier,
 } from "./client.js";
 export { ApiError } from "./errors.js";
+export { newIdempotencyKey } from "./idempotency.js";

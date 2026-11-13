@@ -1,7 +1,7 @@
 /** 行业文档生成：草稿工作台（资料 → 生成 → 处理敏感项 → 审核 → 发布）。 */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiError, PlatformRole, hasRole } from "@aiteam/shared";
+import { ApiError, PlatformRole, hasRole, newIdempotencyKey } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -194,7 +194,7 @@ export function DraftDetailPage(): ReactNode {
   }
 
   const generate = () => run(async () => {
-    const key = generateKey.current ?? crypto.randomUUID();
+    const key = generateKey.current ?? newIdempotencyKey();
     generateKey.current = key;
     try {
       await api.generate(draftId, key);
