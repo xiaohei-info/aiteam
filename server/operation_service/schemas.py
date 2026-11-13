@@ -11,12 +11,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from shared.contracts.platform_provider import PlatformModelRef
 
+from .catalog_scope import MAX_ITEM_LENGTH, MAX_SCOPE_ITEMS, _clean
 
-class ProvisionEnterpriseRequest(BaseModel):
+
+class EnterpriseProfile(BaseModel):
+    """企业行业 / 标签（发布范围匹配用）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    industry: str | None = Field(default=None, max_length=MAX_ITEM_LENGTH, description="所属行业（单选，≤20 字）。")
+    tags: list[str] | None = Field(default=None, description=f"企业标签，最多 {MAX_SCOPE_ITEMS} 个，每个 ≤{MAX_ITEM_LENGTH} 字。")
+
+    @field_validator("industry")
+    @classmethod
+    def _industry(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    @field_validator("tags")
+    @classmethod
+    def _tags(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else _clean(value)
+
+
+class ProvisionEnterpriseRequest(EnterpriseProfile):
     """F01 开通企业（北向请求）：系统操作员发起。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -29,6 +50,14 @@ class ProvisionEnterpriseRequest(BaseModel):
         default=None,
         description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",
     )
+
+
+class EnterpriseProfileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enterprise_id: str
+    industry: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class EnterpriseProvisioned(BaseModel):

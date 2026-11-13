@@ -31,6 +31,7 @@ from shared.contracts.expert_profile import (
 )
 from shared.contracts.platform_skill import PlatformSkillRef
 
+from .catalog_scope import VisibleScope
 from .catalog_avatar import AVATAR_MAX_DATA_URL_LENGTH, validate_avatar_value
 
 
@@ -138,8 +139,8 @@ class PublishTemplateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    visible_scope: dict[str, Any] | None = Field(
-        default=None, description="可见范围（如 tenant_ids 白名单）；空=全可见。"
+    visible_scope: VisibleScope | None = Field(
+        default=None, description="发布范围：全部企业，或按行业 / 标签指定；空=全部企业。"
     )
 
 
@@ -148,7 +149,7 @@ class SetVisibilityRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    visible_scope: dict[str, Any] = Field(description="新的可见范围配置。")
+    visible_scope: VisibleScope = Field(description="新的发布范围。")
 
 
 class UpdateExpertTemplateRequest(BaseModel):

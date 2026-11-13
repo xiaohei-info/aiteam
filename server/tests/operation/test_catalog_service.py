@@ -8,6 +8,8 @@ import base64
 
 import pytest
 
+from operation_service.catalog_scope import VisibleScope
+
 from operation_service.catalog_avatar import (
     AVATAR_MAX_BYTES,
     AVATAR_MAX_DATA_URL_LENGTH,
@@ -282,9 +284,9 @@ def test_unpublish_draft_conflict(service):
 def test_set_visibility_notifies_manager(service, manager):
     service.register_expert_template(_expert())
     service.publish_template(CatalogType.EXPERT_TEMPLATE, "tpl-cmo", PublishTemplateRequest())
-    scope = {"tenant_ids": ["t1", "t2"]}
+    scope = {"mode": "limited", "industries": ["制造业"], "tags": ["华东"]}
     entry = service.set_visibility(
-        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", SetVisibilityRequest(visible_scope=scope)
+        CatalogType.EXPERT_TEMPLATE, "tpl-cmo", SetVisibilityRequest(visible_scope=VisibleScope(**scope))
     )
     assert entry.visible_scope == scope
 
@@ -298,7 +300,7 @@ def test_set_visibility_unpublished_conflict(service):
     service.register_expert_template(_expert())
     with pytest.raises(Conflict):
         service.set_visibility(
-            CatalogType.EXPERT_TEMPLATE, "tpl-cmo", SetVisibilityRequest(visible_scope={})
+            CatalogType.EXPERT_TEMPLATE, "tpl-cmo", SetVisibilityRequest(visible_scope=VisibleScope())
         )
 
 

@@ -30,6 +30,9 @@ class EnterpriseAccount:
     owner_bootstrap_hash: str
     # None keeps legacy enterprises unrestricted; [] is an explicit deny-all policy.
     allowed_model_refs: list[dict] | None = None
+    # 发布范围匹配用的企业资料（行业单选 + 自由标签）。
+    industry: str | None = None
+    tags: tuple[str, ...] = ()
 
 
 class EnterpriseRepository(ABC):
@@ -53,6 +56,16 @@ class EnterpriseRepository(ABC):
     @abstractmethod
     def get_by_tenant_id(self, tenant_id: str) -> EnterpriseAccount:
         """按 Manager tenant_id 查询企业。不存在 -> NotFound。"""
+        ...
+
+    @abstractmethod
+    def update_profile(self, enterprise_id: str, *, industry: str | None, tags: list[str]) -> EnterpriseAccount:
+        """更新企业行业 / 标签。不存在 -> NotFound。"""
+        ...
+
+    @abstractmethod
+    def list_profiles(self) -> list[tuple[str | None, tuple[str, ...]]]:
+        """全部企业的 (行业, 标签)，用于范围预览与联想。"""
         ...
 
     @abstractmethod
@@ -96,6 +109,8 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
             owner_phone=account.owner_phone,
             owner_bootstrap_hash=bootstrap_hash,
             allowed_model_refs=account.allowed_model_refs,
+            industry=account.industry,
+            tags=account.tags,
         )
         self._by_id[enterprise_id] = updated
         return updated
@@ -118,9 +133,20 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
             owner_phone=account.owner_phone,
             owner_bootstrap_hash=account.owner_bootstrap_hash,
             allowed_model_refs=allowed_model_refs,
+            industry=account.industry,
+            tags=account.tags,
         )
         self._by_id[enterprise_id] = updated
         return updated
+
+    def update_profile(self, enterprise_id: str, *, industry: str | None, tags: list[str]) -> EnterpriseAccount:
+        import dataclasses
+        updated = dataclasses.replace(self.get(enterprise_id), industry=industry, tags=tuple(tags))
+        self._by_id[enterprise_id] = updated
+        return updated
+
+    def list_profiles(self) -> list[tuple[str | None, tuple[str, ...]]]:
+        return [(a.industry, a.tags) for a in self._by_id.values()]
 
 
 # ---- PostgreSQL 实现 ----
@@ -179,8 +205,9 @@ class PgEnterpriseRepository(EnterpriseRepository):
                             """
                             INSERT INTO enterprise_account
                                 (enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                                 owner_phone, owner_bootstrap_hash, allowed_model_refs)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                 owner_phone, owner_bootstrap_hash, allowed_model_refs,
+                                 industry, tags)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
                                 account.enterprise_id,
@@ -190,6 +217,8 @@ class PgEnterpriseRepository(EnterpriseRepository):
                                 account.owner_phone,
                                 account.owner_bootstrap_hash,
                                 json.dumps(account.allowed_model_refs) if account.allowed_model_refs is not None else None,
+                                account.industry,
+                                list(account.tags),
                             ),
                         )
                 return account
@@ -209,7 +238,7 @@ class PgEnterpriseRepository(EnterpriseRepository):
                 cur.execute(
                     """
                     SELECT enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                           owner_phone, owner_bootstrap_hash, allowed_model_refs
+                           owner_phone, owner_bootstrap_hash, allowed_model_refs, industry, tags
                     FROM enterprise_account
                     WHERE enterprise_id = %s
                     """,
@@ -228,6 +257,8 @@ class PgEnterpriseRepository(EnterpriseRepository):
             owner_phone=row[4],
             owner_bootstrap_hash=row[5],
             allowed_model_refs=list(row[6]) if row[6] is not None else None,
+            industry=row[7],
+            tags=tuple(row[8] or ()),
         )
 
     def get_by_tenant_id(self, tenant_id: str) -> EnterpriseAccount:
@@ -238,7 +269,7 @@ class PgEnterpriseRepository(EnterpriseRepository):
                 cur.execute(
                     """
                     SELECT enterprise_id, tenant_id, enterprise_name, enterprise_code,
-                           owner_phone, owner_bootstrap_hash, allowed_model_refs
+                           owner_phone, owner_bootstrap_hash, allowed_model_refs, industry, tags
                     FROM enterprise_account
                     WHERE tenant_id = %s
                     """,
@@ -255,6 +286,8 @@ class PgEnterpriseRepository(EnterpriseRepository):
             owner_phone=row[4],
             owner_bootstrap_hash=row[5],
             allowed_model_refs=list(row[6]) if row[6] is not None else None,
+            industry=row[7],
+            tags=tuple(row[8] or ()),
         )
 
     def update_allowed_model_refs(
@@ -281,6 +314,27 @@ class PgEnterpriseRepository(EnterpriseRepository):
                     if cur.rowcount == 0:
                         raise NotFound(f"enterprise not found: {enterprise_id}")
             return self.get(enterprise_id)
+
+    def update_profile(self, enterprise_id: str, *, industry: str | None, tags: list[str]) -> EnterpriseAccount:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE enterprise_account SET industry = %s, tags = %s, updated_at = now() WHERE enterprise_id = %s",
+                    (industry, list(tags), enterprise_id),
+                )
+                if cur.rowcount == 0:
+                    raise NotFound(f"enterprise not found: {enterprise_id}")
+        return self.get(enterprise_id)
+
+    def list_profiles(self) -> list[tuple[str | None, tuple[str, ...]]]:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT industry, tags FROM enterprise_account WHERE operation_status <> 'deleted'")
+                return [(row[0], tuple(row[1] or ())) for row in cur.fetchall()]
 
     def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
         import psycopg
