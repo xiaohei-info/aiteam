@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -41,6 +42,7 @@ class RecognizeRunner(Protocol):
         budget: AuthoringBudget,
         system_prompt: str,
         task_prompt: str,
+        abort: threading.Event | None = None,
     ) -> RecognizeOutcome: ...
 
 
@@ -67,12 +69,16 @@ def _add(total: AuthoringUsage, part: AuthoringUsage) -> AuthoringUsage:
 class VisionImageRecognizer:
     """方案 B：用宿主注入的多模态模型识别。按批起 worker 子进程，一批失败不影响其它批。"""
 
-    def __init__(self, runner: RecognizeRunner, model: ModelConfig, limits: VisionLimits | None = None):
+    def __init__(
+        self, runner: RecognizeRunner, model: ModelConfig, limits: VisionLimits | None = None,
+        abort: threading.Event | None = None,
+    ):
         if not model.supports_images:
             raise WorkerError("vision_unsupported", "the selected model does not accept image input")
         self._runner = runner
         self._model = model
         self._limits = limits or VisionLimits()
+        self._abort = abort
 
     def recognize(self, images: Sequence[ImageAsset]) -> RecognitionOutcome:
         outcome = RecognitionOutcome()
@@ -91,7 +97,7 @@ class VisionImageRecognizer:
             try:
                 result = self._runner.recognize(
                     batch, model=self._model, budget=budget,
-                    system_prompt=recognize_system_prompt(), task_prompt=recognize_task_prompt(),
+                    system_prompt=recognize_system_prompt(), task_prompt=recognize_task_prompt(), abort=self._abort,
                 )
             except WorkerError as error:
                 if error.code in _FATAL_CODES:

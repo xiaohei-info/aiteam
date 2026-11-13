@@ -18,6 +18,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,7 @@ HOST_ERROR_CODES = frozenset({
 _ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE")
 _HOST_GRACE_SECONDS = 20.0
 _MAX_MESSAGE_CHARS = 300
+_ABORT_POLL_SECONDS = 0.25
 
 
 class WorkerError(Exception):
@@ -207,10 +209,11 @@ class PiWorkerRunner:
         budget: AuthoringBudget,
         system_prompt: str,
         task_prompt: str,
+        abort: threading.Event | None = None,
     ) -> GenerateOutcome:
         job = self._job("generate", model, budget, system_prompt, task_prompt)
         job["chunks"] = [chunk.model_dump(mode="json") for chunk in chunks]
-        result, usage = self._run(job, model, budget)
+        result, usage = self._run(job, model, budget, abort)
         try:
             parsed = AuthoringResult.model_validate(result)
         except ValidationError as exc:
@@ -228,6 +231,7 @@ class PiWorkerRunner:
         budget: AuthoringBudget,
         system_prompt: str,
         task_prompt: str,
+        abort: threading.Event | None = None,
     ) -> RecognizeOutcome:
         job = self._job("recognize", model, budget, system_prompt, task_prompt)
         job["images"] = [
@@ -237,7 +241,7 @@ class PiWorkerRunner:
             }
             for image in images
         ]
-        result, usage = self._run(job, model, budget)
+        result, usage = self._run(job, model, budget, abort)
         try:
             recognized = [RecognizedImage.model_validate(item) for item in result.get("images", [])]
         except (ValidationError, AttributeError, TypeError) as exc:
@@ -261,9 +265,13 @@ class PiWorkerRunner:
             env["SOLUTION_AUTHORING_ALLOW_FAUX"] = "1"
         return env
 
-    def _run(self, job: dict[str, Any], model: ModelConfig, budget: AuthoringBudget) -> tuple[dict[str, Any], AuthoringUsage]:
+    def _run(
+        self, job: dict[str, Any], model: ModelConfig, budget: AuthoringBudget, abort: threading.Event | None = None,
+    ) -> tuple[dict[str, Any], AuthoringUsage]:
         secrets = model.secrets()
-        raw = self._execute(json.dumps(job, ensure_ascii=False).encode("utf-8"), budget.timeout_ms / 1000 + self._host_grace_seconds)
+        raw = self._execute(
+            json.dumps(job, ensure_ascii=False).encode("utf-8"), budget.timeout_ms / 1000 + self._host_grace_seconds, abort,
+        )
         lines = [line for line in raw.decode("utf-8", errors="replace").splitlines() if line.strip()]
         try:
             if len(lines) != 1:
@@ -286,7 +294,7 @@ class PiWorkerRunner:
             usage,
         )
 
-    def _execute(self, payload: bytes, timeout_seconds: float) -> bytes:
+    def _execute(self, payload: bytes, timeout_seconds: float, abort: threading.Event | None = None) -> bytes:
         if self._command is None:
             command, cwd = default_worker_command()
         else:
@@ -294,6 +302,8 @@ class PiWorkerRunner:
         with self._active_lock:
             if self._closed:
                 raise WorkerError("worker_unavailable", "the authoring worker host is shutting down")
+            if abort is not None and abort.is_set():
+                raise WorkerError("worker_crashed", "the job was aborted before the authoring worker started")
             try:
                 process = subprocess.Popen(  # noqa: S603 — 固定命令，无 shell；任务内容只走 stdin
                     command, cwd=cwd, env=self._environment(),
@@ -304,12 +314,14 @@ class PiWorkerRunner:
                 raise WorkerError("worker_unavailable", "failed to start the authoring worker") from exc
             self._active.add(process)
         try:
-            return self._collect(process, payload, timeout_seconds)
+            return self._collect(process, payload, timeout_seconds, abort)
         finally:
             with self._active_lock:
                 self._active.discard(process)
 
-    def _collect(self, process: subprocess.Popen[bytes], payload: bytes, timeout_seconds: float) -> bytes:
+    def _collect(
+        self, process: subprocess.Popen[bytes], payload: bytes, timeout_seconds: float, abort: threading.Event | None = None,
+    ) -> bytes:
         stdin, out = process.stdin, process.stdout
         if stdin is None or out is None:
             _kill(process)
@@ -338,17 +350,29 @@ class PiWorkerRunner:
         threads = [threading.Thread(target=feed, daemon=True), threading.Thread(target=drain, daemon=True)]
         for thread in threads:
             thread.start()
-        timed_out = False
-        try:
-            process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        timed_out = aborted = False
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                process.wait(timeout=max(0.0, min(_ABORT_POLL_SECONDS, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if abort is not None and abort.is_set():
+                aborted = True
+            elif time.monotonic() >= deadline:
+                timed_out = True
+            else:
+                continue
             _kill(process)
             process.wait()
+            break
         for thread in threads:
             thread.join(timeout=5)
         out.close()
 
+        if aborted:
+            raise WorkerError("worker_crashed", "the job was aborted and the authoring worker was stopped")
         if overflow.is_set():
             raise WorkerError("worker_output_too_large", "authoring worker output exceeded the size limit")
         if timed_out:

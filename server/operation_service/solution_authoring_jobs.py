@@ -66,10 +66,12 @@ class AuthoringRunner(Protocol):
 
     def generate(
         self, chunks: Sequence[SourceChunk], *, model: ModelConfig, budget: AuthoringBudget, system_prompt: str, task_prompt: str,
+        abort: threading.Event | None = None,
     ) -> GenerateOutcome: ...
 
     def recognize(
         self, images: Sequence[ImageAsset], *, model: ModelConfig, budget: AuthoringBudget, system_prompt: str, task_prompt: str,
+        abort: threading.Event | None = None,
     ) -> RecognizeOutcome: ...
 
 
@@ -221,7 +223,7 @@ class GenerationJobExecutor:
         if attempted:
             vision = draft.image_recognition == "vision"
             try:
-                recognizer: ImageRecognizer = VisionImageRecognizer(self._runner, model) if vision else NoopImageRecognizer()
+                recognizer: ImageRecognizer = VisionImageRecognizer(self._runner, model, abort=lease.lost) if vision else NoopImageRecognizer()
                 recognition = recognizer.recognize(attempted)
             except WorkerError as error:
                 raise _JobFailure(error.code, str(error), error.usage) from error
@@ -242,7 +244,7 @@ class GenerationJobExecutor:
         try:
             outcome = self._runner.generate(
                 chunks, model=model, budget=self._budget,
-                system_prompt=generate_system_prompt(), task_prompt=generate_task_prompt(draft.supplement),
+                system_prompt=generate_system_prompt(), task_prompt=generate_task_prompt(draft.supplement), abort=lease.lost,
             )
         except WorkerError as error:
             raise _JobFailure(error.code, str(error), _sum(usage, error.usage)) from error
