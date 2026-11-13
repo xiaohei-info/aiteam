@@ -15,6 +15,8 @@ from shared.contracts.envelope import Envelope
 
 from .dependencies import get_provisioning_service
 from .schemas import (
+    EnterpriseProfile,
+    EnterpriseProfileOut,
     EnterpriseProvisioned,
     OwnerBootstrapResetResult,
     ProvisionEnterpriseRequest,
@@ -68,3 +70,30 @@ async def reset_owner_bootstrap(
             enterprise_id, idempotency_key=idempotency_key, actor_id=claims.user_id, actor_name=claims.user_id,
         )
     )
+
+
+@router.get(
+    "/enterprises/{enterprise_id}/profile",
+    description="读取企业行业 / 标签。", summary="读取企业行业 / 标签",
+    operation_id="operation_get_enterprise_profile",
+)
+async def get_enterprise_profile(
+    enterprise_id: str,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: ProvisioningService = Depends(get_provisioning_service),
+) -> Envelope[EnterpriseProfileOut]:
+    return Envelope[EnterpriseProfileOut](data=service.get_profile(enterprise_id))
+
+
+@router.put(
+    "/enterprises/{enterprise_id}/profile",
+    description="更新企业行业 / 标签（用于专家发布范围匹配）。", summary="更新企业行业 / 标签",
+    operation_id="operation_update_enterprise_profile",
+)
+async def update_enterprise_profile(
+    enterprise_id: str,
+    body: EnterpriseProfile,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: ProvisioningService = Depends(get_provisioning_service),
+) -> Envelope[EnterpriseProfileOut]:
+    return Envelope[EnterpriseProfileOut](data=service.update_profile(enterprise_id, body))

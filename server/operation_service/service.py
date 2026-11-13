@@ -189,6 +189,8 @@ class ProvisioningService:
                 [ref.model_dump(mode="json") for ref in allowed_model_refs]
                 if allowed_model_refs is not None else None
             ),
+            industry=original.industry,
+            tags=tuple(original.tags or ()),
         )
         try:
             existing = self._repo.get(receipt.enterprise_id)
@@ -220,6 +222,14 @@ class ProvisioningService:
             result.model_dump(mode="json", exclude={"owner_bootstrap_secret"}),
         )
         return result
+
+    def get_profile(self, enterprise_id: str) -> EnterpriseProfileOut:
+        account = self._repo.get(enterprise_id)
+        return EnterpriseProfileOut(enterprise_id=account.enterprise_id, industry=account.industry, tags=list(account.tags))
+
+    def update_profile(self, enterprise_id: str, body: EnterpriseProfile) -> EnterpriseProfileOut:
+        account = self._repo.update_profile(enterprise_id, industry=body.industry, tags=list(body.tags or ()))
+        return EnterpriseProfileOut(enterprise_id=account.enterprise_id, industry=account.industry, tags=list(account.tags))
 
     def get_model_access(self, enterprise_id: str) -> EnterpriseModelAccessOut:
         account = self._repo.get(enterprise_id)

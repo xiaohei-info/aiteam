@@ -20,6 +20,7 @@ from shared.errors import Conflict, NotFound, ValidationProblem
 from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
+from .catalog_scope import VisibleScope, normalize_scope, scope_allows
 from .catalog_schemas import (
     CatalogDetailView,
     CatalogEntryResponse,
@@ -185,11 +186,12 @@ def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
 class CatalogService:
     """无状态编排器；依赖注入 repository 与 Manager 网关（对端可 mock）。"""
 
-    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None, platform_providers=None):
+    def __init__(self, repo: CatalogRepository, manager: CatalogManagerGateway, *, platform_skills=None, platform_providers=None, enterprises=None):
         self._repo = repo
         self._manager = manager
         self._platform_skills = platform_skills
         self._platform_providers = platform_providers
+        self._enterprises = enterprises
 
     # ---- 注册（草稿态，不通知 Manager）----
 
@@ -294,7 +296,8 @@ class CatalogService:
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
-            entry, status=CatalogStatus.PUBLISHED, visible_scope=req.visible_scope,
+            entry, status=CatalogStatus.PUBLISHED,
+            visible_scope=(req.visible_scope or VisibleScope()).model_dump(mode="json"),
             payload={**(entry.payload or {}), "updated_at": _now_iso()},
         )
         self._notify(updated, action="published")
@@ -316,7 +319,7 @@ class CatalogService:
         entry = self._repo.get(catalog_type, template_id)
         if entry.status != CatalogStatus.PUBLISHED:
             raise Conflict(f"visibility applies to published entries only: {template_id}")
-        updated = self._repo.update(entry, visible_scope=req.visible_scope)
+        updated = self._repo.update(entry, visible_scope=req.visible_scope.model_dump(mode="json"))
         self._notify(updated, action="visibility_changed")
         return _to_response(updated)
 
@@ -433,8 +436,27 @@ class CatalogService:
 
     # ---- Manager 拉取详情（F06/F07 跨端契约，05 §5.4）----
 
+    def _visible_to(self, entry: CatalogEntry, tenant_id: str | None) -> bool:
+        """发布范围是否对该企业可见。`tenant_id=None` 仅限内部调用；拿不到企业资料时按不可见处理。"""
+        if tenant_id is None or normalize_scope(entry.visible_scope).mode == "all":
+            return True
+        if self._enterprises is None:
+            return False
+        try:
+            account = self._enterprises.get_by_tenant_id(tenant_id)
+        except NotFound:
+            return False
+        return scope_allows(entry.visible_scope, industry=account.industry, tags=account.tags)
+
+    def _expert_visible(self, template_id: str, tenant_id: str) -> bool:
+        try:
+            entry = self._repo.get(CatalogType.EXPERT_TEMPLATE, template_id)
+        except NotFound:
+            return True  # 缺失的专家由后面的“方案不完整”冲突报告，不当作范围外
+        return self._visible_to(entry, tenant_id)
+
     def pull_expert_template_detail(
-        self, *, template_id: str, version: str | None = None
+        self, *, template_id: str, version: str | None = None, tenant_id: str | None = None
     ):
         """F06：Manager 拉取专家模板详情（只读；Operator 持模板真相）。
 
@@ -448,6 +470,8 @@ class CatalogService:
             raise NotFound(f"expert template not published: {template_id}")
         if version is not None and entry.version != version:
             raise NotFound(f"expert template version mismatch: {template_id}@{version}")
+        if not self._visible_to(entry, tenant_id):
+            raise NotFound(f"expert template not visible: {template_id}")
 
         payload = entry.payload or {}
         persona, recommended = self._backfill_expert(payload)
@@ -469,7 +493,7 @@ class CatalogService:
         )
 
     def pull_solution_package(
-        self, *, solution_id: str, version: str | None = None
+        self, *, solution_id: str, version: str | None = None, tenant_id: str | None = None
     ):
         """F07：Manager 拉取行业方案包（只读；Operator 持模板真相）。
 
@@ -483,6 +507,8 @@ class CatalogService:
             raise NotFound(f"solution package not published: {solution_id}")
         if version is not None and entry.version != version:
             raise NotFound(f"solution package version mismatch: {solution_id}@{version}")
+        if not self._visible_to(entry, tenant_id):
+            raise NotFound(f"solution package not visible: {solution_id}")
 
         payload = entry.payload or {}
 
@@ -498,7 +524,11 @@ class CatalogService:
             binding_order = payload.get("expert_template_ids", [])
             binding_overrides = {}
         experts: list[ExpertTemplateDetail] = []
+        hidden_ids: set[str] = set()
         for expert_id in binding_order:
+            if tenant_id is not None and not self._expert_visible(expert_id, tenant_id):
+                hidden_ids.add(expert_id)
+                continue
             try:
                 pinned_version = template_versions.get(expert_id) if isinstance(template_versions, dict) else None
                 expert = self.pull_expert_template_detail(template_id=expert_id, version=pinned_version if isinstance(pinned_version, str) and pinned_version else None)
@@ -511,6 +541,11 @@ class CatalogService:
                 # 方案包必须是完整可复现的团队；任何缺失/下架/版本不符专家都使整包不可应用。
                 raise Conflict(f"solution expert {expert_id!r} is unavailable or not published") from exc
 
+        coordinator_id = payload.get("coordinator_template_id", "")
+        if hidden_ids and (coordinator_id in hidden_ids or not experts):
+            # 协调专家（或全部专家）对本企业不可见：方案无法在该企业应用，当作不存在。
+            raise NotFound(f"solution package not visible: {solution_id}")
+
         return SolutionPackage(
             solution_id=entry.template_id,
             version=entry.version,
@@ -522,9 +557,10 @@ class CatalogService:
             output_requirements=payload.get("output_requirements", ""),
             experts=experts,
             tags=payload.get("tags", []),
+            hidden_expert_count=len(hidden_ids),
         )
 
-    def list_published_expert_templates(self):
+    def list_published_expert_templates(self, *, tenant_id: str | None = None):
         """F06：Manager 列举可招募专家模板（只读，只返回 PUBLISHED 状态）。"""
         from shared.contracts.crosstier import ExpertTemplateDetail
 
@@ -533,6 +569,8 @@ class CatalogService:
         )
         results: list[ExpertTemplateDetail] = []
         for entry in entries:
+            if not self._visible_to(entry, tenant_id):
+                continue
             payload = entry.payload or {}
             persona, recommended = self._backfill_expert(payload)
             results.append(
@@ -555,7 +593,7 @@ class CatalogService:
             )
         return results
 
-    def list_published_solution_packages(self):
+    def list_published_solution_packages(self, *, tenant_id: str | None = None):
         """F07：Manager 列举可应用行业方案包（只读，只返回 PUBLISHED 状态）。"""
         from shared.contracts.crosstier import SolutionPackage
 
@@ -565,12 +603,24 @@ class CatalogService:
         results: list[SolutionPackage] = []
         for entry in entries:
             try:
-                package = self.pull_solution_package(solution_id=entry.template_id, version=None)
+                package = self.pull_solution_package(solution_id=entry.template_id, version=None, tenant_id=tenant_id)
                 results.append(package)
             except Exception:  # noqa: BLE001
                 # 跳过解析失败的方案包
                 pass
         return results
+
+    # ---- 发布范围：联想与预计可见企业数 ----
+
+    def scope_options(self) -> dict:
+        profiles = self._enterprises.list_profiles() if self._enterprises is not None else []
+        industries = sorted({industry for industry, _ in profiles if industry})
+        tags = sorted({tag for _, tags in profiles for tag in tags})
+        return {"industries": industries, "tags": tags}
+
+    def preview_scope(self, scope: VisibleScope) -> int:
+        profiles = self._enterprises.list_profiles() if self._enterprises is not None else []
+        return sum(1 for industry, tags in profiles if scope_allows(scope.model_dump(), industry=industry, tags=tags))
 
     # ---- 内部：窄通道通知 Manager ----
 

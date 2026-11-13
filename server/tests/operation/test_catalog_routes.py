@@ -186,7 +186,7 @@ def test_unpublish_flow(client, manager):
 def test_set_visibility_flow(client, manager):
     _register_expert(client)
     client.post("/api/operation/catalog/expert_template/tpl-cmo/publish", json={}, headers=_auth())
-    scope = {"tenant_ids": ["t1"]}
+    scope = {"mode": "limited", "industries": ["制造业"], "tags": []}
     r = client.put(
         "/api/operation/catalog/expert_template/tpl-cmo/visibility",
         json={"visible_scope": scope}, headers=_auth(),
