@@ -651,6 +651,22 @@ describe("草稿列表的筛选与行操作", () => {
     expect(await screen.findByText("排队中")).toBeInTheDocument();
   });
 
+  it("非安全上下文（http://IP 访问，没有 crypto.randomUUID）下继续生成仍可用", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array) => bytes.fill(7) });
+    try {
+      const calls = mockApi({
+        [`GET ${BASE}`]: () => listResponse([summary({ status: "draft" })]),
+        [`POST ${BASE}/${DRAFT_ID}/generate`]: () => json({ job_id: "j-2", status: "queued" }, 202),
+      });
+      renderList();
+      await openRowMenu(DRAFT_ID, "继续生成");
+      await waitFor(() => expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/generate"))).toBe(true));
+      expect(calls.find((call) => call.method === "POST")!.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("继续生成被拒绝时在列表顶部显示原因", async () => {
     mockApi({
       [`GET ${BASE}`]: () => listResponse([summary({ status: "draft" })]),
