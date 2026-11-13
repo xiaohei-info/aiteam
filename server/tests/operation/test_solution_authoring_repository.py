@@ -376,3 +376,38 @@ def test_a_failed_regeneration_keeps_the_previous_content_and_a_new_job_can_be_q
     assert created and retry.job_id != job.job_id
     latest = repo.latest_job(draft.draft_id)
     assert latest is not None and latest.job_id == retry.job_id
+
+
+# ---- 列表的最近任务与取消 ----
+
+def test_list_with_latest_job_picks_the_newest_job_of_each_draft(repo, clock):
+    bare = _draft(repo, clock, title="无任务")
+    draft, first = _queued(repo, clock, "k1")
+    repo.cancel_job(draft.draft_id, "op2")
+    second, created = repo.enqueue_job(_job(clock, draft.draft_id, "k2"), allowed_statuses=EDITABLE)
+    assert created
+    pairs = {row.draft_id: job for row, job in repo.list_drafts_with_latest_job()}
+    assert pairs[bare.draft_id] is None
+    assert pairs[draft.draft_id].job_id == second.job_id and pairs[draft.draft_id].status == "queued"
+
+
+def test_cancel_job_fails_the_active_job_and_restores_the_draft(repo, clock):
+    draft, job = _queued(repo, clock)
+    cancelled = repo.cancel_job(draft.draft_id, "op2")
+    assert cancelled.status == "draft"
+    stored = repo.get_job(draft.draft_id, job.job_id)
+    assert (stored.status, stored.error_code, stored.lease_owner) == ("failed", "cancelled", None)
+    assert stored.finished_at is not None
+    assert repo.list_events(draft.draft_id)[-1].action == "generation_cancelled"
+    assert repo.heartbeat_job(job.job_id, "w1", 60) is False
+    again = repo.cancel_job(draft.draft_id, "op2")
+    assert again.version == cancelled.version
+
+
+def test_a_claimed_job_that_is_cancelled_cannot_be_completed(repo, clock):
+    draft, job = _queued(repo, clock)
+    claimed = repo.claim_job("w1", 60)
+    assert claimed is not None and claimed.job_id == job.job_id
+    repo.cancel_job(draft.draft_id, "op2")
+    assert repo.complete_job(draft.draft_id, job.job_id, "w1", change=DraftChange(changes={"status": "ready_for_review"}), usage={}) is False
+    assert repo.get_draft(draft.draft_id).status == "draft"

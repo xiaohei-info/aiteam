@@ -112,6 +112,23 @@ class JobOut(_Strict):
         )
 
 
+class JobBriefOut(_Strict):
+    """列表用的最近任务概要：只有状态与时间，不含错误详情与用量。"""
+
+    status: Literal["queued", "parsing", "analyzing", "succeeded", "failed"]
+    error_code: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+    @classmethod
+    def of(cls, row: JobRow) -> JobBriefOut:
+        return cls(
+            status=row.status, error_code=row.error_code, created_at=row.created_at,  # type: ignore[arg-type]
+            started_at=row.started_at, finished_at=row.finished_at,
+        )
+
+
 class FindingOut(_Strict):
     finding_id: str
     kind: str = Field(description="phone / email / id_card / bank_card / secret / amount / company / person / other / image_unrecognized")
@@ -174,6 +191,14 @@ class DraftOut(_Strict):
     @classmethod
     def of(cls, row: DraftRow) -> DraftOut:
         return cls(**_draft_fields(row))
+
+
+class DraftSummaryOut(DraftOut):
+    latest_job: JobBriefOut | None = None
+
+    @classmethod
+    def summarize(cls, row: DraftRow, job: JobRow | None) -> DraftSummaryOut:
+        return cls(**_draft_fields(row), latest_job=JobBriefOut.of(job) if job is not None else None)
 
 
 class DraftDetailOut(DraftOut):

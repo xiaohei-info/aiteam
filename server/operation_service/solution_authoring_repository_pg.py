@@ -76,6 +76,10 @@ _DRAFTS = _select(DraftRow, "TRUE")
 _SOURCES = _select(SourceRow, "draft_id = %s")
 _JOBS = _select(JobRow, "draft_id = %s")
 _JOB = _select(JobRow, "job_id = %s")
+# 每个草稿只取 created_at 最新的一行（DISTINCT ON 走一次扫描）。
+_JOBS_LATEST = sql.SQL("SELECT DISTINCT ON (draft_id) {} FROM {} ORDER BY draft_id, created_at DESC").format(
+    sql.SQL(", ").join(map(sql.Identifier, _columns(JobRow))), sql.Identifier(_TABLES[JobRow][0]),
+)
 _JOB_FOR_UPDATE = _select(JobRow, "job_id = %s FOR UPDATE")
 _JOB_CLAIMABLE = _select(
     JobRow,
@@ -140,6 +144,9 @@ class _PgTx(_Tx):
 
     def jobs(self, draft_id: str) -> list[JobRow]:
         return self._fetch(JobRow, _JOBS, (draft_id,))
+
+    def latest_jobs(self) -> dict[str, JobRow]:
+        return {row.draft_id: row for row in self._fetch(JobRow, _JOBS_LATEST)}
 
     def job(self, job_id: str, *, lock: bool = False) -> JobRow | None:
         return self._first(JobRow, _JOB_FOR_UPDATE if lock else _JOB, (job_id,))

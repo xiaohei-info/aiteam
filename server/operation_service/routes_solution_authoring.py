@@ -25,11 +25,12 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
 
-from .solution_authoring_dependencies import get_solution_authoring_service
+from .solution_authoring_dependencies import get_solution_authoring_service, worker_enabled
 from .solution_authoring_schemas import (
     DraftCreate,
     DraftDetailOut,
     DraftOut,
+    DraftSummaryOut,
     FindingResolve,
     JobOut,
     PackageUpdate,
@@ -60,12 +61,15 @@ def _reviewer(request: Request) -> TokenClaims:
 
 @router.get(
     "/drafts", summary="列出方案草稿", operation_id="operation_solution_authoring_draft_list",
-    description="列出未归档的行业方案草稿，按最近更新倒序。只含概要，不含正文。",
+    description=(
+        "列出未归档的行业方案草稿，按最近更新倒序。只含概要与最近一次生成任务的状态，不含正文。"
+        "meta.worker_available 表示本服务是否启用了生成执行器（false 时排队的任务不会被执行）。"
+    ),
 )
 def list_drafts(
     _claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
-) -> ListEnvelope[DraftOut]:
-    return ListEnvelope[DraftOut](data=service.list_drafts())
+) -> ListEnvelope[DraftSummaryOut]:
+    return ListEnvelope[DraftSummaryOut](data=service.list_drafts(), meta={"worker_available": worker_enabled()})
 
 
 @router.post(
@@ -103,6 +107,20 @@ def archive_draft(
     reviewer = PlatformRole.SYSTEM_ADMIN.value in claims.roles
     service.archive_draft(str(draft_id), claims.user_id, can_archive_reviewed=reviewer)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/drafts/{draft_id}/generation/cancel", summary="取消生成", operation_id="operation_solution_authoring_generation_cancel",
+    description=(
+        "取消进行中（排队 / 解析 / 分析）的生成任务：任务记为失败（error_code=cancelled），草稿回到生成前的状态，"
+        "已有正文保留；执行者随后停止并丢弃结果。没有进行中的任务时不做任何改动，直接返回草稿（幂等）。"
+    ),
+)
+def cancel_generation(
+    draft_id: UUID,
+    claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
+) -> Envelope[DraftDetailOut]:
+    return Envelope[DraftDetailOut](data=service.cancel_generation(str(draft_id), claims.user_id))
 
 
 # ---- 资料 ----
