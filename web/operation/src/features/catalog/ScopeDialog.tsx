@@ -9,7 +9,7 @@ import { MultiSelector } from "@astryxdesign/core/MultiSelector";
 import { SegmentedControl, SegmentedControlItem } from "@astryxdesign/core/SegmentedControl";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
-import { normalizeScope, type VisibleScope } from "./types";
+import { normalizeScope, scopeNarrowed, type VisibleScope } from "./types";
 import { useCatalogApi } from "./useCatalogApi";
 
 interface Props {
@@ -38,6 +38,8 @@ export function ScopeDialog({ title, confirmLabel, initial, onConfirm, onClose }
 
   const scope: VisibleScope = mode === "all" ? { mode, industries: [], tags: [] } : { mode, industries, tags };
   const incomplete = mode === "limited" && industries.length === 0 && tags.length === 0;
+  // 只有调整已发布模板（传了 initial）才可能影响已招募的企业。
+  const narrowing = initial !== undefined && scopeNarrowed(start, scope);
 
   useEffect(() => {
     let active = true;
@@ -108,6 +110,12 @@ export function ScopeDialog({ title, confirmLabel, initial, onConfirm, onClose }
               <Text color="secondary" data-testid="scope-preview">
                 {count === null ? "预计可见企业：—" : `预计可见企业：${count} 家`}
               </Text>
+              {narrowing && (
+                <Banner
+                  status="warning"
+                  title="收窄后，不在范围内的企业已招募的专家会自动停用；重新放开范围后自动恢复。"
+                />
+              )}
               {error && <Banner status="error" title={error} />}
             </VStack>
           </LayoutContent>

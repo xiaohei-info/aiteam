@@ -7,7 +7,7 @@ import { operationMessages } from "../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../auth/session";
 import { DeletionDialog } from "./DeletionDialog";
 import { EnterpriseActions } from "./EnterpriseActions";
-import type { EnterpriseAccount } from "./types";
+import { deletedLabel, type EnterpriseAccount } from "./types";
 import type { AccountsApi } from "./useAccountsApi";
 
 function makeI18n() {
@@ -89,6 +89,48 @@ describe("DeletionDialog", () => {
     render(<DeletionDialog mode="purge" api={api} enterprise={ent({ status: "deleted" })} onClose={() => {}} onDone={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
     await waitFor(() => expect(api.purgeEnterprise).toHaveBeenCalledWith("ent_1"));
+  });
+});
+
+describe("删除状态的展示与出口", () => {
+  it("已删除状态显示剩余可恢复天数 / 可清理 / 已清理", () => {
+    const now = Date.parse("2026-11-13T00:00:00Z");
+    expect(deletedLabel({ deleted_at: "2026-11-08T00:00:00Z" }, now)).toBe("已删除 · 25 天内可恢复");
+    expect(deletedLabel({ deleted_at: "2026-10-01T00:00:00Z" }, now)).toBe("已删除 · 可清理");
+    expect(deletedLabel({ deleted_at: "2026-10-01T00:00:00Z", purged_at: "2026-11-10T00:00:00Z" }, now)).toBe("已清理");
+    expect(deletedLabel({}, now)).toBe("已删除");
+  });
+
+  it("恢复文案说明：只恢复数据，已注销企业不能重新启用", () => {
+    render(<DeletionDialog mode="restore" api={makeApi()} enterprise={ent({ status: "deleted" })} onClose={() => {}} onDone={() => {}} />);
+    expect(screen.getByText(/不能重新启用/)).toBeInTheDocument();
+    expect(screen.queryByText(/另行处理/)).not.toBeInTheDocument();
+  });
+
+  it("删除未完成时可以放弃删除，回到已注销", async () => {
+    const api = makeApi();
+    renderActions("system_admin", ent({ operation_status: "deleting" }), api);
+    openMenu();
+    fireEvent.click(await screen.findByText("放弃删除"));
+    expect(await screen.findByRole("dialog", { name: "放弃删除" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认放弃" }));
+    await waitFor(() => expect(api.restoreEnterprise).toHaveBeenCalledWith("ent_1"));
+    expect(api.deleteEnterprise).not.toHaveBeenCalled();
+  });
+
+  it("没有可用操作时不显示空菜单", () => {
+    const { unmount } = renderActions("system_operator", ent({ operation_status: "deleted", deleted_at: new Date().toISOString() }));
+    expect(screen.queryByRole("button", { name: "操作" })).not.toBeInTheDocument();
+    expect(screen.getByText("仅系统管理员可操作")).toBeInTheDocument();
+    unmount();
+
+    const r2 = renderActions("system_operator", ent({ operation_status: "deleting" }));
+    expect(screen.queryByRole("button", { name: "操作" })).not.toBeInTheDocument();
+    r2.unmount();
+
+    renderActions("system_admin", ent({ operation_status: "deleted", deleted_at: "2026-01-01T00:00:00Z", purged_at: "2026-03-01T00:00:00Z" }));
+    expect(screen.queryByRole("button", { name: "操作" })).not.toBeInTheDocument();
+    expect(screen.queryByText("仅系统管理员可操作")).not.toBeInTheDocument();
   });
 });
 

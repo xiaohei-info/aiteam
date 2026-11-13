@@ -14,7 +14,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useAccountsApi } from "./useAccountsApi.js";
-import type { EnterpriseAccount, EnterpriseStats } from "./types.js";
+import { deletedLabel, type EnterpriseAccount, type EnterpriseStats } from "./types.js";
 import { EnterpriseActions } from "./EnterpriseActions.js";
 
 type AccountRow = EnterpriseAccount & Record<string, unknown>;
@@ -41,7 +41,7 @@ function statusBadge(status: string): { label: string; variant: BadgeVariant } {
     case "closed":
       return { label: "注销", variant: "neutral" };
     case "deleting":
-      return { label: "删除未完成，请重试", variant: "warning" };
+      return { label: "删除未完成", variant: "warning" };
     case "deleted":
       return { label: "已删除", variant: "neutral" };
     default:
@@ -143,7 +143,10 @@ export function AccountsPage(): ReactNode {
       header: "状态",
       width: pixel(90),
       renderCell: (enterprise) => {
-        const badge = statusBadge(enterprise.operation_status ?? enterprise.status);
+        const status = enterprise.operation_status ?? enterprise.status;
+        const badge = status === "deleted"
+          ? { label: deletedLabel(enterprise), variant: "neutral" as const }
+          : statusBadge(status);
         return <Badge label={badge.label} variant={badge.variant} />;
       },
     },
