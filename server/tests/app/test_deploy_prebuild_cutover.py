@@ -5,9 +5,9 @@ ctl.sh 与 .venv 里的 python。不接触 taiyi，也不读取任何真实密�
 """
 from __future__ import annotations
 
-import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -111,7 +111,9 @@ class Deploy:
         self.live = tmp / "live"
         self.stage = tmp / "live-stage"
         self.bin = tmp / "bin"
-        for name, text in STUBS.items():
+        # run.sh 先检查 PATH 上有 pnpm，再把 corepack 缓存里的固定版本放到 PATH 最前；
+        # 两处都要有桩，测试不能依赖宿主机装了什么。
+        for name, text in (STUBS | {"pnpm": PNPM}).items():
             _write_exec(self.bin / name, text)
         _write_exec(tmp / "home/.cache/node/corepack/v1/pnpm/11.4.0/bin/pnpm.mjs", PNPM)
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
@@ -131,7 +133,7 @@ class Deploy:
         _write_exec(self.work / "scripts/ctl.sh", "#!/usr/bin/env bash\nexit 0\n")
         self.first = self.commit("first release")
         subprocess.run(["git", "clone", "-q", str(self.origin), str(self.live)], check=True, capture_output=True)
-        _write_exec(self.live / ".venv/bin/python", FAKE_PYTHON)
+        _write_exec(self.live / ".venv/bin/python", FAKE_PYTHON.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1))
         (self.live / ".env.test").write_text("APP_RW_PASSWORD=local-test-value\nLEAK_PROBE=1\n", encoding="utf-8")
         for tier in ("operation", "manager", "agent"):
             (self.live / "web" / tier / "dist").mkdir(parents=True)
@@ -149,7 +151,7 @@ class Deploy:
 
     def run(self, **extra: str) -> subprocess.CompletedProcess[str]:
         env = {
-            "PATH": f"{self.bin}:{os.environ['PATH']}",
+            "PATH": f"{self.bin}:/usr/bin:/bin",
             "HOME": str(self.tmp / "home"),
             "STUB_TMP": str(self.tmp),
             "STUB_ROOT": str(self.live.resolve()),
