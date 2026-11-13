@@ -50,6 +50,7 @@ function mockApi(): ExpertsApi {
     listSolutionInstances: vi.fn().mockResolvedValue([]),
     transitionEmployee: vi.fn().mockResolvedValue(null),
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
+    copyEmployee: vi.fn(),
   };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
   return api;

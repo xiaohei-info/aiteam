@@ -42,7 +42,7 @@ function mockApi(overrides: Partial<apiModule.AuditApi> = {}) {
   vi.mocked(expertsModule.useExpertsApi).mockReturnValue({
     listEmployees: vi.fn().mockResolvedValue([{ employee_id: "e1", display_name: "专家A" }]),
     listTemplates: vi.fn(), listSolutions: vi.fn(), recruitExpert: vi.fn(), applySolution: vi.fn(),
-    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
+    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), copyEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
   });
   const api: apiModule.AuditApi = {
     list: vi.fn().mockResolvedValue([

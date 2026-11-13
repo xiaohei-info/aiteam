@@ -18,6 +18,7 @@ import type {
   EmployeeConfigIn,
   ExpertTemplate,
   RecruitExpertInput,
+  RecruitModelPolicy,
   LifecycleOptions,
   SolutionInstance,
   SolutionPackage,
@@ -33,6 +34,12 @@ export interface ExpertsApi {
   listEmployees: () => Promise<EmployeeConfig[]>;
   updateEmployee: (employeeId: string, config: EmployeeConfigIn) => Promise<EmployeeConfig | null>;
   transitionEmployee: (employeeId: string, transition: string, reason?: string) => Promise<EmployeeConfig | null>;
+  /** 复制专家；idempotencyKey 在同一次操作的重试中保持不变。 */
+  copyEmployee: (
+    employeeId: string,
+    input: { display_name: string; model_policy?: RecruitModelPolicy },
+    idempotencyKey: string,
+  ) => Promise<EmployeeConfig | null>;
   getLifecycleOptions: (employeeId: string) => Promise<LifecycleOptions>;
   listSolutionInstances: () => Promise<SolutionInstance[]>;
 }
@@ -68,6 +75,9 @@ export function useExpertsApi(): ExpertsApi {
       updateEmployee(employeeId, config) {
         // PUT 全量替换（EmployeeConfigIn）：回传载入的完整配置，仅覆盖被编辑字段，保全其余。
         return client.put<EmployeeConfig>(`/api/manager/employees/${employeeId}`, { body: config });
+      },
+      copyEmployee(employeeId, input, idempotencyKey) {
+        return client.post<EmployeeConfig>(`/api/manager/employees/${employeeId}/copy`, { body: input, idempotencyKey });
       },
       transitionEmployee(employeeId, transition, reason) {
         const body = reason ? { reason } : undefined;

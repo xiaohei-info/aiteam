@@ -21,6 +21,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
+import { CopyExpertDialog } from "./CopyExpertDialog";
 import { EmployeeConfigDrawer } from "./EmployeeConfigDrawer";
 import { useExpertsApi } from "./useExpertsApi";
 import type { Department, EmployeeConfig } from "./types";
@@ -41,6 +42,10 @@ function statusPresentation(status: string, reason?: string | null): { label: st
   return { label: status || "未知状态", tone: "is-archived" };
 }
 
+const ORIGIN_LABELS: Record<string, string> = {
+  recruited: "市场", solution: "方案", copied: "企业（复制）", custom: "企业",
+};
+
 export function ExpertsPage(): ReactNode {
   const i18n = useI18n();
   const api = useExpertsApi();
@@ -50,6 +55,7 @@ export function ExpertsPage(): ReactNode {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [copySource, setCopySource] = useState<EmployeeConfig | null>(null);
   const [transitioningId, setTransitioningId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ExpertFilter>("all");
@@ -93,6 +99,12 @@ export function ExpertsPage(): ReactNode {
     },
     [],
   );
+
+  const onCopied = useCallback((copy: EmployeeConfig) => {
+    setItems((prev) => [copy, ...prev]);
+    setCopySource(null);
+    setDetailId(copy.employee_id); // 复制后直接进入编辑
+  }, []);
 
   const filteredItems = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -216,6 +228,7 @@ export function ExpertsPage(): ReactNode {
                 <div data-ui="expert-card-meta">
                   <span><strong>模型</strong>{employee.model_policy.model || "待配置"}</span>
                   <span><strong>技能</strong>{employee.skills.length} 项</span>
+                  <span><strong>来源</strong><span data-testid="employee-origin">{ORIGIN_LABELS[employee.origin ?? "recruited"] ?? "市场"}</span></span>
                   <span><strong>知识</strong>{employee.knowledge_refs.length} 项</span>
                   <span><strong>部门</strong>{(employee.department_ids ?? []).map((id) => departmentNames.get(id) ?? id).join(", ") || "未设置"}</span>
                 </div>
@@ -238,6 +251,14 @@ export function ExpertsPage(): ReactNode {
                       data-testid="edit-config"
                       onClick={() => setDetailId(employee.employee_id)}
                     />
+                    <Button
+                      label="复制"
+                      variant="ghost"
+                      size="sm"
+                      data-testid="copy-expert"
+                      isDisabled={scopeRevoked}
+                      onClick={() => setCopySource(employee)}
+                    />
                     {action ? (
                       <Button
                         label={i18n.t(`manager.experts.transition_${action}`)}
@@ -259,6 +280,10 @@ export function ExpertsPage(): ReactNode {
             </div>
           )}
         </div>
+      )}
+
+      {copySource && (
+        <CopyExpertDialog api={api} source={copySource} onClose={() => setCopySource(null)} onCopied={onCopied} />
       )}
 
       {detailId && (
