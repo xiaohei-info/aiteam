@@ -33,7 +33,7 @@ function makeApi(overrides: Partial<AccountsApi> = {}): AccountsApi {
     list: vi.fn(), getDetail: vi.fn(), exportAll: vi.fn(),
     doAction: vi.fn().mockResolvedValue({ ok: true }), getStats: vi.fn(),
     getLifecycleStatus: vi.fn(), changeLifecycle: vi.fn(), getQuota: vi.fn(),
-    setQuota: vi.fn(), listAudits: vi.fn(), ...overrides,
+    setQuota: vi.fn(), listAudits: vi.fn(), resetOwnerBootstrap: vi.fn(), ...overrides,
   };
 }
 

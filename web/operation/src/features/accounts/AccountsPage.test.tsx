@@ -72,6 +72,7 @@ function makeApi(overrides: Partial<AccountsApi> = {}): AccountsApi {
     getQuota: vi.fn(),
     setQuota: vi.fn(),
     listAudits: vi.fn(),
+    resetOwnerBootstrap: vi.fn(),
     ...overrides,
   };
 }
