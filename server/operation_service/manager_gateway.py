@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.crosstier import (
+    EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest, TenantPurgeRequest, TenantStatusSync,
+)
 from shared.service_client import ServiceClient
 
 
@@ -89,7 +91,7 @@ class HttpManagerGateway:
     def set_tenant_status(self, tenant_id: str, status: str, *, reason: str | None = None, idempotency_key: str) -> None:
         self._client.post(
             f"/api/manager/tenants/{tenant_id}/status",
-            json={"status": status, **({"reason": reason} if reason else {})},
+            json=TenantStatusSync(status=status, reason=reason).model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
             service_purpose="tenant:lifecycle",
             service_tenant_id=tenant_id,
@@ -98,7 +100,7 @@ class HttpManagerGateway:
     def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
         self._client.post(
             f"/api/manager/tenants/{tenant_id}/purge",
-            json={},
+            json=TenantPurgeRequest().model_dump(mode="json"),
             idempotency_key=idempotency_key,
             service_purpose="tenant:lifecycle",
             service_tenant_id=tenant_id,
