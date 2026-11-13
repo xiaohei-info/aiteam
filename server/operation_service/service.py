@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import string
 import uuid
@@ -24,6 +25,7 @@ from shared.errors import Conflict, NotFound
 from .admin_repository import AdminRepository
 from .manager_gateway import ManagerGateway
 from .onboarding_receipt import (
+    SECRET_RETENTION,
     BootstrapReceiptExpired,
     build_onboarding_receipt_store,
     canonical_request_fingerprint,
@@ -110,6 +112,7 @@ class ProvisioningService:
         *,
         idempotency_key: str | None = None,
     ) -> EnterpriseProvisioned:
+        self._sweep_expired_secrets()
         request_body = req.model_dump(mode="json", exclude_none=False)
         request_fingerprint = canonical_request_fingerprint(
             req.model_dump(mode="json", exclude_none=True)
@@ -267,6 +270,14 @@ class ProvisioningService:
         for ref in refs:
             self._platform_providers.validate_model_ref(ref, require_published=True)
 
+    def _sweep_expired_secrets(self) -> None:
+        """顺带清掉所有已过保留期的一次性密文，不等有人重放；失败只记日志，不影响本次开通 / 重置。"""
+        store = self._onboarding_receipts
+        try:
+            store.expire_secrets_before(store.clock() - SECRET_RETENTION)
+        except Exception:  # noqa: BLE001 - 清理是尽力而为
+            logging.getLogger(__name__).warning("expired bootstrap secret sweep failed", exc_info=True)
+
     def _replayable_secret(self, receipt) -> str:
         """重放已完成回执时取回明文；超过保留期则清掉密文并要求重新发起。"""
         if receipt.secret_expired(self._onboarding_receipts.clock()):
@@ -283,6 +294,7 @@ class ProvisioningService:
         actor_name: str | None = None,
     ) -> OwnerBootstrapResetResult:
         account = self._repo.get(enterprise_id)  # NotFound -> 404
+        self._sweep_expired_secrets()
         raw_key = normalize_idempotency_key(idempotency_key)
         receipt_key = f"reset:{enterprise_id}:{raw_key}"
         receipt_body = {"enterprise_id": enterprise_id, "operation": "owner-bootstrap-reset"}

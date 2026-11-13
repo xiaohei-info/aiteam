@@ -271,3 +271,45 @@ def test_a_prepared_receipt_never_expires_so_a_lost_fanout_can_resume(audited, c
     clock.now += timedelta(days=30)
     assert receipt.state == "prepared" and not receipt.secret_expired(clock.now)
     assert receipt.bootstrap_secret == "s"
+
+
+def test_expired_secrets_are_cleared_without_waiting_for_a_replay(audited, clock):
+    """过期的一次性密文不等重放：下一次开通 / 重置时顺带清掉所有已过期的。"""
+    svc, _ = audited
+    created = svc.provision_enterprise(_req(), idempotency_key="p1")
+    svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1")
+    rows = svc._onboarding_receipts._rows
+    old_keys = ["p1", "reset:" + created.enterprise_id + ":r1"]
+    assert all(rows[key].bootstrap_secret_ciphertext for key in old_keys)
+
+    clock.now += SECRET_RETENTION + timedelta(minutes=1)
+    fresh = svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r2")
+
+    assert all(rows[key].bootstrap_secret_ciphertext is None for key in old_keys)
+    # 刚完成的回执不受影响，24 小时内仍可重放。
+    assert svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r2").owner_bootstrap_secret == fresh.owner_bootstrap_secret
+
+
+def test_prepared_receipts_survive_the_sweep(audited, clock):
+    svc, _ = audited
+    store = svc._onboarding_receipts
+    store.reserve(
+        idempotency_key="k", request_fingerprint="f", request_body={}, enterprise_id="e", tenant_id="t",
+        enterprise_name="A", enterprise_code=None, owner_phone="138", bootstrap_secret="s",
+    )
+    clock.now += SECRET_RETENTION * 10
+    assert store.expire_secrets_before(clock.now) == 0
+    assert store._rows["k"].bootstrap_secret_ciphertext is not None
+
+
+def test_sweep_failure_does_not_block_a_reset(audited, monkeypatch):
+    from shared.errors import ServiceUnavailable
+
+    svc, _ = audited
+    created = svc.provision_enterprise(_req())
+
+    def boom(cutoff):
+        raise ServiceUnavailable("db down")
+
+    monkeypatch.setattr(svc._onboarding_receipts, "expire_secrets_before", boom)
+    assert svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1").owner_bootstrap_secret

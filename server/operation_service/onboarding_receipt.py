@@ -171,6 +171,19 @@ class InMemoryOnboardingReceiptStore:
             if existing is not None and existing.state == "completed":
                 self._rows[idempotency_key] = replace(existing, bootstrap_secret_ciphertext=None)
 
+    def expire_secrets_before(self, cutoff: datetime) -> int:
+        """清掉所有在 cutoff 之前完成的回执里的密文，返回清除数量。`prepared` 回执续跑要用，不动。"""
+        cleared = 0
+        with self._lock:
+            for key, row in list(self._rows.items()):
+                if (
+                    row.state == "completed" and row.bootstrap_secret_ciphertext is not None
+                    and row.completed_at is not None and row.completed_at < cutoff
+                ):
+                    self._rows[key] = replace(row, bootstrap_secret_ciphertext=None)
+                    cleared += 1
+        return cleared
+
 
 class PgOnboardingReceiptStore:
     def __init__(self, dsn: str, clock: Callable[[], datetime] | None = None):
@@ -274,6 +287,21 @@ class PgOnboardingReceiptStore:
                     "WHERE idempotency_key=%s AND state='completed'",
                     (idempotency_key,),
                 )
+        except (pg_errors.Error, OSError) as exc:
+            raise ServiceUnavailable("Operator onboarding receipt database is unavailable") from exc
+
+    def expire_secrets_before(self, cutoff: datetime) -> int:
+        """清掉所有在 cutoff 之前完成的回执里的密文，返回清除数量。`prepared` 回执续跑要用，不动。"""
+        import psycopg
+        from psycopg import errors as pg_errors
+
+        try:
+            with psycopg.connect(self._dsn, autocommit=True) as conn:
+                return conn.execute(
+                    "UPDATE onboarding_receipt SET bootstrap_secret_ciphertext=NULL "
+                    "WHERE state='completed' AND bootstrap_secret_ciphertext IS NOT NULL AND completed_at < %s",
+                    (cutoff,),
+                ).rowcount
         except (pg_errors.Error, OSError) as exc:
             raise ServiceUnavailable("Operator onboarding receipt database is unavailable") from exc
 
