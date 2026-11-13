@@ -29,14 +29,11 @@ from .catalog_schemas import (
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
     ExpertBinding,
-    ThinkingLevel,
 )
 
 _INITIAL_VERSION = "1"
 _ID_RANDOM_LENGTH = 4
 _ID_MAX_ATTEMPTS = 8
-_THINKING_LEVEL_ALIASES = {"none": "off", "basic": "low", "deep": "high"}
-_THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 
 def _slugify_id(display_name: str, *, random_suffix: str) -> str:

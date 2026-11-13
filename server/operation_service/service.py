@@ -31,6 +31,8 @@ from .onboarding_receipt import (
 )
 from .repository import EnterpriseAccount, EnterpriseRepository
 from .schemas import (
+    EnterpriseProfile,
+    EnterpriseProfileOut,
     EnterpriseProvisioned,
     OwnerBootstrapResetResult,
     ProvisionEnterpriseRequest,
