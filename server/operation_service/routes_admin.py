@@ -40,6 +40,8 @@ class EnterpriseAccountOut(BaseModel):
     status: str = "active"
     operation_status: str = "active"
     monthly_active: bool = False
+    deleted_at: datetime | None = None
+    purged_at: datetime | None = None
 
 
 class EnterpriseAccountDetail(EnterpriseAccountOut):
@@ -158,6 +160,8 @@ class LifecycleStatusOut(BaseModel):
     banned_at: datetime | None = None
     banned_reason: str | None = None
     closed_at: datetime | None = None
+    deleted_at: datetime | None = None
+    purged_at: datetime | None = None
 
 
 class LifecycleRequest(BaseModel):
@@ -165,6 +169,12 @@ class LifecycleRequest(BaseModel):
 
     action: Literal["activate", "suspend", "ban", "close"]
     reason: str | None = Field(default=None, description="操作原因(封禁/暂停必填)")
+
+
+class DeleteEnterpriseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_name: str = Field(min_length=1, description="须与企业名称完全一致，防止误删")
 
 
 class LifecycleResponse(BaseModel):
@@ -279,6 +289,8 @@ def build_admin_router(verifier) -> APIRouter:
             banned_at=state.get("banned_at"),
             banned_reason=state.get("banned_reason"),
             closed_at=state.get("closed_at"),
+            deleted_at=state.get("deleted_at"),
+            purged_at=state.get("purged_at"),
         ))
 
     @router.post(
@@ -296,6 +308,9 @@ def build_admin_router(verifier) -> APIRouter:
         detail_before = service.get_enterprise_detail(org_id)
         current = detail_before["operation_status"]
 
+        if current in ("deleting", "deleted"):
+            from shared.errors import InvalidTransition
+            raise InvalidTransition(f"{current} enterprise cannot change lifecycle; got {body.action}")
         if current == "closed" and body.action != "close":
             from shared.errors import InvalidTransition
             raise InvalidTransition(f"closed enterprise can only remain closed; got {body.action}")
@@ -313,6 +328,64 @@ def build_admin_router(verifier) -> APIRouter:
             action=body.action,
             operation_status=new_status,
             detail=f"operation_status changed to {new_status}" + (f" (reason: {body.reason})" if body.reason else ""),
+        ))
+
+    # ---------------------------------------------------------------------------------
+    # R5 删除 / 恢复 / 清理：仅 system_admin（system_operator 只能注销）
+    # ---------------------------------------------------------------------------------
+
+    def require_admin_only(request: Request) -> TokenClaims:
+        claims = require_any(request)
+        authorize(claims, [PlatformRole.SYSTEM_ADMIN.value])
+        return claims
+
+    def _actor(claims: TokenClaims) -> dict:
+        return {"actor_name": "system_admin", "actor_id": str(claims.user_id) if claims.user_id else None}
+
+    @router.post(
+        "/enterprises/{org_id}/delete",
+        summary="删除已注销的企业（软删除，30 天保留期，仅 system_admin）",
+        operation_id="operation_admin_enterprise_delete",
+    )
+    async def delete_enterprise(
+        org_id: str,
+        body: DeleteEnterpriseRequest,
+        claims: TokenClaims = Depends(require_admin_only),
+        service: AdminService = Depends(get_admin_service),
+    ) -> Envelope[LifecycleResponse]:
+        status = service.delete(org_id, confirm_name=body.confirm_name, **_actor(claims))
+        return Envelope(data=LifecycleResponse(
+            org_id=org_id, action="delete", operation_status=status, detail="enterprise deleted; restorable for 30 days",
+        ))
+
+    @router.post(
+        "/enterprises/{org_id}/restore",
+        summary="保留期内把已删除企业恢复为已注销（仅 system_admin）",
+        operation_id="operation_admin_enterprise_restore",
+    )
+    async def restore_enterprise(
+        org_id: str,
+        claims: TokenClaims = Depends(require_admin_only),
+        service: AdminService = Depends(get_admin_service),
+    ) -> Envelope[LifecycleResponse]:
+        status = service.restore(org_id, **_actor(claims))
+        return Envelope(data=LifecycleResponse(
+            org_id=org_id, action="restore", operation_status=status, detail="enterprise restored to closed",
+        ))
+
+    @router.post(
+        "/enterprises/{org_id}/purge",
+        summary="保留期满后清理企业数据并匿名化（仅 system_admin）",
+        operation_id="operation_admin_enterprise_purge",
+    )
+    async def purge_enterprise(
+        org_id: str,
+        claims: TokenClaims = Depends(require_admin_only),
+        service: AdminService = Depends(get_admin_service),
+    ) -> Envelope[LifecycleResponse]:
+        result = service.purge(org_id, **_actor(claims))
+        return Envelope(data=LifecycleResponse(
+            org_id=org_id, action="purge", operation_status="deleted", detail=f"tenant data {result}",
         ))
 
     # ---------------------------------------------------------------------------------
