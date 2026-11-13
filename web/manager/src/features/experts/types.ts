@@ -142,6 +142,9 @@ export interface EmployeeConfig {
   source_template_version?: string | null;
   /** 自动停用原因（服务端维护）：catalog_scope_revoked* = 来源模板已不在本企业发布范围内。 */
   status_reason?: string | null;
+  /** 来源（服务端维护）：recruited 市场 / solution 方案 / copied 复制 / custom 自建。 */
+  origin?: "recruited" | "solution" | "copied" | "custom";
+  copied_from_employee_id?: string | null;
 }
 
 /**
@@ -152,7 +155,7 @@ export interface EmployeeConfig {
 export type EmployeeConfigIn = Omit<
   EmployeeConfig,
   | "employee_id" | "employee_slug" | "version" | "status" | "archive_reason" | "archived_at" | "memory_policy"
-  | "source_template_id" | "source_template_version" | "status_reason"
+  | "source_template_id" | "source_template_version" | "status_reason" | "origin" | "copied_from_employee_id"
 > & { memory_policy?: Record<string, unknown> | null };
 
 /** 可用生命周期流转（对齐 EmployeeLifecycleOptionsOut）。 */

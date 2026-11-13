@@ -38,7 +38,7 @@ function mockApi(overrides: Partial<apiModule.MemoryApi> = {}) {
   vi.mocked(expertsModule.useExpertsApi).mockReturnValue({
     listEmployees: vi.fn().mockResolvedValue([{ employee_id: "emp-2", display_name: "专家B" }]),
     listTemplates: vi.fn(), listSolutions: vi.fn(), recruitExpert: vi.fn(), applySolution: vi.fn(),
-    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
+    updateEmployee: vi.fn(), transitionEmployee: vi.fn(), copyEmployee: vi.fn(), getLifecycleOptions: vi.fn(), listSolutionInstances: vi.fn(),
   });
   const api: apiModule.MemoryApi = {
     list: vi.fn().mockResolvedValue([memItem]),
