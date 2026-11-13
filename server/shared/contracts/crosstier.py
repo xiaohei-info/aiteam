@@ -13,7 +13,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
+
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -41,6 +42,21 @@ class TenantProvisionRequest(BaseModel):
         default=None,
         description="企业允许使用的当前 effective 平台模型身份；null=不限制，空列表=不开放模型。",
     )
+
+
+class TenantStatusSync(BaseModel):
+    """R5 企业生命周期同步：Operator → Manager 下发租户状态（tenant 来自路径，签名主体需与之一致）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "suspended", "banned", "closed", "deleted"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class TenantPurgeRequest(BaseModel):
+    """R5 保留期后清理：无参数；仅对 deleted 的租户生效。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class OwnerBootstrapSync(BaseModel):

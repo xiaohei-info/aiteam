@@ -321,6 +321,7 @@ class AuthService:
         principal = require_active(self._repo.find_user(ctx, user_id=user_id))
         roles = list(principal.roles)
         enterprise_id = self._enterprise_id_for_tenant(tenant_id)
+        self._assert_tenant_active(tenant_id)
         issued_at = datetime.now(UTC)
         expires_at = issued_at + timedelta(seconds=_ACCESS_TTL_SECONDS)
         jti = (
@@ -346,6 +347,14 @@ class AuthService:
     def revoke(self, claims: TokenClaims, *, reason: str) -> None:
         if self._sessions is not None:
             self._sessions.revoke(claims, reason=reason)
+
+    def _assert_tenant_active(self, tenant_id: str) -> None:
+        """R5：暂停 / 封禁 / 注销 / 删除的企业不再签发 token（覆盖密码、passkey、第三方登录）。"""
+        from .tenant_status import ACTIVE, TenantUnavailable, fetch_tenant_status
+
+        status = fetch_tenant_status(self._admin_dsn, tenant_id)
+        if status != ACTIVE:
+            raise TenantUnavailable(status)
 
     def _enterprise_id_for_tenant(self, tenant_id: str) -> str | None:
         """Resolve the persisted Operator enterprise binding for token claims."""

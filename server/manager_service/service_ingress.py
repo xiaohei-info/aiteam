@@ -27,11 +27,13 @@ _REQUIRED_SCOPES = {
     "provision": "enterprise:provision",
     "bootstrap": "owner:bootstrap",
     "notification": "notification:write",
+    "lifecycle": "tenant:lifecycle",
 }
 _REQUIRED_CAPABILITIES = {
     "provision": "provision-enterprise",
     "bootstrap": "owner-bootstrap",
     "notification": "enterprise-notification",
+    "lifecycle": "tenant-lifecycle",
 }
 
 
@@ -227,16 +229,18 @@ def test_compatibility_principal(
         raise Unauthorized("TEST onboarding service token is not configured")
     body_values = body.model_dump(mode="json", exclude_none=True) if hasattr(body, "model_dump") else dict(body)
     enterprise_id = body_values.get("enterprise_id") or body_values.get("org_id")
-    tenant_id = body_values.get("tenant_id")
+    tenant_id = body_values.get("tenant_id") or request.path_params.get("tenant_id")
     scopes = {
         "provision": "enterprise:provision",
         "bootstrap": "owner:bootstrap",
         "notification": "notification:write",
+        "lifecycle": "tenant:lifecycle",
     }
     capabilities = {
         "provision": "provision-enterprise",
         "bootstrap": "owner-bootstrap",
         "notification": "enterprise-notification",
+        "lifecycle": "tenant-lifecycle",
     }
     return type("TestServicePrincipal", (), {
         "iss": "aiteam-test-service",
@@ -244,7 +248,7 @@ def test_compatibility_principal(
         "aud": getattr(settings, "service_name", None) or "aiteam-manager-service",
         "purpose": "service",
         "deployment_id": "aiteam-test-deployment",
-        "enterprise_id": enterprise_id if operation != "bootstrap" else None,
+        "enterprise_id": enterprise_id if operation not in ("bootstrap", "lifecycle") else None,
         "tenant_id": tenant_id,
         "scope": (scopes[operation],),
         "origin": "https://aiteam-test.invalid",
@@ -311,6 +315,9 @@ def validate_onboarding_principal(
     elif operation == "bootstrap":
         if principal_field(principal, "enterprise_id") is not None or principal_field(principal, "tenant_id") != tenant_id:
             raise Forbidden("owner bootstrap target does not match the signed service principal")
+    elif operation == "lifecycle":
+        if principal_field(principal, "enterprise_id") is not None or principal_field(principal, "tenant_id") != tenant_id:
+            raise Forbidden("tenant lifecycle target does not match the signed service principal")
     elif operation == "notification":
         if (
             principal_field(principal, "enterprise_id") != enterprise_id
