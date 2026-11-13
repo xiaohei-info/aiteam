@@ -29,6 +29,7 @@ function makeApi(reset: AccountsApi["resetOwnerBootstrap"]): AccountsApi {
     list: vi.fn(), getDetail: vi.fn(), exportAll: vi.fn(), doAction: vi.fn(), getStats: vi.fn(),
     getLifecycleStatus: vi.fn(), changeLifecycle: vi.fn(), getQuota: vi.fn(), setQuota: vi.fn(), listAudits: vi.fn(),
     resetOwnerBootstrap: reset,
+    deleteEnterprise: vi.fn(), restoreEnterprise: vi.fn(), purgeEnterprise: vi.fn(),
   };
 }
 

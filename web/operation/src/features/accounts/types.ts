@@ -19,6 +19,10 @@ export interface EnterpriseAccount {
   /** New canonical lifecycle status (use this going forward). */
   operation_status?: string;
   monthly_active: boolean;
+  /** 删除时间（deleted 状态才有）；30 天保留期自此起算。 */
+  deleted_at?: string | null;
+  /** 数据清理完成时间。 */
+  purged_at?: string | null;
 }
 
 export interface QuotaSnapshot {

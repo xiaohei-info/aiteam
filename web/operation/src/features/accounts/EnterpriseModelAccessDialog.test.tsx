@@ -35,6 +35,7 @@ function makeApi(): AccountsApi {
     setModelAccess: vi.fn().mockResolvedValue({ enterprise_id: "ent-1", tenant_id: "tenant-1", allowed_model_refs: [] }),
     listAudits: vi.fn(),
     resetOwnerBootstrap: vi.fn(),
+    deleteEnterprise: vi.fn(), restoreEnterprise: vi.fn(), purgeEnterprise: vi.fn(),
   };
 }
 

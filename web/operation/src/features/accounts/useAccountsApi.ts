@@ -56,6 +56,10 @@ export interface AccountsApi {
   ) => Promise<{ org_id: string; action: string; operation_status: string; detail: string } | null>;
   /** 重置企业管理员密码；同一个 idempotencyKey 的重试返回同一份结果（24 小时内）。 */
   resetOwnerBootstrap: (orgId: string, idempotencyKey: string) => Promise<OwnerResetResult>;
+  /** 删除已注销企业（仅 system_admin）；confirmName 必须与企业名称一致。 */
+  deleteEnterprise: (orgId: string, confirmName: string) => Promise<unknown>;
+  restoreEnterprise: (orgId: string) => Promise<unknown>;
+  purgeEnterprise: (orgId: string) => Promise<unknown>;
   getQuota: (orgId: string) => Promise<QuotaSnapshot | null>;
   setQuota: (orgId: string, body: QuotaChangePayload) => Promise<QuotaSnapshot | null>;
   /** Optional for older injected test clients; production hook always provides both. */
@@ -127,6 +131,15 @@ function createApi(client: ApiClient): AccountsApi {
       );
       if (!data) throw new Error("服务端返回了空结果");
       return data;
+    },
+    deleteEnterprise(orgId, confirmName) {
+      return client.post(`/api/operation/admin/enterprises/${orgId}/delete`, { body: { confirm_name: confirmName } });
+    },
+    restoreEnterprise(orgId) {
+      return client.post(`/api/operation/admin/enterprises/${orgId}/restore`);
+    },
+    purgeEnterprise(orgId) {
+      return client.post(`/api/operation/admin/enterprises/${orgId}/purge`);
     },
     getQuota(orgId) {
       return client.get<QuotaSnapshot>(`/api/operation/admin/enterprises/${orgId}/quota`);

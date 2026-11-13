@@ -25,6 +25,8 @@ const STATUS_OPTIONS = [
   { value: "suspended", label: "暂停" },
   { value: "banned", label: "封禁" },
   { value: "closed", label: "注销" },
+  { value: "deleting", label: "删除未完成" },
+  { value: "deleted", label: "已删除" },
 ];
 
 function statusBadge(status: string): { label: string; variant: BadgeVariant } {
@@ -38,6 +40,10 @@ function statusBadge(status: string): { label: string; variant: BadgeVariant } {
       return { label: "封禁", variant: "error" };
     case "closed":
       return { label: "注销", variant: "neutral" };
+    case "deleting":
+      return { label: "删除未完成，请重试", variant: "warning" };
+    case "deleted":
+      return { label: "已删除", variant: "neutral" };
     default:
       return { label: "欠费", variant: "warning" };
   }
