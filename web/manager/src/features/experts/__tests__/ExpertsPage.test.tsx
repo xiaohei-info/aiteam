@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
@@ -110,6 +110,7 @@ function mockApis(
     listSolutionInstances: vi.fn().mockResolvedValue([]),
     transitionEmployee: vi.fn().mockResolvedValue(null),
     getLifecycleOptions: vi.fn().mockResolvedValue({ actions: [] }),
+    copyEmployee: vi.fn(),
   };
   (useExpertsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
   (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -407,6 +408,78 @@ describe("ExpertsPage", () => {
     (api.listEmployees as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
     renderPage();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
+  });
+});
+
+describe("ExpertsPage 复制专家", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  const copied: EmployeeConfig = {
+    ...employeeConfigured, employee_id: "emp-9", employee_slug: "copy", display_name: "架构师 - 副本",
+    status: "draft", origin: "copied", copied_from_employee_id: "emp-1",
+  };
+
+  it("来源标签：招募=市场，复制=企业（复制）", async () => {
+    mockApis([{ ...employeeConfigured, origin: "recruited" }, copied]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-origin")).toHaveLength(2));
+    expect(screen.getAllByTestId("employee-origin").map((el) => el.textContent)).toEqual(["市场", "企业（复制）"]);
+  });
+
+  it("源专家模型可用：只问名称，复制后列表新增并直接打开编辑抽屉", async () => {
+    const { api } = mockApis([employeeConfigured]);
+    (api.copyEmployee as ReturnType<typeof vi.fn>).mockResolvedValue(copied);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("copy-expert")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("copy-expert"));
+
+    const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+    expect(within(dialog).getByRole("textbox", { name: /新专家名称/ })).toHaveValue("架构师 - 副本");
+    expect(within(dialog).queryByTestId("copy-model")).not.toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", { name: "复制" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(api.copyEmployee).toHaveBeenCalledTimes(1));
+    const [id, body, key] = (api.copyEmployee as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(id).toBe("emp-1");
+    expect(body).toEqual({ display_name: "架构师 - 副本" });
+    expect(typeof key).toBe("string");
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(2));
+    expect(screen.queryByRole("dialog", { name: "复制专家" })).not.toBeInTheDocument();
+  });
+
+  it("源专家没有模型：必须先选模型，不选不发请求", async () => {
+    const { api } = mockApis([employeeUnconfigured]);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("copy-expert")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("copy-expert"));
+
+    const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+    await waitFor(() => expect(within(dialog).getByTestId("copy-model")).toBeInTheDocument());
+    const submit = within(dialog).getByRole("button", { name: "复制" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    expect(await within(dialog).findByText("请先选择一个可用模型")).toBeInTheDocument();
+    expect(api.copyEmployee).not.toHaveBeenCalled();
+  });
+
+  it("复制失败：留在弹窗并显示原因；范围已收回的专家不能复制", async () => {
+    const { api } = mockApis([employeeConfigured, { ...employeeUnconfigured, status: "paused", status_reason: "catalog_scope_revoked" }]);
+    (api.copyEmployee as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError("名称已被占用", 409, "conflict"));
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("copy-expert")).toHaveLength(2));
+    expect(screen.getAllByTestId("copy-expert")[1]!).toBeDisabled();
+
+    fireEvent.click(screen.getAllByTestId("copy-expert")[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+    const submit = within(dialog).getByRole("button", { name: "复制" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    expect(await within(dialog).findByText("名称已被占用")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "复制专家" })).toBeInTheDocument();
   });
 });
 
