@@ -59,10 +59,12 @@ async def provision_enterprise(
 )
 async def reset_owner_bootstrap(
     enterprise_id: str,
-    _claims: TokenClaims = Depends(_require_platform_operator),
+    claims: TokenClaims = Depends(_require_platform_operator),
     service: ProvisioningService = Depends(get_provisioning_service),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> Envelope[OwnerBootstrapResetResult]:
     return Envelope[OwnerBootstrapResetResult](
-        data=service.reset_owner_bootstrap(enterprise_id, idempotency_key=idempotency_key)
+        data=service.reset_owner_bootstrap(
+            enterprise_id, idempotency_key=idempotency_key, actor_id=claims.user_id, actor_name=claims.user_id,
+        )
     )

@@ -26,8 +26,9 @@ class FakeManagerGateway(ManagerGateway):
     def provision_tenant(self, req, *, idempotency_key):
         self.provisioned.append((req, idempotency_key))
 
-    def sync_owner_bootstrap(self, req, *, idempotency_key):
+    def sync_owner_bootstrap(self, req, *, idempotency_key) -> dict | None:
         self.bootstraps.append((req, idempotency_key))
+        return None
 
     def notify_enterprise(self, req, *, idempotency_key):
         self.notifications.append((req, idempotency_key))
@@ -164,3 +165,107 @@ def test_provision_without_admin_repo_still_works(manager):
     svc = ProvisioningService(repo, manager)
     result = svc.provision_enterprise(_req())
     assert result.enterprise_name == "Acme"
+
+
+# ---- 重置负责人凭据：审计与回执 24 小时过期 ----
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from operation_service.admin_repository import AdminRepository  # noqa: E402
+from operation_service.onboarding_receipt import BootstrapReceiptExpired, SECRET_RETENTION  # noqa: E402
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 11, 13, 8, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+class _CountingManager(FakeManagerGateway):
+    """像真实 Manager 一样在重置时回传清除数量。"""
+
+    def sync_owner_bootstrap(self, req, *, idempotency_key):
+        super().sync_owner_bootstrap(req, idempotency_key=idempotency_key)
+        return {"tenant_id": req.tenant_id, "user_id": "owner-1", "cleared": {"sessions": 2, "passkeys": 1, "oauth": 1}}
+
+
+@pytest.fixture
+def clock():
+    return _Clock()
+
+
+@pytest.fixture
+def audited(clock):
+    repo = InMemoryEnterpriseRepository()
+    admin = AdminRepository()
+    svc = ProvisioningService(repo, _CountingManager(), admin_repo=admin)
+    svc._onboarding_receipts.clock = clock
+    return svc, admin
+
+
+def test_reset_writes_an_audit_event_with_the_actor_and_cleared_counts(audited):
+    svc, admin = audited
+    created = svc.provision_enterprise(_req())
+    svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1", actor_id="op1", actor_name="运营甲")
+    events = [e for e in admin.list_enriched_audits(enterprise_id=created.enterprise_id)[0] if e.action == "owner_bootstrap_reset"]
+    assert len(events) == 1
+    assert (events[0].actor_id, events[0].actor_name) == ("op1", "运营甲")
+    assert "sessions=2" in events[0].detail and "passkeys=1" in events[0].detail and "oauth=1" in events[0].detail
+    assert created.tenant_id not in events[0].detail
+
+
+def test_replaying_a_reset_does_not_write_a_second_audit_event(audited):
+    svc, admin = audited
+    created = svc.provision_enterprise(_req())
+    svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1", actor_id="op1")
+    svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1", actor_id="op1")
+    events = [e for e in admin.list_enriched_audits(enterprise_id=created.enterprise_id)[0] if e.action == "owner_bootstrap_reset"]
+    assert len(events) == 1
+
+
+def test_a_completed_receipt_replays_the_secret_within_24_hours_then_expires(audited, clock):
+    svc, _ = audited
+    created = svc.provision_enterprise(_req())
+    first = svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1", actor_id="op1")
+    clock.now += SECRET_RETENTION - timedelta(minutes=1)
+    assert svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1").owner_bootstrap_secret == first.owner_bootstrap_secret
+    clock.now += timedelta(minutes=2)
+    with pytest.raises(BootstrapReceiptExpired) as raised:
+        svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1")
+    assert (raised.value.status, raised.value.code) == (409, "bootstrap_receipt_expired")
+    # 密文已被清掉：再次重放仍是 409，而不是解密失败。
+    receipt = svc._onboarding_receipts._rows["reset:" + created.enterprise_id + ":r1"]
+    assert receipt.bootstrap_secret_ciphertext is None
+    with pytest.raises(BootstrapReceiptExpired):
+        svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1")
+
+
+def test_a_new_idempotency_key_after_expiry_issues_a_fresh_secret(audited, clock):
+    svc, _ = audited
+    created = svc.provision_enterprise(_req())
+    first = svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1")
+    clock.now += SECRET_RETENTION + timedelta(hours=1)
+    second = svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r2")
+    assert second.owner_bootstrap_secret != first.owner_bootstrap_secret
+
+
+def test_provisioning_replay_also_stops_returning_the_secret_after_24_hours(audited, clock):
+    svc, _ = audited
+    first = svc.provision_enterprise(_req(), idempotency_key="p1")
+    assert svc.provision_enterprise(_req(), idempotency_key="p1").owner_bootstrap_secret == first.owner_bootstrap_secret
+    clock.now += SECRET_RETENTION + timedelta(seconds=1)
+    with pytest.raises(BootstrapReceiptExpired):
+        svc.provision_enterprise(_req(), idempotency_key="p1")
+
+
+def test_a_prepared_receipt_never_expires_so_a_lost_fanout_can_resume(audited, clock):
+    svc, _ = audited
+    receipt = svc._onboarding_receipts.reserve(
+        idempotency_key="k", request_fingerprint="f", request_body={}, enterprise_id="e", tenant_id="t",
+        enterprise_name="A", enterprise_code=None, owner_phone="13800000000", bootstrap_secret="s",
+    )
+    clock.now += timedelta(days=30)
+    assert receipt.state == "prepared" and not receipt.secret_expired(clock.now)
+    assert receipt.bootstrap_secret == "s"
