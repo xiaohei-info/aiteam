@@ -2,24 +2,27 @@ import { useRef, useState, type ReactNode } from "react";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { HStack } from "@astryxdesign/core/HStack";
-import type { CatalogItem } from "./types";
+import { ScopeDialog } from "./ScopeDialog";
+import type { CatalogItem, VisibleScope } from "./types";
 
-export type TemplateLifecycleAction = "publish" | "unpublish" | "hide";
+/** publish / scope 带发布范围；unpublish 无参数。 */
+export type TemplateLifecycleAction = "publish" | "unpublish" | "scope";
+export type LifecycleHandler = (action: TemplateLifecycleAction, scope?: VisibleScope) => Promise<void>;
 
 interface TemplateLifecycleActionsProps {
   item: CatalogItem;
-  onAction: (action: TemplateLifecycleAction) => Promise<void>;
+  onAction: LifecycleHandler;
 }
 
 const ACTION_LABELS: Record<TemplateLifecycleAction, string> = {
   publish: "发布",
   unpublish: "下架",
-  hide: "隐藏",
+  scope: "发布范围",
 };
 
 function availableActions(status: CatalogItem["status"]): TemplateLifecycleAction[] {
-  if (status === "published") return ["unpublish", "hide"];
-  return ["publish", "hide"];
+  if (status === "published") return ["scope", "unpublish"];
+  return ["publish"];
 }
 
 export function TemplateLifecycleActions({ item, onAction }: TemplateLifecycleActionsProps): ReactNode {
@@ -28,15 +31,12 @@ export function TemplateLifecycleActions({ item, onAction }: TemplateLifecycleAc
   const [working, setWorking] = useState(false);
   const keepOpenOnAction = useRef(false);
 
-  const label = action ? ACTION_LABELS[action] : "";
-
-  async function confirm() {
-    if (!action) return;
+  async function confirmUnpublish() {
     keepOpenOnAction.current = true;
     setWorking(true);
     setError(null);
     try {
-      await onAction(action);
+      await onAction("unpublish");
       keepOpenOnAction.current = false;
       setAction(null);
     } catch (err) {
@@ -54,9 +54,9 @@ export function TemplateLifecycleActions({ item, onAction }: TemplateLifecycleAc
           <Button
             key={nextAction}
             label={ACTION_LABELS[nextAction]}
-            variant={nextAction === "hide" ? "destructive" : "ghost"}
+            variant="ghost"
             size="sm"
-          onClick={() => {
+            onClick={() => {
               keepOpenOnAction.current = false;
               setError(null);
               setAction(nextAction);
@@ -65,23 +65,31 @@ export function TemplateLifecycleActions({ item, onAction }: TemplateLifecycleAc
         ))}
       </HStack>
 
+      {(action === "publish" || action === "scope") && (
+        <ScopeDialog
+          title={action === "publish" ? "发布模板" : "调整发布范围"}
+          confirmLabel={action === "publish" ? "确认发布" : "保存范围"}
+          initial={action === "scope" ? item.visible_scope : undefined}
+          onConfirm={async (scope) => { await onAction(action, scope); setAction(null); }}
+          onClose={() => setAction(null)}
+        />
+      )}
+
       <AlertDialog
-        isOpen={action !== null}
+        isOpen={action === "unpublish"}
         onOpenChange={(open) => {
           if (!open && !working && !keepOpenOnAction.current) {
             setAction(null);
             setError(null);
           }
         }}
-        title={`${label}模板`}
-        description={action === "hide"
-          ? `隐藏后模板不再向企业展示。${error ? ` ${error}` : ""}`
-          : `确认要${label}模板「${item.display_name}」吗？${error ? ` ${error}` : ""}`}
+        title="下架模板"
+        description={`确认要下架模板「${item.display_name}」吗？已招募的专家不受影响。${error ? ` ${error}` : ""}`}
         cancelLabel="取消"
-        actionLabel={`确认${label}`}
-        actionVariant={action === "publish" ? "primary" : "destructive"}
+        actionLabel="确认下架"
+        actionVariant="destructive"
         isActionLoading={working}
-        onAction={() => void confirm()}
+        onAction={() => void confirmUnpublish()}
       />
     </>
   );
