@@ -429,6 +429,25 @@ describe("ExpertsPage 复制专家", () => {
     expect(screen.queryByRole("dialog", { name: "复制专家" })).not.toBeInTheDocument();
   });
 
+  it("非安全上下文（http://IP 访问，没有 crypto.randomUUID）下复制仍可用", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array) => bytes.fill(7) });
+    try {
+      const { api } = mockApis([employeeConfigured]);
+      (api.copyEmployee as ReturnType<typeof vi.fn>).mockResolvedValue(copied);
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId("copy-expert")).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId("copy-expert"));
+      const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+      const submit = within(dialog).getByRole("button", { name: "复制" });
+      await waitFor(() => expect(submit).toBeEnabled());
+      fireEvent.click(submit);
+      await waitFor(() => expect(api.copyEmployee).toHaveBeenCalledTimes(1));
+      expect((api.copyEmployee as ReturnType<typeof vi.fn>).mock.calls[0]![2]).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("源专家没有模型：必须先选模型，不选不发请求", async () => {
     const { api } = mockApis([employeeUnconfigured]);
     renderPage();

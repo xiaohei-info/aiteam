@@ -6,6 +6,7 @@
  *   POST /enterprises（开通）
  * 重置管理员密码已迁到账号管理的行菜单（accounts/ResetOwnerDialog）。
  */
+import { newIdempotencyKey } from "@aiteam/shared";
 import type { ApiClient } from "../../api";
 import type { PlatformModelRef } from "../catalog/types";
 
@@ -37,7 +38,7 @@ export interface EnterpriseModelAccess {
 }
 
 function writeKey(prefix: string): string {
-  return `${prefix}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+  return `${prefix}:${newIdempotencyKey()}`;
 }
 
 export interface EnterpriseProfile {

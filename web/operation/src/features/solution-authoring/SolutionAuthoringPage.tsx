@@ -1,7 +1,7 @@
 /** 行业文档生成：草稿列表与新建入口。 */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { PlatformRole, hasRole } from "@aiteam/shared";
+import { PlatformRole, hasRole, newIdempotencyKey } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -93,7 +93,7 @@ export function SolutionAuthoringPage(): ReactNode {
 
   const onRowAction = useCallback((action: RowAction, draft: DraftSummary) => {
     if (action === "continue") {
-      void perform(() => api.generate(draft.draft_id, crypto.randomUUID()), "继续生成失败");
+      void perform(() => api.generate(draft.draft_id, newIdempotencyKey()), "继续生成失败");
     } else {
       setPending({ action, draft });
     }
