@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, Request, status
 
 from shared.contracts.crosstier import OwnerBootstrapSync
 from shared.contracts.envelope import Envelope
-from shared.errors import NotFound
+from shared.errors import Conflict, NotFound
 
 from .exceptions import ManagerAdminDbNotConfigured
 from .idempotency_repository import normalize_idempotency_key, request_fingerprint
@@ -24,15 +24,23 @@ router = APIRouter(tags=["manager", "control-plane"])
 
 
 def _tenant_exists(admin_db_url: str, tenant_id: str) -> bool:
-    """Return whether the control-plane tenant has been provisioned."""
+    """Return whether the control-plane tenant has been provisioned.
+
+    R5：清理后 tenant_registry 仍保留，已注销 / 已删除 / 已清理的租户不能再写负责人凭据（返回 409）。
+    """
     import psycopg
 
     with psycopg.connect(admin_db_url, autocommit=True) as conn:
         row = conn.execute(
-            "SELECT 1 FROM tenant_registry WHERE tenant_id = %s",
+            "SELECT status, purged_at FROM tenant_registry WHERE tenant_id = %s",
             (tenant_id,),
         ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    status, purged_at = row
+    if purged_at is not None or status in ("closed", "deleted"):
+        raise Conflict("tenant is closed, deleted or purged; owner credentials cannot be written")
+    return True
 
 
 @router.post(

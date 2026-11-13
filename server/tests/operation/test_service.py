@@ -313,3 +313,22 @@ def test_sweep_failure_does_not_block_a_reset(audited, monkeypatch):
 
     monkeypatch.setattr(svc._onboarding_receipts, "expire_secrets_before", boom)
     assert svc.reset_owner_bootstrap(created.enterprise_id, idempotency_key="r1").owner_bootstrap_secret
+
+
+@pytest.mark.parametrize("status", ["closed", "deleting", "deleted"])
+def test_reset_owner_is_refused_for_enterprises_leaving_the_platform(audited, status):
+    """已注销 / 删除流程中的企业不能重置负责人凭据（否则会在 Manager 已清理的租户里重建负责人）。"""
+    svc, admin = audited
+    eid = svc.provision_enterprise(_req()).enterprise_id
+    for step in {"closed": ["closed"], "deleting": ["closed", "deleting"], "deleted": ["closed", "deleting", "deleted"]}[status]:
+        admin.set_operation_status(eid, step, normalized=True)
+    with pytest.raises(Conflict):
+        svc.reset_owner_bootstrap(eid, idempotency_key=f"r-{status}")
+
+
+@pytest.mark.parametrize("status", ["suspended", "banned"])
+def test_reset_owner_still_works_for_suspended_or_banned_enterprises(audited, status):
+    svc, admin = audited
+    eid = svc.provision_enterprise(_req()).enterprise_id
+    admin.set_operation_status(eid, status, normalized=True)
+    assert svc.reset_owner_bootstrap(eid, idempotency_key=f"r-{status}").owner_bootstrap_secret
