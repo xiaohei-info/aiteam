@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.envelope import Envelope
 from shared.service_token import verify_service_token
 
+from .catalog_scope_wiring import reconcile_all_tenants
 from .openapi_schemas import CatalogNotifyOut
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ router = APIRouter(tags=["manager", "control-plane"])
 def catalog_notify(
     body: CatalogReleaseNotify,
     request: Request,
+    background: BackgroundTasks,
     _svc=Depends(verify_service_token),
 ) -> Envelope[CatalogNotifyOut]:
     """接收目录变更通知并记录日志（Manager 按需拉取，不持久化模板真相）。
@@ -53,6 +55,10 @@ def catalog_notify(
             catalog.invalidate(body.catalog_type, body.template_id)
         except Exception:  # noqa: BLE001
             logger.debug("catalog cache invalidate skipped", exc_info=True)
+
+    # 发布范围变更：逐 tenant 对账来源于该模板的员工（响应后在后台执行，失败只记日志）。
+    if body.catalog_type == "expert_template" and body.action in {"visibility_changed", "published"}:
+        background.add_task(reconcile_all_tenants, request, body.template_id)
 
     return Envelope[CatalogNotifyOut](
         data=CatalogNotifyOut(received=True, template_id=body.template_id, action=body.action)

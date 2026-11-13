@@ -45,13 +45,15 @@ class EmployeeConfigRow:
     role_title: str | None = None
     source_template_id: str | None = None
     source_template_version: str | None = None
+    # 发布范围对账写入：catalog_scope_revoked / catalog_scope_revoked_keep_paused
+    status_reason: str | None = None
 
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
     "timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
     "memory_policy, version, status, archive_reason, archived_at, platform_model_ref, "
-    "department_ids, role_title, source_template_id, source_template_version"
+    "department_ids, role_title, source_template_id, source_template_version, status_reason"
 )
 
 
@@ -84,6 +86,7 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         role_title=row[19] if len(row) > 19 else None,
         source_template_id=row[20] if len(row) > 20 else None,
         source_template_version=row[21] if len(row) > 21 else None,
+        status_reason=row[22] if len(row) > 22 else None,
     )
 
 
@@ -242,6 +245,25 @@ class EmployeeConfigRepository:
         with self._router.session(ctx) as s:
             rows = s.execute("SELECT " + _CONFIG_COLUMNS + " FROM employee ORDER BY created_at").fetchall()
         return [_row_to_config(r) for r in rows]
+
+    def set_scope_state(
+        self,
+        ctx: TenantContext,
+        *,
+        employee_id: str,
+        expect_status: str,
+        expect_reason: str | None,
+        new_status: str,
+        new_reason: str | None,
+    ) -> bool:
+        """发布范围对账的条件更新：仅当状态与原因仍是读取时的值才写入（并发对账只有一个生效）。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "UPDATE employee SET status = %s, status_reason = %s "
+                "WHERE id = %s AND status = %s AND status_reason IS NOT DISTINCT FROM %s RETURNING id",
+                (new_status, new_reason, employee_id, expect_status, expect_reason),
+            ).fetchone()
+        return row is not None
 
     def transition_status(
         self,

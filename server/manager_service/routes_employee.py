@@ -20,6 +20,7 @@ from shared.errors import AppError
 from shared.db import PgTenantRouter
 
 from .active_principal import require_admin
+from .catalog_scope_wiring import reconcile_for_admin
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
@@ -120,6 +121,7 @@ def build_employee_router(verifier) -> APIRouter:
     ) -> ListEnvelope[EmployeeConfigOut]:
         require_admin(tenant_context_from(claims))
         svc = _service(request)
+        reconcile_for_admin(request, tenant_context_from(claims))
         items = svc.list_all(tenant_context_from(claims))
         return ListEnvelope[EmployeeConfigOut](data=items)
 
