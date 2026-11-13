@@ -211,3 +211,31 @@ def test_create_forbidden_403():
             json={"display_name": "y"}, headers=_auth_header(roles=["member"]),
         )
         assert r.status_code == 403
+
+
+def test_copy_route_requires_idempotency_key_admin_and_returns_201(monkeypatch):
+    from manager_service import routes_employee
+    from shared.errors import ValidationProblem
+
+    svc = MagicMock()
+    svc.copy.return_value = EmployeeConfigOut(
+        employee_id="new-1", employee_slug="x", version=1, display_name="副本", status="draft",
+        origin="copied", copied_from_employee_id="emp-1",
+    )
+    monkeypatch.setattr(routes_employee, "_copy_service", lambda request: svc)
+    client = _client("postgresql://unused")
+    url = "/api/manager/employees/emp-1/copy"
+
+    ok = client.post(url, json={"display_name": "副本"}, headers={**_auth_header(), "Idempotency-Key": "k1"})
+    assert ok.status_code == 201
+    assert ok.json()["data"]["origin"] == "copied" and ok.json()["data"]["copied_from_employee_id"] == "emp-1"
+    assert svc.copy.call_args.kwargs["idempotency_key"] == "k1"
+    assert svc.copy.call_args.kwargs["source_id"] == "emp-1"
+
+    svc.copy.side_effect = ValidationProblem("Idempotency-Key is required for this operation")
+    assert client.post(url, json={"display_name": "副本"}, headers=_auth_header()).status_code == 422
+
+    assert client.post(url, json={"display_name": "副本"},
+                       headers={**_auth_header(roles=("member",)), "Idempotency-Key": "k"}).status_code == 403
+    assert client.post(url, json={"display_name": ""}, headers={**_auth_header(), "Idempotency-Key": "k"}).status_code == 422
+    assert client.post(url, json={"display_name": "x"}).status_code == 401

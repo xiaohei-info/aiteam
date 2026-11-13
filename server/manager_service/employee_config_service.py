@@ -257,6 +257,8 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         source_template_id=row.source_template_id,
         source_template_version=row.source_template_version,
         status_reason=row.status_reason,
+        origin=row.origin,
+        copied_from_employee_id=row.copied_from_employee_id,
     )
 
 
