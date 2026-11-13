@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>专家发布与企业管理增强（9 项） · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>专家发布与企业管理增强</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>专家发布与企业管理增强（9 项） <small>2026-11-13 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：运营端草稿、专家发布、企业账号缺少常用操作，企业端选模型、复制专家的入口难找或没有 → 操作统一放进现有列表的「⋯」菜单和抽屉里，不新增页面 → 运营和企业管理员都能在一个界面里完成操作。</p>
+<div class="grid3">
+<div class="card"><b>运营端 5 项（R1–R5）</b><p class="note">草稿可删除、可继续生成；配置专家<b>不再选模型</b>（模型只在企业端选），并能按行业 / 标签指定发布范围；在企业账号行里直接重置管理员密码；企业可以「注销 → 删除」两步删除。</p></div>
+<div class="card"><b>企业端 4 项（R6–R9）</b><p class="note"><b>招募时必须选模型，没选就招募失败</b>（应用方案也一样）；新增「复制专家」；顶栏显示<b>企业名称</b>，点开可<b>设置新密码</b>。</p></div>
+<div class="card"><b>边界不变</b><p class="note">发布范围由运营端过滤（单写者）；删除企业只让企业端拒绝访问，不向用户机器推送，本机会话也不会被删除。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-13-专家发布与企业管理增强-需求与设计.md</code>（现状代码位置都在里面）。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:24%">现在的问题</th><th style="width:44%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td><b>R1</b> 草稿列表没有任何行操作；生成服务停了，草稿会一直停在「生成中」</td><td>列表每行加「⋯」菜单：继续生成 / 删除 / 取消生成（新）。列表返回最近一次任务的状态，能看出哪些生成失败了</td><td><span class="tag op">运营</span></td></tr>
+<tr><td><b>R2</b> 运营端配置专家必须选模型和思考档位，企业只能被动接受</td><td>运营端<b>去掉</b>模型和思考档位（表单、详情、卡片、契约都不再有）；模型只在企业招募时选；行业方案发布的专家也不再带模型</td><td><span class="tag op">运营</span><span class="tag mg">企业管理员</span></td></tr>
+<tr><td><b>R3</b> 专家对所有企业都可见；已有 <code>visible_scope</code> 字段，但没有任何代码读它</td><td>企业增加行业和标签字段；发布时选「全部企业 / 指定行业或标签」；企业端拉目录时带上租户身份，由运营端过滤；范围收窄后，范围外企业已招募的员工<b>停用</b>；方案里的专家也各自按范围过滤</td><td><span class="tag op">运营</span></td></tr>
+<tr><td><b>R4</b> 重置密码要手输 enterprise_id；重置后旧会话仍然有效</td><td>入口改到企业账号行菜单，自动带入企业；重置后负责人全部登录下线、须重新登录，<b>清除其通行密钥等二次验证并解绑第三方登录</b>，并记审计</td><td><span class="tag op">运营</span></td></tr>
+<tr><td><b>R5</b> 没有删除功能；「注销」只改了运营端的状态，企业端照常可以登录</td><td>先注销、再删除：企业端下线该租户，拒绝登录和同步；平台 Relay 令牌吊销；保留期过后再清理数据</td><td><span class="tag op">运营</span></td></tr>
+<tr><td><b>R6</b> 招募时不能选模型，模型只能事后在抽屉深处改</td><td>招募 / 应用方案弹窗里<b>模型必填</b>，没选不能提交，后端也拒绝（422，不落库）；应用方案时已招募的专家也可以顺手改模型；编辑时允许清空（二次确认）</td><td><span class="tag mg">企业管理员</span></td></tr>
+<tr><td><b>R7</b> 想基于现有专家改一个自己的版本，做不到</td><td>行菜单增加「复制」，只需填一个名称，复制完直接打开编辑抽屉</td><td><span class="tag mg">企业管理员</span></td></tr>
+<tr><td><b>R8</b> 企业端看不出当前登录的是哪家企业</td><td>顶栏右侧固定显示「企业名称 ▾」，点开是账号菜单</td><td><span class="tag mg">企业成员</span></td></tr>
+<tr><td><b>R9</b> 登录后不能自己改密码</td><td>账号菜单「设置新密码」：输入当前密码和新密码，成功后其他设备下线</td><td><span class="tag mg">企业成员</span></td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>
+①「继续生成」不是断点续跑，而是用原资料重新跑一次，耗时和费用都和首次生成相当；
+② 取消生成时，已经产生的模型费用不能退；
+③ 删除企业后，用户电脑上的本地会话仍然保留，平台无法远程清除；
+④ 发布范围收窄会停用范围外企业已招募的员工，但用户端要到下次同步才生效，进行中的执行不中断；
+⑤ 删除企业后，财务和审计记录会匿名保留，不会彻底抹除；
+⑥ 招募必选模型只保证招募那一刻模型可用，模型之后被平台下架，员工仍会变为不可用；
+⑦ 重置管理员密码会清除其通行密钥、解绑第三方登录，负责人需要重新登录、重新登记二次验证；
+⑧ 设置新密码后，离线的桌面端要等下次联网访问企业端时才会被要求重新登录。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">运营 · 方案草稿列表</button>
+<button data-p="u2">运营 · 发布专家</button>
+<button data-p="u3">运营 · 企业账号操作</button>
+<button data-p="u4">运营 · 删除企业</button>
+<button data-p="u5">企业 · 专家列表与复制</button>
+<button data-p="u6">企业 · 招募必选模型</button>
+<button data-p="u7">企业 · 顶栏与设置新密码</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>行业方案生成</b></div>
+<div class="body">
+<div class="row"><span><span class="tag">未完成</span><span class="tag gray">全部</span></span><span class="btn pri">新建草稿</span></div>
+<table style="margin-top:8px">
+<tr><th>标题</th><th>状态</th><th>生成模型</th><th>最近更新</th><th>操作</th></tr>
+<tr><td>制造业质检方案</td><td><span class="tag bad">生成失败</span></td><td>qwen-max</td><td>11-13 10:02</td><td style="white-space:nowrap">⋯ 继续生成 · <span style="color:var(--bad)">删除</span></td></tr>
+<tr><td>零售门店巡检</td><td><span class="tag gray">待生成</span></td><td>qwen-max</td><td>11-12 18:40</td><td style="white-space:nowrap">⋯ 继续生成 · <span style="color:var(--bad)">删除</span></td></tr>
+<tr><td>医药合规助手</td><td><span class="tag warn">生成中 · 排队超时</span></td><td>deepseek-v3</td><td>11-12 09:15</td><td style="white-space:nowrap">⋯ 取消生成</td></tr>
+<tr><td>物流调度方案</td><td><span class="tag warn">待处理</span></td><td>qwen-max</td><td>11-11 14:20</td><td style="white-space:nowrap">⋯ 继续编辑 · 重新生成 · <span style="color:var(--bad)">删除</span></td></tr>
+</table>
+<div class="box" style="margin-top:10px;max-width:420px"><h4>确认删除「制造业质检方案」？</h4><p class="note">删除后列表不再显示，已上传的资料会被清除，无法恢复。</p><p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri" style="background:var(--bad);border-color:var(--bad)">删除</span></p></div>
+</div></div>
+<p class="note">要点：「⋯」菜单只列出当前状态能做的操作，不放灰色按钮；默认筛选「未完成」；「取消生成」只在排队超时或生成服务未启用时出现，避免误操作。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>发布专家模板 · 财务分析师</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>专家配置（运营端）</h4>
+<div class="row"><span>名称 / 岗位提示词</span><span class="tag gray">保留</span></div>
+<div class="row"><span>技能 / 头像 / 标签</span><span class="tag gray">保留</span></div>
+<div class="row"><span style="text-decoration:line-through;color:var(--sub)">大模型服务 / 模型</span><span class="tag bad">删除</span></div>
+<div class="row"><span style="text-decoration:line-through;color:var(--sub)">默认思考等级</span><span class="tag bad">删除</span></div>
+<p class="note">模型由企业在招募时选择，运营端不配置、不推荐。</p></div>
+</div>
+<div>
+<div class="box"><h4>发布范围</h4>
+<div class="row"><span>○ 全部企业　● 指定行业或标签</span></div>
+<div class="row"><span>行业</span><span class="input">制造业 ×　零售 ×</span></div>
+<div class="row"><span>标签</span><span class="input">华东 ×　KA ×　＋</span></div>
+<div class="row"><span>预计可见企业</span><b>23 家</b></div>
+<p class="note">规则：行业命中，或任一标签命中，即可见。范围收窄后，已招募的员工不受影响。</p>
+<p style="margin-top:8px"><span class="btn pri">发布</span> <span class="btn">取消</span></p>
+</div>
+</div></div></div></div>
+<p class="note">要点：运营端只管「岗位做什么、给谁看」，不管「用哪个模型」；发布范围实时显示可见企业数，避免把范围设成 0 家。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业账号</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>行菜单「操作 ▾」</h4>
+<div class="row"><span>充值 / 通知 / 调额度</span><span class="tag gray">已有</span></div>
+<div class="row"><span>配置可用模型</span><span class="tag gray">已有</span></div>
+<div class="row"><span>编辑企业信息（行业、标签）</span><span class="tag">新</span></div>
+<div class="row"><span>重置管理员密码</span><span class="tag">新入口</span></div>
+<div class="row"><span>暂停 / 封禁 / 注销</span><span class="tag gray">已有</span></div>
+<div class="row"><span style="color:var(--bad)">删除企业（仅已注销）</span><span class="tag">新</span></div>
+</div>
+</div>
+<div>
+<div class="box"><h4>重置管理员密码 · 华东精密制造</h4>
+<p class="note">会生成新的一次性登录凭据。负责人的旧密码立即失效，已登录的会话会被踢下线，<b style="color:var(--bad)">通行密钥等二次验证会被清除、第三方登录会被解绑</b>，网页和桌面端都须重新登录，首次登录时须修改密码。</p>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri">确认重置</span></p></div>
+<div class="box" style="margin-top:10px"><h4>✓ 已重置（只显示这一次）</h4>
+<div class="row"><span>负责人手机</span><span>138****0021</span></div>
+<div class="row"><span>一次性密码</span><span><code>Xa9#…qT2m</code> <span class="btn">复制</span></span></div>
+<div class="row"><span>首登须改密</span><span class="tag ok">是</span></div>
+</div>
+</div></div></div></div>
+<p class="note">要点：重置入口跟着企业行走，不用再手输 enterprise_id；结果复用现有的 BootstrapSecretDisplay，关闭后不能再查看。企业开通页上原来那个独立重置表单下线。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>删除企业 · 华东精密制造</b></div>
+<div class="body">
+<div class="steps"><span class="done">① 已注销（停止登录与同步）</span><span class="cur">② 删除</span><span>③ 30 天后清理数据</span></div>
+<div class="box"><h4>此操作会</h4>
+<div class="row"><span>立即吊销企业所有账号会话和平台模型令牌</span><span class="tag bad">立即</span></div>
+<div class="row"><span>员工客户端无法再登录、同步，提示「企业已删除」</span><span class="tag bad">立即</span></div>
+<div class="row"><span>30 天后清理企业数据（知识库、记忆、配置）</span><span class="tag warn">保留期后</span></div>
+<div class="row"><span>充值、计量、审计记录匿名保留</span><span class="tag gray">保留</span></div>
+<div class="row"><span>员工电脑上的本地会话仍保留在本机</span><span class="tag gray">不受影响</span></div>
+</div>
+<p style="margin-top:10px">请输入企业名称以确认：<span class="input">华东精密制造</span></p>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri" style="background:var(--bad);border-color:var(--bad)">删除企业</span></p>
+<p class="note">只有 system_admin 能看到这个入口。删除失败时，列表显示「删除未完成 · 重试」。</p>
+</div></div>
+<p class="note">要点：先注销、再删除，两步避免误删；影响逐条写清楚，用户不用猜。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · 专家</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>筛选</h4>
+<div class="row"><span>全部</span><b>12</b></div>
+<div class="row"><span>运行中</span><b>9</b></div>
+<div class="row"><span style="color:var(--warn)">待配置模型</span><b>2</b></div>
+<div class="row"><span style="color:var(--bad)">已停用 · 不在发布范围</span><b>1</b></div>
+</div>
+<div class="box" style="margin-top:10px"><h4>复制专家</h4>
+<div class="row"><span>新专家名称</span></div>
+<div class="input">财务分析师 - 副本</div>
+<p class="note">会复制角色设定、模型、技能、知识、提示词；不复制成员授权和个人记忆。</p>
+<p style="margin-top:8px"><span class="btn pri">复制并编辑</span> <span class="btn">取消</span></p></div>
+</div>
+<div>
+<div class="box"><h4>专家列表</h4>
+<div class="row"><span>财务分析师 <span class="tag gray">市场</span></span><span>qwen-max</span><span>⋯ 详情 · <b>复制</b></span></div>
+<div class="row"><span>合同审核员 <span class="tag gray">市场</span></span><span style="color:var(--warn)">待配置模型</span><span><span class="btn pri">选择模型</span> ⋯</span></div>
+<div class="row"><span>财务分析师（华东版） <span class="tag mg">企业</span></span><span>deepseek-v3</span><span>⋯ 详情 · 复制</span></div>
+<div class="row"><span>巡店助手 <span class="tag gray">方案</span></span><span>qwen-max</span><span>⋯ 详情 · 复制</span></div>
+<div class="row"><span>医保审核员 <span class="tag gray">市场</span></span><span class="tag bad">已停用 · 不在发布范围</span><span>⋯ 详情</span></div>
+<p class="note">「待配置模型」包括历史无模型员工和被管理员清空模型的员工，「选择模型」会打开员工抽屉并定位到模型选择框。抽屉里清空模型时会二次确认：「清空后该专家立即不可用」。不在发布范围的员工不能启用、不能复制；范围恢复后自动恢复。已有复制品不受影响。停用和恢复时企业管理员会收到站内通知。</p>
+</div>
+</div></div></div></div>
+<p class="note">要点：复制会沿用源专家的模型，源专家没有模型时复制弹窗里要求必选；复制完直接进入编辑；来源标签「市场 / 方案 / 企业」一眼就能区分。</p>
+</div>
+<div class="pane" id="u6">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · 人才市场</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>招募「合同审核员」</h4>
+<div class="row"><span>模型 <b style="color:var(--bad)">*</b></span></div>
+<div class="input">请选择模型 ▾</div>
+<p class="note">从企业已开通的模型中选择；思考档位按模型默认，招募后可在抽屉里调。</p>
+<div class="row" style="margin-top:6px"><span>授权部门</span></div>
+<div class="input">法务部 ×</div>
+<p style="margin-top:8px"><span class="btn dis">招募</span> <span class="btn">取消</span></p>
+<p class="note">选好模型后「招募」才可点。企业只有 1 个可用模型时默认选中。</p>
+</div>
+</div>
+<div>
+<div class="box"><h4>应用方案「门店运营」· 新建 3 个，已招募 1 个</h4>
+<div class="row"><span>新建专家全部使用</span><span class="input">qwen-max ▾</span></div>
+<div class="row"><span>巡店助手</span><span class="input">qwen-max ▾</span></div>
+<div class="row"><span>排班专家</span><span class="input">qwen-max ▾</span></div>
+<div class="row"><span>库存分析师</span><span class="input" style="border-color:var(--bad)">请选择 ▾</span></div>
+<div class="row"><span>财务分析师 <span class="tag gray">已招募</span></span><span class="input">deepseek-v3 ▾</span></div>
+<p class="note">已招募的专家预填当前模型，可以改；修改会影响正在使用它的成员。</p>
+<p class="note">另有 1 个专家不在本企业可见范围，不会招募。</p>
+<p class="note" style="color:var(--bad)">还有 1 个专家没选模型，不能应用。</p>
+<p style="margin-top:8px"><span class="btn dis">应用方案</span> <span class="btn">取消</span></p>
+</div>
+<div class="box" style="margin-top:10px"><h4>后端兜底（绕过前端也一样）</h4>
+<div class="row"><span>没带模型</span><span class="tag bad">422 model_required</span></div>
+<div class="row"><span>模型未开通 / 未发布 / 价格未知</span><span class="tag bad">422 model_unavailable</span></div>
+<div class="row"><span>失败时</span><span>员工、技能、授权都不写入</span></div>
+</div>
+</div></div></div></div>
+<p class="note">要点：模型和授权部门在同一个弹窗里，一步完成；应用方案时整单校验，任何一个新专家没选模型就整单失败，不会只招一半；「全部使用」只作用于新建的专家，不会误改已招募的。</p>
+</div>
+<div class="pane" id="u7">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · 顶栏</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><div class="row"><span style="color:var(--sub);white-space:nowrap">专家 / 人才市场</span><span class="btn" style="white-space:nowrap">🏢 华东精密制造 ▾</span></div>
+<div class="box" style="margin-top:8px;white-space:nowrap">
+<div class="row"><span>138****0021</span><span class="tag gray">负责人</span></div>
+<div class="row"><span>企业设置</span><span class="tag gray">仅管理员</span></div>
+<div class="row"><span><b>设置新密码</b></span><span class="tag">新</span></div>
+<div class="row"><span>退出登录</span><span></span></div>
+</div>
+<p class="note">企业名称取自企业设置，所有页面都能看到；为空时显示企业代码。改名后顶栏同步刷新。</p></div>
+</div>
+<div>
+<div class="box"><h4>设置新密码</h4>
+<div class="row"><span>当前密码</span></div><div class="input">••••••••</div>
+<div class="row" style="margin-top:6px"><span>新密码</span></div><div class="input">••••••••••</div>
+<p class="note">✓ 至少 8 位　✓ 含字母和数字　✗ 不能与当前密码相同</p>
+<div class="row" style="margin-top:6px"><span>确认新密码</span></div><div class="input">••••••••••</div>
+<p style="margin-top:8px"><span class="btn dis">确定</span> <span class="btn">取消</span></p>
+<p class="note">成功后提示「密码已更新，其他设备需要重新登录」；当前页面保持登录。当前密码输错会计入登录失败次数。</p></div>
+</div></div></div></div>
+<p class="note">要点：企业名称和账号操作合在顶栏一个菜单里，替换原来孤零零的「退出登录」按钮；不新增页面。密码规则以现有复杂度校验为准，示意图里的规则仅为示例。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站；会话内容不上传；平台模型状态和发布范围由 Operator 单写；Manager 租户数据经 TenantContext / RLS 访问；企业的行业、标签只存在 Operator，Manager 不持有。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 520" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="160" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="320" width="1090" height="180" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="342" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 发布专家</text><text x="40" y="86" fill="#667085">不含模型 · 选发布范围</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 按租户过滤目录</text><text x="280" y="86" fill="#667085">行业 / 标签命中</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ 重置密码 / 注销 / 删除</text><text x="520" y="86" fill="#667085">服务调用 Manager</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">enterprise_account + catalog_template</text><text x="770" y="86" fill="#667085">industry/tags · visible_scope · deleted_at</text>
+
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">④ 拉目录（带 tenant）</text><text x="280" y="226" fill="#667085">招募：必须选模型，否则 422</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑤ 选模型 / 复制专家</text><text x="40" y="226" fill="#667085">origin=copied</text>
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">⑥ 租户状态生效</text><text x="520" y="226" fill="#667085">吊销会话 · 拒登录 / sync</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">employee · tenant_registry.status</text><text x="770" y="226" fill="#667085">auth_identity · 会话表</text>
+
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ 主动 sync 快照</text><text x="40" y="406" fill="#667085">快照必带模型</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑧ 收到 tenant_deleted</text><text x="520" y="406" fill="#667085">停止同步 · 提示用户</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">本地会话 / 投影</text><text x="770" y="406" fill="#667085">留在本机，不远程删除</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/>
+<path d="M370 190 V98" stroke-dasharray="4 3"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M270 214 H230"/>
+<path d="M130 370 V238" stroke-dasharray="4 3"/>
+<path d="M610 370 V238" stroke-dasharray="4 3"/>
+<path d="M710 394 H760"/>
+</g>
+<text x="378" y="150" font-size="11" fill="#667085">Manager 主动 pull（带 tenant_id）</text>
+<text x="618" y="150" font-size="11" fill="#667085">Operator→Manager 服务调用</text>
+<text x="140" y="310" font-size="11" fill="#667085">Agent 主动访问</text>
+<text x="618" y="310" font-size="11" fill="#667085">Agent 主动访问时被拒</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。箭头从发起方指向被调用方。只有三种方向：Operator→Manager 服务调用、Manager 主动拉 Operator 目录、Agent 主动访问 Manager；没有任何入站到用户机器的调用。</p>
+</div>
+
+<h3>3.2 主流程</h3>
+<p><b>R2 + R3 + R6：运营端发布（不含模型）→ 企业招募时必选模型</b></p>
+<div class="flow">
+<div class="s"><b>运营发布</b>表单无模型项，范围 = 制造业</div><div class="a">→</div>
+<div class="s"><b>Manager 拉目录</b>带 tenant_id；Operator 按行业 / 标签过滤</div><div class="a">→</div>
+<div class="s"><b>招募（必选模型）</b>弹窗选模型 + 部门；只有 1 个可用模型时默认选中</div><div class="a">→</div>
+<div class="s"><b>Manager 校验</b>已开通 + 已发布 + 价格已知；不通过 422，不落库</div><div class="a">→</div>
+<div class="s"><b>Agent sync</b>快照带模型，员工立即可用</div>
+</div>
+<p><b>R3：发布范围收窄 → 范围外企业的员工停用</b></p>
+<div class="flow">
+<div class="s"><b>运营改范围</b>去掉「零售」行业</div><div class="a">→</div>
+<div class="s"><b>notify 提示</b>scope_changed；Manager 按 tenant 重新 pull（没收到也会在刷新时对账）</div><div class="a">→</div>
+<div class="s"><b>Manager 停用</b>相关员工 paused + 不在发布范围</div><div class="a">→</div>
+<div class="s"><b>Agent sync</b>拿不到快照，员工标为不可用；本机历史保留</div><div class="a">→</div>
+<div class="s"><b>站内通知</b>企业管理员收到被停用员工清单；范围恢复时自动恢复并再通知</div>
+</div>
+<p><b>R5：删除企业</b></p>
+<div class="flow">
+<div class="s"><b>注销</b>Operator closed → Manager closed（拒新登录与 sync）</div><div class="a">→</div>
+<div class="s"><b>删除</b>system_admin 输入企业名；Operator 置 deleting</div><div class="a">→</div>
+<div class="s"><b>下线</b>Manager deleted + 吊销会话；Relay 令牌吊销</div><div class="a">→</div>
+<div class="s"><b>完成</b>Operator 置 deleted；30 天后清理并匿名化</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<p><b>R1 草稿（列表「⋯」菜单）</b></p>
+<table>
+<tr><th>草稿情形</th><th>状态列显示</th><th>菜单操作</th><th>说明</th></tr>
+<tr><td><span class="tag gray">draft · 从未生成</span></td><td>待生成</td><td>继续生成、删除</td><td>没有资料时，提示先上传资料并跳到详情</td></tr>
+<tr><td><span class="tag bad">上次任务 failed</span></td><td>生成失败（悬停看原因）</td><td>继续生成、删除</td><td>使用新的幂等键，全量重新生成</td></tr>
+<tr><td><span class="tag">generating · 正常</span></td><td>生成中</td><td>查看进度</td><td>不能删除，也不能取消，避免误操作</td></tr>
+<tr><td><span class="tag warn">generating · 疑似卡住</span></td><td>生成中 · 排队超时</td><td>取消生成</td><td>取消后记为 failed + cancelled，回到可编辑状态，之后可以删除</td></tr>
+<tr><td><span class="tag warn">ready_for_review / rejected</span></td><td>待处理 / 已驳回</td><td>继续编辑、重新生成、删除</td><td>重新生成会覆盖当前正文，确认弹窗里会说明</td></tr>
+</table>
+<p style="margin-top:12px"><b>R5 企业状态在各端的效果</b></p>
+<table>
+<tr><th>Operator 状态</th><th>企业管理员 / 员工登录</th><th>Agent sync</th><th>平台模型令牌</th><th>数据</th></tr>
+<tr><td><span class="tag ok">active</span></td><td>正常</td><td>正常</td><td>正常</td><td>保留</td></tr>
+<tr><td><span class="tag warn">suspended（暂停）</span></td><td>拒绝新登录；已登录只能查看 <span class="tag">新</span></td><td>只读</td><td>保留</td><td>保留</td></tr>
+<tr><td><span class="tag bad">banned（封禁）</span></td><td>全部拒绝 <span class="tag">新</span></td><td>拒绝</td><td>保留</td><td>保留，解封后恢复</td></tr>
+<tr><td><span class="tag warn">closed（注销）</span></td><td>拒绝新登录 <span class="tag">新</span></td><td>拒绝 <span class="tag">新</span></td><td>保留（可恢复）</td><td>保留</td></tr>
+<tr><td><span class="tag warn">deleting</span></td><td>拒绝</td><td>拒绝</td><td>吊销中</td><td>保留，列表可重试</td></tr>
+<tr><td><span class="tag bad">deleted</span></td><td>拒绝，会话已吊销</td><td>返回 tenant_deleted</td><td>已吊销</td><td>30 天后清理；财务和审计记录匿名保留</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features/{solution-authoring,catalog,enterprise,accounts}</code>、<code>web/manager/src/features/{experts,marketplace}</code>。以下改动都在现有页面上扩展，不新增页面。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag op">web/operation</span></td><td><b>R1</b> 草稿列表：「未完成 / 全部」筛选，「生成失败」状态，行内「⋯」菜单（<span class="tag">新</span>）和确认弹窗；详情页「归档」文案改为「删除」，新增「取消生成」</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td><b>R4</b> 账号行菜单加「重置管理员密码」（复用 BootstrapSecretDisplay），企业开通页下线独立重置表单</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td><b>R2 R3</b> 专家注册表单、模板详情、目录卡片<b>删除</b>模型与思考档位；发布范围单选 + 行业 / 标签多选 + 预计可见企业数；开通表单和「编辑企业信息」（<span class="tag">新</span>）里维护行业、标签</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td><b>R5</b> 「删除企业」弹窗（输入企业名确认，仅 system_admin 可见）、「删除未完成 · 重试」提示、「已删除」筛选</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>R6</b> 招募弹窗加<b>必填</b>模型（只有 1 个可用模型时默认选中，没选不能提交）；应用方案弹窗：新建专家逐个选模型、已招募专家可改模型、不可见专家提示；抽屉里清空模型时二次确认；「待配置模型」筛选和「选择模型」按钮；「已停用 · 不在发布范围」标签</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>R7</b> 行菜单「复制」弹窗（只填名称），复制完直接打开编辑抽屉；列表显示来源标签</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>R8 R9</b> 顶栏「企业名称 ▾」账号菜单（<span class="tag">新</span> AccountMenu），替换单独的「退出登录」按钮；「设置新密码」弹窗（<span class="tag">新</span>），实时显示密码规则</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>识别 tenant_deleted / tenant_closed 并提示，本地数据不删除</td><td>P3</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>i18n、按角色显隐、Vitest 组件测试、Playwright 主路径</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更（新）</b>：<code>ExpertTemplateDetail.platform_model_ref</code> 先改可选、再删除；<code>visible_scope</code> 改为严格的 <code>{mode, industries, tags}</code>；新增 <code>TenantStatusChange</code></td><td>P2 / P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td><b>R1</b> <code>POST /drafts/{id}/generation/cancel</code>（<span class="tag">新</span>）；<code>DraftOut.latest_job</code> 和 <code>worker_available</code></td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td><b>R4</b> 重置操作写审计，actor 取 JWT 里的用户；回执里的明文 24 小时后清空</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td><b>R2 R3</b> 模板删除模型 / 思考档位字段与校验；行业方案发布的专家不带模型；迁移清除存量模板上的模型；pull 按 tenant 过滤，详情 pull 也校验范围；预计可见企业计数；企业表加 industry / tags；旧的 visible_scope 迁移为 all</td><td>P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td><b>R5</b> <code>operation_status</code> 增加 deleting / deleted 和 deleted_at；注销、删除都调 Manager；吊销 Relay 令牌；匿名化任务</td><td>P3</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R4</b> 替换 owner 凭据时在同一事务里吊销该负责人的全部会话，并删除其 passkey 等二次验证凭据、解绑第三方登录</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R2 R3</b> 拉目录时带 tenant；删除按模型白名单隐藏模板的过滤和从模板取模型的逻辑；范围对账：不可见模板的员工置 paused 并记 <code>status_reason</code>（<span class="tag">新</span>），启用返回 409；重新可见时自动恢复；停用 / 恢复发站内通知（新增内部投递方法）</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R6</b> <code>RecruitExpertRequest.model_policy</code>（必填）、<code>ApplySolutionRequest.expert_models</code>（<span class="tag">新</span>）；招募事务前统一校验，失败返回 <code>422 model_required / model_unavailable</code> 且零写入；员工 PUT 不允许清空模型</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R8 R9</b> <code>POST /api/auth/password</code>（<span class="tag">新</span>，需登录，校验当前密码，成功后吊销其他会话）；<code>/api/auth/session</code> 加 <code>has_password</code>；企业设置响应加只读 <code>enterprise_code</code></td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R7</b> <code>POST /employees/{id}/copy</code>（<span class="tag">新</span>）；employee 表加 <code>origin</code> 和 <code>copied_from_employee_id</code>；同时复制 prompt、技能绑定和头像</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><b>R5</b> <code>POST /api/manager/tenants/{id}/status</code>（<span class="tag">新</span>）；登录、验签、sync、知识库窄通道都检查 <code>tenant_registry.status</code>（带缓存）；保留期过后清理租户数据</td><td>P3</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>收到 tenant_deleted / tenant_closed 时停止 sync，不删除本地数据</td><td>P3</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI 快照（<code>scripts/check-openapi.sh</code>）；跨租户隔离和负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>① 运营端去掉模型前，必须先上线 Manager 的「招募必选模型」（不再读模板模型），再上线 Operator，最后从契约删除字段；② pull 加 tenant_id 时先设为可选、兼容旧调用方，Manager 全部升级后再改为必需；③ 租户状态检查进入验签路径，必须加缓存，否则每个请求都会多查一次库。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:22%">变更</th><th>内容</th><th style="width:16%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>ExpertTemplateDetail.platform_model_ref</code></td><td>必填 → 可选 → 删除；运营端模板去掉模型和思考档位</td><td>Operator ↔ Manager 共享契约</td><td class="sz L">高</td></tr>
+<tr><td>catalog pull 接口</td><td>新增 <code>tenant_id</code> 参数（先可选，后必需）；详情 pull 也校验范围</td><td>Operator ↔ Manager 服务接口</td><td class="sz L">高</td></tr>
+<tr><td><code>POST /api/manager/tenants/{id}/status</code>（新）</td><td>租户下线 / 恢复，必带幂等键</td><td>Operator → Manager</td><td class="sz L">高</td></tr>
+<tr><td><code>tenant_registry.status</code> 生效</td><td>新增错误码 <code>tenant_closed</code> / <code>tenant_deleted</code></td><td>Manager 全部入口、Agent、桌面端</td><td class="sz L">高</td></tr>
+<tr><td><code>visible_scope</code></td><td>自由 JSON 改为严格模型，旧数据迁移为 <code>{"mode":"all"}</code></td><td>Operator 表、notify</td><td class="sz M">中</td></tr>
+<tr><td><code>enterprise_account</code></td><td>新增 industry、tags、deleted_at；<code>operation_status</code> 增加 deleting / deleted</td><td>Operator 库（CHECK 约束）</td><td class="sz M">中</td></tr>
+<tr><td><code>employee.origin / copied_from_employee_id</code></td><td>新增列和复制接口</td><td>Manager 库、员工 OpenAPI</td><td class="sz M">中</td></tr>
+<tr><td>招募 / 应用方案请求</td><td>新增必填模型字段（应用方案时已招募专家可选）；新错误码 <code>model_required</code> / <code>model_unavailable</code></td><td>Manager 北向 API（与 web/manager 同发）</td><td class="sz M">中</td></tr>
+<tr><td>设置新密码接口（新）</td><td><code>POST /api/auth/password</code>；<code>has_password</code>；错误码 <code>old_password_incorrect</code></td><td>Manager <code>/api/auth/*</code>（Agent 同前缀）</td><td class="sz L">高</td></tr>
+<tr><td>租户暂停 / 封禁联动</td><td><code>tenant_registry.status</code> 增加 suspended / banned；错误码 <code>tenant_suspended</code> / <code>tenant_banned</code></td><td>Manager 全部入口、Agent、桌面端</td><td class="sz L">高</td></tr>
+<tr><td>范围停用</td><td><code>employee.status_reason</code>；notify 增加 <code>scope_changed</code>；方案详情 pull 增加 <code>hidden_expert_count</code>；错误码 <code>template_out_of_scope</code></td><td>Manager 库、Operator ↔ Manager 契约</td><td class="sz M">中</td></tr>
+<tr><td>草稿取消接口、<code>DraftOut.latest_job</code></td><td>Operator 内部接口</td><td>Operator</td><td class="sz S">低</td></tr>
+</table>
+<div class="callout red"><b>高风险（2026-11-13 已确认）：</b>标「高」的属于共享契约 / 北向 API 变更，已按 AGENTS.md §8 确认。建议发布顺序：<b>先升级下游再发布上游</b>。R2：先 Manager（招募必选模型）→ Operator 去掉模型 → 删除契约字段；R3：先 Operator（参数可选）→ Manager → 再把 Operator 参数改为必需；R5：先 Manager 状态端点和入口检查（默认 active，行为不变）→ Agent / 桌面端识别新错误码 → 最后开放 Operator 删除入口。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:14%">阶段</th><th>内容</th><th style="width:20%">依赖</th><th style="width:30%">验收</th></tr>
+<tr><td>P0 验证</td><td>① 取消任务后，worker 续租失败能放弃写结果；② 招募 / 应用方案在模型校验失败时确实零写入（含技能安装和授权）；③ 验签路径加租户状态检查对性能的影响（缓存 TTL）；④ 员工被置 paused 后 Agent 下次 sync 确实标为不可用、进行中执行不中断</td><td>现有测试夹具</td><td>四项各有可重复运行的测试或脚本输出，结论回写设计文档</td></tr>
+<tr><td>P1 快速可用</td><td>R1 列表行操作 + 取消生成；R4 入口迁移 + 吊销会话 + 清二次验证 + 审计；R6 招募 / 应用方案必选模型；R8 顶栏企业名称；R9 设置新密码</td><td>P0 ①②</td><td>对 draft / failed / 卡住三类草稿，在列表上就能完成继续生成、删除、取消；重置后旧的 owner token 访问返回 401、该负责人的 passkey 和第三方登录绑定被清空；审计表有记录；顶栏显示企业名称；设置新密码后旧密码登录失败、其他会话 401、当前会话可用；不带模型招募返回 422 且员工、授权表没有新增行；应用方案缺任一新建专家模型时整单 422</td></tr>
+<tr><td>P2 发布与复制</td><td>R2 运营端去掉模型；R3 发布范围 + 企业行业 / 标签；R7 复制专家</td><td>P1（必选模型已上线）；契约先 Manager 后 Operator</td><td>运营端表单、详情、卡片都没有模型项，契约中无模型字段；企业招募时选模型后员工立即可用；范围外的企业在列表和详情 pull 中都看不到（跨租户负例）；收窄范围后范围外企业的相关员工变为「已停用」、启用返回 409、复制品不受影响、管理员收到站内通知；放宽后自动恢复；方案里不可见的专家不会被展开，全部不可见的方案不展示；复制品不占招募名额，也没有成员授权</td></tr>
+<tr><td>P3 企业删除</td><td>R5 注销联动 + 删除 + 延迟清理</td><td>P0 ③；Manager 先上线</td><td>暂停后拒新登录、已登录的写操作返回 403；封禁后全部拒绝；删除后 Manager 登录和 sync 都返回 tenant_deleted；Relay 令牌调用被拒；财务记录仍可查询；保留期任务跑完后该 tenant 的业务数据行数为 0</td></tr>
+</table>
+<p class="note">P1 内三项可以并行；P2 中 R7 与 R2 / R3 可以并行；P3 可以和 P2 并行开发，但必须最后上线。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（2026-11-13 拍板，#1–#19 全部定案）</h3>
+<p><span class="tag ok">继续生成 = 全量重新生成</span><span class="tag ok">草稿删除沿用软删除</span><span class="tag ok">发布范围由 Operator 过滤</span><span class="tag ok">不远程删除用户本机数据</span><span class="tag ok">复制不带成员授权</span><span class="tag ok">不新增页面，操作进行菜单</span><span class="tag ok">招募 / 应用方案必须选模型，未选则失败</span><span class="tag ok">运营端不配置专家模型，只在企业端选</span></p>
+<table>
+<tr><th style="width:4%">#</th><th style="width:30%">事项</th><th>结论</th></tr>
+<tr><td>1</td><td>「未完成」包含哪些状态</td><td>draft / generating / ready_for_review / rejected</td></tr>
+<tr><td>2</td><td>取消生成的状态</td><td>failed + error_code=cancelled，显示「已取消」</td></tr>
+<tr><td>3</td><td>重置回执明文保留多久</td><td>24 小时后清空</td></tr>
+<tr><td>4</td><td>重置是否清二次验证</td><td><b>清除</b>（passkey 等）</td></tr>
+<tr><td>5</td><td>只有 1 个可用模型时</td><td>默认选中</td></tr>
+<tr><td>6</td><td>编辑时能否清空模型</td><td><b>能</b>，二次确认，清空后不可用</td></tr>
+<tr><td>7</td><td>范围收窄后已招募员工</td><td><b>停用</b></td></tr>
+<tr><td>8</td><td>方案内专家是否单独按范围过滤</td><td><b>单独过滤</b></td></tr>
+<tr><td>9</td><td>删除保留期</td><td>30 天，期内可恢复为注销</td></tr>
+<tr><td>10</td><td>暂停 / 封禁联动 Manager</td><td>联动</td></tr>
+<tr><td>11</td><td>删除企业权限</td><td>仅 system_admin</td></tr>
+<tr><td>12</td><td>应用方案时已招募的专家</td><td><b>弹窗里列出，可改模型</b></td></tr>
+<tr><td>13</td><td>存量模板上的模型数据</td><td>迁移时清除</td></tr>
+<tr><td>14</td><td>重置时是否解绑第三方登录</td><td><b>解绑</b>；被重置的管理员本人全部登录下线、须重新登录，其他成员不受影响</td></tr>
+<tr><td>15</td><td>范围恢复后被停用的员工</td><td>自动恢复；只恢复因范围停用的</td></tr>
+<tr><td>16</td><td>被停用员工的复制品</td><td><b>不停用</b></td></tr>
+<tr><td>17</td><td>方案里有不可见的专家</td><td>跳过并提示；全部不可见时方案不展示</td></tr>
+<tr><td>18</td><td>设置新密码后的其他登录</td><td>当前页面保持，其他设备下线</td></tr>
+<tr><td>19</td><td>范围停用是否通知企业管理员</td><td><b>通知</b>（停用与自动恢复都发）</td></tr>
+</table>
+
+<div class="callout green"><b>当前无待决策。</b>第 6 节中标「高」的契约 / 北向 API 变更已于 2026-11-13 按 AGENTS.md §8 确认。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
