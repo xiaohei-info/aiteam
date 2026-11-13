@@ -7,6 +7,9 @@
 import { useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppShell as AstryxAppShell } from "@astryxdesign/core/AppShell";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
 import {
   SideNav,
   SideNavHeading,
@@ -26,7 +29,7 @@ export function AppShell(): React.ReactNode {
   const i18n = useI18n();
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const me = useMe();
+  const { me, blocked } = useMe();
   const [changingPw, setChangingPw] = useState(false);
   const isAdmin = Boolean(me?.roles.some((role) => role === "owner" || role === "enterprise_admin"));
   const vm = buildShellViewModel(managerShellConfig, session, pathname);
@@ -34,6 +37,18 @@ export function AppShell(): React.ReactNode {
   if (vm.requiresLogin) {
     // 未登录：壳退化为仅登录入口，由路由层 <RequireAuth> 把页面切到 /login。
     return <Outlet />;
+  }
+
+  if (blocked) {
+    // 企业被封禁 / 注销 / 删除：所有接口都会被拒绝，不渲染只会满屏报错的页面，直接说明原因。
+    return (
+      <EmptyState
+        headingLevel={1}
+        title={blocked.message}
+        description="当前企业无法继续使用企业端。如有疑问，请联系平台运营。"
+        actions={<Button label="退出登录" variant="primary" onClick={signOut} />}
+      />
+    );
   }
 
   const sideNav = (
@@ -62,6 +77,11 @@ export function AppShell(): React.ReactNode {
       sideNav={sideNav}
       mobileNav={{ breakpoint: "md" }}
     >
+      {me?.tenant_status === "suspended" && (
+        <div data-testid="tenant-status-banner">
+          <Banner status="warning" title="企业已暂停，仅可查看；新增、修改和删除操作暂不可用。如有疑问，请联系平台运营。" />
+        </div>
+      )}
       <Outlet />
       {changingPw && me && <ChangePasswordDialog policy={me.password_policy} onClose={() => setChangingPw(false)} />}
     </AstryxAppShell>

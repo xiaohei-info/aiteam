@@ -294,3 +294,27 @@ def test_remove_tenant_files_logs_what_could_not_be_removed(tmp_path, monkeypatc
     assert not (tmp_path / "knowledge" / T).exists()
     assert left == [f"avatars/{T}"]
     assert any("could not be removed" in record.getMessage() for record in caplog.records)
+
+
+def test_login_message_for_a_suspended_tenant_does_not_promise_read_only_access():
+    """暂停的企业不能新登录：登录时的提示不能是“仅可查看”（那是已登录会话的提示）。"""
+    from manager_service.tenant_status import TenantUnavailable
+
+    in_session = TenantUnavailable("suspended")
+    at_login = TenantUnavailable("suspended", at_login=True)
+    assert in_session.code == at_login.code == "tenant_suspended"
+    assert "仅可查看" in str(in_session.detail)
+    assert "仅可查看" not in str(at_login.detail) and "无法登录" in str(at_login.detail)
+    assert TenantUnavailable("banned", at_login=True).detail == TenantUnavailable("banned").detail
+
+
+def test_issuing_a_token_for_a_suspended_tenant_uses_the_login_message(monkeypatch):
+    from manager_service import tenant_status
+    from manager_service.auth_service import AuthService
+
+    monkeypatch.setattr(tenant_status, "fetch_tenant_status", lambda dsn, tenant_id: "suspended")
+    service = AuthService.__new__(AuthService)
+    service._admin_dsn = "postgresql://unused"
+    with pytest.raises(tenant_status.TenantUnavailable) as raised:
+        service._assert_tenant_active(T)
+    assert raised.value.code == "tenant_suspended" and "无法登录" in str(raised.value.detail)

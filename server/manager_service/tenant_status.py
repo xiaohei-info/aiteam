@@ -29,6 +29,7 @@ _MESSAGES = {
     "closed": "企业已注销",
     "deleted": "企业已删除",
 }
+_LOGIN_MESSAGES = {"suspended": "企业已暂停，暂时无法登录；如有疑问请联系平台运营"}
 # 暂停期间仍放行的写操作：退出登录、用户端授权配置同步 / 用量与结算上报。
 SUSPENDED_WRITE_ALLOWLIST = frozenset({
     "/api/auth/logout",
@@ -48,9 +49,11 @@ class TenantUnavailable(AppError):
 
     status, title = 403, "Tenant unavailable"
 
-    def __init__(self, tenant_status: str):
+    def __init__(self, tenant_status: str, *, at_login: bool = False):
         self.code = _CODES.get(tenant_status, "tenant_unavailable")
-        super().__init__(_MESSAGES.get(tenant_status, "企业当前不可用"))
+        # 暂停的企业不能新登录；“仅可查看”只对已登录的会话成立，登录时不能这么提示。
+        messages = _LOGIN_MESSAGES if at_login else {}
+        super().__init__(messages.get(tenant_status) or _MESSAGES.get(tenant_status, "企业当前不可用"))
 
 
 class TenantNotFound(NotFound):

@@ -4,6 +4,8 @@ verify_service_token 守卫 + psycopg mock + initial_quota_policy 条件分支�
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -30,7 +32,7 @@ def _seed_name(monkeypatch):
 _BOUND_TENANT = "11111111-1111-4111-8111-111111111111"
 
 
-def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder", *, aiteam_env="development", force_no_principal=False, onboarding_writes_enabled=False):
+def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder", *, aiteam_env: Literal["dev", "development", "test", "production"] = "development", force_no_principal=False, onboarding_writes_enabled=False):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_tenant import router as tenant_router

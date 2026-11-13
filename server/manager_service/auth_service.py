@@ -354,7 +354,7 @@ class AuthService:
 
         status = fetch_tenant_status(self._admin_dsn, tenant_id)
         if status != ACTIVE:
-            raise TenantUnavailable(status)
+            raise TenantUnavailable(status, at_login=True)
 
     def _enterprise_id_for_tenant(self, tenant_id: str) -> str | None:
         """Resolve the persisted Operator enterprise binding for token claims."""

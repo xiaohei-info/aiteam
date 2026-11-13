@@ -73,7 +73,7 @@ def test_success_updates_hash_and_keeps_only_current_session():
     assert len(repo.updated) == 1
     assert verify_password(NEW, repo.updated[0][1])
     assert sessions.calls == [("jti-current", "password_changed")]
-    assert audit.records[-1]["success"] is True
+    assert audit is not None and audit.records[-1]["success"] is True
 
 
 def test_wrong_old_password_is_422_and_counts_as_failure():
@@ -82,7 +82,7 @@ def test_wrong_old_password_is_422_and_counts_as_failure():
         svc.change_password(_claims(), old_password="nope", new_password=NEW)
     assert exc.value.status == 422 and exc.value.code == "old_password_incorrect"
     assert repo.updated == [] and sessions.calls == []
-    assert audit.records[-1]["success"] is False
+    assert audit is not None and audit.records[-1]["success"] is False
 
 
 def test_same_password_is_422():
