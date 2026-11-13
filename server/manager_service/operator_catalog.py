@@ -22,11 +22,21 @@ from urllib.parse import quote
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.platform_skill import PlatformSkillPackage
-from shared.errors import AppError
+from shared.errors import AppError, NotFound
 
 
 class OperatorCatalogUnavailable(AppError):
     status, code, title = 503, "operator_unavailable", "Operator catalog unavailable"
+
+
+class TemplateOutOfScope(NotFound):
+    """Operator 返回 code=template_out_of_scope：模板已发布但不在本企业发布范围内。"""
+
+    code = "template_out_of_scope"
+
+
+def is_out_of_scope(exc: BaseException) -> bool:
+    return isinstance(exc, NotFound) and getattr(exc, "code", "") == "template_out_of_scope"
 
 
 class OperatorCatalogPort(ABC):
@@ -37,23 +47,23 @@ class OperatorCatalogPort(ABC):
 
     @abstractmethod
     def pull_expert_template(
-        self, *, template_id: str, version: str | None = None
+        self, *, template_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> ExpertTemplateDetail:
-        """F06 拉专家模板详情（05 F06）。template_id/version 为 Operator 侧只读标识。"""
+        """F06 拉专家模板详情（05 F06）。按 tenant 的发布范围校验；范围外抛 code=template_out_of_scope 的 NotFound。"""
 
     @abstractmethod
     def pull_solution_package(
-        self, *, solution_id: str, version: str | None = None
+        self, *, solution_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> SolutionPackage:
         """F07 拉行业方案包（05 F07）。solution_id/version 为 Operator 侧只读标识。"""
 
     @abstractmethod
-    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
-        """F06 浏览：列可招募专家模板（各 template 取最新版本）。只读，不写 Operator。"""
+    def list_expert_templates(self, *, tenant_id: str | None = None) -> list[ExpertTemplateDetail]:
+        """F06 浏览：列该 tenant 发布范围内的可招募专家模板（各 template 取最新版本）。只读，不写 Operator。"""
 
     @abstractmethod
-    def list_solution_packages(self) -> list[SolutionPackage]:
-        """F07 浏览：列可应用行业方案包（各 solution 取最新版本）。只读，不写 Operator。"""
+    def list_solution_packages(self, *, tenant_id: str | None = None) -> list[SolutionPackage]:
+        """F07 浏览：列该 tenant 发布范围内的可应用行业方案包（各 solution 取最新版本）。只读，不写 Operator。"""
 
     def list_platform_skills(self) -> list[dict]:
         return []
@@ -101,40 +111,43 @@ class OperatorCatalogClient(OperatorCatalogPort):
         kwargs.update(base_url=base_url, timeout=10.0)
         self._client = ServiceClient(**kwargs)
 
+    def _pull_get(self, path: str, tenant_id: str | None, version: str | None = None) -> dict:
+        """目录拉取：必须带 tenant_id，并以 tenant 绑定的服务身份调用（Operator 据此按发布范围过滤）。"""
+        if not tenant_id:
+            raise ValueError("catalog pull requires tenant_id")
+        query = f"tenant_id={quote(tenant_id, safe='')}"
+        if version:
+            query += f"&version={quote(version, safe='')}"
+        return self._get(f"{path}?{query}", service_purpose="catalog:read", service_tenant_id=tenant_id)
+
     def pull_expert_template(
-        self, *, template_id: str, version: str | None = None
+        self, *, template_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> ExpertTemplateDetail:
         """F06：拉取专家模板详情。调用 GET /api/operation/catalog/pull/expert-templates/{template_id}"""
-        path = f"/api/operation/catalog/pull/expert-templates/{template_id}"
-        if version:
-            path += f"?version={version}"
-        resp = self._get(path)
+        resp = self._pull_get(f"/api/operation/catalog/pull/expert-templates/{template_id}", tenant_id, version)
         # 响应为 Envelope[ExpertTemplateDetail]，取 data 字段
         data = resp.get("data", {})
         return ExpertTemplateDetail.model_validate(data)
 
     def pull_solution_package(
-        self, *, solution_id: str, version: str | None = None
+        self, *, solution_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> SolutionPackage:
         """F07：拉取行业方案包。调用 GET /api/operation/catalog/pull/solution-templates/{solution_id}"""
-        path = f"/api/operation/catalog/pull/solution-templates/{solution_id}"
-        if version:
-            path += f"?version={version}"
-        resp = self._get(path)
+        resp = self._pull_get(f"/api/operation/catalog/pull/solution-templates/{solution_id}", tenant_id, version)
         # 响应为 Envelope[SolutionPackage]，取 data 字段
         data = resp.get("data", {})
         return SolutionPackage.model_validate(data)
 
-    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
+    def list_expert_templates(self, *, tenant_id: str | None = None) -> list[ExpertTemplateDetail]:
         """F06：列举可招募专家模板。调用 GET /api/operation/catalog/pull/expert-templates"""
-        resp = self._get("/api/operation/catalog/pull/expert-templates")
+        resp = self._pull_get("/api/operation/catalog/pull/expert-templates", tenant_id)
         # 响应为 ListEnvelope[ExpertTemplateDetail]，取 data 字段
         data_list = resp.get("data", [])
         return [ExpertTemplateDetail.model_validate(item) for item in data_list]
 
-    def list_solution_packages(self) -> list[SolutionPackage]:
+    def list_solution_packages(self, *, tenant_id: str | None = None) -> list[SolutionPackage]:
         """F07：列举可应用行业方案包。调用 GET /api/operation/catalog/pull/solution-templates"""
-        resp = self._get("/api/operation/catalog/pull/solution-templates")
+        resp = self._pull_get("/api/operation/catalog/pull/solution-templates", tenant_id)
         # 响应为 ListEnvelope[SolutionPackage]，取 data 字段
         data_list = resp.get("data", [])
         return [SolutionPackage.model_validate(item) for item in data_list]
@@ -213,6 +226,18 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._platform_skills: dict[tuple[str, str], PlatformSkillPackage] = {}
         self._platform_catalog: dict = {"providers": [], "models": []}
         self.invalidated: list[tuple[str, str]] = []
+        self._hidden: set[tuple[str, str]] = set()  # (tenant_id, template_id / solution_id)
+
+    def hide_from(self, tenant_id: str, template_id: str) -> None:
+        """测试用：模拟该模板 / 方案不在 tenant 的发布范围内。"""
+        self._hidden.add((tenant_id, template_id))
+
+    def show_to(self, tenant_id: str, template_id: str) -> None:
+        self._hidden.discard((tenant_id, template_id))
+
+    def _check_scope(self, tenant_id: str | None, template_id: str) -> None:
+        if tenant_id and (tenant_id, template_id) in self._hidden:
+            raise TemplateOutOfScope(f"template not visible: {template_id}")
 
     def invalidate(self, catalog_type: str, template_id: str) -> None:
         """记录缓存失效请求（fake 无真实缓存，仅用于测试观测）。"""
@@ -235,8 +260,9 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
 
     # ---- 只读拉取（红线：不改预置真相）----
     def pull_expert_template(
-        self, *, template_id: str, version: str | None = None
+        self, *, template_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> ExpertTemplateDetail:
+        self._check_scope(tenant_id, template_id)
         if version is not None:
             detail = self._experts.get((template_id, version))
         else:
@@ -248,8 +274,9 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         return detail.model_copy(deep=True)  # 返回副本，防止调用方改模板真相
 
     def pull_solution_package(
-        self, *, solution_id: str, version: str | None = None
+        self, *, solution_id: str, version: str | None = None, tenant_id: str | None = None
     ) -> SolutionPackage:
+        self._check_scope(tenant_id, solution_id)
         if version is not None:
             package = self._solutions.get((solution_id, version))
         else:
@@ -261,11 +288,17 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         return package.model_copy(deep=True)  # 返回副本，防止调用方改模板真相
 
     # ---- 只读列举（浏览；各标识取最新版本，返回副本防改真相）----
-    def list_expert_templates(self) -> list[ExpertTemplateDetail]:
-        return [d.model_copy(deep=True) for d in self._experts_latest.values()]
+    def list_expert_templates(self, *, tenant_id: str | None = None) -> list[ExpertTemplateDetail]:
+        return [
+            d.model_copy(deep=True) for d in self._experts_latest.values()
+            if not (tenant_id and (tenant_id, d.template_id) in self._hidden)
+        ]
 
-    def list_solution_packages(self) -> list[SolutionPackage]:
-        return [p.model_copy(deep=True) for p in self._solutions_latest.values()]
+    def list_solution_packages(self, *, tenant_id: str | None = None) -> list[SolutionPackage]:
+        return [
+            p.model_copy(deep=True) for p in self._solutions_latest.values()
+            if not (tenant_id and (tenant_id, p.solution_id) in self._hidden)
+        ]
 
     def list_platform_skills(self) -> list[dict]:
         latest: dict[str, PlatformSkillPackage] = {}

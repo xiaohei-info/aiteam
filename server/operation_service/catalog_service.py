@@ -20,7 +20,7 @@ from shared.errors import Conflict, NotFound, ValidationProblem
 from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
-from .catalog_scope import VisibleScope, normalize_scope, scope_allows
+from .catalog_scope import TemplateOutOfScope, VisibleScope, normalize_scope, scope_allows
 from .catalog_schemas import (
     CatalogDetailView,
     CatalogEntryResponse,
@@ -474,7 +474,7 @@ class CatalogService:
         if version is not None and entry.version != version:
             raise NotFound(f"expert template version mismatch: {template_id}@{version}")
         if not self._visible_to(entry, tenant_id):
-            raise NotFound(f"expert template not visible: {template_id}")
+            raise TemplateOutOfScope(f"expert template not visible: {template_id}")
 
         payload = entry.payload or {}
         persona, recommended = self._backfill_expert(payload)
@@ -511,7 +511,7 @@ class CatalogService:
         if version is not None and entry.version != version:
             raise NotFound(f"solution package version mismatch: {solution_id}@{version}")
         if not self._visible_to(entry, tenant_id):
-            raise NotFound(f"solution package not visible: {solution_id}")
+            raise TemplateOutOfScope(f"solution package not visible: {solution_id}")
 
         payload = entry.payload or {}
 
@@ -547,7 +547,7 @@ class CatalogService:
         coordinator_id = payload.get("coordinator_template_id", "")
         if hidden_ids and (coordinator_id in hidden_ids or not experts):
             # 协调专家（或全部专家）对本企业不可见：方案无法在该企业应用，当作不存在。
-            raise NotFound(f"solution package not visible: {solution_id}")
+            raise TemplateOutOfScope(f"solution package not visible: {solution_id}")
 
         return SolutionPackage(
             solution_id=entry.template_id,

@@ -156,7 +156,7 @@ def build_recruit_router(verifier) -> APIRouter:
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
             ctx = tenant_context_from(claims)
-            templates = catalog.list_expert_templates()
+            templates = catalog.list_expert_templates(tenant_id=ctx.tenant_id)
         except AppError:
             raise
         except Exception as exc:
@@ -184,7 +184,7 @@ def build_recruit_router(verifier) -> APIRouter:
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
             ctx = tenant_context_from(claims)
-            packages = catalog.list_solution_packages()
+            packages = catalog.list_solution_packages(tenant_id=ctx.tenant_id)
             return ListEnvelope[SolutionPackage](data=packages)
         except AppError:
             raise
