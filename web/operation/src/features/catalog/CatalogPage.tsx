@@ -65,7 +65,6 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
   onAction: (action: TemplateLifecycleAction) => Promise<void>;
 }): ReactNode {
   const status = statusPresentation(item.status);
-  const model = item.platform_model_ref?.model_id || "待配置";
   const skillCount = item.platform_skill_refs?.length || item.skill_ids?.length || 0;
   const tags = [item.category, ...(item.tags ?? [])].filter(Boolean).slice(0, 3) as string[];
   const displayName = item.display_name || "未命名专家";
@@ -100,7 +99,6 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
       </div>
 
       <dl data-ui="catalog-expert-card-stats">
-        <div><dt>模型</dt><dd title={model}>{model}</dd></div>
         <div><dt>技能</dt><dd>{skillCount} 项</dd></div>
         <div><dt>可见范围</dt><dd>{visibilityText(visibilityLabel(item.visible_scope))}</dd></div>
       </dl>

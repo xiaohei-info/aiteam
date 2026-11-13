@@ -356,7 +356,7 @@ class SolutionAuthoringService:
         for expert in package.experts:
             request = RegisterExpertTemplateRequest(
                 template_id=expert_ids[expert.key], display_name=expert.display_name, category=expert.category,
-                system_prompt=expert.system_prompt, description=expert.description, platform_model_ref=_model_ref(draft),
+                system_prompt=expert.system_prompt, description=expert.description,
             )
             self._ensure_registered(catalog, CatalogType.EXPERT_TEMPLATE, request.template_id or "", lambda r=request: catalog.register_expert_template(r))
         solution = RegisterSolutionTemplateRequest(

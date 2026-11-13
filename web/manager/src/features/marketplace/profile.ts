@@ -57,16 +57,14 @@ export interface CardMetric {
   tone?: RateTone;
 }
 
-/** 卡片关键指标：按 解决率 / 计价 / 技能数 / 默认模型 的优先级取前 3 个有数据的。 */
+/** 卡片关键指标：按 解决率 / 计价 / 技能数 的优先级取前 3 个有数据的。 */
 export function cardMetrics(template: ExpertTemplate): CardMetric[] {
   const rate = template.stats?.resolution_rate;
   const skills = template.platform_skill_refs?.length || template.skill_ids?.length || 0;
-  const model = template.platform_model_ref?.model_id;
   const candidates: Array<CardMetric | null> = [
     rate != null ? { label: "解决率", value: formatRate(rate), tone: rateTone(rate) } : null,
     template.pricing ? { label: "计价", value: formatPricing(template.pricing) } : null,
     skills > 0 ? { label: "技能", value: `${skills} 项` } : null,
-    model ? { label: "模型", value: model } : null,
   ];
   return candidates.filter((metric): metric is CardMetric => metric !== null).slice(0, CARD_METRIC_SLOTS);
 }

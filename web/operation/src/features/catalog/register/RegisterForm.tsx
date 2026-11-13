@@ -22,16 +22,8 @@ import {
   type ExpertTemplateProfile,
   type ProfileErrors,
 } from "../profile";
-import type { CatalogItem, CatalogItemType, PlatformModelRef, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
+import type { CatalogItem, CatalogItemType, RegisterExpertTemplate, RegisterSolutionTemplate } from "../types";
 import type { PlatformSkillRef } from "../../skill-market/types";
-import { usePlatformProvidersApi } from "../../providers/usePlatformProvidersApi";
-import {
-  thinkingLabel,
-  thinkingLevelsForModel,
-  type ModelCapabilities,
-  type ThinkingLevel,
-} from "./thinking";
-
 const DEFAULT_EXPERT_CATEGORIES = ["市场营销", "财务分析", "技术研发", "客户服务", "人力资源"];
 
 function formatRegisterError(error: unknown): string {
@@ -49,7 +41,6 @@ export interface RegisterFormProps {
 }
 
 export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFormProps) {
-  const providerApi = usePlatformProvidersApi();
   const [displayName, setDisplayName] = useState("");
   const [category, setCategory] = useState(DEFAULT_EXPERT_CATEGORIES[0] ?? "");
   const [categories, setCategories] = useState(DEFAULT_EXPERT_CATEGORIES);
@@ -57,11 +48,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [defaultModel, setDefaultModel] = useState("");
-  const [defaultThinkingLevel, setDefaultThinkingLevel] = useState<ThinkingLevel>("off");
-  const [modelOptions, setModelOptions] = useState<Array<{ value: string; label: string }>>([]);
-  const [modelRefs, setModelRefs] = useState<Record<string, PlatformModelRef>>({});
-  const [modelCapabilities, setModelCapabilities] = useState<Record<string, ModelCapabilities>>({});
   const [expertDescription, setExpertDescription] = useState("");
   const [platformSkillRefs, setPlatformSkillRefs] = useState<PlatformSkillRef[]>([]);
   const [profile, setProfile] = useState<ExpertTemplateProfile>(() => profileFromItem({}));
@@ -76,29 +62,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   const [validationErrors, setValidationErrors] = useState<RegistrationErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (catalogType !== "expert_template") return;
-    void providerApi.list().then(async (providers) => {
-      const published = providers.filter((provider) => provider.status === "published");
-      const groups = await Promise.all(published.map(async (provider) => ({ provider, models: await providerApi.models(provider.provider_id) })));
-      const refs: Record<string, PlatformModelRef> = {};
-      const capabilities: Record<string, ModelCapabilities> = {};
-      const options: Array<{ value: string; label: string }> = [];
-      for (const { provider, models } of groups) for (const item of models) {
-        if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
-        const value = `${provider.provider_id}::${item.model.model_id}`;
-        refs[value] = { provider_id: provider.provider_id, provider_version: provider.version, model_id: item.model.model_id, model_version: item.model.version };
-        const modelName = item.model.display_name && item.model.display_name !== item.model.model_id
-          ? `${item.model.display_name} · `
-          : "";
-        options.push({ value, label: `${provider.display_name} / ${modelName}${item.model.model_id} · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}` });
-        capabilities[value] = (item.model.capabilities ?? {}) as ModelCapabilities;
-      }
-      setModelRefs(refs); setModelOptions(options); setModelCapabilities(capabilities);
-      if (options.length === 1) setDefaultModel(options[0]!.value);
-    }).catch(() => { setModelOptions([]); setModelRefs({}); });
-  }, [catalogType, providerApi]);
 
   useEffect(() => {
     if (catalogType !== "solution_template") return;
@@ -127,8 +90,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       category: category.trim(),
       avatar_url: avatarUrl.trim(),
       system_prompt: systemPrompt.trim(),
-      platform_model_ref: modelRefs[defaultModel]!,
-      thinking_level: defaultThinkingLevel,
       platform_skill_refs: platformSkillRefs,
       description: expertDescription.trim(),
       ...filledProfileFields(profilePayload(profile)),
@@ -156,7 +117,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
       category,
       avatarUrl,
       systemPrompt,
-      defaultModel,
       description: expertDescription,
       expertTemplateIds,
       coordinatorTemplateId,
@@ -182,15 +142,6 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
   }
 
   const disabled = isSubmitting;
-  const selectedModelCapabilities = modelCapabilities[defaultModel];
-  const defaultThinkingOptions = thinkingLevelsForModel(selectedModelCapabilities)
-    .map((level) => ({ value: level, label: thinkingLabel(level, selectedModelCapabilities) }));
-
-  function updateDefaultModel(value: string): void {
-    setDefaultModel(value);
-    const levels = thinkingLevelsForModel(modelCapabilities[value]);
-    setDefaultThinkingLevel((current) => levels.includes(current) ? current : "off");
-  }
 
   return (
     <Card>
@@ -218,19 +169,12 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
               <ExpertTemplateFields
                 avatarUrl={avatarUrl}
                 systemPrompt={systemPrompt}
-                defaultModel={defaultModel}
-                modelOptions={modelOptions}
-                defaultThinkingLevel={defaultThinkingLevel}
-                thinkingOptions={defaultThinkingOptions}
                 description={expertDescription}
                 disabled={disabled}
                 systemPromptError={validationErrors.systemPrompt}
-                defaultModelError={validationErrors.defaultModel}
                 descriptionError={validationErrors.description}
                 onAvatarUrlChange={setAvatarUrl}
                 onSystemPromptChange={setSystemPrompt}
-                onDefaultModelChange={updateDefaultModel}
-                onDefaultThinkingLevelChange={(value) => setDefaultThinkingLevel(value as ThinkingLevel)}
                 onDescriptionChange={setExpertDescription}
               />
               <ExpertSkillSelector value={platformSkillRefs} onChange={setPlatformSkillRefs} disabled={disabled} />

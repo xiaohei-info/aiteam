@@ -42,10 +42,6 @@ import "./marketplace.css";
 
 type MarketplaceFilter = "all" | "available" | "recruited";
 
-function modelLabel(template: ExpertTemplate): string {
-  return template.platform_model_ref?.model_id || "模型待配置";
-}
-
 /** 卡片指标区固定 3 格，缺数据的格子留空，保持卡片等高。 */
 function CardMetrics({ template }: { template: ExpertTemplate }): ReactNode {
   const metrics = cardMetrics(template);
@@ -132,7 +128,7 @@ export function MarketplacePage(): ReactNode {
       const matchesFilter = filter === "all"
         || (filter === "available" && !template.is_recruited)
         || (filter === "recruited" && template.is_recruited);
-      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, modelLabel(template), ...(template.tags ?? [])]
+      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, ...(template.tags ?? [])]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase();

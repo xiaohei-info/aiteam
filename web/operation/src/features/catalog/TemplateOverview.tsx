@@ -17,17 +17,8 @@ import { ExpertProfileFields } from "./register/ExpertProfileFields";
 import { profileFromItem, type ProfileErrors } from "./profile";
 import { labelToVisibleScope, visibilityLabel } from "./types";
 import type { CatalogItem } from "./types";
-import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
 import type { InternalSkill } from "../skill-market/types";
-import {
-  THINKING_LEVELS,
-  thinkingLabel,
-  thinkingLevelsForModel,
-  type ModelCapabilities,
-  type ThinkingLevel,
-} from "./register/thinking";
-
 function safeJson(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
@@ -123,42 +114,17 @@ function ReadonlyJson({ title, value }: { title?: string; value?: unknown }): Re
   );
 }
 
-type ModelOption = {
-  value: string;
-  label: string;
-  ref: NonNullable<CatalogItem["platform_model_ref"]>;
-  capabilities?: ModelCapabilities;
-};
-
 function ExpertDetailSections({
   draft,
   onChange,
   editing,
   profileErrors,
-  modelOptions,
-  modelLoading,
 }: {
   draft: CatalogItem;
   onChange: (next: CatalogItem) => void;
   editing: boolean;
   profileErrors?: ProfileErrors;
-  modelOptions: ModelOption[];
-  modelLoading: boolean;
 }): ReactNode {
-  const selectedModel = modelOptions.find((option) => option.value === (
-    draft.platform_model_ref
-      ? `${draft.platform_model_ref.provider_id}::${draft.platform_model_ref.model_id}`
-      : ""
-  ));
-  const thinkingLevels = thinkingLevelsForModel(selectedModel?.capabilities);
-  const currentThinking = draft.thinking_level as ThinkingLevel | undefined;
-  if (currentThinking && THINKING_LEVELS.includes(currentThinking) && !thinkingLevels.includes(currentThinking)) {
-    thinkingLevels.push(currentThinking);
-  }
-  const thinkingOptions = thinkingLevels.map((level) => ({
-    value: level,
-    label: thinkingLabel(level, selectedModel?.capabilities),
-  }));
   return (
     <>
       <DetailSection title="分类 / 头像">
@@ -180,46 +146,6 @@ function ExpertDetailSections({
 
       <DetailSection title="系统提示词 (system_prompt)">
         {editing ? <TextArea label="system_prompt" placeholder="岗位描述系统提示词（纯文本）" value={draft.system_prompt ?? ""} onChange={(system_prompt) => onChange({ ...draft, system_prompt })} rows={6} /> : <ReadonlyText value={draft.system_prompt} />}
-      </DetailSection>
-
-      <DetailSection title="大模型服务 / 模型">
-        {editing ? (
-          <Selector
-            label="大模型服务 / 模型"
-            options={modelOptions}
-            value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id}::${draft.platform_model_ref.model_id}` : undefined}
-            onChange={(value) => {
-              const selected = modelOptions.find((option) => option.value === value);
-              const levels = thinkingLevelsForModel(selected?.capabilities);
-              onChange({
-                ...draft,
-                platform_model_ref: selected?.ref,
-                thinking_level: levels.includes(draft.thinking_level as ThinkingLevel)
-                  ? draft.thinking_level
-                  : "off",
-              });
-            }}
-            placeholder={modelLoading ? "加载可用模型…" : "选择 Operator 已发布模型"}
-            data-testid="edit-platform-model-select"
-            isRequired
-            isDisabled={modelLoading || modelOptions.length === 0}
-          />
-        ) : (
-          <ReadonlyText value={draft.platform_model_ref ? `${draft.platform_model_ref.provider_id} / ${draft.platform_model_ref.model_id} · v${draft.platform_model_ref.model_version}` : "未配置"} />
-        )}
-      </DetailSection>
-
-      <DetailSection title="默认思考等级">
-        {editing ? (
-          <Selector
-            label="默认思考等级"
-            options={thinkingOptions}
-            value={thinkingOptions.some((option) => option.value === (draft.thinking_level || "off")) ? (draft.thinking_level || "off") : "off"}
-            onChange={(thinking_level) => onChange({ ...draft, thinking_level })}
-            isDisabled={modelLoading || thinkingOptions.length === 0}
-            data-testid="edit-default-thinking-level-select"
-          />
-        ) : <ReadonlyText value={draft.thinking_level || "off"} />}
       </DetailSection>
 
       <DetailSection title="岗位描述 (description)">
@@ -306,39 +232,7 @@ function SolutionDetailSections({ draft, onChange, editing }: {
 
 export function TemplateOverview({ item, draft, editing, canWrite, profileErrors, visibilityChanging, onChange, onVisibilityChange }: TemplateOverviewProps): ReactNode {
   const isExpert = item.catalog_type === "expert_template";
-  const providerApi = usePlatformProvidersApi();
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [modelLoading, setModelLoading] = useState(false);
   const visible = visibilityLabel(item.visible_scope);
-
-  useEffect(() => {
-    if (!isExpert || !editing) return;
-    let active = true;
-    setModelLoading(true);
-    void providerApi.list().then(async (providers) => {
-      const published = providers.filter((provider) => provider.status === "published");
-      const groups = await Promise.all(published.map(async (provider) => ({ provider, models: await providerApi.models(provider.provider_id) })));
-      const options: ModelOption[] = [];
-      for (const { provider, models } of groups) {
-        for (const item of models) {
-          if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
-          options.push({
-            value: `${provider.provider_id}::${item.model.model_id}`,
-            label: `${provider.display_name} / ${item.model.display_name || item.model.model_id} · $${item.rate.input_usd_per_million}/$${item.rate.output_usd_per_million}`,
-            capabilities: item.model.capabilities as ModelCapabilities,
-            ref: {
-              provider_id: provider.provider_id,
-              provider_version: provider.version,
-              model_id: item.model.model_id,
-              model_version: item.model.version,
-            },
-          });
-        }
-      }
-      if (active) setModelOptions(options);
-    }).catch(() => { if (active) setModelOptions([]); }).finally(() => { if (active) setModelLoading(false); });
-    return () => { active = false; };
-  }, [editing, isExpert, providerApi]);
   const visibilityText = visible === "public" ? "公开" : visible === "enterprise" ? "企业可见" : "隐藏";
 
   return (
@@ -369,7 +263,7 @@ export function TemplateOverview({ item, draft, editing, canWrite, profileErrors
       </Card>
 
       {isExpert
-        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} profileErrors={profileErrors} modelOptions={modelOptions} modelLoading={modelLoading} />
+        ? <ExpertDetailSections draft={draft} onChange={onChange} editing={editing} profileErrors={profileErrors} />
         : <SolutionDetailSections draft={draft} onChange={onChange} editing={editing} />}
     </VStack>
   );

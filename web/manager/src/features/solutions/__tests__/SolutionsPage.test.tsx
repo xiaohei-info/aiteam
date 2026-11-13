@@ -212,7 +212,7 @@ describe("SolutionsPage", () => {
   });
 
   it("应用方案成功：显示成功提示", async () => {
-    const api = mockApi();
+    mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     await applyDefaultSolution();
@@ -234,7 +234,7 @@ describe("SolutionsPage", () => {
 
 
   it("应用方案成功：显示前往专家实例配置入口", async () => {
-    const api = mockApi();
+    mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     await applyDefaultSolution();

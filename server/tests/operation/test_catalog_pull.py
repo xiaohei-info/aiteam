@@ -67,7 +67,7 @@ def _register_and_publish_expert(client):
     # 注册
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader", "platform_model_ref": _MODEL_REF, "skill_ids": ["seo"], "description": "CMO expert"},
+        json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing", "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader", "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
     # 发布
@@ -166,7 +166,7 @@ def test_pull_expert_template_not_published(client):
     # 只注册，不发布
     client.post(
         "/api/operation/catalog/expert-templates",
-        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "h", "system_prompt": "s", "platform_model_ref": {**_MODEL_REF, "model_id": "g"}, "skill_ids": ["sk"], "description": "d"},
+        json={"template_id": "tpl-draft", "display_name": "Draft", "category": "x", "avatar_url": "h", "system_prompt": "s", "skill_ids": ["sk"], "description": "d"},
         headers=_auth_header(),
     )
 
@@ -194,7 +194,7 @@ def _register_solution_with_bindings(client):
     for tpl_id, name in [("tpl-cmo", "CMO"), ("tpl-ceo", "CEO")]:
         client.post(
             "/api/operation/catalog/expert-templates",
-            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "h", "system_prompt": f"{name} system", "platform_model_ref": {**_MODEL_REF, "model_id": "g"}, "skill_ids": ["sk"], "description": "d"},
+            json={"template_id": tpl_id, "display_name": name, "category": "x", "avatar_url": "h", "system_prompt": f"{name} system", "skill_ids": ["sk"], "description": "d"},
             headers=_auth_header(),
         )
         client.post(
@@ -311,7 +311,7 @@ def _register_solution_with_orchestration(client):
         "/api/operation/catalog/expert-templates",
         json={"template_id": "tpl-cmo", "display_name": "CMO", "category": "marketing",
               "avatar_url": "https://example.com/cmo.png", "system_prompt": "marketing leader",
-              "platform_model_ref": _MODEL_REF, "skill_ids": ["seo"], "description": "CMO expert"},
+              "skill_ids": ["seo"], "description": "CMO expert"},
         headers=_auth_header(),
     )
     client.post(
@@ -378,7 +378,7 @@ def _register_expert_with_full_config(client):
             "category": "marketing",
             "avatar_url": "https://example.com/a.png",
             "system_prompt": "You are CMO",
-            "platform_model_ref": _MODEL_REF,
+            
             "platform_skill_refs": [{
                 "skill_id": "00000000-0000-0000-0000-000000000101",
                 "version": "1.0.0",
@@ -408,7 +408,7 @@ def test_pull_expert_template_includes_flat_config(client):
     assert data["template_id"] == "tpl-full"
     assert data["display_name"] == "Full Config Expert"
     assert data["system_prompt"] == "You are CMO"
-    assert data["platform_model_ref"]["model_id"] == "gpt-5"
+    assert "platform_model_ref" not in data  # 模板不带模型
     assert data["skill_ids"] == []
     assert data["platform_skill_refs"][0]["version"] == "1.0.0"
     assert data["category"] == "marketing"
@@ -416,7 +416,7 @@ def test_pull_expert_template_includes_flat_config(client):
     assert data["description"] == "营销高管"
     # backfill：persona/model + 固定平台技能引用供 Manager 招募时安装。
     assert data["persona"] == "You are CMO"
-    assert data["recommended_config"].get("model") == "gpt-5"
+    assert "model" not in data["recommended_config"]
     assert data["recommended_config"].get("skills") == ["00000000-0000-0000-0000-000000000101"]
     assert data["recommended_config"].get("platform_skill_refs")[0]["content_hash"] == "abc123"
 
@@ -432,7 +432,7 @@ def test_pull_expert_template_defaults_when_unset(client):
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["system_prompt"] == "marketing leader"
-    assert data["platform_model_ref"]["model_id"] == "gpt-5"
+    assert "platform_model_ref" not in data  # 模板不带模型
     assert data["skill_ids"] == []
     assert data["platform_skill_refs"] == []
     assert data["category"] == "marketing"
@@ -466,13 +466,13 @@ def test_list_expert_templates_include_flat_config(client):
     data = r.json()["data"]
     item = next(i for i in data if i["template_id"] == "tpl-full")
     assert item["system_prompt"] == "You are CMO"
-    assert item["platform_model_ref"]["model_id"] == "gpt-5"
+    assert "platform_model_ref" not in item
     assert item["skill_ids"] == []
     assert item["platform_skill_refs"][0]["skill_id"] == "00000000-0000-0000-0000-000000000101"
     assert item["category"] == "marketing"
     assert item["persona"] == "You are CMO"
     assert item["description"] == "营销高管"
-    assert item["recommended_config"].get("model") == "gpt-5"
+    assert "model" not in item["recommended_config"]
 # ---- Issue #285：方案包拉取透传专家绑定排序号与启用开关 ----
 
 def test_pull_solution_package_includes_binding_metadata(client):
