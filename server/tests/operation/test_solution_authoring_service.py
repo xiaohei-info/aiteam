@@ -111,8 +111,10 @@ class Runner:
         self.prompts: list[tuple[str, str]] = []
         self.before_return = lambda: None
         self.closed = False
+        self.aborts: list = []
 
-    def generate(self, chunks, *, model, budget, system_prompt, task_prompt):
+    def generate(self, chunks, *, model, budget, system_prompt, task_prompt, abort=None):
+        self.aborts.append(abort)
         self.chunks = list(chunks)
         self.prompts.append((system_prompt, task_prompt))
         if self.generate_error is not None:
@@ -125,7 +127,8 @@ class Runner:
         self.before_return()
         return GenerateOutcome(result=result, usage=AuthoringUsage(input_tokens=90, output_tokens=10, total_tokens=100, turns=3, tool_calls=3))
 
-    def recognize(self, images, *, model, budget, system_prompt, task_prompt):
+    def recognize(self, images, *, model, budget, system_prompt, task_prompt, abort=None):
+        self.aborts.append(abort)
         recognized = [
             RecognizedImage(image_id=image.image_id, status="unrecognized", reason="unreadable") if image.image_id in self.unreadable
             else RecognizedImage(image_id=image.image_id, status="recognized", blocks=[RecognizedBlock(text="图中流程：抽检", confidence=0.4)])
@@ -413,6 +416,31 @@ def test_a_job_taken_over_by_another_instance_writes_nothing(env):
     detail = env.service.get_draft(draft_id)
     assert (detail.status, detail.package) == ("generating", None)
     assert detail.latest_job is not None and detail.latest_job.status == "parsing"
+
+
+def test_losing_the_lease_sets_the_abort_event_so_the_runner_can_stop_the_child(env):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    env.executor = GenerationJobExecutor(env.repo, env.store, env.models, env.runner, owner="w1", clock=env.clock, lease_seconds=0.4)
+    seen: dict[str, bool] = {}
+
+    def generate(chunks, *, abort=None, **_):
+        env.clock.now += timedelta(seconds=600)
+        assert env.repo.claim_job("w2", 600) is not None
+        seen["aborted"] = abort is not None and abort.wait(5)
+        raise WorkerError("worker_crashed", "aborted")
+
+    env.runner.generate = generate
+    assert env.executor.run_once() is True
+    assert seen == {"aborted": True}
+    detail = env.service.get_draft(draft_id)
+    assert (detail.status, detail.package) == ("generating", None)
+
+
+def test_the_abort_event_stays_clear_while_the_lease_is_held(env):
+    env.generated()
+    assert env.runner.aborts and all(item is not None and not item.is_set() for item in env.runner.aborts)
 
 
 def test_shutdown_stops_claiming_and_closes_the_runner(env):

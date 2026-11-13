@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import textwrap
+import threading
 import time
 
 import pytest
@@ -192,6 +193,27 @@ def test_hung_worker_is_killed_at_the_host_deadline(tmp_path):
     error = _error(_runner(tmp_path, "time.sleep(60)", host_grace_seconds=0.3), AuthoringBudget(timeout_ms=200))
     assert error.code == "worker_timeout"
     assert time.monotonic() - started < 10
+
+
+def test_abort_event_kills_a_running_worker_promptly(tmp_path):
+    abort = threading.Event()
+    threading.Timer(0.3, abort.set).start()
+    runner = _runner(tmp_path, "time.sleep(60)")
+    started = time.monotonic()
+    with pytest.raises(WorkerError) as raised:
+        runner.generate(CHUNKS, model=_model(), budget=BUDGET, system_prompt="SYS", task_prompt="TASK", abort=abort)
+    assert raised.value.code == "worker_crashed"
+    assert time.monotonic() - started < 10
+
+
+def test_an_abort_that_is_already_set_does_not_start_the_worker(tmp_path):
+    abort = threading.Event()
+    abort.set()
+    runner = _runner(tmp_path, "time.sleep(60)")
+    started = time.monotonic()
+    with pytest.raises(WorkerError):
+        runner.generate(CHUNKS, model=_model(), budget=BUDGET, system_prompt="SYS", task_prompt="TASK", abort=abort)
+    assert time.monotonic() - started < 5
 
 
 def test_oversized_output_is_cut_off(tmp_path):
