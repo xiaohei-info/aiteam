@@ -25,6 +25,8 @@ from shared.errors import NotFound
 
 
 class FakeManagerGateway(ManagerGateway):
+    def set_tenant_status(self, tenant_id, status, *, reason=None, idempotency_key): pass
+    def purge_tenant(self, tenant_id, *, idempotency_key): pass
     def provision_tenant(self, req, *, idempotency_key): pass
     def sync_owner_bootstrap(self, req, *, idempotency_key): pass
     notifications: list = []

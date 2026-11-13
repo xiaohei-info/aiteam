@@ -16,6 +16,8 @@ from shared.errors import Conflict, NotFound
 
 
 class FakeManagerGateway(ManagerGateway):
+    def set_tenant_status(self, tenant_id, status, *, reason=None, idempotency_key): pass
+    def purge_tenant(self, tenant_id, *, idempotency_key): pass
     """记录调用与幂等键的内存 fake，不发真实网络。"""
 
     def __init__(self) -> None:
