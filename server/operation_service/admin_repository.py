@@ -40,10 +40,11 @@ def _normalize_operation_status(value: str) -> str:
 def _next_operation_status(current: str, action: str) -> str:
     """Apply a legacy execute_action command to the new operation_status value."""
     cur = _normalize_operation_status(current)
-    if action == "reactivate":
-        return EnterpriseOperationStatus.ACTIVE.value
+    # 删除流程中的企业任何生命周期动作都不接受（包括重新启用），只能走恢复 / 清理。
     if cur in _DELETION_STATES:
         raise InvalidTransition(f"cannot {action} an enterprise that is {cur}")
+    if action == "reactivate":
+        return EnterpriseOperationStatus.ACTIVE.value
     if action in {"suspend", "ban"}:
         if cur == EnterpriseOperationStatus.CLOSED.value:
             raise InvalidTransition(f"cannot {action} a closed enterprise")
