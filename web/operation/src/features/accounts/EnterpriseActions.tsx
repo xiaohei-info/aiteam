@@ -1,5 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { DropdownMenu, DropdownMenuItem } from "@astryxdesign/core/DropdownMenu";
+import { PlatformRole, hasRole } from "@aiteam/shared";
+import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import type { AccountsApi } from "./useAccountsApi";
 import type { EnterpriseAccount, EnterpriseActionBody } from "./types";
@@ -10,8 +12,12 @@ import { LifecycleDialogs, type LifecycleAction } from "./LifecycleDialogs";
 import { EnterpriseModelAccessDialog } from "./EnterpriseModelAccessDialog";
 import { ResetOwnerDialog } from "./ResetOwnerDialog";
 import { EnterpriseProfileDialog } from "./EnterpriseProfileDialog";
+import { DeletionDialog, type DeletionMode } from "./DeletionDialog";
 
-type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile";
+/** 保留期（天），与服务端一致。 */
+const RETENTION_DAYS = 30;
+
+type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile" | DeletionMode;
 
 interface Props {
   api: AccountsApi;
@@ -28,6 +34,13 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
   const isClosed = status === "closed";
   const isBanned = status === "banned";
   const isSuspended = status === "suspended";
+  const isDeleting = status === "deleting";
+  const isDeleted = status === "deleted";
+  const { session } = useSession();
+  const isSystemAdmin = hasRole(session, PlatformRole.SYSTEM_ADMIN);
+  const retentionEnded = Boolean(
+    enterprise.deleted_at && Date.now() - new Date(enterprise.deleted_at).getTime() > RETENTION_DAYS * 86_400_000,
+  );
 
   async function runAction(body: EnterpriseActionBody): Promise<string | null> {
     setSubmitting(true);
@@ -44,6 +57,7 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
     }
   }
 
+  const deletionActive = active === "delete" || active === "restore" || active === "purge" ? active : null;
   const lifecycleActive = active === "ban" || active === "unban" || active === "suspend" || active === "close" || active === "reactivate"
     ? active
     : null;
@@ -55,6 +69,18 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
         data-testid={`actions-toggle-${enterprise.org_id}`}
         menuWidth={220}
       >
+        {isDeleting || isDeleted ? (
+          <>
+            {isSystemAdmin && isDeleting && <DropdownMenuItem label="继续删除（上次未完成）" onClick={() => setActive("delete")} />}
+            {isSystemAdmin && isDeleted && !enterprise.purged_at && !retentionEnded && (
+              <DropdownMenuItem label="恢复企业" onClick={() => setActive("restore")} />
+            )}
+            {isSystemAdmin && isDeleted && !enterprise.purged_at && retentionEnded && (
+              <DropdownMenuItem label="清理数据" onClick={() => setActive("purge")} />
+            )}
+          </>
+        ) : (
+          <>
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.recharge")} onClick={() => setActive("recharge")} />
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.notify")} onClick={() => setActive("notify")} />
         {!isClosed && !isBanned && !isSuspended && (
@@ -75,6 +101,9 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
         <DropdownMenuItem label="编辑企业信息" onClick={() => setActive("profile")} />
         <DropdownMenuItem label="配置可用模型" onClick={() => setActive("model_access")} />
         {!isClosed && <DropdownMenuItem label="重置管理员密码" onClick={() => setActive("reset_owner")} />}
+        {isSystemAdmin && isClosed && <DropdownMenuItem label="删除企业" onClick={() => setActive("delete")} />}
+          </>
+        )}
       </DropdownMenu>
 
       {active === "recharge" && (
@@ -117,6 +146,9 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
       )}
       {active === "reset_owner" && (
         <ResetOwnerDialog api={api} enterprise={enterprise} onClose={() => { setActive(null); requestAnimationFrame(() => triggerRef.current?.focus()); }} />
+      )}
+      {deletionActive && (
+        <DeletionDialog mode={deletionActive} api={api} enterprise={enterprise} onClose={() => setActive(null)} onDone={onDone} />
       )}
       {lifecycleActive && (
         <LifecycleDialogs

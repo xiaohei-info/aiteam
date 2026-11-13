@@ -58,6 +58,8 @@ class TenantPurgeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    reason: str | None = Field(default=None, max_length=500, description="清理原因（仅供审计）")
+
 
 class OwnerBootstrapSync(BaseModel):
     """F02 负责人 bootstrap：Operator 同步负责人初始/重置凭据给 Manager tenant。
