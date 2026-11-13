@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from shared.contracts.enums import AuditResult, AuditSeverity, CatalogType
-from shared.errors import NotFound, ValidationProblem
+from shared.errors import Conflict, InvalidTransition, NotFound, ValidationProblem
 
 from .admin_repository import (
     AdminRepository,
@@ -50,6 +51,8 @@ class AdminService:
         manager_gateway: ManagerGateway | None = None,
         manager_health: ServiceHealthProbe | None = None,
         agent_health: ServiceHealthProbe | None = None,
+        relay_access=None,
+        clock=None,
     ):
         self._admin = admin_repo
         self._enterprise = enterprise_repo
@@ -59,6 +62,8 @@ class AdminService:
         self._manager = manager_gateway
         self._manager_health = manager_health
         self._agent_health = agent_health
+        self._relay = relay_access
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     # ---- internal: ensure an enterprise has admin-side state ----
 
@@ -124,6 +129,33 @@ class AdminService:
             user_agent=user_agent,
         )
 
+    # ---- internal: Manager / Relay 联动 ----
+
+    def _tenant_id(self, enterprise_id: str) -> str | None:
+        try:
+            return self._enterprise.get(enterprise_id).tenant_id
+        except NotFound:
+            return None
+
+    def _sync_manager(self, enterprise_id: str, status: str, reason: str | None = None) -> None:
+        """先让 Manager 生效；失败就抛出，本地状态保持不变，避免两端分裂。"""
+        tenant_id = self._tenant_id(enterprise_id)
+        if self._manager is None or tenant_id is None:
+            return
+        self._manager.set_tenant_status(
+            tenant_id, status, reason=reason, idempotency_key=f"tenant-status:{enterprise_id}:{status}:{uuid.uuid4().hex}",
+        )
+
+    def _fence_relay(self, enterprise_id: str) -> None:
+        """立即吊销该企业已签发的中转令牌；上游不可用只告警，签发侧围栏兜底。"""
+        tenant_id = self._tenant_id(enterprise_id)
+        if self._relay is None or tenant_id is None:
+            return
+        try:
+            self._relay.revoke_tenant_access(tenant_id)
+        except Exception:  # noqa: BLE001 - NewAPI 不可用不应阻断状态变更
+            logging.getLogger(__name__).warning("revoke relay access failed: tenant=%s", tenant_id, exc_info=True)
+
     # ---- internal: lifecycle transition wrapper ----
 
     def _transition(
@@ -139,7 +171,12 @@ class AdminService:
         user_agent: str | None = None,
     ) -> str:
         before = self._admin.get_state(enterprise_id).operation_status
-        self._admin.set_operation_status(enterprise_id, target, reason=reason, normalized=False)
+        if before != target:
+            AdminRepository._assert_valid_transition(before, target)
+            self._sync_manager(enterprise_id, target, reason)
+        self._admin.set_operation_status(enterprise_id, target, reason=reason, normalized=False, at=self._clock())
+        if before != target and target != "active":
+            self._fence_relay(enterprise_id)
         after = self._admin.get_state(enterprise_id).operation_status
         detail = f"operation_status {before} -> {after}"
         if reason:
@@ -240,6 +277,62 @@ class AdminService:
             ip_address=ip_address,
             user_agent=user_agent,
         )
+
+    # ---- R5 删除 / 恢复 / 清理 ----
+
+    RETENTION = timedelta(days=30)
+
+    def delete(self, enterprise_id: str, *, confirm_name: str, actor_id: str | None = None, actor_name: str | None = None) -> str:
+        """closed → deleting → (Manager 下线) → deleted。Manager 失败停在 deleting，可重试。"""
+        state = self._ensure_state(enterprise_id)
+        if state.operation_status not in ("closed", "deleting"):
+            raise InvalidTransition(f"only a closed enterprise can be deleted; current: {state.operation_status}")
+        if confirm_name.strip() != state.enterprise_name:
+            raise ValidationProblem("confirmation name does not match the enterprise name")
+        if state.operation_status == "closed":
+            self._admin.set_operation_status(enterprise_id, "deleting", normalized=True, at=self._clock())
+            self._record(enterprise_id, "delete_requested", "operation_status closed -> deleting",
+                         severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
+        self._fence_relay(enterprise_id)
+        self._sync_manager(enterprise_id, "deleted")
+        self._admin.set_operation_status(enterprise_id, "deleted", normalized=True, at=self._clock())
+        self._record(enterprise_id, "delete", "operation_status deleting -> deleted",
+                     severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
+        return "deleted"
+
+    def _require_deleted(self, enterprise_id: str):
+        state = self._ensure_state(enterprise_id)
+        if state.operation_status != "deleted":
+            raise InvalidTransition(f"enterprise is not deleted; current: {state.operation_status}")
+        return state
+
+    def restore(self, enterprise_id: str, *, actor_id: str | None = None, actor_name: str | None = None) -> str:
+        """保留期内把已删除企业恢复为 closed（Manager 同步后再改本地）。"""
+        state = self._require_deleted(enterprise_id)
+        if state.purged_at is not None or (state.deleted_at and self._clock() - state.deleted_at > self.RETENTION):
+            raise Conflict("the 30-day retention period has ended; the enterprise can no longer be restored")
+        self._sync_manager(enterprise_id, "closed")
+        self._admin.set_operation_status(enterprise_id, "closed", normalized=True, at=self._clock())
+        self._record(enterprise_id, "restore", "operation_status deleted -> closed",
+                     severity=AuditSeverity.WARNING.value, actor_id=actor_id, actor_name=actor_name)
+        return "closed"
+
+    def purge(self, enterprise_id: str, *, actor_id: str | None = None, actor_name: str | None = None) -> str:
+        """保留期满后：Manager 清理业务数据，Operator 匿名化展示字段（充值 / 计量 / 审计保留）。可重入。"""
+        state = self._require_deleted(enterprise_id)
+        if state.purged_at is not None:
+            return "purged"
+        now = self._clock()
+        if state.deleted_at is None or now - state.deleted_at < self.RETENTION:
+            raise Conflict("the 30-day retention period has not ended yet")
+        tenant_id = self._tenant_id(enterprise_id)
+        if self._manager is not None and tenant_id is not None:
+            self._manager.purge_tenant(tenant_id, idempotency_key=f"tenant-purge:{enterprise_id}")
+        self._enterprise.anonymize(enterprise_id)
+        self._admin.mark_purged(enterprise_id, now)
+        self._record(enterprise_id, "purge", "tenant data purged and identity anonymized",
+                     severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
+        return "purged"
 
     # ---- quota operations (issue #413) ----
 

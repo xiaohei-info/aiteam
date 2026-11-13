@@ -35,6 +35,14 @@ class ManagerGateway(Protocol):
         """F17：通知 Manager 向运营指定企业发送运营侧消息（站内信）。Manager 在租户上下文内落库。"""
         ...
 
+    def set_tenant_status(self, tenant_id: str, status: str, *, reason: str | None = None, idempotency_key: str) -> None:
+        """R5：同步企业生命周期状态（active / suspended / banned / closed / deleted）。"""
+        ...
+
+    def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
+        """R5：保留期后清理该 tenant 的全部数据（仅对 deleted 的租户生效）。"""
+        ...
+
 
 class HttpManagerGateway:
     """经 service_client 的真实 Manager 网关（生产/集成用）。"""
@@ -76,4 +84,22 @@ class HttpManagerGateway:
             service_purpose="notification:write",
             service_enterprise_id=req.org_id,
             service_tenant_id=req.tenant_id,
+        )
+
+    def set_tenant_status(self, tenant_id: str, status: str, *, reason: str | None = None, idempotency_key: str) -> None:
+        self._client.post(
+            f"/api/manager/tenants/{tenant_id}/status",
+            json={"status": status, **({"reason": reason} if reason else {})},
+            idempotency_key=idempotency_key,
+            service_purpose="tenant:lifecycle",
+            service_tenant_id=tenant_id,
+        )
+
+    def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
+        self._client.post(
+            f"/api/manager/tenants/{tenant_id}/purge",
+            json={},
+            idempotency_key=idempotency_key,
+            service_purpose="tenant:lifecycle",
+            service_tenant_id=tenant_id,
         )
