@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, newIdempotencyKey } from "@aiteam/shared";
 import { createManagerApiClient, type ApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import type { KnowledgeSpace } from "./types";
@@ -28,7 +28,7 @@ export interface KnowledgeApi {
 }
 
 function idempotencyKey(): string {
-  return globalThis.crypto.randomUUID();
+  return newIdempotencyKey();
 }
 
 export function parseKnowledgeDocumentOperation(value: unknown): KnowledgeDocumentOperation {
