@@ -61,6 +61,8 @@ export interface AccountsApi {
   /** Optional for older injected test clients; production hook always provides both. */
   getModelAccess?: (orgId: string) => Promise<EnterpriseModelAccess | null>;
   setModelAccess?: (orgId: string, allowedModelRefs: EnterpriseModelAccess["allowed_model_refs"]) => Promise<EnterpriseModelAccess | null>;
+  getProfile?: (orgId: string) => Promise<{ enterprise_id: string; industry: string | null; tags: string[] } | null>;
+  setProfile?: (orgId: string, body: { industry: string | null; tags: string[] }) => Promise<unknown>;
   listAudits: (params: {
     enterpriseId?: string;
     severity?: string;
@@ -145,6 +147,14 @@ function createApi(client: ApiClient): AccountsApi {
         `/api/operation/admin/enterprises/${orgId}/model-access`,
         { body: { allowed_model_refs: allowedModelRefs } },
       );
+    },
+    getProfile(orgId) {
+      return client.get<{ enterprise_id: string; industry: string | null; tags: string[] }>(
+        `/api/operation/enterprises/${orgId}/profile`,
+      );
+    },
+    setProfile(orgId, body) {
+      return client.put(`/api/operation/enterprises/${orgId}/profile`, { body });
     },
     async listAudits(params) {
       const sp = new URLSearchParams();
