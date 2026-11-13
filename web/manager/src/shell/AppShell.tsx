@@ -4,8 +4,8 @@
  * 渲染由 buildShellViewModel 产出的可见导航树；未登录只渲染登录入口（requiresLogin）。
  * 不做跨端聚合（08 §12.3 无中心 BFF）——导航全部指向本端路由。
  */
-import { Button } from "@astryxdesign/core/Button";
-import { Outlet, useLocation } from "react-router-dom";
+import { useState } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppShell as AstryxAppShell } from "@astryxdesign/core/AppShell";
 import {
   SideNav,
@@ -17,11 +17,18 @@ import { buildShellViewModel } from "@aiteam/shared";
 import { managerShellConfig } from "./config";
 import { useSession } from "../auth/session";
 import { useI18n } from "../i18n/context";
+import { ChangePasswordDialog } from "./ChangePasswordDialog";
+import { TopBar } from "./TopBar";
+import { useMe } from "./useMe";
 
 export function AppShell(): React.ReactNode {
   const { session, signOut } = useSession();
   const i18n = useI18n();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const me = useMe();
+  const [changingPw, setChangingPw] = useState(false);
+  const isAdmin = Boolean(me?.roles.some((role) => role === "owner" || role === "enterprise_admin"));
   const vm = buildShellViewModel(managerShellConfig, session, pathname);
 
   if (vm.requiresLogin) {
@@ -51,11 +58,12 @@ export function AppShell(): React.ReactNode {
     <AstryxAppShell
       variant="elevated"
       contentPadding={4}
+      topNav={<TopBar me={me} onSignOut={signOut} onChangePassword={() => setChangingPw(true)} onSetEnterpriseName={isAdmin ? () => navigate("/settings") : undefined} />}
       sideNav={sideNav}
       mobileNav={{ breakpoint: "md" }}
     >
-      <Button label="退出登录" variant="ghost" onClick={signOut} />
       <Outlet />
+      {changingPw && me && <ChangePasswordDialog policy={me.password_policy} onClose={() => setChangingPw(false)} />}
     </AstryxAppShell>
   );
 }
