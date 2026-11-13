@@ -35,6 +35,16 @@ def get_solution_repository() -> SolutionRepository:
     return SolutionRepository()
 
 
+def _relay_access():
+    """中转令牌吊销通道；Relay 未配置（dev/测试）时为 None，状态变更不受影响。"""
+    from .platform_provider_service import build_platform_provider_service
+
+    try:
+        return build_platform_provider_service()
+    except (RuntimeError, ValueError):
+        return None
+
+
 def get_admin_service() -> AdminService:
     return AdminService(
         admin_repo=get_admin_repository(),
@@ -45,4 +55,5 @@ def get_admin_service() -> AdminService:
         manager_gateway=get_manager_gateway(),
         manager_health=build_manager_health_probe(),
         agent_health=build_agent_health_probe(),
+        relay_access=_relay_access(),
     )

@@ -290,6 +290,11 @@ class PlatformProviderService:
             # A tenant-scoped service request must fail closed rather than
             # silently inheriting the unrestricted legacy view.
             return []
+        status_of = getattr(self._enterprise, "operation_status", None)
+        status = status_of(tenant_id) if callable(status_of) else None
+        if isinstance(status, str) and status != "active":
+            # 暂停 / 封禁 / 注销 / 删除的企业不再签发或续期中转令牌（沿用白名单收缩 → 先吊销再签发）。
+            return []
         refs = getattr(account, "allowed_model_refs", None)
         return refs if refs is None else [ref for ref in refs if isinstance(ref, dict)]
 
@@ -437,6 +442,33 @@ class PlatformProviderService:
             with policy_lock(tenant_id):
                 return resolve_under_access_lock()
         return resolve_under_access_lock()
+
+    def revoke_tenant_access(self, tenant_id: str) -> None:
+        """企业被暂停 / 封禁 / 注销 / 删除时，立即吊销其在所有 provider 上的有效中转令牌。"""
+        policy_lock = getattr(self._repo, "relay_policy_lock", None)
+        access_lock = getattr(self._repo, "relay_access_lock", None)
+
+        def revoke(provider_id: str) -> None:
+            existing = self._repo.get_access(tenant_id, provider_id)
+            if existing and existing.status == "active":
+                self._revoke_existing_access(
+                    existing, tenant_id=tenant_id, provider_id=provider_id, desired_model_ids=[],
+                    policy_revision=self._policy_revision(provider_id, []),
+                )
+
+        def under_access(provider_id: str) -> None:
+            if callable(access_lock):
+                with access_lock(tenant_id, provider_id):
+                    revoke(provider_id)
+            else:
+                revoke(provider_id)
+
+        for provider in self.list_providers():
+            if callable(policy_lock):
+                with policy_lock(tenant_id):
+                    under_access(provider.provider_id)
+            else:
+                under_access(provider.provider_id)
 
     def _resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         """Resolve a current tenant token, fencing stale grants first.

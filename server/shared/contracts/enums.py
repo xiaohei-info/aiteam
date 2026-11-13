@@ -114,7 +114,9 @@ class EnterpriseOperationStatus(str, Enum):
         active     → banned | closed
         suspended  → banned | closed
         banned     → closed
-        closed     → (terminal，不可退出)
+        closed     → deleting（仅 system_admin 删除）
+        deleting   → deleted | closed（Manager 清理未完成可重试 / 放弃）
+        deleted    → closed（30 天保留期内恢复）
 
     仅 Operator 经 lifecycle endpoint 驱动；前端按当前 status 渲染可达操作。
     持久化与 API 值均用 enum value（禁止重新声明）。
@@ -124,6 +126,8 @@ class EnterpriseOperationStatus(str, Enum):
     SUSPENDED = "suspended"
     BANNED = "banned"
     CLOSED = "closed"
+    DELETING = "deleting"
+    DELETED = "deleted"
 
 
 class AuditSeverity(str, Enum):

@@ -26,6 +26,10 @@ from shared.errors import InvalidTransition, NotFound
 _NORMAL_TO_ACTIVE = {"normal": "active", "archived": "suspended", "banned": "banned", "active": "active"}
 
 
+PURGED_NAME = "已删除企业"
+_DELETION_STATES = {EnterpriseOperationStatus.DELETING.value, EnterpriseOperationStatus.DELETED.value}
+
+
 def _normalize_operation_status(value: str) -> str:
     """Best-effort mapping of legacy status strings to the new enum values."""
     if value in {s.value for s in EnterpriseOperationStatus}:
@@ -38,6 +42,8 @@ def _next_operation_status(current: str, action: str) -> str:
     cur = _normalize_operation_status(current)
     if action == "reactivate":
         return EnterpriseOperationStatus.ACTIVE.value
+    if cur in _DELETION_STATES:
+        raise InvalidTransition(f"cannot {action} an enterprise that is {cur}")
     if action in {"suspend", "ban"}:
         if cur == EnterpriseOperationStatus.CLOSED.value:
             raise InvalidTransition(f"cannot {action} a closed enterprise")
@@ -108,6 +114,8 @@ class EnterpriseAdminState:
     banned_at: datetime | None = None
     banned_reason: str | None = None
     closed_at: datetime | None = None
+    deleted_at: datetime | None = None
+    purged_at: datetime | None = None
 
     # Backward compatibility: old call sites / tests reference `status`.
     @property
@@ -166,7 +174,7 @@ class AdminRepositoryBase(ABC):
     @abstractmethod
     def set_status(self, enterprise_id, status): ...
     @abstractmethod
-    def set_operation_status(self, enterprise_id, target, *, reason=None, normalized=False): ...
+    def set_operation_status(self, enterprise_id, target, *, reason=None, normalized=False, at=None): ...
     @abstractmethod
     def apply_action(self, enterprise_id, action): ...
     @abstractmethod
@@ -249,15 +257,16 @@ class AdminRepository(AdminRepositoryBase):
         *,
         reason: str | None = None,
         normalized: bool = False,
+        at: datetime | None = None,
     ) -> EnterpriseAdminState:
-        """Drive the lifecycle state machine (active/suspended/banned/closed)."""
+        """Drive the lifecycle state machine (active/suspended/banned/closed/deleting/deleted)."""
         s = self.get_state(enterprise_id)
         target_value = target if normalized else _normalize_operation_status(target)
         current = s.operation_status
         if current == target_value:
             return s
         self._assert_valid_transition(current, target_value)
-        now = datetime.now(timezone.utc)
+        now = at or datetime.now(timezone.utc)
         s.operation_status = target_value
         if target_value == EnterpriseOperationStatus.SUSPENDED.value:
             s.suspended_at = now
@@ -266,15 +275,25 @@ class AdminRepository(AdminRepositoryBase):
             s.banned_at = now
             s.banned_reason = reason
         elif target_value == EnterpriseOperationStatus.CLOSED.value:
-            s.closed_at = now
+            if current not in _DELETION_STATES:
+                s.closed_at = now
+            s.deleted_at = None
+        elif target_value == EnterpriseOperationStatus.DELETED.value:
+            s.deleted_at = now
+        return s
+
+    def mark_purged(self, enterprise_id: str, at: datetime) -> EnterpriseAdminState:
+        """保留期后清理完成：记录时间并匿名化展示字段（充值 / 计量 / 审计保留）。"""
+        s = self.get_state(enterprise_id)
+        s.purged_at = at
+        s.enterprise_name = PURGED_NAME
+        s.owner_phone = ""
         return s
 
     @staticmethod
     def _assert_valid_transition(current: str, target: str) -> None:
         if current == target:
             return
-        if current == EnterpriseOperationStatus.CLOSED.value:
-            raise InvalidTransition(f"closed enterprise can only stay closed; got {target}")
         allowed = {
             EnterpriseOperationStatus.ACTIVE.value: {
                 EnterpriseOperationStatus.SUSPENDED.value,
@@ -291,6 +310,13 @@ class AdminRepository(AdminRepositoryBase):
                 EnterpriseOperationStatus.SUSPENDED.value,
                 EnterpriseOperationStatus.CLOSED.value,
             },
+            # 注销后只能走删除；删除未完成可放弃回到注销；已删除只能在保留期内恢复为注销。
+            EnterpriseOperationStatus.CLOSED.value: {EnterpriseOperationStatus.DELETING.value},
+            EnterpriseOperationStatus.DELETING.value: {
+                EnterpriseOperationStatus.DELETED.value,
+                EnterpriseOperationStatus.CLOSED.value,
+            },
+            EnterpriseOperationStatus.DELETED.value: {EnterpriseOperationStatus.CLOSED.value},
         }
         if target not in allowed.get(current, set()):
             raise InvalidTransition(f"invalid transition {current} -> {target}")
@@ -385,6 +411,8 @@ class AdminRepository(AdminRepositoryBase):
         if status:
             want = _normalize_operation_status(status)
             results = [s for s in results if s.operation_status == want]
+        else:  # 已删除的企业默认隐藏，按状态筛选才可见
+            results = [s for s in results if s.operation_status != EnterpriseOperationStatus.DELETED.value]
         if keyword:
             kw = keyword.lower()
             results = [
@@ -496,33 +524,46 @@ class PgAdminRepository(AdminRepositoryBase):
                     )
             conn.commit()
 
+    _STATE_COLUMNS = (
+        "enterprise_id, enterprise_name, owner_phone, operation_status, total_recharged, created_at, "
+        "suspended_at, suspended_reason, banned_at, banned_reason, closed_at, deleted_at, purged_at"
+    )
+
+    @staticmethod
+    def _state_from_row(r):
+        from datetime import timezone
+        registered = r[5]
+        if getattr(registered, "tzinfo", None) is None:
+            registered = registered.replace(tzinfo=timezone.utc)
+        return EnterpriseAdminState(
+            enterprise_id=str(r[0]), enterprise_name=r[1], owner_phone=r[2],
+            operation_status=r[3], total_recharged=r[4], registered_at=registered,
+            suspended_at=r[6], suspended_reason=r[7], banned_at=r[8],
+            banned_reason=r[9], closed_at=r[10], deleted_at=r[11], purged_at=r[12],
+        )
+
     def _fetch_state(self, enterprise_id):
         import psycopg
-        from datetime import timezone
         with psycopg.connect(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT enterprise_id, enterprise_name, owner_phone, operation_status,
-                           total_recharged, created_at,
-                           suspended_at, suspended_reason, banned_at, banned_reason, closed_at
-                    FROM enterprise_account
-                    WHERE enterprise_id = %s::uuid
-                    """,
+                    "SELECT " + self._STATE_COLUMNS + " FROM enterprise_account WHERE enterprise_id = %s::uuid",
                     (enterprise_id,),
                 )
                 row = cur.fetchone()
                 if row is None:
                     raise NotFound(f"enterprise admin state not found: {enterprise_id}")
-        registered = row[5]
-        if getattr(registered, "tzinfo", None) is None:
-            registered = registered.replace(tzinfo=timezone.utc)
-        return EnterpriseAdminState(
-            enterprise_id=str(row[0]), enterprise_name=row[1], owner_phone=row[2],
-            operation_status=row[3], total_recharged=row[4], registered_at=registered,
-            suspended_at=row[6], suspended_reason=row[7], banned_at=row[8],
-            banned_reason=row[9], closed_at=row[10],
-        )
+        return self._state_from_row(row)
+
+    def mark_purged(self, enterprise_id, at):
+        import psycopg
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE enterprise_account SET purged_at = %s, updated_at = now() WHERE enterprise_id = %s::uuid",
+                    (at, enterprise_id),
+                )
+        return self._fetch_state(enterprise_id)
 
     def register_enterprise(self, enterprise_id, enterprise_name, owner_phone=""):
         self._upsert_account(enterprise_id, enterprise_name, owner_phone)
@@ -536,8 +577,9 @@ class PgAdminRepository(AdminRepositoryBase):
         self.set_operation_status(enterprise_id, status_value, normalized=True)
         return self._fetch_state(enterprise_id)
 
-    def set_operation_status(self, enterprise_id, target, *, reason=None, normalized=False):
+    def set_operation_status(self, enterprise_id, target, *, reason=None, normalized=False, at=None):
         import psycopg
+        at = at or datetime.now(timezone.utc)
         target_value = target if normalized else _normalize_operation_status(target)
         state = self._fetch_state(enterprise_id)
         if state.operation_status == target_value:
@@ -553,13 +595,17 @@ class PgAdminRepository(AdminRepositoryBase):
                            suspended_reason = CASE WHEN %s = 'suspended' THEN %s ELSE suspended_reason END,
                            banned_at = CASE WHEN %s = 'banned' THEN now() ELSE banned_at END,
                            banned_reason = CASE WHEN %s = 'banned' THEN %s ELSE banned_reason END,
-                           closed_at = CASE WHEN %s = 'closed' THEN now() ELSE closed_at END,
+                           closed_at = CASE WHEN %s = 'closed' AND operation_status NOT IN ('deleting','deleted')
+                                            THEN now() ELSE closed_at END,
+                           deleted_at = CASE WHEN %s = 'deleted' THEN %s
+                                             WHEN %s = 'closed' THEN NULL ELSE deleted_at END,
                            updated_at = now()
                      WHERE enterprise_id = %s::uuid
                     """,
                     (
                         target_value, target_value, target_value, reason or "",
                         target_value, target_value, reason or "", target_value,
+                        target_value, at, target_value,
                         enterprise_id,
                     ),
                 )
@@ -684,14 +730,12 @@ class PgAdminRepository(AdminRepositoryBase):
         if status:
             where.append("operation_status = %s")
             args.append(_normalize_operation_status(status))
+        else:
+            where.append("operation_status <> 'deleted'")
         if keyword:
             where.append("(lower(enterprise_name) LIKE %s OR lower(enterprise_id::text) LIKE %s)")
             args.extend([f"%{keyword.lower()}%", f"%{keyword.lower()}%"])
-        sql = (
-            "SELECT enterprise_id, enterprise_name, owner_phone, operation_status, total_recharged, "
-            "created_at, suspended_at, suspended_reason, banned_at, banned_reason, closed_at "
-            "FROM enterprise_account"
-        )
+        sql = "SELECT " + self._STATE_COLUMNS + " FROM enterprise_account"
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC"

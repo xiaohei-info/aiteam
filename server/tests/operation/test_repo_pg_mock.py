@@ -153,6 +153,7 @@ def test_usage_rollup_migration_scopes_idempotency_and_allows_unknown_cost():
 _ACC_COLS = (
     "ent-1", "Test Corp", "13800000000", "active", Decimal("0"),
     _dt(), None, None, None, None, None,
+    None, None,  # deleted_at, purged_at
 )
 
 
