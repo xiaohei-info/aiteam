@@ -38,6 +38,8 @@ from manager_service.recruit_repository import (
 )
 from manager_service.recruit_service import RecruitService
 from manager_service.repository_member import GrantRow
+from manager_service.recruit_model_guard import ModelUnavailable
+from tests.manager._recruit_model import EXPERT_MODELS, MODEL_POLICY, seed_default_model
 from manager_service.schemas import (
     ApplySolutionRequest,
     RecruitExpertRequest,
@@ -45,7 +47,7 @@ from manager_service.schemas import (
 
 
 def _model_ref(model="claude-opus-4-8", provider="provider-1") -> PlatformModelRef:
-    return PlatformModelRef(provider_id=provider, provider_version=1, model_id=model, model_version=1)
+    return PlatformModelRef(provider_id=provider, model_id=model)
 
 
 # ---- 内存伪 repository（模拟 RLS 跨租户不可见；tenant_id 只从 ctx 读，D22）----
@@ -109,6 +111,15 @@ class _FakeEmployeeRepo:
             for employee_id, template_id in sources.items()
             if (row := self._bucket(ctx).get(employee_id)) is not None and row.status != "archived"
         }
+
+    def update(self, ctx, *, employee_id, **fields):
+        import dataclasses
+        row = self._bucket(ctx).get(employee_id)
+        if row is None:
+            return None
+        row = dataclasses.replace(row, version=row.version + 1, **fields)
+        self._bucket(ctx)[employee_id] = row
+        return row
 
     def delete(self, ctx, *, employee_id):
         return self._bucket(ctx).pop(employee_id, None) is not None
@@ -378,7 +389,14 @@ def _fake_transaction(service):
     return transaction
 
 
+def _fake_catalog() -> FakeOperatorCatalogClient:
+    catalog = FakeOperatorCatalogClient()
+    seed_default_model(catalog)
+    return catalog
+
+
 def _build_service(catalog: OperatorCatalogPort):
+    seed_default_model(catalog)
     emp = _FakeEmployeeRepo()
     grant = _FakeGrantRepo()
     recruit = _FakeRecruitRepo()
@@ -421,11 +439,11 @@ def _expert_template(template_id="tpl-1", version="v1", display_name="专家A") 
 
 
 def test_failed_recruit_can_retry_same_request_without_deleting_order(monkeypatch):
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, recruit, orders = _build_service(catalog)
     ctx = _ctx("t-a")
-    req = RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert")
+    req = RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="retry-expert")
     resolve = catalog.resolve_tenant_access
 
     def unavailable(**kwargs):
@@ -457,7 +475,7 @@ def test_failed_recruit_can_retry_same_request_without_deleting_order(monkeypatc
 
 @pytest.mark.parametrize("status", ["provisioning", "succeeded"])
 def test_active_or_succeeded_order_rejects_recruit_before_provider_side_effects(status, monkeypatch):
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, _, orders = _build_service(catalog)
     ctx = _ctx("t-a")
@@ -468,25 +486,25 @@ def test_active_or_succeeded_order_rejects_recruit_before_provider_side_effects(
 
     monkeypatch.setattr(catalog, "resolve_tenant_access", unexpected)
     with pytest.raises(Conflict, match="already provisioning or succeeded"):
-        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert"))
+        svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="retry-expert"))
     assert emp._bucket(ctx) == {}
 
 
 @pytest.mark.parametrize("status", ["pending", "cancelled"])
 def test_recruit_resumes_unfinished_order(status):
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, _, _, _, orders = _build_service(catalog)
     ctx = _ctx("t-a")
     previous = orders.create(ctx, idempotency_key="recruit:tpl-1:retry-expert", status=status)
-    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-1", employee_slug="retry-expert"))
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="retry-expert"))
     assert result.order.order_id == previous.id
     assert result.order.status == "succeeded"
 
 
 
 def test_recruit_expert_auto_installs_pinned_platform_skills():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     ref = PlatformSkillRef(skill_id="platform-skill", version="1.0.0", content_hash="abc123")
     catalog.seed_expert(_expert_template().model_copy(update={"platform_skill_refs": [ref]}))
     from manager_service.platform_skill_service import PreparedPlatformSkill
@@ -501,19 +519,19 @@ def test_recruit_expert_auto_installs_pinned_platform_skills():
     svc = RecruitService(catalog=catalog, employees=emp, grants=grant, recruit=recruit, orders=orders, providers=providers, platform_skills=installer)
     svc._transaction = _fake_transaction(svc)
 
-    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1"))
+    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1"))
 
     assert emp.get(_ctx("t-a"), employee_id=result.employee_id).skills == ["platform-skill--v1"]
 
 
 def test_recruit_expert_creates_employee_instance_from_template():
     """F06 主路径：拉模板 → 建 employee 实例（persona/model 等中立字段来自模板，D16）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, recruit, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"),
     )
 
     assert result.employee_slug == "exp-a"
@@ -524,7 +542,7 @@ def test_recruit_expert_creates_employee_instance_from_template():
     assert row.display_name == "专家A"
     assert row.model == "claude-opus-4-8"
     assert row.provider_ref == "provider-1"
-    assert row.thinking_level == "high"
+    assert row.thinking_level is None  # 模板档位不再带入；由企业在请求里显式给
     assert row.platform_model_ref == _model_ref().model_dump(mode="json")
     assert row.status == "active"
     assert result.provider_match_status == "platform"
@@ -540,13 +558,13 @@ def test_recruit_expert_creates_employee_instance_from_template():
 
 def test_recruit_expert_binds_grants_when_subjects_provided():
     """F06 可选招募即绑定授权（D12）：提供 department_ids/member_ids → 落 member_grant。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, grant, _, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"),
-        RecruitExpertRequest(
+        RecruitExpertRequest(model_policy=MODEL_POLICY, 
             template_id="tpl-1", employee_slug="exp-a",
             department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER],
         ),
@@ -563,13 +581,13 @@ def test_recruit_expert_binds_grants_when_subjects_provided():
 
 def test_recruit_expert_overrides_take_precedence():
     """F06 display_name_override / persona_override 覆盖模板默认值。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, _, _ = _build_service(catalog)
 
     result = svc.recruit_expert(
         _ctx("t-a"),
-        RecruitExpertRequest(
+        RecruitExpertRequest(model_policy=MODEL_POLICY, 
             template_id="tpl-1", employee_slug="exp-a",
             display_name_override="自定义名", persona_override="自定义 persona",
         ),
@@ -581,17 +599,17 @@ def test_recruit_expert_overrides_take_precedence():
 
 def test_recruit_expert_slug_conflict_in_tenant():
     """同 tenant 同 slug 重复招募 → 409 Conflict。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, _, _, _, _ = _build_service(catalog)
 
-    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="dup"))
+    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="dup"))
     with pytest.raises(Conflict):
-        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="dup"))
+        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="dup"))
 
 
 def test_recruit_expert_rejects_model_outside_enterprise_allow_list():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     catalog.seed_platform_catalog({
         "allowed_models_by_tenant": {
@@ -600,22 +618,23 @@ def test_recruit_expert_rejects_model_outside_enterprise_allow_list():
     })
     svc, emp, _grant, _recruit, orders = _build_service(catalog)
 
-    with pytest.raises(NotFound, match="platform model not found"):
-        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="blocked"))
+    # 前置校验失败：422 model_unavailable，且零写入（不留员工，也不留招募订单）。
+    with pytest.raises(ModelUnavailable):
+        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="blocked"))
     assert emp._bucket(_ctx("t-a")) == {}
-    assert orders.list_orders(_ctx("t-a"))[0].status == "failed"
+    assert orders.list_orders(_ctx("t-a")) == []
 
 
 def test_recruit_expert_member_forbidden():
     """招募写操作需 owner/enterprise_admin；member → 403（03 §9.7）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, _, _, _, _ = _build_service(catalog)
 
     with pytest.raises(Forbidden):
         svc.recruit_expert(
             _ctx("t-a", roles=["member"]),
-            RecruitExpertRequest(template_id="tpl-1", employee_slug="x"),
+            RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="x"),
         )
 
 
@@ -641,7 +660,7 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
 
 
 def test_apply_solution_validates_grant_subjects_before_publication():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, emp, grant, recruit, _ = _build_service(catalog)
 
@@ -655,7 +674,7 @@ def test_apply_solution_validates_grant_subjects_before_publication():
     svc._members = MissingSubjects()
     with pytest.raises(NotFound, match="department not found"):
         svc.apply_solution(
-            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[MISSING_AUDIENCE_DEPARTMENT]),
+            _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", department_ids=[MISSING_AUDIENCE_DEPARTMENT]),
         )
     assert emp._bucket(_ctx("t-a")) == {}
     assert grant._bucket(_ctx("t-a")) == {}
@@ -664,12 +683,12 @@ def test_apply_solution_validates_grant_subjects_before_publication():
 
 def test_apply_solution_expands_experts_and_instance():
     """F07 主路径：拉方案包 → 建 solution_instance → 展开两个专家 employee 实例 + 知识/技能叠加。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, emp, _, recruit, _ = _build_service(catalog)
 
     result = svc.apply_solution(
-        _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"),
+        _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"),
     )
 
     inst = result.solution_instance
@@ -694,7 +713,7 @@ def test_apply_solution_expands_experts_and_instance():
 
 def test_apply_solution_reuses_existing_template_and_recruits_only_missing_experts():
     """方案应用按 source_template_id 去重：已有员工复用，缺失模板自动落地。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     package = _solution_package()
     catalog.seed_solution(package)
     for expert in package.experts:
@@ -702,9 +721,9 @@ def test_apply_solution_reuses_existing_template_and_recruits_only_missing_exper
     svc, emp, _, _, orders = _build_service(catalog)
 
     existing = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-a", employee_slug="programmer"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-a", employee_slug="programmer"),
     )
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
     assert result.solution_instance.expert_employee_ids[0] == existing.employee_id
     assert len(result.solution_instance.expert_employee_ids) == 2
@@ -717,7 +736,7 @@ def test_apply_solution_reuses_existing_template_and_recruits_only_missing_exper
 
 
 def test_apply_solution_rejects_duplicate_template_ids():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     package = _solution_package().model_copy(update={
         "coordinator_template_id": "tpl-a",
         "experts": [_solution_package().experts[0], _solution_package().experts[0]],
@@ -726,11 +745,11 @@ def test_apply_solution_rejects_duplicate_template_ids():
     svc, _, _, _, _ = _build_service(catalog)
 
     with pytest.raises(Conflict, match="duplicate expert template"):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
 
 def test_apply_solution_rolls_back_when_order_tracking_fails():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
 
     class FailingOrderRepo(_FakeOrderRepo):
@@ -746,11 +765,11 @@ def test_apply_solution_rolls_back_when_order_tracking_fails():
     )
     svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="order tracking failure"):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
 
 def test_apply_solution_rolls_back_when_expert_grant_fails():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
 
     class FailingGrantRepo(_FakeGrantRepo):
@@ -765,13 +784,13 @@ def test_apply_solution_rolls_back_when_expert_grant_fails():
     svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="expert grant failure"):
         svc.apply_solution(
-            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
+            _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
         )
     assert emp._bucket(_ctx("t-a")) == {}
 
 
 def test_apply_solution_rolls_back_when_instance_creation_fails():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
 
     class FailingRecruitRepo(_FakeRecruitRepo):
@@ -785,13 +804,13 @@ def test_apply_solution_rolls_back_when_instance_creation_fails():
     )
     svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="instance creation failure"):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     assert emp._bucket(_ctx("t-a")) == {}
     assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 
 def test_apply_solution_rolls_back_when_solution_grant_fails():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
 
     class FailingSolutionGrantRepo(_FakeGrantRepo):
@@ -805,7 +824,7 @@ def test_apply_solution_rolls_back_when_solution_grant_fails():
     svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="solution grant failure"):
         svc.apply_solution(
-            _ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
+            _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT]),
         )
     assert emp._bucket(_ctx("t-a")) == {}
     assert grant._bucket(_ctx("t-a")) == {}
@@ -813,7 +832,7 @@ def test_apply_solution_rolls_back_when_solution_grant_fails():
 
 
 def test_apply_solution_rolls_back_when_apply_record_fails():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
 
     class FailingRecordRepo(_FakeRecruitRepo):
@@ -827,13 +846,13 @@ def test_apply_solution_rolls_back_when_apply_record_fails():
     )
     svc._transaction = _fake_transaction(svc)
     with pytest.raises(RuntimeError, match="apply record failure"):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 
 def test_apply_solution_rolls_back_partial_employee_creation():
     """方案展开中途失败不留下已创建员工或授权。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     class FailingEmployeeRepo(_FakeEmployeeRepo):
         calls = 0
@@ -853,7 +872,7 @@ def test_apply_solution_rolls_back_partial_employee_creation():
     with pytest.raises(RuntimeError, match="simulated employee write failure"):
         svc.apply_solution(
             _ctx("t-a"),
-            ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
+            ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
         )
 
     assert emp._bucket(_ctx("t-a")) == {}
@@ -863,11 +882,11 @@ def test_apply_solution_rolls_back_partial_employee_creation():
 
 def test_apply_solution_ignores_legacy_package_default_grants():
     """F07：Operator 方案不再决定 tenant 成员/部门授权。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, grant, _, _ = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
     assert result.grants_applied is False
     assert grant._bucket(_ctx("t-a")) == {}
@@ -875,13 +894,13 @@ def test_apply_solution_ignores_legacy_package_default_grants():
 
 def test_apply_solution_request_grants_override_package_defaults():
     """F07：请求显式指定授权 → 覆盖方案包 default_grants。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, emp, grant, _, _ = _build_service(catalog)
 
     result = svc.apply_solution(
         _ctx("t-a"),
-        ApplySolutionRequest(solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
+        ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", department_ids=[AUDIENCE_DEPARTMENT], member_ids=[AUDIENCE_MEMBER]),
     )
     assert result.grants_applied is True
     grants = grant._bucket(_ctx("t-a"))
@@ -895,43 +914,43 @@ def test_apply_solution_request_grants_override_package_defaults():
 
 
 def test_apply_solution_rejects_coordinator_outside_roster():
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package().model_copy(update={"coordinator_template_id": "tpl-missing", "planner_template_id": ""}))
     svc, _, _, _, _ = _build_service(catalog)
     with pytest.raises(Conflict, match="coordinator"):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
 
 def test_apply_solution_conflict_when_already_applied():
     """同 tenant 同 (solution_id, version) 重复应用方案 → 409（避免重复展开）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, _, _, _ = _build_service(catalog)
 
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     with pytest.raises(Conflict):
-        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
 
 def test_apply_solution_member_forbidden():
     """应用方案写操作需 owner/enterprise_admin；member → 403。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, _, _, _ = _build_service(catalog)
 
     with pytest.raises(Forbidden):
         svc.apply_solution(
-            _ctx("t-a", roles=["member"]), ApplySolutionRequest(solution_id="sol-1"),
+            _ctx("t-a", roles=["member"]), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"),
         )
 
 
 def test_get_solution_instance_not_found_cross_tenant():
     """跨租户查方案实例：t-a 建的，t-b 视角 → 404（D22 + RLS 语义）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, _, _, _ = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     with pytest.raises(NotFound):
         svc.get_solution_instance(_ctx("t-b"), instance_id=result.solution_instance.id)
 
@@ -960,14 +979,14 @@ def test_operator_catalog_is_read_only_port():
 
 def test_recruit_does_not_mutate_pulled_template():
     """红线②：Manager 拉下来的模板不可变；落本地 employee 用副本，不改模板真相。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     template = _expert_template()
     catalog.seed_expert(template)
     svc, _, _, _, _ = _build_service(catalog)
 
     # 用模板 Persona 字段做"被改"探针：招募后模板 persona 应保持不变
     original_persona = template.persona
-    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"))
 
     # 再拉一次，确认 Operator 侧真相未被改（Fake 返回 deep copy 副本，本断言验证不变性契约）
     pulled_again = catalog.pull_expert_template(template_id="tpl-1")
@@ -978,30 +997,30 @@ def test_recruit_does_not_mutate_pulled_template():
 
 def test_cross_tenant_employee_isolation():
     """红线③：t-a 招募的专家，t-b 的 employee repository 视角看不到（D22 + RLS）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, _, _ = _build_service(catalog)
 
-    created = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+    created = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"))
     # t-b 看不到（不同 tenant 桶）
     assert emp.get(_ctx("t-b"), employee_id=created.employee_id) is None
     # t-b 同 slug 不冲突（不同 tenant）
-    created_b = svc.recruit_expert(_ctx("t-b"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+    created_b = svc.recruit_expert(_ctx("t-b"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"))
     assert created_b.employee_id != created.employee_id
 
 
 def test_cross_tenant_solution_instances_isolated():
     """红线③：t-a 应用的方案实例，t-b list/get 看不到（D22 + RLS）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, _, _, _ = _build_service(catalog)
 
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
     # t-b list 为空
     assert svc.list_solution_instances(_ctx("t-b")) == []
     # t-b 同 (solution_id, version) 不冲突（不同 tenant）
-    result_b = svc.apply_solution(_ctx("t-b"), ApplySolutionRequest(solution_id="sol-1"))
+    result_b = svc.apply_solution(_ctx("t-b"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     assert result_b.solution_instance.solution_id == "sol-1"
 
 
@@ -1015,7 +1034,7 @@ def test_cross_tenant_solution_instances_isolated():
 
 def test_fake_catalog_versioned_and_latest_lookup():
     """Fake 支持指定版本拉取与取最新；缺失模板 → 404 NotFound。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template(version="v1"))
     catalog.seed_expert(_expert_template(version="v2", display_name="v2名"))
 
@@ -1045,11 +1064,11 @@ def test_order_failure_preserves_business_error_codes():
 
 def test_recruit_expert_returns_completed_order():
     """F06 招募成功后，result.order 应携带 succeeded 状态 + created_employee_id。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, _, _, _, orders = _build_service(catalog)
 
-    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+    result = svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"))
 
     assert result.order is not None
     assert result.order.status == "succeeded"
@@ -1063,7 +1082,7 @@ def test_recruit_expert_returns_completed_order():
 
 def test_recruit_expert_failure_marks_order_failed():
     """F06 招募抛异常时，order 应 failed 并被持久化。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, emp, _, _, orders = _build_service(catalog)
 
@@ -1076,7 +1095,7 @@ def test_recruit_expert_failure_marks_order_failed():
 
     from shared.errors import NotFound
     with pytest.raises(NotFound):
-        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="boom"))
+        svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="boom"))
 
     stored = orders.list_orders(_ctx("t-a"))
     assert len(stored) == 1
@@ -1089,11 +1108,11 @@ def test_recruit_expert_failure_marks_order_failed():
 
 def test_apply_solution_expands_one_order_per_expert():
     """F07 方案展开每个专家都生成一个 succeeded order。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_solution_package())
     svc, _, _, _, orders = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     assert len(result.experts) == 2
     # 每个 expert 结果都带 order
     for r in result.experts:
@@ -1109,10 +1128,10 @@ def test_apply_solution_expands_one_order_per_expert():
 
 def test_list_and_get_recruit_orders():
     """查询接口 list/get 返回 RecruitmentOrderOut 形态（按 tenant 裁剪）。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())
     svc, _, _, _, _ = _build_service(catalog)
-    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"))
+    svc.recruit_expert(_ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"))
 
     orders_out = svc.list_recruit_orders(_ctx("t-a"))
     assert len(orders_out) == 1
@@ -1152,11 +1171,11 @@ def _ordered_solution_package() -> SolutionPackage:
 
 def test_apply_solution_honors_sequence_order_and_skips_disabled():
     """展开按 sequence_order 排序，且 enabled=False 的专家不生成 employee。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_ordered_solution_package())
     svc, emp, _, _, _ = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-ord"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-ord"))
 
     # 禁用专家被跳过 → 只展开 2 个
     assert len(result.experts) == 2
@@ -1186,7 +1205,7 @@ def test_manager_cannot_edit_solution_instance_after_apply():
 
 def test_apply_solution_persists_pi_native_coordinator_metadata():
     """F07 持久化 coordinator/instructions，不再持久化旧三段 planner prompts。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     pkg = SolutionPackage(
         solution_id="sol-prompt", version="v1", display_name="方案",
         coordinator_template_id="tpl-1",
@@ -1197,7 +1216,7 @@ def test_apply_solution_persists_pi_native_coordinator_metadata():
     catalog.seed_solution(pkg)
     svc, _, _, _, _ = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-prompt"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-prompt"))
     assert result.solution_instance.coordinator_employee_id == result.solution_instance.expert_employee_ids[0]
     assert result.solution_instance.coordinator_instructions == "先核对事实，再给出结论。"
     assert result.solution_instance.output_requirements == "给出三条可执行建议。"
@@ -1210,7 +1229,7 @@ def test_recruit_expert_generates_slug_when_missing():
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="测试销售专家", persona="销售精英", platform_model_ref=_model_ref(),
     )
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(template)
 
     svc = RecruitService(
@@ -1223,7 +1242,7 @@ def test_recruit_expert_generates_slug_when_missing():
     )
     svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-a", enterprise_id="ent-a", user_id="owner-1", roles=["owner"])
-    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-auto"))
     assert result.employee_slug, "应自动生成 slug"
     assert svc._employees.get_by_slug(ctx, employee_slug=result.employee_slug) is not None
 
@@ -1233,7 +1252,7 @@ def test_recruit_expert_same_template_conflicts():
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="销售 专家", persona=None, platform_model_ref=_model_ref(),
     )
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(template)
 
     svc = RecruitService(
@@ -1246,9 +1265,9 @@ def test_recruit_expert_same_template_conflicts():
     )
     svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-slug", enterprise_id="ent-slug", user_id="owner-1", roles=["owner"])
-    svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-auto"))
     with pytest.raises(Conflict, match="already recruited"):
-        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+        svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-auto"))
 
 
 def test_recruit_expert_explicit_slug_still_works():
@@ -1256,7 +1275,7 @@ def test_recruit_expert_explicit_slug_still_works():
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="销售专家", persona=None, platform_model_ref=_model_ref(),
     )
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(template)
 
     svc = RecruitService(
@@ -1269,7 +1288,7 @@ def test_recruit_expert_explicit_slug_still_works():
     )
     svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-exp", enterprise_id="ent-exp", user_id="owner-1", roles=["owner"])
-    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto", employee_slug="my-custom-slug"))
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-auto", employee_slug="my-custom-slug"))
     assert result.employee_slug == "my-custom-slug"
 
 
@@ -1279,7 +1298,7 @@ def test_recruit_expert_generated_slug_allowed_chars():
     template = ExpertTemplateDetail(
         template_id="tpl-auto", version="1", display_name="企业 销售-顾问 · Alpha", persona=None, platform_model_ref=_model_ref(),
     )
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(template)
 
     svc = RecruitService(
@@ -1292,7 +1311,7 @@ def test_recruit_expert_generated_slug_allowed_chars():
     )
     svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-chars", enterprise_id="ent-chars", user_id="owner-1", roles=["owner"])
-    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-auto"))
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-auto"))
     slug = result.employee_slug
     assert slug and slug == slug.lower(), "slug 全小写"
     assert all(c.isalnum() or c == "_" for c in slug), "slug 仅允许 [a-z0-9_]"
@@ -1305,7 +1324,7 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
     template = ExpertTemplateDetail(
         template_id="tpl-sales", version="1", display_name="Enterprise Sales-Pro v2", persona=None, platform_model_ref=_model_ref(),
     )
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(template)
 
     svc = RecruitService(
@@ -1318,10 +1337,10 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
     )
     svc._transaction = _fake_transaction(svc)
     ctx = TenantContext(tenant_id="t-eng", enterprise_id="ent-eng", user_id="owner-1", roles=["owner"])
-    result = svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+    result = svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-sales"))
     assert result.employee_slug == "enterprise_sales_pro_v2"
     with pytest.raises(Conflict, match="already recruited"):
-        svc.recruit_expert(ctx, RecruitExpertRequest(template_id="tpl-sales"))
+        svc.recruit_expert(ctx, RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-sales"))
 
 
 # ---- AITEAM-682：recruit/apply 时 default_model 自动匹配 provider_ref（resolver 验收）----
@@ -1330,6 +1349,7 @@ def test_recruit_expert_generated_slug_handles_ascii_template():
 def _service_with_providers(
     catalog: OperatorCatalogPort, providers: "_FakeProviderRepo"
 ):
+    seed_default_model(catalog)
     svc = RecruitService(
         catalog=catalog,
         employees=_FakeEmployeeRepo(),
@@ -1348,14 +1368,14 @@ def _service_with_providers(
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_explicit_provider_ref_exists_sets_explicit_and_writes_ref():
     """recommended.provider_ref 有值且本 tenant 存在 → explicit，employee 写入该 ref。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())  # recommended_config.provider_ref="relay-default"
     providers = _FakeProviderRepo()
     providers.seed("relay-default", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = _service_with_providers(catalog, providers)
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"),
     )
     assert result.provider_match_status == "explicit"
     assert result.provider_match_candidates == ["relay-default"]
@@ -1367,13 +1387,13 @@ def test_resolve_explicit_provider_ref_exists_sets_explicit_and_writes_ref():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_explicit_provider_ref_missing_raises_conflict_409():
     """recommended.provider_ref 有值但本 tenant 不存在 → V1 抛 409，避免落错误引用。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_expert_template())  # provider_ref="relay-default" 未 seed
     svc = _service_with_providers(catalog, _FakeProviderRepo())
 
     with pytest.raises(Conflict):
         svc.recruit_expert(
-            _ctx("t-a"), RecruitExpertRequest(template_id="tpl-1", employee_slug="exp-a"),
+            _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-1", employee_slug="exp-a"),
         )
 
 
@@ -1392,14 +1412,14 @@ def _template_with_model_only(
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_single_match_sets_matched_and_writes_ref():
     """有 model、恰好 1 个 provider 支持且 enabled → matched，employee 自动写入 provider_ref + model。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
     providers = _FakeProviderRepo()
     providers.seed("only-one", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = _service_with_providers(catalog, providers)
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-m"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-m", employee_slug="exp-m"),
     )
     assert result.provider_match_status == "matched"
     row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
@@ -1411,12 +1431,12 @@ def test_resolve_model_single_match_sets_matched_and_writes_ref():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_no_match_creates_with_provider_ref_none_status_none():
     """有 model、本 tenant 无 provider 支持 → 仍创建 employee，provider_ref=None，status=none(待配置)。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
     svc = _service_with_providers(catalog, _FakeProviderRepo())  # 未 seed 任何 provider
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-none"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-m", employee_slug="exp-none"),
     )
     assert result.provider_match_status == "none"
     assert result.provider_match_candidates == []
@@ -1428,7 +1448,7 @@ def test_resolve_model_no_match_creates_with_provider_ref_none_status_none():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
     """有 model、多个 provider 支持 → ambiguous，不随机选择，provider_ref=None，保留 candidates。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
     providers = _FakeProviderRepo()
     providers.seed("p-a", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
@@ -1436,7 +1456,7 @@ def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
     svc = _service_with_providers(catalog, providers)
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-amb"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-m", employee_slug="exp-amb"),
     )
     assert result.provider_match_status == "ambiguous"
     assert set(result.provider_match_candidates) == {"p-a", "p-b"}
@@ -1448,14 +1468,14 @@ def test_resolve_model_multiple_matches_ambiguous_no_random_pick():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_ignores_disabled_provider_model():
     """provider 声明了该 model 但 enabled=False → 不参与匹配。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
     providers = _FakeProviderRepo()
     providers.seed("off", supported_models=[{"model": "claude-opus-4-8", "enabled": False}])
     svc = _service_with_providers(catalog, providers)
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-off"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-m", employee_slug="exp-off"),
     )
     assert result.provider_match_status == "none"
     row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
@@ -1465,7 +1485,7 @@ def test_resolve_ignores_disabled_provider_model():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_no_provider_ref_and_no_model_status_none():
     """无 provider_ref 且无 model → status=none，不查 provider。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     tpl = ExpertTemplateDetail(
         template_id="tpl-x", version="v1", display_name="X", persona="p",
         recommended_config={},
@@ -1474,7 +1494,7 @@ def test_resolve_no_provider_ref_and_no_model_status_none():
     svc = _service_with_providers(catalog, _FakeProviderRepo())
 
     result = svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-x", employee_slug="exp-x"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-x", employee_slug="exp-x"),
     )
     assert result.provider_match_status == "none"
     row = svc._employees.get(_ctx("t-a"), employee_id=result.employee_id)
@@ -1488,14 +1508,14 @@ def test_resolve_no_provider_ref_and_no_model_status_none():
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_resolve_audit_detail_records_match_decision_no_secret():
     """recruit_event.detail 记录 default_model / provider_match_status / matched_provider_ref / candidates，不记 secret。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_expert(_template_with_model_only(model="claude-opus-4-8"))
     providers = _FakeProviderRepo()
     providers.seed("only-one", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = _service_with_providers(catalog, providers)
 
     svc.recruit_expert(
-        _ctx("t-a"), RecruitExpertRequest(template_id="tpl-m", employee_slug="exp-audit"),
+        _ctx("t-a"), RecruitExpertRequest(model_policy=MODEL_POLICY, template_id="tpl-m", employee_slug="exp-audit"),
     )
     events = svc._recruit.list_recruit_events(_ctx("t-a"))
     assert len(events) == 1
@@ -1532,13 +1552,13 @@ def _mixed_solution_package() -> SolutionPackage:
 @pytest.mark.skip(reason="superseded by Operator-owned D18 platform model references")
 def test_apply_solution_each_expert_owns_provider_match():
     """apply_solution 展开多个专家时，每个专家独立走同一 resolver；单匹配写 ref，无匹配保留 None。"""
-    catalog = FakeOperatorCatalogClient()
+    catalog = _fake_catalog()
     catalog.seed_solution(_mixed_solution_package())
     providers = _FakeProviderRepo()
     providers.seed("only-claude", supported_models=[{"model": "claude-opus-4-8", "enabled": True}])
     svc = _service_with_providers(catalog, providers)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-mix"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-mix"))
     assert len(result.experts) == 2
     by_template = {e.source_template_id: e for e in result.experts}
 

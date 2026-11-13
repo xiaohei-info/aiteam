@@ -1,6 +1,7 @@
 """routes_recruit 招募订单路由验收（AITEAM-243）。"""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -55,7 +56,7 @@ def test_recruit_order_invalid_transition_returns_409():
     fake = type("FakeRecruit", (), {"recruit_expert": staticmethod(recruit_expert)})()
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
         response = _client("postgresql://fake/fake").post(
-            "/api/manager/recruit/experts", headers=_hdr(), json={"template_id": "t-1"},
+            "/api/manager/recruit/experts", headers=_hdr(), json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "t-1"},
         )
     assert response.status_code == 409
     assert response.json()["code"] == "invalid_transition"
@@ -81,7 +82,7 @@ def test_list_orders_unconfigured_db_503():
 
 
 def test_list_orders_happy():
-    fake = type("FakeNS", (), {})()
+    fake = SimpleNamespace()
     fake.list_recruit_orders = lambda ctx: [_fake_order()]
     fake.get_recruit_order = lambda ctx, order_id: _fake_order(order_id)
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
@@ -94,7 +95,7 @@ def test_list_orders_happy():
 
 
 def test_get_order_happy():
-    fake = type("FakeNS", (), {})()
+    fake = SimpleNamespace()
     fake.list_recruit_orders = lambda ctx: []
     fake.get_recruit_order = lambda ctx, order_id: _fake_order(order_id)
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
