@@ -461,6 +461,8 @@ class AdminService:
                 "token_consumed": token_consumed,
                 "status": s.operation_status,
                 "operation_status": s.operation_status,
+                "deleted_at": s.deleted_at,
+                "purged_at": s.purged_at,
                 "monthly_active": token_consumed > 0,
             })
         return results, total
@@ -530,6 +532,8 @@ class AdminService:
             "banned_at": state.banned_at,
             "banned_reason": state.banned_reason,
             "closed_at": state.closed_at,
+            "deleted_at": state.deleted_at,
+            "purged_at": state.purged_at,
             "monthly_active": token_consumed > 0,
             "recharge_records": [
                 {"recharge_id": r.recharge_id, "amount": r.amount, "created_at": r.created_at}

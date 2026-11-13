@@ -38,6 +38,8 @@ def test_operation_production_startup_guards(monkeypatch):
 
 
 class FakeManagerGateway(ManagerGateway):
+    def set_tenant_status(self, tenant_id, status, *, reason=None, idempotency_key): pass
+    def purge_tenant(self, tenant_id, *, idempotency_key): pass
     def __init__(self) -> None:
         self.provisioned: list[TenantProvisionRequest] = []
         self.bootstraps: list[OwnerBootstrapSync] = []
