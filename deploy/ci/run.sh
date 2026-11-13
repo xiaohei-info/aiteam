@@ -7,15 +7,20 @@
 # 与此前"条件性 build / fallback 到默认分支"的行为不同，本脚本
 # 严格要求调用方给出明确分支；分支为空即 fail。
 #
-# TEST 简化维护窗口（失败就报错，无 fallback）：
-#   1) 先停止 systemd 管理的 Manager/Operation/Agent application writers
-#   2) 保持应用停止，拉取代码并构建前端
-#   3) 确认 PostgreSQL/NewAPI 依赖运行后备份并执行管理迁移/DDL
-#   4) 安装 systemd unit、启动新三端应用栈
-#   5) /healthz 冒烟 + GET / 必须是 HTML
+# 先构建后切换（失败就报错；只有下面写明的两个阶段会自动回滚）：
+#   1) 应用仍在运行：在旁路目录 <DEPLOY_ROOT>-stage 拉取目标提交，装依赖、构建前端、
+#      跑 Agent 登录检查、准备 Python wheels。这一步失败，线上版本不受影响。
+#   1b) 迁移全部向后兼容时，在旧版本运行期间执行迁移；带收缩型迁移
+#      （文件含 `-- deploy-compat: contract`）的发布改在第 4 步停机后执行。
+#   2) 停止 systemd 管理的 Manager/Operation/Agent application writers
+#   3) 停机窗口内只做本地、离线动作：切换代码、离线装运行时依赖、替换前端产物、同步 venv
+#   4) 确认 PostgreSQL/NewAPI 依赖运行后备份并执行管理迁移/DDL
+#   5) 安装 systemd unit、启动新三端应用栈
+#   6) /healthz 冒烟 + GET / 必须是 HTML
 #
-# 本流程是完整停机，不是零停机/cgroup cutover；可选的 S05 systemd probe
-# 只在独立 hosted workflow 验证，不能由本脚本或 deploy-main 调用。
+# 第 3 步和第 5–6 步失败会自动切回上一个版本并启动；第 4 步失败保持停机、人工对账。
+# 本流程仍有一次短暂停机（停应用到新栈健康），不是零停机/cgroup cutover；可选的
+# S05 systemd probe 只在独立 hosted workflow 验证，不能由本脚本或 deploy-main 调用。
 
 set -euo pipefail
 
@@ -283,81 +288,295 @@ start_release_dependency() {
 }
 # --- end dependency start diagnostics ---
 
-cd "$DEPLOY_ROOT"
+# --- release prepare and cutover ---
+# 先构建后切换：新版本的拉取、依赖安装、构建与检查都在旁路目录完成，此时旧版本
+# 仍在运行；全部成功后才停应用。停机窗口内只做本地、离线的动作。
+#
+#   prepare  应用运行中。任何失败都直接退出，线上版本不受影响。
+#   switch   应用已停。切换代码、离线装依赖、换前端产物、同步 venv。失败自动回滚。
+#   data     依赖启动、备份、（未在线完成时的）DDL/迁移。失败保持停机并人工对账（沿用既有约定）。
+#   start    迁移已完成。启动与冒烟失败时自动回滚，除非本次发布带有收缩型迁移。
+#   stopping 正在停应用；失败时状态未知，不自动处理。
+#   done     发布完成。
+STAGE_DIR="${DEPLOY_STAGE_DIR:-${DEPLOY_ROOT}-stage}"
+STAGE_CACHE_DIR="${STAGE_DIR}/.deploy-cache"
+WEB_TIERS=(operation manager agent)
+NODE_PACKAGES=(server/agent_service server/solution_authoring_worker)
+CONTRACT_MIGRATION_MARKER='-- deploy-compat: contract'
+DEPLOY_PHASE="prepare"
+TARGET_SHA=""
+PREVIOUS_SHA=""
+WAS_ACTIVE=0
+MIGRATED_ONLINE=0
+PIP_WHEELHOUSE=""
+PNPM_SHIM_DIR=""
 
-# TEST 发布先停止应用 writers。systemd ExecStop 可能同时停止依赖；依赖会
-# 在代码同步/备份前由下方受控的 docker start 显式恢复。失败保持停机，避免
-# 在旧代码仍写库时 checkout 或备份。
-if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
-  log "stopping application writers (unit=${UNIT_NAME}) before code sync"
-  systemctl stop "$UNIT_NAME" 2>&1 || fail "failed to stop application writers; release remains stopped"
-else
-  log "application writers already stopped (unit=${UNIT_NAME})"
-fi
-
-if [[ ! -d ".git" ]]; then
-  fail "${DEPLOY_ROOT} is not a git repository — bootstrap it first (see deploy/ci/README.md)"
-fi
-if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$DEPLOY_ROOT"; then
-  git config --global --add safe.directory "$DEPLOY_ROOT" || fail "cannot mark ${DEPLOY_ROOT} as a safe git directory"
-fi
-
-# 1) 同步目标分支最新代码
-log "fetch + checkout + pull '${BRANCH}'"
-git fetch --all --prune 2>&1 || fail "git fetch failed (network?)"
-if ! git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
-  fail "branch '${BRANCH}' does not exist on origin"
-fi
-# Reset the local deployment branch to the fetched remote tip before pull. This
-# also makes a first deploy of a newly requested branch work without a
-# pre-created local branch; ignored env/dist files are preserved.
-git checkout -B "$BRANCH" "origin/$BRANCH" 2>&1 | tail -1 || fail "checkout '${BRANCH}' failed"
-git pull --ff-only origin "$BRANCH" 2>&1 || fail "git pull --ff-only '${BRANCH}' failed (diverged)"
-log "code ready @ $(git rev-parse --short HEAD)"
-
-# 2) 前端产物无条件每次 CI 都重新 build（部署根下需已装 node >=22 + pnpm >=11）。
-#    条件性 build 容易因为残留旧的 dist/导致前后端不一致；每次重建代价
-#    可控（pnpm install --frozen-lockfile ~10s, pnpm build --parallel ~3s）。
-log "building web frontend"
-if ! command -v pnpm >/dev/null 2>&1 || ! command -v corepack >/dev/null 2>&1; then
-  fail "pnpm and corepack are required — install Node.js >=22 first (see deploy/ci/README.md)"
-fi
 # The host may have a newer global pnpm than the repository pin.  Direct
 # recursive scripts invoke `pnpm` again, so merely wrapping the top-level
 # command with corepack is not enough; put the pinned Corepack binary first on
 # PATH for both the build command and its child scripts.
-PNPM_VERSION="$(node -p "require('./web/package.json').packageManager.replace(/^pnpm@/, '')" 2>/dev/null || true)"
-[[ "${PNPM_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "web/package.json has no pinned pnpm version"
-corepack "pnpm@${PNPM_VERSION}" --version >/dev/null 2>&1 || fail "pnpm ${PNPM_VERSION} is unavailable"
-PNPM_MJS="$(find "${COREPACK_HOME:-${HOME}/.cache/node/corepack}" -path "*/pnpm/${PNPM_VERSION}/bin/pnpm.mjs" -print -quit 2>/dev/null || true)"
-[[ -f "${PNPM_MJS}" ]] || fail "Corepack pnpm ${PNPM_VERSION} binary was not cached"
-PNPM_SHIM_DIR="$(mktemp -d)"
-ln -s "${PNPM_MJS}" "${PNPM_SHIM_DIR}/pnpm"
-export PATH="${PNPM_SHIM_DIR}:${PATH}"
-hash -r 2>/dev/null || true
-[[ "$(pnpm --version)" == "${PNPM_VERSION}" ]] || fail "pnpm version mismatch after Corepack setup"
-# Agent is an independent package, outside web/pnpm-workspace.yaml. Sync its
-# lockfile before startup as well, while the pinned pnpm shim is still active.
-(cd server/agent_service && pnpm install --frozen-lockfile 2>&1 || fail "Agent pnpm install failed: check network / registry")
-# Verify the secure login seam against a local synthetic Manager before starting services.
-(cd server/agent_service && pnpm check && pnpm exec tsx --test --test-concurrency=1 src/http/auth.test.ts src/http/manager-jwks.test.ts) || fail "Agent authentication checks failed"
-# The solution-authoring worker is another independent package (own lockfile). Operation
-# spawns it from source per generation job and refuses to start it without node_modules/tsx,
-# so sync its lockfile here too; otherwise "generate" fails with worker_unavailable.
-(cd server/solution_authoring_worker && pnpm install --frozen-lockfile 2>&1 || fail "Solution authoring worker pnpm install failed: check network / registry")
-(cd web && pnpm install --frozen-lockfile 2>&1 || fail "pnpm install failed: check network / registry")
-(cd web && pnpm build 2>&1 || fail "pnpm build failed: see build errors above")
-rm -rf "${PNPM_SHIM_DIR}"
+setup_pinned_pnpm() {
+  local tree="$1" pnpm_version pnpm_mjs
+  if ! command -v pnpm >/dev/null 2>&1 || ! command -v corepack >/dev/null 2>&1; then
+    fail "pnpm and corepack are required — install Node.js >=22 first (see deploy/ci/README.md)"
+  fi
+  pnpm_version="$(AITEAM_WEB_PACKAGE_JSON="${tree}/web/package.json" node -p "require(process.env.AITEAM_WEB_PACKAGE_JSON).packageManager.replace(/^pnpm@/, '')" 2>/dev/null || true)"
+  [[ "${pnpm_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "web/package.json has no pinned pnpm version"
+  corepack "pnpm@${pnpm_version}" --version >/dev/null 2>&1 || fail "pnpm ${pnpm_version} is unavailable"
+  pnpm_mjs="$(find "${COREPACK_HOME:-${HOME}/.cache/node/corepack}" -path "*/pnpm/${pnpm_version}/bin/pnpm.mjs" -print -quit 2>/dev/null || true)"
+  [[ -f "${pnpm_mjs}" ]] || fail "Corepack pnpm ${pnpm_version} binary was not cached"
+  PNPM_SHIM_DIR="$(mktemp -d)"
+  ln -s "${pnpm_mjs}" "${PNPM_SHIM_DIR}/pnpm"
+  export PATH="${PNPM_SHIM_DIR}:${PATH}"
+  hash -r 2>/dev/null || true
+  [[ "$(pnpm --version)" == "${pnpm_version}" ]] || fail "pnpm version mismatch after Corepack setup"
+}
 
-# Hash-gated install of the checked-out pin file. Never use system Python, and
-# never source TEST secrets into pip / install hooks.
-if [[ ! -x "${DEPLOY_ROOT}/.venv/bin/python" ]]; then
-  fail "persistent .venv/bin/python is required; bootstrap it per deploy/ci/README.md"
-fi
-VENV_PYTHON="${DEPLOY_ROOT}/.venv/bin/python"
-sync_persistent_venv_requirements "${VENV_PYTHON}"
+# The stage is a detached git worktree of the deployment checkout: it shares the
+# object store, keeps its own node_modules between deploys, and is never served.
+prepare_stage_checkout() {
+  local sha="$1" stage_common live_common
+  if [[ -e "${STAGE_DIR}" ]]; then
+    stage_common="$(cd "${STAGE_DIR}" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P || true)"
+    live_common="$(cd "${DEPLOY_ROOT}" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+    if [[ -z "${stage_common}" || "${stage_common}" != "${live_common}" ]]; then
+      fail "stage directory ${STAGE_DIR} is not a worktree of ${DEPLOY_ROOT}; remove it manually and redeploy"
+    fi
+    git -C "${STAGE_DIR}" checkout --force --detach "${sha}" 2>&1 | tail -1 \
+      || fail "cannot refresh stage worktree at ${sha:0:8}"
+  else
+    git -C "${DEPLOY_ROOT}" worktree prune 2>&1 || true
+    git -C "${DEPLOY_ROOT}" worktree add --force --detach "${STAGE_DIR}" "${sha}" 2>&1 | tail -1 \
+      || fail "cannot create stage worktree ${STAGE_DIR}"
+  fi
+  [[ "$(git -C "${STAGE_DIR}" rev-parse HEAD)" == "${sha}" ]] || fail "stage worktree is not at ${sha:0:8}"
+}
 
-# 3) NewAPI 数据在服务重启/升级前先做可恢复备份（首次部署无容器时跳过）。
+# Build wheels for the target requirements while the old release still runs, so
+# the venv sync inside the stop window needs no network. Skipped when unchanged.
+prepare_python_wheelhouse() {
+  local venv_python="${DEPLOY_ROOT}/.venv/bin/python"
+  local req_file="${STAGE_DIR}/server/requirements.txt"
+  local marker="${DEPLOY_ROOT}/.venv/.aiteam-requirements.sha256"
+  local wheelhouse="${STAGE_CACHE_DIR}/wheelhouse"
+  local req_hash current=""
+
+  PIP_WHEELHOUSE=""
+  [[ -x "${venv_python}" ]] || fail "persistent .venv/bin/python is required; bootstrap it per deploy/ci/README.md"
+  [[ -f "${req_file}" ]] || fail "server/requirements.txt missing in stage worktree"
+  req_hash="$(AITEAM_REQUIREMENTS_FILE="${req_file}" "${venv_python}" -c "import hashlib, os, pathlib; print(hashlib.sha256(pathlib.Path(os.environ['AITEAM_REQUIREMENTS_FILE']).read_bytes()).hexdigest())")" \
+    || fail "cannot hash staged server/requirements.txt"
+  if [[ -f "${marker}" ]]; then
+    current="$(tr -d '[:space:]' < "${marker}")"
+  fi
+  if [[ "${current}" == "${req_hash}" ]]; then
+    log "python requirements unchanged; no wheels to prepare"
+    return 0
+  fi
+  log "preparing python wheels for changed requirements ${req_hash:0:12}"
+  rm -rf "${wheelhouse}"
+  mkdir -p "${wheelhouse}"
+  "${venv_python}" -m pip wheel --requirement "${req_file}" --wheel-dir "${wheelhouse}" \
+    || fail "pip wheel for server/requirements.txt failed; running release untouched"
+  PIP_WHEELHOUSE="${wheelhouse}"
+}
+
+# Everything that needs the network or can fail on its own merits happens here,
+# before the running release is touched.
+prepare_release() {
+  local pkg tier
+  log "fetch '${BRANCH}' (running release untouched)"
+  git fetch --all --prune 2>&1 || fail "git fetch failed (network?); running release untouched"
+  if ! git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
+    fail "branch '${BRANCH}' does not exist on origin"
+  fi
+  TARGET_SHA="$(git rev-parse --verify "refs/remotes/origin/${BRANCH}^{commit}")" || fail "cannot resolve origin/${BRANCH}"
+  PREVIOUS_SHA="$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+  log "preparing ${TARGET_SHA:0:8} in ${STAGE_DIR} (running ${PREVIOUS_SHA:0:8})"
+  prepare_stage_checkout "${TARGET_SHA}"
+  setup_pinned_pnpm "${STAGE_DIR}"
+
+  # Agent and the solution-authoring worker are independent packages (own lockfiles,
+  # outside web/pnpm-workspace.yaml) and run from source. Installing them here fills
+  # the shared pnpm store, so the live tree can be installed offline after the stop.
+  for pkg in "${NODE_PACKAGES[@]}"; do
+    (cd "${STAGE_DIR}/${pkg}" && pnpm install --frozen-lockfile 2>&1) \
+      || fail "${pkg} pnpm install failed: check network / registry; running release untouched"
+  done
+  # Verify the secure login seam against a local synthetic Manager before any cutover.
+  (cd "${STAGE_DIR}/server/agent_service" && pnpm check && pnpm exec tsx --test --test-concurrency=1 src/http/auth.test.ts src/http/manager-jwks.test.ts) \
+    || fail "Agent authentication checks failed; running release untouched"
+
+  # 前端产物每次部署都在旁路目录重新 build，切换时整体替换，避免前后端不一致。
+  log "building web frontend in stage"
+  (cd "${STAGE_DIR}/web" && pnpm install --frozen-lockfile 2>&1) \
+    || fail "web pnpm install failed: check network / registry; running release untouched"
+  (cd "${STAGE_DIR}/web" && pnpm build 2>&1) \
+    || fail "pnpm build failed: see build errors above; running release untouched"
+  for tier in "${WEB_TIERS[@]}"; do
+    [[ -f "${STAGE_DIR}/web/${tier}/dist/index.html" ]] \
+      || fail "staged web/${tier}/dist/index.html missing after build; running release untouched"
+  done
+
+  prepare_python_wheelhouse
+  log "release ${TARGET_SHA:0:8} prepared"
+}
+
+install_live_node_package() {
+  local pkg="$1"
+  if (cd "${DEPLOY_ROOT}/${pkg}" && pnpm install --frozen-lockfile --offline 2>&1); then
+    return 0
+  fi
+  log "${pkg} offline install failed; retrying with the registry"
+  (cd "${DEPLOY_ROOT}/${pkg}" && pnpm install --frozen-lockfile 2>&1) \
+    || fail "${pkg} pnpm install failed: check network / registry"
+}
+
+# Replace each served dist with the staged build. The replaced dist is kept in
+# the stage cache so a rollback can put it back.
+publish_web_dist() {
+  local tier src dst keep
+  for tier in "${WEB_TIERS[@]}"; do
+    src="${STAGE_DIR}/web/${tier}/dist"
+    dst="${DEPLOY_ROOT}/web/${tier}/dist"
+    keep="${STAGE_CACHE_DIR}/previous-dist/${tier}"
+    rm -rf "${dst}.incoming"
+    cp -R "${src}" "${dst}.incoming" || fail "cannot copy staged web/${tier}/dist"
+    rm -rf "${keep}"
+    mkdir -p "$(dirname "${keep}")"
+    if [[ -d "${dst}" ]]; then
+      mv "${dst}" "${keep}" || fail "cannot set aside current web/${tier}/dist"
+    fi
+    mv "${dst}.incoming" "${dst}" || fail "cannot publish web/${tier}/dist"
+  done
+}
+
+# Runs inside the stop window: local and offline only.
+activate_release() {
+  local pkg
+  # Anything kept from an earlier deploy is stale; a rollback must only restore
+  # what this deploy replaces.
+  rm -rf "${STAGE_CACHE_DIR}/previous-dist"
+  log "checkout '${BRANCH}' @ ${TARGET_SHA:0:8}"
+  # Reset the local deployment branch to the fetched remote tip. This also makes
+  # a first deploy of a newly requested branch work without a pre-created local
+  # branch; ignored env/dist files are preserved. No second fetch: the stop
+  # window must not depend on the network.
+  git checkout -B "$BRANCH" "origin/$BRANCH" 2>&1 | tail -1 || fail "checkout '${BRANCH}' failed"
+  [[ "$(git rev-parse HEAD)" == "${TARGET_SHA}" ]] \
+    || fail "origin/${BRANCH} moved after prepare; expected ${TARGET_SHA:0:8}"
+  log "code ready @ $(git rev-parse --short HEAD)"
+  for pkg in "${NODE_PACKAGES[@]}"; do
+    install_live_node_package "${pkg}"
+  done
+  publish_web_dist
+}
+
+# Venv sync inside the stop window. Uses the prepared wheels (no network); falls
+# back to the index only if the offline install fails.
+sync_venv_for_release() {
+  local venv_python="$1"
+  if [[ -n "${PIP_WHEELHOUSE}" ]]; then
+    if (export PIP_NO_INDEX=1 PIP_FIND_LINKS="${PIP_WHEELHOUSE}"; sync_persistent_venv_requirements "${venv_python}"); then
+      return 0
+    fi
+    log "offline venv sync failed; retrying with the index"
+  fi
+  sync_persistent_venv_requirements "${venv_python}"
+}
+
+smoke_healthz() {
+  local port ok attempt
+  sleep "${DEPLOY_HEALTHZ_WARMUP_SECONDS:-5}"
+  for port in 8781 8782 8783; do
+    ok=0
+    # shellcheck disable=SC2034  # attempt 只用来计数
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+        log "  port ${port} /healthz OK"; ok=1; break
+      fi
+      sleep "${DEPLOY_HEALTHZ_RETRY_SECONDS:-2}"
+    done
+    (( ok )) || { log "port ${port} /healthz failed after 10 attempts"; return 1; }
+  done
+}
+
+# A contract migration removes or narrows something the previous release still
+# uses, so the previous release must not be started against the migrated schema.
+release_has_contract_migration() {
+  local files file
+  files="$(git diff --name-only --diff-filter=AM "${PREVIOUS_SHA}" "${TARGET_SHA}" -- 'server/*/migrations/*.sql' 2>/dev/null)" || return 0
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    if git show "${TARGET_SHA}:${file}" 2>/dev/null | grep -Fq -- "${CONTRACT_MIGRATION_MARKER}"; then
+      return 0
+    fi
+  done <<<"${files}"
+  return 1
+}
+
+rollback_allowed() {
+  (( WAS_ACTIVE == 1 )) || { log "no rollback: the application was not running before this deploy"; return 1; }
+  [[ -n "${PREVIOUS_SHA}" && -n "${TARGET_SHA}" && "${PREVIOUS_SHA}" != "${TARGET_SHA}" ]] \
+    || { log "no rollback: there is no different previous release"; return 1; }
+  if [[ "${DEPLOY_PHASE}" == "start" ]] && release_has_contract_migration; then
+    log "no rollback: this release applied a contract migration (${CONTRACT_MIGRATION_MARKER})"
+    return 1
+  fi
+  return 0
+}
+
+# Put the previous release back and start it. Local and offline only; the venv
+# and the database are left as they are (migrations must be backward compatible).
+rollback_release() {
+  local pkg tier dst keep
+  log "ROLLBACK to previous release ${PREVIOUS_SHA:0:8}"
+  cd "${DEPLOY_ROOT}" || return 1
+  git checkout -B "$BRANCH" "${PREVIOUS_SHA}" 2>&1 | tail -1 || return 1
+  for pkg in "${NODE_PACKAGES[@]}"; do
+    [[ -d "${DEPLOY_ROOT}/${pkg}" ]] || continue
+    (cd "${DEPLOY_ROOT}/${pkg}" && pnpm install --frozen-lockfile --offline 2>&1) || return 1
+  done
+  for tier in "${WEB_TIERS[@]}"; do
+    dst="${DEPLOY_ROOT}/web/${tier}/dist"
+    keep="${STAGE_CACHE_DIR}/previous-dist/${tier}"
+    [[ -d "${keep}" ]] || continue
+    rm -rf "${dst}.incoming" "${dst}"
+    mv "${keep}" "${dst}" || return 1
+  done
+  systemctl restart "${UNIT_NAME}" 2>&1 || return 1
+  smoke_healthz || return 1
+  log "ROLLBACK complete: previous release ${PREVIOUS_SHA:0:8} is running; this deploy still failed"
+}
+
+on_deploy_exit() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if (( rc != 0 )); then
+    case "${DEPLOY_PHASE}" in
+      prepare)
+        log "deploy aborted before cutover; the running release was not touched" ;;
+      stopping)
+        log "stopping the application failed; its state is unknown — check systemctl status" ;;
+      switch|start)
+        if rollback_allowed; then
+          rollback_release || log "ROLLBACK FAILED; application remains stopped — recover manually"
+        else
+          log "application remains stopped — recover manually"
+        fi ;;
+      data)
+        log "dependency/backup/DDL step failed; application remains stopped — reconcile manually, no automatic rollback" ;;
+    esac
+  fi
+  [[ -z "${UNIT_RENDERED:-}" ]] || rm -f -- "${UNIT_RENDERED}"
+  [[ -z "${migration_env_file:-}" ]] || rm -f -- "${migration_env_file}"
+  [[ -z "${PNPM_SHIM_DIR:-}" ]] || rm -rf -- "${PNPM_SHIM_DIR}"
+  exit "${rc}"
+}
+# Load the selected environment file. Call only after every pnpm/pip step that
+# must not see TEST secrets, or inside a subshell.
+load_release_env() {
 ENV_FILE="${DEPLOY_ROOT}/.env.${ENV_TARGET}"
 [[ -f "${ENV_FILE}" ]] || fail "environment file missing: ${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
@@ -385,6 +604,7 @@ for database_name in "${MANAGER_DB_NAME}" "${OPERATION_DB_NAME}"; do
   [[ "${database_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "invalid control-plane database name: ${database_name}"
 done
 [[ "${MANAGER_DB_NAME}" != "${OPERATION_DB_NAME}" ]] || fail "Manager and Operation database names must be distinct"
+}
 
 ensure_operation_database() {
   local password="${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}"
@@ -404,9 +624,168 @@ ensure_operation_database() {
   printf '%s\n' "${password}" | docker exec -i aiteam-pg sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; createdb --username="$1" "$2"' sh "${username}" "${OPERATION_DB_NAME}"
 }
 
+# 应用迁移/DDL：只用管理 DSN 执行 Manager/Operation migration，绝不让 app_rw 承担 DDL。
+# $1 = 提供迁移脚本的 server 根目录；$2 = 失败时的现场说明。
+apply_control_plane_migrations() {
+  local server_root="$1" on_failure="$2"
+if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
+  [[ "${POSTGRES_USER:-}" == "app_rw" ]] || fail "POSTGRES_USER must be app_rw for production control-plane business access"
+  [[ -n "${POSTGRES_SUPER_USER:-}" && "${POSTGRES_SUPER_USER}" != "app_rw" ]] && ! is_placeholder_secret "${POSTGRES_SUPER_USER}" || fail "POSTGRES_SUPER_USER must be a distinct production migration role"
+fi
+APP_RW_PASSWORD_FOR_MIGRATION="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
+  [[ ${#APP_RW_PASSWORD_FOR_MIGRATION} -ge 24 ]] && ! is_placeholder_secret "${APP_RW_PASSWORD_FOR_MIGRATION}" || fail "APP_RW_PASSWORD must be a non-placeholder secret of at least 24 characters"
+else
+  [[ -n "${APP_RW_PASSWORD_FOR_MIGRATION}" ]] || fail "APP_RW_PASSWORD is required for control-plane migrations"
+fi
+DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}"
+ADMIN_DB_URL_FOR_MIGRATION="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}}"
+OPERATION_DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}"
+OPERATION_ADMIN_DB_URL_FOR_MIGRATION="${OPERATION_ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}}"
+migration_env_file="$(mktemp "${DEPLOY_ROOT}/.aiteam-migration-env.XXXXXX")" || fail "cannot create protected migration environment file"
+chmod 600 "${migration_env_file}"
+{
+  printf 'DB_URL=%s\n' "${DB_URL_FOR_MIGRATION}"
+  printf 'ADMIN_DB_URL=%s\n' "${ADMIN_DB_URL_FOR_MIGRATION}"
+  printf 'OPERATION_DB_URL=%s\n' "${OPERATION_DB_URL_FOR_MIGRATION}"
+  printf 'OPERATION_ADMIN_DB_URL=%s\n' "${OPERATION_ADMIN_DB_URL_FOR_MIGRATION}"
+  printf 'APP_RW_PASSWORD=%s\n' "${APP_RW_PASSWORD_FOR_MIGRATION}"
+} >"${migration_env_file}"
+if ! env -i \
+  PATH="${PATH}" \
+  PYTHONPATH="${server_root}" \
+  AITEAM_MIGRATION_ENV_FILE="${migration_env_file}" \
+  PGOPTIONS="${MIGRATION_PGOPTIONS:-}" \
+  "${DEPLOY_ROOT}/.venv/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+for line in Path(os.environ["AITEAM_MIGRATION_ENV_FILE"]).read_text(encoding="utf-8").splitlines():
+    key, value = line.split("=", 1)
+    os.environ[key] = value
+
+from shared.db import apply_migrations as apply_manager_migrations
+from operation_service.repository import apply_migrations as apply_operation_migrations
+
+manager_admin_url = os.environ["ADMIN_DB_URL"]
+operation_admin_url = os.environ["OPERATION_ADMIN_DB_URL"]
+password = os.environ.get("APP_RW_PASSWORD")
+apply_manager_migrations(manager_admin_url, password)
+apply_operation_migrations(operation_admin_url, password)
+PY
+then
+  rm -f -- "${migration_env_file}"
+  fail "Manager/Operation DDL or migration failed; ${on_failure}"
+fi
+rm -f -- "${migration_env_file}"
+migration_env_file=""
+}
+
+# Layer 2: a release whose migrations are all backward compatible (expand-only) is
+# migrated while the previous release keeps serving; only a release that carries a
+# contract migration, or cannot be migrated with the current venv, is migrated
+# inside the stop window.
+online_migration_eligible() {
+  if [[ "${DEPLOY_ONLINE_MIGRATIONS:-1}" != "1" ]]; then
+    log "online migrations disabled (DEPLOY_ONLINE_MIGRATIONS); migrating during the cutover"
+    return 1
+  fi
+  if (( WAS_ACTIVE != 1 )); then
+    log "application is not running; migrating during the cutover"
+    return 1
+  fi
+  if [[ -z "${PREVIOUS_SHA}" || "${PREVIOUS_SHA}" == "${TARGET_SHA}" ]]; then
+    log "no different previous release; migrating during the cutover"
+    return 1
+  fi
+  if release_has_contract_migration; then
+    log "release carries a contract migration (${CONTRACT_MIGRATION_MARKER}); migrating while the application is stopped"
+    return 1
+  fi
+  if ! env -i PATH="${PATH}" PYTHONPATH="${STAGE_DIR}/server" "${DEPLOY_ROOT}/.venv/bin/python" \
+      -c 'import shared.db, operation_service.repository' >/dev/null 2>&1; then
+    log "staged migration code does not import with the current venv; migrating during the cutover"
+    return 1
+  fi
+  return 0
+}
+
+# Runs in a subshell so the environment file never reaches later install steps.
+# lock_timeout keeps a blocked DDL from queueing live queries behind it.
+migrate_online() {
+  local rc=0
+  log "applying backward-compatible migrations while the previous release keeps running"
+  set +e
+  (
+    set -e
+    load_release_env
+    ensure_operation_database || fail "Operation database bootstrap failed"
+    MIGRATION_PGOPTIONS="-c lock_timeout=${DEPLOY_MIGRATION_LOCK_TIMEOUT_MS:-5000}"
+    apply_control_plane_migrations "${STAGE_DIR}/server" "previous release keeps running on a backward-compatible schema"
+  )
+  rc=$?
+  set -e
+  (( rc == 0 )) || fail "online migration failed before cutover; running release untouched"
+  MIGRATED_ONLINE=1
+  log "Manager/Operation migrations complete while the previous release keeps running"
+}
+
+# --- end release prepare and cutover ---
+
+cd "$DEPLOY_ROOT"
+
+if [[ ! -d ".git" ]]; then
+  fail "${DEPLOY_ROOT} is not a git repository — bootstrap it first (see deploy/ci/README.md)"
+fi
+if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fxq "$DEPLOY_ROOT"; then
+  git config --global --add safe.directory "$DEPLOY_ROOT" || fail "cannot mark ${DEPLOY_ROOT} as a safe git directory"
+fi
+trap on_deploy_exit EXIT
+
+# 1) 应用仍在运行：在旁路目录准备新版本（拉取、装依赖、构建、检查、Python wheels）。
+#    这一步失败直接退出，线上版本不受影响。
+prepare_release
+
+# 1b) 向后兼容的迁移在旧版本运行期间执行；带收缩型迁移的发布留到停机窗口内执行。
+if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+  WAS_ACTIVE=1
+fi
+if online_migration_eligible; then
+  migrate_online
+fi
+
+# 2) 停止应用 writers。systemd ExecStop 可能同时停止依赖；依赖会在备份/DDL 前由
+#    下方受控的 docker start 显式恢复，避免在旧代码仍写库时切换代码或备份。
+if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+  WAS_ACTIVE=1
+  DEPLOY_PHASE="stopping"
+  log "stopping application writers (unit=${UNIT_NAME}) before cutover"
+  systemctl stop "$UNIT_NAME" 2>&1 || fail "failed to stop application writers; release remains stopped"
+else
+  log "application writers already stopped (unit=${UNIT_NAME})"
+fi
+DEPLOY_PHASE="switch"
+
+# 3) 停机窗口：切换代码、离线装运行时依赖、替换前端产物。
+activate_release
+
+# Hash-gated install of the checked-out pin file. Never use system Python, and
+# never source TEST secrets into pip / install hooks.
+if [[ ! -x "${DEPLOY_ROOT}/.venv/bin/python" ]]; then
+  fail "persistent .venv/bin/python is required; bootstrap it per deploy/ci/README.md"
+fi
+VENV_PYTHON="${DEPLOY_ROOT}/.venv/bin/python"
+sync_venv_for_release "${VENV_PYTHON}"
+
+# 3) NewAPI 数据在服务重启/升级前先做可恢复备份（首次部署无容器时跳过）。
+load_release_env
+
+
+
 # systemd's simple stop also stops the local dependency containers.  Bring the
 # migration/backup dependencies back while application writers remain stopped;
 # never run backup or DDL against a stopped/unknown database.
+DEPLOY_PHASE="data"
 log "starting PostgreSQL/NewAPI dependencies while applications remain stopped"
 start_release_dependency postgres PostgreSQL
 ensure_operation_database || fail "Operation database bootstrap failed"
@@ -467,61 +846,20 @@ else
   log "NewAPI database container not present yet; skipping pre-restart backup"
 fi
 
-# 4) 应用迁移/DDL。此时应用 writers 仍停止、PostgreSQL 已由上面显式启动；
-#    只用管理 DSN 执行 Manager/Operation migration，绝不让 app_rw 承担 DDL。
-if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
-  [[ "${POSTGRES_USER:-}" == "app_rw" ]] || fail "POSTGRES_USER must be app_rw for production control-plane business access"
-  [[ -n "${POSTGRES_SUPER_USER:-}" && "${POSTGRES_SUPER_USER}" != "app_rw" ]] && ! is_placeholder_secret "${POSTGRES_SUPER_USER}" || fail "POSTGRES_SUPER_USER must be a distinct production migration role"
-fi
-APP_RW_PASSWORD_FOR_MIGRATION="${APP_RW_PASSWORD:-${POSTGRES_PASSWORD:-}}"
-if [[ "${ENV_TARGET}" == "prod" || "${AITEAM_ENV}" == "production" ]]; then
-  [[ ${#APP_RW_PASSWORD_FOR_MIGRATION} -ge 24 ]] && ! is_placeholder_secret "${APP_RW_PASSWORD_FOR_MIGRATION}" || fail "APP_RW_PASSWORD must be a non-placeholder secret of at least 24 characters"
+# 4) 应用迁移/DDL。已在停机前在线完成的不再重复；否则此时应用 writers 仍停止、
+#    PostgreSQL 已由上面显式启动。
+if (( MIGRATED_ONLINE == 1 )); then
+  log "migrations already applied before the stop; nothing to migrate while applications remain stopped"
 else
-  [[ -n "${APP_RW_PASSWORD_FOR_MIGRATION}" ]] || fail "APP_RW_PASSWORD is required for control-plane migrations"
+  apply_control_plane_migrations "${DEPLOY_ROOT}/server" "application writers remain stopped"
+  log "Manager/Operation migrations complete while applications remain stopped"
 fi
-DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}"
-ADMIN_DB_URL_FOR_MIGRATION="${ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${MANAGER_DB_NAME}}"
-OPERATION_DB_URL_FOR_MIGRATION="postgresql://app_rw:${APP_RW_PASSWORD_FOR_MIGRATION}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}"
-OPERATION_ADMIN_DB_URL_FOR_MIGRATION="${OPERATION_ADMIN_DB_URL:-postgresql://${POSTGRES_SUPER_USER:-${POSTGRES_USER:-aiteam}}:${POSTGRES_SUPER_PASSWORD:-${POSTGRES_PASSWORD:-}}@${POSTGRES_HOST:-localhost}:${POSTGRES_PORT:-5432}/${OPERATION_DB_NAME}}"
-migration_env_file="$(mktemp "${DEPLOY_ROOT}/.aiteam-migration-env.XXXXXX")" || fail "cannot create protected migration environment file"
-chmod 600 "${migration_env_file}"
-trap 'rm -f -- "${UNIT_RENDERED:-}"; if [[ -n "${migration_env_file:-}" ]]; then rm -f -- "${migration_env_file}"; fi' EXIT
-{
-  printf 'DB_URL=%s\n' "${DB_URL_FOR_MIGRATION}"
-  printf 'ADMIN_DB_URL=%s\n' "${ADMIN_DB_URL_FOR_MIGRATION}"
-  printf 'OPERATION_DB_URL=%s\n' "${OPERATION_DB_URL_FOR_MIGRATION}"
-  printf 'OPERATION_ADMIN_DB_URL=%s\n' "${OPERATION_ADMIN_DB_URL_FOR_MIGRATION}"
-  printf 'APP_RW_PASSWORD=%s\n' "${APP_RW_PASSWORD_FOR_MIGRATION}"
-} >"${migration_env_file}"
-if ! env -i \
-  PATH="${PATH}" \
-  PYTHONPATH="${DEPLOY_ROOT}/server" \
-  AITEAM_MIGRATION_ENV_FILE="${migration_env_file}" \
-  "${VENV_PYTHON}" - <<'PY'
-import os
-from pathlib import Path
-
-for line in Path(os.environ["AITEAM_MIGRATION_ENV_FILE"]).read_text(encoding="utf-8").splitlines():
-    key, value = line.split("=", 1)
-    os.environ[key] = value
-
-from shared.db import apply_migrations as apply_manager_migrations
-from operation_service.repository import apply_migrations as apply_operation_migrations
-
-manager_admin_url = os.environ["ADMIN_DB_URL"]
-operation_admin_url = os.environ["OPERATION_ADMIN_DB_URL"]
-password = os.environ.get("APP_RW_PASSWORD")
-apply_manager_migrations(manager_admin_url, password)
-apply_operation_migrations(operation_admin_url, password)
-PY
-then
-  fail "Manager/Operation DDL or migration failed; application writers remain stopped"
-fi
-log "Manager/Operation migrations complete while applications remain stopped"
+DEPLOY_PHASE="start"
 
 # 5) 装 systemd unit（内容变了才 daemon-reload）
 UNIT_SRC="${DEPLOY_ROOT}/deploy/ci/${UNIT_NAME}.service"
-UNIT_DST="/etc/systemd/system/${UNIT_NAME}.service"
+UNIT_DIR="${DEPLOY_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
+UNIT_DST="${UNIT_DIR}/${UNIT_NAME}.service"
 [[ -f "$UNIT_SRC" ]] || fail "unit file not found: ${UNIT_SRC}"
 [[ "${ENV_TARGET}" =~ ^(dev|test|prod)$ ]] || fail "unsupported deployment environment: ${ENV_TARGET}"
 UNIT_RENDERED="$(mktemp)" || fail "cannot create rendered systemd unit"
@@ -531,7 +869,7 @@ escaped_deploy_root="${escaped_deploy_root//&/\\&}"
 escaped_deploy_root="${escaped_deploy_root//|/\\|}"
 sed -e "s|@ENV_TARGET@|${ENV_TARGET}|g" -e "s|@DEPLOY_ROOT@|${escaped_deploy_root}|g" "${UNIT_SRC}" >"${UNIT_RENDERED}"
 if grep -Eq '@(ENV_TARGET|DEPLOY_ROOT)@' "${UNIT_RENDERED}"; then fail "systemd unit placeholder was not rendered"; fi
-mkdir -p /etc/systemd/system
+mkdir -p "${UNIT_DIR}"
 if ! cmp -s "$UNIT_RENDERED" "$UNIT_DST" 2>/dev/null; then
   cp "$UNIT_RENDERED" "$UNIT_DST"
   log "installed ${UNIT_DST} (content changed)"
@@ -550,20 +888,11 @@ fi
 
 # 7) /healthz + internal NewAPI 冒烟；GET / 必须是 HTML
 log "smoking /healthz"
-sleep 5
-for port in 8781 8782 8783; do
-  ok=0
-  for attempt in 1 2 3 4 5 6 7 8 9 10; do
-    if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
-      log "  port ${port} /healthz OK"; ok=1; break
-    fi
-    sleep 2
-  done
-  (( ok )) || fail "port ${port} /healthz failed after 10 attempts"
-done
+smoke_healthz || fail "/healthz smoke failed for the new release"
 
 newapi_admin_url="${NEWAPI_ADMIN_BASE_URL:-${NEWAPI_URL:-http://127.0.0.1:${NEWAPI_PORT:-9300}}}"
 newapi_ok=0
+# shellcheck disable=SC2034  # attempt 只用来计数
 for attempt in $(seq 1 30); do
   if curl -fsS --max-time 3 "${newapi_admin_url%/}/api/status" 2>/dev/null | grep -Eq '"success"[[:space:]]*:[[:space:]]*true'; then
     newapi_ok=1; break
@@ -573,6 +902,7 @@ done
 (( newapi_ok )) || fail "internal NewAPI /api/status failed after 30 attempts"
 for container in aiteam-newapi-pg aiteam-newapi-redis aiteam-newapi; do
   state=""
+  # shellcheck disable=SC2034  # attempt 只用来计数
   for attempt in $(seq 1 30); do
     state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
     [[ "${state}" == "healthy" ]] && break
@@ -591,4 +921,5 @@ for port in 8781 8782 8783; do
   log "  port ${port} / -> ${root_ct}"
 done
 
+DEPLOY_PHASE="done"
 log "deploy-run done (unit=${UNIT_NAME}, env=${ENV_TARGET}, branch=${BRANCH})"

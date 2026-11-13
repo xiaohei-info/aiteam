@@ -6,10 +6,11 @@ PR merge 触发、self-hosted runner 执行的自动部署流水线。
 
 - `aiteam-v1.service` — systemd unit（`Type=simple`）。由 `run.sh` 装到
   `/etc/systemd/system/`，`ctl.sh --daemon` 在前台盯住三端子进程 PID。
-- `run.sh` — 部署编排脚本。在 `DEPLOY_ROOT` 指定的部署根（未指定时为当前目录）执行；TEST
-  维护窗口先停止应用 writers，再保持应用停止拉取/构建代码，显式启动并确认
-  PostgreSQL/NewAPI 依赖后备份、执行 DDL/迁移，最后启动新栈并做 healthz/readyz +
-  HTML smoke。失败时保持应用停机，不回退到旧 writer 并行运行。
+- `run.sh` — 部署编排脚本。在 `DEPLOY_ROOT` 指定的部署根（未指定时为当前目录）执行。
+  **先构建后切换**：应用仍在运行时，在旁路目录 `<DEPLOY_ROOT>-stage` 完成拉取、装依赖、
+  构建、检查，向后兼容的迁移也在这时执行；全部成功后才停应用、切换、启动并做
+  healthz + HTML smoke。准备阶段失败不影响线上版本；切换或启动失败自动切回上一个版本。
+  详见下文「先构建后切换」与「迁移规则」。
 - `.github/workflows/deploy-main.yml` — GitHub Actions workflow。
   PR merge 到 `main` 或 `workflow_dispatch` 手动触发。
 
@@ -21,38 +22,66 @@ PR merge → GitHub Actions → self-hosted runner(taiyi)
   → 写 DEPLOY_ROOT/.env.<env>（从 GitHub Secret 注入）
   → 从 origin/<branch> 只刷新 deploy/ci/run.sh（避免首次部署仍执行旧编排脚本）
   → cd DEPLOY_ROOT && bash deploy/ci/run.sh --branch <branch> --env <env>
-      → TEST 维护窗口：先停止应用 writers/Manager/Operation/Agent，确认已退出
-      → 保持应用停止，git pull --ff-only 同步部署根
-      → 独立 Node Agent、行业文档生成 worker（`server/solution_authoring_worker`）与 web 各自 pnpm install --frozen-lockfile，然后 pnpm build 前端（每次部署重建，避免依赖/产物不一致）
-      → 按 checked-out `server/requirements.txt` hash 同步持久化 `.venv`（无 marker、或 hash 与 checked-out 文件不一致时才 pip install；hash 相同则跳过）
-      → 启动并确认 PostgreSQL/NewAPI 依赖（应用仍停止）→ 备份 → DDL/迁移
+      → 【应用仍在运行】git fetch，把目标提交检出到旁路目录 <DEPLOY_ROOT>-stage
+      → 【应用仍在运行】独立 Node Agent、行业文档生成 worker（`server/solution_authoring_worker`）与 web 各自 pnpm install --frozen-lockfile，跑 Agent 登录检查，pnpm build 前端；requirements 有变化时预先 pip wheel
+      → 【应用仍在运行】迁移全部向后兼容时，在线执行 DDL/迁移（带 lock_timeout）
+      → 停止应用 writers/Manager/Operation/Agent
+      → 切换部署根到目标提交；运行时依赖 pnpm install --offline；整体替换前端 dist
+      → 按 checked-out `server/requirements.txt` hash 同步持久化 `.venv`（无 marker、或 hash 与 checked-out 文件不一致时才 pip install；hash 相同则跳过；优先用预先准备的 wheels 离线安装）
+      → 启动并确认 PostgreSQL/NewAPI 依赖 → 备份 →（未在线完成时）DDL/迁移
       → 安装/校验新 unit，启动新的三端应用栈
-      → /healthz、Manager /readyz、内部 NewAPI 与 HTML 冒烟
+      → /healthz、内部 NewAPI 与 HTML 冒烟；失败则自动切回上一个版本
   → CI success
   → runner 退出
   → systemd (PID 1) 继续托管三端（runner 的 orphan clean-up 波及不到）
 ```
 
-### taiyi TEST 版本与维护窗口口径
+### 先构建后切换
 
-本轮允许的是**完整应用停机**，不是零停机、旧新栈并行或可选的复杂 systemd
-cgroup cutover。任务给定的已部署基线是 `5483218e`（PR56）；当前工作树为未提交的
-`feature/manager-session-multitenancy-stage-b` 上的未提交累计变更，不能在发布记录中把两者写成同一个已部署版本；发布记录必须填写 CI 实际 checkout SHA。只有主控完成审查、CI 和
-TEST 维护窗口后，当前工作树才可成为新的 release checkout。
+部署仍有一次短暂停机（从停应用到新栈健康），不是零停机、旧新栈并行或 systemd cgroup
+cutover。与此前「先停应用再拉取/构建」的区别是：所有需要联网、可能因自身原因失败的步骤
+都挪到了停应用之前。
 
-TEST 数据库约束：Manager 使用 `MANAGER_DB_NAME`（默认 `manager_control_db`），Operation 使用独立 `OPERATION_DB_NAME`（默认 `oper`）；两端的业务/管理 DSN 不得指向同一个数据库。`run.sh` 会在迁移前幂等创建 Operation database。
+| 阶段 | 应用状态 | 做什么 | 失败时 |
+|---|---|---|---|
+| prepare | 运行中 | fetch；旁路目录检出、装依赖、构建前端、Agent 登录检查、准备 Python wheels；向后兼容的迁移 | 直接退出，线上版本不受影响 |
+| switch | 已停 | 切换代码、离线装运行时依赖、替换前端 dist、同步 venv | 自动切回上一个版本并启动 |
+| data | 已停 | 启动并确认 PostgreSQL/NewAPI、NewAPI 备份、未在线完成的 DDL/迁移 | 保持停机，人工对账，不自动回滚 |
+| start | 启动中 | 安装 unit、启动、/healthz、NewAPI、HTML 冒烟 | 自动切回上一个版本并启动；本次发布带收缩型迁移时不回滚、保持停机 |
 
-TEST 顺序固定为：
+- 旁路目录是部署根的一个 git worktree（默认 `<DEPLOY_ROOT>-stage`，可用 `DEPLOY_STAGE_DIR`
+  改），保留自己的 `node_modules`，从不对外提供服务；会多占一份依赖和构建产物的磁盘。
+  目录损坏时手工删除即可，下次部署会重建。
+- 自动回滚只恢复代码、运行时依赖和前端产物；**不回退数据库，也不回退 `.venv`**。因此
+  回滚是否安全取决于下面的迁移规则。回滚成功后本次部署仍以失败结束。
+- 回滚后的旧版本是在新版本的 Python 依赖上运行的；requirements 有不兼容升级时旧版本可能
+  起不来，此时脚本报 `ROLLBACK FAILED` 并保持停机。
+- `DEPLOY_ONLINE_MIGRATIONS=0` 可关闭在线迁移，全部留到停机窗口内执行。
 
-1. 暂停新的应用写入/知识导入，停止 Manager、Operation、Agent writers，并确认旧进程已退出；
-2. 保留数据卷；若依赖曾随旧栈停止，先在应用保持停止时启动并确认 PostgreSQL/NewAPI 可用。若 `ctl` 因固定名 `aiteam-pg` 已存在而无法 `compose up`，只在镜像、容器内的迁移角色（对应 `.env` 的 `POSTGRES_SUPER_USER`）/`POSTGRES_DB` 与数据卷都与当前 TEST 期望一致时 `docker start` 复用该容器，不删除容器或卷；业务配置中的 `POSTGRES_USER` 必须是 `app_rw`。
-3. 依赖可用后执行数据库备份；
-4. 切换已批准 checkout；`run.sh` 按 `server/requirements.txt` 内容 hash 同步持久化 `.venv`（失败保持停机），再在应用保持停止时执行 0039 及其它已批准 DDL/迁移；
-5. 迁移成功后启动新应用栈，再检查 healthz/readyz/OpenAPI 与 HTML 入口。
+TEST 数据库约束：Manager 使用 `MANAGER_DB_NAME`（默认 `manager_control_db`），Operation 使用独立 `OPERATION_DB_NAME`（默认 `oper`）；两端的业务/管理 DSN 不得指向同一个数据库。`run.sh` 会在迁移前幂等创建 Operation database。若 `ctl` 因固定名 `aiteam-pg` 已存在而无法 `compose up`，只在镜像、容器内的迁移角色（对应 `.env` 的 `POSTGRES_SUPER_USER`）/`POSTGRES_DB` 与数据卷都与当前 TEST 期望一致时 `docker start` 复用该容器，不删除容器或卷；业务配置中的 `POSTGRES_USER` 必须是 `app_rw`。
 
-任何备份/DDL/迁移失败都保持应用停止并按 backout 合同人工对账。`stop_legacy_unit.py`
-和 `s05_systemd_cutover_probe.py` 只是独立候选/hosted 实验，不属于上述 TEST 过程，
-也不接入 `deploy-main.yml`。
+`stop_legacy_unit.py` 和 `s05_systemd_cutover_probe.py` 只是独立候选/hosted 实验，不属于
+上述过程，也不接入 `deploy-main.yml`。
+
+### 迁移规则（向后兼容，先扩展后收缩）
+
+迁移脚本没有版本表：每次部署都会按文件名顺序把 `migrations/*.sql` 全部重新执行一遍，所以
+每个脚本必须幂等。在此之上，新增迁移还要满足：
+
+1. **默认只扩展**：新增表、新增可空列或带默认值的列、新增索引、放宽约束。上一个版本的
+   代码必须能在迁移后的表结构上继续运行。这样的迁移会在旧版本运行期间执行，出问题时
+   旧版本不受影响，回滚也安全。
+2. **收缩分两次发布**：删除或重命名表/列、改列类型、加 `NOT NULL`、清空数据，必须先发布
+   一个不再使用该对象的版本，下一次发布再收缩。
+3. **收缩型迁移要标记**：文件里加一行 `-- deploy-compat: contract`。带标记的发布，迁移
+   留到停应用之后执行，并且启动失败时不自动回滚（旧代码不能在收缩后的结构上运行）。
+4. 在线迁移带 `lock_timeout`（默认 5000 毫秒，`DEPLOY_MIGRATION_LOCK_TIMEOUT_MS` 可调）：
+   拿不到锁就失败并中止部署，线上版本不受影响，重新触发部署即可。长时间的回填、大表建
+   索引不要写进迁移脚本。
+
+`server/tests/app/test_deployment_workflow_contract.py` 会检查新增迁移（Operation 0018、
+Manager 0050 之后）：出现收缩型语句而没有标记时测试失败。这只是关键字检查，「旧代码能否
+在新结构上运行」仍要靠评审判断。
 
 ## 新服务器接入清单（一次性）
 
