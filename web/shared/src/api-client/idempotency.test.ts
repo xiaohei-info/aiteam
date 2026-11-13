@@ -13,6 +13,13 @@ describe("newIdempotencyKey", () => {
     for (const k of keys) expect(k).toMatch(UUID_V4);
   });
 
+  it("回退路径固定版本位与变体位", () => {
+    vi.stubGlobal("crypto", { getRandomValues: (a: Uint8Array) => a.fill(0x00) });
+    expect(newIdempotencyKey()).toBe("00000000-0000-4000-8000-000000000000");
+    vi.stubGlobal("crypto", { getRandomValues: (a: Uint8Array) => a.fill(0xff) });
+    expect(newIdempotencyKey()).toBe("ffffffff-ffff-4fff-bfff-ffffffffffff");
+  });
+
   it("有 randomUUID 时直接使用", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "fixed" });
     expect(newIdempotencyKey()).toBe("fixed");

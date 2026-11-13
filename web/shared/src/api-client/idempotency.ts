@@ -8,9 +8,10 @@
 export function newIdempotencyKey(): string {
   const c = globalThis.crypto;
   if (typeof c?.randomUUID === "function") return c.randomUUID();
-  const hex = Array.from(c.getRandomValues(new Uint8Array(16)), (x) => x.toString(16).padStart(2, "0"));
-  hex[6] = `4${hex[6]?.[1] ?? "0"}`; // version 4
-  hex[8] = `${"89ab"[Number.parseInt(hex[8]?.[0] ?? "0", 16) & 3]}${hex[8]?.[1] ?? "0"}`; // variant 10xx
-  const h = hex.join("");
+  const bytes = c.getRandomValues(new Uint8Array(16));
+  const view = new DataView(bytes.buffer);
+  view.setUint8(6, (view.getUint8(6) & 0x0f) | 0x40); // version 4
+  view.setUint8(8, (view.getUint8(8) & 0x3f) | 0x80); // variant 10xx
+  const h = Array.from(bytes, (x) => x.toString(16).padStart(2, "0")).join("");
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
