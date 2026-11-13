@@ -190,6 +190,10 @@ class AdminService:
         user_agent: str | None = None,
     ) -> str:
         before = self._admin.get_state(enterprise_id).operation_status
+        if before in ("deleting", "deleted"):
+            # 删除流程中的企业只能走恢复 / 放弃删除 / 清理（仅 system_admin，含保留期与已清理检查）；
+            # 旧的企业操作接口（system_operator 可用）不能借 close 等动作把它拉回来。
+            raise InvalidTransition(f"{before} enterprise cannot change lifecycle; use restore or purge")
         if before != target:
             AdminRepository._assert_valid_transition(before, target)
             self._sync_manager(enterprise_id, target, reason)

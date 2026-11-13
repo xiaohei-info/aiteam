@@ -1,4 +1,4 @@
-/** R5 企业删除相关弹窗：删除（输入企业名称确认）/ 恢复 / 保留期满后清理。仅 system_admin 可见入口。 */
+/** R5 企业删除相关弹窗：删除与清理（输入企业名称确认）/ 恢复 / 放弃删除。仅 system_admin 可见入口。 */
 import { useState, type ReactNode } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -50,7 +50,8 @@ export function DeletionDialog({ mode, api, enterprise, onClose, onDone }: Props
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const needsName = mode === "delete";
+  // 删除与清理（不可撤销）都要求输入企业名称确认。
+  const needsName = mode === "delete" || mode === "purge";
   const matches = !needsName || typed.trim() === enterprise.enterprise_name;
 
   async function submit(): Promise<void> {

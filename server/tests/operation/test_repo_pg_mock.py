@@ -312,6 +312,24 @@ class TestPgAdminRepository:
         joined = "\n".join(s for s, _ in self.cursor.calls)
         assert "WHERE" in joined and "ORDER BY created_at DESC" in joined
 
+    def test_list_enterprises_carries_deletion_timestamps(self, repo):
+        """列表要带删除 / 清理时间：前端据此显示保留期与“清理数据”，补同步据此跳过已清理企业。"""
+        row = _ACC_COLS[:3] + ("deleted",) + _ACC_COLS[4:11] + (_dt(2026, 10, 1), _dt(2026, 11, 1))
+        _set_all(self.cursor, [row])
+        [state] = repo.list_enterprises(status="deleted")
+        assert state.deleted_at == _dt(2026, 10, 1) and state.purged_at == _dt(2026, 11, 1)
+
+    def test_set_operation_status_rejects_a_concurrent_change(self, repo):
+        """先读后写之间状态被别人改了：条件更新命中 0 行，返回冲突而不是静默覆盖。"""
+        from shared.errors import Conflict
+
+        _set_one(self.cursor, _ACC_COLS)  # 读到 active
+        self.cursor.rowcount = 0           # UPDATE ... AND operation_status = 'active' 未命中
+        with pytest.raises(Conflict):
+            repo.set_operation_status("ent-1", "suspended", normalized=True)
+        update_sql, params = next((s, p) for s, p in self.cursor.calls if "UPDATE enterprise_account" in s)
+        assert "AND operation_status = %s" in update_sql and params[-1] == "active"
+
     def test_list_enterprises_naive_datetime(self, repo):
         row = _ACC_COLS[:5] + (datetime(2026, 1, 1),) + _ACC_COLS[6:]
         _set_all(self.cursor, [row])

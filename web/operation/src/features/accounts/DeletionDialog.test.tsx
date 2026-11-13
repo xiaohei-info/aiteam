@@ -80,14 +80,23 @@ describe("DeletionDialog", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("恢复与清理无需输入名称", async () => {
+  it("恢复无需输入名称", async () => {
     const api = makeApi();
-    const { unmount } = render(<DeletionDialog mode="restore" api={api} enterprise={ent({ status: "deleted" })} onClose={() => {}} onDone={() => {}} />);
+    render(<DeletionDialog mode="restore" api={api} enterprise={ent({ status: "deleted" })} onClose={() => {}} onDone={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "确认恢复" }));
     await waitFor(() => expect(api.restoreEnterprise).toHaveBeenCalledWith("ent_1"));
-    unmount();
+  });
+
+  it("清理不可撤销：必须输入完全一致的企业名称才可确认", async () => {
+    const api = makeApi();
     render(<DeletionDialog mode="purge" api={api} enterprise={ent({ status: "deleted" })} onClose={() => {}} onDone={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "确认清理" }));
+    const confirm = screen.getByRole("button", { name: "确认清理" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "别的企业" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "测试企业" } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
     await waitFor(() => expect(api.purgeEnterprise).toHaveBeenCalledWith("ent_1"));
   });
 });
