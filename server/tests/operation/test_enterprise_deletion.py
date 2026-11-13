@@ -277,3 +277,68 @@ def test_resync_cli_prints_summary_and_exit_code(monkeypatch, capsys):
     failed = {"synced": 0, "failed": [{"enterprise_id": "e", "status": "banned", "error": "X"}]}
     monkeypatch.setattr(tenant_status_resync, "get_admin_service", lambda: Stub(failed))
     assert tenant_status_resync.main([]) == 1
+
+
+# ---- 健壮性：deleting 可放弃；Manager 没有该租户时删除 / 恢复 / 清理不再卡死 ----
+
+class _TenantMissing(NotFound):
+    code = "tenant_not_found"
+
+
+def test_abandoning_an_unfinished_delete_returns_to_closed(env):
+    svc, admin, _, gateway, _, _, eid, tid = env
+    svc.close(eid)
+    gateway.fail_status = True
+    with pytest.raises(RuntimeError):
+        svc.delete(eid, confirm_name="示例企业")
+    assert admin.get_state(eid).operation_status == "deleting"
+    with pytest.raises(RuntimeError):  # Manager 仍不可用：放弃也要先让 Manager 回到 closed
+        svc.restore(eid)
+    assert admin.get_state(eid).operation_status == "deleting"
+    gateway.fail_status = False
+    assert svc.restore(eid) == "closed"
+    assert admin.get_state(eid).operation_status == "closed" and admin.get_state(eid).deleted_at is None
+    assert gateway.calls[-1] == ("status", tid, "closed", None)
+
+
+def test_delete_restore_and_purge_proceed_when_manager_has_no_such_tenant(env):
+    svc, admin, enterprises, gateway, _, clock, eid, _ = env
+    svc.close(eid)
+
+    def missing(*args, **kwargs):
+        raise _TenantMissing("tenant not found")
+
+    gateway.set_tenant_status = missing
+    gateway.purge_tenant = missing
+    assert svc.delete(eid, confirm_name="示例企业") == "deleted"
+    assert svc.restore(eid) == "closed"
+    svc.delete(eid, confirm_name="示例企业")
+    clock.now = NOW + timedelta(days=31)
+    assert svc.purge(eid) == "purged"
+    assert enterprises.get(eid).owner_phone == "" and admin.get_state(eid).purged_at is not None
+
+
+def test_generic_not_found_from_manager_still_blocks(env):
+    """旧版 Manager 没有状态路由时返回通用 not_found：不能当作“租户不存在”放行。"""
+    svc, admin, _, gateway, _, _, eid, _ = env
+    svc.close(eid)
+
+    def old_manager(*args, **kwargs):
+        raise NotFound("Not Found")
+
+    gateway.set_tenant_status = old_manager
+    with pytest.raises(NotFound):
+        svc.delete(eid, confirm_name="示例企业")
+    assert admin.get_state(eid).operation_status == "deleting"
+
+
+def test_suspend_is_not_skipped_when_manager_has_no_such_tenant(env):
+    svc, admin, _, gateway, _, _, eid, _ = env
+
+    def missing(*args, **kwargs):
+        raise _TenantMissing("tenant not found")
+
+    gateway.set_tenant_status = missing
+    with pytest.raises(NotFound):
+        svc.suspend(eid)
+    assert admin.get_state(eid).operation_status == "active"

@@ -239,13 +239,15 @@ def set_tenant_status(
     principal=Depends(require_operator_service_principal),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Envelope[dict]:
-    from shared.errors import Conflict, NotFound
+    from shared.errors import Conflict
+
+    from .tenant_status import TenantNotFound
 
     _lifecycle_principal(request, principal, body, tenant_id, idempotency_key)
     store = _lifecycle_store(request)
     record = store.record(tenant_id)
     if record is None:
-        raise NotFound("tenant not found")
+        raise TenantNotFound("tenant not found")
     if record[1] is not None:
         raise Conflict("tenant data has been purged; its status can no longer change")
     store.set_status(tenant_id, body.status, body.reason)
@@ -265,16 +267,16 @@ def purge_tenant(
     principal=Depends(require_operator_service_principal),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Envelope[dict]:
-    from shared.errors import Conflict, NotFound
+    from shared.errors import Conflict
 
     from .knowledge_intake_service import manager_storage_root
-    from .tenant_status import purge_tenant_data
+    from .tenant_status import TenantNotFound, purge_tenant_data
 
     _lifecycle_principal(request, principal, body, tenant_id, idempotency_key)
     store = _lifecycle_store(request)
     record = store.record(tenant_id)
     if record is None:
-        raise NotFound("tenant not found")
+        raise TenantNotFound("tenant not found")
     if record[0] != "deleted":
         raise Conflict("only a deleted tenant can be purged")
     counts = purge_tenant_data(
