@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
@@ -151,6 +151,7 @@ def build_recruit_router(verifier) -> APIRouter:
     )
     async def list_recruitable_experts(
         request: Request,
+        background: BackgroundTasks,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[RecruitableExpertOut]:
         # 浏览是 Operator 目录只读；is_recruited 再查本 tenant 已落地实例。
@@ -162,7 +163,8 @@ def build_recruit_router(verifier) -> APIRouter:
             raise
         except Exception as exc:
             raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
-        reconcile_for_admin(request, ctx, visible_ids={t.template_id for t in templates})
+        # 对账可能还要逐个拉取不在列表里的模板：放到响应之后执行。
+        background.add_task(reconcile_for_admin, request, ctx, visible_ids={t.template_id for t in templates})
         recruited = _service(request).recruited_template_ids(ctx)
         stats = _template_stats(request, ctx) if templates else {}
         return ListEnvelope[RecruitableExpertOut](

@@ -9,12 +9,11 @@ from fastapi.testclient import TestClient
 
 from operation_service.catalog_dependencies import get_catalog_service
 from operation_service.catalog_gateway import CatalogManagerGateway
-from operation_service.catalog_repository import CatalogEntry, CatalogRepository
+from operation_service.catalog_repository import CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
-from shared.auth import DevTokenService
 from shared.contracts.crosstier import CatalogReleaseNotify
-from shared.contracts.enums import CatalogStatus, CatalogType, EnterpriseRole, PlatformRole
+from shared.contracts.enums import EnterpriseRole, PlatformRole
 from tests.operation.auth_helpers import operation_test_token
 
 

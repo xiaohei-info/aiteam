@@ -122,6 +122,14 @@ export function normalizeScope(raw: unknown): VisibleScope {
   return { mode: "limited", industries: value.industries ?? [], tags: value.tags ?? [] };
 }
 
+/** 新范围是否比原范围窄：全部企业改为指定范围，或去掉了原有的行业 / 标签。 */
+export function scopeNarrowed(before: VisibleScope, after: VisibleScope): boolean {
+  if (after.mode === "all") return false;
+  if (before.mode === "all") return true;
+  return before.industries.some((item) => !after.industries.includes(item))
+    || before.tags.some((item) => !after.tags.includes(item));
+}
+
 export function scopeText(raw: unknown): string {
   const scope = normalizeScope(raw);
   if (scope.mode === "all") return "全部企业";

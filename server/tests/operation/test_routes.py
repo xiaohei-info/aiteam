@@ -156,6 +156,48 @@ def test_reset_unknown_enterprise_404(client):
     assert r.json()["code"] == "not_found"
 
 
+def test_enterprise_profile_roundtrip(client):
+    """R3：企业行业 / 标签的读取与保存（发布范围匹配用）。"""
+    admin = PlatformRole.SYSTEM_ADMIN.value
+    created = client.post(
+        "/api/operation/enterprises",
+        json={**_BODY, "industry": "制造业", "tags": ["KA"]},
+        headers=_headers(admin, "profile-provision"),
+    ).json()["data"]
+    eid = created["enterprise_id"]
+
+    got = client.get(f"/api/operation/enterprises/{eid}/profile", headers=_auth(admin))
+    assert got.status_code == 200
+    assert got.json()["data"] == {"enterprise_id": eid, "industry": "制造业", "tags": ["KA"]}
+
+    put = client.put(
+        f"/api/operation/enterprises/{eid}/profile",
+        json={"industry": " 金融 ", "tags": ["A", "B", "A"]},
+        headers=_auth(PlatformRole.SYSTEM_OPERATOR.value),
+    )
+    assert put.status_code == 200
+    assert put.json()["data"] == {"enterprise_id": eid, "industry": "金融", "tags": ["A", "B"]}
+    assert client.get(f"/api/operation/enterprises/{eid}/profile", headers=_auth(admin)).json()["data"]["industry"] == "金融"
+
+    cleared = client.put(f"/api/operation/enterprises/{eid}/profile", json={}, headers=_auth(admin))
+    assert cleared.json()["data"] == {"enterprise_id": eid, "industry": None, "tags": []}
+
+
+def test_enterprise_profile_auth_and_errors(client):
+    admin = PlatformRole.SYSTEM_ADMIN.value
+    assert client.get("/api/operation/enterprises/nope/profile").status_code == 401
+    assert client.get(
+        "/api/operation/enterprises/nope/profile", headers=_auth(EnterpriseRole.MEMBER.value)
+    ).status_code == 403
+    missing = client.get("/api/operation/enterprises/nope/profile", headers=_auth(admin))
+    assert missing.status_code == 404 and missing.json()["code"] == "not_found"
+    assert client.put("/api/operation/enterprises/nope/profile", json={}, headers=_auth(admin)).status_code == 404
+    too_long = client.put(
+        "/api/operation/enterprises/nope/profile", json={"industry": "x" * 21}, headers=_auth(admin)
+    )
+    assert too_long.status_code == 422
+
+
 def test_openapi_exposes_enterprise_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "/api/operation/enterprises" in paths
