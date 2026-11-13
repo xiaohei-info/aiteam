@@ -65,7 +65,7 @@ def _auth() -> dict:
 def _expert(**extra) -> dict:
     return {
         "template_id": "tpl-mkt", "display_name": "市场分析师", "category": "marketing",
-        "system_prompt": "lead", "platform_model_ref": _MODEL_REF, "description": "市场数据分析", **extra,
+        "system_prompt": "lead", "description": "市场数据分析", **extra,
     }
 
 
@@ -109,7 +109,7 @@ def test_legacy_template_without_profile_fields_reads_defaults(client):
     service._repo.create(CatalogEntry(
         catalog_type=CatalogType.EXPERT_TEMPLATE, template_id="tpl-old", version="3", display_name="旧模板",
         status=CatalogStatus.PUBLISHED,
-        payload={"category": "x", "system_prompt": "p", "platform_model_ref": _MODEL_REF, "description": "d"},
+        payload={"category": "x", "system_prompt": "p", "description": "d"},
     ))
     pulled = service.pull_expert_template_detail(template_id="tpl-old")
     assert pulled.tagline == "" and pulled.use_cases == [] and pulled.pricing is None
@@ -125,7 +125,7 @@ def test_legacy_subscription_without_period_keeps_its_price(client):
     service._repo.create(CatalogEntry(
         catalog_type=CatalogType.EXPERT_TEMPLATE, template_id="tpl-sub", version="1", display_name="旧套餐",
         status=CatalogStatus.PUBLISHED,
-        payload={"category": "x", "system_prompt": "p", "platform_model_ref": _MODEL_REF, "description": "d", "pricing": legacy},
+        payload={"category": "x", "system_prompt": "p", "description": "d", "pricing": legacy},
     ))
     assert profile_from_payload({"pricing": legacy}).model_dump(mode="json")["pricing"] == legacy
     detail = client.get("/api/operation/catalog/expert_template/tpl-sub", headers=_auth()).json()["data"]

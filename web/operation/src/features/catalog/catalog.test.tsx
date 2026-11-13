@@ -557,7 +557,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
     fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
     await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "保留的人设" } });
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "描述" } });
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
@@ -586,7 +585,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
         category: "市场营销",
         avatarUrl: "https://example.com/avatar.png",
         systemPrompt: "sp",
-        defaultModel: "gpt-5",
         description: "desc",
         expertTemplateIds: [],
         coordinatorTemplateId: "",
@@ -682,14 +680,14 @@ describe("注册表单", { timeout: 15_000 }, () => {
     });
   });
 
-  it("注册专家模板成功提交 system_prompt + platform_model_ref", async () => {
+  it("注册专家模板成功提交 system_prompt（不含模型）", async () => {
     let capturedBody: unknown = null;
     mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
       if (String(url).includes("skill-market/internal")) return listPage([]);
       if (String(url).includes("skill-market/external")) return singleResponse([]);
       if (String(url).includes("expert-templates") && init?.method === "POST") {
         capturedBody = init.body ? JSON.parse(String(init.body)) : null;
-        return singleResponse(makeCatalogItem({ id: "new-id", display_name: "新专家", system_prompt: "电商客服", platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 } }));
+        return singleResponse(makeCatalogItem({ id: "new-id", display_name: "新专家", system_prompt: "电商客服" }));
       }
       return envOk();
     });
@@ -715,7 +713,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
     )!;
     fireEvent.change(systemPrompt, { target: { value: "电商客服" } });
 
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
 
     // Fill all PRD required fields so the always-send payload is complete.
     await selectAstryxOption("分类 (category)", "市场营销");
@@ -733,8 +730,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
       category: "市场营销",
       avatar_url: "data:image/png;base64,iVBORw0KGgo=",
       system_prompt: "电商客服",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
-      thinking_level: "off",
       description: "淘宝电商客服",
       platform_skill_refs: [],
     });
@@ -744,24 +739,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
     fireEvent.click(screen.getByText("注册专家模板"));
     expect(screen.getByPlaceholderText("display_name")).toHaveValue("");
     expect(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）")).toHaveValue("");
-  });
-
-  it("注册专家模板按模型能力显示默认思考等级", async () => {
-    platformProvidersMock.models.mockResolvedValueOnce([{
-      model: {
-        provider_id: "provider-1", model_id: "minimax-m3", display_name: "MiniMax M3",
-        capabilities: { reasoning: true, thinking_mode: "toggle", thinking_levels: ["off", "high"] },
-        status: "published", source: "discovery", version: 1, updated_at: "now",
-      },
-      rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" },
-    }]);
-    renderCatalogPage(makeSystemAdminSession());
-    fireEvent.click(await screen.findByText("注册专家模板"));
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("minimax-m3"));
-    const thinking = screen.getByTestId("default-thinking-level-select");
-    expect(within(thinking).getByRole("combobox")).toHaveTextContent("关闭思考");
-    fireEvent.click(within(thinking).getByRole("combobox"));
-    expect(await screen.findByRole("option", { name: "开启思考", hidden: true })).toBeInTheDocument();
   });
 
   it("注册专家模板不再展示手工技能 ID、标签、预置记忆和排序", async () => {
@@ -793,7 +770,6 @@ describe("注册表单", { timeout: 15_000 }, () => {
 
     fireEvent.change(document.querySelector<HTMLInputElement>("input[placeholder=\"display_name\"]")!, { target: { value: "新专家" } });
     fireEvent.change(document.querySelector<HTMLTextAreaElement>("textarea[placeholder=\"岗位描述系统提示词（纯文本）\"]")!, { target: { value: "sp" } });
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
     fireEvent.change(screen.getByLabelText("头像（可选，本地图片）"), { target: { files: [avatarFile()] } });
     await waitFor(() => expect(screen.getByText("已选择：avatar.png")).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText("用户可见的岗位描述（不超过 200 字）"), { target: { value: "desc" } });
@@ -989,7 +965,6 @@ describe("详情页编辑模式", () => {
       visible_scope: null,
       version: "1",
       system_prompt: "你是一名客服专家",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
       ...overrides,
     });
   }
@@ -1169,7 +1144,6 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
   async function openExpertRegisterForm() {
     renderCatalogPage(makeSystemAdminSession());
     fireEvent.click(await screen.findByText("注册专家模板"));
-    await waitFor(() => expect(screen.getByTestId("platform-model-select")).toHaveTextContent("LLM 网关"));
     fireEvent.change(screen.getByPlaceholderText("display_name"), { target: { value: "新专家" } });
     fireEvent.change(screen.getByPlaceholderText("岗位描述系统提示词（纯文本）"), { target: { value: "电商客服" } });
     await selectAstryxOption("分类 (category)", "市场营销");
@@ -1221,7 +1195,6 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
       template_id: "exp-profile",
       display_name: "画像专家",
       system_prompt: "你是客服",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
       tagline: "售后问题一站解决",
       use_cases: ["退款处理"],
       output_types: ["document"],
@@ -1261,7 +1234,6 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
     const expert = makeCatalogItem({
       template_id: "exp-profile",
       system_prompt: "你是客服",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
     });
     mockFetch.mockImplementation(async (url: unknown) => {
       if (String(url).includes("skill-market")) return listPage([]);
@@ -1281,7 +1253,6 @@ describe("人才市场展示字段", { timeout: 15_000 }, () => {
     const expert = makeCatalogItem({
       template_id: "exp-profile",
       system_prompt: "你是客服",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 },
     });
     mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
       if (String(url).includes("skill-market")) return listPage([]);
@@ -1319,7 +1290,6 @@ describe("详情页多 section", () => {
       system_prompt: "你是客服",
       category: "support",
       avatar_url: "https://example.com/a.png",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
       platform_skill_refs: [
         { skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" },
         { skill_id: "skill_b", version: "2.0.0", content_hash: "hash-b" },
@@ -1366,7 +1336,7 @@ describe("详情页多 section", () => {
     expect(screen.getByText("方案标签")).toBeInTheDocument();
   });
 
-  it("管理员编辑 system_prompt 和平台模型，并通过 PATCH 保存模型引用", async () => {
+  it("管理员编辑 system_prompt，并通过 PATCH 保存（不提交模型字段）", async () => {
     mockFetch
       .mockResolvedValueOnce(
         singleResponse(
@@ -1375,7 +1345,6 @@ describe("详情页多 section", () => {
             template_id: "exp_a",
             display_name: "AI 客服",
             system_prompt: "旧 system_prompt",
-            platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
           }),
         ),
       )
@@ -1386,15 +1355,10 @@ describe("详情页多 section", () => {
             template_id: "exp_a",
             display_name: "AI 客服",
             system_prompt: "新 system_prompt",
-            platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
           }),
         ),
       );
 
-    platformProvidersMock.models.mockResolvedValue([
-      { model: { provider_id: "provider-1", model_id: "gpt-5", display_name: "GPT-5", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
-      { model: { provider_id: "provider-1", model_id: "gpt-4o", display_name: "GPT-4o", capabilities: {}, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
-    ]);
     renderCatalogDetail(makeSystemAdminSession(), "exp_a", "expert_template");
 
     await waitFor(() => {
@@ -1417,9 +1381,6 @@ describe("详情页多 section", () => {
     );
     expect(textareas[0]).toHaveValue("旧 system_prompt");
     fireEvent.change(textareas[0]!, { target: { value: "新 system_prompt" } });
-    const modelSelect = await screen.findByTestId("edit-platform-model-select");
-    fireEvent.click(modelSelect);
-    fireEvent.click(await screen.findByRole("option", { name: /GPT-5/ }));
 
     fireEvent.click(screen.getByText("保存"));
 
@@ -1431,41 +1392,8 @@ describe("详情页多 section", () => {
       expect(patchCall).toBeTruthy();
       const body = JSON.parse((patchCall![1] as { body: string }).body);
       expect(body.system_prompt).toBe("新 system_prompt");
-      expect(body.platform_model_ref).toEqual({ provider_id: "provider-1", provider_version: 2, model_id: "gpt-5", model_version: 3 });
-      expect(body.thinking_level).toBe("off");
-    });
-  });
-
-  it("编辑专家按模型能力调整默认思考等级", async () => {
-    const item = makeCatalogItem({
-      catalog_type: "expert_template",
-      template_id: "minimax-template",
-      display_name: "MiniMax 专家",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "minimax-m3", model_version: 3 },
-      thinking_level: "off",
-    });
-    mockFetch
-      .mockResolvedValueOnce(singleResponse(item))
-      .mockResolvedValueOnce(singleResponse({ ...item, thinking_level: "high" }));
-    platformProvidersMock.models.mockResolvedValue([
-      { model: { provider_id: "provider-1", model_id: "minimax-m3", display_name: "MiniMax M3", capabilities: { reasoning: true, thinking_mode: "toggle", thinking_levels: ["off", "high"] }, status: "published", source: "discovery", version: 3, updated_at: "now" }, rate: { pricing_version: 1, pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" } },
-    ]);
-
-    renderCatalogDetail(makeSystemAdminSession(), "minimax-template", "expert_template");
-    await waitFor(() => expect(screen.getByText("编辑")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("编辑"));
-    const thinking = await screen.findByTestId("edit-default-thinking-level-select");
-    fireEvent.click(within(thinking).getByRole("combobox"));
-    fireEvent.click(await screen.findByRole("option", { name: "开启思考" }));
-    fireEvent.click(screen.getByText("保存"));
-
-    await waitFor(() => {
-      const patchCall = mockFetch.mock.calls.find((call: unknown[]) =>
-        (call[0] as string).includes("minimax-template") && call[1] && (call[1] as { method?: string }).method === "PATCH",
-      );
-      expect(patchCall).toBeDefined();
-      const body = JSON.parse((patchCall![1] as { body: string }).body);
-      expect(body.thinking_level).toBe("high");
+      expect(body).not.toHaveProperty("platform_model_ref");
+      expect(body).not.toHaveProperty("thinking_level");
     });
   });
 
@@ -1481,7 +1409,6 @@ describe("详情页多 section", () => {
       category: "support",
       avatar_url: "https://old.png",
       system_prompt: "你是客服",
-      platform_model_ref: { provider_id: "provider-1", provider_version: 2, model_id: "gpt-4o", model_version: 3 },
       platform_skill_refs: [{ skill_id: "skill_a", version: "1.0.0", content_hash: "hash-a" }],
       description: "旧描述",
     });

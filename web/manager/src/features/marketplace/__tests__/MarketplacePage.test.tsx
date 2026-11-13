@@ -230,7 +230,6 @@ describe("MarketplacePage", () => {
         pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" },
         stats: { resolution_rate: 0.85, evaluated_segments: 40, resolved_segments: 34, min_sample: 10 },
         platform_skill_refs: [{ skill_id: "s1", version: "1", content_hash: "h" }],
-        platform_model_ref: { provider_id: "p", provider_version: 1, model_id: "gpt-5", model_version: 1 },
       },
       {
         template_id: "tpl-2", version: "1", display_name: "研究专家",

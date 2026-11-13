@@ -60,8 +60,6 @@ export interface CatalogItem extends Partial<ExpertTemplateProfile> {
   /** Backward-compatible Catalog field; new values are validated local-image data URLs. */
   avatar_url?: string;
   system_prompt?: string;
-  platform_model_ref?: PlatformModelRef;
-  thinking_level?: string | null;
   skill_ids?: string[];
   platform_skill_refs?: PlatformSkillRef[];
   tags?: string[];
@@ -88,9 +86,6 @@ export interface RegisterExpertTemplate extends Partial<ExpertTemplateProfile> {
   /** Optional local image encoded as a validated data URL for the legacy Catalog field. */
   avatar_url?: string;
   system_prompt?: string;
-  platform_model_ref: PlatformModelRef;
-  /** Default thinking level inherited by newly recruited Manager employees. */
-  thinking_level?: string | null;
   platform_skill_refs?: PlatformSkillRef[];
   description?: string;
 }

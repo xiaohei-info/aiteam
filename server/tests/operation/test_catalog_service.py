@@ -69,7 +69,7 @@ def _expert(**kw):
         category="marketing",
         avatar_url="https://example.com/cmo.png",
         system_prompt="market lead",
-        platform_model_ref={"provider_id": "provider-1", "provider_version": 1, "model_id": "gpt-5", "model_version": 1},
+       
         platform_skill_refs=[],
         description="CMO expert",
     )
@@ -176,29 +176,6 @@ def test_update_expert_validates_and_persists_avatar(service):
     assert updated.avatar_url == avatar
 
 
-def test_register_expert_persists_default_thinking_for_manager_recruit(service):
-    entry = service.register_expert_template(_expert(thinking_level="high"))
-    stored = service._repo.get(CatalogType.EXPERT_TEMPLATE, entry.template_id)
-    assert entry.thinking_level == "high"
-    assert stored.payload["thinking_level"] == "high"
-    service._repo.update(stored, status=CatalogStatus.PUBLISHED)
-    detail = service.pull_expert_template_detail(template_id=entry.template_id)
-    assert detail.recommended_config["thinking_level"] == "high"
-
-
-def test_register_expert_validates_default_thinking_with_provider_capabilities(manager):
-    seen = []
-
-    class PlatformProviderStoreWithThinking(PlatformProviderStore):
-        def validate_model_thinking_level(self, ref, thinking_level, *, require_published=False):
-            seen.append((ref.model_id, thinking_level, require_published))
-
-    svc = CatalogService(
-        CatalogRepository(), manager,
-        platform_providers=PlatformProviderStoreWithThinking(),
-    )
-    svc.register_expert_template(_expert(thinking_level="high"))
-    assert seen == [("gpt-5", "high", True)]
 
 
 def test_register_expert_is_draft_and_silent(service, manager):
@@ -462,7 +439,7 @@ def test_register_expert_stores_minimal_fields_and_pinned_skills(service):
     assert entry.payload["category"] == "marketing"
     assert entry.payload["avatar_url"] == "https://example.com/avatar.png"
     assert entry.payload["system_prompt"] == "You are CMO"
-    assert entry.payload["platform_model_ref"]["model_id"] == "gpt-5"
+    assert "platform_model_ref" not in entry.payload
     assert entry.payload["skill_ids"] == []
     assert entry.payload["platform_skill_refs"] == [ref]
     assert entry.payload["description"] == "营销高管"
@@ -477,7 +454,7 @@ def test_register_expert_default_fields(service):
     assert entry.payload["category"] == "marketing"
     assert entry.payload["avatar_url"] == "https://example.com/cmo.png"
     assert entry.payload["system_prompt"] == "market lead"
-    assert entry.payload["platform_model_ref"]["model_id"] == "gpt-5"
+    assert "platform_model_ref" not in entry.payload
     assert entry.payload["skill_ids"] == []
     assert entry.payload["platform_skill_refs"] == []
     assert entry.payload["description"] == "CMO expert"
@@ -491,19 +468,19 @@ def test_update_expert_flat_fields(service):
         CatalogType.EXPERT_TEMPLATE, "tpl-cmo",
         {
             "system_prompt": "Updated system prompt",
-            "platform_model_ref": {"provider_id": "provider-1", "provider_version": 1, "model_id": "claude-opus-4-8", "model_version": 1},
+            
             "category": "growth",
             "platform_skill_refs": [{"skill_id": "00000000-0000-0000-0000-000000000101", "version": "1.0.0", "content_hash": "abc123"}],
         },
     )
     entry = service._repo.get(CatalogType.EXPERT_TEMPLATE, "tpl-cmo")
     assert entry.payload["system_prompt"] == "Updated system prompt"
-    assert entry.payload["platform_model_ref"]["model_id"] == "claude-opus-4-8"
+    assert "platform_model_ref" not in entry.payload
     assert entry.payload["category"] == "growth"
     assert entry.payload["platform_skill_refs"][0]["version"] == "1.0.0"
 
 
-def test_list_published_experts_skips_legacy_missing_model_ref(service):
+def test_list_published_experts_does_not_require_a_model(service):
     service._repo.create(CatalogEntry(
         catalog_type=CatalogType.EXPERT_TEMPLATE,
         template_id="legacy-no-model",
@@ -518,11 +495,12 @@ def test_list_published_experts_skips_legacy_missing_model_ref(service):
         version="1",
         display_name="可用专家",
         status=CatalogStatus.PUBLISHED,
-        payload={"platform_model_ref": {"provider_id": "p", "provider_version": 1, "model_id": "m", "model_version": 1}},
+        payload={"system_prompt": "ok"},
     ))
 
     items = service.list_published_expert_templates()
-    assert [item.template_id for item in items] == ["valid-model"]
+    # 模板不再带模型：没有模型字段的模板（含旧数据）照常出现在市场里。
+    assert sorted(item.template_id for item in items) == ["legacy-no-model", "valid-model"]
 
 
 def test_list_includes_full_config(service):
@@ -539,7 +517,6 @@ def test_list_includes_full_config(service):
     assert len(items) == 1
     out = items[0]
     assert out.system_prompt == "x"
-    assert out.platform_model_ref.model_id == "gpt-5"
     assert out.category == "marketing"
     assert out.skill_ids == []
     assert out.platform_skill_refs[0].content_hash == "abc123"
@@ -595,17 +572,6 @@ def test_solution_coordinator_must_be_enabled(service):
         service.register_solution_template(_multi_solution(coordinator_template_id="tpl-cmo"))
 
 
-def test_publish_missing_platform_model_ref_is_a_business_validation_error(service):
-    service._repo.create(CatalogEntry(
-        catalog_type=CatalogType.EXPERT_TEMPLATE,
-        template_id="legacy-no-model-publish",
-        version="1",
-        display_name="旧专家",
-        payload={"system_prompt": "legacy"},
-    ))
-    with pytest.raises(ValidationProblem, match="valid published platform model"):
-        service.publish_template(CatalogType.EXPERT_TEMPLATE, "legacy-no-model-publish", PublishTemplateRequest())
-
 
 def test_pull_solution_fails_closed_when_bound_expert_is_missing(service):
     service.register_solution_template(_solution(solution_id="sol-missing", expert_template_ids=["tpl-missing"], coordinator_template_id="tpl-missing"))
@@ -622,7 +588,7 @@ def _auto_expert(**kw):
         category="x",
         avatar_url="h",
         system_prompt="s",
-        platform_model_ref={"provider_id": "provider-1", "provider_version": 1, "model_id": "g", "model_version": 1},
+       
         skill_ids=["sk"],
         description="d",
     )

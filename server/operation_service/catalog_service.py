@@ -10,13 +10,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import cast
 
-from pydantic import ValidationError
 
 from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
-from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.errors import Conflict, NotFound, ValidationProblem
 
@@ -39,19 +36,6 @@ _ID_RANDOM_LENGTH = 4
 _ID_MAX_ATTEMPTS = 8
 _THINKING_LEVEL_ALIASES = {"none": "off", "basic": "low", "deep": "high"}
 _THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
-
-
-def _normalize_thinking_level(value) -> ThinkingLevel:
-    value = value.strip().lower() if isinstance(value, str) else ""
-    value = _THINKING_LEVEL_ALIASES.get(value, value)
-    return cast(ThinkingLevel, value) if value in _THINKING_LEVELS else "off"
-
-
-def _parse_platform_model_ref(value) -> PlatformModelRef:
-    try:
-        return PlatformModelRef.model_validate(value)
-    except (ValidationError, TypeError, ValueError) as exc:
-        raise ValidationProblem("expert template must reference a valid published platform model") from exc
 
 
 def _slugify_id(display_name: str, *, random_suffix: str) -> str:
@@ -122,8 +106,6 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         category=payload.get("category", ""),
         avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
         system_prompt=payload.get("system_prompt", ""),
-        platform_model_ref=payload.get("platform_model_ref"),
-        thinking_level=_normalize_thinking_level(payload.get("thinking_level")),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
@@ -190,8 +172,6 @@ def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
         category=payload.get("category", ""),
         avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
         system_prompt=payload.get("system_prompt", ""),
-        platform_model_ref=payload.get("platform_model_ref"),
-        thinking_level=_normalize_thinking_level(payload.get("thinking_level")),
         skill_ids=payload.get("skill_ids", []),
         platform_skill_refs=payload.get("platform_skill_refs", []),
         tags=payload.get("tags", []),
@@ -220,7 +200,6 @@ class CatalogService:
         self, req: RegisterExpertTemplateRequest
     ) -> CatalogEntryResponse:
         self._validate_platform_skill_refs(req.platform_skill_refs)
-        self._validate_platform_model_ref(req.platform_model_ref, thinking_level=req.thinking_level)
         avatar_url = normalize_avatar_for_service(req.avatar_url)
 
         def make(candidate: str) -> CatalogEntry:
@@ -233,8 +212,6 @@ class CatalogService:
                     "category": req.category,
                     "avatar_url": avatar_url,
                     "system_prompt": req.system_prompt,
-                    "platform_model_ref": req.platform_model_ref.model_dump(mode="json"),
-                    "thinking_level": req.thinking_level,
                     "skill_ids": [],
                     "platform_skill_refs": [ref.model_dump(mode="json") for ref in req.platform_skill_refs],
                     "tags": [],
@@ -305,20 +282,6 @@ class CatalogService:
             if row["content_hash"] != ref.content_hash:
                 raise Conflict("platform skill reference content hash does not match the published version")
 
-    def _validate_platform_model_ref(
-        self, ref, *, thinking_level: str | None = None,
-    ) -> None:
-        if self._platform_providers is None:
-            from shared.errors import AppError
-            exc = AppError("Operator platform Provider store is not configured")
-            exc.status, exc.code, exc.title = 503, "operator_provider_store_unavailable", "Operator Provider store unavailable"
-            raise exc
-        validator = getattr(self._platform_providers, "validate_model_thinking_level", None)
-        if thinking_level is not None and callable(validator):
-            validator(ref, thinking_level, require_published=True)
-        else:
-            self._platform_providers.validate_model_ref(ref, require_published=True)
-
     # ---- 生命周期：发布 / 下架 / 可见范围 ----
 
     def publish_template(
@@ -326,16 +289,11 @@ class CatalogService:
     ) -> CatalogEntryResponse:
         entry = self._repo.get(catalog_type, template_id)
         if catalog_type == CatalogType.EXPERT_TEMPLATE:
-            from shared.contracts.platform_provider import PlatformModelRef
             from shared.contracts.platform_skill import PlatformSkillRef
             payload = entry.payload or {}
             normalize_avatar_for_service(payload.get("avatar_url") or "")
             refs = [PlatformSkillRef.model_validate(ref) for ref in payload.get("platform_skill_refs", [])]
             self._validate_platform_skill_refs(refs)
-            self._validate_platform_model_ref(
-                _parse_platform_model_ref(payload.get("platform_model_ref")),
-                thinking_level=_normalize_thinking_level(payload.get("thinking_level")),
-            )
         if entry.status == CatalogStatus.PUBLISHED:
             raise Conflict(f"already published: {template_id}")
         updated = self._repo.update(
@@ -410,9 +368,6 @@ class CatalogService:
         if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_skill_refs" in changes:
             from shared.contracts.platform_skill import PlatformSkillRef
             self._validate_platform_skill_refs([PlatformSkillRef.model_validate(ref) for ref in changes["platform_skill_refs"]])
-        if catalog_type == CatalogType.EXPERT_TEMPLATE and "platform_model_ref" in changes:
-            from shared.contracts.platform_provider import PlatformModelRef
-            self._validate_platform_model_ref(_parse_platform_model_ref(changes["platform_model_ref"]))
         # 分离 payload 字段与 dataclass 顶层字段
         _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
                        'status', 'visible_scope', 'payload'}
@@ -420,13 +375,6 @@ class CatalogService:
         top_updates = {k: v for k, v in changes.items() if k in _top_fields}
         if payload_updates:
             new_payload = {**(entry.payload or {}), **payload_updates, "updated_at": _now_iso()}
-            if entry.catalog_type == CatalogType.EXPERT_TEMPLATE and (
-                "thinking_level" in payload_updates or "platform_model_ref" in payload_updates
-            ):
-                self._validate_platform_model_ref(
-                    _parse_platform_model_ref(new_payload.get("platform_model_ref")),
-                    thinking_level=_normalize_thinking_level(new_payload.get("thinking_level")),
-                )
             top_updates['payload'] = new_payload
         # 行业方案编辑后重新校验协调专家完整性。
         if (
@@ -473,19 +421,13 @@ class CatalogService:
 
         Manager recruit 读 template.persona 与 template.recommended_config 中的模型和专家能力配置。
         注册端已改为 flat 字段后，跨端 pull 时把 system_prompt → persona、
-        platform_model_ref → recommended_config 的 provider/model 固定引用，skill refs 同步回去，
+        skill refs 同步回 recommended_config（模型与思考档位不属于模板，由企业招募时选择），
         避免联动 manager 侧。
         """
         if not payload:
             return None, {}
         persona = payload.get("system_prompt") or None
         recommended: dict = {}
-        if payload.get("platform_model_ref"):
-            model_ref = _parse_platform_model_ref(payload["platform_model_ref"]).model_dump(mode="json")
-            recommended["platform_model_ref"] = model_ref
-            recommended["provider_ref"] = model_ref["provider_id"]
-            recommended["model"] = model_ref["model_id"]
-        recommended["thinking_level"] = _normalize_thinking_level(payload.get("thinking_level"))
         refs = payload.get("platform_skill_refs") or []
         if refs:
             recommended["platform_skill_refs"] = list(refs)
@@ -522,8 +464,6 @@ class CatalogService:
             category=payload.get("category", ""),
             avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
             system_prompt=payload.get("system_prompt", ""),
-            # payload 里是 JSON dict；Pydantic 在构造时校验并转换，缺失时照旧抛 ValidationError。
-            platform_model_ref=cast(PlatformModelRef, payload.get("platform_model_ref")),
             skill_ids=payload.get("skill_ids", []),
             platform_skill_refs=payload.get("platform_skill_refs", []),
             description=payload.get("description", ""),
@@ -597,12 +537,6 @@ class CatalogService:
         results: list[ExpertTemplateDetail] = []
         for entry in entries:
             payload = entry.payload or {}
-            try:
-                # Old published rows may predate the required platform model reference.
-                # They are not executable and must not break the whole marketplace list.
-                model_ref = PlatformModelRef.model_validate(payload.get("platform_model_ref"))
-            except (ValidationError, TypeError, ValueError):
-                continue
             persona, recommended = self._backfill_expert(payload)
             results.append(
                 ExpertTemplateDetail(
@@ -615,7 +549,6 @@ class CatalogService:
                     category=payload.get("category", ""),
                     avatar_url=safe_avatar_for_response(payload.get("avatar_url", "")),
                     system_prompt=payload.get("system_prompt", ""),
-                    platform_model_ref=model_ref,
                     skill_ids=payload.get("skill_ids", []),
                     platform_skill_refs=payload.get("platform_skill_refs", []),
                     description=payload.get("description", ""),

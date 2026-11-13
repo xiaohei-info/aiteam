@@ -518,7 +518,7 @@ def test_review_flow_blocks_on_open_findings_and_publishes_to_the_catalog(env):
     assert [expert.template_id for expert in package.experts] == [f"{solution_id}-lead", f"{solution_id}-inspector"]
     assert package.coordinator_template_id == f"{solution_id}-lead"
     assert package.experts[0].system_prompt == "你是质检协调专家。联系电话 [已脱敏]。"
-    assert package.experts[0].platform_model_ref == MODEL_REF
+    assert "platform_model_ref" not in package.experts[0].model_dump()
     assert sorted(env.gateway.notifications) == sorted(
         [(f"{solution_id}-lead", "published"), (f"{solution_id}-inspector", "published"), (solution_id, "published")],
     )

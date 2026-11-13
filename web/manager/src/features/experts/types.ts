@@ -63,7 +63,6 @@ export interface ExpertTemplate extends ExpertTemplateProfile {
   tags?: string[];
   skill_ids?: string[];
   platform_skill_refs?: Array<{ skill_id: string; version: string; content_hash: string }>;
-  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   is_recruited?: boolean;
   /** 本企业尚无该模板评估数据或统计不可用时为 null。 */
   stats?: TemplateStats | null;
@@ -78,7 +77,6 @@ export interface SolutionPackageExpertSummary {
   category?: string;
   avatar_url?: string;
   system_prompt?: string;
-  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   skill_ids?: string[];
   description?: string;
   sequence_no?: number;

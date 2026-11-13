@@ -6,7 +6,6 @@ export interface RegistrationInput {
   category: string;
   avatarUrl: string;
   systemPrompt: string;
-  defaultModel: string;
   description: string;
   expertTemplateIds: string[];
   coordinatorTemplateId: string;
@@ -42,7 +41,6 @@ export function validateRegistration(input: RegistrationInput): RegistrationErro
   if (input.catalogType === "expert_template") {
     if (!input.category.trim()) errors.category = "请选择分类";
     if (!input.systemPrompt.trim()) errors.systemPrompt = "请填写系统提示词";
-    if (!input.defaultModel.trim()) errors.defaultModel = "请填写默认模型";
     if (!input.description.trim()) errors.description = "请填写岗位描述";
     return errors;
   }

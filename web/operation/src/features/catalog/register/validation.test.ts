@@ -10,7 +10,6 @@ describe("validateRegistration", () => {
         category: "",
         avatarUrl: "",
         systemPrompt: "",
-        defaultModel: "",
         description: "",
         expertTemplateIds: [],
         coordinatorTemplateId: "",
@@ -30,7 +29,6 @@ describe("validateRegistration", () => {
         category: "",
         avatarUrl: "",
         systemPrompt: "",
-        defaultModel: "",
         description: "",
         expertTemplateIds: [],
         coordinatorTemplateId: "",
@@ -38,7 +36,6 @@ describe("validateRegistration", () => {
     ).toEqual({
       category: "请选择分类",
       systemPrompt: "请填写系统提示词",
-      defaultModel: "请填写默认模型",
       description: "请填写岗位描述",
     });
   });
