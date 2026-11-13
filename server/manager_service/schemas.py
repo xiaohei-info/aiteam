@@ -588,6 +588,19 @@ class MemoryPolicyCatalogOut(MemoryPolicyCatalogIn):
 #      展开为 employee 实例 + 知识/技能引用 + 默认授权。
 #
 
+class RecruitModelPolicy(BaseModel):
+    """招募 / 应用方案时企业为专家选定的平台模型。模板不带模型，这里是模型进入员工配置的唯一入口。
+
+    `provider_ref` / `model` 允许空串以便服务端统一返回 422 `model_required`（而不是通用校验错误）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_ref: str = Field(description="Operator 平台 provider 引用")
+    model: str = Field(description="Operator 发布的模型 id；必须是本企业已开通、已发布且价格已知的模型")
+    thinking_level: str | None = Field(default=None, description="思考档位；空=留空，由模型能力决定")
+
+
 class RecruitExpertRequest(BaseModel):
     """F06 招募专家请求：指定 Operator 侧模板标识 + 本 tenant 落地参数 + 可选授权绑定。
 
@@ -598,6 +611,7 @@ class RecruitExpertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template_id: str = Field(description="Operator 侧专家模板 id（只读拉取来源）")
+    model_policy: RecruitModelPolicy = Field(description="必填：专家使用的平台模型。未选择或不可用时返回 422")
     template_version: str | None = Field(
         default=None, description="模板版本；空=取 Operator 侧最新"
     )
@@ -636,6 +650,13 @@ class ApplySolutionRequest(BaseModel):
     )
     member_ids: list[str] = Field(
         default_factory=list, description="方案默认授权成员（D12，展开为各专家的 member_grant）"
+    )
+    expert_models: dict[str, RecruitModelPolicy] = Field(
+        default_factory=dict,
+        description=(
+            "template_id → 模型。方案里每个**新建**专家必须有一项，否则整单 422；"
+            "已招募的专家有一项则同时改它的模型。不属于本方案专家的键会被忽略。"
+        ),
     )
 
 

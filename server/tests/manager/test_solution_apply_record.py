@@ -22,7 +22,10 @@ def _ctx(tid: str, roles=None) -> TenantContext:
 
 
 def _ref(model):
-    return PlatformModelRef(provider_id="provider-1", provider_version=1, model_id=model, model_version=1)
+    return PlatformModelRef(provider_id="provider-1", model_id=model)
+
+
+from tests.manager._recruit_model import EXPERT_MODELS, MODEL_POLICY, seed_default_model
 
 
 def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
@@ -52,7 +55,7 @@ def test_apply_solution_persists_solution_apply_record():
     catalog.seed_solution(_solution_package())
     svc, _, _, recruit, _ = _build_service(catalog)
 
-    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    result = svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
     expert_ids = result.solution_instance.expert_employee_ids
 
     latest = svc.get_latest_solution_apply_record(_ctx("t-a"), solution_id="sol-1")
@@ -78,8 +81,8 @@ def test_list_solution_apply_records_filters_by_solution_and_status():
     catalog.seed_solution(_solution_package(solution_id="sol-b", version="v1"))
     svc, _, _, recruit, _ = _build_service(catalog)
 
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-a"))
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-b"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-a"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-b"))
 
     all_rows = svc.list_solution_apply_records(_ctx("t-a"))
     assert len(all_rows) == 2
@@ -103,7 +106,7 @@ def test_apply_record_is_tenant_isolated():
     catalog.seed_solution(_solution_package())
     svc, _, _, recruit, _ = _build_service(catalog)
 
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
 
     assert recruit.list_solution_apply_records(_ctx("t-b")) == []
     with pytest.raises(Exception):
@@ -119,8 +122,8 @@ def test_apply_record_latest_picks_most_recent_applied():
     catalog.seed_solution(_solution_package(solution_id="sol-1", version="v2"))
     svc, _, _, recruit, _ = _build_service(catalog)
 
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", solution_version="v1"))
-    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(solution_id="sol-1", solution_version="v2"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", solution_version="v1"))
+    svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1", solution_version="v2"))
 
     latest = svc.get_latest_solution_apply_record(_ctx("t-a"), solution_id="sol-1")
     assert latest.solution_version == "v2"

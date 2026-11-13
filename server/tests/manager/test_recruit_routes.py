@@ -44,7 +44,7 @@ def test_recruit_expert_without_token_returns_401():
     client = _client(None)
     resp = client.post(
         "/api/manager/recruit/experts",
-        json={"template_id": "tpl-1", "employee_slug": "exp-a"},
+        json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl-1", "employee_slug": "exp-a"},
     )
     assert resp.status_code == 401
     assert resp.headers["content-type"].startswith("application/problem+json")
@@ -80,7 +80,7 @@ def test_recruit_expert_unconfigured_db_returns_503():
     token = sign_inmem_token(_INMEM_SIGNER, str(uuid.uuid4()), ["owner"])
     resp = client.post(
         "/api/manager/recruit/experts",
-        json={"template_id": "tpl-1", "employee_slug": "exp-a"},
+        json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl-1", "employee_slug": "exp-a"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 503
@@ -126,7 +126,7 @@ def test_browse_experts_returns_seeded_templates():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=service):
         client = _client("postgresql://fake/fake")
         client.app.state._operator_catalog.seed_expert(
-            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家", platform_model_ref={"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1})
+            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试专家", platform_model_ref={"provider_id": "p1", "model_id": "m1", })
         )
         resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
     assert resp.status_code == 200, resp.text
@@ -181,8 +181,8 @@ def test_browse_experts_keeps_templates_when_platform_catalog_is_unavailable():
             ExpertTemplateDetail(
                 template_id="tpl-1", version="1", display_name="测试专家",
                 platform_model_ref={
-                    "provider_id": "p1", "provider_version": 1,
-                    "model_id": "m1", "model_version": 1,
+                    "provider_id": "p1",
+                    "model_id": "m1",
                 },
             )
         )
@@ -209,7 +209,7 @@ def test_browse_catalog_supports_legacy_signature_and_propagates_client_errors()
         _list_platform_catalog(MissingCatalog(), "tenant-1")
 
 
-def test_browse_experts_filters_unopened_models():
+def test_browse_experts_is_not_filtered_by_model():
     from shared.contracts.crosstier import ExpertTemplateDetail
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
@@ -217,8 +217,8 @@ def test_browse_experts_filters_unopened_models():
         return ExpertTemplateDetail(
             template_id=template_id, version="1", display_name=template_id,
             platform_model_ref={
-                "provider_id": "p1", "provider_version": 1,
-                "model_id": model_id, "model_version": 1,
+                "provider_id": "p1",
+                "model_id": model_id,
             },
         )
 
@@ -237,10 +237,11 @@ def test_browse_experts_filters_unopened_models():
         resp = client.get("/api/manager/recruit/catalog/experts", headers=_auth_header())
 
     assert resp.status_code == 200, resp.text
-    assert [item["template_id"] for item in resp.json()["data"]] == ["allowed"]
+    # 模板不再带模型,目录浏览不再按模型开通过滤;模型在招募时由企业选择并校验。
+    assert sorted(item["template_id"] for item in resp.json()["data"]) == ["allowed", "blocked"]
 
 
-def test_browse_solutions_filters_unopened_models():
+def test_browse_solutions_is_not_filtered_by_model():
     from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
     from manager_service.operator_catalog import FakeOperatorCatalogClient
 
@@ -248,8 +249,8 @@ def test_browse_solutions_filters_unopened_models():
         return ExpertTemplateDetail(
             template_id=template_id, version="1", display_name=template_id,
             platform_model_ref={
-                "provider_id": "p1", "provider_version": 1,
-                "model_id": model_id, "model_version": 1,
+                "provider_id": "p1",
+                "model_id": model_id,
             },
         )
 
@@ -271,7 +272,7 @@ def test_browse_solutions_filters_unopened_models():
     response = client.get("/api/manager/recruit/catalog/solutions", headers=_auth_header())
 
     assert response.status_code == 200, response.text
-    assert [item["solution_id"] for item in response.json()["data"]] == ["allowed"]
+    assert sorted(item["solution_id"] for item in response.json()["data"]) == ["allowed", "blocked"]
 
 
 def test_browse_experts_unconfigured_db_returns_503():

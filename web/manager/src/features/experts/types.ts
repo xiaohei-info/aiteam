@@ -163,8 +163,16 @@ export interface LifecycleOptions {
 }
 
 /** 招募专家入参（对齐 RecruitExpertRequest）。 */
+export interface RecruitModelPolicy {
+  provider_ref: string;
+  model: string;
+  thinking_level?: string | null;
+}
+
 export interface RecruitExpertInput {
   template_id: string;
+  /** 必填：专家使用的平台模型（模板不带模型）。 */
+  model_policy: RecruitModelPolicy;
   template_version?: string | null;
   /** 可选；未传时后端自动生成 slug（PRD P03：实例标识由服务端自动创建）。 */
   employee_slug?: string | null;
@@ -176,6 +184,8 @@ export interface RecruitExpertInput {
 /** 应用方案入参（对齐 ApplySolutionRequest）。 */
 export interface ApplySolutionInput {
   solution_id: string;
+  /** template_id → 模型。新建专家必填；已招募的专家带了才会改模型。 */
+  expert_models?: Record<string, RecruitModelPolicy>;
   solution_version?: string | null;
   display_name_override?: string | null;
   department_ids?: string[];
