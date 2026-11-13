@@ -1,5 +1,6 @@
 /** 重置企业管理员（负责人）密码：确认 → 一次性展示新凭据。关闭后凭据不可再看。 */
 import { useRef, useState, type ReactNode } from "react";
+import { newIdempotencyKey } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
@@ -22,7 +23,7 @@ export function ResetOwnerDialog({ api, enterprise, onClose }: Props): ReactNode
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OwnerResetResult | null>(null);
   // 同一次对话框内的重试沿用同一个幂等键：网络失败后再点不会重复重置。
-  const key = useRef(`owner-bootstrap-reset:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`);
+  const key = useRef(`owner-bootstrap-reset:${newIdempotencyKey()}`);
 
   async function submit(): Promise<void> {
     setBusy(true);
