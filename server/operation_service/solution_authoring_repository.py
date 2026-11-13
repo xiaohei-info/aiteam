@@ -141,6 +141,9 @@ class _Tx(ABC):
     @abstractmethod
     def jobs(self, draft_id: str) -> list[JobRow]: ...
     @abstractmethod
+    def latest_jobs(self) -> dict[str, JobRow]:
+        """每个有任务的草稿的最近一个任务（draft_id → 任务），一次读取。"""
+    @abstractmethod
     def job(self, job_id: str, *, lock: bool = False) -> JobRow | None: ...
     @abstractmethod
     def next_claimable_job(self, now: datetime) -> JobRow | None: ...
@@ -181,6 +184,14 @@ class SolutionAuthoringRepository(ABC):
         with self._transaction() as tx:
             rows = [row for row in tx.drafts() if include_archived or row.status != "archived"]
         return sorted(rows, key=lambda row: row.updated_at, reverse=True)
+
+    def list_drafts_with_latest_job(self, *, include_archived: bool = False) -> list[tuple[DraftRow, JobRow | None]]:
+        """列表用：草稿连同各自最近一个任务，两次批量读取，与草稿数量无关。"""
+        with self._transaction() as tx:
+            rows = [row for row in tx.drafts() if include_archived or row.status != "archived"]
+            latest = tx.latest_jobs()
+        rows.sort(key=lambda row: row.updated_at, reverse=True)
+        return [(row, latest.get(row.draft_id)) for row in rows]
 
     def update_draft(self, draft_id: str, actor_id: str, decide: Decide, *, expected_version: int | None = None) -> DraftRow:
         """锁住草稿后调用 `decide(草稿, 发现项)`；它返回的变更与审计事件一起提交，抛错则整体回滚。
@@ -334,6 +345,24 @@ class SolutionAuthoringRepository(ABC):
             self._apply(tx, draft, [], job.created_by, change)
             return True
 
+    def cancel_job(self, draft_id: str, actor_id: str) -> DraftRow:
+        """取消进行中的生成：任务置 failed / cancelled，草稿回到生成前的状态。没有进行中的任务时什么都不改。
+
+        执行者下一次续租发现任务已不归自己，会丢弃结果并结束子进程（见 `heartbeat_job`）。
+        """
+        with self._transaction() as tx:
+            draft = self._require(tx, draft_id, lock=True)
+            job = next((row for row in tx.jobs(draft_id) if row.status in ACTIVE_JOB_STATUSES), None)
+            if job is None:
+                return draft
+            tx.put_job(replace(
+                job, status="failed", lease_owner=None, lease_expires_at=None,
+                error_code="cancelled", error_message="", finished_at=self._clock(),
+            ))
+            restored = "ready_for_review" if draft.package is not None else "draft"
+            change = DraftChange(changes={"status": restored}, event=("generation_cancelled", ""))
+            return self._apply(tx, draft, [], actor_id, change)
+
     # ---- 发现项 / 审计 ----
 
     def list_findings(self, draft_id: str) -> list[FindingRow]:
@@ -423,6 +452,13 @@ class _MemoryTx(_Tx):
 
     def jobs(self, draft_id: str) -> list[JobRow]:
         return [row for row in self._store.jobs.values() if row.draft_id == draft_id]
+
+    def latest_jobs(self) -> dict[str, JobRow]:
+        latest: dict[str, JobRow] = {}
+        for row in self._store.jobs.values():
+            if row.draft_id not in latest or row.created_at > latest[row.draft_id].created_at:
+                latest[row.draft_id] = row
+        return latest
 
     def job(self, job_id: str, *, lock: bool = False) -> JobRow | None:
         return self._store.jobs.get(job_id)
