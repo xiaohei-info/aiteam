@@ -47,13 +47,17 @@ class EmployeeConfigRow:
     source_template_version: str | None = None
     # 发布范围对账写入：catalog_scope_revoked / catalog_scope_revoked_keep_paused
     status_reason: str | None = None
+    # recruited | solution | copied | custom；copied_from_employee_id 仅复制品有值
+    origin: str = "recruited"
+    copied_from_employee_id: str | None = None
 
 
 _CONFIG_COLUMNS = (
     "id, employee_slug, display_name, persona, model, provider_ref, thinking_level, "
     "timeout_seconds, tools, skills, knowledge_refs, connector_refs, "
     "memory_policy, version, status, archive_reason, archived_at, platform_model_ref, "
-    "department_ids, role_title, source_template_id, source_template_version, status_reason"
+    "department_ids, role_title, source_template_id, source_template_version, status_reason, "
+    "origin, copied_from_employee_id"
 )
 
 
@@ -87,6 +91,8 @@ def _row_to_config(row: Any) -> EmployeeConfigRow:
         source_template_id=row[20] if len(row) > 20 else None,
         source_template_version=row[21] if len(row) > 21 else None,
         status_reason=row[22] if len(row) > 22 else None,
+        origin=(row[23] if len(row) > 23 else None) or "recruited",
+        copied_from_employee_id=str(row[24]) if len(row) > 24 and row[24] else None,
     )
 
 
@@ -117,8 +123,11 @@ class EmployeeConfigRepository:
         platform_model_ref: dict | None = None,
         department_ids: list[str] | None = None,
         role_title: str | None = None,
+        origin: str | None = None,
+        copied_from_employee_id: str | None = None,
     ) -> EmployeeConfigRow:
         """在本 tenant 建 employee 配置行。tenant_id 取自 ctx（D22，RLS WITH CHECK 兜底）。"""
+        origin = origin or ("recruited" if source_template_id else "custom")
         try:
             with self._router.session(ctx) as s:
                 row = s.execute(
@@ -127,9 +136,10 @@ class EmployeeConfigRepository:
                         tenant_id, employee_slug, display_name, persona, model, provider_ref,
                         thinking_level, timeout_seconds, tools, skills,
                         knowledge_refs, connector_refs, memory_policy,
-                        source_template_id, source_template_version, platform_model_ref, department_ids, role_title
+                        source_template_id, source_template_version, platform_model_ref, department_ids, role_title,
+                        origin, copied_from_employee_id
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     RETURNING """ + _CONFIG_COLUMNS,
                     (
@@ -140,6 +150,7 @@ class EmployeeConfigRepository:
                         source_template_id, source_template_version,
                         json.dumps(platform_model_ref) if platform_model_ref else None,
                         list(department_ids or []), role_title,
+                        origin, copied_from_employee_id,
                     ),
                 ).fetchone()
                 write_policy_in_session(s, ctx, employee_id=str(row[0]),

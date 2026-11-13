@@ -9,7 +9,7 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
@@ -22,7 +22,8 @@ from shared.db import PgTenantRouter
 from .active_principal import require_admin
 from .catalog_scope_wiring import reconcile_for_admin
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
-from .schemas import EmployeeConfigIn, EmployeeConfigOut
+from .employee_copy_service import EmployeeCopyService, build_employee_copy_service
+from .schemas import EmployeeConfigIn, EmployeeConfigOut, EmployeeCopyIn
 from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
 from .employee_avatar_repository import EmployeeAvatarRepository
 from .employee_avatar_service import EmployeeAvatarService
@@ -91,6 +92,18 @@ def _avatar_service(request: Request) -> EmployeeAvatarService:
     return cache
 
 
+def _copy_service(request: Request) -> EmployeeCopyService:
+    cache = getattr(request.app.state, "_employee_copy_service", None)
+    if cache is None:
+        cache = build_employee_copy_service(
+            PgTenantRouter(request.app.state.settings.db_url),
+            getattr(request.app.state, "_operator_catalog", None),
+            _avatar_service(request), _service(request),
+        )
+        request.app.state._employee_copy_service = cache
+    return cache
+
+
 def build_employee_router(verifier) -> APIRouter:
     """构造 employee 配置路由；verifier 由 app 持有并闭包注入受保护端点。"""
     router = APIRouter(prefix="/api/manager/employees", tags=["manager", "employee-config"])
@@ -126,6 +139,26 @@ def build_employee_router(verifier) -> APIRouter:
         # 发布范围对账要调运营端：放到响应之后，运营端慢或不可用时列表照常返回；结果在下次打开时可见。
         background.add_task(reconcile_for_admin, request, ctx)
         return ListEnvelope[EmployeeConfigOut](data=items)
+
+    @router.post(
+        "/{employee_id}/copy",
+        description="复制专家为企业自建专家（草稿）：带走配置、prompt、技能/知识/连接器绑定与头像，不带成员授权与个人记忆。必须带 Idempotency-Key。",
+        summary="复制专家", operation_id="manager_employee_copy", status_code=status.HTTP_201_CREATED,
+    )
+    async def copy_employee(
+        employee_id: str,
+        body: EmployeeCopyIn,
+        request: Request,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        claims: TokenClaims = Depends(require),
+    ) -> Envelope[EmployeeConfigOut]:
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        out = _copy_service(request).copy(
+            ctx, source_id=employee_id, display_name=body.display_name,
+            model_policy=body.model_policy, idempotency_key=idempotency_key or "",
+        )
+        return Envelope[EmployeeConfigOut](data=out)
 
     @router.get(
         "/{employee_id}", description="仅owner/enterprise_admin取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",

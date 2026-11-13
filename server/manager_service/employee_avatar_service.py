@@ -7,6 +7,7 @@ import binascii
 import hashlib
 import os
 import secrets
+import shutil
 import tempfile
 from io import BytesIO
 from pathlib import Path
@@ -142,6 +143,28 @@ class EmployeeAvatarService:
             if old_path is not None:
                 old_path.unlink(missing_ok=True)
         return {"employee_id": row.employee_id, "avatar_url": row.avatar_url, "version": row.version, "updated_at": row.updated_at, "byte_size": row.byte_size}
+
+    def copy(self, ctx: TenantContext, *, source_id: str, target_id: str) -> None:
+        """把源专家头像复制为目标专家自己的文件与记录（不共用路径）；源无头像则什么也不做。"""
+        source_id, target_id = normalize_employee_id(source_id), normalize_employee_id(target_id)
+        row = self._repo.get(ctx, source_id)
+        src = self._managed_path(row.storage_key) if row else None
+        if row is None or src is None or not src.is_file():
+            return
+        key = f"avatars/{ctx.tenant_id}/{target_id}/{secrets.token_urlsafe(24)}.webp"
+        path = self._managed_path(key)
+        if path is None:
+            raise InvalidAvatar("avatar storage path is invalid")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(src, path)
+        os.chmod(path, 0o600)
+        url = f"{self._public_base}/api/manager/employees/{target_id}/avatar/content"
+        try:
+            self._repo.upsert(ctx, employee_id=target_id, avatar_url=url, storage_key=key, mime_type=row.mime_type,
+                              byte_size=row.byte_size, sha256=row.sha256)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
 
     def content(self, ctx: TenantContext, employee_id: str) -> tuple[bytes, str] | None:
         employee_id = normalize_employee_id(employee_id)

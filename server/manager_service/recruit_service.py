@@ -385,7 +385,7 @@ class RecruitService:
                     knowledge_refs=list(recommended.get("knowledge_refs", [])), connector_refs=list(recommended.get("connector_refs", [])),
                     memory_policy=recommended.get("memory_policy"), source_template_id=template.template_id,
                     source_template_version=template.version, platform_model_ref=recommended["platform_model_ref"],
-                    department_ids=department_ids,
+                    department_ids=department_ids, origin="solution",
                 )
                 row = self._employees.transition_status(ctx, employee_id=row.employee_id, from_status="draft", to_status="active") or row
                 order_out = _order_out(self._orders.update(ctx, order.mark_succeeded(row.employee_id)))
