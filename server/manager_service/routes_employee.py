@@ -145,7 +145,7 @@ def build_employee_router(verifier) -> APIRouter:
         description="复制专家为企业自建专家（草稿）：带走配置、prompt、技能/知识/连接器绑定与头像，不带成员授权与个人记忆。必须带 Idempotency-Key。",
         summary="复制专家", operation_id="manager_employee_copy", status_code=status.HTTP_201_CREATED,
     )
-    async def copy_employee(
+    def copy_employee(  # 同步读库、调运营端目录、复制头像：普通函数由框架放到线程池
         employee_id: str,
         body: EmployeeCopyIn,
         request: Request,

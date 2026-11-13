@@ -1,6 +1,6 @@
 /** 复制专家：只问新名称；源专家没有可用模型时才多问一个模型。复制成功后由父组件直接打开编辑抽屉。 */
 import { useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, newIdempotencyKey } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
@@ -35,7 +35,7 @@ export function CopyExpertDialog({ api, source, onClose, onCopied }: Props): Rea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forcePick, setForcePick] = useState(false);
-  const [idempotencyKey] = useState(() => globalThis.crypto.randomUUID());
+  const [idempotencyKey] = useState(newIdempotencyKey);
 
   const showPicker = needsModel || forcePick;
   const trimmed = name.trim();

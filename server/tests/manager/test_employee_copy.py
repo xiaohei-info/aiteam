@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -20,7 +18,7 @@ from manager_service.recruit_model_guard import ModelRequired, ModelUnavailable
 from manager_service.schemas import RecruitModelPolicy
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Conflict, NotFound, ValidationProblem
-from tests.manager._recruit_model import MODEL, MODEL_POLICY, PROVIDER, platform_catalog_with_model
+from tests.manager._recruit_model import MODEL, PROVIDER, platform_catalog_with_model
 
 NOW = datetime(2026, 11, 13, tzinfo=timezone.utc)
 CTX = TenantContext(tenant_id="t-a", user_id="admin-1", roles=["owner"])
