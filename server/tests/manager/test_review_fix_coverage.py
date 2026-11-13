@@ -74,6 +74,11 @@ def test_copy_avatar_removes_the_file_when_the_record_cannot_be_written(tmp_path
 
 # ---- 发布范围对账的装配 ----
 
+def _messages(caplog) -> str:
+    # 用原始消息而不是 caplog.text：应用装上的脱敏格式器会把带异常的日志整条替换掉。
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
 def _request(*, db_url="postgresql://biz", admin_db_url="postgresql://admin", catalog=object()):
     state = SimpleNamespace(settings=SimpleNamespace(db_url=db_url, admin_db_url=admin_db_url), _operator_catalog=catalog)
     return SimpleNamespace(app=SimpleNamespace(state=state))
@@ -101,7 +106,7 @@ def test_reconcile_all_tenants_walks_every_tenant_and_isolates_failures(monkeypa
     with caplog.at_level("WARNING", logger=catalog_scope_wiring.logger.name):
         catalog_scope_wiring.reconcile_all_tenants(_request(), "tpl-1")  # type: ignore[arg-type]
     assert seen == [("t1", "tpl-1"), ("t2", "tpl-1"), ("t3", "tpl-1")]
-    assert "scope reconcile failed for tenant t2" in caplog.text
+    assert "scope reconcile failed for tenant t2" in _messages(caplog)
 
 
 def test_reconcile_all_tenants_is_a_no_op_or_logs_without_raising(monkeypatch, caplog):
@@ -118,7 +123,7 @@ def test_reconcile_all_tenants_is_a_no_op_or_logs_without_raising(monkeypatch, c
     monkeypatch.setattr(catalog_scope_wiring, "_list_manager_tenants", boom)
     with caplog.at_level("WARNING", logger=catalog_scope_wiring.logger.name):
         catalog_scope_wiring.reconcile_all_tenants(_request(), "tpl")  # type: ignore[arg-type]
-    assert "scope reconcile sweep failed" in caplog.text
+    assert "scope reconcile sweep failed" in _messages(caplog)
 
 
 def test_reconcile_for_admin_skips_members_and_swallows_errors(monkeypatch, caplog):
@@ -132,4 +137,4 @@ def test_reconcile_for_admin_skips_members_and_swallows_errors(monkeypatch, capl
     monkeypatch.setattr(catalog_scope_wiring, "build_reconciler", broken)
     with caplog.at_level("WARNING", logger=catalog_scope_wiring.logger.name):
         catalog_scope_wiring.reconcile_for_admin(_request(), CTX)  # type: ignore[arg-type]
-    assert "scope reconcile (on read) failed" in caplog.text
+    assert "scope reconcile (on read) failed" in _messages(caplog)
