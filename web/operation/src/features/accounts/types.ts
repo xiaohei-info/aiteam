@@ -104,3 +104,23 @@ export interface LifecycleCommand {
   action: "activate" | "suspend" | "ban" | "close";
   reason?: string;
 }
+
+/** 删除后的保留期（天），与服务端一致。 */
+export const RETENTION_DAYS = 30;
+
+/** 距保留期结束还剩几天（向上取整）；0 表示已到期，没有删除时间时为 null。 */
+export function retentionDaysLeft(deletedAt: string | null | undefined, now: number = Date.now()): number | null {
+  if (!deletedAt) return null;
+  const end = new Date(deletedAt).getTime() + RETENTION_DAYS * 86_400_000;
+  return Math.max(0, Math.ceil((end - now) / 86_400_000));
+}
+
+/** 已删除企业的状态文案：剩余可恢复天数 / 可清理 / 已清理。 */
+export function deletedLabel(
+  enterprise: Pick<EnterpriseAccount, "deleted_at" | "purged_at">, now: number = Date.now(),
+): string {
+  if (enterprise.purged_at) return "已清理";
+  const left = retentionDaysLeft(enterprise.deleted_at, now);
+  if (left === null) return "已删除";
+  return left > 0 ? `已删除 · ${left} 天内可恢复` : "已删除 · 可清理";
+}

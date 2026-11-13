@@ -20,7 +20,7 @@ from shared.contracts.enums import (
     AuditSeverity,
     EnterpriseOperationStatus,
 )
-from shared.errors import InvalidTransition, NotFound
+from shared.errors import Conflict, InvalidTransition, NotFound
 
 # --- legacy action string, kept for backward compatibility with existing call sites ---
 _NORMAL_TO_ACTIVE = {"normal": "active", "archived": "suspended", "banned": "banned", "active": "active"}
@@ -40,10 +40,11 @@ def _normalize_operation_status(value: str) -> str:
 def _next_operation_status(current: str, action: str) -> str:
     """Apply a legacy execute_action command to the new operation_status value."""
     cur = _normalize_operation_status(current)
-    if action == "reactivate":
-        return EnterpriseOperationStatus.ACTIVE.value
+    # 删除流程中的企业任何生命周期动作都不接受（包括重新启用），只能走恢复 / 清理。
     if cur in _DELETION_STATES:
         raise InvalidTransition(f"cannot {action} an enterprise that is {cur}")
+    if action == "reactivate":
+        return EnterpriseOperationStatus.ACTIVE.value
     if action in {"suspend", "ban"}:
         if cur == EnterpriseOperationStatus.CLOSED.value:
             raise InvalidTransition(f"cannot {action} a closed enterprise")
@@ -600,15 +601,18 @@ class PgAdminRepository(AdminRepositoryBase):
                            deleted_at = CASE WHEN %s = 'deleted' THEN %s
                                              WHEN %s = 'closed' THEN NULL ELSE deleted_at END,
                            updated_at = now()
-                     WHERE enterprise_id = %s::uuid
+                     WHERE enterprise_id = %s::uuid AND operation_status = %s
                     """,
                     (
                         target_value, target_value, target_value, reason or "",
                         target_value, target_value, reason or "", target_value,
                         target_value, at, target_value,
-                        enterprise_id,
+                        enterprise_id, state.operation_status,
                     ),
                 )
+                if cur.rowcount == 0:
+                    # 读到状态之后被并发改过（例如一人继续删除、一人放弃删除）：不静默覆盖。
+                    raise Conflict("enterprise status changed concurrently; reload and retry")
         return self._fetch_state(enterprise_id)
 
     def apply_action(self, enterprise_id, action):
@@ -743,18 +747,8 @@ class PgAdminRepository(AdminRepositoryBase):
             with conn.cursor() as cur:
                 cur.execute(sql, args)
                 rows = cur.fetchall()
-        out = []
-        for r in rows:
-            reg = r[5]
-            if getattr(reg, "tzinfo", None) is None:
-                reg = reg.replace(tzinfo=timezone.utc)
-            out.append(EnterpriseAdminState(
-                enterprise_id=str(r[0]), enterprise_name=r[1], owner_phone=r[2],
-                operation_status=r[3], total_recharged=r[4], registered_at=reg,
-                suspended_at=r[6], suspended_reason=r[7], banned_at=r[8],
-                banned_reason=r[9], closed_at=r[10],
-            ))
-        return out
+        # 用完整的行映射：删除 / 清理时间决定前端的保留期显示与“清理数据”入口，补同步也据此跳过已清理企业。
+        return [self._state_from_row(r) for r in rows]
 
     def list_recharges(self, enterprise_id=None):
         import psycopg

@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from shared.errors import AppError, Conflict, ServiceUnavailable, problem_response
+from shared.errors import AppError, Conflict, NotFound, ServiceUnavailable, problem_response
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ _MESSAGES = {
     "closed": "企业已注销",
     "deleted": "企业已删除",
 }
+_LOGIN_MESSAGES = {"suspended": "企业已暂停，暂时无法登录；如有疑问请联系平台运营"}
 # 暂停期间仍放行的写操作：退出登录、用户端授权配置同步 / 用量与结算上报。
 SUSPENDED_WRITE_ALLOWLIST = frozenset({
     "/api/auth/logout",
@@ -48,9 +49,17 @@ class TenantUnavailable(AppError):
 
     status, title = 403, "Tenant unavailable"
 
-    def __init__(self, tenant_status: str):
+    def __init__(self, tenant_status: str, *, at_login: bool = False):
         self.code = _CODES.get(tenant_status, "tenant_unavailable")
-        super().__init__(_MESSAGES.get(tenant_status, "企业当前不可用"))
+        # 暂停的企业不能新登录；“仅可查看”只对已登录的会话成立，登录时不能这么提示。
+        messages = _LOGIN_MESSAGES if at_login else {}
+        super().__init__(messages.get(tenant_status) or _MESSAGES.get(tenant_status, "企业当前不可用"))
+
+
+class TenantNotFound(NotFound):
+    """本 Manager 没有这个租户。专用 code，供 Operator 与“路由不存在”（旧版本，通用 not_found）区分。"""
+
+    code = "tenant_not_found"
 
 
 def check_access(tenant_status: str, method: str, path: str) -> None:
@@ -123,27 +132,48 @@ class TenantStatusStore:
         return changed
 
 
+def _decide(verifier, store, token: str, method: str, path: str) -> AppError | None:
+    """验签 + 读状态 + 判定；同步执行（可能读库），由中间件放到线程池里跑。"""
+    try:
+        claims = verifier.verify(token)
+    except Exception:  # noqa: BLE001 - 无效 token 由路由统一 401
+        return None
+    tenant_id = getattr(claims, "tenant_id", None)
+    if not tenant_id:
+        return None
+    try:
+        check_access(store.get(tenant_id), method, path)
+    except AppError as exc:
+        return exc
+    return None
+
+
 def install_tenant_status_guard(app) -> None:
     """统一入口拦截：先验签，验签通过才按租户状态放行；验签失败交给路由返回 401（不泄露租户状态）。"""
+    from starlette.concurrency import run_in_threadpool
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
 
-    @app.middleware("http")
     async def tenant_status_guard(request, call_next):
         store = getattr(request.app.state, "_tenant_status_store", None)
         verifier = getattr(request.app.state, "_token_verifier", None)
         header = request.headers.get("Authorization", "")
         if store is None or verifier is None or not header.startswith("Bearer ") or not request.url.path.startswith("/api/"):
             return await call_next(request)
-        try:
-            claims = verifier.verify(header[7:].strip())
-        except Exception:  # noqa: BLE001 - 无效 token 由路由统一 401
-            return await call_next(request)
-        if not getattr(claims, "tenant_id", None):
-            return await call_next(request)
-        try:
-            check_access(store.get(claims.tenant_id), request.method, request.url.path)
-        except AppError as exc:
-            return problem_response(exc, instance=request.url.path, request_id=getattr(request.state, "request_id", None))
+        denied = await run_in_threadpool(
+            _decide, verifier, store, header[7:].strip(), request.method, request.url.path,
+        )
+        if denied is not None:
+            return problem_response(
+                denied, instance=request.url.path, request_id=getattr(request.state, "request_id", None),
+            )
         return await call_next(request)
+
+    if getattr(app, "middleware_stack", None) is not None:
+        raise RuntimeError("tenant status guard must be installed before the application starts")
+    # 追加到最内层（列表靠后 = 靠近路由）：被拦截的请求同样经过 RequestContextMiddleware，
+    # 所以 403 带 request_id、进访问日志与指标。app.middleware() 会把它放到最外层，拿不到这些。
+    app.user_middleware.append(Middleware(BaseHTTPMiddleware, dispatch=tenant_status_guard))
 
 
 def delete_in_dependency_order(tables: Iterable[str], try_delete: Callable[[str], bool]) -> None:
@@ -197,6 +227,11 @@ def purge_tenant_data(admin_dsn: str, tenant_id: str, storage_root: Path | None)
         if leftovers:
             raise Conflict(f"tenant purge left rows behind: {leftovers}")
         conn.execute("DELETE FROM tenant_signing_key WHERE tenant_id = %s::uuid", (tenant_id,))
+        # 开通回执里也存着企业代码 / slug；回执本身（幂等键、指纹）保留，旧键重放会因内容不符被拒。
+        conn.execute(
+            "UPDATE manager_onboarding_receipt SET enterprise_slug = %s, enterprise_code = %s "
+            "WHERE tenant_id = %s::uuid", (f"deleted-{tenant_id}", f"deleted-{tenant_id}", tenant_id),
+        )
         conn.execute(
             "UPDATE tenant_registry SET enterprise_slug = %s, enterprise_code = %s, purged_at = now() "
             "WHERE tenant_id = %s::uuid", (f"deleted-{tenant_id}", f"deleted-{tenant_id}", tenant_id),
@@ -205,12 +240,21 @@ def purge_tenant_data(admin_dsn: str, tenant_id: str, storage_root: Path | None)
     return counts
 
 
-def _remove_tenant_files(root: Path | None, tenant_id: str) -> None:
+def _remove_tenant_files(root: Path | None, tenant_id: str) -> list[str]:
+    """删除该租户的文件目录；返回没能删掉的目录（相对存储根），并记日志，供运维手工处理。"""
+    left: list[str] = []
     if root is None:
-        return
+        return left
     for namespace in ("knowledge", "avatars"):
         target = root / namespace / tenant_id
         if target.is_symlink():
             logger.warning("skip symlinked tenant storage: %s", target)
-        elif target.is_dir():
-            shutil.rmtree(target, ignore_errors=True)
+            left.append(f"{namespace}/{tenant_id}")
+            continue
+        if not target.is_dir():
+            continue
+        shutil.rmtree(target, ignore_errors=True)
+        if target.exists():
+            logger.warning("tenant storage could not be removed: %s", target)
+            left.append(f"{namespace}/{tenant_id}")
+    return left

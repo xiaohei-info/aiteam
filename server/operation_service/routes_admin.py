@@ -347,7 +347,7 @@ def build_admin_router(verifier) -> APIRouter:
         summary="删除已注销的企业（软删除，30 天保留期，仅 system_admin）",
         operation_id="operation_admin_enterprise_delete",
     )
-    async def delete_enterprise(
+    def delete_enterprise(  # 同步调用 Manager 与数据库：普通函数由框架放到线程池
         org_id: str,
         body: DeleteEnterpriseRequest,
         claims: TokenClaims = Depends(require_admin_only),
@@ -363,7 +363,7 @@ def build_admin_router(verifier) -> APIRouter:
         summary="保留期内把已删除企业恢复为已注销（仅 system_admin）",
         operation_id="operation_admin_enterprise_restore",
     )
-    async def restore_enterprise(
+    def restore_enterprise(
         org_id: str,
         claims: TokenClaims = Depends(require_admin_only),
         service: AdminService = Depends(get_admin_service),
@@ -378,7 +378,7 @@ def build_admin_router(verifier) -> APIRouter:
         summary="保留期满后清理企业数据并匿名化（仅 system_admin）",
         operation_id="operation_admin_enterprise_purge",
     )
-    async def purge_enterprise(
+    def purge_enterprise(
         org_id: str,
         claims: TokenClaims = Depends(require_admin_only),
         service: AdminService = Depends(get_admin_service),

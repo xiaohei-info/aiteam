@@ -4,7 +4,8 @@ import { PlatformRole, hasRole } from "@aiteam/shared";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import type { AccountsApi } from "./useAccountsApi";
-import type { EnterpriseAccount, EnterpriseActionBody } from "./types";
+import { Text } from "@astryxdesign/core/Text";
+import { retentionDaysLeft, type EnterpriseAccount, type EnterpriseActionBody } from "./types";
 import { RechargeDialog } from "./RechargeDialog";
 import { NotificationDialog } from "./NotificationDialog";
 import { QuotaDialog } from "./QuotaDialog";
@@ -13,9 +14,6 @@ import { EnterpriseModelAccessDialog } from "./EnterpriseModelAccessDialog";
 import { ResetOwnerDialog } from "./ResetOwnerDialog";
 import { EnterpriseProfileDialog } from "./EnterpriseProfileDialog";
 import { DeletionDialog, type DeletionMode } from "./DeletionDialog";
-
-/** 保留期（天），与服务端一致。 */
-const RETENTION_DAYS = 30;
 
 type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile" | DeletionMode;
 
@@ -38,9 +36,8 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
   const isDeleted = status === "deleted";
   const { session } = useSession();
   const isSystemAdmin = hasRole(session, PlatformRole.SYSTEM_ADMIN);
-  const retentionEnded = Boolean(
-    enterprise.deleted_at && Date.now() - new Date(enterprise.deleted_at).getTime() > RETENTION_DAYS * 86_400_000,
-  );
+  const retentionEnded = retentionDaysLeft(enterprise.deleted_at) === 0;
+  const purged = Boolean(enterprise.purged_at);
 
   async function runAction(body: EnterpriseActionBody): Promise<string | null> {
     setSubmitting(true);
@@ -57,7 +54,14 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
     }
   }
 
-  const deletionActive = active === "delete" || active === "restore" || active === "purge" ? active : null;
+  const deletionActive = active === "delete" || active === "restore" || active === "abandon" || active === "purge"
+    ? active
+    : null;
+
+  // 删除流程中的企业只有系统管理员能操作；已清理的企业没有任何可用操作。不渲染点开是空的菜单。
+  if ((isDeleting || isDeleted) && (!isSystemAdmin || purged)) {
+    return <Text color="secondary">{purged ? "—" : "仅系统管理员可操作"}</Text>;
+  }
   const lifecycleActive = active === "ban" || active === "unban" || active === "suspend" || active === "close" || active === "reactivate"
     ? active
     : null;
@@ -71,13 +75,10 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
       >
         {isDeleting || isDeleted ? (
           <>
-            {isSystemAdmin && isDeleting && <DropdownMenuItem label="继续删除（上次未完成）" onClick={() => setActive("delete")} />}
-            {isSystemAdmin && isDeleted && !enterprise.purged_at && !retentionEnded && (
-              <DropdownMenuItem label="恢复企业" onClick={() => setActive("restore")} />
-            )}
-            {isSystemAdmin && isDeleted && !enterprise.purged_at && retentionEnded && (
-              <DropdownMenuItem label="清理数据" onClick={() => setActive("purge")} />
-            )}
+            {isDeleting && <DropdownMenuItem label="继续删除（上次未完成）" onClick={() => setActive("delete")} />}
+            {isDeleting && <DropdownMenuItem label="放弃删除" onClick={() => setActive("abandon")} />}
+            {isDeleted && !retentionEnded && <DropdownMenuItem label="恢复企业" onClick={() => setActive("restore")} />}
+            {isDeleted && retentionEnded && <DropdownMenuItem label="清理数据" onClick={() => setActive("purge")} />}
           </>
         ) : (
           <>

@@ -35,10 +35,23 @@ def password_policy() -> dict[str, Any]:
 
 
 class MeService:
-    def __init__(self, *, settings, auth, registry_code: Callable[[str], str | None]):
+    def __init__(
+        self, *, settings, auth, registry_code: Callable[[str], str | None],
+        tenant_status: Callable[[str], str] | None = None,
+    ):
         self._settings = settings
         self._auth = auth
         self._registry_code = registry_code
+        self._tenant_status = tenant_status
+
+    def _status(self, tenant_id: str) -> str:
+        """企业状态只用于顶栏提示（真正的拦截在入口中间件）；读不到按正常处理，不让页面失败。"""
+        if self._tenant_status is None:
+            return "active"
+        try:
+            return self._tenant_status(tenant_id) or "active"
+        except Exception:  # noqa: BLE001 - 展示用，尽力而为
+            return "active"
 
     def get(self, ctx: TenantContext) -> dict[str, Any]:
         row = self._settings.get_settings(ctx)
@@ -50,6 +63,7 @@ class MeService:
             "enterprise_code": self._registry_code(ctx.tenant_id),
             "account_masked": mask_account(account),
             "roles": list(ctx.roles),
+            "tenant_status": self._status(ctx.tenant_id),
             "has_password": has_password,
             "password_policy": password_policy(),
         }
