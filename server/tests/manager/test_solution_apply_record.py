@@ -13,7 +13,6 @@ from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.tenancy import TenantContext
 
-from manager_service.recruit_service import RecruitService
 from manager_service.schemas import ApplySolutionRequest
 
 
@@ -25,7 +24,7 @@ def _ref(model):
     return PlatformModelRef(provider_id="provider-1", model_id=model)
 
 
-from tests.manager._recruit_model import EXPERT_MODELS, MODEL_POLICY, seed_default_model
+from tests.manager._recruit_model import EXPERT_MODELS
 
 
 def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:

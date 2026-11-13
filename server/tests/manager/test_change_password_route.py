@@ -1,7 +1,6 @@
 """R9: POST /api/auth/password route."""
 from __future__ import annotations
 from unittest.mock import MagicMock
-import pytest
 from fastapi.testclient import TestClient
 from shared.config import Settings
 from tests.manager._auth_helper import make_inmem_verifier_and_signer, sign_inmem_token
