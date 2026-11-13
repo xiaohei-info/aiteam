@@ -334,6 +334,36 @@ class AdminService:
                      severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
         return "purged"
 
+    # ---- 存量状态补同步 ----
+
+    _RESYNC_STATUSES = ("suspended", "banned", "closed", "deleting", "deleted")
+
+    def resync_tenant_statuses(self) -> dict:
+        """把所有非 active 企业的当前状态重新下发给 Manager，并吊销其中转令牌。
+
+        用途：状态联动上线之前就已暂停 / 封禁 / 注销的企业，Manager 侧仍是 active。只同步、不改本地状态；
+        幂等，可重复执行；单个企业失败不影响其余，失败项在结果里列出。已清理的企业跳过（Manager 不再接受变更）。
+        """
+        synced, failed = 0, []
+        for status in self._RESYNC_STATUSES:
+            for state in self._admin.list_enterprises(status=status):
+                if state.purged_at is not None:
+                    continue
+                # 删除尚未在 Manager 生效时按“已注销”对待；重试删除时再改成 deleted。
+                target = "closed" if status == "deleting" else status
+                reason = {"suspended": state.suspended_reason, "banned": state.banned_reason}.get(status)
+                try:
+                    self._sync_manager(state.enterprise_id, target, reason or None)
+                except Exception as exc:  # noqa: BLE001 - 逐个上报，继续处理其余企业
+                    logging.getLogger(__name__).warning(
+                        "tenant status resync failed: enterprise=%s status=%s", state.enterprise_id, status, exc_info=True,
+                    )
+                    failed.append({"enterprise_id": state.enterprise_id, "status": status, "error": type(exc).__name__})
+                    continue
+                self._fence_relay(state.enterprise_id)
+                synced += 1
+        return {"synced": synced, "failed": failed}
+
     # ---- quota operations (issue #413) ----
 
     def get_quota(self, enterprise_id: str) -> EnterpriseQuota:

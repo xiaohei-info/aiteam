@@ -100,7 +100,8 @@ class HttpManagerGateway:
     def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
         self._client.post(
             f"/api/manager/tenants/{tenant_id}/purge",
-            json=TenantPurgeRequest().model_dump(mode="json"),
+            # 与其余调用一致去掉空值：Manager 按去空值后的正文校验签名摘要。
+            json=TenantPurgeRequest().model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
             service_purpose="tenant:lifecycle",
             service_tenant_id=tenant_id,
