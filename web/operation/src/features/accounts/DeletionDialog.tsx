@@ -1,4 +1,4 @@
-/** R5 企业删除相关弹窗：删除（输入企业名称确认）/ 恢复 / 保留期满后清理。仅 system_admin 可见入口。 */
+/** R5 企业删除相关弹窗：删除与清理（输入企业名称确认）/ 恢复 / 放弃删除。仅 system_admin 可见入口。 */
 import { useState, type ReactNode } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -11,7 +11,8 @@ import { VStack } from "@astryxdesign/core/VStack";
 import type { EnterpriseAccount } from "./types";
 import type { AccountsApi } from "./useAccountsApi";
 
-export type DeletionMode = "delete" | "restore" | "purge";
+/** abandon = 删除未完成时放弃删除（与恢复走同一个接口，回到已注销）。 */
+export type DeletionMode = "delete" | "restore" | "abandon" | "purge";
 
 const COPY: Record<DeletionMode, { title: string; confirm: string; body: (name: string) => string }> = {
   delete: {
@@ -22,7 +23,12 @@ const COPY: Record<DeletionMode, { title: string; confirm: string; body: (name: 
   restore: {
     title: "恢复企业",
     confirm: "确认恢复",
-    body: (name) => `将「${name}」恢复为已注销状态。恢复后仍需另行处理才能重新启用。`,
+    body: (name) => `将「${name}」恢复为已注销状态，数据保留、不再清理。已注销的企业不能重新启用，成员仍无法登录；如需继续使用，请重新开通企业。`,
+  },
+  abandon: {
+    title: "放弃删除",
+    confirm: "确认放弃",
+    body: (name) => `「${name}」上次删除没有完成。放弃后回到已注销状态，数据不受影响；之后仍可再次删除。`,
   },
   purge: {
     title: "清理企业数据",
@@ -44,7 +50,8 @@ export function DeletionDialog({ mode, api, enterprise, onClose, onDone }: Props
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const needsName = mode === "delete";
+  // 删除与清理（不可撤销）都要求输入企业名称确认。
+  const needsName = mode === "delete" || mode === "purge";
   const matches = !needsName || typed.trim() === enterprise.enterprise_name;
 
   async function submit(): Promise<void> {
@@ -52,7 +59,7 @@ export function DeletionDialog({ mode, api, enterprise, onClose, onDone }: Props
     setError(null);
     try {
       if (mode === "delete") await api.deleteEnterprise(enterprise.org_id, typed.trim());
-      else if (mode === "restore") await api.restoreEnterprise(enterprise.org_id);
+      else if (mode === "restore" || mode === "abandon") await api.restoreEnterprise(enterprise.org_id);
       else await api.purgeEnterprise(enterprise.org_id);
       onDone();
       onClose();
@@ -90,7 +97,7 @@ export function DeletionDialog({ mode, api, enterprise, onClose, onDone }: Props
               <Button label="取消" variant="ghost" onClick={close} isDisabled={busy} />
               <Button
                 label={copy.confirm}
-                variant={mode === "restore" ? "primary" : "destructive"}
+                variant={mode === "restore" || mode === "abandon" ? "primary" : "destructive"}
                 onClick={() => void submit()}
                 isLoading={busy}
                 isDisabled={!matches}

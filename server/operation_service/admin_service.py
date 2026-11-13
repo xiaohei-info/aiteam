@@ -137,14 +137,33 @@ class AdminService:
         except NotFound:
             return None
 
-    def _sync_manager(self, enterprise_id: str, status: str, reason: str | None = None) -> None:
-        """先让 Manager 生效；失败就抛出，本地状态保持不变，避免两端分裂。"""
+    @staticmethod
+    def _tenant_missing(exc: NotFound) -> bool:
+        """Manager 明确回报“没有这个租户”（专用 code）。旧版 Manager 没有该路由时是通用 not_found，不算。"""
+        return getattr(exc, "code", "") == "tenant_not_found"
+
+    def _sync_manager(
+        self, enterprise_id: str, status: str, reason: str | None = None, *, missing_ok: bool = False,
+    ) -> None:
+        """先让 Manager 生效；失败就抛出，本地状态保持不变，避免两端分裂。
+
+        `missing_ok` 只用于删除 / 放弃删除 / 恢复：Manager 根本没有这个租户时没有可同步的对象，
+        不能让企业永远卡在 deleting。暂停 / 封禁 / 注销不放行（那种情况说明两端数据不一致，应当报错）。
+        """
         tenant_id = self._tenant_id(enterprise_id)
         if self._manager is None or tenant_id is None:
             return
-        self._manager.set_tenant_status(
-            tenant_id, status, reason=reason, idempotency_key=f"tenant-status:{enterprise_id}:{status}:{uuid.uuid4().hex}",
-        )
+        try:
+            self._manager.set_tenant_status(
+                tenant_id, status, reason=reason,
+                idempotency_key=f"tenant-status:{enterprise_id}:{status}:{uuid.uuid4().hex}",
+            )
+        except NotFound as exc:
+            if not (missing_ok and self._tenant_missing(exc)):
+                raise
+            logging.getLogger(__name__).warning(
+                "manager has no such tenant; status %s not synced: tenant=%s", status, tenant_id,
+            )
 
     def _fence_relay(self, enterprise_id: str) -> None:
         """立即吊销该企业已签发的中转令牌；上游不可用只告警，签发侧围栏兜底。"""
@@ -171,6 +190,10 @@ class AdminService:
         user_agent: str | None = None,
     ) -> str:
         before = self._admin.get_state(enterprise_id).operation_status
+        if before in ("deleting", "deleted"):
+            # 删除流程中的企业只能走恢复 / 放弃删除 / 清理（仅 system_admin，含保留期与已清理检查）；
+            # 旧的企业操作接口（system_operator 可用）不能借 close 等动作把它拉回来。
+            raise InvalidTransition(f"{before} enterprise cannot change lifecycle; use restore or purge")
         if before != target:
             AdminRepository._assert_valid_transition(before, target)
             self._sync_manager(enterprise_id, target, reason)
@@ -294,7 +317,7 @@ class AdminService:
             self._record(enterprise_id, "delete_requested", "operation_status closed -> deleting",
                          severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
         self._fence_relay(enterprise_id)
-        self._sync_manager(enterprise_id, "deleted")
+        self._sync_manager(enterprise_id, "deleted", missing_ok=True)
         self._admin.set_operation_status(enterprise_id, "deleted", normalized=True, at=self._clock())
         self._record(enterprise_id, "delete", "operation_status deleting -> deleted",
                      severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
@@ -307,11 +330,17 @@ class AdminService:
         return state
 
     def restore(self, enterprise_id: str, *, actor_id: str | None = None, actor_name: str | None = None) -> str:
-        """保留期内把已删除企业恢复为 closed（Manager 同步后再改本地）。"""
+        """保留期内把已删除企业恢复为 closed（Manager 同步后再改本地）；删除未完成（deleting）时即“放弃删除”。"""
+        if self._ensure_state(enterprise_id).operation_status == "deleting":
+            self._sync_manager(enterprise_id, "closed", missing_ok=True)
+            self._admin.set_operation_status(enterprise_id, "closed", normalized=True, at=self._clock())
+            self._record(enterprise_id, "delete_abandoned", "operation_status deleting -> closed",
+                         severity=AuditSeverity.WARNING.value, actor_id=actor_id, actor_name=actor_name)
+            return "closed"
         state = self._require_deleted(enterprise_id)
         if state.purged_at is not None or (state.deleted_at and self._clock() - state.deleted_at > self.RETENTION):
             raise Conflict("the 30-day retention period has ended; the enterprise can no longer be restored")
-        self._sync_manager(enterprise_id, "closed")
+        self._sync_manager(enterprise_id, "closed", missing_ok=True)
         self._admin.set_operation_status(enterprise_id, "closed", normalized=True, at=self._clock())
         self._record(enterprise_id, "restore", "operation_status deleted -> closed",
                      severity=AuditSeverity.WARNING.value, actor_id=actor_id, actor_name=actor_name)
@@ -327,12 +356,47 @@ class AdminService:
             raise Conflict("the 30-day retention period has not ended yet")
         tenant_id = self._tenant_id(enterprise_id)
         if self._manager is not None and tenant_id is not None:
-            self._manager.purge_tenant(tenant_id, idempotency_key=f"tenant-purge:{enterprise_id}")
+            try:
+                self._manager.purge_tenant(tenant_id, idempotency_key=f"tenant-purge:{enterprise_id}")
+            except NotFound as exc:
+                if not self._tenant_missing(exc):
+                    raise
+                logging.getLogger(__name__).warning("manager has no such tenant; nothing to purge: tenant=%s", tenant_id)
         self._enterprise.anonymize(enterprise_id)
         self._admin.mark_purged(enterprise_id, now)
         self._record(enterprise_id, "purge", "tenant data purged and identity anonymized",
                      severity=AuditSeverity.CRITICAL.value, actor_id=actor_id, actor_name=actor_name)
         return "purged"
+
+    # ---- 存量状态补同步 ----
+
+    _RESYNC_STATUSES = ("suspended", "banned", "closed", "deleting", "deleted")
+
+    def resync_tenant_statuses(self) -> dict:
+        """把所有非 active 企业的当前状态重新下发给 Manager，并吊销其中转令牌。
+
+        用途：状态联动上线之前就已暂停 / 封禁 / 注销的企业，Manager 侧仍是 active。只同步、不改本地状态；
+        幂等，可重复执行；单个企业失败不影响其余，失败项在结果里列出。已清理的企业跳过（Manager 不再接受变更）。
+        """
+        synced, failed = 0, []
+        for status in self._RESYNC_STATUSES:
+            for state in self._admin.list_enterprises(status=status):
+                if state.purged_at is not None:
+                    continue
+                # 删除尚未在 Manager 生效时按“已注销”对待；重试删除时再改成 deleted。
+                target = "closed" if status == "deleting" else status
+                reason = {"suspended": state.suspended_reason, "banned": state.banned_reason}.get(status)
+                try:
+                    self._sync_manager(state.enterprise_id, target, reason or None)
+                except Exception as exc:  # noqa: BLE001 - 逐个上报，继续处理其余企业
+                    logging.getLogger(__name__).warning(
+                        "tenant status resync failed: enterprise=%s status=%s", state.enterprise_id, status, exc_info=True,
+                    )
+                    failed.append({"enterprise_id": state.enterprise_id, "status": status, "error": type(exc).__name__})
+                    continue
+                self._fence_relay(state.enterprise_id)
+                synced += 1
+        return {"synced": synced, "failed": failed}
 
     # ---- quota operations (issue #413) ----
 

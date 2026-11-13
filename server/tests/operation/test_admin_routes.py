@@ -203,6 +203,22 @@ def test_restore_and_purge_routes_and_lifecycle_lock(client, enterprise_repo, ad
     assert restored.status_code == 200 and restored.json()["data"]["operation_status"] == "closed"
 
 
+@pytest.mark.parametrize("state", ["deleting", "deleted"])
+def test_legacy_action_endpoint_cannot_pull_an_enterprise_out_of_deletion(client, enterprise_repo, admin_repo, state):
+    """旧的企业操作接口（system_operator 可用）不能把删除流程中的企业改回已注销，绕过保留期与 system_admin 限制。"""
+    eid = _provision_closed(client, enterprise_repo, admin_repo)
+    admin_repo.set_operation_status(eid, "deleting", normalized=True)
+    if state == "deleted":
+        admin_repo.set_operation_status(eid, "deleted", normalized=True)
+    for action in ("close", "reactivate", "unban", "suspend", "ban"):
+        r = client.post(
+            f"/api/operation/admin/enterprises/{eid}/actions", json={"action": action},
+            headers={**_auth(), "Idempotency-Key": f"k-{state}-{action}"},
+        )
+        assert r.status_code == 409, (action, r.text)
+    assert admin_repo.get_state(eid).operation_status == state
+
+
 def test_deleted_enterprise_hidden_from_default_list(client, enterprise_repo, admin_repo):
     eid = _provision_closed(client, enterprise_repo, admin_repo)
     admin = _auth(PlatformRole.SYSTEM_ADMIN.value)

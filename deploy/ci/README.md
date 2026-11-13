@@ -76,7 +76,10 @@ TEST 数据库约束：Manager 使用 `MANAGER_DB_NAME`（默认 `manager_contro
    一个不再使用该对象的版本，下一次发布再收缩。
 3. **收缩型迁移要标记**：文件里加一行 `-- deploy-compat: contract`。带标记的发布，迁移
    留到停应用之后执行，并且启动失败时不自动回滚（旧代码不能在收缩后的结构上运行）。
-4. 在线迁移带 `lock_timeout`（默认 5000 毫秒，`DEPLOY_MIGRATION_LOCK_TIMEOUT_MS` 可调）：
+4. **旧迁移里的取值清单要跟着改**：迁移每次全量重跑，给状态类字段新增取值时，要同步改
+   更早的迁移里针对该字段的清洗 `UPDATE ... NOT IN (...)` 和 `CHECK`，否则下一次部署会把
+   新取值改回默认值（`tests/operation/test_migration_status_lists.py` 对企业运营状态做了检查）。
+5. 在线迁移带 `lock_timeout`（默认 5000 毫秒，`DEPLOY_MIGRATION_LOCK_TIMEOUT_MS` 可调）：
    拿不到锁就失败并中止部署，线上版本不受影响，重新触发部署即可。长时间的回填、大表建
    索引不要写进迁移脚本。
 

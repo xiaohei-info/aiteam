@@ -54,7 +54,7 @@ class TenantStatusSync(BaseModel):
 
 
 class TenantPurgeRequest(BaseModel):
-    """R5 保留期后清理：无参数；仅对 deleted 的租户生效。"""
+    """R5 保留期后清理：仅对 deleted 的租户生效；reason 只用于审计。"""
 
     model_config = ConfigDict(extra="forbid")
 

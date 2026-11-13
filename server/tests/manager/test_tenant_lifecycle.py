@@ -213,3 +213,108 @@ def test_purge_route_only_for_deleted_tenants(monkeypatch):
     r = _route_client(store, {}, path).post(path, json={}, headers=hdr)
     assert r.status_code == 200 and r.json()["data"]["purged_rows"] == 5
     assert purged == [T] and store.invalidated == [T]
+
+
+# ---- 健壮性：拦截不阻塞事件循环、带 request_id；租户不存在有专用错误码；文件删除失败要留痕 ----
+
+def test_guard_reads_status_off_the_event_loop_and_keeps_request_id():
+    import asyncio
+
+    from shared.observability import RequestContextMiddleware
+
+    seen = {}
+
+    def get(tenant):
+        try:
+            asyncio.get_running_loop()
+            seen["on_loop"] = True
+        except RuntimeError:
+            seen["on_loop"] = False
+        return "banned"
+
+    app = FastAPI()
+    app.add_middleware(RequestContextMiddleware)
+    app.state._token_verifier = SimpleNamespace(verify=lambda token: SimpleNamespace(tenant_id=T))
+    app.state._tenant_status_store = SimpleNamespace(get=get)
+    install_tenant_status_guard(app)
+
+    @app.get("/api/x")
+    def get_x():
+        return {"ok": True}
+
+    r = TestClient(app).get("/api/x", headers={"Authorization": "Bearer good"})
+    assert r.status_code == 403 and r.json()["code"] == "tenant_banned"
+    assert seen == {"on_loop": False}  # 同步读库放在线程池，不占事件循环
+    assert r.headers.get("x-request-id") and r.json()["request_id"] == r.headers["x-request-id"]
+
+
+def test_guard_fails_closed_with_503_when_status_is_unreadable():
+    def get(tenant):
+        raise ServiceUnavailable("db down")
+
+    app = FastAPI()
+    app.state._token_verifier = SimpleNamespace(verify=lambda token: SimpleNamespace(tenant_id=T))
+    app.state._tenant_status_store = SimpleNamespace(get=get)
+    install_tenant_status_guard(app)
+
+    @app.get("/api/x")
+    def get_x():
+        return {"ok": True}
+
+    assert TestClient(app).get("/api/x", headers={"Authorization": "Bearer good"}).status_code == 503
+
+
+def test_lifecycle_routes_report_unknown_tenant_with_a_dedicated_code():
+    """Operator 靠这个 code 区分“Manager 没有该租户”和“Manager 版本太旧、没有这条路由”（后者是通用 not_found）。"""
+    hdr = {"Idempotency-Key": "idem-1"}
+    for suffix, body in (("status", {"status": "closed"}), ("purge", {})):
+        path = f"/api/manager/tenants/{T}/{suffix}"
+        r = _route_client(FakeStore(None), body, path).post(path, json=body, headers=hdr)
+        assert r.status_code == 404 and r.json()["code"] == "tenant_not_found"
+
+
+def test_remove_tenant_files_logs_what_could_not_be_removed(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from manager_service import tenant_status
+
+    for namespace in ("knowledge", "avatars"):
+        (tmp_path / namespace / T).mkdir(parents=True)
+        (tmp_path / namespace / T / "f.bin").write_bytes(b"x")
+    real_rmtree = tenant_status.shutil.rmtree
+
+    def rmtree(path, ignore_errors=False):
+        if "avatars" in str(path):
+            return  # 模拟删除失败（权限 / 占用）
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(tenant_status.shutil, "rmtree", rmtree)
+    with caplog.at_level(logging.WARNING, logger="manager_service.tenant_status"):
+        left = tenant_status._remove_tenant_files(tmp_path, T)
+    assert not (tmp_path / "knowledge" / T).exists()
+    assert left == [f"avatars/{T}"]
+    assert any("could not be removed" in record.getMessage() for record in caplog.records)
+
+
+def test_login_message_for_a_suspended_tenant_does_not_promise_read_only_access():
+    """暂停的企业不能新登录：登录时的提示不能是“仅可查看”（那是已登录会话的提示）。"""
+    from manager_service.tenant_status import TenantUnavailable
+
+    in_session = TenantUnavailable("suspended")
+    at_login = TenantUnavailable("suspended", at_login=True)
+    assert in_session.code == at_login.code == "tenant_suspended"
+    assert "仅可查看" in str(in_session.detail)
+    assert "仅可查看" not in str(at_login.detail) and "无法登录" in str(at_login.detail)
+    assert TenantUnavailable("banned", at_login=True).detail == TenantUnavailable("banned").detail
+
+
+def test_issuing_a_token_for_a_suspended_tenant_uses_the_login_message(monkeypatch):
+    from manager_service import tenant_status
+    from manager_service.auth_service import AuthService
+
+    monkeypatch.setattr(tenant_status, "fetch_tenant_status", lambda dsn, tenant_id: "suspended")
+    service = AuthService.__new__(AuthService)
+    service._admin_dsn = "postgresql://unused"
+    with pytest.raises(tenant_status.TenantUnavailable) as raised:
+        service._assert_tenant_active(T)
+    assert raised.value.code == "tenant_suspended" and "无法登录" in str(raised.value.detail)

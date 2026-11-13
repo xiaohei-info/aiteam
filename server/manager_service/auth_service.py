@@ -251,6 +251,8 @@ class AuthService:
                            actor="anon", success=False, detail="invalid credentials")
             raise Unauthorized("invalid credentials")
         require_active(identity)
+        # 凭据核对通过后再看企业状态（不向未认证者泄露），且在任何“成功”审计之前。
+        self._assert_tenant_active(tenant_id)
         if identity.must_reset:
             record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                            actor=identity.user_id, success=False, detail="reset required")
@@ -270,6 +272,8 @@ class AuthService:
                            actor="anon", success=False, detail="invalid credentials")
             raise Unauthorized("invalid credentials")
         require_active(identity)
+        # 暂停 / 封禁等企业不可用时不能改密码（先拒绝，再写）。
+        self._assert_tenant_active(tenant_id)
         self._repo.update_secret(
             ctx, provider=AuthProvider.PHONE, external_id=req.account,
             secret=hash_password(req.new_password), must_reset=False,
@@ -354,7 +358,7 @@ class AuthService:
 
         status = fetch_tenant_status(self._admin_dsn, tenant_id)
         if status != ACTIVE:
-            raise TenantUnavailable(status)
+            raise TenantUnavailable(status, at_login=True)
 
     def _enterprise_id_for_tenant(self, tenant_id: str) -> str | None:
         """Resolve the persisted Operator enterprise binding for token claims."""
