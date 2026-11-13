@@ -23,6 +23,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError, ValidationProblem
 
+from .catalog_scope_wiring import reconcile_for_admin
 from .operator_catalog import OperatorCatalogPort
 from .recruit_service import RecruitService, build_recruit_service
 from .segment_outcome_repository import (
@@ -161,6 +162,7 @@ def build_recruit_router(verifier) -> APIRouter:
             raise
         except Exception as exc:
             raise _OperatorUnavailable("Operator expert catalog is unavailable") from exc
+        reconcile_for_admin(request, ctx, visible_ids={t.template_id for t in templates})
         recruited = _service(request).recruited_template_ids(ctx)
         stats = _template_stats(request, ctx) if templates else {}
         return ListEnvelope[RecruitableExpertOut](
