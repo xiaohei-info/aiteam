@@ -46,6 +46,15 @@ export interface EnrichedAudit {
   created_at: string;
 }
 
+/** 重置管理员密码的结果；一次性明文只在本次响应里出现。 */
+export interface OwnerResetResult {
+  enterprise_id: string;
+  tenant_id: string;
+  owner_phone: string;
+  owner_bootstrap_secret: string;
+  must_reset: boolean;
+}
+
 export interface EnterpriseModelAccess {
   enterprise_id: string;
   tenant_id: string;
