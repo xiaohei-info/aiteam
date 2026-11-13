@@ -141,12 +141,16 @@ def test_deploy_bootstrap_docs_use_tracked_requirements_path():
 
 def test_deploy_script_syncs_checked_out_requirements_into_persistent_venv():
     script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
-    checkout = script.index('git checkout -B "$BRANCH" "origin/$BRANCH"')
-    sync = script.index('sync_persistent_venv_requirements "${VENV_PYTHON}"')
-    source_env = script.index('source "${ENV_FILE}"')
-    migrations = script.index("apply_manager_migrations")
-    restart = script.index('systemctl restart "$UNIT_NAME"')
+    assert 'git checkout -B "$BRANCH" "origin/$BRANCH"' in script.split("activate_release() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'source "${ENV_FILE}"' in script.split("load_release_env() {", 1)[1].split("\n}\n", 1)[0]
+    assert "apply_manager_migrations" in script.split("apply_control_plane_migrations() {", 1)[1].split("\n}\n", 1)[0]
+    checkout = script.index("\nactivate_release\n")
+    sync = script.index('sync_venv_for_release "${VENV_PYTHON}"')
+    source_env = script.index("\nload_release_env\n")
+    migrations = script.index('apply_control_plane_migrations "${DEPLOY_ROOT}/server"')
+    restart = script.index('systemctl restart "$UNIT_NAME" 2>&1; then')
     assert checkout < sync < source_env < migrations < restart
+    assert 'sync_persistent_venv_requirements "${venv_python}"' in script
     assert '"${venv_python}" -m pip install --requirement "${req_file}"' in script
     assert "python3 -m pip" not in script
     assert 'command -v python3' not in script.split("sync_persistent_venv_requirements()", 1)[1]
@@ -174,13 +178,13 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     helper = script.split("# --- dependency start diagnostics ---\n", 1)[1].split(
         "# --- end dependency start diagnostics ---\n", 1
     )[0]
-    sync = script.index('sync_persistent_venv_requirements "${VENV_PYTHON}"')
-    source_env = script.index('source "${ENV_FILE}"')
+    sync = script.index('sync_venv_for_release "${VENV_PYTHON}"')
+    source_env = script.index("\nload_release_env\n")
     deps_log = script.index("starting PostgreSQL/NewAPI dependencies while applications remain stopped")
     postgres = script.index("start_release_dependency postgres PostgreSQL")
     newapi = script.index("start_release_dependency newapi NewAPI")
-    migrations = script.index("apply_manager_migrations")
-    restart = script.index('systemctl restart "$UNIT_NAME"')
+    migrations = script.index('apply_control_plane_migrations "${DEPLOY_ROOT}/server"')
+    restart = script.index('systemctl restart "$UNIT_NAME" 2>&1; then')
     assert sync < source_env < deps_log < postgres < newapi < migrations < restart
     assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server postgres >/dev/null 2>&1' not in script
     assert 'scripts/ctl.sh start --env "${ENV_TARGET}" --deploy docker --server newapi >/dev/null 2>&1' not in script
@@ -199,21 +203,87 @@ def test_deploy_script_exposes_dependency_start_failure_before_restart():
     assert "host binding is not loopback-only" in helper
 
 
-def test_taiyi_installs_independent_agent_lockfile_before_startup():
-    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
-    install = script.index('(cd server/agent_service && pnpm install --frozen-lockfile')
-    assert script.index('git pull --ff-only origin') < install
-    assert script.index('export PATH="${PNPM_SHIM_DIR}:${PATH}"') < install
-    assert install < script.index('rm -rf "${PNPM_SHIM_DIR}"')
-    assert '|| fail "Agent pnpm install failed:' in script
+def _main_flow(script: str) -> str:
+    return script.split("# --- end release prepare and cutover ---\n", 1)[1]
 
 
-def test_taiyi_installs_solution_authoring_worker_lockfile_before_startup():
-    # Operation 按任务从源码启动 worker，缺 node_modules/tsx 时生成会报 worker_unavailable。
+def test_taiyi_prepares_independent_node_packages_before_stopping():
+    # Agent 与行业文档生成 worker 都是独立包、从源码运行；Operation 缺 worker 的
+    # node_modules/tsx 时生成会报 worker_unavailable。联网安装必须发生在停应用之前。
     script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
-    install = script.index('(cd server/solution_authoring_worker && pnpm install --frozen-lockfile')
-    assert script.index('git pull --ff-only origin') < install
-    assert script.index('export PATH="${PNPM_SHIM_DIR}:${PATH}"') < install
-    assert install < script.index('rm -rf "${PNPM_SHIM_DIR}"')
-    assert '|| fail "Solution authoring worker pnpm install failed:' in script
-    assert (ROOT / "server/solution_authoring_worker/pnpm-lock.yaml").is_file()
+    assert "NODE_PACKAGES=(server/agent_service server/solution_authoring_worker)" in script
+    prepare = script.split("prepare_release() {", 1)[1].split("\n}\n", 1)[0]
+    assert '(cd "${STAGE_DIR}/${pkg}" && pnpm install --frozen-lockfile 2>&1)' in prepare
+    assert prepare.index('setup_pinned_pnpm "${STAGE_DIR}"') < prepare.index("pnpm install --frozen-lockfile")
+    assert "src/http/auth.test.ts src/http/manager-jwks.test.ts" in prepare
+    assert '(cd "${STAGE_DIR}/web" && pnpm build 2>&1)' in prepare
+    assert "systemctl" not in prepare and "${DEPLOY_ROOT}/web" not in prepare
+    for name in ("server/agent_service", "server/solution_authoring_worker", "web"):
+        assert (ROOT / name / "pnpm-lock.yaml").is_file()
+
+
+def test_taiyi_stops_the_application_only_after_the_release_is_prepared():
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    flow = _main_flow(script)
+    trap = flow.index("trap on_deploy_exit EXIT")
+    prepare = flow.index("\nprepare_release\n")
+    stop = flow.index('systemctl stop "$UNIT_NAME"')
+    activate = flow.index("\nactivate_release\n")
+    data = flow.index('DEPLOY_PHASE="data"')
+    migrations = flow.index('apply_control_plane_migrations "${DEPLOY_ROOT}/server"')
+    online = flow.index("\nif online_migration_eligible; then\n")
+    assert prepare < online < stop
+    start = flow.index('DEPLOY_PHASE="start"')
+    restart = flow.index('systemctl restart "$UNIT_NAME" 2>&1; then')
+    done = flow.index('DEPLOY_PHASE="done"')
+    assert trap < prepare < stop < activate < data < migrations < start < restart < done
+    # 停机窗口内不再联网拉代码；运行时依赖先离线安装。
+    assert "git fetch" not in flow and "git pull" not in flow
+    activate_body = script.split("activate_release() {", 1)[1].split("\n}\n", 1)[0]
+    assert "git fetch" not in activate_body and "git pull" not in activate_body
+    assert "pnpm install --frozen-lockfile --offline" in script
+    assert "PIP_NO_INDEX=1" in script and "pip wheel --requirement" in script
+
+
+def test_taiyi_rollback_is_limited_to_switch_and_start_phases():
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    handler = script.split("on_deploy_exit() {", 1)[1].split("\n}\n", 1)[0]
+    data_branch = handler.split("      data)", 1)[1].split(";;", 1)[0]
+    assert "rollback_release" not in data_branch
+    assert "no automatic rollback" in data_branch
+    assert "switch|start)" in handler
+    assert "CONTRACT_MIGRATION_MARKER='-- deploy-compat: contract'" in script
+    rollback = script.split("rollback_release() {", 1)[1].split("\n}\n", 1)[0]
+    assert "--offline" in rollback and "apply_" not in rollback and "pip" not in rollback
+
+
+# 第 2 层：迁移必须向后兼容（只扩展）。收缩型语句只能出现在带标记的迁移里，
+# run.sh 据此把该次发布的迁移留到停机窗口内执行，并禁止自动回滚到旧版本。
+_MIGRATION_BASELINE = {"operation_service": 18, "manager_service": 50}
+_CONTRACT_SQL = (
+    r"\bDROP\s+(TABLE|COLUMN|INDEX|TYPE|SCHEMA|VIEW)\b",
+    r"\bRENAME\s+(TO|COLUMN|CONSTRAINT)\b",
+    r"\bALTER\s+COLUMN\s+\w+\s+(SET\s+DATA\s+)?TYPE\b",
+    r"\bSET\s+NOT\s+NULL\b",
+    r"\bTRUNCATE\b",
+)
+
+
+def test_new_migrations_are_expand_only_unless_marked_contract():
+    import re
+
+    script = (ROOT / "deploy/ci/run.sh").read_text(encoding="utf-8")
+    marker = "-- deploy-compat: contract"
+    assert f"CONTRACT_MIGRATION_MARKER='{marker}'" in script
+    offenders = []
+    for service, baseline in _MIGRATION_BASELINE.items():
+        for path in sorted((ROOT / "server" / service / "migrations").glob("*.sql")):
+            if int(path.name.split("_", 1)[0]) <= baseline:
+                continue
+            text = path.read_text(encoding="utf-8")
+            body = "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+            if marker not in text and any(re.search(p, body, re.IGNORECASE) for p in _CONTRACT_SQL):
+                offenders.append(f"{service}/{path.name}")
+    assert not offenders, (
+        f"收缩型迁移必须带一行 `{marker}`，并拆成两次发布（先扩展、后收缩），见 deploy/ci/README.md：{offenders}"
+    )
