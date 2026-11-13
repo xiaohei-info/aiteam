@@ -129,8 +129,8 @@ class PgTenantSession(TenantDataSession):
     def __init__(self, dsn: str, tenant_id: str):
         self._dsn = dsn
         self._tenant_id = tenant_id
-        self._conn = None  # type: ignore[var-annotated]
-        self._cur = None  # type: ignore[var-annotated]
+        self._conn: Any = None
+        self._cur: Any = None
 
     @property
     def tenant_id(self) -> str:
@@ -151,7 +151,7 @@ class PgTenantSession(TenantDataSession):
         self._cur.execute("SELECT set_config('app.tenant_id', %s, true)", (self._tenant_id,))
         return self
 
-    def execute(self, sql: str, params: tuple | list | None = None):
+    def execute(self, sql: str, params: tuple | list | None = None) -> Any:
         """在租户事务内执行 SQL，返回 cursor（可 .fetchone()/.fetchall()）。"""
         self._cur.execute(sql, params)
         return self._cur

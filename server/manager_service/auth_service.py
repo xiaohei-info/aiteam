@@ -28,7 +28,7 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import AuthProvider, EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
-from shared.errors import Conflict, NotFound, ServiceUnavailable, Unauthorized, ValidationProblem
+from shared.errors import Conflict, NotFound, ServiceUnavailable, TooManyRequests, Unauthorized, ValidationProblem
 from shared.auth.constants import AUTH_SESSION_TTL_SECONDS
 
 from .active_principal import require_active
@@ -44,6 +44,23 @@ from .repository import TenantAuthRepository
 from .security import hash_password, verify_password
 
 _ACCESS_TTL_SECONDS = AUTH_SESSION_TTL_SECONDS
+
+
+CHANGE_PW_MAX_FAILURES = 5
+CHANGE_PW_WINDOW_MINUTES = 15
+_CHANGE_PW_DETAIL = "change_password"
+
+
+class OldPasswordIncorrect(ValidationProblem):
+    code, title = "old_password_incorrect", "Old password incorrect"
+
+
+class PasswordNotSet(Conflict):
+    code, title = "password_not_set", "Password not set"
+
+
+class TooManyAttempts(TooManyRequests):
+    code, title = "too_many_attempts", "Too many attempts"
 
 
 class TenantSelectionRequired(Conflict):
@@ -265,6 +282,38 @@ class AuthService:
         record_attempt(self._audit, ctx, provider="password", external_id=req.account,
                        actor=identity.user_id, success=True, detail="owner reset")
         return self._issue(tenant_id, identity.user_id, identity.roles)
+
+    def change_password(self, claims: TokenClaims, *, old_password: str, new_password: str) -> None:
+        """已登录成员自助设置新密码：校验旧密码，成功后吊销该成员除当前会话外的其它会话。
+
+        连续输错旧密码 5 次（15 分钟内）后锁定，期间连正确的旧密码也会被拒绝；
+        审计库未配置时拒绝操作（无法计数就不能放开）。
+        """
+        if self._audit is None:
+            raise ServiceUnavailable("login audit store is not configured")
+        if not claims.tenant_id:
+            raise Unauthorized("token has no tenant")
+        ctx = TenantContext(tenant_id=claims.tenant_id, user_id=claims.user_id, roles=list(claims.roles))
+        identity = require_active(self._repo.find_user(ctx, user_id=claims.user_id))
+        if not identity.secret:
+            raise PasswordNotSet("this account has no local password")
+        detail = _CHANGE_PW_DETAIL
+        if self._audit.count_recent_failures(
+            ctx, actor=claims.user_id, detail=detail, within_minutes=CHANGE_PW_WINDOW_MINUTES,
+        ) >= CHANGE_PW_MAX_FAILURES:
+            raise TooManyAttempts("too many incorrect attempts, try again later")
+        if not verify_password(old_password, identity.secret):
+            record_attempt(self._audit, ctx, provider="password", external_id=None,
+                           actor=claims.user_id, success=False, detail=detail)
+            raise OldPasswordIncorrect("old password is incorrect")
+        if new_password == old_password:
+            raise ValidationProblem("new password must differ from the old one")
+        validate_password_complexity(new_password)
+        self._repo.update_secret_for_user(ctx, user_id=claims.user_id, secret=hash_password(new_password))
+        if self._sessions is not None and claims.jti:
+            self._sessions.revoke_user_except(ctx, keep_jti=claims.jti, reason="password_changed")
+        record_attempt(self._audit, ctx, provider="password", external_id=None,
+                       actor=claims.user_id, success=True, detail=detail)
 
     # ---- token 单一出口（9.3/9.5）----
     def _issue(self, tenant_id, user_id, roles):

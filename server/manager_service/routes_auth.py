@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import require_claims
 from shared.contracts.auth import TokenClaims
@@ -24,6 +24,15 @@ class ResolveTenantInput(BaseModel):
     enterprise: str = Field(
         description="企业代码或企业名称（匹配 tenant_registry.enterprise_code 或 enterprise_slug）"
     )
+
+
+class ChangePasswordInput(BaseModel):
+    """自助设置新密码。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    old_password: str = Field(description="当前密码")
+    new_password: str = Field(description="新密码，需满足企业密码策略")
 
 
 class ResolveTenantOutput(BaseModel):
@@ -107,6 +116,15 @@ async def logout(request: Request, svc: AuthService = Depends(_auth_service)) ->
     claims = require_claims(request.app.state._token_verifier)(request)
     svc.revoke(claims, reason="user_logout")
     return Envelope[dict[str, bool]](data={"signed_out": True})
+
+
+@router.post("/password", description="已登录成员自助设置新密码：校验旧密码，成功后吊销该成员其它会话（当前会话保留）。连续输错旧密码 5 次（15 分钟内）返回 429。仅第三方登录的账号返回 409。", summary="自助设置新密码", operation_id="manager_change_password")
+async def change_password(
+    body: ChangePasswordInput, request: Request, svc: AuthService = Depends(_auth_service)
+) -> Envelope[dict[str, bool]]:
+    claims = require_claims(request.app.state._token_verifier)(request)
+    svc.change_password(claims, old_password=body.old_password, new_password=body.new_password)
+    return Envelope[dict[str, bool]](data={"changed": True})
 
 
 @router.post("/owner-reset", description="active账号以旧密码重置。请求携带企业标识或已解析 tenant。password_reset_required/password_expired提示重置；principal_inactive拒绝重置和签发。已签发 JWT 会话会撤销。", summary="负责人首登强制重置（公开端点）", operation_id="manager_owner_reset")
