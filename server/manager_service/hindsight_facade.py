@@ -1,6 +1,7 @@
 """Operation-scoped Hindsight transport; bank administration stays in trusted Manager code."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
@@ -89,7 +90,9 @@ class HindsightFacade:
         # The persisted bank is Manager-derived at issuance, never caller input.
         if not all(isinstance(v, str) and v.strip() for v in (lease.tenant_id, lease.member_id, lease.employee_id)):
             raise HindsightLeaseForbidden("Hindsight lease scope is invalid")
-        self._authorize(lease, operation)
+        # Authorization regenerates the snapshot (Manager DB + Operator catalog);
+        # keep that blocking IO off the event loop shared by every Manager request.
+        await asyncio.to_thread(self._authorize, lease, operation)
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
@@ -113,14 +116,14 @@ class HindsightFacade:
             raise HindsightUnavailable("Hindsight upstream is not configured")
         # Body streaming can span a revocation/expiry; recheck before side effects.
         lease = self.leases.resolve(token, bank_id=bank_id)
-        policy = self._authorize(lease, operation)
+        policy = await asyncio.to_thread(self._authorize, lease, operation)
         ctx = TenantContext(tenant_id=lease.tenant_id, user_id=lease.member_id)
         if self._retention is not None:
             payload = (self._retention.prepare(ctx, employee_id=lease.employee_id, bank_id=bank_id, policy=policy, body=payload)
                        if operation == "retain" else self._retention.recall_body(policy, payload))
         # Write authorization linearizes at this final current-policy check.
         # A later revocation cannot roll back a native operation already handed off.
-        self._authorize(self.leases.resolve(token, bank_id=bank_id), operation)
+        await asyncio.to_thread(self._authorize, self.leases.resolve(token, bank_id=bank_id), operation)
         client = self._client or httpx.AsyncClient(timeout=60.0, follow_redirects=False)
         try:
             async with client.stream("POST", f"{self.settings.base_url.rstrip('/')}/{path}", json=payload,

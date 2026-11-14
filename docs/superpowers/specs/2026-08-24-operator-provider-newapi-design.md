@@ -94,7 +94,7 @@
 
 ### 7.1 Operator 配置
 
-1. Operation 启动后首次访问时自动确保内置 NewAPI Provider 投影，并从内部 NewAPI 渠道刷新模型。
+1. Operation 启动后首次访问时自动确保内置 NewAPI Provider 投影，并从内部 NewAPI 渠道刷新模型；之后目录读取（含 Manager 拉取）只读库，距上次刷新超过 5 分钟时由后台线程刷新，读请求不等待 NewAPI / models.dev。渠道增删改仍即时刷新。
 2. Operator 页面默认展示内部 NewAPI 和可用模型；新上游渠道在 NewAPI 管理面配置。
 3. 同步公开价格或人工维护，发布模型/价格版本。
 4. 注册专家模板时从已发布模型选择。

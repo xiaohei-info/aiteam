@@ -21,7 +21,7 @@ def build_platform_model_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get("", operation_id="manager_platform_model_list")
-    async def list_platform_models(request: Request, claims: TokenClaims = Depends(require)) -> Envelope[PlatformCatalogOut]:
+    def list_platform_models(request: Request, claims: TokenClaims = Depends(require)) -> Envelope[PlatformCatalogOut]:
         claims_ctx = tenant_context_from(claims)
         catalog = _list_platform_catalog(request.app.state._operator_catalog, claims_ctx.tenant_id)
         return Envelope(data=PlatformCatalogOut(**catalog))

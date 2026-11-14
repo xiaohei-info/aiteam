@@ -40,11 +40,11 @@ def build_skill_market_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.get("", summary="列出平台技能市场", description="列出 Operator 已发布且当前企业可安装的技能版本。", operation_id="manager_skill_market_list")
-    async def list_market(request: Request, claims: TokenClaims = Depends(require)) -> ListEnvelope[PlatformSkillMarketOut]:
+    def list_market(request: Request, claims: TokenClaims = Depends(require)) -> ListEnvelope[PlatformSkillMarketOut]:
         return ListEnvelope(data=[PlatformSkillMarketOut(**item) for item in _service(request).list_market(tenant_context_from(claims))])
 
     @router.post("/{skill_id}/install", summary="安装平台技能", description="将指定的 Operator 固定版本技能导入当前企业技能目录。", operation_id="manager_skill_market_install")
-    async def install_skill(
+    def install_skill(
         skill_id: str,
         body: PlatformSkillRef,
         request: Request,
