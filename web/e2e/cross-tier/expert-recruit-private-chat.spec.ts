@@ -1,7 +1,7 @@
 /**
  * AITEAM-685 跨端全链路 E2E：专家注册 → 招募 → 私聊会话创建。
  *
- * 业务闭环：Operator 发布专家模板 → Manager 按 platform_model_ref 招募
+ * 业务闭环：Operator 发布专家模板（不带模型）→ Manager 招募时选择平台模型（model_policy）
  * → Manager 授权 member → Agent sync 拉取 → Agent 私聊 roster 出现该专家 → 创建私聊会话。
  *
  * Provider 匹配隔离：本用例只在 E2E_EXTERNAL_SEED 提供的独立 tenant 上运行，并使用
@@ -11,9 +11,9 @@
  *   npx playwright test e2e/cross-tier/expert-recruit-private-chat.spec.ts --project=cross-tier
  *
  * 验收锚点：
- * - Operation 端注册专家模板（platform_model_ref 指向已发布 provider/model）并发布。
- * - Manager 端招募专家（template_id 引用 Operator 模板）→ 落库 employee
- *   的 model_policy 与 platform_model_ref 一致，并可完成 runtime provider access。
+ * - Operation 端注册专家模板（模板不带模型）并发布。
+ * - Manager 端招募专家（template_id 引用 Operator 模板，model_policy 指向已发布、价格已知的模型）
+ *   → 落库 employee 的 model_policy 与所选模型一致，并可完成 runtime provider access。
  * - Manager 端 member_grant 授权 → Agent 端 sync 成功 → roster 可见该 employee。
  * - Agent 端创建私聊会话，entry_employee_id == 招募的 employee_id。
  * - /api/manager/grants/authorized-config 主体不一致 → 403，且不得被误判为通过。
@@ -121,7 +121,6 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
           display_name: templateDisplayName,
           category: "通用咨询",
           system_prompt: "你是一个专业的 E2E 测试专家。",
-          platform_model_ref: platformModelRef,
           platform_skill_refs: [],
           description: "E2E 全链路测试专家模板",
         },
@@ -199,6 +198,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       {
         data: {
           template_id: templateId,
+          model_policy: { provider_ref: providerRef, model: platformModelRef.model_id },
           display_name_override: `E2E Matched Expert ${uniqueTag}`,
         },
         headers: {
@@ -270,12 +270,12 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     stageExpect(
       modelPolicy.model === platformModelRef.model_id,
       "match",
-      `employee.model_policy.model 应与 platform_model_ref 一致：期望=${platformModelRef.model_id} 实际=${modelPolicy.model}`,
+      `employee.model_policy.model 应与招募时选择的模型一致：期望=${platformModelRef.model_id} 实际=${modelPolicy.model}`,
     );
     stageExpect(
       modelPolicy.provider_ref === providerRef,
       "match",
-      `employee.model_policy.provider_ref 应与 platform_model_ref 一致：期望=${providerRef} 实际=${modelPolicy.provider_ref}`,
+      `employee.model_policy.provider_ref 应与招募时选择的模型一致：期望=${providerRef} 实际=${modelPolicy.provider_ref}`,
     );
 
     // ── 6. Manager 授权当前 member 使用该 employee（member_grant）──
@@ -449,10 +449,27 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     }
     if (!employeeId) {
       const templateId = recruitable[0]?.template_id!;
+      // 招募必须选模型：取本企业可用的第一个已发布、价格已知的平台模型。
+      const modelsResp = await request.get(`${TIER_API_ORIGIN.manager}/api/manager/platform-models`, {
+        headers: { Authorization: `Bearer ${mgrToken}` },
+        failOnStatusCode: false,
+      });
+      const catalog = modelsResp.ok()
+        ? ((await modelsResp.json()) as { data?: { models?: Array<{ model?: { provider_id?: string; model_id?: string; status?: string }; rate?: { pricing_status?: string } | null }> } }).data
+        : undefined;
+      const usable = catalog?.models?.find((item) => item.model?.status === "published" && item.rate?.pricing_status === "known");
+      if (!usable?.model?.provider_id || !usable.model.model_id) {
+        test.skip(true, "[authz-gate-negative] 本企业没有可用的平台模型，且 seed 无 employee，无法建立 403 前置");
+        return;
+      }
       const recruitResp = await request.post(
         `${TIER_API_ORIGIN.manager}/api/manager/recruit/experts`,
         {
-          data: { template_id: templateId, display_name_override: `gate-neg-${uniqueTag}` },
+          data: {
+            template_id: templateId,
+            model_policy: { provider_ref: usable.model.provider_id, model: usable.model.model_id },
+            display_name_override: `gate-neg-${uniqueTag}`,
+          },
           headers: { Authorization: `Bearer ${mgrToken}`, "Content-Type": "application/json" },
           failOnStatusCode: false,
         },

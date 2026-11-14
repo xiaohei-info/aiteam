@@ -1,4 +1,5 @@
 /** 可用于生成的模型：已发布、有价格的平台模型（与专家模板注册页同一口径）。 */
+import { isSelectablePlatformModel } from "@aiteam/shared";
 import { useEffect, useState } from "react";
 import { usePlatformProvidersApi } from "../providers/usePlatformProvidersApi";
 import type { ModelRef } from "./types";
@@ -31,7 +32,7 @@ export function usePublishedModels(enabled: boolean): PublishedModels {
         const options: ModelOption[] = [];
         for (const { provider, models } of groups) {
           for (const item of models) {
-            if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
+            if (!isSelectablePlatformModel(item)) continue;
             const input = item.model.capabilities.input;
             const supportsImages = Array.isArray(input) && input.includes("image");
             options.push({

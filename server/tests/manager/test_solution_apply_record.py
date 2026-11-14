@@ -10,7 +10,6 @@ from __future__ import annotations
 import pytest
 
 from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
-from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.tenancy import TenantContext
 
 from manager_service.schemas import ApplySolutionRequest
@@ -18,10 +17,6 @@ from manager_service.schemas import ApplySolutionRequest
 
 def _ctx(tid: str, roles=None) -> TenantContext:
     return TenantContext(tenant_id=tid, user_id="u-1", roles=roles or ["owner"])
-
-
-def _ref(model):
-    return PlatformModelRef(provider_id="provider-1", model_id=model)
 
 
 from tests.manager._recruit_model import EXPERT_MODELS
@@ -32,11 +27,11 @@ def _solution_package(solution_id="sol-1", version="v1") -> SolutionPackage:
         solution_id=solution_id, version=version, display_name="行业方案A",
         experts=[
             ExpertTemplateDetail(
-                template_id="tpl-a", version="v1", display_name="专家甲", platform_model_ref=_ref("m-a"),
+                template_id="tpl-a", version="v1", display_name="专家甲",
                 persona="你是甲", recommended_config={"model": "m-a", "skills": ["s-a"]},
             ),
             ExpertTemplateDetail(
-                template_id="tpl-b", version="v1", display_name="专家乙", platform_model_ref=_ref("m-b"),
+                template_id="tpl-b", version="v1", display_name="专家乙",
                 persona="你是乙", recommended_config={"model": "m-b", "knowledge_refs": ["ks-b"]},
             ),
         ],

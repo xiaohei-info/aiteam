@@ -181,7 +181,6 @@ test.describe("Pi solution → fixed participant group chat", () => {
           display_name: `E2E Solution ${role} ${tag}`,
           category: "E2E",
           system_prompt: `You are the ${role} solution expert. Reply briefly.`,
-          platform_model_ref: modelRef,
           platform_skill_refs: [],
           description: `Pi solution ${role} expert`,
         },
@@ -253,7 +252,13 @@ test.describe("Pi solution → fixed participant group chat", () => {
       agentHeaders = bearer(agentLogin.token);
     }
     const applyResponse = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/recruit/solutions`, {
-      data: { solution_id: solutionId, solution_version: "1", member_ids: [memberId], department_ids: [] },
+      data: {
+        solution_id: solutionId, solution_version: "1", member_ids: [memberId], department_ids: [],
+        // 模板不带模型：应用方案时为每个新建专家选择平台模型。
+        expert_models: Object.fromEntries(
+          expertIds.map((id) => [id, { provider_ref: modelRef.provider_id, model: modelRef.model_id }]),
+        ),
+      },
       headers: { ...managerHeaders, "Content-Type": "application/json", "Idempotency-Key": `e2e-apply-${tag}` },
       failOnStatusCode: false,
     });

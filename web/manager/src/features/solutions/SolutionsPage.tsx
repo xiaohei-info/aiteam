@@ -235,7 +235,7 @@ function SolutionApplyDialog({
     });
   }, []);
 
-  function useForAllNew(key: string | undefined): void {
+  function applyToAllNew(key: string | undefined): void {
     if (!key) return;
     setModelKeys((current) => ({ ...current, ...Object.fromEntries(newExperts.map((expert) => [expert.template_id, key])) }));
     setModelErrors({});
@@ -310,7 +310,7 @@ function SolutionApplyDialog({
                   autoPickSingle={false}
                   isRequired={false}
                   placeholder="一次给全部新建专家选同一个模型"
-                  onChange={useForAllNew}
+                  onChange={applyToAllNew}
                   isDisabled={working}
                   testId="solution-model-all"
                 />

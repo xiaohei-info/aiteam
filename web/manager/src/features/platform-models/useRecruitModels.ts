@@ -4,6 +4,7 @@
  * 模板不再带模型，模型由企业在招募时显式选择；这里只列出本企业可用的
  * （Operator 已发布且价格已知）模型。`/api/manager/platform-models` 已按企业开通过滤。
  */
+import { isSelectablePlatformModel } from "@aiteam/shared";
 import { useEffect, useState } from "react";
 import type { RecruitModelPolicy } from "../experts/types";
 import { usePlatformModelsApi } from "./usePlatformModelsApi";
@@ -42,7 +43,7 @@ export function useRecruitModels(): RecruitModels {
       (catalog) => {
         if (!active) return;
         const choices = catalog.models
-          .filter((item) => item.model.status === "published" && item.rate?.pricing_status === "known")
+          .filter(isSelectablePlatformModel)
           .map<ModelChoice>((item) => {
             const { provider_id, model_id, display_name } = item.model;
             const name = display_name && display_name !== model_id ? `${display_name} · ${model_id}` : model_id;

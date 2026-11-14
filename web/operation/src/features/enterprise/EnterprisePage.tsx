@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { isSelectablePlatformModel } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -53,7 +54,7 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
       const options: EnterpriseModelOption[] = [];
       for (const { provider, models } of groups) {
         for (const item of models) {
-          if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
+          if (!isSelectablePlatformModel(item)) continue;
           const value = `${provider.provider_id}::${item.model.model_id}`;
           options.push({
             value,
