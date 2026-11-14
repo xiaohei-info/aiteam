@@ -14,6 +14,14 @@ const catalogItem = {
   default_model: "gpt-5",
 };
 
+/** 已发布模板（带「已发布」成功徽标）；后注册的路由优先，只覆盖目录列表。 */
+async function mockPublishedCatalog(page: Page): Promise<void> {
+  await page.route("**/api/operation/catalog?**", (route) => route.fulfill({ json: {
+    data: [{ ...catalogItem, status: "published", visible_scope: { mode: "all" } }],
+    page: { next_cursor: null, has_more: false },
+  } }));
+}
+
 async function mockOperationReadModels(page: Page): Promise<void> {
   await page.route("**/api/operation/providers", (route) => route.fulfill({ json: {
     data: [],
@@ -124,16 +132,19 @@ authTest.describe("Operation Astryx rollout", () => {
     expect(browserErrors).toEqual([]);
   });
 
-  authTest("隐藏目录模板必须经过破坏性确认", async ({ authedPage }) => {
+  authTest("下架目录模板必须经过破坏性确认", async ({ authedPage }) => {
+    // R3：「隐藏」改为发布范围里的「暂不开放」；已发布模板的「下架」是唯一需要破坏性确认的操作。
     await mockOperationReadModels(authedPage);
+    await mockPublishedCatalog(authedPage);
     await authedPage.goto("/experts");
-    await authedPage.getByRole("button", { name: "隐藏" }).click();
-    await expect(authedPage.getByRole("alertdialog", { name: "隐藏模板" })).toBeVisible();
-    await expect(authedPage.getByRole("button", { name: "确认隐藏" })).toBeVisible();
+    await authedPage.getByRole("button", { name: "下架", exact: true }).click();
+    await expect(authedPage.getByRole("alertdialog", { name: "下架模板" })).toBeVisible();
+    await expect(authedPage.getByRole("button", { name: "确认下架" })).toBeVisible();
   });
 
   authTest("语义状态和破坏性操作按钮的文字与底色保持对比度", async ({ authedPage }) => {
     await mockOperationReadModels(authedPage);
+    await mockPublishedCatalog(authedPage);
     await authedPage.emulateMedia({ colorScheme: "light" });
     await authedPage.goto("/experts");
     const items = authedPage.locator(".astryx-badge.success, .astryx-button.destructive");
