@@ -201,6 +201,12 @@ if settings.db_url and settings.admin_db_url:
     app.state._hindsight_lease_store = _hindsight_lease_store
 # 受保护端点共享的 token 验签器（挂 app.state 供业务路由引用，03 §9.6）。
 app.state._token_verifier = _verifier
+if settings.admin_db_url:
+    # R5：统一入口按租户状态放行（暂停只读；封禁 / 注销 / 删除拒绝）。
+    from .tenant_status import TenantStatusStore, install_tenant_status_guard
+
+    app.state._tenant_status_store = TenantStatusStore(settings.admin_db_url)
+    install_tenant_status_guard(app)
 app.state._auth_sessions = _auth_sessions
 # Operator 目录拉取端口（05 F06/F07，#176）。OPERATOR_URL 必填，否则 fail-closed（AITEAM-331 C1）。
 app.state._operator_catalog = _build_operator_catalog()

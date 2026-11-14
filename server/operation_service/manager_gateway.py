@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from shared.contracts.crosstier import EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest
+from shared.contracts.crosstier import (
+    EnterpriseNotifyRequest, OwnerBootstrapSync, TenantProvisionRequest, TenantPurgeRequest, TenantStatusSync,
+)
 from shared.service_client import ServiceClient
 
 
@@ -33,6 +35,14 @@ class ManagerGateway(Protocol):
 
     def notify_enterprise(self, req: EnterpriseNotifyRequest, *, idempotency_key: str) -> None:
         """F17：通知 Manager 向运营指定企业发送运营侧消息（站内信）。Manager 在租户上下文内落库。"""
+        ...
+
+    def set_tenant_status(self, tenant_id: str, status: str, *, reason: str | None = None, idempotency_key: str) -> None:
+        """R5：同步企业生命周期状态（active / suspended / banned / closed / deleted）。"""
+        ...
+
+    def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
+        """R5：保留期后清理该 tenant 的全部数据（仅对 deleted 的租户生效）。"""
         ...
 
 
@@ -76,4 +86,23 @@ class HttpManagerGateway:
             service_purpose="notification:write",
             service_enterprise_id=req.org_id,
             service_tenant_id=req.tenant_id,
+        )
+
+    def set_tenant_status(self, tenant_id: str, status: str, *, reason: str | None = None, idempotency_key: str) -> None:
+        self._client.post(
+            f"/api/manager/tenants/{tenant_id}/status",
+            json=TenantStatusSync(status=status, reason=reason).model_dump(mode="json", exclude_none=True),
+            idempotency_key=idempotency_key,
+            service_purpose="tenant:lifecycle",
+            service_tenant_id=tenant_id,
+        )
+
+    def purge_tenant(self, tenant_id: str, *, idempotency_key: str) -> None:
+        self._client.post(
+            f"/api/manager/tenants/{tenant_id}/purge",
+            # 与其余调用一致去掉空值：Manager 按去空值后的正文校验签名摘要。
+            json=TenantPurgeRequest().model_dump(mode="json", exclude_none=True),
+            idempotency_key=idempotency_key,
+            service_purpose="tenant:lifecycle",
+            service_tenant_id=tenant_id,
         )

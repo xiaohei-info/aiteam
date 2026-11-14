@@ -135,6 +135,10 @@ class MeOut(BaseModel):
     enterprise_code: str | None = Field(description="企业代码；读不到时为空。")
     account_masked: str = Field(description="脱敏后的登录账号。")
     roles: list[str]
+    tenant_status: str = Field(
+        default="active",
+        description="企业状态：active 或 suspended（暂停，仅可查看）。封禁 / 注销 / 删除的企业请求本接口会直接得到 403。",
+    )
     has_password: bool = Field(description="是否持有本地密码；仅第三方登录的账号为 false。")
     password_policy: MePasswordPolicyOut
 

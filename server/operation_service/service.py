@@ -290,6 +290,17 @@ class ProvisioningService:
             raise BootstrapReceiptExpired("the one-time secret of this request has expired; reset again")
         return receipt.bootstrap_secret
 
+    def _assert_owner_resettable(self, enterprise_id: str) -> None:
+        """R5：已注销 / 删除流程中 / 已清理的企业不能重置负责人凭据（暂停、封禁仍可）。"""
+        if self._admin is None:
+            return
+        try:
+            state = self._admin.get_state(enterprise_id)
+        except NotFound:
+            return
+        if state.operation_status in ("closed", "deleting", "deleted") or getattr(state, "purged_at", None):
+            raise Conflict(f"owner credentials cannot be reset for a {state.operation_status} enterprise")
+
     def reset_owner_bootstrap(
         self,
         enterprise_id: str,
@@ -299,6 +310,7 @@ class ProvisioningService:
         actor_name: str | None = None,
     ) -> OwnerBootstrapResetResult:
         account = self._repo.get(enterprise_id)  # NotFound -> 404
+        self._assert_owner_resettable(enterprise_id)
         self._sweep_expired_secrets()
         raw_key = normalize_idempotency_key(idempotency_key)
         receipt_key = f"reset:{enterprise_id}:{raw_key}"

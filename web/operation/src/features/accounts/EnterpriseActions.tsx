@@ -1,8 +1,11 @@
 import { useRef, useState, type ReactNode } from "react";
 import { DropdownMenu, DropdownMenuItem } from "@astryxdesign/core/DropdownMenu";
+import { PlatformRole, hasRole } from "@aiteam/shared";
+import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import type { AccountsApi } from "./useAccountsApi";
-import type { EnterpriseAccount, EnterpriseActionBody } from "./types";
+import { Text } from "@astryxdesign/core/Text";
+import { retentionDaysLeft, type EnterpriseAccount, type EnterpriseActionBody } from "./types";
 import { RechargeDialog } from "./RechargeDialog";
 import { NotificationDialog } from "./NotificationDialog";
 import { QuotaDialog } from "./QuotaDialog";
@@ -10,8 +13,9 @@ import { LifecycleDialogs, type LifecycleAction } from "./LifecycleDialogs";
 import { EnterpriseModelAccessDialog } from "./EnterpriseModelAccessDialog";
 import { ResetOwnerDialog } from "./ResetOwnerDialog";
 import { EnterpriseProfileDialog } from "./EnterpriseProfileDialog";
+import { DeletionDialog, type DeletionMode } from "./DeletionDialog";
 
-type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile";
+type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile" | DeletionMode;
 
 interface Props {
   api: AccountsApi;
@@ -28,6 +32,12 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
   const isClosed = status === "closed";
   const isBanned = status === "banned";
   const isSuspended = status === "suspended";
+  const isDeleting = status === "deleting";
+  const isDeleted = status === "deleted";
+  const { session } = useSession();
+  const isSystemAdmin = hasRole(session, PlatformRole.SYSTEM_ADMIN);
+  const retentionEnded = retentionDaysLeft(enterprise.deleted_at) === 0;
+  const purged = Boolean(enterprise.purged_at);
 
   async function runAction(body: EnterpriseActionBody): Promise<string | null> {
     setSubmitting(true);
@@ -44,6 +54,14 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
     }
   }
 
+  const deletionActive = active === "delete" || active === "restore" || active === "abandon" || active === "purge"
+    ? active
+    : null;
+
+  // 删除流程中的企业只有系统管理员能操作；已清理的企业没有任何可用操作。不渲染点开是空的菜单。
+  if ((isDeleting || isDeleted) && (!isSystemAdmin || purged)) {
+    return <Text color="secondary">{purged ? "—" : "仅系统管理员可操作"}</Text>;
+  }
   const lifecycleActive = active === "ban" || active === "unban" || active === "suspend" || active === "close" || active === "reactivate"
     ? active
     : null;
@@ -55,6 +73,15 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
         data-testid={`actions-toggle-${enterprise.org_id}`}
         menuWidth={220}
       >
+        {isDeleting || isDeleted ? (
+          <>
+            {isDeleting && <DropdownMenuItem label="继续删除（上次未完成）" onClick={() => setActive("delete")} />}
+            {isDeleting && <DropdownMenuItem label="放弃删除" onClick={() => setActive("abandon")} />}
+            {isDeleted && !retentionEnded && <DropdownMenuItem label="恢复企业" onClick={() => setActive("restore")} />}
+            {isDeleted && retentionEnded && <DropdownMenuItem label="清理数据" onClick={() => setActive("purge")} />}
+          </>
+        ) : (
+          <>
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.recharge")} onClick={() => setActive("recharge")} />
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.notify")} onClick={() => setActive("notify")} />
         {!isClosed && !isBanned && !isSuspended && (
@@ -75,6 +102,9 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
         <DropdownMenuItem label="编辑企业信息" onClick={() => setActive("profile")} />
         <DropdownMenuItem label="配置可用模型" onClick={() => setActive("model_access")} />
         {!isClosed && <DropdownMenuItem label="重置管理员密码" onClick={() => setActive("reset_owner")} />}
+        {isSystemAdmin && isClosed && <DropdownMenuItem label="删除企业" onClick={() => setActive("delete")} />}
+          </>
+        )}
       </DropdownMenu>
 
       {active === "recharge" && (
@@ -117,6 +147,9 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
       )}
       {active === "reset_owner" && (
         <ResetOwnerDialog api={api} enterprise={enterprise} onClose={() => { setActive(null); requestAnimationFrame(() => triggerRef.current?.focus()); }} />
+      )}
+      {deletionActive && (
+        <DeletionDialog mode={deletionActive} api={api} enterprise={enterprise} onClose={() => setActive(null)} onDone={onDone} />
       )}
       {lifecycleActive && (
         <LifecycleDialogs
