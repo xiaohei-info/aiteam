@@ -4,6 +4,7 @@ import { useSession } from "../../auth/session";
 import type {
   DraftCreateInput,
   DraftDetail,
+  DraftList,
   DraftSummary,
   FindingResolution,
   GeneratedSolution,
@@ -14,10 +15,11 @@ import type {
 const BASE = "/api/operation/solution-authoring/drafts";
 
 export interface SolutionAuthoringApi {
-  list: () => Promise<DraftSummary[]>;
-  create: (input: DraftCreateInput) => Promise<DraftSummary>;
+  list: () => Promise<DraftList>;
+  create: (input: DraftCreateInput) => Promise<{ draft_id: string }>;
   get: (draftId: string) => Promise<DraftDetail>;
   archive: (draftId: string) => Promise<void>;
+  cancelGeneration: (draftId: string) => Promise<DraftDetail>;
   uploadSource: (draftId: string, file: File) => Promise<SourceDocument>;
   deleteSource: (draftId: string, sourceId: string) => Promise<void>;
   generate: (draftId: string, idempotencyKey: string) => Promise<GenerationJob>;
@@ -40,10 +42,19 @@ export function useSolutionAuthoringApi(): SolutionAuthoringApi {
     const client = createOperationApiClient({ getToken: () => token, onUnauthorized });
     const draft = (draftId: string) => `${BASE}/${draftId}`;
     return {
-      async list() { return (await client.listGet<DraftSummary>(BASE)).items; },
-      async create(input) { return required(await client.post<DraftSummary>(BASE, { body: input })); },
+      async list() {
+        const result = await client.listGet<DraftSummary>(BASE);
+        const serverTime = typeof result.meta?.server_time === "string" ? Date.parse(result.meta.server_time) : Number.NaN;
+        return {
+          drafts: result.items,
+          workerAvailable: result.meta?.worker_available !== false,
+          serverNow: Number.isNaN(serverTime) ? null : serverTime,
+        };
+      },
+      async create(input) { return required(await client.post<{ draft_id: string }>(BASE, { body: input })); },
       async get(draftId) { return required(await client.get<DraftDetail>(draft(draftId))); },
       async archive(draftId) { await client.del<null>(draft(draftId)); },
+      async cancelGeneration(draftId) { return required(await client.post<DraftDetail>(`${draft(draftId)}/generation/cancel`)); },
       async uploadSource(draftId, file) {
         const body = new FormData();
         body.append("file", file, file.name);

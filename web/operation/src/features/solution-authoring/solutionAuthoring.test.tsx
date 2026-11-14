@@ -27,7 +27,7 @@ const SUMMARY: DraftSummary = {
   draft_id: DRAFT_ID, title: "质检方案", status: "ready_for_review",
   platform_model_ref: { provider_id: "provider-1", model_id: "model-1" }, image_recognition: "none", version: 3,
   published_solution_id: null, created_by: "u1", updated_by: "u1",
-  created_at: "2026-11-12T08:00:00Z", updated_at: "2026-11-12T08:05:00Z",
+  created_at: "2026-11-12T08:00:00Z", updated_at: "2026-11-12T08:05:00Z", latest_job: null,
 };
 
 const PHONE_FINDING: Finding = {
@@ -417,7 +417,7 @@ describe("DraftDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "脱敏" }));
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
     expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);
-    expect(screen.queryByText(/无法恢复/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前正文、人工修改/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     await waitFor(() => expect(isDisabled(screen.getByRole("button", { name: "脱敏" }))).toBe(false));
@@ -486,12 +486,12 @@ describe("DraftDetailPage", () => {
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: approved });
     const operator = renderDetail("system_operator");
     await screen.findByText("审核已通过，等待管理员发布");
-    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
     operator.unmount();
 
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: approved });
     const admin = renderDetail("system_admin");
-    expect(await screen.findByRole("button", { name: "归档" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "删除" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "驳回" })).toBeInTheDocument();
     expect(screen.queryByText("上一次发布没有完成")).not.toBeInTheDocument();
     admin.unmount();
@@ -507,7 +507,7 @@ describe("DraftDetailPage", () => {
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "published", findings: [], publish_started: true, published_solution_id: "sa-abc" })) });
     renderDetail("system_operator");
     await screen.findByRole("link", { name: "查看目录项" });
-    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 
   it("操作记录是合法的列表结构", async () => {
@@ -525,10 +525,10 @@ describe("DraftDetailPage", () => {
       [`DELETE ${BASE}/${DRAFT_ID}`]: () => new Response(null, { status: 204 }),
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "归档" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
     expect(await screen.findByText(/已上传的资料原件会被删除/)).toBeInTheDocument();
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
-    fireEvent.click(screen.getByRole("button", { name: "确认归档" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     expect(await screen.findByText("列表页")).toBeInTheDocument();
     expect(calls.filter((call) => call.method === "DELETE")).toHaveLength(1);
   });
@@ -553,5 +553,227 @@ describe("labels", () => {
   it("未知错误码原样带出，不吞掉", () => {
     expect(jobError("something_new")).toBe("生成失败（something_new）");
     expect(jobError(null)).toBe("");
+  });
+});
+
+// ---- 草稿列表：筛选、最近任务提示与行操作 ----
+
+const OTHER_ID = "22222222-2222-4222-8222-222222222222";
+const NOW = "2026-11-13T04:00:00Z";
+
+function job(overrides: Partial<NonNullable<DraftSummary["latest_job"]>> = {}): NonNullable<DraftSummary["latest_job"]> {
+  return { status: "queued", error_code: null, created_at: new Date().toISOString(), started_at: null, finished_at: null, ...overrides };
+}
+
+function listResponse(drafts: DraftSummary[], meta?: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({ data: drafts, page: {}, ...(meta ? { meta } : {}) }), {
+    status: 200, headers: { "content-type": "application/json" },
+  });
+}
+
+function summary(overrides: Partial<DraftSummary>): DraftSummary {
+  return { ...SUMMARY, ...overrides };
+}
+
+async function openRowMenu(draftId: string, item: string) {
+  const row = (await screen.findAllByRole("row")).find((candidate) => candidate.querySelector(`a[href$="${draftId}"]`));
+  expect(row).toBeDefined();
+  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: /的操作$/ }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
+describe("草稿列表的筛选与行操作", () => {
+  it("默认只显示未完成的草稿，切到「全部」才显示已发布的", async () => {
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([
+        summary({ status: "draft", title: "未完成方案" }),
+        summary({ draft_id: OTHER_ID, status: "published", title: "已发布方案" }),
+      ]),
+    });
+    renderList();
+    expect(await screen.findByRole("link", { name: "未完成方案" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "已发布方案" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "全部" }));
+    expect(await screen.findByRole("link", { name: "已发布方案" })).toBeInTheDocument();
+  });
+
+  it("生成失败、被取消与排队过久分别给出提示", async () => {
+    const stale = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([
+        summary({ draft_id: "a", title: "失败的", status: "draft", latest_job: job({ status: "failed", error_code: "model_error" }) }),
+        summary({ draft_id: "b", title: "取消的", status: "draft", latest_job: job({ status: "failed", error_code: "cancelled" }) }),
+        summary({ draft_id: "c", title: "卡住的", status: "generating", latest_job: job({ created_at: stale }) }),
+      ]),
+    });
+    renderList();
+    expect(await screen.findByText(/上次生成失败/)).toBeInTheDocument();
+    expect(screen.getByText("生成已取消")).toBeInTheDocument();
+    expect(screen.getByText(/疑似卡住/)).toBeInTheDocument();
+  });
+
+  it("排队是否过久按服务器时间判断，不受浏览器时钟影响", async () => {
+    // 浏览器时钟比服务器快 1 小时：按浏览器算会误报卡住，按服务器时间只排了 2 分钟。
+    const serverNow = Date.now() - 60 * 60 * 1000;
+    const queuedAt = new Date(serverNow - 2 * 60 * 1000).toISOString();
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse(
+        [summary({ status: "generating", latest_job: job({ created_at: queuedAt }) })],
+        { worker_available: true, server_time: new Date(serverNow).toISOString() },
+      ),
+    });
+    renderList();
+    expect(await screen.findByText("排队中")).toBeInTheDocument();
+    expect(screen.queryByText(/疑似卡住/)).not.toBeInTheDocument();
+  });
+
+  it("每行的操作按钮带草稿标题，读屏可区分", async () => {
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([
+        summary({ title: "零售方案", status: "draft" }),
+        summary({ draft_id: OTHER_ID, title: "制造方案", status: "draft" }),
+      ]),
+    });
+    renderList();
+    expect(await screen.findByRole("button", { name: "零售方案 的操作" })).toHaveTextContent("操作");
+    expect(screen.getByRole("button", { name: "制造方案 的操作" })).toBeInTheDocument();
+  });
+
+  it("执行器未启用时提示，且排队的草稿说明不会被执行", async () => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "generating", latest_job: job() })], { worker_available: false }) });
+    renderList();
+    expect(await screen.findByText("生成服务未启用")).toBeInTheDocument();
+    expect(screen.getByText(/任务不会被执行/, { selector: "span" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["draft", ["继续生成", "删除"]],
+    ["generating", ["取消生成", "删除"]],
+    ["ready_for_review", ["删除"]],
+  ] as const)("%s 状态的草稿只出现可用的菜单项", async (status, expected) => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status, latest_job: status === "generating" ? job({ status: "parsing" }) : null })]) });
+    renderList();
+    fireEvent.click(await screen.findByRole("button", { name: /的操作$/ }));
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);
+  });
+
+  it("已发布的草稿只有管理员能在列表里删除", async () => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "approved" })]) });
+    renderList();
+    await screen.findByRole("link", { name: "质检方案" });
+    expect(screen.queryByRole("button", { name: /的操作$/ })).not.toBeInTheDocument();
+  });
+
+  it("继续生成：用新的幂等键发起生成并刷新列表", async () => {
+    let listed = 0;
+    const calls = mockApi({
+      [`GET ${BASE}`]: () => listResponse([listed++ === 0 ? summary({ status: "draft" }) : summary({ status: "generating", latest_job: job() })]),
+      [`POST ${BASE}/${DRAFT_ID}/generate`]: () => json({ job_id: "j-2", status: "queued" }, 202),
+    });
+    renderList();
+    await openRowMenu(DRAFT_ID, "继续生成");
+    await waitFor(() => expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/generate"))).toBe(true));
+    const post = calls.find((call) => call.method === "POST")!;
+    expect(post.headers.get("Idempotency-Key")).toBeTruthy();
+    expect(await screen.findByText("排队中")).toBeInTheDocument();
+  });
+
+  it("非安全上下文（http://IP 访问，没有 crypto.randomUUID）下继续生成仍可用", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array) => bytes.fill(7) });
+    try {
+      const calls = mockApi({
+        [`GET ${BASE}`]: () => listResponse([summary({ status: "draft" })]),
+        [`POST ${BASE}/${DRAFT_ID}/generate`]: () => json({ job_id: "j-2", status: "queued" }, 202),
+      });
+      renderList();
+      await openRowMenu(DRAFT_ID, "继续生成");
+      await waitFor(() => expect(calls.some((call) => call.method === "POST" && call.path.endsWith("/generate"))).toBe(true));
+      expect(calls.find((call) => call.method === "POST")!.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("继续生成被拒绝时在列表顶部显示原因", async () => {
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([summary({ status: "draft" })]),
+      [`POST ${BASE}/${DRAFT_ID}/generate`]: () => json({ status: 422, code: "validation_error", title: "Unprocessable", detail: "model is no longer published" }, 422),
+    });
+    renderList();
+    await openRowMenu(DRAFT_ID, "继续生成");
+    expect(await screen.findByText(/model is no longer published/)).toBeInTheDocument();
+  });
+
+  it("取消生成需要确认：返回不发请求，确认后调用取消接口", async () => {
+    const calls = mockApi({
+      [`GET ${BASE}`]: () => listResponse([summary({ status: "generating", latest_job: job({ status: "parsing" }) })]),
+      [`POST ${BASE}/${DRAFT_ID}/generation/cancel`]: () => json(detail({ status: "draft" })),
+    });
+    renderList();
+    await openRowMenu(DRAFT_ID, "取消生成");
+    fireEvent.click(await screen.findByRole("button", { name: "返回" }));
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    await openRowMenu(DRAFT_ID, "取消生成");
+    fireEvent.click(await screen.findByRole("button", { name: "确认取消" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/generation/cancel"))).toBe(true));
+  });
+
+  it("删除生成中的草稿：先取消再删除；已完成的直接删除", async () => {
+    const calls = mockApi({
+      [`GET ${BASE}`]: () => listResponse([summary({ status: "generating", latest_job: job({ status: "parsing" }) })]),
+      [`POST ${BASE}/${DRAFT_ID}/generation/cancel`]: () => json(detail({ status: "draft" })),
+      [`DELETE ${BASE}/${DRAFT_ID}`]: () => new Response(null, { status: 204 }),
+    });
+    renderList();
+    await openRowMenu(DRAFT_ID, "删除");
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "DELETE")).toBe(true));
+    const writes = calls.filter((call) => call.method !== "GET").map((call) => `${call.method} ${call.path.replace(BASE, "")}`);
+    expect(writes).toEqual([`POST /${DRAFT_ID}/generation/cancel`, `DELETE /${DRAFT_ID}`]);
+  });
+
+  it("删除失败时显示原因，列表保持", async () => {
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([summary({ status: "draft" })]),
+      [`DELETE ${BASE}/${DRAFT_ID}`]: () => json({ status: 403, code: "forbidden", title: "Forbidden", detail: "only a system_admin can archive an approved or published draft" }, 403),
+    });
+    renderList();
+    await openRowMenu(DRAFT_ID, "删除");
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    expect(await screen.findByText(/only a system_admin/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "质检方案" })).toBeInTheDocument();
+  });
+});
+
+describe("草稿详情的取消生成", () => {
+  it("生成中显示「取消生成」，确认后调用取消接口；生成被取消后显示说明", async () => {
+    let cancelled = false;
+    const calls = mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => json(cancelled
+        ? detail({ status: "draft", package: null, findings: [], latest_job: { job_id: "j", status: "failed", attempt: 1, error_code: "cancelled", error_message: "", usage: {}, created_at: NOW, started_at: NOW, finished_at: NOW } })
+        : detail({ status: "generating", latest_job: { job_id: "j", status: "parsing", attempt: 1, error_code: null, error_message: null, usage: {}, created_at: NOW, started_at: NOW, finished_at: null } })),
+      [`POST ${BASE}/${DRAFT_ID}/generation/cancel`]: () => {
+        cancelled = true;
+        return json(detail({ status: "draft", package: null, findings: [], latest_job: { job_id: "j", status: "failed", attempt: 1, error_code: "cancelled", error_message: "", usage: {}, created_at: NOW, started_at: NOW, finished_at: NOW } }));
+      },
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "取消生成" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认取消" }));
+    expect(await screen.findByText("上一次生成已取消")).toBeInTheDocument();
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
+  it("生成中点「删除」会先取消再删除并回到列表", async () => {
+    const calls = mockApi({
+      [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "generating", latest_job: null })),
+      [`POST ${BASE}/${DRAFT_ID}/generation/cancel`]: () => json(detail({ status: "draft" })),
+      [`DELETE ${BASE}/${DRAFT_ID}`]: () => new Response(null, { status: 204 }),
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
+    expect(await screen.findByText("列表页")).toBeInTheDocument();
+    expect(calls.filter((call) => call.method !== "GET").map((call) => call.method)).toEqual(["POST", "DELETE"]);
   });
 });

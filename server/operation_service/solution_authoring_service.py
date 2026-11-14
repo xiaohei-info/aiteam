@@ -57,6 +57,7 @@ from .solution_authoring_schemas import (
     DraftCreate,
     DraftDetailOut,
     DraftOut,
+    DraftSummaryOut,
     FindingResolution,
     JobOut,
     PackageUpdate,
@@ -142,8 +143,13 @@ class SolutionAuthoringService:
         )
         return DraftOut.of(self._repo.create_draft(row))
 
-    def list_drafts(self) -> list[DraftOut]:
-        return [DraftOut.of(row) for row in self._repo.list_drafts()]
+    def list_drafts(self) -> list[DraftSummaryOut]:
+        return [DraftSummaryOut.summarize(row, job) for row, job in self._repo.list_drafts_with_latest_job()]
+
+    def cancel_generation(self, draft_id: str, actor_id: str) -> DraftDetailOut:
+        """取消进行中的生成；没有进行中的任务时原样返回（幂等）。"""
+        self._repo.cancel_job(draft_id, actor_id)
+        return self.get_draft(draft_id)
 
     def get_draft(self, draft_id: str) -> DraftDetailOut:
         row = self._repo.get_draft(draft_id)

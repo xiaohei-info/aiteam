@@ -242,6 +242,48 @@ def test_archiving_an_approved_draft_needs_the_reviewer_role(client, env):
 
 # ---- 契约 ----
 
+def test_list_reports_whether_a_worker_is_running_and_the_latest_job(client, env, monkeypatch):
+    draft_id = _create(client)
+    assert _upload(client, draft_id).status_code == 201
+    client.post(f"{BASE}/drafts/{draft_id}/generate", headers={**_auth(), "Idempotency-Key": "k1"})
+    monkeypatch.setattr("operation_service.routes_solution_authoring.worker_enabled", lambda: False)
+    listed = client.get(f"{BASE}/drafts", headers=_auth()).json()
+    assert listed["meta"]["worker_available"] is False
+    # 服务器当前时间：前端据此判断「排队过久」，不受浏览器时钟偏差影响（#200 评论）。
+    from datetime import UTC, datetime
+    server_time = datetime.fromisoformat(listed["meta"]["server_time"])
+    assert server_time.tzinfo is not None and abs((datetime.now(UTC) - server_time).total_seconds()) < 60
+    job = listed["data"][0]["latest_job"]
+    assert set(job) == {"status", "error_code", "created_at", "started_at", "finished_at"} and job["status"] == "queued"
+    monkeypatch.setattr("operation_service.routes_solution_authoring.worker_enabled", lambda: True)
+    assert client.get(f"{BASE}/drafts", headers=_auth()).json()["meta"]["worker_available"] is True
+
+
+def test_cancel_generation_over_http(client, env):
+    draft_id = _create(client)
+    assert _upload(client, draft_id).status_code == 201
+    client.post(f"{BASE}/drafts/{draft_id}/generate", headers={**_auth(), "Idempotency-Key": "k1"})
+    assert client.post(f"{BASE}/drafts/{draft_id}/generation/cancel").status_code == 401
+    _problem(client.post(f"{BASE}/drafts/{draft_id}/generation/cancel", headers=_auth(EnterpriseRole.OWNER.value)), 403, "forbidden")
+    response = client.post(f"{BASE}/drafts/{draft_id}/generation/cancel", headers=_auth())
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert (data["status"], data["latest_job"]["error_code"]) == ("draft", "cancelled")
+    again = client.post(f"{BASE}/drafts/{draft_id}/generation/cancel", headers=_auth())
+    assert again.status_code == 200 and again.json()["data"]["version"] == data["version"]
+    _problem(client.post(f"{BASE}/drafts/{MISSING}/generation/cancel", headers=_auth()), 404, "not_found")
+    assert client.post(f"{BASE}/drafts/{draft_id}/generate", headers={**_auth(), "Idempotency-Key": "k2"}).status_code == 202
+
+
+def test_a_cancelled_draft_can_be_archived(client, env):
+    draft_id = _create(client)
+    assert _upload(client, draft_id).status_code == 201
+    client.post(f"{BASE}/drafts/{draft_id}/generate", headers={**_auth(), "Idempotency-Key": "k1"})
+    _problem(client.delete(f"{BASE}/drafts/{draft_id}", headers=_auth()), 409, "invalid_transition")
+    assert client.post(f"{BASE}/drafts/{draft_id}/generation/cancel", headers=_auth()).status_code == 200
+    assert client.delete(f"{BASE}/drafts/{draft_id}", headers=_auth()).status_code == 204
+
+
 def test_openapi_exposes_solution_authoring_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
     expected = {
@@ -250,6 +292,7 @@ def test_openapi_exposes_solution_authoring_routes(client):
         f"{BASE}/drafts/{{draft_id}}/sources": {"post"},
         f"{BASE}/drafts/{{draft_id}}/sources/{{source_id}}": {"delete"},
         f"{BASE}/drafts/{{draft_id}}/generate": {"post"},
+        f"{BASE}/drafts/{{draft_id}}/generation/cancel": {"post"},
         f"{BASE}/drafts/{{draft_id}}/jobs/{{job_id}}": {"get"},
         f"{BASE}/drafts/{{draft_id}}/package": {"put"},
         f"{BASE}/drafts/{{draft_id}}/findings/{{finding_id}}/resolve": {"post"},

@@ -111,8 +111,10 @@ class Runner:
         self.prompts: list[tuple[str, str]] = []
         self.before_return = lambda: None
         self.closed = False
+        self.aborts: list = []
 
-    def generate(self, chunks, *, model, budget, system_prompt, task_prompt):
+    def generate(self, chunks, *, model, budget, system_prompt, task_prompt, abort=None):
+        self.aborts.append(abort)
         self.chunks = list(chunks)
         self.prompts.append((system_prompt, task_prompt))
         if self.generate_error is not None:
@@ -125,7 +127,8 @@ class Runner:
         self.before_return()
         return GenerateOutcome(result=result, usage=AuthoringUsage(input_tokens=90, output_tokens=10, total_tokens=100, turns=3, tool_calls=3))
 
-    def recognize(self, images, *, model, budget, system_prompt, task_prompt):
+    def recognize(self, images, *, model, budget, system_prompt, task_prompt, abort=None):
+        self.aborts.append(abort)
         recognized = [
             RecognizedImage(image_id=image.image_id, status="unrecognized", reason="unreadable") if image.image_id in self.unreadable
             else RecognizedImage(image_id=image.image_id, status="recognized", blocks=[RecognizedBlock(text="图中流程：抽检", confidence=0.4)])
@@ -413,6 +416,133 @@ def test_a_job_taken_over_by_another_instance_writes_nothing(env):
     detail = env.service.get_draft(draft_id)
     assert (detail.status, detail.package) == ("generating", None)
     assert detail.latest_job is not None and detail.latest_job.status == "parsing"
+
+
+def test_losing_the_lease_sets_the_abort_event_so_the_runner_can_stop_the_child(env):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    env.executor = GenerationJobExecutor(env.repo, env.store, env.models, env.runner, owner="w1", clock=env.clock, lease_seconds=0.4)
+    seen: dict[str, bool] = {}
+
+    def generate(chunks, *, abort=None, **_):
+        env.clock.now += timedelta(seconds=600)
+        assert env.repo.claim_job("w2", 600) is not None
+        seen["aborted"] = abort is not None and abort.wait(5)
+        raise WorkerError("worker_crashed", "aborted")
+
+    env.runner.generate = generate
+    assert env.executor.run_once() is True
+    assert seen == {"aborted": True}
+    detail = env.service.get_draft(draft_id)
+    assert (detail.status, detail.package) == ("generating", None)
+
+
+def test_the_abort_event_stays_clear_while_the_lease_is_held(env):
+    env.generated()
+    assert env.runner.aborts and all(item is not None and not item.is_set() for item in env.runner.aborts)
+
+
+# ---- 草稿列表的最近任务与取消生成 ----
+
+def test_the_list_carries_the_latest_job_of_each_draft_without_error_details(env):
+    never_generated = env.draft(title="空草稿")
+    done = env.generated(title="已生成")
+    queued = env.draft(title="排队中")
+    env.service.add_source(queued, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(queued, "op1", "k9")
+    by_id = {item.draft_id: item for item in env.service.list_drafts()}
+    assert by_id[never_generated].latest_job is None
+    assert (by_id[queued].latest_job.status, by_id[queued].latest_job.error_code) == ("queued", None)
+    assert by_id[done].latest_job.status == "succeeded" and by_id[done].latest_job.finished_at is not None
+    assert not hasattr(by_id[done].latest_job, "error_message")
+
+
+def test_the_list_shows_the_newest_job_after_a_regeneration(env):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    env.runner.generate_error = WorkerError("model_error", "boom")
+    env.executor.run_once()
+    env.runner.generate_error = None
+    env.service.request_generation(draft_id, "op1", "k2")
+    only = env.service.list_drafts()[0]
+    assert only.latest_job.status == "queued"
+    env.executor.run_once()
+    assert env.service.list_drafts()[0].latest_job.status == "succeeded"
+
+
+def test_list_reads_jobs_in_one_query_regardless_of_the_draft_count(env):
+    for n in range(5):
+        env.draft(title=f"草稿{n}")
+    calls = {"latest_jobs": 0, "jobs": 0}
+    original_tx = env.repo._transaction
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def counting():
+        with original_tx() as tx:
+            for name in calls:
+                inner = getattr(tx, name)
+
+                def wrapper(*args, _name=name, _inner=inner, **kwargs):
+                    calls[_name] += 1
+                    return _inner(*args, **kwargs)
+
+                setattr(tx, name, wrapper)
+            yield tx
+
+    env.repo._transaction = counting
+    assert len(env.service.list_drafts()) == 5
+    assert calls == {"latest_jobs": 1, "jobs": 0}
+
+
+def test_cancelling_a_queued_job_fails_it_as_cancelled_and_frees_the_draft(env):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    detail = env.service.cancel_generation(draft_id, "op2")
+    assert detail.status == "draft"
+    assert (detail.latest_job.status, detail.latest_job.error_code) == ("failed", "cancelled")
+    assert detail.latest_job.finished_at is not None
+    assert detail.events[-1].action == "generation_cancelled" and detail.events[-1].actor_id == "op2"
+    assert env.executor.run_once() is False
+    env.service.request_generation(draft_id, "op1", "k2")
+    assert env.executor.run_once() is True
+    assert env.service.get_draft(draft_id).status == "ready_for_review"
+
+
+def test_cancelling_a_regeneration_keeps_the_previous_content(env):
+    draft_id = env.generated()
+    before = env.service.get_draft(draft_id).package
+    env.service.request_generation(draft_id, "op1", "k2")
+    detail = env.service.cancel_generation(draft_id, "op1")
+    assert detail.status == "ready_for_review" and detail.package == before
+
+
+def test_cancelling_without_an_active_job_changes_nothing(env):
+    draft_id = env.generated()
+    version = env.service.get_draft(draft_id).version
+    detail = env.service.cancel_generation(draft_id, "op1")
+    assert (detail.version, detail.status) == (version, "ready_for_review")
+    assert len(env.service.get_draft(draft_id).events) == len(detail.events)
+
+
+def test_a_cancelled_running_job_writes_nothing_even_if_the_worker_finishes(env):
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    env.runner.before_return = lambda: env.service.cancel_generation(draft_id, "op2")
+    assert env.executor.run_once() is True
+    detail = env.service.get_draft(draft_id)
+    assert (detail.status, detail.package) == ("draft", None)
+    assert (detail.latest_job.status, detail.latest_job.error_code) == ("failed", "cancelled")
+
+
+def test_cancel_refuses_unknown_and_archived_drafts(env):
+    with pytest.raises(NotFound):
+        env.service.cancel_generation("00000000-0000-4000-8000-000000000000", "op1")
 
 
 def test_shutdown_stops_claiming_and_closes_the_runner(env):

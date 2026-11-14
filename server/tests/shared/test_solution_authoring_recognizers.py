@@ -39,9 +39,11 @@ class _Runner:
     def __init__(self, failures: dict[int, str] | None = None):
         self.batches: list[list[str]] = []
         self.budgets: list[AuthoringBudget] = []
+        self.aborts: list = []
         self._failures = failures or {}
 
-    def recognize(self, images, *, model, budget, system_prompt, task_prompt):
+    def recognize(self, images, *, model, budget, system_prompt, task_prompt, abort=None):
+        self.aborts.append(abort)
         index = len(self.batches)
         self.batches.append([image.image_id for image in images])
         self.budgets.append(budget)
@@ -129,3 +131,12 @@ def test_chunks_from_recognition_flags_low_confidence_and_lists_unrecognized():
         ("s1-i2", "空白页", "第 2 页图片"), ("s1-i3", "no_result", "第 3 页图片"), ("s1-i4", "no_result", "第 4 页图片"),
     ]
     assert chunks_from_recognition(images[:1], recognized, low_confidence_threshold=0.99)[0][0].low_confidence is True
+
+
+def test_vision_recognizer_hands_the_abort_event_to_every_batch():
+    import threading
+
+    abort = threading.Event()
+    runner = _Runner()
+    VisionImageRecognizer(runner, VISION, abort=abort).recognize(_images(20))
+    assert len(runner.aborts) == 3 and all(item is abort for item in runner.aborts)
