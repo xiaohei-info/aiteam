@@ -489,8 +489,9 @@ describe("ExpertsPage 复制专家", () => {
     const { api } = mockApis([employeeConfigured]);
     const copy = api.copyEmployee as ReturnType<typeof vi.fn>;
     copy
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      // 与共享客户端一致：没有 HTTP 响应时抛 status=0 的 network_error（#205 第 2 轮评论）。
+      .mockRejectedValueOnce(ApiError.network("Failed to fetch"))
+      .mockRejectedValueOnce(ApiError.network("Failed to fetch"))
       .mockRejectedValueOnce(new ApiError("名称已被占用", 409, "conflict"))
       .mockResolvedValueOnce(copied);
     renderPage();

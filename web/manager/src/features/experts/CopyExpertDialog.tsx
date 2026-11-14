@@ -63,7 +63,8 @@ export function CopyExpertDialog({ api, source, onClose, onCopied }: Props): Rea
       const copy = await api.copyEmployee(source.employee_id, body, attempt.current.key);
       if (copy) onCopied(copy);
     } catch (err) {
-      if (err instanceof ApiError) attempt.current = null;
+      // 服务端有答复（status > 0）才换键；共享客户端把网络失败包成 status=0 的 network_error，此时保留原键重试。
+      if (err instanceof ApiError && err.status !== 0) attempt.current = null;
       if (err instanceof ApiError && MODEL_ERRORS.has(err.code)) setForcePick(true);
       setError(err instanceof ApiError ? err.message : "复制失败，请稍后重试");
       setBusy(false);
