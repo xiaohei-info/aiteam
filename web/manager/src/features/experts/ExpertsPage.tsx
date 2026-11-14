@@ -28,7 +28,12 @@ import "./experts.css";
 
 type ExpertFilter = "all" | "active" | "attention";
 
-function statusPresentation(status: string): { label: string; tone: string } {
+function isScopeRevoked(reason: string | null | undefined): boolean {
+  return (reason ?? "").startsWith("catalog_scope_revoked");
+}
+
+function statusPresentation(status: string, reason?: string | null): { label: string; tone: string } {
+  if (isScopeRevoked(reason)) return { label: "已停用 · 不在发布范围", tone: "is-paused" };
   if (status === "active") return { label: "运行中", tone: "is-active" };
   if (status === "paused") return { label: "已暂停", tone: "is-paused" };
   if (status === "draft") return { label: "待上线", tone: "is-draft" };
@@ -192,9 +197,10 @@ export function ExpertsPage(): ReactNode {
       ) : (
         <div data-ui="expert-grid" data-testid="employee-list">
           {filteredItems.map((employee) => {
-            const action = employee.status === "active" ? "pause" : employee.status === "paused" ? "resume" : employee.status === "draft" ? "activate" : null;
+            const scopeRevoked = isScopeRevoked(employee.status_reason);
+            const action = scopeRevoked ? null : employee.status === "active" ? "pause" : employee.status === "paused" ? "resume" : employee.status === "draft" ? "activate" : null;
             const configured = Boolean(employee.model_policy.provider_ref && employee.model_policy.model);
-            const status = statusPresentation(employee.status);
+            const status = statusPresentation(employee.status, employee.status_reason);
             const displayName = employee.display_name || "未命名专家";
             return (
               <article key={employee.employee_id} data-ui="expert-card" role="article" aria-label={displayName}>

@@ -139,7 +139,7 @@ class RecruitService:
 
         # 1) 单向拉模板详情（只读，不改 Operator 真相；Operator 不写 Manager 库）。
         template = self._catalog.pull_expert_template(
-            template_id=req.template_id, version=req.template_version
+            template_id=req.template_id, version=req.template_version, tenant_id=ctx.tenant_id,
         )
         if self._employees.get_by_source_template(
             ctx, source_template_id=template.template_id
@@ -266,7 +266,7 @@ class RecruitService:
 
         # 1) 单向拉方案包（只读；方案真相只在 Operator 侧，Manager 只读用）。
         package = self._catalog.pull_solution_package(
-            solution_id=req.solution_id, version=req.solution_version
+            solution_id=req.solution_id, version=req.solution_version, tenant_id=ctx.tenant_id,
         )
 
         # 2) 本 tenant 方案实例幂等：同 (solution_id, version) 已存在 → 冲突（避免重复展开）。

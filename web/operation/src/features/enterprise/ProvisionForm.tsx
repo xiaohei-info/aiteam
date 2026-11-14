@@ -10,6 +10,15 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import type { PlatformModelRef } from "../catalog/types";
+import { parseTags, validateProfile } from "./profile";
+
+/** 企业资料：行业（单选文本）+ 标签；用于专家发布范围匹配。 */
+export interface EnterpriseProfileInput {
+  industry?: string;
+  tags?: string[];
+}
+
+export { parseTags } from "./profile";
 
 export interface EnterpriseModelOption {
   value: string;
@@ -18,7 +27,7 @@ export interface EnterpriseModelOption {
 }
 
 interface Props {
-  onSubmit: (name: string, phone: string, code: string, allowedModelRefs?: PlatformModelRef[] | null) => Promise<boolean>;
+  onSubmit: (name: string, phone: string, code: string, allowedModelRefs?: PlatformModelRef[] | null, profile?: EnterpriseProfileInput) => Promise<boolean>;
   modelOptions?: EnterpriseModelOption[];
   selectedModelValues?: string[];
   onSelectedModelsChange?: (values: string[]) => void;
@@ -40,6 +49,8 @@ export function ProvisionForm({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
+  const [industry, setIndustry] = useState("");
+  const [tagsText, setTagsText] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -53,18 +64,28 @@ export function ProvisionForm({
       setValidationError(i18n.t("operation.enterprise.phone_required"));
       return;
     }
-    const succeeded = await onSubmit(
-      name.trim(),
-      phone.trim(),
-      code.trim(),
-      modelOptions.length > 0
-        ? modelOptions.filter((option) => selectedModelValues.includes(option.value)).map((option) => option.ref)
-        : [],
-    );
+    const tags = parseTags(tagsText);
+    const profileError = validateProfile(industry, tags);
+    if (profileError) {
+      setValidationError(profileError);
+      return;
+    }
+    const models = modelOptions.length > 0
+      ? modelOptions.filter((option) => selectedModelValues.includes(option.value)).map((option) => option.ref)
+      : [];
+    const profile: EnterpriseProfileInput = {
+      ...(industry.trim() ? { industry: industry.trim() } : {}),
+      ...(tags.length ? { tags } : {}),
+    };
+    const succeeded = await (Object.keys(profile).length
+      ? onSubmit(name.trim(), phone.trim(), code.trim(), models, profile)
+      : onSubmit(name.trim(), phone.trim(), code.trim(), models));
     if (succeeded) {
       setName("");
       setPhone("");
       setCode("");
+      setIndustry("");
+      setTagsText("");
     }
   }
 
@@ -95,6 +116,22 @@ export function ProvisionForm({
               value={code}
               onChange={setCode}
               placeholder="enterprise_code（可选）"
+              isOptional
+              isDisabled={loading}
+            />
+            <TextInput
+              label="所属行业"
+              value={industry}
+              onChange={setIndustry}
+              placeholder="如：制造业（可选，用于专家发布范围）"
+              isOptional
+              isDisabled={loading}
+            />
+            <TextInput
+              label="企业标签"
+              value={tagsText}
+              onChange={setTagsText}
+              placeholder="多个用逗号分隔，如：华东, KA（可选）"
               isOptional
               isDisabled={loading}
             />

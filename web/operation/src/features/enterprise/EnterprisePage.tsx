@@ -69,7 +69,7 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
     return () => { active = false; };
   }, [providerApi]);
 
-  async function handleProvision(name: string, phone: string, code: string, allowedModelRefs?: PlatformModelRef[] | null): Promise<boolean> {
+  async function handleProvision(name: string, phone: string, code: string, allowedModelRefs?: PlatformModelRef[] | null, profile?: { industry?: string; tags?: string[] }): Promise<boolean> {
     setProvisionError(null);
     setProvisionLoading(true);
     try {
@@ -77,6 +77,8 @@ export function EnterprisePage({ apiClient }: Props): ReactNode {
         enterprise_name: name,
         owner_phone: phone,
         ...(code ? { enterprise_code: code } : {}),
+        ...(profile?.industry ? { industry: profile.industry } : {}),
+        ...(profile?.tags?.length ? { tags: profile.tags } : {}),
         ...(allowedModelRefs !== undefined ? { allowed_model_refs: allowedModelRefs } : {}),
       });
       setProvisionResult(result);

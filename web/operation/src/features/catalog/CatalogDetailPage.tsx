@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError, PlatformRole, hasRole } from "@aiteam/shared";
-import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Banner } from "@astryxdesign/core/Banner";
 import { BreadcrumbItem, Breadcrumbs } from "@astryxdesign/core/Breadcrumbs";
 import { Button } from "@astryxdesign/core/Button";
@@ -15,10 +14,11 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
-import { TemplateOverview, visibilityScopeFor } from "./TemplateOverview";
+import { TemplateOverview } from "./TemplateOverview";
+import { ScopeDialog } from "./ScopeDialog";
 import { TemplateVersionPanel, type DetailTab } from "./TemplateVersionPanel";
 import { useCatalogApi } from "./useCatalogApi";
-import type { CatalogDetailLocationState, CatalogItem, CatalogItemType } from "./types";
+import type { CatalogDetailLocationState, CatalogItem, CatalogItemType, VisibleScope } from "./types";
 import { isSafeAvatarDataUrl } from "./avatar";
 import { profileFromItem, profilePayload, validateProfile, type ProfileErrors } from "./profile";
 
@@ -38,9 +38,7 @@ export function CatalogDetailPage(): ReactNode {
   const [error, setError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [profileErrors, setProfileErrors] = useState<ProfileErrors>({});
-  const [visibilityError, setVisibilityError] = useState<string | null>(null);
-  const [pendingHidden, setPendingHidden] = useState(false);
-  const [visibilityWorking, setVisibilityWorking] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [activeTab, setActiveTab] = useState<DetailTab>("overview");
 
@@ -54,10 +52,8 @@ export function CatalogDetailPage(): ReactNode {
     setError(null);
     setEditError(null);
     setProfileErrors({});
-    setVisibilityError(null);
-    setPendingHidden(false);
+    setScopeOpen(false);
     setSaving(false);
-    setVisibilityWorking(false);
     setEditing(false);
     setActiveTab("overview");
     api.get(catalog_type as CatalogItemType, template_id)
@@ -74,33 +70,12 @@ export function CatalogDetailPage(): ReactNode {
       });
   }, [api, catalog_type, template_id]);
 
-  const doVisibility = useCallback(async (next: "public" | "enterprise" | "hidden") => {
+  const saveScope = useCallback(async (scope: VisibleScope) => {
     if (!catalog_type || !template_id) return;
-    const currentRequest = requestId.current;
-    setVisibilityWorking(true);
-    setVisibilityError(null);
-    try {
-      const updated = await api.setVisibility(catalog_type as CatalogItemType, template_id, visibilityScopeFor(next));
-      if (requestId.current !== currentRequest) return;
-      if (updated) setItem(updated);
-      setPendingHidden(false);
-    } catch (err) {
-      if (requestId.current === currentRequest) {
-        setVisibilityError(err instanceof Error ? err.message : "操作失败");
-      }
-    } finally {
-      if (requestId.current === currentRequest) setVisibilityWorking(false);
-    }
+    const updated = await api.setVisibility(catalog_type as CatalogItemType, template_id, scope);
+    if (updated) setItem(updated);
+    setScopeOpen(false);
   }, [api, catalog_type, template_id]);
-
-  const requestVisibilityChange = useCallback((next: "public" | "enterprise" | "hidden") => {
-    if (next === "hidden") {
-      setVisibilityError(null);
-      setPendingHidden(true);
-      return;
-    }
-    void doVisibility(next);
-  }, [doVisibility]);
 
   const handleSave = useCallback(async () => {
     if (!catalog_type || !template_id || !draft) return;
@@ -184,8 +159,6 @@ export function CatalogDetailPage(): ReactNode {
         {canWrite && !editing && <Button label="编辑" variant="secondary" size="sm" onClick={() => setEditing(true)} />}
       </HStack>
 
-      {visibilityError && !pendingHidden && <Banner status="error" title={visibilityError} />}
-
       <TemplateVersionPanel item={item} activeTab={activeTab} onTabChange={setActiveTab} />
 
       {activeTab === "overview" && (
@@ -195,9 +168,8 @@ export function CatalogDetailPage(): ReactNode {
           editing={editing}
           canWrite={canWrite}
           profileErrors={profileErrors}
-          visibilityChanging={visibilityWorking}
           onChange={setDraft}
-          onVisibilityChange={requestVisibilityChange}
+          onAdjustScope={() => setScopeOpen(true)}
         />
       )}
 
@@ -218,22 +190,15 @@ export function CatalogDetailPage(): ReactNode {
         </Card>
       )}
 
-      <AlertDialog
-        isOpen={pendingHidden}
-        onOpenChange={(open) => {
-          if (!open && !visibilityWorking) {
-            setPendingHidden(false);
-            setVisibilityError(null);
-          }
-        }}
-        title="隐藏模板"
-        description={`隐藏后模板不再向企业展示。${visibilityError ? ` ${visibilityError}` : ""}`}
-        cancelLabel="取消"
-        actionLabel="确认隐藏"
-        actionVariant="destructive"
-        isActionLoading={visibilityWorking}
-        onAction={() => void doVisibility("hidden")}
-      />
+      {scopeOpen && (
+        <ScopeDialog
+          title="调整发布范围"
+          confirmLabel="保存范围"
+          initial={item.visible_scope}
+          onConfirm={saveScope}
+          onClose={() => setScopeOpen(false)}
+        />
+      )}
     </VStack>
   );
 }

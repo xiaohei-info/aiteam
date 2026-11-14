@@ -9,7 +9,7 @@ verifier 注入：本端 DevTokenService（骨架期）/ 生产 RS256 验签器�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
@@ -20,6 +20,7 @@ from shared.errors import AppError
 from shared.db import PgTenantRouter
 
 from .active_principal import require_admin
+from .catalog_scope_wiring import reconcile_for_admin
 from .employee_config_service import EmployeeConfigService, build_employee_config_service
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 from .avatar_schemas import EmployeeAvatarIn, EmployeeAvatarOut
@@ -116,11 +117,14 @@ def build_employee_router(verifier) -> APIRouter:
     )
     async def list_employee_config(
         request: Request,
+        background: BackgroundTasks,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[EmployeeConfigOut]:
-        require_admin(tenant_context_from(claims))
-        svc = _service(request)
-        items = svc.list_all(tenant_context_from(claims))
+        ctx = tenant_context_from(claims)
+        require_admin(ctx)
+        items = _service(request).list_all(ctx)
+        # 发布范围对账要调运营端：放到响应之后，运营端慢或不可用时列表照常返回；结果在下次打开时可见。
+        background.add_task(reconcile_for_admin, request, ctx)
         return ListEnvelope[EmployeeConfigOut](data=items)
 
     @router.get(

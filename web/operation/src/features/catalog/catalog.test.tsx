@@ -207,6 +207,16 @@ afterEach(() => {
 
 // ---- 1. role-state 门控 ----
 
+// 发布范围弹窗会拉取联想与预计企业数；其余请求按 handler 处理，未处理的返回空成功。
+function scopeFetch(handler: (url: string, init?: RequestInit) => Response | undefined) {
+  mockFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("/scope-options")) return singleResponse({ industries: ["制造业"], tags: ["KA"] });
+    if (u.includes("/scope-preview")) return singleResponse({ visible_enterprise_count: 3 });
+    return handler(u, init) ?? singleResponse(null);
+  });
+}
+
 describe("role-state 门控", () => {
   it("无平台角色时显示无权限提示", async () => {
     const sess = makeSystemAdminSession();
@@ -260,26 +270,25 @@ describe("列表渲染", () => {
       expect(screen.getByText("客服专家")).toBeInTheDocument();
     });
     expect(screen.getAllByText("已发布").length).toBeGreaterThanOrEqual(1);
-    // "公开" appears in visibility td + select option
-    expect(screen.getAllByText("公开").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("全部企业").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("显示隐藏可见范围的目录项", async () => {
+  it("显示指定行业 / 标签的发布范围", async () => {
     mockFetch.mockResolvedValue(
       listPage([
         makeCatalogItem({
           template_id: "h1",
-          display_name: "隐藏模板",
+          display_name: "限定模板",
           status: "published",
-          visible_scope: { hidden: true },
+          visible_scope: { mode: "limited", industries: ["制造业"], tags: ["KA"] },
         }),
       ]),
     );
     renderCatalogPage(makeSystemAdminSession());
     await waitFor(() => {
-      expect(screen.getByText("隐藏模板")).toBeInTheDocument();
+      expect(screen.getByText("限定模板")).toBeInTheDocument();
     });
-    expect(screen.getAllByText("隐藏").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("指定：制造业、KA").length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -508,11 +517,11 @@ describe("API 错误展示", () => {
   });
 
   it("publish 失败展示错误", async () => {
-    mockFetch
-      .mockResolvedValueOnce(listPage([makeCatalogItem({ status: "draft" })]))
-      .mockResolvedValueOnce(
-        problemResponse(409, "conflict", "该模板已发布"),
-      );
+    scopeFetch((url, init) => {
+      if (init?.method === "POST" && url.includes("/publish")) return problemResponse(409, "conflict", "该模板已发布");
+      if (!init?.method || init.method === "GET") return listPage([makeCatalogItem({ status: "draft" })]);
+      return undefined;
+    });
 
     renderCatalogPage(makeSystemAdminSession());
 
@@ -523,7 +532,7 @@ describe("API 错误展示", () => {
     fireEvent.click(screen.getByText("发布"));
     fireEvent.click(await screen.findByRole("button", { name: "确认发布" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toHaveTextContent("该模板已发布");
+    expect(await screen.findByText("该模板已发布")).toBeInTheDocument();
   });
 });
 
@@ -1573,12 +1582,12 @@ describe("AstryX 目录工作台", () => {
     expect(screen.queryByText("财务专家")).not.toBeInTheDocument();
   });
 
-  it("生命周期动作必须确认；失败时保留确认框和错误", async () => {
-    mockFetch
-      .mockResolvedValueOnce(
-        listPage([makeCatalogItem({ template_id: "publish-me", status: "draft" })]),
-      )
-      .mockResolvedValueOnce(problemResponse(409, "conflict", "无法发布模板"));
+  it("发布必须经范围弹窗确认；失败时保留弹窗和错误", async () => {
+    scopeFetch((url, init) => {
+      if (init?.method === "POST" && url.includes("/publish")) return problemResponse(409, "conflict", "无法发布模板");
+      if (!init?.method || init.method === "GET") return listPage([makeCatalogItem({ template_id: "publish-me", status: "draft" })]);
+      return undefined;
+    });
 
     renderCatalogPage(makeSystemAdminSession());
 
@@ -1587,35 +1596,31 @@ describe("AstryX 目录工作台", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "发布" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toBeInTheDocument();
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("dialog", { name: "发布模板" })).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c: unknown[]) => String(c[0]).includes("/publish"))).toBe(false);
+    expect(await screen.findByText("预计可见企业：3 家")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "确认发布" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "发布模板" })).toHaveTextContent("无法发布模板");
+    expect(await screen.findByText("无法发布模板")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "发布模板" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "发布模板" })).not.toBeInTheDocument());
   });
 
-  it("隐藏动作须经确认后才将模板设为隐藏", async () => {
-    mockFetch
-      .mockResolvedValueOnce(
-        listPage([makeCatalogItem({ template_id: "retire-me", status: "unpublished" })]),
-      )
-      .mockResolvedValueOnce(singleResponse(null))
-      .mockResolvedValueOnce(listPage([]));
+  it("已发布模板可在列表调整发布范围，保存后以 PUT 提交结构化范围", async () => {
+    scopeFetch((url, init) => {
+      if (!init?.method || init.method === "GET") return listPage([makeCatalogItem({ template_id: "scope-me", status: "published" })]);
+      return undefined;
+    });
 
     renderCatalogPage(makeSystemAdminSession());
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "隐藏" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "发布范围" })).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: "隐藏" }));
-
-    expect(await screen.findByRole("alertdialog", { name: "隐藏模板" })).toBeInTheDocument();
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "确认隐藏" }));
+    fireEvent.click(screen.getByRole("button", { name: "发布范围" }));
+    expect(await screen.findByRole("dialog", { name: "调整发布范围" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
 
     await waitFor(() => {
       const request = mockFetch.mock.calls.find(
@@ -1624,7 +1629,7 @@ describe("AstryX 目录工作台", () => {
       expect(request).toBeDefined();
       expect((request![1] as { method?: string }).method).toBe("PUT");
       expect(JSON.parse((request![1] as { body: string }).body)).toEqual({
-        visible_scope: { hidden: true },
+        visible_scope: { mode: "all", industries: [], tags: [] },
       });
     });
   });
@@ -1755,52 +1760,54 @@ describe("AstryX 目录工作台", () => {
     expect(await screen.findByText("专家列表页")).toBeInTheDocument();
   });
 
-  it("详情页隐藏模板必须先经过确认", async () => {
-    const item = makeCatalogItem({ template_id: "hide-detail", display_name: "待隐藏模板", visible_scope: { public: true } });
-    mockFetch
-      .mockResolvedValueOnce(singleResponse(item))
-      .mockResolvedValueOnce(singleResponse({ ...item, visible_scope: { hidden: true } }));
+  it("详情页调整发布范围：弹窗确认后才提交", async () => {
+    const item = makeCatalogItem({ template_id: "scope-detail", display_name: "待调整模板", status: "published", visible_scope: null });
+    scopeFetch((url, init) => {
+      if (init?.method === "PUT") return singleResponse({ ...item, visible_scope: { mode: "all", industries: [], tags: [] } });
+      return singleResponse(item);
+    });
 
-    renderCatalogDetail(makeSystemAdminSession(), "hide-detail");
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
-    fireEvent.click(screen.getByRole("option", { name: "隐藏" }));
+    renderCatalogDetail(makeSystemAdminSession(), "scope-detail");
+    fireEvent.click(await screen.findByRole("button", { name: "调整范围" }));
 
-    expect(await screen.findByRole("alertdialog", { name: "隐藏模板" })).toBeInTheDocument();
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "确认隐藏" }));
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("dialog", { name: "调整发布范围" })).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "保存范围" }));
+    await waitFor(() => expect(mockFetch.mock.calls.some((c: unknown[]) => (c[1] as RequestInit | undefined)?.method === "PUT")).toBe(true));
   });
 
-  it("可见性更新成功不覆盖未保存的本地输入", async () => {
-    const item = makeCatalogItem({ template_id: "keep-draft", display_name: "保留草稿", system_prompt: "旧提示词", visible_scope: { public: true } });
-    mockFetch
-      .mockResolvedValueOnce(singleResponse(item))
-      .mockResolvedValueOnce(singleResponse({ ...item, visible_scope: { enterprise_ids: ["*"] } }));
+  it("调整范围成功不覆盖未保存的本地输入", async () => {
+    const item = makeCatalogItem({ template_id: "keep-draft", display_name: "保留草稿", system_prompt: "旧提示词", status: "published", visible_scope: null });
+    scopeFetch((url, init) => {
+      if (init?.method === "PUT") return singleResponse({ ...item, visible_scope: { mode: "all", industries: [], tags: [] } });
+      return singleResponse(item);
+    });
 
     renderCatalogDetail(makeSystemAdminSession(), "keep-draft");
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByRole("textbox", { name: "system_prompt" }), { target: { value: "本地未保存" } });
-    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
-    fireEvent.click(screen.getByRole("option", { name: "企业可见" }));
+    fireEvent.click(screen.getByRole("button", { name: "调整范围" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存范围" }));
 
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "调整发布范围" })).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "system_prompt" })).toHaveValue("本地未保存");
   });
 
-  it("可见性更新失败后仍保留编辑表单和输入", async () => {
-    const item = makeCatalogItem({ template_id: "visibility-fail", display_name: "失败保留", system_prompt: "旧提示词", visible_scope: { public: true } });
-    mockFetch
-      .mockResolvedValueOnce(singleResponse(item))
-      .mockResolvedValueOnce(problemResponse(409, "conflict", "可见性冲突"));
+  it("调整范围失败后保留弹窗、编辑表单和输入", async () => {
+    const item = makeCatalogItem({ template_id: "visibility-fail", display_name: "失败保留", system_prompt: "旧提示词", status: "published", visible_scope: null });
+    scopeFetch((url, init) => {
+      if (init?.method === "PUT") return problemResponse(409, "conflict", "可见性冲突");
+      return singleResponse(item);
+    });
 
     renderCatalogDetail(makeSystemAdminSession(), "visibility-fail");
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     fireEvent.change(screen.getByRole("textbox", { name: "system_prompt" }), { target: { value: "保留的输入" } });
-    fireEvent.click(screen.getByRole("combobox", { name: "可见范围" }));
-    fireEvent.click(screen.getByRole("option", { name: "企业可见" }));
+    fireEvent.click(screen.getByRole("button", { name: "调整范围" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存范围" }));
 
     expect(await screen.findByText("可见性冲突")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "调整发布范围" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "system_prompt" })).toHaveValue("保留的输入");
   });
 
