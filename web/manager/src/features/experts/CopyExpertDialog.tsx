@@ -95,6 +95,7 @@ export function CopyExpertDialog({ api, source, onClose, onCopied }: Props): Rea
                   testId="copy-model"
                 />
               )}
+              {showPicker && models.error && <Banner status="error" title={`模型列表加载失败：${models.error}`} />}
               {error && <Banner status="error" title={error} />}
             </VStack>
           </LayoutContent>
