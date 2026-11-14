@@ -408,6 +408,59 @@ describe("ExpertsPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("加载失败"));
   });
+  it("点卡片空白处或专家名称都能打开专家详情（#207 验收反馈 1）", async () => {
+    mockApis([employeeConfigured]);
+    renderPage();
+    const card = await screen.findByRole("article", { name: "架构师" });
+    fireEvent.click(within(card).getByText("技术架构专家"));
+    expect(await screen.findByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "专家实例详情" })).not.toBeInTheDocument());
+
+    fireEvent.click(within(card).getByRole("button", { name: "查看架构师的详情" }));
+    expect(await screen.findByRole("dialog", { name: "专家实例详情" })).toBeInTheDocument();
+  });
+
+  it("点卡片里的「暂停」等操作按钮不会打开详情", async () => {
+    mockApis([employeeConfigured]);
+    renderPage();
+    const card = await screen.findByRole("article", { name: "架构师" });
+    fireEvent.click(within(card).getByRole("button", { name: "暂停" }));
+    expect(screen.queryByRole("dialog", { name: "专家实例详情" })).not.toBeInTheDocument();
+  });
+
+  it("模型列表加载中：显示当前模型和「正在加载」，不显示「暂无可用模型」（#207 验收反馈 3）", async () => {
+    mockApis([employeeConfigured]);
+    (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ list: vi.fn(() => new Promise(() => {})) });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("employee-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("edit-config"));
+    const select = await screen.findByTestId("model-select");
+    expect(select).toHaveTextContent("gpt-4o");
+    expect(select).toHaveTextContent("正在加载可选模型");
+    expect(screen.queryByText("暂无可用模型")).not.toBeInTheDocument();
+  });
+
+  it("模型列表加载失败：提示原因，点「重试」后可以改选（#207 验收反馈 3）", async () => {
+    mockApis([employeeConfigured]);
+    // mockApis 已放好可用的模型目录；第一次请求失败，重试时走它。
+    const good = (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>)() as { list: () => Promise<unknown> };
+    const list = vi.fn()
+      .mockRejectedValueOnce(new Error("Operator catalog is unavailable"))
+      .mockImplementation(() => good.list());
+    (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ list });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("employee-row")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("edit-config"));
+    const dialog = await screen.findByRole("dialog", { name: "专家实例详情" });
+    expect(await within(dialog).findByText("模型列表加载失败：Operator catalog is unavailable")).toBeInTheDocument();
+    expect(within(dialog).queryByText("暂无可用模型")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(within(dialog).queryByText(/模型列表加载失败/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("model-select")).not.toHaveTextContent("正在加载"));
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
 });
 
 describe("toEmployeeConfigIn", () => {

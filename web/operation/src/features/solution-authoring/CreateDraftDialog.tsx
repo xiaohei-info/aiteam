@@ -76,7 +76,7 @@ export function CreateDraftDialog({ isOpen, onClose, onCreate }: Props): ReactNo
                   value={model || undefined}
                   onChange={setModel}
                   placeholder={models.loading ? "加载中…" : "选择已发布的平台模型"}
-                  description="也会作为生成出的专家的默认模型"
+                  description="只用于生成方案草稿；发布出的专家不带模型，由企业招募时选择"
                   isRequired
                   isDisabled={submitting || models.loading}
                 />

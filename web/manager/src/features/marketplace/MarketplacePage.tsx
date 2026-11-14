@@ -25,7 +25,7 @@ import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
-import type { Department, ExpertTemplate, RecruitModelPolicy } from "../experts/types";
+import type { Department, ExpertTemplate, RecruitModelPolicy, SolutionPackage } from "../experts/types";
 import { ModelPicker } from "../platform-models/ModelPicker";
 import { toPolicy, useRecruitModels } from "../platform-models/useRecruitModels";
 import {
@@ -74,6 +74,19 @@ function CardTags({ template }: { template: ExpertTemplate }): ReactNode {
   );
 }
 
+/** 一个专家可能出现在多个行业方案里，按方案目录顺序列出、去重。 */
+export function solutionNamesByTemplate(solutions: SolutionPackage[]): Map<string, string[]> {
+  const names = new Map<string, string[]>();
+  for (const solution of solutions) {
+    for (const expert of solution.experts ?? []) {
+      const list = names.get(expert.template_id) ?? [];
+      if (!list.includes(solution.display_name)) list.push(solution.display_name);
+      names.set(expert.template_id, list);
+    }
+  }
+  return names;
+}
+
 function MarketplaceAvatar({ name, src }: { name: string; src?: string | null }): ReactNode {
   return <DigitalEmployeeAvatar name={name} src={src} size={54} />;
 }
@@ -86,6 +99,8 @@ export function MarketplacePage(): ReactNode {
   const skillMarketApi = useSkillMarketApi();
 
   const [templates, setTemplates] = useState<ExpertTemplate[]>([]);
+  // 模板 → 所属行业方案名称。方案目录只用来补充展示，读取失败不影响招募。
+  const [solutionNames, setSolutionNames] = useState<ReadonlyMap<string, string[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -113,6 +128,15 @@ export function MarketplacePage(): ReactNode {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
+    let active = true;
+    api.listSolutions().then(
+      (solutions) => { if (active) setSolutionNames(solutionNamesByTemplate(solutions)); },
+      () => undefined,
+    );
+    return () => { active = false; };
+  }, [api]);
+
+  useEffect(() => {
     if (!needsSkillNames) return;
     let active = true;
     skillMarketApi.list().then(
@@ -128,13 +152,16 @@ export function MarketplacePage(): ReactNode {
       const matchesFilter = filter === "all"
         || (filter === "available" && !template.is_recruited)
         || (filter === "recruited" && template.is_recruited);
-      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, ...(template.tags ?? [])]
+      const searchable = [
+        template.display_name, template.category, template.tagline, template.description, template.persona,
+        ...(template.tags ?? []), ...(solutionNames.get(template.template_id) ?? []),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase();
       return matchesFilter && (!normalized || searchable.includes(normalized));
     });
-  }, [filter, query, templates]);
+  }, [filter, query, solutionNames, templates]);
 
   const summaryStats = [
     { key: "all" as const, label: "全部专家", value: templates.length },
@@ -209,7 +236,7 @@ export function MarketplacePage(): ReactNode {
           isLabelHidden
           value={query}
           onChange={setQuery}
-          placeholder="搜索专家名称、岗位或模型"
+          placeholder="搜索专家名称、岗位或所属方案"
           startIcon="search"
           width="100%"
         />
@@ -285,6 +312,11 @@ export function MarketplacePage(): ReactNode {
                   {cardTagline(t) || "将成熟经验封装为可复用的企业数字员工。"}
                 </p>
 
+                {solutionNames.has(t.template_id) && (
+                  <Text type="supporting" data-ui="marketplace-card-solutions">
+                    所属方案：{solutionNames.get(t.template_id)!.join("、")}
+                  </Text>
+                )}
                 <CardTags template={t} />
                 <CardMetrics template={t} />
 
