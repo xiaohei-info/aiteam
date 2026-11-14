@@ -3,6 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { createManagerApiClient } from "../api/client";
 import { useSession } from "../auth/session";
 
+/** 企业名等 me 字段被改后（如设置页保存），派发此事件让顶栏重新读取，不用刷新页面。 */
+export const ME_CHANGED_EVENT = "aiteam:manager-me-changed";
+
 export interface PasswordPolicy {
   min_length: number;
   require_upper: boolean;
@@ -25,6 +28,13 @@ export function useMe(): Me | null {
   const { token, onUnauthorized } = useSession();
   const client = useMemo(() => createManagerApiClient({ getToken: () => token, onUnauthorized }), [token, onUnauthorized]);
   const [me, setMe] = useState<Me | null>(null);
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setVersion((value) => value + 1);
+    window.addEventListener(ME_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(ME_CHANGED_EVENT, refresh);
+  }, []);
 
   useEffect(() => {
     if (!token) return;
@@ -34,7 +44,7 @@ export function useMe(): Me | null {
       () => { if (active) setMe(null); },
     );
     return () => { active = false; };
-  }, [client, token]);
+  }, [client, token, version]);
 
   return me;
 }

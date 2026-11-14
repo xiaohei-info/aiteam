@@ -14,6 +14,7 @@ import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
 import { SettingsPage } from "../SettingsPage";
+import { ME_CHANGED_EVENT } from "../../../shell/useMe";
 // Account factors have independent route/ceremony tests; isolate enterprise settings here.
 vi.mock("../AccountSecurityPanel", () => ({ AccountSecurityPanel: () => null }));
 
@@ -91,6 +92,36 @@ describe("SettingsPage 设置", () => {
     fireEvent.click(screen.getByText("保存"));
     await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+  });
+
+  it("保存成功后通知顶栏重新读取企业名（R8）", async () => {
+    const seen = vi.fn();
+    window.addEventListener(ME_CHANGED_EVENT, seen);
+    try {
+      const api = mockApi();
+      renderPage();
+      await waitFor(() => expect(screen.getByDisplayValue("测试企业")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("保存"));
+      await waitFor(() => expect(api.update).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    } finally {
+      window.removeEventListener(ME_CHANGED_EVENT, seen);
+    }
+  });
+
+  it("保存失败不通知顶栏", async () => {
+    const seen = vi.fn();
+    window.addEventListener(ME_CHANGED_EVENT, seen);
+    try {
+      mockApi({ update: vi.fn().mockRejectedValue(new ApiError("企业名称已存在", 409, "duplicate")) });
+      renderPage();
+      await waitFor(() => expect(screen.getByDisplayValue("测试企业")).toBeInTheDocument());
+      fireEvent.click(screen.getByText("保存"));
+      await waitFor(() => expect(screen.getByText("企业名称已存在")).toBeInTheDocument());
+      expect(seen).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(ME_CHANGED_EVENT, seen);
+    }
   });
 
   it("发送邀请后刷新列表", async () => {
