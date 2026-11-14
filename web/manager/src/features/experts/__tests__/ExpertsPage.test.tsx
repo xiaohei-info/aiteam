@@ -485,6 +485,19 @@ describe("ExpertsPage 复制专家", () => {
     expect(api.copyEmployee).not.toHaveBeenCalled();
   });
 
+  it("模型列表加载失败：复制弹窗说明原因，而不是只显示「暂无可用模型」", async () => {
+    mockApis([employeeUnconfigured]);
+    (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      list: vi.fn().mockRejectedValue(new ApiError("Internal Server Error", 500, "internal")),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("copy-expert")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("copy-expert"));
+
+    const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+    expect(await within(dialog).findByText("模型列表加载失败：Internal Server Error")).toBeInTheDocument();
+  });
+
   it("幂等键：网络失败后原样重试沿用同一个键；改了名称或服务端已答复则换新键（#205 评论）", async () => {
     const { api } = mockApis([employeeConfigured]);
     const copy = api.copyEmployee as ReturnType<typeof vi.fn>;
