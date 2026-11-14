@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -59,6 +60,8 @@ RELAY_TOKEN_HEARTBEAT_INTERVAL_SECONDS = 60
 RELAY_TOKEN_RECOVERY_INTERVAL_SECONDS = 30
 RELAY_TOKEN_RECOVERY_BATCH_LIMIT = 20
 RELAY_TENANT_INITIAL_QUOTA = 1_000_000_000
+# 目录读取只在过期后后台刷新 NewAPI 渠道和公开价格；渠道变更/显式同步仍即时生效。
+MODEL_REFRESH_INTERVAL_SECONDS = 300
 
 
 class PlatformProviderService:
@@ -75,9 +78,13 @@ class PlatformProviderService:
         token_lifetime: timedelta = RELAY_TOKEN_LIFETIME,
         renewal_window: timedelta = RELAY_TOKEN_RENEWAL_WINDOW,
         heartbeat_interval: float = RELAY_TOKEN_HEARTBEAT_INTERVAL_SECONDS,
+        model_refresh_interval: float = MODEL_REFRESH_INTERVAL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
     ):
         if heartbeat_interval <= 0:
             raise ValueError("heartbeat interval must be positive")
+        if model_refresh_interval <= 0:
+            raise ValueError("model refresh interval must be positive")
         self._repo = repo
         self._newapi = newapi
         self._crypto = crypto
@@ -87,6 +94,11 @@ class PlatformProviderService:
         self._token_lifetime = token_lifetime
         self._renewal_window = renewal_window
         self._heartbeat_interval = heartbeat_interval
+        self._model_refresh_interval = model_refresh_interval
+        self._monotonic = monotonic
+        self._models_refreshed_at: float | None = None
+        self._model_refresh_lock = threading.Lock()
+        self._model_refresh_thread: threading.Thread | None = None
         # Fallback only for lightweight in-memory test doubles.  Production
         # repositories expose the durable operation methods below; this map is
         # intentionally not used as a credential store.
@@ -102,8 +114,42 @@ class PlatformProviderService:
             newapi_channel_id=INTERNAL_NEWAPI_CHANNEL_ID,
         )
         if sync_models:
-            self._auto_prepare_models(row, self._sync_models(row))
+            self._refresh_models(row)
         return self._provider_output(row)
+
+    def _refresh_models(self, provider: ProviderRow) -> None:
+        self._auto_prepare_models(provider, self._sync_models(provider))
+        self._models_refreshed_at = self._monotonic()
+
+    def _ensure_catalog_fresh(self) -> None:
+        """Read paths never wait on NewAPI/models.dev once this process has a catalog.
+
+        The first read after startup still refreshes synchronously (and reports
+        gateway errors) so a fresh deployment never serves an empty catalog.
+        """
+        if self._models_refreshed_at is None:
+            with self._model_refresh_lock:
+                if self._models_refreshed_at is None:
+                    self.ensure_internal_provider()
+            return
+        if self._monotonic() - self._models_refreshed_at < self._model_refresh_interval:
+            return
+        with self._model_refresh_lock:
+            if self._model_refresh_thread is not None and self._model_refresh_thread.is_alive():
+                return
+            self._model_refresh_thread = threading.Thread(
+                target=self._refresh_models_in_background, name="platform-model-refresh", daemon=True,
+            )
+            self._model_refresh_thread.start()
+
+    def _refresh_models_in_background(self) -> None:
+        try:
+            self.ensure_internal_provider()
+        except Exception:
+            # Keep serving the stored catalog and back off one interval
+            # instead of letting every read hit a failing gateway.
+            self._models_refreshed_at = self._monotonic()
+            logger.warning("background platform model refresh failed", exc_info=True)
 
     def _auto_prepare_models(self, provider: ProviderRow, models: list[PlatformModel]) -> None:
         """Fill missing catalog metadata/prices and publish every priced model."""
@@ -145,7 +191,7 @@ class PlatformProviderService:
             )
 
     def list_providers(self, *, published_only: bool = False) -> list[PlatformProvider]:
-        self.ensure_internal_provider()
+        self._ensure_catalog_fresh()
         return [self._provider_output(row) for row in self._repo.list_providers(published_only=published_only)]
 
     def _sync_models(self, provider: ProviderRow) -> list[PlatformModel]:
@@ -173,7 +219,7 @@ class PlatformProviderService:
     def _resync_after_channel_change(self, provider: ProviderRow) -> None:
         """Refresh the model union; an empty gateway must not fail the channel write."""
         try:
-            self._auto_prepare_models(provider, self._sync_models(provider))
+            self._refresh_models(provider)
         except Conflict:
             logger.warning("model resync after gateway channel change failed", exc_info=True)
 

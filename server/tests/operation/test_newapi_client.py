@@ -161,7 +161,8 @@ def test_internal_provider_bootstrap_syncs_the_deployment_owned_channel():
     assert service.sync_models("p1")[0].model_id == "minimax-m3"
     assert seen["display_name"] == "LLM 网关"
     assert seen["newapi_channel_id"] == 1
-    assert published == ["p1", "p1"]
+    # 启动刷新之后，间隔内的读取不再重复同步网关（见 test_platform_catalog_refresh.py）。
+    assert published == ["p1"]
 
 
 def test_internal_provider_sync_reports_gateway_discovery_errors():
