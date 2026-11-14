@@ -288,6 +288,7 @@ def _derive_snapshot_version(
         exclude={
             "employee_id", "employee_slug", "version", "knowledge_refs",
             "source_template_id", "source_template_version", "status_reason",
+            "origin", "copied_from_employee_id",
         },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)
