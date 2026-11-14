@@ -7,7 +7,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { parseTags } from "../enterprise/ProvisionForm";
+import { parseTags, validateProfile } from "../enterprise/profile";
 import type { EnterpriseAccount } from "./types";
 import type { AccountsApi } from "./useAccountsApi";
 
@@ -22,6 +22,8 @@ export function EnterpriseProfileDialog({ api, enterprise, onClose, onDone }: Pr
   const [industry, setIndustry] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [loading, setLoading] = useState(true);
+  // 只有读到现有资料后才允许保存：读取失败时输入框是空的，保存会把已有行业和标签覆盖成空。
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,19 +38,21 @@ export function EnterpriseProfileDialog({ api, enterprise, onClose, onDone }: Pr
       if (!active || !profile) return;
       setIndustry(profile.industry ?? "");
       setTagsText(profile.tags.join(", "));
+      setLoaded(true);
     }).catch((err) => {
-      if (active) setError(err instanceof Error && err.message ? err.message : "加载失败");
+      if (active) setError(`读取企业资料失败，暂不能保存：${err instanceof Error && err.message ? err.message : "请稍后重试"}`);
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [api, enterprise.org_id]);
 
   async function submit(): Promise<void> {
     const tags = parseTags(tagsText);
-    if (industry.trim().length > 20 || tags.length > 10 || tags.some((tag) => tag.length > 20)) {
-      setError("行业不超过 20 字；标签最多 10 个，每个不超过 20 字");
+    const invalid = validateProfile(industry, tags);
+    if (invalid) {
+      setError(invalid);
       return;
     }
-    if (!api.setProfile) return;
+    if (!api.setProfile || !loaded) return;
     setBusy(true);
     setError(null);
     try {
@@ -70,8 +74,8 @@ export function EnterpriseProfileDialog({ api, enterprise, onClose, onDone }: Pr
         content={
           <LayoutContent>
             <VStack gap={3}>
-              <TextInput label="所属行业" value={industry} onChange={setIndustry} placeholder="如：制造业" isOptional isDisabled={loading || busy} />
-              <TextInput label="企业标签" value={tagsText} onChange={setTagsText} placeholder="多个用逗号分隔，如：华东, KA" isOptional isDisabled={loading || busy} />
+              <TextInput label="所属行业" value={industry} onChange={setIndustry} placeholder="如：制造业" isOptional isDisabled={!loaded || busy} />
+              <TextInput label="企业标签" value={tagsText} onChange={setTagsText} placeholder="多个用逗号分隔，如：华东, KA" isOptional isDisabled={!loaded || busy} />
               {error && <Banner status="error" title={error} />}
             </VStack>
           </LayoutContent>
@@ -80,7 +84,7 @@ export function EnterpriseProfileDialog({ api, enterprise, onClose, onDone }: Pr
           <LayoutFooter hasDivider>
             <HStack gap={2} hAlign="end">
               <Button label="取消" variant="ghost" onClick={close} isDisabled={busy} />
-              <Button label="保存" variant="primary" onClick={() => void submit()} isLoading={busy} isDisabled={loading} />
+              <Button label="保存" variant="primary" onClick={() => void submit()} isLoading={busy} isDisabled={loading || !loaded} />
             </HStack>
           </LayoutFooter>
         }

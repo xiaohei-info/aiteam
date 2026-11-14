@@ -179,7 +179,15 @@ def test_enterprise_profile_roundtrip(client):
     assert put.json()["data"] == {"enterprise_id": eid, "industry": "金融", "tags": ["A", "B"]}
     assert client.get(f"/api/operation/enterprises/{eid}/profile", headers=_auth(admin)).json()["data"]["industry"] == "金融"
 
-    cleared = client.put(f"/api/operation/enterprises/{eid}/profile", json={}, headers=_auth(admin))
+    # 没传的字段保持原值：前端读取失败后误发的空请求不会把已有资料覆盖成空（#204 评论）。
+    kept = client.put(f"/api/operation/enterprises/{eid}/profile", json={}, headers=_auth(admin))
+    assert kept.json()["data"] == {"enterprise_id": eid, "industry": "金融", "tags": ["A", "B"]}
+    only_tags = client.put(f"/api/operation/enterprises/{eid}/profile", json={"tags": ["KA"]}, headers=_auth(admin))
+    assert only_tags.json()["data"] == {"enterprise_id": eid, "industry": "金融", "tags": ["KA"]}
+
+    cleared = client.put(
+        f"/api/operation/enterprises/{eid}/profile", json={"industry": None, "tags": []}, headers=_auth(admin),
+    )
     assert cleared.json()["data"] == {"enterprise_id": eid, "industry": None, "tags": []}
 
 

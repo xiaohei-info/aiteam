@@ -19,7 +19,7 @@ from .catalog_scope import MAX_ITEM_LENGTH, MAX_SCOPE_ITEMS, _clean
 
 
 class EnterpriseProfile(BaseModel):
-    """企业行业 / 标签（发布范围匹配用）。"""
+    """企业行业 / 标签（发布范围匹配用）。更新时没给的字段保持原值；要清空须显式传 null（行业）或 []（标签）。"""
 
     model_config = ConfigDict(extra="forbid")
 

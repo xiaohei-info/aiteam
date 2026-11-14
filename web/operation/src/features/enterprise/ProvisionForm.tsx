@@ -10,6 +10,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useI18n } from "../../i18n/context";
 import type { PlatformModelRef } from "../catalog/types";
+import { parseTags, validateProfile } from "./profile";
 
 /** 企业资料：行业（单选文本）+ 标签；用于专家发布范围匹配。 */
 export interface EnterpriseProfileInput {
@@ -17,9 +18,7 @@ export interface EnterpriseProfileInput {
   tags?: string[];
 }
 
-export function parseTags(text: string): string[] {
-  return [...new Set(text.split(/[,，\n]/).map((item) => item.trim()).filter(Boolean))];
-}
+export { parseTags } from "./profile";
 
 export interface EnterpriseModelOption {
   value: string;
@@ -66,8 +65,9 @@ export function ProvisionForm({
       return;
     }
     const tags = parseTags(tagsText);
-    if (tags.length > 10 || tags.some((tag) => tag.length > 20) || industry.trim().length > 20) {
-      setValidationError("行业不超过 20 字；标签最多 10 个，每个不超过 20 字");
+    const profileError = validateProfile(industry, tags);
+    if (profileError) {
+      setValidationError(profileError);
       return;
     }
     const models = modelOptions.length > 0

@@ -39,13 +39,23 @@ describe("EnterpriseProfileDialog", () => {
 
     fireEvent.change(screen.getByLabelText(/企业标签/), { target: { value: "x".repeat(21) } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByText(/标签最多 10 个/)).toBeInTheDocument();
+    expect(await screen.findByText(/超过 20 字/)).toBeInTheDocument();
     expect(api.setProfile).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText(/所属行业/), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText(/企业标签/), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(api.setProfile).toHaveBeenCalledWith("ent-1", { industry: null, tags: [] }));
+  });
+
+  it("读取现有资料失败时不能保存（避免把已有行业和标签覆盖成空）", async () => {
+    const api = makeApi({ getProfile: vi.fn(async () => { throw new Error("网络错误"); }) });
+    render(<EnterpriseProfileDialog api={api} enterprise={enterprise} onClose={() => undefined} onDone={() => undefined} />);
+    expect(await screen.findByText(/网络错误/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByLabelText(/所属行业/)).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(api.setProfile).not.toHaveBeenCalled();
   });
 
   it("保存失败：留在弹窗并显示原因", async () => {

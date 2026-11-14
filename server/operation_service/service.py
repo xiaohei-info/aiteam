@@ -230,7 +230,12 @@ class ProvisioningService:
         return EnterpriseProfileOut(enterprise_id=account.enterprise_id, industry=account.industry, tags=list(account.tags))
 
     def update_profile(self, enterprise_id: str, body: EnterpriseProfile) -> EnterpriseProfileOut:
-        account = self._repo.update_profile(enterprise_id, industry=body.industry, tags=list(body.tags or ()))
+        """只改请求里给出的字段；没给的保持原值，清空要显式传 null / []（避免读取失败后的空请求覆盖已有资料）。"""
+        sent = body.model_fields_set
+        current = self._repo.get(enterprise_id)  # NotFound -> 404
+        industry = body.industry if "industry" in sent else current.industry
+        tags = list(body.tags or ()) if "tags" in sent else list(current.tags)
+        account = self._repo.update_profile(enterprise_id, industry=industry, tags=tags)
         return EnterpriseProfileOut(enterprise_id=account.enterprise_id, industry=account.industry, tags=list(account.tags))
 
     def get_model_access(self, enterprise_id: str) -> EnterpriseModelAccessOut:
