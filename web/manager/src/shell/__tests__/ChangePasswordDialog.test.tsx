@@ -22,6 +22,24 @@ function fill(old: string, next: string, again: string) {
 describe("ChangePasswordDialog", () => {
   beforeEach(() => post.mockReset());
 
+  it("密码框带密码管理器识别用的 autocomplete", () => {
+    open();
+    expect(screen.getByLabelText(/当前密码/)).toHaveAttribute("autocomplete", "current-password");
+    expect(screen.getByLabelText(/^新密码/)).toHaveAttribute("autocomplete", "new-password");
+    expect(screen.getByLabelText(/确认新密码/)).toHaveAttribute("autocomplete", "new-password");
+  });
+
+  it("回车提交；未填完整或两次不一致时回车不提交", async () => {
+    post.mockResolvedValue({ changed: true });
+    open();
+    fill("Old-1aaa!", "New-1aaa!", "other");
+    fireEvent.keyDown(screen.getByLabelText(/确认新密码/), { key: "Enter" });
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText(/确认新密码/), { target: { value: "New-1aaa!" } });
+    fireEvent.keyDown(screen.getByLabelText(/确认新密码/), { key: "Enter" });
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+  });
+
   it("提示密码策略", () => {
     expect(policyHint(policy)).toBe("至少 8 位、大写字母、小写字母、数字、符号");
   });

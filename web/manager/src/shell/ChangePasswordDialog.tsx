@@ -39,6 +39,7 @@ export function ChangePasswordDialog({ policy, onClose }: { policy: PasswordPoli
   const canSubmit = oldPw !== "" && newPw !== "" && confirm === newPw && !working;
 
   async function submit(): Promise<void> {
+    if (!canSubmit) return;
     setWorking(true);
     setError(null);
     try {
@@ -65,10 +66,14 @@ export function ChangePasswordDialog({ policy, onClose }: { policy: PasswordPoli
         ) : (
           <>
             {error && <Banner status="error" title={error} />}
-            <TextInput label="当前密码" type="password" value={oldPw} onChange={setOldPw} isRequired isDisabled={working} />
-            <TextInput label="新密码" type="password" value={newPw} onChange={setNewPw} isRequired isDisabled={working} description={policyHint(policy)} />
+            {/* autocomplete 让密码管理器识别旧/新密码；任一框内回车即提交（未填完整时不提交）。 */}
+            <TextInput label="当前密码" type="password" value={oldPw} onChange={setOldPw} isRequired isDisabled={working}
+              onEnter={() => void submit()} {...({ autoComplete: "current-password" } as Record<string, string>)} />
+            <TextInput label="新密码" type="password" value={newPw} onChange={setNewPw} isRequired isDisabled={working} description={policyHint(policy)}
+              onEnter={() => void submit()} {...({ autoComplete: "new-password" } as Record<string, string>)} />
             <TextInput label="确认新密码" type="password" value={confirm} onChange={setConfirm} isRequired isDisabled={working}
-              status={mismatch ? { type: "error", message: "两次输入不一致" } : undefined} />
+              status={mismatch ? { type: "error", message: "两次输入不一致" } : undefined}
+              onEnter={() => void submit()} {...({ autoComplete: "new-password" } as Record<string, string>)} />
             <HStack justify="end" gap={2}>
               <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
               <Button label="确认" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={!canSubmit} />
