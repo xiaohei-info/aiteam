@@ -2,6 +2,7 @@
 
 - `{"mode": "all"}`：全部企业可见。
 - `{"mode": "limited", "industries": [...], "tags": [...]}`：企业的行业命中 **或** 任一标签命中即可见。
+- `{"mode": "none"}`：暂不对任何企业开放（模板保持已发布，企业都看不到；main 上的“隐藏”由迁移 0021 改成它）。
 - 旧的空值 / 自由 JSON 一律按“全部可见”处理（迁移 0021 同步把存量改成结构化形态）。
 """
 
@@ -36,7 +37,7 @@ class VisibleScope(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["all", "limited"] = "all"
+    mode: Literal["all", "limited", "none"] = "all"
     industries: list[str] = Field(default_factory=list, description="命中任一行业即可见（仅 limited）")
     tags: list[str] = Field(default_factory=list, description="命中任一标签即可见（仅 limited）")
 
@@ -47,7 +48,7 @@ class VisibleScope(BaseModel):
 
     @model_validator(mode="after")
     def _check_mode(self) -> "VisibleScope":
-        if self.mode == "all":
+        if self.mode in ("all", "none"):
             self.industries, self.tags = [], []
         elif not self.industries and not self.tags:
             raise ValueError("指定范围时行业与标签至少填一项")
@@ -71,6 +72,8 @@ def scope_allows(raw: Any, *, industry: str | None, tags: Iterable[str]) -> bool
     scope = normalize_scope(raw)
     if scope.mode == "all":
         return True
+    if scope.mode == "none":
+        return False
     if industry and industry in scope.industries:
         return True
     return bool(set(tags) & set(scope.tags))

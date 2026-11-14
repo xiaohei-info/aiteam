@@ -1,4 +1,4 @@
-/** 发布范围弹窗：全部企业 / 指定行业或标签，底部实时显示预计可见企业数。发布与「调整范围」共用。 */
+/** 发布范围弹窗：全部企业 / 指定行业或标签 / 暂不开放，底部实时显示预计可见企业数。发布与「调整范围」共用。 */
 import { useEffect, useState, type ReactNode } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -36,7 +36,7 @@ export function ScopeDialog({ title, confirmLabel, initial, onConfirm, onClose }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const scope: VisibleScope = mode === "all" ? { mode, industries: [], tags: [] } : { mode, industries, tags };
+  const scope: VisibleScope = mode === "limited" ? { mode, industries, tags } : { mode, industries: [], tags: [] };
   const incomplete = mode === "limited" && industries.length === 0 && tags.length === 0;
   // 只有调整已发布模板（传了 initial）才可能影响已招募的企业。
   const narrowing = initial !== undefined && scopeNarrowed(start, scope);
@@ -79,7 +79,11 @@ export function ScopeDialog({ title, confirmLabel, initial, onConfirm, onClose }
               <SegmentedControl label="发布范围" value={mode} onChange={(value) => setMode(value as VisibleScope["mode"])}>
                 <SegmentedControlItem value="all" label="全部企业" />
                 <SegmentedControlItem value="limited" label="指定行业或标签" />
+                <SegmentedControlItem value="none" label="暂不开放" />
               </SegmentedControl>
+              {mode === "none" && (
+                <Text color="secondary">模板保持已发布，但任何企业都看不到；需要时再调整范围即可重新开放，不必下架。</Text>
+              )}
               {mode === "limited" && (
                 <>
                   <Text color="secondary">企业的行业命中其中之一，或带有任一标签，即可看到。</Text>

@@ -72,6 +72,25 @@ def test_scope_model_rules():
     assert VisibleScope(mode="limited", tags=[" a ", "a", ""]).tags == ["a"]
 
 
+def test_scope_none_is_visible_to_no_enterprise():
+    """「暂不对任何企业开放」：模板保持已发布，但任何企业都看不到，预计可见企业数为 0。"""
+    assert VisibleScope(mode="none", industries=["制造业"], tags=["KA"]).model_dump() == {"mode": "none", "industries": [], "tags": []}
+    for industry, tags in (("制造业", ["KA"]), (None, [])):
+        assert not scope_allows({"mode": "none"}, industry=industry, tags=tags)
+
+
+def test_hidden_templates_from_main_stay_invisible_after_0021():
+    """main 上「隐藏」存为 {"hidden": true}：0021 先把它改成 none，再把其余旧值改成全部企业。"""
+    from pathlib import Path
+
+    sql = (Path(__file__).resolve().parents[2] / "operation_service" / "migrations"
+           / "0021_enterprise_profile_visible_scope.sql").read_text(encoding="utf-8")
+    to_none = sql.index("SET visible_scope = '{\"mode\": \"none\"}'::jsonb")
+    to_all = sql.index("SET visible_scope = '{\"mode\": \"all\"}'::jsonb")
+    assert to_none < to_all
+    assert "visible_scope @> '{\"hidden\": true}'::jsonb" in sql[to_none:to_all]
+
+
 def test_legacy_scope_values_mean_all():
     for raw in (None, {}, {"tenant_ids": ["t1"]}, "x", {"mode": "limited"}):
         assert normalize_scope(raw).mode == "all"
@@ -108,6 +127,15 @@ def test_unknown_tenant_sees_only_public_templates(service):
     assert [i.template_id for i in service.list_published_expert_templates(tenant_id="ghost")] == ["open"]
     with pytest.raises(NotFound):
         service.pull_expert_template_detail(template_id="mfg-only", tenant_id="ghost")
+
+
+def test_scope_none_hides_a_published_template_from_every_tenant(service):
+    _expert(service, "paused", VisibleScope(mode="none"))
+    for tenant in ("t-mfg", "t-retail", "t-bare"):
+        assert service.list_published_expert_templates(tenant_id=tenant) == []
+        with pytest.raises(NotFound):
+            service.pull_expert_template_detail(template_id="paused", tenant_id=tenant)
+    assert service.preview_scope(VisibleScope(mode="none")) == 0
 
 
 def test_set_visibility_changes_what_a_tenant_sees(service):
