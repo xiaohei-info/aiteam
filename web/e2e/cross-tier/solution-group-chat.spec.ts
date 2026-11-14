@@ -13,7 +13,6 @@ import { apiLogin, defaultCredentials, TIER_API_ORIGIN } from "../support/auth";
 import { isSelectablePlatformModel, type PlatformModelAvailability } from "../../shared/src/contracts/platform-models";
 
 type JsonRecord = Record<string, unknown>;
-type Login = { token: string };
 
 type Expert = {
   employee_id: string;

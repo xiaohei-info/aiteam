@@ -306,6 +306,27 @@ describe("ExpertsPage", () => {
     expect((await screen.findByText("模型尚未关联平台服务，请刷新目录后重试")).closest("[role=alert]")).toBeInTheDocument();
   });
 
+  it("专家当前使用的模型价格失效时仍在下拉中可见，其它未定价模型不可选", async () => {
+    mockApis([employeeConfigured], []);
+    const unpriced = { pricing_version: 1, pricing_status: "unknown", input_usd_per_million: null, output_usd_per_million: null, cache_read_usd_per_million: null, cache_write_usd_per_million: null, currency: "USD" };
+    (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      list: vi.fn().mockResolvedValue({
+        providers: [],
+        models: [
+          { model: { provider_id: "openai-main", model_id: "gpt-4o", display_name: "GPT-4o", status: "published", version: 1 }, rate: unpriced },
+          { model: { provider_id: "openai-main", model_id: "gpt-unpriced", display_name: "Unpriced", status: "published", version: 1 }, rate: unpriced },
+        ],
+      }),
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId("employee-row")).toHaveLength(1));
+    fireEvent.click(screen.getAllByTestId("edit-config")[0]!);
+    const modelSelect = await screen.findByTestId("model-select");
+    fireEvent.click(within(modelSelect).getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: /gpt-4o · 价格待确认/, hidden: true })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /gpt-unpriced/, hidden: true })).not.toBeInTheDocument();
+  });
+
   it("模型归属服务缺少展示信息时仍按模型保存", async () => {
     const { updateEmployee } = mockApis([employeeUnconfigured], []);
     (usePlatformModelsApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
