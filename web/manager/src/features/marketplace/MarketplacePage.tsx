@@ -25,7 +25,9 @@ import { useI18n } from "../../i18n/context";
 import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
-import type { Department, ExpertTemplate } from "../experts/types";
+import type { Department, ExpertTemplate, RecruitModelPolicy } from "../experts/types";
+import { ModelPicker } from "../platform-models/ModelPicker";
+import { toPolicy, useRecruitModels } from "../platform-models/useRecruitModels";
 import {
   CARD_METRIC_SLOTS,
   CARD_OUTPUT_TYPE_LIMIT,
@@ -39,10 +41,6 @@ import "../experts/experts.css";
 import "./marketplace.css";
 
 type MarketplaceFilter = "all" | "available" | "recruited";
-
-function modelLabel(template: ExpertTemplate): string {
-  return template.platform_model_ref?.model_id || "模型待配置";
-}
 
 /** 卡片指标区固定 3 格，缺数据的格子留空，保持卡片等高。 */
 function CardMetrics({ template }: { template: ExpertTemplate }): ReactNode {
@@ -130,7 +128,7 @@ export function MarketplacePage(): ReactNode {
       const matchesFilter = filter === "all"
         || (filter === "available" && !template.is_recruited)
         || (filter === "recruited" && template.is_recruited);
-      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, modelLabel(template), ...(template.tags ?? [])]
+      const searchable = [template.display_name, template.category, template.tagline, template.description, template.persona, ...(template.tags ?? [])]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase();
@@ -162,25 +160,22 @@ export function MarketplacePage(): ReactNode {
   );
 
   function startRecruit(template: ExpertTemplate): void {
-    if (api.listDepartments) {
-      setRecruitFor(template);
-      return;
-    }
-    // Older injected clients do not expose department lookup;
-    // preserve their original direct-recruit contract.
-    void runAction(
-      () => api.recruitExpert({ template_id: template.template_id }),
-      "manager.experts.recruit_ok",
-    );
+    // 招募必须选模型，所以一律先开弹窗，不再有"一键直招"。
+    setRecruitFor(template);
   }
 
-  async function recruitWithDepartments(departmentIds: string[]): Promise<void> {
+  async function recruitWithDepartments(departmentIds: string[], modelPolicy: RecruitModelPolicy): Promise<void> {
     if (!recruitFor) return;
-    const succeeded = await runAction(
-      () => api.recruitExpert({ template_id: recruitFor.template_id, department_ids: departmentIds }),
-      "manager.experts.recruit_ok",
-    );
-    if (succeeded) setRecruitFor(null);
+    // 失败留在弹窗里提示（如 422 模型不可用），不在页面顶部重复报错。
+    await api.recruitExpert({
+      template_id: recruitFor.template_id,
+      model_policy: modelPolicy,
+      department_ids: departmentIds,
+    });
+    setNotice(i18n.t("manager.experts.recruit_ok"));
+    setActionError(null);
+    setRecruitFor(null);
+    await load();
   }
 
   return (
@@ -334,10 +329,10 @@ export function MarketplacePage(): ReactNode {
         />
       )}
 
-      {recruitFor && api.listDepartments && (
+      {recruitFor && (
         <RecruitDepartmentDialog
           template={recruitFor}
-          listDepartments={api.listDepartments}
+          listDepartments={api.listDepartments ?? (async () => [])}
           onClose={() => setRecruitFor(null)}
           onSubmit={recruitWithDepartments}
         />
@@ -355,8 +350,10 @@ function RecruitDepartmentDialog({
   template: ExpertTemplate;
   listDepartments: () => Promise<Department[]>;
   onClose: () => void;
-  onSubmit: (departmentIds: string[]) => Promise<void>;
+  onSubmit: (departmentIds: string[], modelPolicy: RecruitModelPolicy) => Promise<void>;
 }): ReactNode {
+  const models = useRecruitModels();
+  const [modelKey, setModelKey] = useState<string | undefined>(undefined);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -373,10 +370,12 @@ function RecruitDepartmentDialog({
   }, [listDepartments]);
 
   async function submit(): Promise<void> {
+    const choice = models.choices.find((item) => item.key === modelKey);
+    if (!choice) return;
     setWorking(true);
     setError(null);
     try {
-      await onSubmit(departmentIds);
+      await onSubmit(departmentIds, toPolicy(choice));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "招募失败");
     } finally {
@@ -397,8 +396,18 @@ function RecruitDepartmentDialog({
           title={`为${template.display_name}设置部门`}
           onOpenChange={(open) => { if (!open && !working) onClose(); }}
         />
-        <Text color="secondary">请选择该专家所属部门；不归属部门时请选择“未设置”。所选部门也会沿用为该专家的部门授权范围。</Text>
+        <Text color="secondary">请选择该专家使用的模型和所属部门；不归属部门时请选择“未设置”。所选部门也会沿用为该专家的部门授权范围。</Text>
         {error && <Banner status="error" title={error} />}
+        {models.error && <Banner status="error" title={models.error} />}
+        <ModelPicker
+          label="使用模型"
+          choices={models.choices}
+          loading={models.loading}
+          value={modelKey}
+          onChange={setModelKey}
+          isDisabled={working}
+          testId="recruit-model-select"
+        />
         <DepartmentSelector
           departments={departments}
           value={departmentIds}
@@ -410,7 +419,7 @@ function RecruitDepartmentDialog({
         />
         <div>
           <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-          <Button label="招募" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={working || loading} />
+          <Button label="招募" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={working || loading || !modelKey} />
         </div>
       </VStack>
     </Dialog>

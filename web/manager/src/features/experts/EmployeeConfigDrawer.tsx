@@ -11,7 +11,7 @@
  * 未注入时（如未来独立进入）回退到按 employeeId 从列表拉取。
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, isSelectablePlatformModel } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
@@ -205,8 +205,8 @@ export function EmployeeConfigDrawer({
   /** D18：选择 Operator 发布且有生效价格的模型；旧配置即使价格失效也保留可见。 */
   const availableModels = useMemo(
     () => catalog.models.filter((item) =>
-      item.model.status === "published"
-      && (item.rate?.pricing_status === "known" || item.model.model_id === draft?.model)
+      isSelectablePlatformModel(item)
+      || (item.model.status === "published" && item.model.model_id === draft?.model)
     ),
     [catalog.models, draft?.model],
   );

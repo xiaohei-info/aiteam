@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { isSelectablePlatformModel } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
@@ -56,7 +57,7 @@ export function EnterpriseModelAccessDialog({ enterprise, api, onClose, onDone }
         const next: ModelOption[] = [];
         for (const { provider, models } of groups) {
           for (const item of models) {
-            if (item.model.status !== "published" || item.rate?.pricing_status !== "known") continue;
+            if (!isSelectablePlatformModel(item)) continue;
             next.push({
               value: `${provider.provider_id}::${item.model.model_id}`,
               label: `${provider.display_name} / ${item.model.display_name || item.model.model_id}`,

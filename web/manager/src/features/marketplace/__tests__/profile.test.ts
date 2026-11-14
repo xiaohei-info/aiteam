@@ -16,7 +16,6 @@ describe("人才市场展示规则", () => {
       stats: { resolution_rate: 0.85, evaluated_segments: 40, resolved_segments: 34, min_sample: 10 },
       pricing: { mode: "per_call", unit_price: "0.050000", currency: "USD" },
       platform_skill_refs: [{ skill_id: "s1", version: "1", content_hash: "h" }],
-      platform_model_ref: { provider_id: "p", provider_version: 1, model_id: "gpt-5", model_version: 1 },
     });
     expect(metrics).toEqual([
       { label: "解决率", value: "85%", tone: "success" },

@@ -266,6 +266,8 @@ _CONTRACT_SQL = (
     r"\bALTER\s+COLUMN\s+\w+\s+(SET\s+DATA\s+)?TYPE\b",
     r"\bSET\s+NOT\s+NULL\b",
     r"\bTRUNCATE\b",
+    # 删除 jsonb 键（`payload = payload - 'key'` / `#- '{path}'`）：旧版本仍读取该键时等同于删列。
+    r"=\s*[\w.]+\s*(#-|-)\s*'",
 )
 
 

@@ -127,9 +127,7 @@ function RequirementsTab({ template }: { template: ExpertTemplate }): ReactNode 
 
 function DataTab({ template }: { template: ExpertTemplate }): ReactNode {
   const stats = template.stats;
-  const model = template.platform_model_ref;
   const privacyRows: Array<[string, ReactNode]> = [];
-  if (model) privacyRows.push(["模型和服务商", `${model.model_id} · ${model.provider_id}`]);
   if (template.memory_policy_summary) privacyRows.push(["记忆策略", template.memory_policy_summary]);
   return (
     <>

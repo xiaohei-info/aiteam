@@ -26,11 +26,13 @@ from shared.errors import Conflict, Forbidden, NotFound
 
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .operator_catalog import OperatorCatalogPort
+from .recruit_model_guard import collect_model_errors, validate_recruit_model
 from .platform_skill_service import PlatformSkillService
 from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
 from .recruit_repository import RecruitRepository, SolutionInstanceRow
 from .repository_member import GrantRepository, MemberDeptRepository
 from .schemas import (
+    RecruitModelPolicy,
     ApplySolutionRequest,
     ApplySolutionResult,
     RecruitExpertRequest,
@@ -61,20 +63,29 @@ class ProviderMatchResult:
     reason: str
 
 
-def _resolve_platform_model(catalog: OperatorCatalogPort, ctx: TenantContext, template) -> tuple[dict, ProviderMatchResult]:
-    ref = template.platform_model_ref
-    catalog.resolve_tenant_access(tenant_id=ctx.tenant_id, provider_id=ref.provider_id, model_ids=[ref.model_id])
+def _resolve_platform_model(
+    catalog: OperatorCatalogPort, ctx: TenantContext, template, ref: dict, policy: RecruitModelPolicy,
+) -> tuple[dict, ProviderMatchResult]:
+    """用企业在请求里选的、已通过校验的模型构造员工配置；模板上的模型字段被忽略。
+
+    `resolve_tenant_access` 会让 Operator 预配该企业的 Relay 访问，属有副作用调用，
+    所以留在这里（招募订单追踪之内），不放进零写入的前置校验。
+
+    `thinking_level` 只取请求值（缺省留空）：模板的档位是针对模板自带模型的，不能带到别的模型上。
+    """
+    catalog.resolve_tenant_access(tenant_id=ctx.tenant_id, provider_id=ref["provider_id"], model_ids=[ref["model_id"]])
     recommended = dict(template.recommended_config or {})
     recommended.update({
-        "provider_ref": ref.provider_id,
-        "model": ref.model_id,
-        "platform_model_ref": ref.model_dump(mode="json"),
+        "provider_ref": ref["provider_id"],
+        "model": ref["model_id"],
+        "platform_model_ref": dict(ref),
+        "thinking_level": policy.thinking_level or None,
     })
     return recommended, ProviderMatchResult(
-        provider_ref=ref.provider_id,
+        provider_ref=ref["provider_id"],
         status="platform",
-        candidates=[ref.provider_id],
-        reason="Operator platform model and tenant Relay access resolved",
+        candidates=[ref["provider_id"]],
+        reason="Enterprise-selected platform model and tenant Relay access resolved",
     )
 
 
@@ -123,6 +134,8 @@ class RecruitService:
         self._validate_grant_subjects(
             ctx, department_ids=req.department_ids, member_ids=req.member_ids,
         )
+        # 模型校验在任何写入（含招募订单）之前：失败时零写入。
+        model_ref = validate_recruit_model(self._catalog, ctx, req.model_policy)
 
         # 1) 单向拉模板详情（只读，不改 Operator 真相；Operator 不写 Manager 库）。
         template = self._catalog.pull_expert_template(
@@ -146,7 +159,7 @@ class RecruitService:
         order = _track_provision(self._orders, ctx, idem=idem, template_id=template.template_id)
 
         try:
-            recommended, match = _resolve_platform_model(self._catalog, ctx, template)
+            recommended, match = _resolve_platform_model(self._catalog, ctx, template, model_ref, req.model_policy)
             has_platform_skills = bool(template.platform_skill_refs or recommended.get("platform_skill_refs"))
             if has_platform_skills and self._transaction is None:
                 # Installing a remote package before a non-atomic employee write
@@ -280,7 +293,17 @@ class RecruitService:
         # Reuse an existing live employee when the solution references a template that
         # this tenant already recruited. The source template id is the stable identity;
         # solution-derived slugs must only be generated for genuinely new employees.
-        prepared: list[tuple[object, EmployeeConfigRow | None, str, dict | None, ProviderMatchResult | None, list[str]]] = []
+        # 模型先于一切写入、且一次性校验完：新建的专家必须选模型，复用的专家只有请求里带了才改。
+        existing_by_template = {
+            t.template_id: self._employees.get_by_source_template(ctx, source_template_id=t.template_id)
+            for t in ordered_experts
+        }
+        model_refs = collect_model_errors(self._catalog, ctx, {
+            tid: req.expert_models.get(tid)
+            for tid, row in existing_by_template.items()
+            if row is None or tid in req.expert_models
+        })
+        prepared: list[tuple[object, EmployeeConfigRow | None, str, dict | None, ProviderMatchResult | None, list[str], dict | None]] = []
         seen_template_ids: set[str] = set()
         seen_slugs: set[str] = set()
         for idx, template in enumerate(ordered_experts):
@@ -291,18 +314,21 @@ class RecruitService:
                 ctx, source_template_id=template.template_id,
             )
             if existing is not None:
-                prepared.append((template, existing, existing.employee_slug, None, None, []))
+                change = model_refs.get(template.template_id)
+                prepared.append((template, existing, existing.employee_slug, None, None, [], change))
                 continue
             slug = _derive_solution_expert_slug(package.solution_id, package.version, idx)
             if slug in seen_slugs or self._employees.get_by_slug(ctx, employee_slug=slug) is not None:
                 raise Conflict(f"employee slug collision during solution expansion: {slug}")
             seen_slugs.add(slug)
-            recommended, match = _resolve_platform_model(self._catalog, ctx, template)
+            recommended, match = _resolve_platform_model(
+                self._catalog, ctx, template, model_refs[template.template_id], req.expert_models[template.template_id],
+            )
             # Package bytes are fetched/validated before the publication
             # transaction, but installation is deferred until its bound
             # capability repository is part of that transaction.
             skills = self._resolve_skills(ctx, template.platform_skill_refs, recommended, install=False)
-            prepared.append((template, None, slug, recommended, match, skills))
+            prepared.append((template, None, slug, recommended, match, skills, None))
 
         if self._transaction is None:
             raise Conflict("atomic solution publication is not configured")
@@ -334,14 +360,19 @@ class RecruitService:
         employee_ids = []
         match_audits = []
         coordinator_employee_id = None
-        for template, previous, slug, recommended, match, skills in prepared:
+        for template, previous, slug, recommended, match, skills, model_change in prepared:
             existing = self._employees.get_by_source_template(ctx, source_template_id=template.template_id)
             if previous is not None and (existing is None or existing.employee_id != previous.employee_id):
                 raise Conflict("reused employee changed during solution preflight; retry")
             order_out = None
             if existing is not None:
                 row = existing  # Current enterprise overrides remain authoritative.
-                match_audits.append({"reused": True, "reused_employee_id": row.employee_id, "source_template_id": template.template_id})
+                if model_change is not None:
+                    row = self._change_reused_model(ctx, existing, model_change, req.expert_models[template.template_id]) or existing
+                match_audits.append({
+                    "reused": True, "reused_employee_id": row.employee_id, "source_template_id": template.template_id,
+                    "model_changed": model_change is not None,
+                })
             else:
                 order = _track_provision(self._orders, ctx, idem=_idempotency_key(template.template_id, slug),
                                          template_id=template.template_id, solution_id=package.solution_id)
@@ -385,6 +416,17 @@ class RecruitService:
                           department_ids=department_ids, member_ids=member_ids)
         self._record_solution_apply(ctx, package=package, instance=instance, employee_ids=employee_ids, match_audits=match_audits)
         return ApplySolutionResult(solution_instance=_solution_out(instance), experts=expert_results, grants_applied=grants_applied)
+
+    def _change_reused_model(self, ctx: TenantContext, row: EmployeeConfigRow, ref: dict, policy: RecruitModelPolicy):
+        """应用方案时顺带改已招募专家的模型：走员工配置更新（版本号递增），其余配置原样保留。"""
+        return self._employees.update(
+            ctx, employee_id=row.employee_id, display_name=row.display_name, persona=row.persona,
+            model=ref["model_id"], provider_ref=ref["provider_id"], thinking_level=policy.thinking_level or None,
+            timeout_seconds=row.timeout_seconds, tools=list(row.tools), skills=list(row.skills),
+            knowledge_refs=list(row.knowledge_refs), connector_refs=list(row.connector_refs),
+            memory_policy=row.memory_policy, platform_model_ref=dict(ref),
+            department_ids=list(row.department_ids), role_title=row.role_title,
+        )
 
     def _validate_grant_subjects(
         self,

@@ -352,12 +352,14 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
     auth = build_auth_service(migrated_pg, admin_dsn=pg_admin_url)
     msvc, gsvc = build_member_dept_service(migrated_pg, auth=auth)
     catalog = FakeOperatorCatalogClient()
+    from tests.manager._recruit_model import MODEL_POLICY, seed_default_model
+    seed_default_model(catalog)
     catalog.seed_expert(ExpertTemplateDetail(
         template_id="tpl-rc1", version="1", display_name="模板专家",
         recommended_config={"model": "gpt-5", "thinking_level": "deep"},
         platform_model_ref={
-            "provider_id": "relay-default", "provider_version": 1,
-            "model_id": "gpt-5", "model_version": 1,
+            "provider_id": "relay-default",
+            "model_id": "gpt-5",
         },
     ))
     rsvc = build_recruit_service(catalog=catalog, router=router)
@@ -369,7 +371,7 @@ def test_manager_config_recruit_expert_creates_employee_and_optional_grant(
     ))
 
     result = rsvc.recruit_expert(ctx, RecruitExpertRequest(
-        template_id="tpl-rc1", employee_slug="exp-rc1",
+        model_policy=MODEL_POLICY, template_id="tpl-rc1", employee_slug="exp-rc1",
         department_ids=[], member_ids=[member.id],
     ))
     assert result.employee_id

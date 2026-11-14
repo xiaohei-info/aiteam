@@ -38,7 +38,7 @@ class _Strict(BaseModel):
 
 class DraftCreate(_Strict):
     title: str = Field(min_length=1, max_length=80, description="草稿标题（仅运营端内部可见）")
-    platform_model_ref: PlatformModelRef = Field(description="用于生成的已发布平台模型；也是生成出的专家的默认模型")
+    platform_model_ref: PlatformModelRef = Field(description="用于生成文档的已发布平台模型；与生成出的专家使用的模型无关（专家模型由企业招募时选择）")
     image_recognition: ImageRecognition = Field(
         default="none", description="图片识别方式：none 不识别（图片记为待人工处理项）；vision 用所选多模态模型识别",
     )

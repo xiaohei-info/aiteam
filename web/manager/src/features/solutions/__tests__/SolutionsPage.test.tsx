@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
@@ -11,6 +11,18 @@ import { useGrantsApi } from "../../grants/useGrantsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 vi.mock("../../grants/useGrantsApi", () => ({ useGrantsApi: vi.fn() }));
+const platformModels = {
+  providers: [],
+  models: [{
+    model: { provider_id: "p1", model_id: "m1", display_name: "m1", status: "published", version: 1 },
+    rate: { pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" },
+  }],
+};
+// 不用 vi.fn:afterEach 的 restoreAllMocks 会清掉它的实现。
+let currentModels: typeof platformModels = platformModels;
+let modelsError: Error | null = null;
+const platformModelsApi = { list: async () => { if (modelsError) throw modelsError; return currentModels; } };
+vi.mock("../../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: () => platformModelsApi }));
 import type { ExpertsApi } from "../../experts/useExpertsApi";
 import type { GrantsApi } from "../../grants/useGrantsApi";
 import type { SolutionInstance, SolutionPackage } from "../../experts/types";
@@ -84,7 +96,7 @@ const solutionInstance: SolutionInstance = {
 };
 
 describe("SolutionsPage", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => { localStorage.clear(); currentModels = platformModels; modelsError = null; });
   afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
   it("浏览：渲染可应用方案", async () => {
@@ -104,7 +116,7 @@ describe("SolutionsPage", () => {
     expect(within(dialog).queryByRole("combobox", { name: /授权成员/ })).not.toBeInTheDocument();
     finishMembers([{ id: "m-1", display_name: "成员一" }]);
     expect(await applying).toBeUndefined();
-    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: ["m-1"], department_ids: [] }));
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", expert_models: { "tpl-1": { provider_ref: "p1", model: "m1" } }, member_ids: ["m-1"], department_ids: [] }));
   });
 
   it("部门设置允许显式选择未设置并在无授权目标时应用", async () => {
@@ -115,7 +127,105 @@ describe("SolutionsPage", () => {
     fireEvent.click(await within(dialog).findByRole("combobox", { name: /所属部门/ }));
     expect(screen.getByRole("option", { name: "未设置", hidden: true })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "应用方案" }));
-    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", member_ids: [], department_ids: [] }));
+    await waitFor(() => expect(api.applySolution).toHaveBeenCalledWith({ solution_id: "sol-1", solution_version: "1", expert_models: { "tpl-1": { provider_ref: "p1", model: "m1" } }, member_ids: [], department_ids: [] }));
+  });
+
+  it("没有可用模型：应用方案按钮禁用并提示", async () => {
+    mockApi();
+    currentModels = { providers: [], models: [] };
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    await waitFor(() => expect(within(dialog).getByText("暂无可用模型，请联系平台运营开通")).toBeInTheDocument());
+    expect(within(dialog).getByRole("button", { name: "应用方案" })).toBeDisabled();
+  });
+
+  it("多个新建专家：「全部使用」一次选同一模型；422 标红后改选该专家的模型即清除提示", async () => {
+    const api = mockApi();
+    (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      solution_id: "sol-1", version: "1", display_name: "测试方案",
+      experts: [
+        { template_id: "tpl-1", version: "1", display_name: "架构师", persona: "p", category: "tech" },
+        { template_id: "tpl-2", version: "1", display_name: "测试员", persona: "p", category: "tech" },
+      ],
+      coordinator_template_id: "tpl-1",
+    } as SolutionPackage]);
+    currentModels = {
+      providers: [],
+      models: ["m1", "m2"].map((id) => ({
+        model: { provider_id: "p1", model_id: id, display_name: id, status: "published", version: 1 },
+        rate: { pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" },
+      })),
+    };
+    (api.applySolution as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new ApiError("1 expert(s) have no usable model", 422, "model_unavailable", {
+        type: "x", title: "t", status: 422, code: "model_unavailable",
+        errors: [{ loc: ["body", "expert_models", "tpl-2"], message: "m", type: "model_unavailable" }],
+      }))
+      .mockResolvedValueOnce({});
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    const submit = within(dialog).getByRole("button", { name: "应用方案" });
+    const pick = async (testId: string, option: string) => {
+      const picker = await within(dialog).findByTestId(testId);
+      await waitFor(() => expect(within(picker).getByRole("combobox")).toBeEnabled());
+      const combobox = within(picker).getByRole("combobox");
+      fireEvent.click(combobox);
+      // 三个下拉的选项都在文档里，只在当前下拉控制的列表中找。
+      const listbox = document.getElementById(combobox.getAttribute("aria-controls") ?? "");
+      expect(listbox).not.toBeNull();
+      fireEvent.click(within(listbox as HTMLElement).getByRole("option", { name: option, hidden: true }));
+    };
+
+    expect(submit).toBeDisabled(); // 两个模型可选，不自动选中
+    await pick("solution-model-all", "m2");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(within(dialog).getByText("该模型不可用，请换一个")).toBeInTheDocument());
+    expect(api.applySolution).toHaveBeenLastCalledWith(expect.objectContaining({
+      expert_models: { "tpl-1": { provider_ref: "p1", model: "m2" }, "tpl-2": { provider_ref: "p1", model: "m2" } },
+    }));
+
+    await pick("solution-model-tpl-2", "m1");
+    await waitFor(() => expect(within(dialog).queryByText("该模型不可用，请换一个")).not.toBeInTheDocument());
+    fireEvent.click(submit);
+    await waitFor(() => expect(api.applySolution).toHaveBeenLastCalledWith(expect.objectContaining({
+      expert_models: { "tpl-1": { provider_ref: "p1", model: "m2" }, "tpl-2": { provider_ref: "p1", model: "m1" } },
+    })));
+  });
+
+  it("模型列表加载失败：弹窗显示原因，不能应用", async () => {
+    mockApi();
+    modelsError = new Error("模型目录暂不可用");
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    expect(await within(dialog).findByText("模型目录暂不可用")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "应用方案" })).toBeDisabled();
+  });
+
+  it("422 整单失败：在对应专家的模型下拉旁标出原因，弹窗保持打开", async () => {
+    const api = mockApi();
+    (api.applySolution as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(
+      "1 expert(s) have no usable model", 422, "model_unavailable",
+      {
+        type: "x", title: "t", status: 422, code: "model_unavailable",
+        errors: [{ loc: ["body", "expert_models", "tpl-1"], message: "m", type: "model_unavailable" }],
+      },
+    ));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+    const dialog = await screen.findByRole("dialog", { name: "应用测试方案" });
+    const submit = within(dialog).getByRole("button", { name: "应用方案" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(within(dialog).getByText("该模型不可用，请换一个")).toBeInTheDocument());
+    expect(within(dialog).getByText("有专家的模型不可用，请调整后重试")).toBeInTheDocument();
   });
 
   it("只读成员不显示应用入口", async () => {
@@ -170,7 +280,7 @@ describe("SolutionsPage", () => {
   });
 
   it("应用方案成功：显示成功提示", async () => {
-    const api = mockApi();
+    mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     await applyDefaultSolution();
@@ -192,7 +302,7 @@ describe("SolutionsPage", () => {
 
 
   it("应用方案成功：显示前往专家实例配置入口", async () => {
-    const api = mockApi();
+    mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试方案")).toBeInTheDocument());
     await applyDefaultSolution();

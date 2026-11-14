@@ -86,7 +86,7 @@ def _fake_svc():
 ])
 def test_no_token_401(method, path):
     client = _client(None)
-    body = {"template_id": "tpl", "employee_slug": "a"} if path.endswith("experts") and method == "POST" else (
+    body = {"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl", "employee_slug": "a"} if path.endswith("experts") and method == "POST" else (
         {"solution_id": "s"} if path.endswith("solutions") and method == "POST" else None)
     r = client.request(method, path, json=body)
     assert r.status_code == 401
@@ -97,7 +97,7 @@ def test_no_token_401(method, path):
 def test_recruit_expert_no_db_503():
     client = _client(None)
     r = client.post("/api/manager/recruit/experts",
-                    json={"template_id": "tpl", "employee_slug": "a"},
+                    json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl", "employee_slug": "a"},
                     headers=_hdr())
     assert r.status_code == 503
     assert r.json()["code"] == "manager_db_unconfigured"
@@ -144,13 +144,13 @@ def test_recruit_expert_happy():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
         c = _client("postgresql://fake/fake")
         r = c.post("/api/manager/recruit/experts",
-                   json={"template_id": "tpl-1", "employee_slug": "exp-a"},
+                   json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl-1", "employee_slug": "exp-a"},
                    headers=_hdr())
         assert r.status_code == 201
         assert r.json()["data"]["employee_id"] == "emp-1"
         # 二次（cache hit）
         r2 = c.post("/api/manager/recruit/experts",
-                    json={"template_id": "tpl-1", "employee_slug": "exp-a"},
+                    json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl-1", "employee_slug": "exp-a"},
                     headers=_hdr())
         assert r2.status_code == 201
 
@@ -198,7 +198,7 @@ def test_recruit_expert_conflict_409():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
         c = _client("postgresql://fake/fake")
         r = c.post("/api/manager/recruit/experts",
-                   json={"template_id": "tpl-1", "employee_slug": "dup"},
+                   json={"model_policy": {"provider_ref": "provider-1", "model": "m"}, "template_id": "tpl-1", "employee_slug": "dup"},
                    headers=_hdr())
         assert r.status_code == 409
 
@@ -214,7 +214,7 @@ def test_browse_experts_happy():
     with patch("manager_service.routes_recruit.build_recruit_service", return_value=fake):
         c = _client("postgresql://fake/fake")
         c.app.state._operator_catalog.seed_expert(
-            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试", platform_model_ref={"provider_id": "p1", "provider_version": 1, "model_id": "m1", "model_version": 1})
+            ExpertTemplateDetail(template_id="tpl-1", version="1", display_name="测试", platform_model_ref={"provider_id": "p1", "model_id": "m1", })
         )
         r = c.get("/api/manager/recruit/catalog/experts", headers=_hdr())
     assert r.status_code == 200

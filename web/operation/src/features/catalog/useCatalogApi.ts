@@ -32,10 +32,8 @@ export type UpdateExpertTemplateChanges = Partial<ExpertTemplateProfile> & {
   /** New values are local image data URLs; avatar_url remains for Catalog wire compatibility. */
   avatar_url?: string;
   system_prompt?: string;
-  platform_model_ref?: { provider_id: string; provider_version: number; model_id: string; model_version: number };
   platform_skill_refs?: { skill_id: string; version: string; content_hash: string }[];
   description?: string;
-  thinking_level?: string;
 };
 
 export type UpdateSolutionTemplateChanges = {

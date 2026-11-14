@@ -29,7 +29,6 @@ from shared.contracts.expert_profile import (
     UseCase,
     validate_http_url,
 )
-from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
 
 from .catalog_avatar import AVATAR_MAX_DATA_URL_LENGTH, validate_avatar_value
@@ -90,11 +89,6 @@ class RegisterExpertTemplateRequest(ExpertTemplateProfile):
     @classmethod
     def validate_avatar(cls, value: str) -> str:
         return validate_avatar_value(value)
-    platform_model_ref: PlatformModelRef = Field(description="Operator 已发布平台 Provider/模型固定引用")
-    thinking_level: ThinkingLevel = Field(
-        default="off",
-        description="招募后默认思考档位；Manager 可按需覆盖。",
-    )
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator 内部平台技能固定版本引用")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection; use platform_skill_refs")
     description: str = Field(min_length=1, max_length=200, description="用户可见职位描述（≤200字）(PRD: description, 必填)")
@@ -173,11 +167,6 @@ class UpdateExpertTemplateRequest(BaseModel):
     def validate_avatar(cls, value: str | None) -> str | None:
         return None if value is None else validate_avatar_value(value)
     system_prompt: str | None = None
-    thinking_level: ThinkingLevel | None = Field(
-        default=None,
-        description="更新招募后默认思考档位；None 表示沿用现有配置。",
-    )
-    platform_model_ref: PlatformModelRef | None = None
     platform_skill_refs: list[PlatformSkillRef] | None = None
     skill_ids: list[str] | None = None
     description: str | None = None
@@ -249,8 +238,6 @@ class CatalogEntryResponse(ExpertTemplateProfile):
         description="经校验的本地头像图片 data URL；兼容历史 HTTP/path 值",
     )
     system_prompt: str = Field(default="")
-    platform_model_ref: PlatformModelRef | None = None
-    thinking_level: ThinkingLevel = Field(default="off", description="招募后默认思考档位。")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)

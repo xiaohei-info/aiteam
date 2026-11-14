@@ -124,8 +124,6 @@ export function CatalogDetailPage(): ReactNode {
         if (!avatar || isSafeAvatarDataUrl(avatar)) changes.avatar_url = avatar;
         changes.description = draft.description ?? "";
         changes.platform_skill_refs = draft.platform_skill_refs ?? [];
-        changes.platform_model_ref = draft.platform_model_ref ?? null;
-        changes.thinking_level = draft.thinking_level || "off";
         // 全量提交展示字段：清空的列表/文本落为空值，required_permissions/pricing 为 null 时清除。
         Object.assign(changes, profile);
       } else {

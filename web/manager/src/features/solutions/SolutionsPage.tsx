@@ -31,7 +31,9 @@ import { DepartmentSelector } from "../experts/DepartmentSelector";
 import { useExpertsApi } from "../experts/useExpertsApi";
 import { useGrantsApi } from "../grants/useGrantsApi";
 import type { Department, Member } from "../grants/types";
-import type { EmployeeConfig, SolutionInstance, SolutionPackage } from "../experts/types";
+import type { EmployeeConfig, RecruitModelPolicy, SolutionInstance, SolutionPackage } from "../experts/types";
+import { ModelPicker } from "../platform-models/ModelPicker";
+import { toPolicy, useRecruitModels } from "../platform-models/useRecruitModels";
 
 export function SolutionsPage(): ReactNode {
   const { session } = useSession();
@@ -169,6 +171,7 @@ export function SolutionsPage(): ReactNode {
       {applyFor && (
         <SolutionApplyDialog
           solution={applyFor}
+          employees={employees}
           api={api}
           grantsApi={grantsApi}
           onClose={() => setApplyFor(null)}
@@ -191,12 +194,14 @@ export function SolutionsPage(): ReactNode {
 
 function SolutionApplyDialog({
   solution,
+  employees,
   api,
   grantsApi,
   onClose,
   onApplied,
 }: {
   solution: SolutionPackage;
+  employees: EmployeeConfig[];
   api: ReturnType<typeof useExpertsApi>;
   grantsApi: ReturnType<typeof useGrantsApi>;
   onClose: () => void;
@@ -209,6 +214,32 @@ function SolutionApplyDialog({
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const models = useRecruitModels();
+  // template_id → 所选模型 key；新建专家必填，已招募专家留空 = 保持当前模型。
+  const [modelKeys, setModelKeys] = useState<Record<string, string | undefined>>({});
+  const [modelErrors, setModelErrors] = useState<Record<string, string>>({});
+  const recruitedIds = new Set(
+    employees.filter((employee) => employee.status !== "archived" && employee.source_template_id)
+      .map((employee) => employee.source_template_id as string),
+  );
+  const solutionExperts = (solution.experts ?? []).filter((expert) => expert.enabled !== false);
+  const newExperts = solutionExperts.filter((expert) => !recruitedIds.has(expert.template_id));
+  const allNewChosen = newExperts.every((expert) => modelKeys[expert.template_id]);
+
+  const setModelKey = useCallback((templateId: string, key: string | undefined) => {
+    setModelKeys((current) => (current[templateId] === key ? current : { ...current, [templateId]: key }));
+    setModelErrors((current) => {
+      if (!current[templateId]) return current;
+      const { [templateId]: _dropped, ...rest } = current;
+      return rest;
+    });
+  }, []);
+
+  function applyToAllNew(key: string | undefined): void {
+    if (!key) return;
+    setModelKeys((current) => ({ ...current, ...Object.fromEntries(newExperts.map((expert) => [expert.template_id, key])) }));
+    setModelErrors({});
+  }
 
   useEffect(() => {
     let active = true;
@@ -224,18 +255,36 @@ function SolutionApplyDialog({
   }, [grantsApi]);
 
   async function apply(): Promise<void> {
+    const expertModels: Record<string, RecruitModelPolicy> = {};
+    for (const expert of solutionExperts) {
+      const choice = models.choices.find((item) => item.key === modelKeys[expert.template_id]);
+      if (choice) expertModels[expert.template_id] = toPolicy(choice);
+    }
     setWorking(true);
     setError(null);
+    setModelErrors({});
     try {
       await api.applySolution({
         solution_id: solution.solution_id,
         solution_version: solution.version,
+        expert_models: expertModels,
         member_ids: memberIds,
         department_ids: departmentIds,
       });
       onApplied();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");
+      if (err instanceof ApiError && err.status === 422 && err.problem?.errors?.length) {
+        // 整单失败：把每个专家的原因标在对应的模型下拉旁。
+        const byExpert: Record<string, string> = {};
+        for (const item of err.problem.errors) {
+          const templateId = item.loc[item.loc.length - 1];
+          if (typeof templateId === "string") byExpert[templateId] = item.type === "model_required" ? "请选择模型" : "该模型不可用，请换一个";
+        }
+        setModelErrors(byExpert);
+        setError("有专家的模型不可用，请调整后重试");
+      } else {
+        setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "应用方案失败");
+      }
     } finally {
       setWorking(false);
     }
@@ -247,8 +296,45 @@ function SolutionApplyDialog({
         <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
         <Text color="secondary">应用后会在当前企业创建方案专家，并将其归属到下方部门；所选部门也会作为部门授权范围。未归属部门时请选择“未设置”。成员授权仍按下方选择生效。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
         {error && <Banner status="error" title={error} />}
+        {models.error && <Banner status="error" title={models.error} />}
         {loading ? <Text role="status">加载成员和部门…</Text> : (
           <VStack gap={3}>
+            <VStack gap={2} data-testid="solution-expert-models">
+              <Heading level={3}>专家使用的模型</Heading>
+              {newExperts.length > 1 && (
+                <ModelPicker
+                  label="新建专家全部使用"
+                  choices={models.choices}
+                  loading={models.loading}
+                  value={undefined}
+                  autoPickSingle={false}
+                  isRequired={false}
+                  placeholder="一次给全部新建专家选同一个模型"
+                  onChange={applyToAllNew}
+                  isDisabled={working}
+                  testId="solution-model-all"
+                />
+              )}
+              {solutionExperts.map((expert) => {
+                const recruited = recruitedIds.has(expert.template_id);
+                return (
+                  <ModelPicker
+                    key={expert.template_id}
+                    label={recruited ? `${expert.display_name}（已招募）` : expert.display_name}
+                    choices={models.choices}
+                    loading={models.loading}
+                    value={modelKeys[expert.template_id]}
+                    onChange={(key) => setModelKey(expert.template_id, key)}
+                    autoPickSingle={!recruited}
+                    isRequired={!recruited}
+                    placeholder={recruited ? "保持当前模型" : undefined}
+                    errorText={modelErrors[expert.template_id]}
+                    isDisabled={working}
+                    testId={`solution-model-${expert.template_id}`}
+                  />
+                );
+              })}
+            </VStack>
             <DepartmentSelector
               departments={departments}
               value={departmentIds}
@@ -262,7 +348,7 @@ function SolutionApplyDialog({
         )}
         <HStack justify="end" gap={2}>
           <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working} />
+          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working || !allNewChosen} />
         </HStack>
       </VStack>
     </Dialog>

@@ -119,41 +119,6 @@ def _list_platform_catalog(catalog: OperatorCatalogPort, tenant_id: str) -> dict
         raise
 
 
-def _filter_templates_by_model_access(templates: list[ExpertTemplateDetail], catalog: dict) -> list[ExpertTemplateDetail]:
-    if not catalog.get("model_access_configured"):
-        return templates
-    allowed = {
-        (model.get("provider_id"), model.get("model_id"))
-        for item in catalog.get("models", [])
-        if isinstance(item, dict)
-        for model in [item.get("model") or {}]
-        if isinstance(model, dict)
-    }
-    return [
-        template for template in templates
-        if (template.platform_model_ref.provider_id, template.platform_model_ref.model_id) in allowed
-    ]
-
-
-def _filter_solution_packages_by_model_access(packages: list[SolutionPackage], catalog: dict) -> list[SolutionPackage]:
-    if not catalog.get("model_access_configured"):
-        return packages
-    allowed = {
-        (model.get("provider_id"), model.get("model_id"))
-        for item in catalog.get("models", [])
-        if isinstance(item, dict)
-        for model in [item.get("model") or {}]
-        if isinstance(model, dict)
-    }
-    return [
-        package for package in packages
-        if all(
-            (expert.platform_model_ref.provider_id, expert.platform_model_ref.model_id) in allowed
-            for expert in package.experts if expert.enabled
-        )
-    ]
-
-
 def _service(request: Request) -> RecruitService:
     """从端配置构造 RecruitService；未配置业务 DB → 503（不静默，与 employee/auth 路由一致）。
 
@@ -191,10 +156,7 @@ def build_recruit_router(verifier) -> APIRouter:
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
             ctx = tenant_context_from(claims)
-            templates = _filter_templates_by_model_access(
-                catalog.list_expert_templates(),
-                _list_platform_catalog(catalog, ctx.tenant_id),
-            )
+            templates = catalog.list_expert_templates()
         except AppError:
             raise
         except Exception as exc:
@@ -222,10 +184,7 @@ def build_recruit_router(verifier) -> APIRouter:
         try:
             catalog: OperatorCatalogPort = request.app.state._operator_catalog
             ctx = tenant_context_from(claims)
-            packages = _filter_solution_packages_by_model_access(
-                catalog.list_solution_packages(),
-                _list_platform_catalog(catalog, ctx.tenant_id),
-            )
+            packages = catalog.list_solution_packages()
             return ListEnvelope[SolutionPackage](data=packages)
         except AppError:
             raise

@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .expert_profile import ExpertTemplateProfile
 from .skill import SignedSkillPackage, SkillSigningKeyMetadata
@@ -98,6 +98,14 @@ class ExpertTemplateDetail(ExpertTemplateProfile):
 
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_model(cls, value):
+        # 专家模板不再携带模型 / 思考档位（模型由企业招募时选择）；兼容旧 Operator 的响应，读入时丢弃。
+        if isinstance(value, dict):
+            value = {k: v for k, v in value.items() if k != "platform_model_ref"}
+        return value
+
     template_id: str
     version: str
     display_name: str
@@ -109,7 +117,6 @@ class ExpertTemplateDetail(ExpertTemplateProfile):
     category: str = Field(default="", description="分类（市场营销/财务分析/…）")
     avatar_url: str = Field(default="", description="头像图片 URL")
     system_prompt: str = Field(default="", description="岗位描述系统提示词（纯文本）")
-    platform_model_ref: PlatformModelRef = Field(description="Operator 固定平台 Provider/模型引用")
     skill_ids: list[str] = Field(default_factory=list, description="Deprecated compatibility projection")
     platform_skill_refs: list[PlatformSkillRef] = Field(default_factory=list, description="Operator platform skill fixed references")
     description: str = Field(default="", description="用户可见职位描述（≤200字）")

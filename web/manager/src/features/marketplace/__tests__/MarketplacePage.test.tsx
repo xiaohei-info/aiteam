@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
+import { ApiError, createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { I18nContext } from "../../../i18n/context";
 import { managerMessages } from "../../../i18n/messages";
 import { SessionContext, type SessionContextValue } from "../../../auth/session";
@@ -9,6 +9,17 @@ import { MarketplacePage } from "../MarketplacePage";
 import { useExpertsApi } from "../../experts/useExpertsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
+const platformModels = {
+  providers: [],
+  models: [{
+    model: { provider_id: "p1", model_id: "m1", display_name: "m1", status: "published", version: 1 },
+    rate: { pricing_status: "known", input_usd_per_million: "1", output_usd_per_million: "2" },
+  }],
+};
+let currentModels: typeof platformModels = platformModels;
+// 不用 vi.fn:afterEach 的 restoreAllMocks 会清掉它的实现。
+const platformModelsApi = { list: async () => currentModels };
+vi.mock("../../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: () => platformModelsApi }));
 const skillMarketList = vi.fn().mockResolvedValue([]);
 vi.mock("../../skill-market/useSkillMarketApi", () => ({ useSkillMarketApi: () => ({ list: skillMarketList, install: vi.fn() }) }));
 
@@ -44,6 +55,15 @@ function mockApi(): ExpertsApi {
   return api;
 }
 
+async function confirmRecruit(): Promise<void> {
+  fireEvent.click(screen.getByText("招募"));
+  const dialog = await screen.findByRole("dialog", { name: "招募测试专家" });
+  // 只有一个可用模型时自动选中,「招募」随之可点。
+  const submit = within(dialog).getByRole("button", { name: "招募" });
+  await waitFor(() => expect(submit).toBeEnabled());
+  fireEvent.click(submit);
+}
+
 function renderPage(roles: string[]) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
@@ -55,7 +75,7 @@ function renderPage(roles: string[]) {
 }
 
 describe("MarketplacePage", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => { localStorage.clear(); currentModels = platformModels; });
   afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 
   it("浏览：渲染可招募专家模板", async () => {
@@ -85,12 +105,35 @@ describe("MarketplacePage", () => {
     expect(screen.getByRole("article", { name: "研究专家" })).toBeInTheDocument();
   });
 
-  it("招募：直接点击招募按钮 → recruitExpert(template_id，无 slug)", async () => {
+  it("招募：必须选模型；只有一个可用模型时自动选中 → recruitExpert(model_policy，无 slug)", async () => {
     const api = mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    await confirmRecruit();
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({
+      template_id: "tpl-1", model_policy: { provider_ref: "p1", model: "m1" }, department_ids: [],
+    }));
+  });
+
+  it("没有可用模型：招募按钮保持禁用并给出提示", async () => {
+    mockApi();
+    currentModels = { providers: [], models: [] };
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
     fireEvent.click(screen.getByText("招募"));
-    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1" }));
+    const dialog = await screen.findByRole("dialog", { name: "招募测试专家" });
+    await waitFor(() => expect(within(dialog).getByText("暂无可用模型，请联系平台运营开通")).toBeInTheDocument());
+    expect(within(dialog).getByRole("button", { name: "招募" })).toBeDisabled();
+  });
+
+  it("招募 422 模型不可用：错误留在弹窗里，不关闭", async () => {
+    const api = mockApi();
+    (api.recruitExpert as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError("the selected model is not available", 422, "model_unavailable"));
+    renderPage(["owner"]);
+    await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
+    await confirmRecruit();
+    const dialog = await screen.findByRole("dialog", { name: "招募测试专家" });
+    await waitFor(() => expect(within(dialog).getByText("the selected model is not available")).toBeInTheDocument());
   });
 
   it("招募先完成部门设置，并把所选部门传给后端", async () => {
@@ -104,7 +147,7 @@ describe("MarketplacePage", () => {
     fireEvent.click(within(dialog).getByRole("combobox", { name: "所属部门" }));
     fireEvent.click(screen.getByRole("option", { name: "研发部", hidden: true }));
     fireEvent.click(within(dialog).getByRole("button", { name: "招募" }));
-    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", department_ids: ["d1"] }));
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", model_policy: { provider_ref: "p1", model: "m1" }, department_ids: ["d1"] }));
   });
 
   it("部门设置允许显式选择未设置", async () => {
@@ -117,7 +160,7 @@ describe("MarketplacePage", () => {
     expect(within(dialog).getByRole("option", { name: "未设置", hidden: true })).toBeInTheDocument();
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "招募" })).toBeEnabled());
     fireEvent.click(within(dialog).getByRole("button", { name: "招募" }));
-    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", department_ids: [] }));
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1", model_policy: { provider_ref: "p1", model: "m1" }, department_ids: [] }));
   });
 
   it("只读角色（member）不显示招募入口", async () => {
@@ -163,8 +206,8 @@ describe("MarketplacePage", () => {
     const api = mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("招募"));
-    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalledWith({ template_id: "tpl-1" }));
+    await confirmRecruit();
+    await waitFor(() => expect(api.recruitExpert).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("招募成功")).toBeInTheDocument());
   });
 
@@ -173,8 +216,8 @@ describe("MarketplacePage", () => {
     (api.recruitExpert as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("nope"));
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("招募"));
-    await waitFor(() => expect(screen.getByText("操作失败，请重试")).toBeInTheDocument());
+    await confirmRecruit();
+    await waitFor(() => expect(screen.getByText("nope")).toBeInTheDocument());
   });
 
 
@@ -187,7 +230,6 @@ describe("MarketplacePage", () => {
         pricing: { mode: "per_call", unit_price: "0.05", currency: "USD" },
         stats: { resolution_rate: 0.85, evaluated_segments: 40, resolved_segments: 34, min_sample: 10 },
         platform_skill_refs: [{ skill_id: "s1", version: "1", content_hash: "h" }],
-        platform_model_ref: { provider_id: "p", provider_version: 1, model_id: "gpt-5", model_version: 1 },
       },
       {
         template_id: "tpl-2", version: "1", display_name: "研究专家",
@@ -277,7 +319,7 @@ describe("MarketplacePage", () => {
     mockApi();
     renderPage(["owner"]);
     await waitFor(() => expect(screen.getByText("测试专家")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("招募"));
+    await confirmRecruit();
     await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
     expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
   });
