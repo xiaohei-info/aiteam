@@ -63,13 +63,19 @@ def _reviewer(request: Request) -> TokenClaims:
     "/drafts", summary="列出方案草稿", operation_id="operation_solution_authoring_draft_list",
     description=(
         "列出未归档的行业方案草稿，按最近更新倒序。只含概要与最近一次生成任务的状态，不含正文。"
-        "meta.worker_available 表示本服务是否启用了生成执行器（false 时排队的任务不会被执行）。"
+        "meta.worker_available 表示本服务是否启用了生成执行器（false 时排队的任务不会被执行）；"
+        "meta.server_time 为服务器当前时间（ISO 8601），前端据此判断排队是否过久，不依赖浏览器时钟。"
     ),
 )
 def list_drafts(
     _claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
 ) -> ListEnvelope[DraftSummaryOut]:
-    return ListEnvelope[DraftSummaryOut](data=service.list_drafts(), meta={"worker_available": worker_enabled()})
+    from datetime import UTC, datetime
+
+    return ListEnvelope[DraftSummaryOut](
+        data=service.list_drafts(),
+        meta={"worker_available": worker_enabled(), "server_time": datetime.now(UTC).isoformat()},
+    )
 
 
 @router.post(

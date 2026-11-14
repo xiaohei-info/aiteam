@@ -248,11 +248,15 @@ def test_list_reports_whether_a_worker_is_running_and_the_latest_job(client, env
     client.post(f"{BASE}/drafts/{draft_id}/generate", headers={**_auth(), "Idempotency-Key": "k1"})
     monkeypatch.setattr("operation_service.routes_solution_authoring.worker_enabled", lambda: False)
     listed = client.get(f"{BASE}/drafts", headers=_auth()).json()
-    assert listed["meta"] == {"worker_available": False}
+    assert listed["meta"]["worker_available"] is False
+    # 服务器当前时间：前端据此判断「排队过久」，不受浏览器时钟偏差影响（#200 评论）。
+    from datetime import UTC, datetime
+    server_time = datetime.fromisoformat(listed["meta"]["server_time"])
+    assert server_time.tzinfo is not None and abs((datetime.now(UTC) - server_time).total_seconds()) < 60
     job = listed["data"][0]["latest_job"]
     assert set(job) == {"status", "error_code", "created_at", "started_at", "finished_at"} and job["status"] == "queued"
     monkeypatch.setattr("operation_service.routes_solution_authoring.worker_enabled", lambda: True)
-    assert client.get(f"{BASE}/drafts", headers=_auth()).json()["meta"] == {"worker_available": True}
+    assert client.get(f"{BASE}/drafts", headers=_auth()).json()["meta"]["worker_available"] is True
 
 
 def test_cancel_generation_over_http(client, env):

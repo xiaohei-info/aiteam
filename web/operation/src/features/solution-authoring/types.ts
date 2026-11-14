@@ -37,6 +37,8 @@ export interface DraftList {
   drafts: DraftSummary[];
   /** 生成执行器是否启用；为 false 时排队的任务不会被执行。服务端没给时按可用处理。 */
   workerAvailable: boolean;
+  /** 服务器当前时间（毫秒）；旧服务端没给时为 null，退回浏览器时钟。 */
+  serverNow: number | null;
 }
 
 export interface Evidence { chunk_id: string; quote?: string; }

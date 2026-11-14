@@ -44,7 +44,12 @@ export function useSolutionAuthoringApi(): SolutionAuthoringApi {
     return {
       async list() {
         const result = await client.listGet<DraftSummary>(BASE);
-        return { drafts: result.items, workerAvailable: result.meta?.worker_available !== false };
+        const serverTime = typeof result.meta?.server_time === "string" ? Date.parse(result.meta.server_time) : Number.NaN;
+        return {
+          drafts: result.items,
+          workerAvailable: result.meta?.worker_available !== false,
+          serverNow: Number.isNaN(serverTime) ? null : serverTime,
+        };
       },
       async create(input) { return required(await client.post<{ draft_id: string }>(BASE, { body: input })); },
       async get(draftId) { return required(await client.get<DraftDetail>(draft(draftId))); },

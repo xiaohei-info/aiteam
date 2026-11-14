@@ -578,7 +578,7 @@ function summary(overrides: Partial<DraftSummary>): DraftSummary {
 async function openRowMenu(draftId: string, item: string) {
   const row = (await screen.findAllByRole("row")).find((candidate) => candidate.querySelector(`a[href$="${draftId}"]`));
   expect(row).toBeDefined();
-  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "操作" }));
+  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: /的操作$/ }));
   fireEvent.click(await screen.findByRole("menuitem", { name: item }));
 }
 
@@ -612,6 +612,33 @@ describe("草稿列表的筛选与行操作", () => {
     expect(screen.getByText(/疑似卡住/)).toBeInTheDocument();
   });
 
+  it("排队是否过久按服务器时间判断，不受浏览器时钟影响", async () => {
+    // 浏览器时钟比服务器快 1 小时：按浏览器算会误报卡住，按服务器时间只排了 2 分钟。
+    const serverNow = Date.now() - 60 * 60 * 1000;
+    const queuedAt = new Date(serverNow - 2 * 60 * 1000).toISOString();
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse(
+        [summary({ status: "generating", latest_job: job({ created_at: queuedAt }) })],
+        { worker_available: true, server_time: new Date(serverNow).toISOString() },
+      ),
+    });
+    renderList();
+    expect(await screen.findByText("排队中")).toBeInTheDocument();
+    expect(screen.queryByText(/疑似卡住/)).not.toBeInTheDocument();
+  });
+
+  it("每行的操作按钮带草稿标题，读屏可区分", async () => {
+    mockApi({
+      [`GET ${BASE}`]: () => listResponse([
+        summary({ title: "零售方案", status: "draft" }),
+        summary({ draft_id: OTHER_ID, title: "制造方案", status: "draft" }),
+      ]),
+    });
+    renderList();
+    expect(await screen.findByRole("button", { name: "零售方案 的操作" })).toHaveTextContent("操作");
+    expect(screen.getByRole("button", { name: "制造方案 的操作" })).toBeInTheDocument();
+  });
+
   it("执行器未启用时提示，且排队的草稿说明不会被执行", async () => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "generating", latest_job: job() })], { worker_available: false }) });
     renderList();
@@ -626,7 +653,7 @@ describe("草稿列表的筛选与行操作", () => {
   ] as const)("%s 状态的草稿只出现可用的菜单项", async (status, expected) => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status, latest_job: status === "generating" ? job({ status: "parsing" }) : null })]) });
     renderList();
-    fireEvent.click(await screen.findByRole("button", { name: "操作" }));
+    fireEvent.click(await screen.findByRole("button", { name: /的操作$/ }));
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);
   });
 
@@ -634,7 +661,7 @@ describe("草稿列表的筛选与行操作", () => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "approved" })]) });
     renderList();
     await screen.findByRole("link", { name: "质检方案" });
-    expect(screen.queryByRole("button", { name: "操作" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /的操作$/ })).not.toBeInTheDocument();
   });
 
   it("继续生成：用新的幂等键发起生成并刷新列表", async () => {

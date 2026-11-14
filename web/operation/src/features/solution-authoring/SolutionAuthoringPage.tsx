@@ -45,6 +45,8 @@ export function SolutionAuthoringPage(): ReactNode {
   const isAdmin = hasRole(session, PlatformRole.SYSTEM_ADMIN);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [workerAvailable, setWorkerAvailable] = useState(true);
+  // 列表返回时服务器与浏览器的时钟差：「排队过久」按服务器时间判断（#200 评论）。
+  const [clockOffset, setClockOffset] = useState(0);
   const [filter, setFilter] = useState<Filter>("open");
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,7 +61,11 @@ export function SolutionAuthoringPage(): ReactNode {
     if (!silent) { setLoading(true); setError(null); }
     try {
       const next = await api.list();
-      if (requestId === sequence.current) { setDrafts(next.drafts); setWorkerAvailable(next.workerAvailable); }
+      if (requestId === sequence.current) {
+        setDrafts(next.drafts);
+        setWorkerAvailable(next.workerAvailable);
+        setClockOffset(next.serverNow === null ? 0 : next.serverNow - Date.now());
+      }
     } catch (err) {
       if (requestId === sequence.current && !silent) setError(err instanceof Error ? err.message : "加载失败");
     } finally {
@@ -129,7 +135,7 @@ export function SolutionAuthoringPage(): ReactNode {
       key: "status", header: "状态", width: proportional(1.5),
       renderCell: (row) => {
         const status = draftStatus(row.status);
-        const note = generationNote(row, workerAvailable);
+        const note = generationNote(row, workerAvailable, Date.now() + clockOffset);
         return (
           <VStack gap={1}>
             <Badge label={status.label} variant={status.variant} />
@@ -144,7 +150,7 @@ export function SolutionAuthoringPage(): ReactNode {
       key: "actions", header: "操作", width: pixel(100),
       renderCell: (row) => <DraftRowActions draft={row} isAdmin={isAdmin} isDisabled={busy} onAction={onRowAction} />,
     },
-  ], [workerAvailable, isAdmin, busy, onRowAction]);
+  ], [workerAvailable, clockOffset, isAdmin, busy, onRowAction]);
 
   const visible = useMemo(() => (filter === "open" ? drafts.filter(isOpen) : drafts), [drafts, filter]);
 

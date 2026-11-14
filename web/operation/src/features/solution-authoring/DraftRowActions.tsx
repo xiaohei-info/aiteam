@@ -28,7 +28,8 @@ export function DraftRowActions({ draft, isAdmin, isDisabled, onAction }: Props)
   if (actions.length === 0) return null;
   return (
     <DropdownMenu
-      button={{ label: "操作", size: "sm", variant: "ghost", isDisabled }}
+      // 可见文字仍是「操作」；读屏名称带草稿标题，多行之间可区分。
+      button={{ label: `${draft.title} 的操作`, children: "操作", size: "sm", variant: "ghost", isDisabled }}
       data-testid={`draft-actions-${draft.draft_id}`}
       menuWidth={160}
     >
