@@ -66,3 +66,13 @@ class ManagerAuthSessionRepository:
                 "WHERE user_id = %s AND revoked_at IS NULL",
                 (reason, ctx.user_id),
             )
+
+    def revoke_user_except(self, ctx: TenantContext, *, keep_jti: str, reason: str) -> None:
+        """吊销该成员除 keep_jti 之外的所有有效会话（自助改密后其它设备须重新登录）。"""
+        with self._router.session(ctx) as session:
+            session.execute(
+                "UPDATE manager_auth_session SET revoked_at = COALESCE(revoked_at, now()), "
+                "revoke_reason = COALESCE(revoke_reason, %s) "
+                "WHERE user_id = %s AND jti <> %s AND revoked_at IS NULL",
+                (reason, ctx.user_id, keep_jti),
+            )

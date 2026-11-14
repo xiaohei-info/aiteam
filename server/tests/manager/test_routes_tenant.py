@@ -4,8 +4,12 @@ verify_service_token 守卫 + psycopg mock + initial_quota_policy 条件分支�
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from fastapi.testclient import TestClient
 
@@ -15,10 +19,20 @@ from tests.manager._auth_helper import make_inmem_verifier_and_signer
 
 
 _VERIFIER, _SIGNER = make_inmem_verifier_and_signer()
+
+
+@pytest.fixture(autouse=True)
+def _seed_name(monkeypatch):
+    """开通会顺带写企业名；这些用例用假 DSN，统一替换成记录调用的替身。"""
+    calls = []
+    monkeypatch.setattr("manager_service.routes_tenant.seed_enterprise_name", lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
 _BOUND_TENANT = "11111111-1111-4111-8111-111111111111"
 
 
-def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder", *, aiteam_env="development", force_no_principal=False, onboarding_writes_enabled=False):
+def _client(db_url=None, admin_db_url=None, service_token="dev-service-token-placeholder", *, aiteam_env: Literal["dev", "development", "test", "production"] = "development", force_no_principal=False, onboarding_writes_enabled=False):
     from shared.app_factory import create_app
     from manager_service.app import router as manager_router
     from manager_service.routes_tenant import router as tenant_router
@@ -342,3 +356,15 @@ def test_provision_policy_bodies_remain_phase_gated():
         assert response.status_code == 503
         assert response.json()["code"] == "multitenancy_phase_pending"
     assert not mc.called
+
+
+def test_provision_seeds_enterprise_name_for_the_top_bar(monkeypatch, _seed_name):
+    monkeypatch.setenv("AITEAM_TEST_ENABLE_ONBOARDING_WRITES", "true")
+    with (
+        patch("manager_service.routes_tenant.OperatorTenantBindingRepository.ensure_registry_and_binding"),
+        patch("manager_service.routes_tenant.ensure_enterprise_knowledge_space"),
+    ):
+        c = _client("postgresql://fake/business", admin_db_url="postgresql://fake/admin", service_token="test-service-token", aiteam_env="test", force_no_principal=True, onboarding_writes_enabled=True)
+        response = c.post("/api/manager/tenants", json=_body(enterprise_name="星河科技"), headers={"X-Service-Token": "test-service-token", "Idempotency-Key": "f01-name"})
+    assert response.status_code == 201, response.text
+    assert _seed_name == [(("postgresql://fake/business", _BOUND_TENANT, "星河科技"), {})]

@@ -16,6 +16,7 @@ import { AccountSecurityPanel } from "./AccountSecurityPanel";
 import { useSession } from "../../auth/session";
 import { useSettingsApi } from "./useSettingsApi";
 import type { EnterpriseSettings, AdminInvite } from "./types";
+import { ME_CHANGED_EVENT } from "../../shell/useMe";
 
 export function SettingsPage(): ReactNode {
   const { session } = useSession();
@@ -48,7 +49,11 @@ function EnterpriseSettingsPanel(): ReactNode {
   const handleSave = useCallback(async () => {
     if (!settings) return;
     setActionError(null);
-    try { await api.update({ enterprise_name: settings.enterprise_name }); await load(); } catch (err) {
+    try {
+      await api.update({ enterprise_name: settings.enterprise_name });
+      window.dispatchEvent(new Event(ME_CHANGED_EVENT));
+      await load();
+    } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "保存失败，请重试");
     }
   }, [api, settings, load]);
