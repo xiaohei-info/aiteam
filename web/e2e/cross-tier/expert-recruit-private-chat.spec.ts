@@ -33,6 +33,8 @@ import {
   seededEmployeeId,
   TIER_API_ORIGIN,
 } from "../support/auth";
+// 「已发布且价格已生效」的模型规则与前端共用一份（e2e 解析不到包名，按相对路径引入源码）。
+import { isSelectablePlatformModel } from "../../shared/src/contracts/platform-models";
 
 // ── helpers ──
 
@@ -98,8 +100,8 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
     const preferredModelId = process.env.E2E_PROVIDER_MODEL?.trim();
     const modelItem = (modelsBody.data?.items ?? []).find((item) => {
       const model = item.model;
-      return model?.model_id === preferredModelId && model.status === "published" && item.rate?.pricing_status === "known";
-    }) ?? (modelsBody.data?.items ?? []).find((item) => item.model?.status === "published" && item.rate?.pricing_status === "known");
+      return model?.model_id === preferredModelId && isSelectablePlatformModel(item);
+    }) ?? (modelsBody.data?.items ?? []).find(isSelectablePlatformModel);
     if (!modelItem?.model?.model_id || typeof modelItem.model.version !== "number") {
       test.skip(true, "[match] no published priced Operator model is available for isolated E2E");
       return;
@@ -457,7 +459,7 @@ test.describe("专家注册-招募-私聊 全链路（AITEAM-685）", () => {
       const catalog = modelsResp.ok()
         ? ((await modelsResp.json()) as { data?: { models?: Array<{ model?: { provider_id?: string; model_id?: string; status?: string }; rate?: { pricing_status?: string } | null }> } }).data
         : undefined;
-      const usable = catalog?.models?.find((item) => item.model?.status === "published" && item.rate?.pricing_status === "known");
+      const usable = catalog?.models?.find(isSelectablePlatformModel);
       if (!usable?.model?.provider_id || !usable.model.model_id) {
         test.skip(true, "[authz-gate-negative] 本企业没有可用的平台模型，且 seed 无 employee，无法建立 403 前置");
         return;

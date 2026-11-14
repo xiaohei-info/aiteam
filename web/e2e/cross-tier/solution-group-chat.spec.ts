@@ -9,6 +9,8 @@
 import { test, expect, type APIRequestContext, type APIResponse } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { apiLogin, defaultCredentials, TIER_API_ORIGIN } from "../support/auth";
+// 「已发布且价格已生效」的模型规则与前端共用一份（e2e 解析不到包名，按相对路径引入源码）。
+import { isSelectablePlatformModel, type PlatformModelAvailability } from "../../shared/src/contracts/platform-models";
 
 type JsonRecord = Record<string, unknown>;
 type Login = { token: string };
@@ -151,15 +153,11 @@ test.describe("Pi solution → fixed participant group chat", () => {
     const modelsPayload = await requireOk(modelsResponse, "operator-model");
     const modelItems = ((modelsPayload.data as JsonRecord | undefined)?.items ?? []) as JsonRecord[];
     const preferredModelId = process.env.E2E_PROVIDER_MODEL?.trim();
+    const selectable = (item: JsonRecord) => isSelectablePlatformModel(item as PlatformModelAvailability);
     const priced = modelItems.find((item) => {
       const model = item.model as JsonRecord | undefined;
-      const rate = item.rate as JsonRecord | undefined;
-      return model?.status === "published" && rate?.pricing_status === "known" && (!preferredModelId || model.model_id === preferredModelId);
-    }) ?? modelItems.find((item) => {
-      const model = item.model as JsonRecord | undefined;
-      const rate = item.rate as JsonRecord | undefined;
-      return model?.status === "published" && rate?.pricing_status === "known";
-    });
+      return selectable(item) && (!preferredModelId || model?.model_id === preferredModelId);
+    }) ?? modelItems.find(selectable);
     const model = priced?.model as JsonRecord | undefined;
     if (!model || typeof model.model_id !== "string" || typeof provider.version !== "number" || typeof model.version !== "number") {
       test.skip(true, "[operator-model] no published priced model is available");

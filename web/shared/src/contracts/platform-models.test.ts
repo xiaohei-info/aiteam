@@ -10,4 +10,10 @@ describe("isSelectablePlatformModel", () => {
     expect(isSelectablePlatformModel({ model: { status: "published" } })).toBe(false);
     expect(isSelectablePlatformModel({ model: { status: "draft" }, rate: { pricing_status: "known" } })).toBe(false);
   });
+
+  it("接口原始 JSON 缺字段时按不可选处理（e2e 直接用接口返回值）", () => {
+    expect(isSelectablePlatformModel({ rate: { pricing_status: "known" } })).toBe(false);
+    expect(isSelectablePlatformModel({ model: null, rate: { pricing_status: "known" } })).toBe(false);
+    expect(isSelectablePlatformModel({ model: {}, rate: { pricing_status: "known" } })).toBe(false);
+  });
 });
