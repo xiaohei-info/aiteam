@@ -1,5 +1,5 @@
 /** 复制专家：只问新名称；源专家没有可用模型时才多问一个模型。复制成功后由父组件直接打开编辑抽屉。 */
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ApiError, newIdempotencyKey } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -35,7 +35,8 @@ export function CopyExpertDialog({ api, source, onClose, onCopied }: Props): Rea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [forcePick, setForcePick] = useState(false);
-  const [idempotencyKey] = useState(newIdempotencyKey);
+  // 幂等键只用于「没收到响应」时原样重试；内容变了或服务端已答复，下次提交换新键。
+  const attempt = useRef<{ body: string; key: string } | null>(null);
 
   const showPicker = needsModel || forcePick;
   const trimmed = name.trim();
@@ -50,15 +51,19 @@ export function CopyExpertDialog({ api, source, onClose, onCopied }: Props): Rea
       setError("请先选择一个可用模型");
       return;
     }
+    const body = {
+      display_name: trimmed,
+      ...(showPicker && choice ? { model_policy: toPolicy(choice) } : {}),
+    };
+    const signature = JSON.stringify(body);
+    if (attempt.current?.body !== signature) attempt.current = { body: signature, key: newIdempotencyKey() };
     setBusy(true);
     setError(null);
     try {
-      const copy = await api.copyEmployee(source.employee_id, {
-        display_name: trimmed,
-        ...(showPicker && choice ? { model_policy: toPolicy(choice) } : {}),
-      }, idempotencyKey);
+      const copy = await api.copyEmployee(source.employee_id, body, attempt.current.key);
       if (copy) onCopied(copy);
     } catch (err) {
+      if (err instanceof ApiError) attempt.current = null;
       if (err instanceof ApiError && MODEL_ERRORS.has(err.code)) setForcePick(true);
       setError(err instanceof ApiError ? err.message : "复制失败，请稍后重试");
       setBusy(false);

@@ -485,6 +485,39 @@ describe("ExpertsPage 复制专家", () => {
     expect(api.copyEmployee).not.toHaveBeenCalled();
   });
 
+  it("幂等键：网络失败后原样重试沿用同一个键；改了名称或服务端已答复则换新键（#205 评论）", async () => {
+    const { api } = mockApis([employeeConfigured]);
+    const copy = api.copyEmployee as ReturnType<typeof vi.fn>;
+    copy
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new ApiError("名称已被占用", 409, "conflict"))
+      .mockResolvedValueOnce(copied);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("copy-expert")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("copy-expert"));
+    const dialog = await screen.findByRole("dialog", { name: "复制专家" });
+    const submit = within(dialog).getByRole("button", { name: "复制" });
+    const send = async (times: number) => {
+      await waitFor(() => expect(submit).toBeEnabled());
+      fireEvent.click(submit);
+      await waitFor(() => expect(copy).toHaveBeenCalledTimes(times));
+    };
+    const keyOf = (index: number) => copy.mock.calls[index]![2];
+
+    await send(1);
+    await send(2); // 没收到响应、内容没变：同一个键重试
+    expect(keyOf(1)).toBe(keyOf(0));
+
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /新专家名称/ }), { target: { value: "新名字" } });
+    await send(3); // 内容变了：换键
+    expect(keyOf(2)).not.toBe(keyOf(1));
+    expect(await within(dialog).findByText("名称已被占用")).toBeInTheDocument();
+
+    await send(4); // 服务端已答复过：再提交用新键
+    expect(keyOf(3)).not.toBe(keyOf(2));
+  });
+
   it("复制失败：留在弹窗并显示原因；范围已收回的专家不能复制", async () => {
     const { api } = mockApis([employeeConfigured, { ...employeeUnconfigured, status: "paused", status_reason: "catalog_scope_revoked" }]);
     (api.copyEmployee as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError("名称已被占用", 409, "conflict"));
