@@ -112,6 +112,9 @@ class OwnerBootstrapOut(BaseModel):
     tenant_id: str = Field(description="企业租户 ID。")
     user_id: str = Field(description="负责人用户 ID。")
     idempotent: bool | None = Field(default=None, description="是否为幂等重复请求。")
+    cleared: dict[str, int] | None = Field(
+        default=None, description="重置已有负责人时清除的数量：sessions（吊销会话）、passkeys、oauth（第三方登录）；首次开通不返回。",
+    )
 
 
 class CatalogNotifyOut(BaseModel):

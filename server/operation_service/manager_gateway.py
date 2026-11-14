@@ -24,8 +24,11 @@ class ManagerGateway(Protocol):
         """F01：请求 Manager 创建 tenant 并初始化租户数据空间。"""
         ...
 
-    def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> None:
-        """F02：把负责人初始/重置 bootstrap（明文（TLS 服务间），Manager 单次 scrypt 落库）同步给 Manager tenant。"""
+    def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> dict | None:
+        """F02：把负责人初始/重置 bootstrap（明文（TLS 服务间），Manager 单次 scrypt 落库）同步给 Manager tenant。
+
+        返回 Manager 的响应 `data`（重置已有负责人时含 `cleared` 计数）；测试 fake 可返回 None。
+        """
         ...
 
     def notify_enterprise(self, req: EnterpriseNotifyRequest, *, idempotency_key: str) -> None:
@@ -54,14 +57,16 @@ class HttpManagerGateway:
             service_tenant_id=req.tenant_id,
         )
 
-    def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> None:
-        self._client.post(
+    def sync_owner_bootstrap(self, req: OwnerBootstrapSync, *, idempotency_key: str) -> dict | None:
+        response = self._client.post(
             self._BOOTSTRAP_PATH,
             json=req.model_dump(mode="json", exclude_none=True),
             idempotency_key=idempotency_key,
             service_purpose="owner:bootstrap",
             service_tenant_id=req.tenant_id,
         )
+        data = response.get("data") if isinstance(response, dict) else None
+        return data if isinstance(data, dict) else None
 
     def notify_enterprise(self, req: EnterpriseNotifyRequest, *, idempotency_key: str) -> None:
         self._client.post(

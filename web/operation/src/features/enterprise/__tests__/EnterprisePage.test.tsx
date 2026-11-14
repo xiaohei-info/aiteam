@@ -2,7 +2,7 @@
  * 企业开通页测试（W-O.2）：
  * - 开通表单渲染与提交（路径 POST /api/operation/enterprises，字段 owner_phone）
  * - bootstrap_secret 一次性展示（owner_bootstrap_secret）
- * - 重置入口（路径 POST /enterprises/{id}/owner-bootstrap/reset）
+ * - 重置入口已迁到账号管理行菜单（见 accounts/ResetOwnerDialog.test.tsx）
  * - bootstrap_secret 不写 localStorage
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -74,7 +74,6 @@ describe("EnterprisePage 企业开通", () => {
     renderEnterprisePage(mockClient());
     expect(screen.getByRole("heading", { level: 1, name: "企业开通" })).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "开通企业" })).toBeInTheDocument();
-    expect(screen.getByRole("form", { name: "重置负责人凭据" })).toBeInTheDocument();
     expect(screen.getByText("企业名称")).toBeInTheDocument();
     expect(screen.getByText("负责人手机号")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开通" })).toBeInTheDocument();
@@ -195,48 +194,10 @@ describe("EnterprisePage 企业开通", () => {
     expect(screen.getByText("是")).toBeInTheDocument();
   });
 
-  it("展示重置凭据入口", () => {
+  it("独立的重置凭据表单已移除（入口在账号管理的行菜单）", () => {
     renderEnterprisePage(mockClient());
-    expect(screen.getByRole("form", { name: "重置负责人凭据" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "重置凭据" })[0]).toBeInTheDocument();
-  });
-
-  it("重置凭据调用 POST /enterprises/{id}/owner-bootstrap/reset", async () => {
-    const client = mockClient({
-      post: vi.fn().mockResolvedValue({
-        enterprise_id: "ent_001",
-        tenant_id: "t_001",
-        owner_phone: "13800138000",
-        owner_bootstrap_secret: "sec_new_xyz789",
-        must_reset: true,
-      }),
-    });
-    renderEnterprisePage(client);
-
-    fireEvent.change(screen.getByPlaceholderText("企业 ID"), {
-      target: { value: "ent_001" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "重置凭据" }));
-
-    expect(screen.getByRole("alertdialog", { name: "重置负责人凭据" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
-
-    await waitFor(() => {
-      expect(client.post).toHaveBeenCalledWith(
-        "/api/operation/enterprises/ent_001/owner-bootstrap/reset",
-        expect.objectContaining({ idempotencyKey: expect.stringMatching(/^owner-bootstrap-reset:/) }),
-      );
-    });
-    await waitFor(() => {
-      expect(screen.getByText("凭据已重置")).toBeInTheDocument();
-    });
-
-    // 重置结果字段：tenant_id / owner_phone / must_reset
-    const displays = screen.getAllByTestId("secret-display");
-    expect(displays.length).toBeGreaterThan(0);
-    expect(screen.getAllByText("ent_001").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("t_001").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("13800138000").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("form", { name: "重置负责人凭据" })).toBeNull();
+    expect(screen.queryByPlaceholderText("企业 ID")).toBeNull();
   });
 
   it("bootstrap_secret 不写入 localStorage", async () => {

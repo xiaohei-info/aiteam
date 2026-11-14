@@ -10,6 +10,7 @@ import type {
   EnterpriseModelAccess,
   EnrichedAudit,
   LifecycleCommand,
+  OwnerResetResult,
   QuotaSnapshot,
 } from "./types.js";
 
@@ -53,6 +54,8 @@ export interface AccountsApi {
     orgId: string,
     body: LifecycleCommand,
   ) => Promise<{ org_id: string; action: string; operation_status: string; detail: string } | null>;
+  /** 重置企业管理员密码；同一个 idempotencyKey 的重试返回同一份结果（24 小时内）。 */
+  resetOwnerBootstrap: (orgId: string, idempotencyKey: string) => Promise<OwnerResetResult>;
   getQuota: (orgId: string) => Promise<QuotaSnapshot | null>;
   setQuota: (orgId: string, body: QuotaChangePayload) => Promise<QuotaSnapshot | null>;
   /** Optional for older injected test clients; production hook always provides both. */
@@ -114,6 +117,14 @@ function createApi(client: ApiClient): AccountsApi {
         operation_status: string;
         detail: string;
       }>(`/api/operation/admin/enterprises/${orgId}/lifecycle`, { body });
+    },
+    async resetOwnerBootstrap(orgId, idempotencyKey) {
+      const data = await client.post<OwnerResetResult>(
+        `/api/operation/enterprises/${orgId}/owner-bootstrap/reset`,
+        { idempotencyKey },
+      );
+      if (!data) throw new Error("服务端返回了空结果");
+      return data;
     },
     getQuota(orgId) {
       return client.get<QuotaSnapshot>(`/api/operation/admin/enterprises/${orgId}/quota`);
