@@ -1,5 +1,6 @@
 /** S01 账号管理 — API hook（只调本端 /api/operation/admin/*）。 */
 import { useMemo } from "react";
+import { newIdempotencyKey } from "@aiteam/shared";
 import { createOperationApiClient, type ApiClient } from "../../api/index.js";
 import { useSession } from "../../auth/session.js";
 import type {
@@ -95,7 +96,8 @@ function createApi(client: ApiClient): AccountsApi {
     },
     doAction(orgId, body) {
       return client.post(`/api/operation/admin/enterprises/${orgId}/actions`, {
-        body,
+        body: toActionRequest(body),
+        idempotencyKey: newIdempotencyKey(),
       });
     },
     getStats() {
@@ -150,6 +152,26 @@ function createApi(client: ApiClient): AccountsApi {
       );
     },
   };
+}
+
+/** 后端 EnterpriseActionRequest 只接受 action/amount/message（extra=forbid）：原因走 message，配额走 amount。 */
+export function toActionRequest(body: EnterpriseActionBody): { action: string; amount?: number | string; message?: string } {
+  switch (body.action) {
+    case "recharge":
+      return { action: body.action, amount: body.amount };
+    case "adjust_quota":
+      return { action: body.action, amount: body.quota };
+    case "suspend":
+    case "close": {
+      const message = body.reason?.trim();
+      return message ? { action: body.action, message } : { action: body.action };
+    }
+    case "notify":
+    case "ban":
+      return { action: body.action, message: body.message };
+    default:
+      return { action: body.action };
+  }
 }
 
 export function useAccountsApi(): AccountsApi {
