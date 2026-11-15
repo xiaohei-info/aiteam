@@ -30,6 +30,15 @@ const auditEvents = {
 };
 
 async function openAuditBenchmark(page: Parameters<typeof collectBrowserErrors>[0]) {
+  // 顶栏的账号菜单读 /me；真实后端每次的脱敏账号不同，截图会随之变化，这里固定返回。
+  await page.route("**/api/manager/me", (route) => route.fulfill({ json: { data: {
+    enterprise_name: "示例企业",
+    enterprise_code: "demo",
+    account_masked: "138****0000",
+    roles: ["owner"],
+    has_password: true,
+    password_policy: { min_length: 8, require_upper: false, require_lower: false, require_digit: true, require_symbol: false, max_age_days: 0 },
+  } } }));
   await page.route("**/api/manager/audit-events**", async (route) => {
     await route.fulfill({ json: auditEvents });
   });
