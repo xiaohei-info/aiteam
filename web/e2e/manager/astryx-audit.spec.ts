@@ -50,6 +50,8 @@ async function openAuditBenchmark(page: Parameters<typeof collectBrowserErrors>[
   });
   await page.goto("/audit");
   await expect(page.getByRole("table", { name: "审计事件" })).toBeVisible();
+  // 顶栏账号菜单在 /me 返回后才显示脱敏账号；等到默认文案消失再截图。
+  await expect(page.getByRole("button", { name: "账号", exact: true })).toHaveCount(0);
 }
 
 authTest.describe("Manager Astryx Audit benchmark", () => {

@@ -119,6 +119,8 @@ authTest.describe("Manager Astryx rollout", () => {
     await authedPage.goto("/governance");
 
     await expect(authedPage.getByRole("table", { name: "计量汇总" })).toBeVisible();
+    // 顶栏账号菜单在 /me 返回后才显示脱敏账号；等到默认文案消失再截图，避免截到加载中状态。
+    await expect(authedPage.getByRole("button", { name: "账号", exact: true })).toHaveCount(0);
     await expect(authedPage).toHaveScreenshot("manager-rollout-light.png", { fullPage: true });
     await expectCriticalAxeClean(authedPage);
     await expectKeyboardFocusVisible(authedPage);
