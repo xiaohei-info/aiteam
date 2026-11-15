@@ -99,7 +99,7 @@ def build_employee_router(verifier) -> APIRouter:
         "", description="建 employee/expert 配置（runtime 中立）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="建 employee/expert 配置（runtime 中立）",
         operation_id="manager_employee_config_create", status_code=status.HTTP_201_CREATED,
     )
-    async def create_employee_config(
+    def create_employee_config(
         body: EmployeeConfigIn,
         employee_slug: str,
         request: Request,
@@ -114,7 +114,7 @@ def build_employee_router(verifier) -> APIRouter:
         "", description="仅owner/enterprise_admin列本租户全部 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户全部 employee 配置",
         operation_id="manager_employee_config_list",
     )
-    async def list_employee_config(
+    def list_employee_config(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[EmployeeConfigOut]:
@@ -127,7 +127,7 @@ def build_employee_router(verifier) -> APIRouter:
         "/{employee_id}", description="仅owner/enterprise_admin取单个 employee 配置。成功响应遵循统一 envelope，失败返回 problem+json。", summary="取单个 employee 配置",
         operation_id="manager_employee_config_get",
     )
-    async def get_employee_config(
+    def get_employee_config(
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -144,7 +144,7 @@ def build_employee_router(verifier) -> APIRouter:
         status_code=status.HTTP_200_OK,
         response_model=Envelope[EmployeeAvatarOut],
     )
-    async def update_employee_avatar(
+    def update_employee_avatar(
         employee_id: str,
         body: EmployeeAvatarIn,
         request: Request,
@@ -193,7 +193,7 @@ def build_employee_router(verifier) -> APIRouter:
             },
         },
     )
-    async def get_employee_avatar_content(
+    def get_employee_avatar_content(
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -210,7 +210,7 @@ def build_employee_router(verifier) -> APIRouter:
         "/{employee_id}", description="完整替换 employee 配置；role_title 省略或 null 清空岗位，department_ids 省略或 [] 清空全部部门。实际配置变化时 version 自增，授权增量 pull 可感知；需 owner/enterprise_admin。成功响应遵循统一 envelope，失败返回 problem+json。", summary="改写 employee 配置（version 自增）",
         operation_id="manager_employee_config_update",
     )
-    async def update_employee_config(
+    def update_employee_config(
         employee_id: str,
         body: EmployeeConfigIn,
         request: Request,
@@ -227,7 +227,7 @@ def build_employee_router(verifier) -> APIRouter:
         operation_id="manager_employee_config_delete",
         status_code=status.HTTP_204_NO_CONTENT,
     )
-    async def delete_employee_config(
+    def delete_employee_config(
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -244,7 +244,7 @@ def build_employee_router(verifier) -> APIRouter:
         operation_id="manager_employee_export",
         responses={200: {"content": {"text/csv": {"schema": {"type": "string", "format": "binary", "description": "员工配置 CSV 文件。"}}}}},
     )
-    async def export_employees(
+    def export_employees(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> Response:
@@ -274,7 +274,7 @@ def build_employee_router(verifier) -> APIRouter:
         summary="生命周期状态流转（issue #281）",
         operation_id="manager_employee_lifecycle_transition",
     )
-    async def employee_lifecycle_transition(
+    def employee_lifecycle_transition(
         employee_id: str,
         transition: str,
         body: "EmployeeTransitionIn | None" = None,
@@ -300,7 +300,7 @@ def build_employee_router(verifier) -> APIRouter:
         summary="查询可用 lifecycle transitions（issue #281）",
         operation_id="manager_employee_lifecycle_options",
     )
-    async def employee_lifecycle_options(
+    def employee_lifecycle_options(
         employee_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),

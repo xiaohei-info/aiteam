@@ -116,7 +116,7 @@ def build_hindsight_router(verifier) -> APIRouter:
         summary="按当前 employee snapshot 签发 Hindsight bank lease",
         operation_id="manager_hindsight_runtime_config",
     )
-    async def runtime_config(
+    def runtime_config(
         body: HindsightRuntimeConfigRequest,
         request: Request,
         response: Response,
@@ -136,7 +136,7 @@ def build_hindsight_router(verifier) -> APIRouter:
         summary="撤销当前成员可见的 Hindsight lease",
         operation_id="manager_hindsight_lease_revoke",
     )
-    async def revoke_lease(
+    def revoke_lease(
         lease_id: str,
         request: Request,
         response: Response,
@@ -154,7 +154,7 @@ def build_hindsight_router(verifier) -> APIRouter:
         summary="返回 Pi Hindsight 协议适配所需的 Manager 记忆上下文",
         operation_id="manager_memory_runtime_config",
     )
-    async def memory_runtime_config(
+    def memory_runtime_config(
         body: HindsightMemoryRuntimeConfigRequest,
         request: Request,
         response: Response,
