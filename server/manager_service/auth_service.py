@@ -159,14 +159,18 @@ class AuthService:
         hashed = hash_password(bootstrap_password)
 
         def effect(session):
-            user_id, _replaced = self._repo.sync_owner_bootstrap_in_session(
+            user_id, replaced = self._repo.sync_owner_bootstrap_in_session(
                 session,
                 ctx,
                 phone=phone,
                 secret=hashed,
                 must_reset=must_reset,
             )
-            return {"tenant_id": str(tenant_id), "user_id": str(user_id)}
+            payload = {"tenant_id": str(tenant_id), "user_id": str(user_id)}
+            if replaced:
+                # 重置：旧会话、passkey、第三方登录都随旧密码一起失效，且与新密码同一事务提交。
+                payload["cleared"] = self._repo.clear_user_credentials_in_session(session, ctx, user_id=str(user_id))
+            return payload
 
         return idempotency_repository.execute(
             ctx,

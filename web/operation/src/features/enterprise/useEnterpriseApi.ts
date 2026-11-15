@@ -4,7 +4,7 @@
  * 封装本端 /api/operation/enterprises/* 调用，只调本端路径。
  * 路径已对齐后端 routes_enterprise.py：
  *   POST /enterprises（开通）
- *   POST /enterprises/{id}/owner-bootstrap/reset（重置负责人凭据）
+ * 重置管理员密码已迁到账号管理的行菜单（accounts/ResetOwnerDialog）。
  */
 import type { ApiClient } from "../../api";
 import type { PlatformModelRef } from "../catalog/types";
@@ -34,14 +34,6 @@ export interface EnterpriseModelAccess {
   allowed_model_refs: PlatformModelRef[] | null;
 }
 
-export interface ResetOutput {
-  enterprise_id: string;
-  tenant_id: string;
-  owner_phone: string;
-  owner_bootstrap_secret: string;
-  must_reset: boolean;
-}
-
 function writeKey(prefix: string): string {
   return `${prefix}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
 }
@@ -53,17 +45,6 @@ export function useEnterpriseApi(client: ApiClient) {
       { body: input, idempotencyKey: writeKey("enterprise-provision") },
     );
     if (!data) throw new Error("provision 返回空");
-    return data;
-  }
-
-  async function resetBootstrap(
-    enterpriseId: string,
-  ): Promise<ResetOutput> {
-    const data = await client.post<ResetOutput>(
-      `/api/operation/enterprises/${enterpriseId}/owner-bootstrap/reset`,
-      { idempotencyKey: writeKey("owner-bootstrap-reset") },
-    );
-    if (!data) throw new Error("reset 返回空");
     return data;
   }
 
@@ -87,5 +68,5 @@ export function useEnterpriseApi(client: ApiClient) {
     return data;
   }
 
-  return { provision, resetBootstrap, getModelAccess, setModelAccess };
+  return { provision, getModelAccess, setModelAccess };
 }

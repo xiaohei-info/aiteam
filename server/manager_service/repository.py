@@ -180,6 +180,25 @@ class TenantAuthRepository:
         )
         return str(row[0]), True
 
+    def clear_user_credentials_in_session(self, session, ctx: TenantContext, *, user_id: str) -> dict[str, int]:
+        """在调用方的 RLS 事务里清掉某个用户的登录态与二次验证：会话吊销、passkey 删除、第三方登录解绑。
+
+        只动这一个 user_id：同租户其他成员不受影响。第三方登录要删两处——`oauth_connection`，以及
+        `auth_identity(provider=oauth)`（登录时查不到连接会按它反查并重建连接，见 oauth_service）。
+        返回各类被清除的数量，不含任何凭据内容。
+        """
+        sessions = session.execute(
+            "UPDATE manager_auth_session SET revoked_at = now(), revoke_reason = 'owner_bootstrap_reset' "
+            "WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
+        ).rowcount
+        passkeys = session.execute("DELETE FROM passkey_credential WHERE user_id = %s", (user_id,)).rowcount
+        connections = session.execute("DELETE FROM oauth_connection WHERE user_id = %s", (user_id,)).rowcount
+        identities = session.execute(
+            "DELETE FROM auth_identity WHERE user_id = %s AND provider = %s", (user_id, AuthProvider.OAUTH.value),
+        ).rowcount
+        return {"sessions": sessions, "passkeys": passkeys, "oauth": connections + identities}
+
     def update_secret(
         self, ctx: TenantContext, *, provider: AuthProvider, external_id: str, secret: str, must_reset: bool
     ) -> None:

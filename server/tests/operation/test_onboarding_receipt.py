@@ -154,3 +154,57 @@ def test_build_receipt_store_caches_per_repository():
     first = build_onboarding_receipt_store(repository)
     second = build_onboarding_receipt_store(repository)
     assert first is second
+
+
+def test_pg_receipt_expires_secrets_singly_and_in_bulk(monkeypatch):
+    from datetime import timedelta
+
+    monkeypatch.setenv("OPERATION_ONBOARDING_RECEIPT_KEY", Fernet.generate_key().decode())
+    store = PgOnboardingReceiptStore("postgresql://admin")
+
+    single = Connection(Cursor(rowcount=1))
+    with patch("psycopg.connect", return_value=single):
+        store.expire_secret("onboard-1")
+    sql, params = single.calls[0]
+    assert "bootstrap_secret_ciphertext=NULL" in sql and "state='completed'" in sql and params == ("onboard-1",)
+
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    bulk = Connection(Cursor(rowcount=3))
+    with patch("psycopg.connect", return_value=bulk):
+        assert store.expire_secrets_before(cutoff) == 3
+    sql, params = bulk.calls[0]
+    # 只清已完成且仍有密文的回执；prepared 回执续跑要用，不能动。
+    assert "state='completed'" in sql and "IS NOT NULL" in sql and "completed_at <" in sql and params == (cutoff,)
+
+    with patch("psycopg.connect", side_effect=OSError("database down")):
+        with pytest.raises(ServiceUnavailable):
+            store.expire_secret("onboard-1")
+        with pytest.raises(ServiceUnavailable):
+            store.expire_secrets_before(cutoff)
+
+
+def test_receipt_secret_expiry_rules():
+    from datetime import timedelta
+
+    from operation_service.onboarding_receipt import SECRET_RETENTION, BootstrapReceiptExpired
+
+    store = InMemoryOnboardingReceiptStore()
+    receipt = store.reserve(**values())
+    now = datetime.now(UTC)
+    assert receipt.secret_expired(now + SECRET_RETENTION * 5) is False  # prepared 永不过期
+    store.complete(receipt.idempotency_key, {"tenant_id": "t"})
+    done = store._rows[receipt.idempotency_key]
+    completed = done.completed_at
+    assert completed is not None
+    assert done.secret_expired(completed + SECRET_RETENTION - timedelta(seconds=1)) is False
+    assert done.secret_expired(completed + SECRET_RETENTION) is True
+    # 历史回执可能没有完成时间或用的是不带时区的时间
+    from dataclasses import replace
+    assert replace(done, completed_at=None).secret_expired(now + SECRET_RETENTION * 5) is False
+    naive = replace(done, completed_at=completed.replace(tzinfo=None))
+    assert naive.secret_expired(completed + SECRET_RETENTION) is True
+    store.expire_secret(receipt.idempotency_key)
+    cleared = store._rows[receipt.idempotency_key]
+    assert cleared.secret_expired(now) is True
+    with pytest.raises(BootstrapReceiptExpired):
+        _ = cleared.bootstrap_secret
