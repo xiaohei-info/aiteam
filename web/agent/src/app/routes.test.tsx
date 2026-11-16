@@ -45,7 +45,8 @@ describe("Agent routes", () => {
     );
 
     expect(await screen.findByRole("region", { name: "本地工作台" })).toBeInTheDocument();
-    expect(screen.getByText("暂无会话")).toBeInTheDocument();
+    // 工作台区域先渲染，会话列表加载完才显示空态；同步 getByText 在 CI 上偶发找不到。
+    expect(await screen.findByText("暂无会话")).toBeInTheDocument();
     expect(requests).toHaveLength(4);
     expect(requests.some((url) => url.includes("/api/agent/conversations"))).toBe(true);
     expect(requests.some((url) => url.includes("/api/agent/grants/experts"))).toBe(true);
