@@ -315,6 +315,38 @@ describe("MarketplacePage", () => {
     expect(screen.queryByRole("dialog", { name: "测试专家详情" })).not.toBeInTheDocument();
   });
 
+  it("卡片显示所属行业方案，搜索框可按方案名搜索，不再提模型（#207 验收反馈 2）", async () => {
+    const api = mockApi();
+    (api.listTemplates as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { template_id: "tpl-1", version: "1", display_name: "测试专家" },
+      { template_id: "tpl-2", version: "1", display_name: "独立专家" },
+    ]);
+    (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { solution_id: "s1", version: "1", display_name: "制造业招聘团队", experts: [{ template_id: "tpl-1", version: "1", display_name: "测试专家" }] },
+      { solution_id: "s2", version: "1", display_name: "仓储优化团队", experts: [{ template_id: "tpl-1", version: "1", display_name: "测试专家" }] },
+    ]);
+    renderPage(["owner"]);
+    const card = await screen.findByRole("article", { name: "测试专家" });
+    await waitFor(() => expect(within(card).getByText("所属方案：制造业招聘团队、仓储优化团队")).toBeInTheDocument());
+    expect(within(screen.getByRole("article", { name: "独立专家" })).queryByText(/所属方案/)).not.toBeInTheDocument();
+
+    const search = screen.getByRole("textbox", { name: "搜索专家" });
+    expect(search).toHaveAttribute("placeholder", "搜索专家名称、岗位或所属方案");
+    fireEvent.change(search, { target: { value: "仓储优化" } });
+    expect(screen.getByRole("article", { name: "测试专家" })).toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: "独立专家" })).not.toBeInTheDocument();
+  });
+
+  it("方案目录读取失败时只是不显示所属方案，专家照常展示", async () => {
+    const api = mockApi();
+    (api.listSolutions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    renderPage(["owner"]);
+    expect(await screen.findByRole("article", { name: "测试专家" })).toBeInTheDocument();
+    await waitFor(() => expect(api.listSolutions).toHaveBeenCalled());
+    expect(screen.queryByText(/所属方案/)).not.toBeInTheDocument();
+    expect(screen.queryByText("boom")).not.toBeInTheDocument();
+  });
+
   it("招募成功：显示前往专家实例配置入口", async () => {
     mockApi();
     renderPage(["owner"]);

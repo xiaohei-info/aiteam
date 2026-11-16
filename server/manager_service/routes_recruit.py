@@ -149,7 +149,7 @@ def build_recruit_router(verifier) -> APIRouter:
         ), summary="F06 浏览可招募专家模板（拉 Operator 目录列表，只读）",
         operation_id="manager_list_recruitable_experts",
     )
-    async def list_recruitable_experts(
+    def list_recruitable_experts(
         request: Request,
         background: BackgroundTasks,
         claims: TokenClaims = Depends(require),
@@ -181,7 +181,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/catalog/solutions", description="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F07 浏览可应用行业方案（拉 Operator 目录列表，只读）",
         operation_id="manager_list_recruitable_solutions",
     )
-    async def list_recruitable_solutions(
+    def list_recruitable_solutions(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SolutionPackage]:
@@ -199,7 +199,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/experts", description="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F06 招募专家（拉 Operator 模板 → 落本 tenant employee 实例）",
         operation_id="manager_recruit_expert", status_code=status.HTTP_201_CREATED,
     )
-    async def recruit_expert(
+    def recruit_expert(
         body: RecruitExpertRequest,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -214,7 +214,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/solutions", description="F07 应用方案（拉 Operator 方案包 → 展开 employee + 授权）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="F07 应用方案（拉 Operator 方案包 → 展开 employee + 授权）",
         operation_id="manager_apply_solution", status_code=status.HTTP_201_CREATED,
     )
-    async def apply_solution(
+    def apply_solution(
         body: ApplySolutionRequest,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -229,7 +229,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/solutions", description="列本租户方案实例（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户方案实例（按 tenant 裁剪）",
         operation_id="manager_list_solution_instances",
     )
-    async def list_solution_instances(
+    def list_solution_instances(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[SolutionInstanceOut]:
@@ -242,7 +242,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/solutions/{instance_id}", description="方案实例详情（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="方案实例详情（按 tenant 裁剪）",
         operation_id="manager_get_solution_instance",
     )
-    async def get_solution_instance(
+    def get_solution_instance(
         instance_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -259,7 +259,7 @@ def build_recruit_router(verifier) -> APIRouter:
         description="列本租户招募订单（追踪异步招募链路）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户招募订单（追踪异步招募链路）",
         operation_id="manager_list_recruit_orders",
     )
-    async def list_recruit_orders(
+    def list_recruit_orders(
         request: Request,
         claims: TokenClaims = Depends(require),
     ) -> ListEnvelope[RecruitmentOrderOut]:
@@ -273,7 +273,7 @@ def build_recruit_router(verifier) -> APIRouter:
         description="招募订单详情（按 tenant 裁剪）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="招募订单详情（按 tenant 裁剪）",
         operation_id="manager_get_recruit_order",
     )
-    async def get_recruit_order(
+    def get_recruit_order(
         order_id: str,
         request: Request,
         claims: TokenClaims = Depends(require),
@@ -287,7 +287,7 @@ def build_recruit_router(verifier) -> APIRouter:
         "/solutions/{solution_id}/apply-records", description="列本租户某方案的应用记录（审计追溯 who/when/version + 落地专家，AITEAM-242）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列本租户某方案的应用记录（审计追溯 who/when/version + 落地专家，AITEAM-242）",
         operation_id="manager_list_solution_apply_records",
     )
-    async def list_solution_apply_records(
+    def list_solution_apply_records(
         solution_id: str,
         request: Request,
         status: str | None = None,

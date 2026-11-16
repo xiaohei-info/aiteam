@@ -186,6 +186,14 @@ async function choose(label: RegExp, option: RegExp): Promise<void> {
 }
 
 describe("CreateDraftDialog", () => {
+  it("生成模型的说明不再说它会成为专家的默认模型（专家模板不带模型，企业招募时选）", async () => {
+    mockApi({ [`GET ${BASE}`]: () => json([]), ...MODEL_ROUTES });
+    renderList();
+    const dialog = await openCreateDialog();
+    expect(within(dialog).queryByText(/默认模型/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText("只用于生成方案草稿；发布出的专家不带模型，由企业招募时选择")).toBeInTheDocument();
+  });
+
   it("只列已发布且有价格的模型；校验通过后创建并进入草稿页", async () => {
     const calls = mockApi({
       [`GET ${BASE}`]: () => json([]),
@@ -652,6 +660,17 @@ describe("草稿列表的筛选与行操作", () => {
     ["ready_for_review", ["删除"]],
   ] as const)("%s 状态的草稿只出现可用的菜单项", async (status, expected) => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status, latest_job: status === "generating" ? job({ status: "parsing" }) : null })]) });
+    renderList();
+    fireEvent.click(await screen.findByRole("button", { name: /的操作$/ }));
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);
+  });
+
+  it.each([
+    ["没有资料（source_count 为 0）", 0, ["删除"]],
+    ["有资料", 2, ["继续生成", "删除"]],
+    ["旧服务端没给资料数量，照旧显示", undefined, ["继续生成", "删除"]],
+  ] as const)("草稿%s时的菜单项", async (_name, sourceCount, expected) => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "draft", source_count: sourceCount })]) });
     renderList();
     fireEvent.click(await screen.findByRole("button", { name: /的操作$/ }));
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);

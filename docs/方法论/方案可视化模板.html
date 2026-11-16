@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>【专题名】 · 细化方案</title>
+<!--
+============================================================================
+方案可视化模板（固定模板）
+----------------------------------------------------------------------------
+用途：专题方案 / 需求设计的可视化文档，配套一份 Markdown 设计文档。
+
+使用步骤：
+  1. 复制本文件，重命名为 YYYY-MM-DD-专题名-可视化.html，放到
+     docs/v1正式版本/技术设计/专题设计/；
+  2. 同时维护一份 YYYY-MM-DD-专题名-需求与设计.md（Markdown 详细设计）；
+  3. 按每节注释填写；删掉所有「填写指南」注释；
+  4. 浏览器直接打开即可（单文件、无外部依赖）。
+
+填写规则：
+  1. 工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺。
+  2. UI 为示意图，不是最终视觉稿。
+  3. 表格里标「新」的是仓库里目前没有的东西。
+  4. 现状 / 事实必须核对代码，注明文件与行号，不要凭印象。
+  5. 「已决定」与「待决策」分开；每个待决策写清「建议」与「卡住谁」。
+  6. 阶段编号 P0 / P1...，写清依赖与验收标准。
+  7. 项目红线：不向用户机器入站；会话内容不上传；平台模型状态单写者。
+  8. 目录固定 9 节：总览 / 解决什么问题 / 实现效果 / 数据流 /
+     前端要做什么 / 后端要做什么 / 契约与数据变更 / 阶段与依赖 / 待决策。
+
+可用组件（CSS 类，直接复用）：
+  .card .grid2 .grid3                     卡片与两 / 三列
+  table                                   表格
+  .tag .tag.ok/.warn/.bad/.op/.mg/.ag/.gray  状态标签（op=运营 mg=企业 ag=用户）
+  .win > .bar + .body                     mock 窗口；内部用 .box / .row / .input
+  .btn .btn.pri/.dis/.danger              按钮
+  .flow > .s + .a                         流程步骤
+  .callout / .callout.red / .callout.green  提示条
+  .sz.S / .sz.M / .sz.L                  工作量
+  svg                                     架构图（三端横带 + 箭头）
+============================================================================
+-->
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<!-- 填写指南：nav 标题改成专题名；9 个锚点与 section 一一对应，一般不需要改。 -->
+<nav>
+<h1>【专题名】</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<!-- 填写指南：一句话标题 + 3 个要点卡（每卡一句加一句注释）+ 阅读提示。 -->
+<section id="s0">
+<h2>【一句话标题】 <small>YYYY-MM-DD · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：【问题】→【方案】→【结果】。</p>
+<div class="grid3">
+<div class="card"><b>要点一</b><p class="note">用一句话说清这个方案最核心的改动。</p></div>
+<div class="card"><b>要点二</b><p class="note">用一句话说清边界或分层。</p></div>
+<div class="card"><b>要点三</b><p class="note">用一句话说清用户能感知到的结果。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>YYYY-MM-DD-专题名-需求与设计.md</code>。</div>
+</section>
+
+<!-- 填写指南：列 3–8 个「现状问题 → 本方案怎么解决 → 谁受益」；末尾红色 callout 写「不能保证的事」，口径要对外一致。 -->
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:22%">现在的问题</th><th style="width:40%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>【现状问题 1】</td><td>【对应方案，写清机制，不要只写「优化」】</td><td>【角色】</td></tr>
+<tr><td>【现状问题 2】</td><td>【对应方案】</td><td>【角色】</td></tr>
+<tr><td>【现状问题 3】</td><td>【对应方案】</td><td>【角色】</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>【列出本方案不承诺的边界，例如「不保证所有环境都能跑」「不保证零延迟」。】</div>
+</section>
+
+<!-- 填写指南：3–6 个标签页，每页一个 mock 窗口（.win > .bar + .body），展示关键界面。
+     标签按钮的 data-p 与 pane 的 id 必须一一对应（u1/u2/...）。 -->
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">【端】 · 【界面 1】</button>
+<button data-p="u2">【端】 · 【界面 2】</button>
+<button data-p="u3">【端】 · 【界面 3】</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>【窗口标题】</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>【左栏块】</h4>
+<div class="row"><span>【条目】</span><span class="tag ok">状态</span></div>
+<p class="note">说明文字。</p></div>
+</div>
+<div>
+<div class="box"><h4>【右栏块】</h4>
+<div class="row"><span>【条目】</span><span>【值】</span></div>
+<p style="margin-top:8px"><span class="btn pri">主操作</span> <span class="btn">次操作</span></p>
+</div>
+</div></div></div></div>
+<p class="note">要点：这个界面要传达什么。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>【窗口标题 2】</b></div>
+<div class="body">
+<div class="box"><h4>【块】</h4>
+<div class="row"><span>【条目】</span><span class="tag warn">状态</span></div>
+</div>
+<p class="note">说明文字。</p>
+</div></div>
+<p class="note">要点：这个界面要传达什么。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>【窗口标题 3】</b></div>
+<div class="body">
+<div class="box"><h4>【块】</h4>
+<div class="row"><span>【条目】</span><span class="tag bad">状态</span></div>
+</div>
+<p class="note">说明文字。</p>
+</div></div>
+<p class="note">要点：这个界面要传达什么。</p>
+</div>
+</section>
+
+<!-- 填写指南：3.1 三端总图（SVG，三横带 + 编号框 + 实线同端 / 虚线跨端）；
+     3.2 主流程（.flow 步骤）；3.3 状态与处置矩阵（table）。按专题可增减小节，但编号要连续。 -->
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：【写清本专题不破坏的边界，例如「不向用户机器入站；会话内容不上传；平台模型状态单写者」。】</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 560" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="160" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="320" width="1090" height="180" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="342" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 【运营端步骤】</text><text x="40" y="86" fill="#667085">【说明】</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 【运营端步骤】</text><text x="280" y="86" fill="#667085">【说明】</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ 【跨端通知 / 调用】</text><text x="520" y="86" fill="#667085">【说明】</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">【数据 / 存储】</text><text x="770" y="86" fill="#667085">【说明】</text>
+
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">④ 【企业端步骤】</text><text x="520" y="226" fill="#667085">【说明】</text>
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">⑤ 【企业端步骤】</text><text x="280" y="226" fill="#667085">【说明】</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ 【企业端步骤】</text><text x="40" y="226" fill="#667085">【说明】</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">【数据 / 存储】</text><text x="770" y="226" fill="#667085">【说明】</text>
+
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ 【用户端步骤】</text><text x="40" y="406" fill="#667085">【说明】</text>
+<rect x="270" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="390">⑧ 【用户端步骤】</text><text x="280" y="406" fill="#667085">【说明】</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑨ 【用户端步骤】</text><text x="520" y="406" fill="#667085">【说明】</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">【本地存储】</text><text x="770" y="406" fill="#667085">【说明】</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/><path d="M470 74 H510"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M510 214 H470"/><path d="M270 214 H230"/>
+<path d="M130 238 V370" stroke-dasharray="4 3"/>
+<path d="M230 394 H270"/><path d="M470 394 H510"/>
+</g>
+<text x="620" y="150" font-size="11" fill="#667085">【跨端说明】</text>
+<text x="140" y="310" font-size="11" fill="#667085">【跨端说明】</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有：Operator→Manager 服务间调用、Agent 主动访问 Manager、Agent 本机内部；没有入站到用户机器。</p>
+</div>
+
+<h3>3.2 主流程</h3>
+<div class="flow">
+<div class="s"><b>步骤一</b>【做什么】</div><div class="a">→</div>
+<div class="s"><b>步骤二</b>【做什么】</div><div class="a">→</div>
+<div class="s"><b>步骤三</b>【做什么】</div><div class="a">→</div>
+<div class="s"><b>步骤四</b>【做什么】</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>状态</th><th>【列 2】</th><th>【列 3】</th><th>【列 4】</th></tr>
+<tr><td><span class="tag ok">状态 A</span></td><td>【行为】</td><td>【行为】</td><td>【行为】</td></tr>
+<tr><td><span class="tag warn">状态 B</span></td><td>【行为】</td><td>【行为】</td><td>【行为】</td></tr>
+<tr><td><span class="tag bad">状态 C</span></td><td>【行为】</td><td>【行为】</td><td>【行为】</td></tr>
+</table>
+</section>
+
+<!-- 填写指南：前端按位置（web/operation、web/manager、clients/desktop、web/shared）列改动；
+     阶段填 P0–P4；量级填 S/M/L。 -->
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features</code>、<code>web/manager/src/features</code>、<code>clients/desktop/src</code> 现有页面。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>【改动】</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>【改动】</td><td>P1 / P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>【改动】</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>i18n、权限控制（按角色显隐）、Playwright 端到端用例、a11y</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<!-- 填写指南：后端按位置（server/shared、operation_service、manager_service、agent_service）列改动。 -->
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更（新）</b>：【新增 / 修改的共享契约字段】</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>【迁移 + 路由 + 权限 + 审计】</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>【服务 + 迁移 + 跨端投影】</td><td>P1 / P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>【本地投影 + 提示 + 上报】</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>【写清容易踩的坑，例如「共享契约变更必须先升级下游再发布上游」。】</div>
+</section>
+
+<!-- 填写指南：列出数据 / 契约 / 错误码变更；标风险等级；高风险项要单独提示。 -->
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:18%">变更</th><th>内容</th><th style="width:14%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>【表 / 契约】</code></td><td>【字段 / 语义变更】</td><td>【端 / 库】</td><td class="sz M">中</td></tr>
+<tr><td><code>【表 / 契约】</code></td><td>【字段 / 语义变更】</td><td>【端 / 库】</td><td class="sz L">高</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>以上属共享契约变更，需按 AGENTS.md §8「高风险操作」确认后再实施。建议发布顺序：【先升级下游，再发布上游】。</div>
+</section>
+
+<!-- 填写指南：P0 验证 → P1..Pn；每阶段写清内容、依赖、验收标准（可测试）。 -->
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:22%">依赖</th><th style="width:26%">验收</th></tr>
+<tr><td>P0 验证</td><td>【用小规模验证不确定性，结论回流设计】</td><td>【样例 / 环境】</td><td>【达标标准】</td></tr>
+<tr><td>P1 【主题】</td><td>【内容】</td><td>P0</td><td>【验收】</td></tr>
+<tr><td>P2 【主题】</td><td>【内容】</td><td>P1</td><td>【验收】</td></tr>
+<tr><td>P3 【主题】</td><td>【内容】</td><td>P2</td><td>【验收】</td></tr>
+</table>
+<p class="note">【阶段依赖关系一句话说明，例如「P2a 与 P2b 可并行；P4 依赖 P3」。】</p>
+</section>
+
+<!-- 填写指南：已决定用 tag ok 列出；待决策表每行写「建议」+「卡住谁」；
+     绿色 callout 给出建议优先拍板的 1–3 项。 -->
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">【已决定 1】</span><span class="tag ok">【已决定 2】</span><span class="tag ok">【已决定 3】</span></p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>【事项】</td><td>【建议 + 理由】</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>2</td><td>【事项】</td><td>【建议 + 理由】</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>3</td><td>【事项】</td><td>【建议 + 理由】</td><td><span class="tag warn">P2</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#1（【为什么】）、#3（【为什么】）。</div>
+</section>
+
+</main>
+<script>
+// 填写指南：标签页切换；新增标签时同步增加 button[data-p] 与对应 pane#id 即可。
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
