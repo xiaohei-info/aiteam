@@ -199,3 +199,30 @@ def test_multiple_null_codes_allowed(clean_db):
     # 验证两个都创建成功。
     assert repo.get("10000000-0000-4000-8000-000000000129").enterprise_code is None
     assert repo.get("10000000-0000-4000-8000-000000000130").enterprise_code is None
+
+
+def test_rerunning_migrations_keeps_deletion_states(clean_db):
+    """迁移每次部署都全量重跑：deleting / deleted 的企业不得被旧迁移改回 active。"""
+    import psycopg
+
+    ids = {
+        "closed": "10000000-0000-4000-8000-0000000000c1",
+        "deleting": "10000000-0000-4000-8000-0000000000c2",
+        "deleted": "10000000-0000-4000-8000-0000000000c3",
+    }
+    with psycopg.connect(ADMIN_DB_URL, autocommit=True) as conn:
+        for index, (status, enterprise_id) in enumerate(ids.items()):
+            conn.execute(
+                "INSERT INTO enterprise_account (enterprise_id, tenant_id, enterprise_name, owner_phone, "
+                "owner_bootstrap_hash, operation_status) VALUES (%s, %s, %s, '', 'h', %s)",
+                (enterprise_id, f"20000000-0000-4000-8000-0000000000c{index}", f"corp-{status}", status),
+            )
+
+    apply_migrations(ADMIN_DB_URL, APP_RW_PASSWORD)
+
+    with psycopg.connect(ADMIN_DB_URL, autocommit=True) as conn:
+        rows = dict(conn.execute(
+            "SELECT enterprise_id::text, operation_status FROM enterprise_account WHERE enterprise_id = ANY(%s::uuid[])",
+            (list(ids.values()),),
+        ).fetchall())
+    assert rows == {enterprise_id: status for status, enterprise_id in ids.items()}

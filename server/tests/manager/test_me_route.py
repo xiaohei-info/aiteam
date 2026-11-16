@@ -112,3 +112,35 @@ def test_route_open_to_every_role(role):
     r = _client(_svc()).get("/api/manager/me", headers=_hdr([role]))
     assert r.status_code == 200, r.text
     assert r.json()["data"]["enterprise_code"] == "acme"
+
+
+def test_me_reports_tenant_status_and_tolerates_read_failure():
+    """顶栏据此提示“企业已暂停，仅可查看”；状态读不到时按正常处理，不让整个页面失败。"""
+    assert _svc().get(_ctx())["tenant_status"] == "active"
+    suspended = MeService(
+        settings=_Settings("星河科技"), auth=_Auth(("a", True)), registry_code=lambda t: "acme",
+        tenant_status=lambda tenant_id: "suspended",
+    )
+    assert suspended.get(_ctx())["tenant_status"] == "suspended"
+
+    def boom(tenant_id):
+        raise RuntimeError("control db down")
+
+    broken = MeService(settings=_Settings("x"), auth=_Auth(("a", True)), registry_code=lambda t: None, tenant_status=boom)
+    assert broken.get(_ctx())["tenant_status"] == "active"
+
+
+def test_route_reads_tenant_status_from_the_guard_store(monkeypatch):
+    from shared.app_factory import create_app
+    from manager_service import routes_me
+    from manager_service.app import router as manager_router
+
+    monkeypatch.setattr(routes_me, "SettingsRepository", lambda router: _Settings("星河科技"))
+    monkeypatch.setattr(routes_me, "TenantAuthRepository", lambda router: _Auth(("a", True)))
+    app = create_app(Settings(tier="manager", service_name="m", db_url="postgresql://fake/x"), manager_router)
+    app.state._token_verifier = _VERIFIER
+    app.include_router(build_me_router(_VERIFIER))
+    app.state._tenant_status_store = SimpleNamespace(get=lambda tenant_id: "suspended")
+    r = TestClient(app).get("/api/manager/me", headers=_hdr(["member"]))
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["tenant_status"] == "suspended"

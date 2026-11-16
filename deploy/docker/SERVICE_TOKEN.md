@@ -65,6 +65,31 @@ OPERATOR_URL=https://operation.example.com
 
 `SERVICE_TOKEN` 不再是生产凭据；若保留，只能作为 dev/test 兼容输入。Agent 不接收它。生产控制面使用单实例 replay gate；扩容前必须先批准并实现有界共享 replay 机制。
 
+### 2.1 信任清单里要登记的范围（scopes）
+
+生产环境按 `kid` 逐项登记范围，没登记的范围一律 403（不支持通配）。目前用到的范围：
+
+| 接收端 | 范围 | 用途 | 目标绑定 |
+|---|---|---|---|
+| Manager | `enterprise:provision` | 开通企业（另需 `provisioning_capabilities=["provision-enterprise"]`） | 企业 + tenant |
+| Manager | `owner:bootstrap` | 下发 / 重置负责人初始凭据 | 仅 tenant |
+| Manager | `notification:write` | 运营通知 | 企业 + tenant |
+| Manager | `tenant:lifecycle` | 暂停 / 封禁 / 注销 / 恢复 / 删除企业、保留期后清理（`POST /api/manager/tenants/{tenant_id}/status`、`/purge`） | 仅 tenant |
+| Operation | `catalog:read` | Manager 拉取目录（专家模板 / 方案 / 平台模型，按 tenant 的发布范围过滤） | 仅 tenant |
+
+**升级注意（企业生命周期联动）**：运营端的暂停 / 封禁 / 注销 / 恢复现在是“先调 Manager，成功后才落库”。
+升级 Operation 之前，必须先在 Manager 的信任清单里为 Operation 的 key 加上 `tenant:lifecycle`，并为每个
+tenant 登记“仅 tenant”的目标绑定（与 `owner:bootstrap` 用的是同一条绑定，已有则无需新增）；否则这些操作会
+全部返回 403，企业状态不会改变。`tenant-lifecycle` 能力不需要登记。
+
+升级完成后执行一次存量补同步（把升级前就已暂停 / 封禁 / 注销的企业状态下发给 Manager，幂等，可重复执行）：
+
+```bash
+# 在 Operation 主机上，使用与 Operation 服务相同的环境变量
+cd server && ../.venv/bin/python -m operation_service.tenant_status_resync
+# 输出一行 JSON：{"synced": N, "failed": [...]}；有失败项时退出码为 1，修复后重跑即可
+```
+
 ### 3. 密钥轮换
 
 1. 通过受控管理渠道预装 next public key/status/validity/trust binding。

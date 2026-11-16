@@ -27,9 +27,12 @@ SET operation_status = CASE operation_status
     ELSE 'active'
 END
 WHERE operation_status IS NULL
-   OR operation_status NOT IN ('active','suspended','banned','closed');
+   OR operation_status NOT IN ('active','suspended','banned','closed','deleting','deleted');
 
 -- CHECK constraint (drop then add so reruns stay idempotent).
+-- Migrations have no version table and are re-run in full on every deploy, so both the
+-- sanitizing UPDATE above and this CHECK must know every value of EnterpriseOperationStatus
+-- (0022 added deleting / deleted); tests/operation/test_migration_status_lists.py enforces it.
 DO $$
 BEGIN
     IF EXISTS (
@@ -41,7 +44,7 @@ BEGIN
     END IF;
     ALTER TABLE enterprise_account
         ADD CONSTRAINT ck_enterprise_account_operation_status
-        CHECK (operation_status IN ('active','suspended','banned','closed'));
+        CHECK (operation_status IN ('active','suspended','banned','closed','deleting','deleted'));
 END
 $$;
 

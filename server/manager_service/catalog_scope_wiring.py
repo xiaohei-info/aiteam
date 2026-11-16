@@ -38,6 +38,12 @@ def reconcile_for_admin(request: Request, ctx: TenantContext, *, visible_ids: se
     if not set(ctx.roles) & _ADMIN_ROLES:
         return
     try:
+        # 对账会写员工状态并发通知：企业不可用（含暂停只读）时不做。
+        from .tenant_status import ACTIVE
+
+        store = getattr(request.app.state, "_tenant_status_store", None)
+        if store is not None and store.get(ctx.tenant_id) != ACTIVE:
+            return
         reconciler = build_reconciler(request)
         if reconciler is not None:
             reconciler.reconcile(ctx, visible_ids=visible_ids)

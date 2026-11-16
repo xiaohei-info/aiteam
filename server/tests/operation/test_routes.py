@@ -38,6 +38,8 @@ def test_operation_production_startup_guards(monkeypatch):
 
 
 class FakeManagerGateway(ManagerGateway):
+    def set_tenant_status(self, tenant_id, status, *, reason=None, idempotency_key): pass
+    def purge_tenant(self, tenant_id, *, idempotency_key): pass
     def __init__(self) -> None:
         self.provisioned: list[TenantProvisionRequest] = []
         self.bootstraps: list[OwnerBootstrapSync] = []
@@ -156,6 +158,12 @@ def test_reset_unknown_enterprise_404(client):
     assert r.json()["code"] == "not_found"
 
 
+def test_openapi_exposes_enterprise_routes(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    assert "/api/operation/enterprises" in paths
+    assert "/api/operation/enterprises/{enterprise_id}/owner-bootstrap/reset" in paths
+
+
 def test_enterprise_profile_roundtrip(client):
     """R3：企业行业 / 标签的读取与保存（发布范围匹配用）。"""
     admin = PlatformRole.SYSTEM_ADMIN.value
@@ -204,9 +212,3 @@ def test_enterprise_profile_auth_and_errors(client):
         "/api/operation/enterprises/nope/profile", json={"industry": "x" * 21}, headers=_auth(admin)
     )
     assert too_long.status_code == 422
-
-
-def test_openapi_exposes_enterprise_routes(client):
-    paths = client.get("/openapi.json").json()["paths"]
-    assert "/api/operation/enterprises" in paths
-    assert "/api/operation/enterprises/{enterprise_id}/owner-bootstrap/reset" in paths
