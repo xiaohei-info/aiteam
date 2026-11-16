@@ -23,8 +23,12 @@ export type CatalogItemType = "expert_template" | "solution_template";
 /** 模板/方案状态。 */
 export type CatalogStatus = "draft" | "published" | "unpublished";
 
-/** 前端可见范围简化表示（visible_scope dict 的前端投影）。 */
-export type VisibilityLabel = "public" | "enterprise" | "hidden";
+/** 发布范围（对齐后端 VisibleScope）：全部企业；行业命中 / 任一标签命中；或暂不对任何企业开放。 */
+export interface VisibleScope {
+  mode: "all" | "limited" | "none";
+  industries: string[];
+  tags: string[];
+}
 
 export interface PlatformModelRef {
   provider_id: string;
@@ -108,21 +112,30 @@ export interface RegisterSolutionTemplate {
 export interface SetVisibilityInput {
   catalog_type: CatalogItemType;
   template_id: string;
-  visible_scope: Record<string, unknown>;
+  visible_scope: VisibleScope;
 }
 
-/** 前端用于区分 visible_scope dict 语义的辅助函数。 */
-export function visibilityLabel(scope: Record<string, unknown> | null): VisibilityLabel {
-  if (!scope || Object.keys(scope).length === 0) return "public";
-  if (scope["enterprise_only"]) return "enterprise";
-  if (scope["hidden"]) return "hidden";
-  return "public";
+/** 读取存量值：没有 mode 的旧数据一律视为全部企业。 */
+export function normalizeScope(raw: unknown): VisibleScope {
+  const value = (raw ?? {}) as Partial<VisibleScope>;
+  if (value.mode === "none") return { mode: "none", industries: [], tags: [] };
+  if (value.mode !== "limited") return { mode: "all", industries: [], tags: [] };
+  return { mode: "limited", industries: value.industries ?? [], tags: value.tags ?? [] };
 }
 
-export function labelToVisibleScope(label: VisibilityLabel): Record<string, unknown> {
-  if (label === "enterprise") return { enterprise_only: true };
-  if (label === "hidden") return { hidden: true };
-  return {};
+/** 新范围是否比原范围窄：全部企业改为指定范围、改为暂不开放，或去掉了原有的行业 / 标签。 */
+export function scopeNarrowed(before: VisibleScope, after: VisibleScope): boolean {
+  if (after.mode === "all" || before.mode === "none") return false;
+  if (after.mode === "none" || before.mode === "all") return true;
+  return before.industries.some((item) => !after.industries.includes(item))
+    || before.tags.some((item) => !after.tags.includes(item));
+}
+
+export function scopeText(raw: unknown): string {
+  const scope = normalizeScope(raw);
+  if (scope.mode === "all") return "全部企业";
+  if (scope.mode === "none") return "暂不开放";
+  return `指定：${[...scope.industries, ...scope.tags].join("、")}`;
 }
 
 /** 从目录列表进入详情时携带的路由状态：列表网址上的搜索和筛选参数。 */

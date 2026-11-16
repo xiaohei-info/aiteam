@@ -58,6 +58,7 @@ _TARGET_BINDING_POLICIES: dict[str, tuple[str, bool]] = {
     "/api/operation/rollups": ("enterprise-tenant", False),
     "/api/operation/provider-access/resolve": ("tenant-only", True),
     "/api/operation/catalog/platform-providers": ("tenant-only", True),
+    "/api/operation/catalog/pull": ("tenant-only", True),
     # Enterprise-policy consumers must carry the exact enterprise/tenant target;
     # signed scope alone is not a binding and must never authorize an arbitrary
     # policy row.

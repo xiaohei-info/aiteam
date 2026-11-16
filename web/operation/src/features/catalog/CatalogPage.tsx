@@ -18,10 +18,10 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
 import { RegisterForm } from "./register/RegisterForm";
-import { TemplateLifecycleActions, type TemplateLifecycleAction } from "./TemplateLifecycleActions";
+import { TemplateLifecycleActions, type LifecycleHandler, type TemplateLifecycleAction } from "./TemplateLifecycleActions";
 import { useCatalogApi } from "./useCatalogApi";
-import type { CatalogDetailLocationState, CatalogItem, CatalogItemType, CatalogStatus, VisibilityLabel } from "./types";
-import { labelToVisibleScope, visibilityLabel } from "./types";
+import type { CatalogDetailLocationState, CatalogItem, CatalogItemType, CatalogStatus, VisibleScope } from "./types";
+import { scopeText } from "./types";
 import { isSafeAvatarDataUrl } from "./avatar";
 import "./catalog.css";
 
@@ -40,12 +40,6 @@ function statusPresentation(status: CatalogStatus): { label: string; variant: Ba
   return { label: "草稿", variant: "warning" };
 }
 
-function visibilityText(label: VisibilityLabel): string {
-  if (label === "public") return "公开";
-  if (label === "enterprise") return "企业可见";
-  return "隐藏";
-}
-
 function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode {
   if (!isSafeAvatarDataUrl(src)) return <DigitalEmployeeAvatar name={name} size={54} />;
   return (
@@ -62,7 +56,7 @@ function CatalogAvatar({ name, src }: { name: string; src?: string }): ReactNode
 function ExpertCatalogCard({ item, canWrite, onAction }: {
   item: CatalogItem;
   canWrite: boolean;
-  onAction: (action: TemplateLifecycleAction) => Promise<void>;
+  onAction: LifecycleHandler;
 }): ReactNode {
   const status = statusPresentation(item.status);
   const skillCount = item.platform_skill_refs?.length || item.skill_ids?.length || 0;
@@ -100,7 +94,7 @@ function ExpertCatalogCard({ item, canWrite, onAction }: {
 
       <dl data-ui="catalog-expert-card-stats">
         <div><dt>技能</dt><dd>{skillCount} 项</dd></div>
-        <div><dt>可见范围</dt><dd>{visibilityText(visibilityLabel(item.visible_scope))}</dd></div>
+        <div><dt>可见范围</dt><dd>{scopeText(item.visible_scope)}</dd></div>
       </dl>
 
       {/* 确认弹窗渲染在卡片 DOM 之外，但 React 事件仍会冒泡到卡片，所以在这里拦住。 */}
@@ -183,14 +177,14 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
     }
   }, [api, catalogType, hasMore, i18n, nextCursor]);
 
-  const runLifecycle = useCallback(async (item: CatalogItem, action: TemplateLifecycleAction) => {
+  const runLifecycle = useCallback(async (item: CatalogItem, action: TemplateLifecycleAction, scope?: VisibleScope) => {
     try {
       if (action === "publish") {
-        await api.publish(item.catalog_type, item.template_id);
+        await api.publish(item.catalog_type, item.template_id, scope);
       } else if (action === "unpublish") {
         await api.unpublish(item.catalog_type, item.template_id);
-      } else if (action === "hide") {
-        await api.setVisibility(item.catalog_type, item.template_id, labelToVisibleScope("hidden"));
+      } else if (action === "scope" && scope) {
+        await api.setVisibility(item.catalog_type, item.template_id, scope);
       }
       await loadFirst();
     } catch (err) {
@@ -247,7 +241,7 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
         key: "visible_scope",
         header: "可见范围",
         width: pixel(120),
-        renderCell: (item) => visibilityText(visibilityLabel(item.visible_scope)),
+        renderCell: (item) => scopeText(item.visible_scope),
       },
       {
         key: "version",
@@ -263,7 +257,7 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
         align: "end",
         resizable: false,
         renderCell: (item) => (
-          <TemplateLifecycleActions item={item} onAction={(action) => runLifecycle(item, action)} />
+          <TemplateLifecycleActions item={item} onAction={(action, scope) => runLifecycle(item, action, scope)} />
         ),
       });
     }
@@ -360,7 +354,7 @@ export function CatalogPage({ catalogType, titleKey, registerKey }: CatalogPageP
                 key={`${item.template_id}@${item.version}`}
                 item={item}
                 canWrite={canWrite}
-                onAction={(action) => runLifecycle(item, action)}
+                onAction={(action, scope) => runLifecycle(item, action, scope)}
               />
             ))}
             {!filteredItems.length && (

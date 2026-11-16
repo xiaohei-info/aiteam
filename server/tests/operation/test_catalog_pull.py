@@ -118,7 +118,7 @@ def _register_and_publish_solution(client):
 
 def test_pull_requires_service_token(client):
     """拉取端点需要服务间认证（X-Service-Token）。"""
-    r = client.get("/api/operation/catalog/pull/expert-templates/tpl-cmo")
+    r = client.get("/api/operation/catalog/pull/expert-templates/tpl-cmo?tenant_id=t-1")
     assert r.status_code == 401
     assert r.json()["code"] == "unauthorized"
 
@@ -130,7 +130,7 @@ def test_pull_expert_template_envelope(client):
     _register_and_publish_expert(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates/tpl-cmo",
+        "/api/operation/catalog/pull/expert-templates/tpl-cmo?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -144,7 +144,7 @@ def test_pull_expert_template_envelope(client):
 def test_pull_expert_template_not_found(client):
     """拉取不存在的模板 → 404。"""
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates/ghost",
+        "/api/operation/catalog/pull/expert-templates/ghost?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 404
@@ -171,7 +171,7 @@ def test_pull_expert_template_not_published(client):
     )
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates/tpl-draft",
+        "/api/operation/catalog/pull/expert-templates/tpl-draft?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 404
@@ -232,7 +232,7 @@ def test_pull_solution_package_envelope(client):
     _register_and_publish_solution(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates/sol-marketing",
+        "/api/operation/catalog/pull/solution-templates/sol-marketing?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -247,7 +247,7 @@ def test_pull_solution_package_envelope(client):
 def test_pull_solution_package_not_found(client):
     """拉取不存在的方案包 → 404。"""
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates/ghost",
+        "/api/operation/catalog/pull/solution-templates/ghost?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 404
@@ -260,7 +260,7 @@ def test_list_expert_templates_envelope(client):
     _register_and_publish_expert(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates",
+        "/api/operation/catalog/pull/expert-templates?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -274,7 +274,7 @@ def test_list_solution_packages_envelope(client):
     _register_and_publish_solution(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates",
+        "/api/operation/catalog/pull/solution-templates?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -345,7 +345,7 @@ def test_pull_solution_package_includes_orchestration_fields(client):
     _register_solution_with_orchestration(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates/sol-orch",
+        "/api/operation/catalog/pull/solution-templates/sol-orch?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -400,7 +400,7 @@ def test_pull_expert_template_includes_flat_config(client):
     _register_expert_with_full_config(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates/tpl-full",
+        "/api/operation/catalog/pull/expert-templates/tpl-full?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -426,7 +426,7 @@ def test_pull_expert_template_defaults_when_unset(client):
     _register_and_publish_expert(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates/tpl-cmo",
+        "/api/operation/catalog/pull/expert-templates/tpl-cmo?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -459,7 +459,7 @@ def test_list_expert_templates_include_flat_config(client):
     _register_expert_with_full_config(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/expert-templates",
+        "/api/operation/catalog/pull/expert-templates?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -480,7 +480,7 @@ def test_pull_solution_package_includes_binding_metadata(client):
     _register_solution_with_bindings(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates/sol-bound",
+        "/api/operation/catalog/pull/solution-templates/sol-bound?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200
@@ -496,7 +496,7 @@ def test_pull_solution_package_flat_ids_default_binding_metadata(client):
     _register_and_publish_solution(client)
 
     r = client.get(
-        "/api/operation/catalog/pull/solution-templates/sol-marketing",
+        "/api/operation/catalog/pull/solution-templates/sol-marketing?tenant_id=t-1",
         headers=_service_auth(),
     )
     assert r.status_code == 200

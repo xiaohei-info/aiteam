@@ -48,4 +48,9 @@ def get_catalog_service() -> CatalogService:
         providers = build_platform_provider_service()
     except RuntimeError:
         providers = None
-    return CatalogService(get_catalog_repository(), get_catalog_gateway(), platform_skills=skills, platform_providers=providers)
+    from .dependencies import get_repository
+
+    return CatalogService(
+        get_catalog_repository(), get_catalog_gateway(),
+        platform_skills=skills, platform_providers=providers, enterprises=get_repository(),
+    )

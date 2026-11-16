@@ -9,8 +9,9 @@ import { QuotaDialog } from "./QuotaDialog";
 import { LifecycleDialogs, type LifecycleAction } from "./LifecycleDialogs";
 import { EnterpriseModelAccessDialog } from "./EnterpriseModelAccessDialog";
 import { ResetOwnerDialog } from "./ResetOwnerDialog";
+import { EnterpriseProfileDialog } from "./EnterpriseProfileDialog";
 
-type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner";
+type ActionKind = EnterpriseActionBody["action"] | "model_access" | "reset_owner" | "profile";
 
 interface Props {
   api: AccountsApi;
@@ -71,6 +72,7 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
           <DropdownMenuItem label={i18n.t("operation.lifecycle.close")} onClick={() => setActive("close")} />
         )}
         <DropdownMenuItem label={i18n.t("operation.accounts.actions.adjust_quota")} onClick={() => setActive("adjust_quota")} />
+        <DropdownMenuItem label="编辑企业信息" onClick={() => setActive("profile")} />
         <DropdownMenuItem label="配置可用模型" onClick={() => setActive("model_access")} />
         {!isClosed && <DropdownMenuItem label="重置管理员密码" onClick={() => setActive("reset_owner")} />}
       </DropdownMenu>
@@ -109,6 +111,9 @@ export function EnterpriseActions({ api, enterprise, onDone }: Props): ReactNode
           onClose={() => setActive(null)}
           onDone={onDone}
         />
+      )}
+      {active === "profile" && (
+        <EnterpriseProfileDialog api={api} enterprise={enterprise} onClose={() => setActive(null)} onDone={onDone} />
       )}
       {active === "reset_owner" && (
         <ResetOwnerDialog api={api} enterprise={enterprise} onClose={() => { setActive(null); requestAnimationFrame(() => triggerRef.current?.focus()); }} />

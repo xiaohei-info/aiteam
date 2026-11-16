@@ -13,6 +13,7 @@ from shared.errors import Conflict, Forbidden, NotFound
 from shared.db import PgTenantRouter
 
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
+from .catalog_scope_reconciler import TemplateOutOfScopeConflict, is_scope_blocked
 from .employee_lifecycle import can_write_config, is_provisionable, is_runnable, target_status
 from .schemas import EmployeeConfigIn, EmployeeConfigOut
 from .memory_policy_service import MemoryPolicyService, normalize_policy
@@ -177,6 +178,8 @@ class EmployeeConfigService:
         from_s = EmployeeStatus(row.status)
         if not can_write_config(from_s) and transition != "archive":
             raise Forbidden("archived employee cannot be modified")
+        if transition in ("activate", "resume") and is_scope_blocked(row):
+            raise TemplateOutOfScopeConflict("expert template is no longer in this enterprise's publish scope")
         to_s = target_status(from_s, transition)  # 非法 transition → Conflict
         updated = self._repo.transition_status(
             ctx,
@@ -253,6 +256,7 @@ def _to_out(row: EmployeeConfigRow) -> EmployeeConfigOut:
         archived_at=row.archived_at,
         source_template_id=row.source_template_id,
         source_template_version=row.source_template_version,
+        status_reason=row.status_reason,
     )
 
 

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
@@ -26,6 +26,7 @@ from .catalog_schemas import (
     UpdateExpertTemplateRequest,
     UpdateSolutionTemplateRequest,
 )
+from .catalog_scope import VisibleScope
 from .catalog_service import CatalogService
 
 _PLATFORM_ROLES = [PlatformRole.SYSTEM_ADMIN.value, PlatformRole.SYSTEM_OPERATOR.value]
@@ -120,6 +121,31 @@ async def set_catalog_visibility(
 
 
 @router.get(
+    "/scope-options",
+    description="发布范围可选的行业与标签（取自现有企业资料，用于联想）。", summary="发布范围联想",
+    operation_id="operation_catalog_scope_options",
+)
+async def scope_options(
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Envelope[dict]:
+    return Envelope[dict](data=service.scope_options())
+
+
+@router.post(
+    "/scope-preview",
+    description="预计可见企业数：按给定发布范围统计命中的企业。", summary="预计可见企业数",
+    operation_id="operation_catalog_scope_preview",
+)
+async def scope_preview(
+    body: VisibleScope,
+    _claims: TokenClaims = Depends(_require_platform_operator),
+    service: CatalogService = Depends(get_catalog_service),
+) -> Envelope[dict]:
+    return Envelope[dict](data={"visible_enterprise_count": service.preview_scope(body)})
+
+
+@router.get(
     "",
     description="列举目录项（可按类型/状态过滤）。成功响应遵循统一 envelope，失败返回 problem+json。", summary="列举目录项（可按类型/状态过滤）",
     operation_id="operation_list_catalog",
@@ -191,6 +217,7 @@ def _require_service_token(request: Request) -> None:
 async def pull_expert_template(
     template_id: str,
     request: Request,
+    tenant_id: str = Query(min_length=1),
     version: str | None = None,
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[ExpertTemplateDetail]:
@@ -200,7 +227,7 @@ async def pull_expert_template(
     """
     _require_service_token(request)
     return Envelope[ExpertTemplateDetail](
-        data=service.pull_expert_template_detail(template_id=template_id, version=version)
+        data=service.pull_expert_template_detail(template_id=template_id, version=version, tenant_id=tenant_id)
     )
 
 
@@ -212,6 +239,7 @@ async def pull_expert_template(
 async def pull_solution_package(
     solution_id: str,
     request: Request,
+    tenant_id: str = Query(min_length=1),
     version: str | None = None,
     service: CatalogService = Depends(get_catalog_service),
 ) -> Envelope[SolutionPackage]:
@@ -221,7 +249,7 @@ async def pull_solution_package(
     """
     _require_service_token(request)
     return Envelope[SolutionPackage](
-        data=service.pull_solution_package(solution_id=solution_id, version=version)
+        data=service.pull_solution_package(solution_id=solution_id, version=version, tenant_id=tenant_id)
     )
 
 
@@ -232,6 +260,7 @@ async def pull_solution_package(
 )
 async def list_expert_templates(
     request: Request,
+    tenant_id: str = Query(min_length=1),
     service: CatalogService = Depends(get_catalog_service),
 ) -> ListEnvelope[ExpertTemplateDetail]:
     """F06：Manager 浏览可招募专家模板（只读，只返回 PUBLISHED 状态）。
@@ -239,7 +268,7 @@ async def list_expert_templates(
     鉴权：服务间调用（X-Service-Token）。
     """
     _require_service_token(request)
-    return ListEnvelope[ExpertTemplateDetail](data=service.list_published_expert_templates())
+    return ListEnvelope[ExpertTemplateDetail](data=service.list_published_expert_templates(tenant_id=tenant_id))
 
 
 @router_pull.get(
@@ -249,6 +278,7 @@ async def list_expert_templates(
 )
 async def list_solution_packages(
     request: Request,
+    tenant_id: str = Query(min_length=1),
     service: CatalogService = Depends(get_catalog_service),
 ) -> ListEnvelope[SolutionPackage]:
     """F07：Manager 浏览可应用行业方案包（只读，只返回 PUBLISHED 状态）。
@@ -256,4 +286,4 @@ async def list_solution_packages(
     鉴权：服务间调用（X-Service-Token）。
     """
     _require_service_token(request)
-    return ListEnvelope[SolutionPackage](data=service.list_published_solution_packages())
+    return ListEnvelope[SolutionPackage](data=service.list_published_solution_packages(tenant_id=tenant_id))

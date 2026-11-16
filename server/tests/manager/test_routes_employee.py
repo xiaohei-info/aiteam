@@ -188,6 +188,19 @@ def test_get_not_found_404():
         assert r.status_code == 404
 
 
+def test_list_returns_before_scope_reconcile_runs():
+    """专家列表不等发布范围对账（对账要调运营端）：先返回列表，对账在响应之后执行。"""
+    order = []
+    svc = _fake_service()
+    svc.list_all.side_effect = lambda ctx: order.append("list") or []
+    with patch("manager_service.routes_employee._service", return_value=svc), \
+         patch("manager_service.routes_employee.reconcile_for_admin",
+               side_effect=lambda request, ctx, **kw: order.append("reconcile")):
+        client = _client("postgresql://fake/fake")
+        assert client.get("/api/manager/employees", headers=_auth_header()).status_code == 200
+    assert order == ["list", "reconcile"]
+
+
 def test_create_forbidden_403():
     fake = _fake_service()
     fake.create.side_effect = Forbidden("nope")

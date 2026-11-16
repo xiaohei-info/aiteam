@@ -36,6 +36,13 @@ class InAppNotificationService:
             severity=severity,
         )
 
+    def deliver_internal(self, ctx: TenantContext, *, message: str, notify_type: str, severity: str) -> InAppNotificationRow:
+        """Manager 自身产生的站内通知（如发布范围对账）；org_id 取企业 id，缺省回落 tenant_id。"""
+        return self._repo.add(
+            ctx, org_id=ctx.enterprise_id or ctx.tenant_id, message=message,
+            notify_type=notify_type, severity=severity,
+        )
+
     def deliver_from_operation_idempotent(
         self,
         ctx: TenantContext,

@@ -287,7 +287,7 @@ def _derive_snapshot_version(
         mode="json",
         exclude={
             "employee_id", "employee_slug", "version", "knowledge_refs",
-            "source_template_id", "source_template_version",
+            "source_template_id", "source_template_version", "status_reason",
         },
     )
     payload["knowledge_refs"] = sorted(knowledge_refs)

@@ -147,6 +147,7 @@ class SolutionPackage(BaseModel):
     output_requirements: str = Field(default="", description="可选的方案交付要求")
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
+    hidden_expert_count: int = Field(default=0, ge=0, description="方案内因发布范围对本企业不可见、未下发的专家数")
 
 
 # ---- Agent → Manager（用户端主动访问）----

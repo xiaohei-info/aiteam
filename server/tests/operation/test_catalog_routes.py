@@ -9,12 +9,11 @@ from fastapi.testclient import TestClient
 
 from operation_service.catalog_dependencies import get_catalog_service
 from operation_service.catalog_gateway import CatalogManagerGateway
-from operation_service.catalog_repository import CatalogEntry, CatalogRepository
+from operation_service.catalog_repository import CatalogRepository
 from operation_service.catalog_service import CatalogService
 from run import get_app
-from shared.auth import DevTokenService
 from shared.contracts.crosstier import CatalogReleaseNotify
-from shared.contracts.enums import CatalogStatus, CatalogType, EnterpriseRole, PlatformRole
+from shared.contracts.enums import EnterpriseRole, PlatformRole
 from tests.operation.auth_helpers import operation_test_token
 
 
@@ -186,7 +185,7 @@ def test_unpublish_flow(client, manager):
 def test_set_visibility_flow(client, manager):
     _register_expert(client)
     client.post("/api/operation/catalog/expert_template/tpl-cmo/publish", json={}, headers=_auth())
-    scope = {"tenant_ids": ["t1"]}
+    scope = {"mode": "limited", "industries": ["制造业"], "tags": []}
     r = client.put(
         "/api/operation/catalog/expert_template/tpl-cmo/visibility",
         json={"visible_scope": scope}, headers=_auth(),

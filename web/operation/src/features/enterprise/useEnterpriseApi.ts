@@ -6,6 +6,7 @@
  *   POST /enterprises（开通）
  * 重置管理员密码已迁到账号管理的行菜单（accounts/ResetOwnerDialog）。
  */
+import { newIdempotencyKey } from "@aiteam/shared";
 import type { ApiClient } from "../../api";
 import type { PlatformModelRef } from "../catalog/types";
 
@@ -13,6 +14,8 @@ export interface ProvisionInput {
   enterprise_name: string;
   owner_phone: string;
   enterprise_code?: string;
+  industry?: string;
+  tags?: string[];
   /** null keeps all published models; [] explicitly opens none. */
   allowed_model_refs?: PlatformModelRef[] | null;
 }
@@ -35,7 +38,13 @@ export interface EnterpriseModelAccess {
 }
 
 function writeKey(prefix: string): string {
-  return `${prefix}:${globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
+  return `${prefix}:${newIdempotencyKey()}`;
+}
+
+export interface EnterpriseProfile {
+  enterprise_id: string;
+  industry: string | null;
+  tags: string[];
 }
 
 export function useEnterpriseApi(client: ApiClient) {
@@ -68,5 +77,17 @@ export function useEnterpriseApi(client: ApiClient) {
     return data;
   }
 
-  return { provision, getModelAccess, setModelAccess };
+  async function getProfile(enterpriseId: string): Promise<EnterpriseProfile> {
+    const data = await client.get<EnterpriseProfile>(`/api/operation/enterprises/${enterpriseId}/profile`);
+    if (!data) throw new Error("profile 返回空");
+    return data;
+  }
+
+  async function setProfile(enterpriseId: string, body: { industry: string | null; tags: string[] }): Promise<EnterpriseProfile> {
+    const data = await client.put<EnterpriseProfile>(`/api/operation/enterprises/${enterpriseId}/profile`, { body });
+    if (!data) throw new Error("profile 返回空");
+    return data;
+  }
+
+  return { provision, getModelAccess, setModelAccess, getProfile, setProfile };
 }

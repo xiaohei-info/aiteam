@@ -679,7 +679,7 @@ class TestPgEnterpriseModelAccess:
 
     @staticmethod
     def _row(refs=None):
-        return ("ent-1", "tenant-1", "Acme", None, "1", "hash", refs)
+        return ("ent-1", "tenant-1", "Acme", None, "1", "hash", refs, None, [])
 
     def test_get_by_tenant_id_returns_account(self, repo):
         _set_one(self.cursor, self._row([{"provider_id": "p1", "model_id": "m1"}]))
