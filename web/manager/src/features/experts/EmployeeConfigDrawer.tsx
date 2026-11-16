@@ -109,6 +109,7 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     memory_policy,
     source_template_id,
     source_template_version,
+    status_reason,
     ...editable
   } = config;
   void employee_id;
@@ -122,6 +123,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   // Recruitment source is server-owned; the write schema forbids extra fields (422).
   void source_template_id;
   void source_template_version;
+  // 自动停用原因同样由服务端维护。
+  void status_reason;
   return editable;
 }
 

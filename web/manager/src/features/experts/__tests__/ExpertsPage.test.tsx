@@ -436,4 +436,9 @@ describe("toEmployeeConfigIn", () => {
     expect(keys).not.toContain("source_template_id");
     expect(keys).not.toContain("source_template_version");
   });
+
+  it("剔除自动停用原因：读接口带 status_reason，写接口禁止多余字段，回传会导致保存 422", () => {
+    const keys = Object.keys(toEmployeeConfigIn({ ...employeeConfigured, status_reason: null }));
+    expect(keys).not.toContain("status_reason");
+  });
 });
