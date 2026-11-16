@@ -44,10 +44,13 @@ class TenantAuthRepository:
     ) -> str:
         """在本 tenant 建 user + auth_identity；返回 user_id。tenant_id 取自 ctx（D22）。"""
         with self._router.session(ctx) as s:
-            user_id = s.execute(
+            created = s.execute(
                 "INSERT INTO app_user (tenant_id, display_name, roles) VALUES (%s, %s, %s) RETURNING id",
                 (ctx.tenant_id, display_name, roles),
-            ).fetchone()[0]
+            ).fetchone()
+            if created is None:  # INSERT ... RETURNING 总会返回一行；防御性判空
+                raise RuntimeError("app_user insert returned no row")
+            user_id = created[0]
             s.execute(
                 "INSERT INTO auth_identity "
                 "(tenant_id, user_id, provider, external_id, secret, must_reset, password_changed_at) "
@@ -93,6 +96,19 @@ class TenantAuthRepository:
             secret=row[2], must_reset=row[3], password_changed_at=row[4],
             roles=list(row[5] or []), status=row[6],
         )
+
+    def find_account_summary(self, ctx: TenantContext, *, user_id: str) -> tuple[str, bool] | None:
+        """登录账号（external_id）与是否持有本地密码；只读，供「我是谁」展示。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT external_id, bool_or(secret IS NOT NULL) OVER () "
+                "FROM auth_identity WHERE user_id = %s AND provider IN ('phone', 'password') "
+                "ORDER BY (provider = 'phone') DESC, id LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row[0]), bool(row[1])
 
     def find_or_create_passkey_identity(self, ctx: TenantContext, *, user_id: str) -> None:
         """确保该 user 有一条 provider=passkey 的 auth_identity；已存在则跳过（幂等）。
@@ -198,6 +214,15 @@ class TenantAuthRepository:
             "DELETE FROM auth_identity WHERE user_id = %s AND provider = %s", (user_id, AuthProvider.OAUTH.value),
         ).rowcount
         return {"sessions": sessions, "passkeys": passkeys, "oauth": connections + identities}
+
+    def update_secret_for_user(self, ctx: TenantContext, *, user_id: str, secret: str) -> None:
+        """按 user_id 更新本地密码哈希（自助改密）。只改已持有密码的 phone/password 身份。"""
+        with self._router.session(ctx) as s:
+            s.execute(
+                "UPDATE auth_identity SET secret = %s, must_reset = false, password_changed_at = now() "
+                "WHERE user_id = %s AND provider IN ('phone', 'password') AND secret IS NOT NULL",
+                (secret, user_id),
+            )
 
     def update_secret(
         self, ctx: TenantContext, *, provider: AuthProvider, external_id: str, secret: str, must_reset: bool

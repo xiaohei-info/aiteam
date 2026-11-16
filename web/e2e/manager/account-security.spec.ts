@@ -26,7 +26,9 @@ test("Manager password session, factor enrollment, logout, Passkey login and rem
     await page.getByRole("button", { name: "添加 Passkey" }).click();
     expect((await enrolled).status()).toBe(200);
     await expect(page.getByRole("button", { name: "删除 浏览器 Passkey" })).toBeVisible();
-    await page.getByRole("button", { name: "退出登录" }).click();
+    // R8：退出登录在顶栏账号菜单里（菜单按钮显示脱敏账号）。
+    await page.getByRole("button", { name: /\*{4}/ }).click();
+    await page.getByRole("menuitem", { name: "退出登录" }).click();
     await expect(page).toHaveURL(/\/login$/);
     expect(await page.evaluate(() => localStorage.getItem("aiteam.manager.token"))).toBeNull();
     await page.getByLabel("企业代码/名称").fill(enterprise);

@@ -61,6 +61,20 @@ class LoginAuditRepository:
             return
 
 
+    def count_recent_failures(self, ctx: TenantContext, *, actor: str, detail: str, within_minutes: int) -> int:
+        """窗口内、最近一次成功之后的失败次数（成功一次即清零）。读失败时抛出，由调用方拒绝操作。"""
+        with self._router.session(ctx) as s:
+            row = s.execute(
+                "SELECT count(*) FROM login_attempt "
+                "WHERE actor = %s AND detail = %s AND success = false "
+                "AND occurred_at > now() - make_interval(mins => %s) "
+                "AND occurred_at > COALESCE((SELECT max(occurred_at) FROM login_attempt "
+                "WHERE actor = %s AND detail = %s AND success = true), '-infinity')",
+                (actor, detail, within_minutes, actor, detail),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+
 def record_login_attempt(audit, ctx, *, provider, external_id, actor, ip, success, detail=None):
     """站点登录审计的便捷入口。audit 未配置 / 写入失败均不影响登录主路径。"""
     if audit is None:

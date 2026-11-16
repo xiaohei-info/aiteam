@@ -117,6 +117,28 @@ class OwnerBootstrapOut(BaseModel):
     )
 
 
+class MePasswordPolicyOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    min_length: int
+    require_upper: bool
+    require_lower: bool
+    require_digit: bool
+    require_symbol: bool
+    max_age_days: int
+
+
+class MeOut(BaseModel):
+    """当前登录者的企业与账号概览（顶栏与自助改密入口）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    enterprise_name: str | None = Field(description="企业名称；未设置时为空，前端回退显示企业代码。")
+    enterprise_code: str | None = Field(description="企业代码；读不到时为空。")
+    account_masked: str = Field(description="脱敏后的登录账号。")
+    roles: list[str]
+    has_password: bool = Field(description="是否持有本地密码；仅第三方登录的账号为 false。")
+    password_policy: MePasswordPolicyOut
+
+
 class CatalogNotifyOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     received: bool = Field(description="是否已接收通知。")

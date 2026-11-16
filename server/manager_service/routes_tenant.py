@@ -26,6 +26,17 @@ from .service_ingress import (
 router = APIRouter(tags=["manager", "control-plane"])
 
 
+def seed_enterprise_name(business_dsn: str, tenant_id: str, name: str) -> None:
+    """把开通时的企业名写进 enterprise_settings，供企业端顶栏展示（幂等，不覆盖已有名称）。"""
+    from shared.contracts.tenancy import TenantContext
+    from shared.db import PgTenantRouter
+
+    from .settings_repository import SettingsRepository
+
+    ctx = TenantContext(tenant_id=tenant_id, user_id="system", roles=["owner"])
+    SettingsRepository(PgTenantRouter(business_dsn)).ensure_enterprise_name(ctx, name)
+
+
 @router.post(
     "/api/manager/tenants",
     summary="F01 企业开通——建 tenant_registry 行（Operator→Manager 云侧调用）",
@@ -97,6 +108,8 @@ def provision_tenant(
             body.tenant_id,
             instance_registry=getattr(request.app.state, "_rag_instance_registry", None),
         )
+
+        seed_enterprise_name(business_dsn, body.tenant_id, body.enterprise_name)
 
         # 2. 处理 initial_quota_policy（租户作用域，需要 RLS + SET LOCAL）
         if body.initial_quota_policy:

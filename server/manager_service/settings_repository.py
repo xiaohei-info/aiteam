@@ -70,6 +70,16 @@ class SettingsRepository:
             ).fetchone()
         return _row_to_settings(row) if row else None
 
+    def ensure_enterprise_name(self, ctx: TenantContext, name: str) -> None:
+        """开通时写入企业名：只在还没有名称时写，不覆盖管理员已改过的名称。"""
+        name = name.strip()
+        if not name:
+            return
+        row = self.get_settings(ctx)
+        if row is not None and row.enterprise_name:
+            return
+        self.upsert_settings(ctx, enterprise_name=name)
+
     def upsert_settings(
         self, ctx: TenantContext, *,
         enterprise_name: str | None = None,
