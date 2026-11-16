@@ -391,6 +391,24 @@ def test_list_with_latest_job_picks_the_newest_job_of_each_draft(repo, clock):
     assert pairs[draft.draft_id].job_id == second.job_id and pairs[draft.draft_id].status == "queued"
 
 
+def test_count_sources_by_draft_counts_each_draft_in_one_read(repo, clock):
+    bare = _draft(repo, clock, title="无资料")
+    one = _draft(repo, clock, title="一份")
+    two = _draft(repo, clock, title="两份")
+    _source(repo, clock, one.draft_id, sha="b" * 64)
+    _source(repo, clock, two.draft_id, sha="c" * 64)
+    _source(repo, clock, two.draft_id, sha="d" * 64)
+    counts = repo.count_sources_by_draft()
+    assert counts.get(one.draft_id) == 1 and counts.get(two.draft_id) == 2
+    assert bare.draft_id not in counts
+
+
+def test_generate_without_sources_is_refused_in_chinese(repo, clock):
+    draft = _draft(repo, clock)
+    with pytest.raises(ValidationProblem, match="请先上传至少一份资料"):
+        repo.enqueue_job(_job(clock, draft.draft_id, "k1"), allowed_statuses=EDITABLE)
+
+
 def test_cancel_job_fails_the_active_job_and_restores_the_draft(repo, clock):
     draft, job = _queued(repo, clock)
     cancelled = repo.cancel_job(draft.draft_id, "op2")
@@ -411,3 +429,37 @@ def test_a_claimed_job_that_is_cancelled_cannot_be_completed(repo, clock):
     repo.cancel_job(draft.draft_id, "op2")
     assert repo.complete_job(draft.draft_id, job.job_id, "w1", change=DraftChange(changes={"status": "ready_for_review"}), usage={}) is False
     assert repo.get_draft(draft.draft_id).status == "draft"
+
+
+# ---- PG 仓储的批量计数（不依赖真实数据库：覆盖门禁只算非 integration 用例）----
+
+def test_pg_source_counts_groups_in_one_statement_and_maps_uuid_ids():
+    from uuid import UUID
+
+    from operation_service.solution_authoring_repository_pg import _PgTx
+
+    draft_a, draft_b = UUID(int=1), UUID(int=2)
+    executed: list[str] = []
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, statement, params=None):
+            executed.append(statement.as_string())
+            return self
+
+        def fetchall(self):
+            return [{"draft_id": draft_a, "n": 2}, {"draft_id": draft_b, "n": 1}]
+
+    class _Conn:
+        def cursor(self, **kwargs):
+            return _Cursor()
+
+    counts = _PgTx(_Conn()).source_counts()
+    assert counts == {str(draft_a): 2, str(draft_b): 1}
+    assert len(executed) == 1
+    assert "GROUP BY draft_id" in executed[0] and '"solution_source_document"' in executed[0]

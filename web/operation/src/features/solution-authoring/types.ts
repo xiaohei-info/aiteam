@@ -31,6 +31,8 @@ export interface DraftSummary {
   created_at: string;
   updated_at: string;
   latest_job: JobBrief | null;
+  /** 已上传的资料数量；旧服务端没给时为 undefined，按「可能有资料」处理。 */
+  source_count?: number;
 }
 
 export interface DraftList {

@@ -144,7 +144,8 @@ class SolutionAuthoringService:
         return DraftOut.of(self._repo.create_draft(row))
 
     def list_drafts(self) -> list[DraftSummaryOut]:
-        return [DraftSummaryOut.summarize(row, job) for row, job in self._repo.list_drafts_with_latest_job()]
+        counts = self._repo.count_sources_by_draft()
+        return [DraftSummaryOut.summarize(row, job, counts.get(row.draft_id, 0)) for row, job in self._repo.list_drafts_with_latest_job()]
 
     def cancel_generation(self, draft_id: str, actor_id: str) -> DraftDetailOut:
         """取消进行中的生成；没有进行中的任务时原样返回（幂等）。"""
