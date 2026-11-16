@@ -580,4 +580,10 @@ describe("toEmployeeConfigIn", () => {
     const keys = Object.keys(toEmployeeConfigIn({ ...employeeConfigured, status_reason: null }));
     expect(keys).not.toContain("status_reason");
   });
+
+  it("剔除来源字段 origin / copied_from_employee_id：只读溯源信息，回传会导致保存 422", () => {
+    const keys = Object.keys(toEmployeeConfigIn({ ...employeeConfigured, origin: "copied", copied_from_employee_id: "emp-1" }));
+    expect(keys).not.toContain("origin");
+    expect(keys).not.toContain("copied_from_employee_id");
+  });
 });
