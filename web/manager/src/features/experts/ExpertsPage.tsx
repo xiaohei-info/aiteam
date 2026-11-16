@@ -197,11 +197,32 @@ export function ExpertsPage(): ReactNode {
             const status = statusPresentation(employee.status);
             const displayName = employee.display_name || "未命名专家";
             return (
-              <article key={employee.employee_id} data-ui="expert-card" role="article" aria-label={displayName}>
+              <article
+                key={employee.employee_id}
+                data-ui="expert-card"
+                data-clickable="true"
+                role="article"
+                aria-label={displayName}
+                // 点卡片任意空白处看详情；卡片里的按钮各管各的，不连带打开详情。
+                onClick={(event) => {
+                  if ((event.target as HTMLElement).closest("button, a, input, select, textarea")) return;
+                  setDetailId(employee.employee_id);
+                }}
+              >
                 <div data-ui="expert-card-hero">
                   <DigitalEmployeeAvatar name={displayName} size={54} />
                   <div data-ui="expert-card-identity">
-                    <Heading level={3}><span data-testid="employee-row">{displayName}</span></Heading>
+                    <Heading level={3}>
+                      {/* 键盘与读屏用户的详情入口：名称本身是按钮。 */}
+                      <button
+                        type="button"
+                        data-ui="expert-card-name"
+                        aria-label={`查看${displayName}的详情`}
+                        onClick={() => setDetailId(employee.employee_id)}
+                      >
+                        <span data-testid="employee-row">{displayName}</span>
+                      </button>
+                    </Heading>
                     <Text type="supporting">{employee.persona || "企业数字员工"}</Text>
                   </div>
                   <span data-ui="expert-card-status" data-status-tone={status.tone}>{status.label}</span>

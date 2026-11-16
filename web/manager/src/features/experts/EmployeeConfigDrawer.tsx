@@ -36,6 +36,14 @@ import type { Department, EmployeeConfig, EmployeeConfigIn } from "./types";
 import type { PlatformCatalog } from "../platform-models/usePlatformModelsApi";
 import type { SkillCatalog } from "../capability/types";
 
+/** 模型框占位：加载中先亮出当前模型，加载失败与确实没有模型分开说。 */
+function modelPlaceholder(state: { loading: boolean; failed: boolean; current: string; empty: boolean; pick: string }): string {
+  if (state.loading) return state.current ? `${state.current}（正在加载可选模型…）` : "正在加载可选模型…";
+  if (state.failed) return state.current || "模型列表加载失败";
+  if (state.empty) return "暂无可用模型";
+  return state.pick;
+}
+
 export interface EmployeeConfigDrawerProps {
   employeeId: string | null;
   /** 由列表页注入已加载的实例，避免抽屉内按 id 重复拉取全表。 */
@@ -143,6 +151,8 @@ export function EmployeeConfigDrawer({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [providersLoading, setProvidersLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -183,10 +193,15 @@ export function EmployeeConfigDrawer({
   useEffect(() => {
     let alive = true;
     setProvidersLoading(true);
+    setCatalogError(null);
+    // 模型目录由 Manager 转发 Operator，可能要几秒；失败时要说清楚并能重试，不能停在「暂无可用模型」。
     platformModelsApi
       .list()
       .then((items) => {
         if (alive) setCatalog(items);
+      })
+      .catch((err) => {
+        if (alive) setCatalogError(err instanceof Error && err.message ? err.message : "请稍后重试");
       })
       .finally(() => {
         if (alive) setProvidersLoading(false);
@@ -194,7 +209,7 @@ export function EmployeeConfigDrawer({
     return () => {
       alive = false;
     };
-  }, [platformModelsApi]);
+  }, [platformModelsApi, catalogAttempt]);
 
   useEffect(() => {
     let alive = true;
@@ -377,14 +392,25 @@ export function EmployeeConfigDrawer({
 
                     <VStack gap={3}>
                       <Heading level={3}>{i18n.t("manager.experts.section_model")}</Heading>
+                      {catalogError && (
+                        <Banner
+                          status="error"
+                          title={`模型列表加载失败：${catalogError}`}
+                          endContent={<Button label="重试" size="sm" variant="ghost" onClick={() => setCatalogAttempt((n) => n + 1)} />}
+                        />
+                      )}
                       <FormLayout>
                         <Selector
                           label={i18n.t("manager.experts.model")}
                           options={modelOptions}
                           value={modelOptions.some((model) => model.value === draft.model) ? draft.model : undefined}
-                          placeholder={modelOptions.length === 0
-                            ? "暂无可用模型"
-                            : i18n.t("manager.experts.model_pick")}
+                          placeholder={modelPlaceholder({
+                            loading: providersLoading,
+                            failed: catalogError !== null,
+                            current: draft.model,
+                            empty: modelOptions.length === 0,
+                            pick: i18n.t("manager.experts.model_pick"),
+                          })}
                           isDisabled={submitting || providersLoading || modelOptions.length === 0}
                           isLoading={providersLoading}
                           data-testid="model-select"

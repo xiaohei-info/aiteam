@@ -186,6 +186,14 @@ async function choose(label: RegExp, option: RegExp): Promise<void> {
 }
 
 describe("CreateDraftDialog", () => {
+  it("生成模型的说明不再说它会成为专家的默认模型（专家模板不带模型，企业招募时选）", async () => {
+    mockApi({ [`GET ${BASE}`]: () => json([]), ...MODEL_ROUTES });
+    renderList();
+    const dialog = await openCreateDialog();
+    expect(within(dialog).queryByText(/默认模型/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText("只用于生成方案草稿；发布出的专家不带模型，由企业招募时选择")).toBeInTheDocument();
+  });
+
   it("只列已发布且有价格的模型；校验通过后创建并进入草稿页", async () => {
     const calls = mockApi({
       [`GET ${BASE}`]: () => json([]),
