@@ -429,3 +429,37 @@ def test_a_claimed_job_that_is_cancelled_cannot_be_completed(repo, clock):
     repo.cancel_job(draft.draft_id, "op2")
     assert repo.complete_job(draft.draft_id, job.job_id, "w1", change=DraftChange(changes={"status": "ready_for_review"}), usage={}) is False
     assert repo.get_draft(draft.draft_id).status == "draft"
+
+
+# ---- PG 仓储的批量计数（不依赖真实数据库：覆盖门禁只算非 integration 用例）----
+
+def test_pg_source_counts_groups_in_one_statement_and_maps_uuid_ids():
+    from uuid import UUID
+
+    from operation_service.solution_authoring_repository_pg import _PgTx
+
+    draft_a, draft_b = UUID(int=1), UUID(int=2)
+    executed: list[str] = []
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, statement, params=None):
+            executed.append(statement.as_string())
+            return self
+
+        def fetchall(self):
+            return [{"draft_id": draft_a, "n": 2}, {"draft_id": draft_b, "n": 1}]
+
+    class _Conn:
+        def cursor(self, **kwargs):
+            return _Cursor()
+
+    counts = _PgTx(_Conn()).source_counts()
+    assert counts == {str(draft_a): 2, str(draft_b): 1}
+    assert len(executed) == 1
+    assert "GROUP BY draft_id" in executed[0] and '"solution_source_document"' in executed[0]
