@@ -657,6 +657,17 @@ describe("草稿列表的筛选与行操作", () => {
     expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);
   });
 
+  it.each([
+    ["没有资料（source_count 为 0）", 0, ["删除"]],
+    ["有资料", 2, ["继续生成", "删除"]],
+    ["旧服务端没给资料数量，照旧显示", undefined, ["继续生成", "删除"]],
+  ] as const)("草稿%s时的菜单项", async (_name, sourceCount, expected) => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "draft", source_count: sourceCount })]) });
+    renderList();
+    fireEvent.click(await screen.findByRole("button", { name: /的操作$/ }));
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(expected);
+  });
+
   it("已发布的草稿只有管理员能在列表里删除", async () => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "approved" })]) });
     renderList();
