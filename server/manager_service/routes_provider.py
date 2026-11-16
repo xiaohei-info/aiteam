@@ -69,7 +69,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
     require = require_claims(verifier)
 
     @router.post("/runtime-config", operation_id="manager_provider_runtime_config")
-    async def get_runtime_config(
+    def get_runtime_config(
         body: RuntimeProviderConfigRequest,
         request: Request,
         response: Response,
@@ -84,7 +84,7 @@ def build_provider_credential_router(verifier) -> APIRouter:
         summary="获取企业语音模型运行配置（不绑定 employee）",
         description="按当前成员所在企业的模型开放列表返回 ASR 运行配置；语音输入不属于某个专家，因此不要求 employee_id。",
     )
-    async def get_speech_runtime_config(
+    def get_speech_runtime_config(
         body: SpeechRuntimeConfigRequest,
         request: Request,
         response: Response,

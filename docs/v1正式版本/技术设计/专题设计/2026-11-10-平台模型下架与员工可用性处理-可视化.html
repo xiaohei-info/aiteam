@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>平台模型下架与员工可用性处理 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>模型下架处理</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>平台模型下架 → 员工可用性处理 <small>2026-11-10 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：运营端下架模型后，员工不会「突然不可用」——平台公告下架时间，企业端提前看到受影响员工并能一键切换，用户端在宽限期内继续可用、到期才阻断，已冻结会话与进行中的 Run 不受影响。</p>
+<div class="grid3">
+<div class="card"><b>可感知</b><p class="note">Operator 下架主动通知 Manager；Manager 扫描本 tenant 受影响员工，企业端列表可见。不再等用户投诉才发现。</p></div>
+<div class="card"><b>可处置</b><p class="note">Manager 批量切换模型（只能选已发布且 tenant 可见），version 递增，旧会话历史保留。</p></div>
+<div class="card"><b>可恢复</b><p class="note">切换后 Agent 下次 sync 拉到新快照，自动清除不可用标记，用户无需重新登录。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-10-平台模型下架与员工可用性处理-需求与设计.md</code>。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:22%">现在的问题</th><th style="width:40%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>下架没有产品入口，只能靠 discovery 同步顺带发生或直改库，也没有影响面提示</td><td>运营端新增「公告下架 / 立即停用」动作，带 <code>sunset_at</code> 与影响面统计（tenant 数、employee 数）</td><td>运营</td></tr>
+<tr><td>Manager 被动感知：平台模型上下架不通知，只能等 Agent 拉快照失败才被发现</td><td>扩展 <code>CatalogReleaseNotify</code>，下架后 Manager 主动扫描本 tenant 引用该模型的员工并标记</td><td>企业管理员</td></tr>
+<tr><td>企业管理员看不到哪些员工受影响，也没有处置入口</td><td>员工列表增加「依赖不可用」状态与筛选，提供批量切换模型入口（version 递增、旧历史保留）</td><td>企业管理员</td></tr>
+<tr><td>员工突然不可用，用户端只提示「模型暂不可用」，没有恢复路径</td><td>用户端三态提示：宽限期内可用但横幅提示；硬停用 409 + 明确指引；员工下架单独提示</td><td>企业成员</td></tr>
+<tr><td>归因单一：下架 / 硬停用 / 价格未知 / provider 停用混成一个错误码</td><td>错误码细分：<code>employee_dependency_deprecated</code> / <code>employee_dependency_disabled</code> / <code>platform_price_unknown</code></td><td>企业成员、客服</td></tr>
+<tr><td>价格未知也硬阻断，价格同步延迟会误伤正常员工</td><td>价格未知降级为「按 unknown 计价 + 上报」，不阻断执行；仅模型本身不可用才拒绝快照</td><td>企业成员、财务</td></tr>
+<tr><td>恢复要靠用户重新登录或重新装载</td><td>管理员切换后 version 递增，Agent 下次 sync 自动清除标记，无需重新登录</td><td>企业成员</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>模型被硬停用（合规 / 供应商断供）时，宽限也无法继续，只能由企业管理员切换模型；已冻结会话在 Manager 离线期仍可跑，但新会话无法开始。我们保证「不死路、可恢复」，不保证「下架永不影响新对话」。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">运营端 · 模型下架与影响面</button>
+<button data-p="u2">企业端 · 受影响员工与批量切换</button>
+<button data-p="u3">用户端 · 宽限提示（可用）</button>
+<button data-p="u4">用户端 · 硬停用（阻断）</button>
+<button data-p="u5">用户端 · 群聊场景</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 / 平台模型 / anthropic 主渠道</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>模型目录</h4>
+<div class="row"><span>claude-sonnet-5-5</span><span class="tag ok">published</span></div>
+<div class="row"><span>claude-haiku-5</span><span class="tag ok">published</span></div>
+<div class="row"><span>gpt-5.2</span><span class="tag warn">deprecated</span></div>
+<div class="row"><span>old-model-x</span><span class="tag bad">disabled</span></div>
+<p class="note">状态扩展为 published / deprecated / disabled；draft 为未发布。</p></div>
+</div>
+<div>
+<div class="box"><h4>下架操作：claude-sonnet-5-5</h4>
+<p>下架方式</p>
+<p><span class="tag ok">公告下架（deprecated）</span> <span class="tag bad">立即停用（disabled）</span></p>
+<p>计划停用时间 sunset_at</p>
+<div class="input">2026-11-30 23:59</div>
+<p>原因（可选）</p>
+<div class="input">上游停止供应</div>
+<div class="box" style="margin-top:10px"><h4>影响面（聚合）</h4>
+<div class="row"><span>引用企业</span><span>3 家</span></div>
+<div class="row"><span>引用员工</span><span>12 个</span></div>
+<div class="row"><span>其中已装载</span><span>9 个</span></div>
+</div>
+<p style="margin-top:10px"><span class="btn pri">确认下架</span> <span class="btn">取消</span></p>
+</div>
+</div></div></div>
+<p class="note">要点：公告下架给企业留处置时间；立即停用用于合规 / 断供。影响面只出聚合计数，不含会话内容。</p>
+</div>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 / 专家 / 依赖不可用（3）</b></div>
+<div class="body">
+<div class="box"><h4>受影响员工</h4>
+<div class="row"><span>质检主管</span><span><span class="tag warn">宽限中 · 11-30 下架</span></span></div>
+<div class="row"><span>来料检验专家</span><span><span class="tag warn">宽限中 · 11-30 下架</span></span></div>
+<div class="row"><span>合同审阅专家</span><span><span class="tag bad">已停用</span></span></div>
+<div class="row"><span>市场分析专家</span><span class="tag ok">正常</span></div>
+<p class="note">状态来自 Manager 扫描 + Agent sync 兜底；「依赖不可用」只标记，不删除配置。</p></div>
+<div class="box" style="margin-top:10px"><h4>批量切换模型（owner / enterprise_admin）</h4>
+<p>目标模型 <span class="input">claude-haiku-5 ▾</span></p>
+<p class="note">仅列出当前 published 且本企业可见的模型；切换后 version 递增，旧会话历史保留。</p>
+<p>已选 3 个员工</p>
+<p><span class="btn pri">批量切换</span> <span class="btn">取消</span></p>
+</div>
+</div></div>
+<p class="note">要点：管理员在用户投诉之前就能看到影响面并处置；切换即产生新 version，旧快照的会话历史不丢。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>桌面端 / 会话：质检主管</b></div>
+<div class="body">
+<div class="box" style="border-color:#d98a00"><b>该员工使用的模型将于 2026-11-30 下架，请联系企业管理员切换。</b><p class="note">宽限期内可继续对话，历史消息不受影响。</p></div>
+<div class="box" style="margin-top:10px"><h4>对话</h4>
+<div class="row"><span>我：帮我看一下这批来料…</span></div>
+<div class="row"><span>质检主管：收到，正在分析…</span></div>
+</div>
+<p style="margin-top:10px"><span class="input" style="width:70%">输入消息…</span> <span class="btn pri">发送</span></p>
+</div></div>
+<p class="note">要点：<code>employee_dependency_deprecated</code> 只提示、不阻断；到 <code>sunset_at</code> 后自动转为阻断。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>桌面端 / 会话：合同审阅专家</b></div>
+<div class="body">
+<div class="box" style="border-color:#d92d20"><b>平台已下架该模型，员工暂不可用</b><p class="note">请联系企业管理员切换模型。历史消息仍可查看，其他员工不受影响。</p></div>
+<p style="margin-top:10px"><span class="btn dis">发送（已禁用）</span></p>
+<div class="box" style="margin-top:10px"><h4>不可用原因</h4>
+<p><span class="tag bad">employee_dependency_disabled</span></p>
+<p class="note">宽限已结束或平台硬停用；管理员切换后自动恢复，无需重新登录。</p></div>
+</div></div>
+<p class="note">要点：<code>employee_dependency_disabled</code> 才 fail-closed（409）；文案给出可操作指引，不再只说「模型暂不可用」。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>桌面端 / 群聊：协调专家不可用，@提及仍可用</b></div>
+<div class="body">
+<div class="box" style="border-color:#d92d20"><b>协调专家暂不可用（模型已下架）</b><p class="note">无 @ 消息无法投递；@提及成员可直接投递。请联系企业管理员更换协调专家。</p></div>
+<div class="box" style="margin-top:10px"><h4>群成员</h4>
+<div class="row"><span>质检主管（协调专家）</span><span class="tag bad">不可用</span></div>
+<div class="row"><span>来料检验专家</span><span><span class="btn">@来料检验专家</span></span></div>
+<div class="row"><span>合同审阅专家</span><span><span class="btn">@合同审阅专家</span></span></div>
+</div>
+<p style="margin-top:10px"><span class="input" style="width:70%">@来料检验专家 帮我看一下…</span> <span class="btn pri">发送</span></p>
+</div></div>
+<p class="note">要点：coordinator 不可用时无 @ 消息阻断，但 @ 消息直接投递 participant；群详情展示成员可用状态。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界不变：不向用户机器入站；平台模型状态只有 Operator 能写；会话内容不上传；已冻结快照不被改写。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 560" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="160" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="320" width="1090" height="180" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="342" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 下架 / 停用</text><text x="40" y="86" fill="#667085">unpublish / disable + sunset_at</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 影响面统计</text><text x="280" y="86" fill="#667085">tenant / employee 聚合</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ 通知 Manager</text><text x="520" y="86" fill="#667085">CatalogReleaseNotify（扩展）</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">oper 库：platform_model</text><text x="770" y="86" fill="#667085">status 扩展 deprecated；新增 sunset_at</text>
+
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">④ 收通知 → 扫描受影响员工</text><text x="520" y="226" fill="#667085">标记「依赖不可用」（保留配置）</text>
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">⑤ 列表警示 + 批量切换</text><text x="280" y="226" fill="#667085">version 递增，旧历史保留</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ 快照分级下发</text><text x="40" y="226" fill="#667085">deprecation 元数据；过期拒绝</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">tenant 数据空间：employee / snapshot</text><text x="770" y="226" fill="#667085">不删配置；只标记与切换</text>
+
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ 周期 sync 拉快照</text><text x="40" y="406" fill="#667085">Agent 主动访问 Manager</text>
+<rect x="270" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="390">⑧ 三态标记</text><text x="280" y="406" fill="#667085">availability_reason / revision</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑨ 宽限可用 / 停用阻断</text><text x="520" y="406" fill="#667085">横幅提示 / 409 fail-closed</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">本地库：loaded_expert_projection</text><text x="770" y="406" fill="#667085">已冻结快照与进行中 Run 不受影响</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/><path d="M470 74 H510"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M510 214 H470"/><path d="M270 214 H230"/>
+<path d="M130 238 V370" stroke-dasharray="4 3"/>
+<path d="M230 394 H270"/><path d="M470 394 H510"/>
+</g>
+<text x="620" y="150" font-size="11" fill="#667085">Operator → Manager 通知（服务间调用）</text>
+<text x="140" y="310" font-size="11" fill="#667085">Manager → Agent 主动拉（周期 sync）</text>
+<text x="620" y="290" font-size="11" fill="#667085">切换后 version 递增，下次 sync 拉到新快照</text>
+<text x="620" y="305" font-size="11" fill="#667085">→ 自动清除标记（恢复，无需重新登录）</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有两种：Operator→Manager 服务间调用、Agent 主动访问 Manager。没有任何入站到用户机器。</p>
+</div>
+
+<h3>3.2 下架流程</h3>
+<div class="flow">
+<div class="s"><b>Operator</b>公告下架 / 立即停用（sunset_at）</div><div class="a">→</div>
+<div class="s"><b>通知</b>CatalogReleaseNotify 扩展</div><div class="a">→</div>
+<div class="s"><b>Manager</b>扫描本 tenant 引用员工 → 标记</div><div class="a">→</div>
+<div class="s"><b>企业端</b>列表警示 + 批量切换入口</div><div class="a">→</div>
+<div class="s"><b>Agent</b>sync 拉快照 → 三态标记</div><div class="a">→</div>
+<div class="s"><b>用户端</b>宽限可用（横幅）/ 停用 409</div>
+</div>
+
+<h3>3.3 恢复流程</h3>
+<div class="flow">
+<div class="s"><b>管理员</b>批量切换模型（published + tenant 可见）</div><div class="a">→</div>
+<div class="s"><b>Manager</b>employee version 递增</div><div class="a">→</div>
+<div class="s"><b>Agent</b>下次 sync 拉到新快照</div><div class="a">→</div>
+<div class="s"><b>Agent</b>清除 availability_reason</div><div class="a">→</div>
+<div class="s"><b>用户端</b>恢复可用（无需重新登录）</div>
+</div>
+
+<h3>3.4 状态与处置矩阵</h3>
+<table>
+<tr><th>状态</th><th>新招募 / 改配置</th><th>新快照下发</th><th>本地已冻结会话</th><th>用户端</th></tr>
+<tr><td><span class="tag ok">published</span></td><td>允许</td><td>允许</td><td>允许</td><td>正常</td></tr>
+<tr><td><span class="tag warn">deprecated</span></td><td><b>禁止</b></td><td>允许（带 deprecation 元数据）</td><td>允许</td><td>宽限横幅，不阻断</td></tr>
+<tr><td><span class="tag bad">disabled</span></td><td>禁止</td><td>拒绝</td><td>允许（已冻结快照）</td><td>409 阻断 + 指引</td></tr>
+<tr><td><span class="tag gray">draft</span></td><td>禁止</td><td>拒绝</td><td>不适用</td><td>不可用</td></tr>
+</table>
+<p class="note">已冻结快照与进行中 Run 始终可跑（D5 / F11 / D14）；下架只影响「新快照下发」，不打断正在执行的会话。</p>
+
+<h3>3.5 群聊场景（coordinator + participant）</h3>
+<p class="lead">群聊结构：1 个 coordinator + N 个 participant；无 @ 消息只投递 coordinator，@ 消息直接投递 participant（不经过 coordinator），coordinator 用 <code>mention_employee</code> 工具主动 @ 成员。</p>
+<table>
+<tr><th style="width:20%">场景</th><th style="width:50%">实际表现</th><th>是否牵连别人</th></tr>
+<tr><td>coordinator 模型停用</td><td>无 @ 消息：409，整条发不出；有 @ 消息：直接投递 participant，可用；coordinator 无法再用工具 @ 人</td><td>只阻断无 @ 消息</td></tr>
+<tr><td>participant 模型停用</td><td>人工 @ 他：409，整条发不出（即使同时 @ 别人）；coordinator 工具 @ 他：返回 error，可改 @ 别人</td><td>人工多 @ 时可能阻断整条</td></tr>
+<tr><td>其他 participant</td><td>正常</td><td>不受影响</td></tr>
+<tr><td>进行中的 Run</td><td>不中断</td><td>—</td></tr>
+<tr><td>custom / free 群</td><td>可通过成员编辑移除 / 替换（coordinator 不可移除）</td><td>—</td></tr>
+<tr><td>solution 群</td><td>roster 冻结，不可通过成员编辑替换</td><td>恢复路径长</td></tr>
+</table>
+<p class="note"><b>问题：</b>coordinator 单点故障；人工多 @ 全有全无；coordinator 不知成员不可用（<code>buildGroupContext</code> 不给可用性）；solution roster 冻结；无群级健康提示。</p>
+<table>
+<tr><th style="width:22%">场景</th><th>建议</th></tr>
+<tr><td>coordinator 不可用</td><td>群顶部横幅「协调专家暂不可用，@提及成员可直接投递」；无 @ 消息保持阻断（降级选人风险大）；Manager 侧提供「更换协调专家」</td></tr>
+<tr><td>participant 不可用</td><td>工具 @ 失败错误带 <code>employee_dependency_disabled</code>；把不可用成员写进 <code>buildGroupContext</code>，coordinator 一开始就避开</td></tr>
+<tr><td>人工多 @</td><td>改为部分投递：可用的先投递，不可用的汇报给用户；至少前置校验返回明确列表让用户确认</td></tr>
+<tr><td>roster 维护</td><td>custom / free 群：前端暴露移除 / 替换；solution 群：允许管理员替换单个成员（version 递增、roster 重新冻结）</td></tr>
+<tr><td>群健康</td><td>群详情页显示成员可用状态与原因；下架事件触发时在群内提示</td></tr>
+<tr><td>恢复</td><td>切换模型 → version 递增 → sync 更新 snapshot → <code>available</code> 自动恢复；更换 coordinator 后重新冻结 solution roster</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features/providers</code> 已有平台模型目录页；<code>web/manager/src/features/experts</code> 已有员工列表与配置抽屉；桌面端已有 <code>GrantsSyncNotice</code> 与 <code>employeeAvailability</code>。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>平台模型页新增「公告下架 / 立即停用」操作：<code>sunset_at</code> 选择、原因、影响面预览（ tenant 数 / employee 数）；状态列展示 <code>deprecated / disabled</code></td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>员工列表增加「依赖不可用」状态与筛选；行内展示下架时间 / 原因码；提供批量切换模型入口</td><td>P1 / P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>批量切换模型对话框：仅列 published + tenant 可见模型；展示将影响的员工数；确认后提交</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>平台模型只读视图增加 <code>deprecated / disabled</code> 标识与「被 N 个员工引用」提示</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>宽限横幅（会话顶部）：下架时间 + 联系管理员指引；输入框保持可用</td><td>P3</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>硬停用：<code>GrantsSyncNotice</code> 三态文案 + 输入框禁用态 + 原因码展示</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td><code>employeeAvailability.ts</code> 三态映射；<code>availability_reason</code> 取值扩展</td><td>P3</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>i18n、权限控制（按角色显隐）、Playwright 端到端用例、a11y</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更（新）</b>：<code>CatalogReleaseNotify</code> 扩展 <code>catalog_type</code> / <code>action</code>；快照 <code>ModelPolicy</code> 增加只读 <code>deprecation</code> 元数据；错误码细分</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>迁移：<code>platform_model.sunset_at</code>；<code>status</code> 扩展 <code>deprecated</code>；下架 / 停用 / 影响面路由（system_admin）；下架时发通知；审计</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>收通知扫描本 tenant 引用员工并标记；员工列表「依赖不可用」状态；批量切换模型（version 递增、旧历史保留）</td><td>P1 / P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>快照 <code>_resolve_pricing</code> 分级：<code>deprecated</code> 未过 <code>sunset_at</code> 返回 deprecation 元数据；<code>disabled</code> / 过期拒绝；价格未知不阻断</td><td>P2 / P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>三态 <code>availability_reason</code>；宽限期内不阻断；硬停用 409；切换后下次 sync 自动清除标记（恢复）</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>可选：主备模型兜底（<code>fallback_model_ref</code>，快照冻结主备，本地切换）</td><td>P4</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>价格未知（<code>platform_price_unknown</code>）建议降级为「按 unknown 计价 + 上报」，<b>不</b>硬阻断；仅模型本身不可用才拒绝快照。避免价格同步延迟误伤正常员工。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:18%">变更</th><th>内容</th><th style="width:14%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>platform_model</code></td><td>新增 <code>sunset_at</code>（可空）；<code>status</code> 扩展 <code>deprecated</code></td><td>Operator oper 库</td><td class="sz M">中</td></tr>
+<tr><td><code>platform_provider</code></td><td><code>status</code> 扩展 <code>deprecated</code>；provider 不可用时其下模型一律视为不可发布</td><td>Operator oper 库</td><td class="sz S">低</td></tr>
+<tr><td><code>CatalogReleaseNotify</code></td><td><code>catalog_type</code> 增加 <code>platform_model | platform_provider</code>；<code>action</code> 增加 <code>deprecated | disabled</code>；可选 <code>sunset_at</code></td><td>跨端契约</td><td class="sz L">高</td></tr>
+<tr><td>快照 <code>ModelPolicy</code></td><td>增加只读 <code>deprecation</code> 元数据（下架时间、原因码）</td><td>跨端契约 / Agent 本地库</td><td class="sz M">中</td></tr>
+<tr><td><code>availability_reason</code></td><td>取值扩展为 <code>employee_dependency_deprecated / employee_dependency_disabled / employee_unavailable</code></td><td>Agent 本地库 / 桌面端</td><td class="sz M">中</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>以上属共享契约变更，需按 AGENTS.md §8「高风险操作」确认后再实施。建议发布顺序：先升级 Manager 与 Agent（接受新字段），再让 Operator 发布带新字段的下架通知。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:22%">依赖</th><th style="width:26%">验收</th></tr>
+<tr><td>P1 感知</td><td>Operator 下架动作 + 通知扩展；Manager 收通知扫描受影响员工 + 列表警示</td><td>契约获批</td><td>下架后 Manager 能列出受影响员工；未收到通知时 Agent 拉快照失败也能兜底发现</td></tr>
+<tr><td>P2 处置</td><td>Manager 批量切换模型；version 递增；旧会话历史保留</td><td>P1</td><td>切换后 Agent 自动恢复，无需重新登录</td></tr>
+<tr><td>P3 分级</td><td>三态 <code>availability_reason</code> + 宽限横幅 + 价格 unknown 降级；群聊 roster 可用状态、coordinator 提示、工具 @ 错误语义</td><td>P1 / P2</td><td>宽限期内不阻断；硬停用有明确指引；价格未知不误伤；群聊不可用成员不阻断其他成员</td></tr>
+<tr><td>P4 可选</td><td>主备模型兜底（<code>fallback_model_ref</code>）</td><td>P3</td><td>管理员配置备用后主模型不可用自动切换</td></tr>
+</table>
+<p class="note">P1 → P2 → P3 顺序推进；P4 可选，不阻塞主链路。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">快照冻结不被改写</span><span class="tag ok">fail-closed 不硬跑</span><span class="tag ok">单写者（平台模型状态只有 Operator 能写）</span><span class="tag ok">窄通信（复用 CatalogReleaseNotify）</span><span class="tag ok">已冻结会话与进行中 Run 不受影响</span></p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>下架是否必须带 <code>sunset_at</code></td><td>必须；紧急情况用「立即停用」<code>disabled</code> 绕过宽限</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>2</td><td><code>deprecated</code> 宽限期内能否新招募引用该模型</td><td>建议禁止（只保留已装载实例继续可用）</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>3</td><td>价格未知是否降级为「按 unknown 计价 + 上报」</td><td>建议是；仅模型本身不可用才拒绝快照</td><td><span class="tag bad">P3</span></td></tr>
+<tr><td>4</td><td>主备模型兜底是否本期做</td><td>建议 P4 / 可选；必须企业管理员显式配置</td><td><span class="tag warn">P4</span></td></tr>
+<tr><td>5</td><td>影响面统计粒度</td><td>建议 tenant 数 + employee 数；如需部门 / 成员维度另议</td><td><span class="tag warn">P1</span></td></tr>
+<tr><td>6</td><td>coordinator 不可用时，无 @ 消息是「阻断 + 提示」还是「降级选一个可用成员」</td><td>建议前者（语义清晰，降级选人涉及编排变化）</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>7</td><td>人工多 @ 是否改为部分投递</td><td>建议是；至少前置校验返回明确列表让用户确认</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>8</td><td>solution 群是否允许管理员替换单个成员</td><td>建议允许（version 递增、roster 重新冻结），否则恢复路径太长</td><td><span class="tag warn">P2</span></td></tr>
+<tr><td>9</td><td>是否把不可用成员写进 coordinator 群上下文</td><td>建议是，避免 coordinator 反复 @ 不可用成员</td><td><span class="tag warn">P3</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#1（决定「缓冲档」是否存在，直接影响 P1 的契约与路由）、#3（决定价格同步延迟是否误伤正常员工）、#8（决定 solution 群恢复路径）。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>

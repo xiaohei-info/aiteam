@@ -9,7 +9,8 @@ export type RowAction = "continue" | "cancel" | "delete";
 export function availableActions(draft: DraftSummary, isAdmin: boolean): RowAction[] {
   const actions: RowAction[] = [];
   // 「继续生成」：还没有正文的草稿（从未生成，或生成失败 / 被取消）。已有正文的在详情页「重新生成」。
-  if (draft.status === "draft") actions.push("continue");
+  // 没有资料时后端会拒绝生成，所以不显示（旧服务端没给 source_count 时照旧显示）。
+  if (draft.status === "draft" && draft.source_count !== 0) actions.push("continue");
   if (draft.status === "generating") actions.push("cancel");
   const reviewed = draft.status === "approved" || draft.status === "published";
   if (draft.status !== "archived" && (isAdmin || !reviewed)) actions.push("delete");
