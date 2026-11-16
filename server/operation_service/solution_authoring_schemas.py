@@ -195,10 +195,11 @@ class DraftOut(_Strict):
 
 class DraftSummaryOut(DraftOut):
     latest_job: JobBriefOut | None = None
+    source_count: int = Field(default=0, ge=0, description="草稿已上传的资料数量；为 0 时不能生成")
 
     @classmethod
-    def summarize(cls, row: DraftRow, job: JobRow | None) -> DraftSummaryOut:
-        return cls(**_draft_fields(row), latest_job=JobBriefOut.of(job) if job is not None else None)
+    def summarize(cls, row: DraftRow, job: JobRow | None, source_count: int = 0) -> DraftSummaryOut:
+        return cls(**_draft_fields(row), latest_job=JobBriefOut.of(job) if job is not None else None, source_count=source_count)
 
 
 class DraftDetailOut(DraftOut):

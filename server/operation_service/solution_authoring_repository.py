@@ -139,6 +139,9 @@ class _Tx(ABC):
     @abstractmethod
     def delete_source(self, source_id: str) -> None: ...
     @abstractmethod
+    def source_counts(self) -> dict[str, int]:
+        """每个有资料的草稿的资料数量（draft_id → 数量），一次读取；没有资料的草稿不出现。"""
+    @abstractmethod
     def jobs(self, draft_id: str) -> list[JobRow]: ...
     @abstractmethod
     def latest_jobs(self) -> dict[str, JobRow]:
@@ -192,6 +195,11 @@ class SolutionAuthoringRepository(ABC):
             latest = tx.latest_jobs()
         rows.sort(key=lambda row: row.updated_at, reverse=True)
         return [(row, latest.get(row.draft_id)) for row in rows]
+
+    def count_sources_by_draft(self) -> dict[str, int]:
+        """列表用：各草稿的资料数量，一次批量读取，与草稿数量无关。没有资料的草稿不在结果里。"""
+        with self._transaction() as tx:
+            return tx.source_counts()
 
     def update_draft(self, draft_id: str, actor_id: str, decide: Decide, *, expected_version: int | None = None) -> DraftRow:
         """锁住草稿后调用 `decide(草稿, 发现项)`；它返回的变更与审计事件一起提交，抛错则整体回滚。
@@ -272,7 +280,7 @@ class SolutionAuthoringRepository(ABC):
             if draft.status not in allowed_statuses:
                 raise InvalidTransition(f"generation cannot start while the draft is {draft.status}")
             if not tx.sources(job.draft_id):
-                raise ValidationProblem("upload at least one source document before generating")
+                raise ValidationProblem("请先上传至少一份资料再生成")
             tx.put_job(job)
             change = DraftChange(changes={"status": "generating"}, event=("generation_requested", ""))
             self._apply(tx, draft, [], job.created_by, change)
@@ -443,6 +451,12 @@ class _MemoryTx(_Tx):
 
     def sources(self, draft_id: str) -> list[SourceRow]:
         return [row for row in self._store.sources.values() if row.draft_id == draft_id]
+
+    def source_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in self._store.sources.values():
+            counts[row.draft_id] = counts.get(row.draft_id, 0) + 1
+        return counts
 
     def put_source(self, row: SourceRow) -> None:
         self._store.sources[row.source_id] = row

@@ -80,6 +80,7 @@ _JOB = _select(JobRow, "job_id = %s")
 _JOBS_LATEST = sql.SQL("SELECT DISTINCT ON (draft_id) {} FROM {} ORDER BY draft_id, created_at DESC").format(
     sql.SQL(", ").join(map(sql.Identifier, _columns(JobRow))), sql.Identifier(_TABLES[JobRow][0]),
 )
+_SOURCE_COUNTS = sql.SQL("SELECT draft_id, count(*) AS n FROM {} GROUP BY draft_id").format(sql.Identifier(_TABLES[SourceRow][0]))
 _JOB_FOR_UPDATE = _select(JobRow, "job_id = %s FOR UPDATE")
 _JOB_CLAIMABLE = _select(
     JobRow,
@@ -135,6 +136,11 @@ class _PgTx(_Tx):
 
     def sources(self, draft_id: str) -> list[SourceRow]:
         return self._fetch(SourceRow, _SOURCES, (draft_id,))
+
+    def source_counts(self) -> dict[str, int]:
+        with self._conn.cursor(row_factory=dict_row) as cursor:
+            records = cursor.execute(_SOURCE_COUNTS).fetchall()
+        return {str(record["draft_id"]): int(record["n"]) for record in records}
 
     def put_source(self, row: SourceRow) -> None:
         self._write(_UPSERT[SourceRow], _values(row))

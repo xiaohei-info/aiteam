@@ -161,8 +161,13 @@ def test_generate_needs_an_idempotency_key_and_returns_the_same_job_for_a_retry(
 def test_generate_without_sources_or_configuration_is_refused(client, env):
     draft_id = _create(client)
     headers = {**_auth(), "Idempotency-Key": "k1"}
-    _problem(client.post(f"{BASE}/drafts/{draft_id}/generate", headers=headers), 422, "validation_error")
+    refused = client.post(f"{BASE}/drafts/{draft_id}/generate", headers=headers)
+    _problem(refused, 422, "validation_error")
+    assert "请先上传至少一份资料" in refused.text
+    # 列表带资料数量：前端据此在没有资料时不显示「继续生成」。
+    assert client.get(f"{BASE}/drafts", headers=_auth()).json()["data"][0]["source_count"] == 0
     _upload(client, draft_id)
+    assert client.get(f"{BASE}/drafts", headers=_auth()).json()["data"][0]["source_count"] == 1
     env.models.ready = False
     _problem(client.post(f"{BASE}/drafts/{draft_id}/generate", headers=headers), 503, "service_unavailable")
     assert client.get(f"{BASE}/drafts/{draft_id}", headers=_auth()).json()["data"]["status"] == "draft"
