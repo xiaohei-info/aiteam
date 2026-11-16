@@ -118,6 +118,8 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
     source_template_id,
     source_template_version,
     status_reason,
+    origin,
+    copied_from_employee_id,
     ...editable
   } = config;
   void employee_id;
@@ -133,6 +135,9 @@ export function toEmployeeConfigIn(config: EmployeeConfig): EmployeeConfigIn {
   void source_template_version;
   // 自动停用原因同样由服务端维护。
   void status_reason;
+  // 来源（招募 / 方案 / 复制）与复制溯源只读。
+  void origin;
+  void copied_from_employee_id;
   return editable;
 }
 

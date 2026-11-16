@@ -83,6 +83,8 @@ class EmployeeConfigOut(EmployeeConfig):
     source_template_id: str | None = Field(default=None, description="来源人才市场模板 id（直接招募专家时存在）")
     source_template_version: str | None = Field(default=None, description="来源人才市场模板版本")
     status_reason: str | None = Field(default=None, description="自动停用原因：catalog_scope_revoked（模板不在本企业发布范围内）等；空表示无")
+    origin: str = Field(default="recruited", description="来源：recruited 市场招募 / solution 应用方案 / copied 复制 / custom 企业自建")
+    copied_from_employee_id: str | None = Field(default=None, description="复制品的源专家 id；仅作溯源")
 
 
 # ---- 成员/部门/角色 + member_grant 授权（issue #35；03 §9.7；04 §6.1，D12）----
@@ -978,3 +980,12 @@ class InAppNotificationOut(BaseModel):
     severity: str
     read: bool = False
     created_at: str = Field(description="ISO8601 时间戳（由 created_at datetime 序列化）")
+
+
+class EmployeeCopyIn(BaseModel):
+    """复制专家：只需新名称；源专家无可用模型（或想换模型）时再带 model_policy。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=64, description="新专家名称")
+    model_policy: RecruitModelPolicy | None = Field(default=None, description="可选；不传则沿用源专家的模型并重新校验")

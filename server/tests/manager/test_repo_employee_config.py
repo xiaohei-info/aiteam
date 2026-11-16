@@ -31,7 +31,8 @@ def test_create_and_update_carry_department_ids():
     assert created.department_ids == ["d-1"]
     insert_sql, insert_params = router.executed[0]
     assert "department_ids" in insert_sql
-    assert insert_params[-2:] == (["d-1"], "分析师")
+    assert insert_params[-4:-2] == (["d-1"], "分析师")
+    assert insert_params[-2:] == ("custom", None)  # 无来源模板 → 企业自建
     assert created.role_title == "分析师"
     assert "role_title" in insert_sql
 
