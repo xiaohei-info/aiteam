@@ -38,6 +38,15 @@ def _registry_code_reader(admin_dsn: str | None):
     return read
 
 
+def _tenant_status_reader(app):
+    """与入口拦截共用同一个状态缓存；没装拦截（未配置控制库）时一律按正常。"""
+    def read(tenant_id: str) -> str:
+        store = getattr(app.state, "_tenant_status_store", None)
+        return store.get(tenant_id) if store is not None else "active"
+
+    return read
+
+
 def _service(request: Request) -> MeService:
     cached = getattr(request.app.state, "_me_service", None)
     if cached is not None:
@@ -50,6 +59,7 @@ def _service(request: Request) -> MeService:
         settings=SettingsRepository(router),
         auth=TenantAuthRepository(router),
         registry_code=_registry_code_reader(settings.admin_db_url),
+        tenant_status=_tenant_status_reader(request.app),
     )
     request.app.state._me_service = service
     return service

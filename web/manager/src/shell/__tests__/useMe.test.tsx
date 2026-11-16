@@ -29,13 +29,13 @@ describe("useMe", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useMe());
-    await waitFor(() => expect(result.current?.account_masked).toBe("138****0000"));
-    expect(result.current?.enterprise_name).toBeNull();
+    await waitFor(() => expect(result.current.me?.account_masked).toBe("138****0000"));
+    expect(result.current.me?.enterprise_name).toBeNull();
     const before = fetchMock.mock.calls.length;
 
     name = "新企业名";
     act(() => { window.dispatchEvent(new Event(ME_CHANGED_EVENT)); });
-    await waitFor(() => expect(result.current?.enterprise_name).toBe("新企业名"));
+    await waitFor(() => expect(result.current.me?.enterprise_name).toBe("新企业名"));
     expect(fetchMock.mock.calls.length).toBeGreaterThan(before);
   });
 });

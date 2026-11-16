@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from typing import Any
 
@@ -45,6 +46,9 @@ _ROUTE_POLICIES: tuple[tuple[str, str], ...] = (
     ("/api/operation/provider-access/resolve", "relay:resolve"),
 )
 
+# R5：/api/manager/tenants/{tenant_id}/status|purge——tenant 在路径里，只带 tenant、不带企业声明。
+_TENANT_LIFECYCLE_PATH = re.compile(r"^/api/manager/tenants/[^/]+/(status|purge)$")
+
 _SERVICE_CAPABILITY_POLICIES: dict[str, str] = {
     "/api/manager/tenants": "provision-enterprise",
 }
@@ -70,6 +74,8 @@ _TARGET_BINDING_POLICIES: dict[str, tuple[str, bool]] = {
 def required_service_scope(path: str) -> str | None:
     """Return the least scope required by a known service endpoint."""
 
+    if _TENANT_LIFECYCLE_PATH.match(path):
+        return "tenant:lifecycle"
     for prefix, scope in _ROUTE_POLICIES:
         if path == prefix:
             return scope
@@ -91,6 +97,8 @@ def service_required_capability(path: str) -> str | None:
 def service_target_binding_policy(path: str) -> tuple[str | None, bool]:
     """Return (binding kind, reject enterprise claim) for a service route."""
 
+    if _TENANT_LIFECYCLE_PATH.match(path):
+        return "tenant-only", True
     for prefix, policy in _TARGET_BINDING_POLICIES.items():
         if path == prefix or path.startswith(prefix + "/"):
             return policy

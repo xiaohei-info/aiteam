@@ -69,6 +69,15 @@ class EnterpriseRepository(ABC):
         ...
 
     @abstractmethod
+    def anonymize(self, enterprise_id: str) -> EnterpriseAccount:
+        """保留期后匿名化名称 / 手机号 / 企业代码（释放代码占用）。不存在 -> NotFound。"""
+        ...
+
+    def operation_status(self, tenant_id: str) -> str | None:
+        """企业运营状态；内存实现不跟踪，返回 None 表示未知（按 active 对待）。"""
+        return None
+
+    @abstractmethod
     def update_allowed_model_refs(
         self, enterprise_id: str, allowed_model_refs: list[dict] | None
     ) -> EnterpriseAccount:
@@ -147,6 +156,20 @@ class InMemoryEnterpriseRepository(EnterpriseRepository):
 
     def list_profiles(self) -> list[tuple[str | None, tuple[str, ...]]]:
         return [(a.industry, a.tags) for a in self._by_id.values()]
+
+    def anonymize(self, enterprise_id: str) -> EnterpriseAccount:
+        import dataclasses
+        account = self.get(enterprise_id)
+        if account.enterprise_code:
+            self._codes.discard(account.enterprise_code)
+        code = f"deleted-{account.tenant_id}"
+        self._codes.add(code)
+        updated = dataclasses.replace(
+            account, enterprise_name="已删除企业", enterprise_code=code, owner_phone="",
+            owner_bootstrap_hash="", industry=None, tags=(),
+        )
+        self._by_id[enterprise_id] = updated
+        return updated
 
 
 # ---- PostgreSQL 实现 ----
@@ -335,6 +358,36 @@ class PgEnterpriseRepository(EnterpriseRepository):
             with conn.cursor() as cur:
                 cur.execute("SELECT industry, tags FROM enterprise_account WHERE operation_status <> 'deleted'")
                 return [(row[0], tuple(row[1] or ())) for row in cur.fetchall()]
+
+    def operation_status(self, tenant_id: str) -> str | None:
+        import psycopg
+
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            row = conn.execute(
+                "SELECT operation_status FROM enterprise_account WHERE tenant_id = %s", (tenant_id,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def anonymize(self, enterprise_id: str) -> EnterpriseAccount:
+        import psycopg
+
+        account = self.get(enterprise_id)
+        code = f"deleted-{account.tenant_id}"
+        with psycopg.connect(self._dsn, autocommit=False) as conn:
+            conn.execute(
+                "UPDATE enterprise_account SET enterprise_name = '已删除企业', enterprise_code = %s, owner_phone = '', "
+                "owner_bootstrap_hash = '', industry = NULL, tags = '{}', updated_at = now() WHERE enterprise_id = %s",
+                (code, enterprise_id),
+            )
+            # 开通 / 重置回执也存有企业名称与负责人手机号；回执本身（状态、指纹）保留。
+            conn.execute(
+                "UPDATE onboarding_receipt SET enterprise_name = '已删除企业', enterprise_code = %s, owner_phone = '', "
+                "bootstrap_secret_ciphertext = NULL, request_body = '{}'::jsonb, response_body = NULL "
+                "WHERE enterprise_id = %s",
+                (code, enterprise_id),
+            )
+            conn.commit()
+        return self.get(enterprise_id)
 
     def update_bootstrap_hash(self, enterprise_id: str, bootstrap_hash: str) -> EnterpriseAccount:
         import psycopg

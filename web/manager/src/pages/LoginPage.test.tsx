@@ -107,6 +107,34 @@ describe("LoginPage", () => {
     });
   });
 
+  it("企业已暂停：登录页直接显示后端给出的原因，不进入重置密码流程", async () => {
+    const signIn = vi.fn();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { tenant_id: "t-uuid-1" } }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            type: "about:blank", title: "Tenant unavailable", status: 403, code: "tenant_suspended",
+            detail: "企业已暂停，暂时无法登录；如有疑问请联系平台运营", instance: "/api/auth/login",
+          }),
+          { status: 403, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      );
+    renderLogin({ signIn });
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0]!, { target: { value: "acme" } });
+    fireEvent.change(inputs[1]!, { target: { value: "u" } });
+    fireEvent.change(screen.getByLabelText("登录密码"), { target: { value: "p" } });
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    expect(await screen.findByText(/企业已暂停，暂时无法登录/)).toBeInTheDocument();
+    expect(signIn).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("登录失败 401 显示错误", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(

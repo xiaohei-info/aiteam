@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, Request, status
 
-from shared.contracts.crosstier import TenantProvisionRequest
+from shared.contracts.crosstier import TenantProvisionRequest, TenantPurgeRequest, TenantStatusSync
 from shared.contracts.envelope import Envelope
 
 from .exceptions import ManagerAdminDbNotConfigured
@@ -194,3 +194,93 @@ def _provision_initial_quota_policy(dsn: str, tenant_id: str, policy: dict) -> N
                 ),
             )
         conn.commit()
+
+
+def _lifecycle_store(request: Request):
+    """租户状态存取（管理连接）；应用启动时挂在 app.state，测试可替换。"""
+    store = getattr(request.app.state, "_tenant_status_store", None)
+    if store is None:
+        from .tenant_status import TenantStatusStore
+
+        dsn = request.app.state.settings.admin_db_url
+        if not dsn:
+            raise ManagerAdminDbNotConfigured("Manager 管理 DB 未配置（设置 ADMIN_DB_URL）")
+        store = TenantStatusStore(dsn)
+        request.app.state._tenant_status_store = store
+    return store
+
+
+def _lifecycle_principal(request: Request, principal, body, tenant_id: str, idempotency_key: str | None):
+    from shared.errors import Unauthorized
+
+    from .idempotency_repository import normalize_idempotency_key
+
+    key = normalize_idempotency_key(idempotency_key)
+    if principal is None:
+        principal = test_compatibility_principal(request, body, operation="lifecycle", idempotency_key=key)
+        if principal is None:
+            raise Unauthorized("signed service principal is required for tenant lifecycle writes")
+    validate_onboarding_principal(
+        request, principal, operation="lifecycle", tenant_id=tenant_id, body=body, idempotency_key=key,
+    )
+    return key
+
+
+@router.post(
+    "/api/manager/tenants/{tenant_id}/status",
+    summary="R5 企业生命周期——Operator 下发租户状态（active/suspended/banned/closed/deleted）",
+    description="运营端Manager云侧调用：写 tenant_registry.status。暂停=只读；封禁/注销/删除=拒绝登录与访问；幂等。",
+    operation_id="manager_set_tenant_status",
+)
+def set_tenant_status(
+    tenant_id: str,
+    body: TenantStatusSync,
+    request: Request,
+    principal=Depends(require_operator_service_principal),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Envelope[dict]:
+    from shared.errors import Conflict
+
+    from .tenant_status import TenantNotFound
+
+    _lifecycle_principal(request, principal, body, tenant_id, idempotency_key)
+    store = _lifecycle_store(request)
+    record = store.record(tenant_id)
+    if record is None:
+        raise TenantNotFound("tenant not found")
+    if record[1] is not None:
+        raise Conflict("tenant data has been purged; its status can no longer change")
+    store.set_status(tenant_id, body.status, body.reason)
+    return Envelope[dict](data={"tenant_id": tenant_id, "status": body.status})
+
+
+@router.post(
+    "/api/manager/tenants/{tenant_id}/purge",
+    summary="R5 保留期后清理租户数据（仅对 deleted 的租户生效）",
+    description="运营端Manager云侧调用：删除该 tenant 的业务数据与文件、签名私钥，并释放企业代码；可重入。",
+    operation_id="manager_purge_tenant",
+)
+def purge_tenant(
+    tenant_id: str,
+    body: TenantPurgeRequest,
+    request: Request,
+    principal=Depends(require_operator_service_principal),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Envelope[dict]:
+    from shared.errors import Conflict
+
+    from .knowledge_intake_service import manager_storage_root
+    from .tenant_status import TenantNotFound, purge_tenant_data
+
+    _lifecycle_principal(request, principal, body, tenant_id, idempotency_key)
+    store = _lifecycle_store(request)
+    record = store.record(tenant_id)
+    if record is None:
+        raise TenantNotFound("tenant not found")
+    if record[0] != "deleted":
+        raise Conflict("only a deleted tenant can be purged")
+    counts = purge_tenant_data(
+        request.app.state.settings.admin_db_url, tenant_id, manager_storage_root(request.app.state.settings),
+    )
+    store.invalidate(tenant_id)
+    return Envelope[dict](data={"tenant_id": tenant_id, "purged_rows": sum(counts.values())})

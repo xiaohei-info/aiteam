@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { createI18n } from "@aiteam/shared";
 import { I18nContext } from "../../i18n/context";
 import { operationMessages } from "../../i18n/messages";
+import { SessionContext, type SessionContextValue } from "../../auth/session";
 import { EnterpriseActions } from "./EnterpriseActions";
 import type { EnterpriseAccount } from "./types";
 import type { AccountsApi } from "./useAccountsApi";
@@ -13,6 +14,10 @@ function makeI18n() {
   i18n.extend("zh-CN", operationMessages["zh-CN"]!);
   return i18n;
 }
+
+const sessionValue: SessionContextValue = {
+  session: null, token: "t", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {},
+};
 
 function makeEnterprise(status = "active"): EnterpriseAccount {
   return {
@@ -33,16 +38,18 @@ function makeApi(overrides: Partial<AccountsApi> = {}): AccountsApi {
     list: vi.fn(), getDetail: vi.fn(), exportAll: vi.fn(),
     doAction: vi.fn().mockResolvedValue({ ok: true }), getStats: vi.fn(),
     getLifecycleStatus: vi.fn(), changeLifecycle: vi.fn(), getQuota: vi.fn(),
-    setQuota: vi.fn(), listAudits: vi.fn(), resetOwnerBootstrap: vi.fn(), ...overrides,
+    setQuota: vi.fn(), listAudits: vi.fn(), resetOwnerBootstrap: vi.fn(), deleteEnterprise: vi.fn(), restoreEnterprise: vi.fn(), purgeEnterprise: vi.fn(), ...overrides,
   };
 }
 
 function renderActions(api = makeApi(), status = "active", onDone = vi.fn()) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
-      <MemoryRouter>
-        <EnterpriseActions api={api} enterprise={makeEnterprise(status)} onDone={onDone} />
-      </MemoryRouter>
+      <SessionContext.Provider value={sessionValue}>
+        <MemoryRouter>
+          <EnterpriseActions api={api} enterprise={makeEnterprise(status)} onDone={onDone} />
+        </MemoryRouter>
+      </SessionContext.Provider>
     </I18nContext.Provider>,
   );
 }
@@ -64,7 +71,9 @@ describe("LifecycleDialogs", () => {
 
     rerender(
       <I18nContext.Provider value={makeI18n()}>
-        <MemoryRouter><EnterpriseActions api={makeApi()} enterprise={makeEnterprise("closed")} onDone={vi.fn()} /></MemoryRouter>
+        <SessionContext.Provider value={sessionValue}>
+          <MemoryRouter><EnterpriseActions api={makeApi()} enterprise={makeEnterprise("closed")} onDone={vi.fn()} /></MemoryRouter>
+        </SessionContext.Provider>
       </I18nContext.Provider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "操作" }));

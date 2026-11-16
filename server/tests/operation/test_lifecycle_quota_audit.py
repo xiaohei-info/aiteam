@@ -44,6 +44,12 @@ class FakeGateway:
     def notify_enterprise(self, req, *, idempotency_key):
         pass
 
+    def set_tenant_status(self, tenant_id, status, *, reason=None, idempotency_key):
+        pass
+
+    def purge_tenant(self, tenant_id, *, idempotency_key):
+        pass
+
 
 @pytest.fixture
 def admin_repo():
