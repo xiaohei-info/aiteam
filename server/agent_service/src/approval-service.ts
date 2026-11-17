@@ -20,6 +20,8 @@ export interface ApprovalRequest {
   promptReceiptRef?: string;
   toolName: string;
   args: unknown;
+  /** Complete, already-sanitized preview for tools whose approval needs more than the bounded generic summary. */
+  summary?: string;
   riskLevel: ApprovalRisk;
   permissionMode?: "read-only" | "workspace-write" | "full-access";
   /** The lease/JWT cutoff is an upper bound in addition to the approval TTL. */
@@ -185,7 +187,7 @@ export class ApprovalService {
       prompt_receipt_ref: request.promptReceiptRef ?? null,
       tool_name: request.toolName,
       canonical_args_hmac: hash,
-      redacted_summary: redactedToolSummary(request.toolName, request.args),
+      redacted_summary: request.summary ?? redactedToolSummary(request.toolName, request.args),
       risk_level: request.riskLevel,
       expires_at: new Date(expiry).toISOString(),
       idempotency_key: encodeScope([request.conversationId, request.sessionId, request.toolCallId]),

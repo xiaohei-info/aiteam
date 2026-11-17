@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
 import { useApprovalStore, type PendingApproval } from '../../stores/approvals'
+import { parseCapabilityInstall, type CapabilityInstallPreview } from './capabilityInstall'
 
 const riskMeta: Record<string, { label: string; icon: typeof Terminal; tone: string }> = {
   bash: { label: '执行本机命令', icon: Terminal, tone: '#ff6666' },
@@ -62,6 +63,32 @@ function CountdownRing({ remain, total, tone }: { remain: number; total: number;
   )
 }
 
+/** 安装个人 MCP：地址完整显示（不截断、不限高），主机名突出；名称与理由是模型写的，单独标注。 */
+function InstallPreview({ preview }: { preview: CapabilityInstallPreview }) {
+  const label: React.CSSProperties = { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }
+  return (
+    <div style={{ padding: '0 20px', display: 'grid', gap: 10 }}>
+      {preview.replaces && (
+        <div role="alert" style={{ fontSize: 12, lineHeight: 1.6, color: '#ffaa44', border: '1px solid color-mix(in srgb, #ffaa44 40%, transparent)', borderRadius: 8, padding: '8px 12px', background: 'color-mix(in srgb, #ffaa44 10%, var(--surface-2))' }}>
+          将覆盖已安装的「{preview.replaces.displayName}」，原地址：
+          <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}> {preview.replaces.url}</span>
+        </div>
+      )}
+      <div>
+        <div style={label}>服务地址（请确认主机名是你信任的）</div>
+        <div data-testid="install-url" style={{ fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', color: 'var(--text-muted)' }}>
+          {preview.before}<strong style={{ color: 'var(--text-primary)', fontSize: 13 }}>{preview.host}</strong>{preview.after}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+        <div style={label}>以下名称与理由由模型填写，未经核实</div>
+        <div>名称：{preview.displayName || '—'}（标识 {preview.ref}）</div>
+        {preview.reason && <div>理由：{preview.reason}</div>}
+      </div>
+    </div>
+  )
+}
+
 export default function ApprovalDialog() {
   const pending = useApprovalStore((s) => s.pending)
   const pruneExpired = useApprovalStore((s) => s.pruneExpired)
@@ -79,7 +106,10 @@ export default function ApprovalDialog() {
   if (pending.length === 0) return null
   // 多条审批排队：处理完最旧的一条自动露出下一条，不展示队列数量
   const item = pending[0]
-  const meta = riskMeta[item.riskLevel] ?? riskMeta.unknown
+  const install = parseCapabilityInstall(item.toolName, item.summary)
+  const meta = install
+    ? { label: '安装个人能力（MCP）', icon: Globe, tone: '#4488ff' }
+    : riskMeta[item.riskLevel] ?? riskMeta.unknown
   const Icon = meta.icon
   const remain = remainingSeconds(item, Date.now())
   const deciding = item.phase === 'deciding'
@@ -115,7 +145,8 @@ export default function ApprovalDialog() {
         </div>
 
         {/* 参数预览 */}
-        {item.summary && (
+        {install && <InstallPreview preview={install} />}
+        {!install && item.summary && (
           <div style={{ padding: '0 20px' }}>
             <div style={{
               fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)', fontFamily: 'monospace',

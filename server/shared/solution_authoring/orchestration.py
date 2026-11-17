@@ -14,7 +14,16 @@ _REF = re.compile(r"@\{([^{}\s]+)\}")
 
 
 class OrchestrationRefError(ValueError):
-    """规则里有无法解析的成员引用。"""
+    """规则里有无法解析的成员引用。
+
+    `kind`：`malformed` 引用语法错误；`outside` 引用了不在成员集合里的成员；`unmapped` 换算表里没有该成员。
+    各端据此给出面向用户的中文提示，消息本身只用于日志与测试。
+    """
+
+    def __init__(self, message: str, *, kind: str, member: str | None = None) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.member = member
 
 
 def referenced_members(rules: str) -> list[str]:
@@ -24,14 +33,14 @@ def referenced_members(rules: str) -> list[str]:
 
 def _check_well_formed(rules: str) -> None:
     if "@{" in _REF.sub("", rules):
-        raise OrchestrationRefError("Malformed member reference in orchestration rules")
+        raise OrchestrationRefError("Malformed member reference in orchestration rules", kind="malformed")
 
 
 def validate_member_refs(rules: str, members: set[str] | frozenset[str]) -> None:
     _check_well_formed(rules)
     outside = [member for member in referenced_members(rules) if member not in members]
     if outside:
-        raise OrchestrationRefError(f"Orchestration rules reference a member outside this solution: {outside[0]}")
+        raise OrchestrationRefError(f"Orchestration rules reference a member outside this solution: {outside[0]}", kind="outside", member=outside[0])
 
 
 def rewrite_member_refs(rules: str, mapping: Mapping[str, str]) -> str:
@@ -39,5 +48,5 @@ def rewrite_member_refs(rules: str, mapping: Mapping[str, str]) -> str:
     _check_well_formed(rules)
     missing = [member for member in referenced_members(rules) if member not in mapping]
     if missing:
-        raise OrchestrationRefError(f"Orchestration rules reference an unmapped member: {missing[0]}")
+        raise OrchestrationRefError(f"Orchestration rules reference an unmapped member: {missing[0]}", kind="unmapped", member=missing[0])
     return _REF.sub(lambda match: "@{" + mapping[match.group(1)] + "}", rules)

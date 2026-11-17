@@ -1,4 +1,4 @@
-import { capabilityInstallTool, connectorTools, personalConnectorTools } from "../connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -1416,9 +1416,18 @@ export class SessionHost {
     const risk = approvalRiskForTool(tool.name);
     if (!risk) return tool;
     const execute = tool.execute.bind(tool);
+    const owner = { tenantId: authorization.caller.tenantId ?? "", memberId: authorization.caller.userId ?? authorization.caller.callerId };
     return {
       ...tool,
-      execute: async (toolCallId, params, signal, onUpdate, context) => this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
+      execute: async (toolCallId, params, signal, onUpdate, context) => {
+        // Installing a personal MCP: bounce impossible or silently-replacing requests, and show the user the full request.
+        let summary: string | undefined;
+        if (tool.name === "capability_install") {
+          const check = checkCapabilityInstall(this.options.store, owner, params);
+          if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
+          summary = `capability_install: ${check.summary}`;
+        }
+        return this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
         memberId: authorization.caller.userId ?? authorization.caller.callerId,
         conversationId: record.conversationId,
@@ -1433,6 +1442,7 @@ export class SessionHost {
         promptReceiptRef: record.activePromptReceipt,
         toolName: tool.name,
         args: params,
+        ...(summary ? { summary } : {}),
         riskLevel: risk,
         permissionMode: record.permissionMode,
         expiresAt: authorizationExpiry(authorization),
@@ -1440,7 +1450,8 @@ export class SessionHost {
       // Queued after approval, so a request waiting for the user never holds up the other employees.
       }, () => record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
         ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, params, signal, onUpdate, context))
-        : execute(toolCallId, params, signal, onUpdate, context))) as ReturnType<ToolDefinition["execute"]>,
+        : execute(toolCallId, params, signal, onUpdate, context))) as ReturnType<ToolDefinition["execute"]>;
+      },
     } as ToolDefinition;
   }
 

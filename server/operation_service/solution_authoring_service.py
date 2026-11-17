@@ -31,7 +31,7 @@ from shared.errors import (
     ValidationProblem,
 )
 from shared.solution_authoring.isolated_parse import parse_source_isolated
-from shared.solution_authoring.orchestration import rewrite_member_refs
+from shared.solution_authoring.orchestration import OrchestrationRefError, rewrite_member_refs
 from shared.solution_authoring.parsing import SourceParseError
 from shared.solution_authoring.schemas import GeneratedSolution
 from shared.solution_authoring.sensitive_scan import (
@@ -384,6 +384,12 @@ class SolutionAuthoringService:
         expert_ids: dict[str, str] = plan["expert_template_ids"]
         package = GeneratedSolution.model_validate(draft.package)
         catalog = self._catalog()
+        # 草稿里的成员引用是专家 key，目录里换成专家模板 ID；Manager 应用时再换成员工 ID。
+        # 先换算再向目录登记任何东西：换不出来就明确失败，不留下半个已登记的方案。
+        try:
+            catalog_rules = rewrite_member_refs(package.orchestration_rules, expert_ids)
+        except OrchestrationRefError as exc:
+            raise Conflict("该草稿的群聊编排规则引用了不在专家名单里的成员，无法发布；请回到草稿修正编排规则后重新提交审核") from exc
 
         for expert in package.experts:
             request = RegisterExpertTemplateRequest(
@@ -398,8 +404,7 @@ class SolutionAuthoringService:
             coordinator_instructions=package.coordinator_instructions,
             output_requirements=package.output_requirements, tags=package.tags,
             mode=package.mode, recommended_capabilities=_recommended_capabilities(package),
-            # 草稿里的成员引用是专家 key，目录里换成专家模板 ID；Manager 应用时再换成员工 ID。
-            orchestration_rules=rewrite_member_refs(package.orchestration_rules, expert_ids),
+            orchestration_rules=catalog_rules,
         )
         self._ensure_registered(catalog, CatalogType.SOLUTION_TEMPLATE, solution_id, lambda: catalog.register_solution_template(solution))
         for template_id in expert_ids.values():

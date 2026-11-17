@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { LoaderCircle, MessageCircle, ShieldAlert, User, Users } from 'lucide-react'
+import { LoaderCircle, MessageCircle, RefreshCw, ShieldAlert, User, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { agentApi } from '../../api/agent'
 import type { ExpertProjection, SolutionProjection } from '../../api/agent/types'
 import GoldenDotsLoading from '../../components/Loading/GoldenDotsLoading'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { classifyRequestError, type RequestErrorInfo } from '../../lib/requestError'
+import { useAgentAuthStore } from '../../stores/agentAuth'
 import { useChatStore } from '../../stores/chat'
 import { startTalentEmployeeChat } from './talentEmployeeChat'
 import {
@@ -25,11 +26,12 @@ export default function SolutionsTab({ query }: { query: string }) {
   const [error, setError] = useState<RequestErrorInfo | null>(null)
   const [actionError, setActionError] = useState('')
   const [startingId, setStartingId] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (background = false) => {
+    if (!background) setLoading(true)
     setError(null)
     try {
       const [solutionRes, expertRes] = await Promise.all([agentApi.listSolutions(), agentApi.listExperts()])
@@ -40,10 +42,35 @@ export default function SolutionsTab({ query }: { query: string }) {
       console.error(err)
       if (alive.current) setError(classifyRequestError(err, '方案加载失败，请稍后重试。'))
     } finally {
-      if (alive.current) setLoading(false)
+      if (alive.current && !background) setLoading(false)
     }
   }, [])
   useEffect(() => { void load() }, [load])
+
+  // 方案要企业管理员应用并授权后才到本机：先向 Manager 同步最新授权，再重读本机方案；刷新时保留当前列表。
+  const refresh = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setActionError('')
+    try {
+      await useAgentAuthStore.getState().retryGrantsSync()
+    } catch (err) {
+      console.error(err)
+      if (alive.current) setActionError('授权同步失败，方案列表可能不是最新，请稍后再刷新。')
+    }
+    try {
+      await load(true)
+    } finally {
+      if (alive.current) setRefreshing(false)
+    }
+  }, [load, refreshing])
+
+  const refreshButton = (
+    <button className="tm-header-action tm-list-refresh" type="button" disabled={refreshing} onClick={() => void refresh()} title="同步方案授权并刷新方案列表">
+      <RefreshCw size={13} strokeWidth={1.8} className={refreshing ? 'spinning' : undefined} />
+      {refreshing ? '刷新中…' : '刷新'}
+    </button>
+  )
 
   const start = useCallback(async (solution: SolutionProjection) => {
     if (startingId) return
@@ -88,6 +115,7 @@ export default function SolutionsTab({ query }: { query: string }) {
       <div className="tm-empty">
         <h2>{solutions.length ? '没有找到匹配方案' : '当前没有可用的行业方案'}</h2>
         <p>{solutions.length ? '换个关键词再试一次。' : '方案需要企业管理员应用并授权给你后才会出现在这里，授权后点击刷新。'}</p>
+        {!solutions.length && refreshButton}
       </div>
     )
   }
@@ -95,6 +123,7 @@ export default function SolutionsTab({ query }: { query: string }) {
   return (
     <section className="tm-section" aria-label="行业方案">
       {actionError && <div className="tm-error" role="alert"><span>{actionError}</span></div>}
+      <div className="tm-solution-toolbar">{refreshButton}</div>
       <div className="tm-agent-grid">
         {visible.map((solution, index) => {
           const mode = solutionMode(solution)

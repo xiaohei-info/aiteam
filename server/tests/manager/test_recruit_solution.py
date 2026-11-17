@@ -1612,8 +1612,9 @@ def test_apply_solution_rejects_rules_that_reference_unknown_members_before_any_
     catalog = _fake_catalog()
     catalog.seed_solution(_group_package("@{ghost} 先做"))
     svc, emp, _, recruit, _ = _build_service(catalog)
-    with pytest.raises(Conflict):
+    with pytest.raises(Conflict, match="对您的企业不可见") as caught:
         svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
+    assert "ghost" not in str(caught.value)  # 内部引用 ID 不展示给用户
     assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 

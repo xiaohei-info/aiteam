@@ -140,6 +140,39 @@ export function personalConnectorTools(store: AgentSqliteStore, owner: TaskOwner
   } as ToolDefinition));
 }
 
+export interface CapabilityInstallInput { ref: string; display_name: string; url: string; reason: string; replace?: boolean }
+export type CapabilityInstallCheck = { ok: true; summary: string } | { ok: false; message: string };
+
+/**
+ * Runs before the approval prompt. Requests that can never succeed (bad ref/URL) or that would silently replace an
+ * installed capability of the same ref are bounced back to the model without bothering the user. What the user is
+ * asked to approve is the full, untruncated URL plus, for an explicit replacement, the entry being replaced.
+ * The summary is stored in the approval record, so it never contains anything but what the install itself accepts.
+ */
+export function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner, params: unknown): CapabilityInstallCheck {
+  const input = params as CapabilityInstallInput;
+  let url: URL;
+  try {
+    if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
+    url = validMcpUrl(input.url);
+  } catch {
+    return { ok: false, message: "安装未完成：标识或地址无效（地址须为 https 或本机地址，且不含账号、查询串）。请让用户检查。" };
+  }
+  const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.kind === "mcp" && item.ref === input.ref);
+  if (existing && input.replace !== true) {
+    return { ok: false, message: `安装未完成：标识 ${input.ref} 已被「${existing.display_name}」（${existing.url}）占用。请先询问用户：覆盖它、换一个标识，还是取消。`
+      + "用户明确要求覆盖时，才带 replace=true 再次调用；要保留两者就换一个新的 ref。不要擅自替换。" };
+  }
+  const summary = JSON.stringify({
+    ref: input.ref,
+    display_name: String(input.display_name ?? "").slice(0, 120),
+    url: url.toString(),
+    reason: String(input.reason ?? "").slice(0, 200),
+    ...(existing ? { replaces: { display_name: existing.display_name, url: existing.url } } : {}),
+  });
+  return { ok: true, summary };
+}
+
 /**
  * The model may only *ask* to install: this tool is unknown to the approval classifier, so it always needs a human
  * decision, and the approval preview shows the URL. After approval the server is contacted and its real tool list stored.
@@ -157,10 +190,14 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner)
       display_name: Type.String({ minLength: 1, maxLength: 120 }),
       url: Type.String({ description: "MCP endpoint (streamable HTTP)" }),
       reason: Type.String({ maxLength: 200, description: "why the task needs it" }),
+      replace: Type.Optional(Type.Boolean({ description: "set true only when the user explicitly asked to overwrite an installed capability with the same ref" })),
     }, { additionalProperties: false }),
     execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
-      const input = params as { ref: string; display_name: string; url: string; reason: string };
+      const input = params as CapabilityInstallInput;
       try {
+        // Re-checked here as well: the approval may have waited while another install took the same ref.
+        const check = checkCapabilityInstall(store, owner, input);
+        if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true };
         if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
         const url = validMcpUrl(input.url);
         const tools = (await listMcpTools(url.toString(), signal)).filter(name => TOOL_RE.test(name)).slice(0, 50);

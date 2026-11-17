@@ -806,6 +806,25 @@ def test_publish_carries_mode_and_rewrites_rule_references_to_template_ids(env):
     assert package.orchestration_rules == f"1. @{{{sid}-lead}} 先拆解并分派\n2. @{{{sid}-inspector}} 执行检验并回报"
 
 
+def test_publish_fails_with_a_clear_conflict_and_registers_nothing_when_rule_references_cannot_be_mapped(env, monkeypatch):
+    from operation_service import solution_authoring_service as module
+    from shared.solution_authoring.orchestration import OrchestrationRefError
+
+    draft_id = env.generated()
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+
+    def broken(rules, mapping):
+        raise OrchestrationRefError("unmapped", kind="unmapped", member="ghost")
+
+    monkeypatch.setattr(module, "rewrite_member_refs", broken)
+    with pytest.raises(Conflict, match="编排规则"):
+        env.service.publish(draft_id, "admin")
+    assert env.catalog.list_catalog() == []
+    assert env.service.get_draft(draft_id).published_solution_id is None
+
+
 def test_publish_carries_skills_and_mcps_as_non_binding_recommendations(env):
     draft_id = env.generated()
     detail = env.service.get_draft(draft_id)

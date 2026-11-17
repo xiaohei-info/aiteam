@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createFixture } from "./test-fixture.js";
 import { approvalRiskForTool } from "./approval-service.js";
-import { capabilityInstallTool, personalConnectorTools } from "./connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, personalConnectorTools } from "./connectors.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
 const snapshot: Record<string, unknown> = { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", tools: [] };
@@ -93,4 +93,44 @@ test("recommended capabilities become a bounded, non-authorizing hint", () => {
   ]);
   assert.match(text, /skill sk-1：读表；MCP MES（mes）：读取工单/);
   assert.match(text, /并未安装或授权/);
+});
+
+test("a same-ref install is bounced to the model unless the user explicitly asked to replace; the approval shows the full request", async () => {
+  const fixture = await createFixture();
+  const { server, url } = await mcpServer([]);
+  try {
+    const install = capabilityInstallTool(fixture.store, owner);
+    const input = { kind: "mcp", ref: "notion", display_name: "Notion", url, reason: "读页面" };
+    await run(install, input);
+
+    // 已存在且没有 replace：不进审批，提示里带着已装条目，模型据此去问用户。
+    const clash = checkCapabilityInstall(fixture.store, owner, { ...input, display_name: "Other", url: "https://example.com/other" });
+    assert.equal(clash.ok, false);
+    assert.match(clash.ok ? "" : clash.message, /Notion/);
+    assert.match(clash.ok ? "" : clash.message, new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const blocked = await run(install, { ...input, url: "https://example.com/other" });
+    assert.equal(blocked.isError, true);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.url, url);
+
+    // 明确 replace：审批摘要给出完整新地址和被替换的条目，不截断。
+    const long = `https://example.com/${"a".repeat(400)}`;
+    const replace = checkCapabilityInstall(fixture.store, owner, { ...input, url: long, replace: true });
+    assert.equal(replace.ok, true);
+    const summary = JSON.parse(replace.ok ? replace.summary : "{}");
+    assert.equal(summary.url, long);
+    assert.deepEqual(summary.replaces, { display_name: "Notion", url });
+
+    // 全新 ref：没有 replaces 字段；无效地址在审批前就被拒绝。
+    const fresh = checkCapabilityInstall(fixture.store, owner, { ...input, ref: "other" });
+    assert.equal(fresh.ok && "replaces" in JSON.parse(fresh.summary), false);
+    assert.equal(checkCapabilityInstall(fixture.store, owner, { ...input, ref: "x", url: "http://example.com/mcp" }).ok, false);
+
+    // 明确 replace 并经批准后才真的替换。
+    const replaced = await run(install, { ...input, display_name: "Notion 2", replace: true });
+    assert.notEqual(replaced.isError, true);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.display_name, "Notion 2");
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await fixture.close();
+  }
 });
