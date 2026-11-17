@@ -310,8 +310,12 @@ function SolutionApplyDialog({
 
   return (
     <Dialog isOpen purpose="form" width={640} maxHeight="85vh" aria-label={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
+      {/* 标题与操作按钮固定，中间内容滚动：专家多时也始终能点到「应用方案」。 */}
+      <Layout
+        header={<DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />}
+        content={
+          <LayoutContent>
       <VStack gap={4}>
-        <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
         {error && <Banner status="error" title={error} />}
         <SolutionOverview solution={solution} skills={skills} compact />
         <Text type="supporting" color="secondary">应用后会在当前企业创建方案专家（已招募的复用），并将其归属到下方部门；所选部门也会作为部门授权范围。未归属部门时请选择“未设置”。成员授权仍按下方选择生效。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
@@ -365,11 +369,18 @@ function SolutionApplyDialog({
             <MultiSelector label="授权成员" options={members.map((member) => ({ value: member.id, label: member.display_name || "未命名成员" }))} value={memberIds} onChange={setMemberIds} triggerDisplay="labels" isOptional isDisabled={working} />
           </VStack>
         )}
-        <HStack justify="end" gap={2}>
-          <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-          <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working || !allNewChosen} />
-        </HStack>
       </VStack>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack justify="end" gap={2}>
+              <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
+              <Button label="应用方案" variant="primary" onClick={() => void apply()} isLoading={working} isDisabled={loading || working || !allNewChosen} />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
     </Dialog>
   );
 }
@@ -390,7 +401,6 @@ function SolutionDetailOverlay({ solution, skills, onClose }: {
       aria-label={solution.display_name}
     >
       <Layout
-        height="auto"
         header={
           <DialogHeader
             title={solution.display_name}

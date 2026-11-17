@@ -64,7 +64,6 @@ function AssignDialog({ employee, departments, onClose, onAssign }: AssignDialog
       data-testid="assign-modal"
     >
       <Layout
-        height="auto"
         header={<DialogHeader title={i18n.t("manager.org.assign_title")} onOpenChange={(isOpen) => { if (!isOpen && !pending) onClose(); }} />}
         content={
           <LayoutContent>

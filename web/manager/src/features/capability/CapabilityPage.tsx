@@ -394,7 +394,6 @@ export function CapabilityPage(): ReactNode {
       {editor.mode !== "closed" && (
         <AstryxDialog isOpen purpose="form" width={640} maxHeight="90vh" aria-label={editorTitle} onOpenChange={(isOpen) => { if (!isOpen) closeEditor(); }}>
           <Layout
-            height="auto"
             header={<DialogHeader title={editorTitle} onOpenChange={(isOpen) => { if (!isOpen) closeEditor(); }} />}
             content={
               <LayoutContent>

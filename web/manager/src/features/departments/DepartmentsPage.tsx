@@ -344,7 +344,6 @@ export function DepartmentsPage(): ReactNode {
           data-testid="department-editor"
         >
           <Layout
-            height="auto"
             header={<DialogHeader title={editorTitle} onOpenChange={(isOpen) => { if (!isOpen) closeEditor(); }} />}
             content={
               <LayoutContent>

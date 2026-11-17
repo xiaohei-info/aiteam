@@ -130,7 +130,6 @@ export function ProviderSection({
           data-testid={editor.mode === "create" ? "create-form" : "edit-form"}
         >
           <Layout
-            height="auto"
             header={<DialogHeader title={title} onOpenChange={(isOpen) => { if (!isOpen && !working) onCancel(); }} />}
             content={
               <LayoutContent>

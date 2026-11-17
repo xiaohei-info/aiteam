@@ -8,6 +8,7 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
@@ -191,8 +192,11 @@ export function TemplateDetailDialog({ template, skillNames, onRecruit, onClose 
       aria-label={`${template.display_name}详情`}
       onOpenChange={(open) => { if (!open) onClose(); }}
     >
+      <Layout
+        header={<DialogHeader title={template.display_name} onOpenChange={(open) => { if (!open) onClose(); }} />}
+        content={
+          <LayoutContent>
       <VStack gap={4}>
-        <DialogHeader title={template.display_name} onOpenChange={(open) => { if (!open) onClose(); }} />
         <TabList aria-label="专家详情" value={tab} onChange={(value) => setTab(value as DetailTab)} hasDivider>
           <Tab value="overview" label="概览" />
           <Tab value="capabilities" label="能力" />
@@ -205,8 +209,11 @@ export function TemplateDetailDialog({ template, skillNames, onRecruit, onClose 
           {tab === "requirements" && <RequirementsTab template={template} />}
           {tab === "data" && <DataTab template={template} />}
         </div>
-        <PublishInfo template={template} onRecruit={onRecruit} />
       </VStack>
+          </LayoutContent>
+        }
+        footer={<LayoutFooter><PublishInfo template={template} onRecruit={onRecruit} /></LayoutFooter>}
+      />
     </Dialog>
   );
 }

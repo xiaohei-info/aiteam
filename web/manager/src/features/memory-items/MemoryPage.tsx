@@ -6,6 +6,7 @@ import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
@@ -229,12 +230,17 @@ export function MemoryPage(): ReactNode {
           maxHeight="85vh"
           purpose="form"
         >
-          <VStack gap={3}>
+          <Layout
+            header={
             <DialogHeader
               title={`记忆 · ${employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || analytics?.employees.find((employee) => employee.employee_id === detailEmployeeId)?.display_name || "员工"}`}
               subtitle={`${items.length} 条记忆`}
               onOpenChange={(open) => { if (!open) { setDetailEmployeeId(null); setEditing(null); } }}
             />
+            }
+            content={
+              <LayoutContent>
+          <VStack gap={3}>
             <HStack gap={2} align="end">
               <TextInput label="搜索记忆内容" placeholder="搜索记忆内容…" value={keyword} onChange={setKeyword} width="100%" />
               <Button label="搜索" variant="secondary" onClick={() => void load()} />
@@ -248,8 +254,11 @@ export function MemoryPage(): ReactNode {
                 </>}
               </VStack>{editing?.memory_id !== m.memory_id && canManage && <HStack gap={2}><Button label="编辑" variant="secondary" size="sm" isDisabled={m.category === "observation"} onClick={() => { setEditing(m); setEditContent(m.content); }} /><Button label="删除" variant="destructive" size="sm" onClick={() => setPendingDelete(m)} /></HStack>}</HStack></Card>
             ))}</VStack>}
-            <HStack justify="end"><Button label="关闭" variant="secondary" onClick={() => { setDetailEmployeeId(null); setEditing(null); }} /></HStack>
           </VStack>
+              </LayoutContent>
+            }
+            footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={() => { setDetailEmployeeId(null); setEditing(null); }} /></HStack></LayoutFooter>}
+          />
         </Dialog>
       )}
 

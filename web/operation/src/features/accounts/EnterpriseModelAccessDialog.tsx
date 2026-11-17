@@ -132,7 +132,6 @@ export function EnterpriseModelAccessDialog({ enterprise, api, onClose, onDone }
       data-testid="enterprise-model-access-dialog"
     >
       <Layout
-        height="auto"
         header={<DialogHeader title={`配置${enterprise.enterprise_name}可用模型`} onOpenChange={(open) => { if (!open && !submitting) onClose(); }} />}
         content={
           <LayoutContent>
