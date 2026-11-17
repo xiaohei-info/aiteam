@@ -1,8 +1,8 @@
 /** 资料清单：上传、删除、发起生成。 */
-import { useRef, type ChangeEvent, type ReactNode } from "react";
+import { useRef, type ChangeEvent, type ReactNode, type RefObject } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
-import { Card } from "@astryxdesign/core/Card";
+import styles from "./workbench.module.css";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
@@ -23,11 +23,17 @@ interface Props {
   onDelete: (source: SourceDocument) => void;
   /** 已有正文时由页面先弹确认。 */
   onGenerate: () => void;
+  /** 页头「上传资料」主操作借此打开文件选择。 */
+  pickerRef?: RefObject<HTMLInputElement | null>;
+  /** 页头主操作已承担「上传资料」/「开始生成」时，这里不再重复显示。 */
+  hideUpload?: boolean;
+  hideGenerate?: boolean;
 }
 
-export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, busy, onUpload, onDelete, onGenerate }: Props): ReactNode {
+export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, busy, onUpload, onDelete, onGenerate, pickerRef, hideUpload, hideGenerate }: Props): ReactNode {
   const generateHint = sources.length === 0 ? "请先上传至少一份资料" : isContentLocked ? "请先保存或取消正文修改" : undefined;
-  const inputRef = useRef<HTMLInputElement>(null);
+  const ownRef = useRef<HTMLInputElement>(null);
+  const inputRef = pickerRef ?? ownRef;
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.currentTarget.files ?? []);
@@ -36,11 +42,11 @@ export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, bu
   }
 
   return (
-    <Card>
+    <section className={styles.box} aria-label="行业资料">
       <VStack gap={4}>
         <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
           <VStack gap={1}>
-            <Heading level={2}>行业资料</Heading>
+            <Heading level={3} accessibilityLevel={2}>行业资料</Heading>
             <Text type="supporting" color="secondary">
               支持 Word / PPT / Excel（新格式）、PDF、Markdown、HTML、TXT、CSV 与图片；单个不超过 20 MB，最多 20 份。
             </Text>
@@ -57,22 +63,23 @@ export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, bu
                 disabled={busy}
                 onChange={handleChange}
               />
-              <Button label="上传资料" variant="secondary" onClick={() => inputRef.current?.click()} isDisabled={busy} />
-              <Button
+              {!hideUpload && <Button label="上传资料" variant="secondary" onClick={() => inputRef.current?.click()} isDisabled={busy} />}
+              {!hideGenerate && <Button
                 label={hasContent ? "重新生成" : "开始生成"}
+                variant={hasContent ? "secondary" : "primary"}
                 onClick={onGenerate}
                 isDisabled={busy || sources.length === 0 || isContentLocked}
                 tooltip={generateHint}
-              />
+              />}
             </HStack>
           )}
         </HStack>
         {sources.length === 0 ? (
           <Text color="secondary">还没有上传资料。</Text>
         ) : (
-          <VStack as="ul" gap={2} aria-label="资料清单" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <VStack as="ul" gap={0} aria-label="资料清单" style={{ listStyle: "none", margin: 0, padding: 0 }}>
             {sources.map((source) => (
-              <HStack as="li" key={source.source_id} justify="between" vAlign="center" gap={3}>
+              <HStack as="li" key={source.source_id} justify="between" vAlign="center" gap={3} className={styles.item}>
                 <VStack gap={1}>
                   <Text weight="semibold" wordBreak="break-all">{source.file_name}</Text>
                   <HStack gap={2} wrap="wrap" vAlign="center">
@@ -92,6 +99,6 @@ export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, bu
           </VStack>
         )}
       </VStack>
-    </Card>
+    </section>
   );
 }

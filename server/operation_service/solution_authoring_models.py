@@ -15,7 +15,11 @@ from pydantic import SecretStr, ValidationError
 
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.errors import NotFound, ServiceUnavailable, ValidationProblem
-from shared.solution_authoring.runner import FauxModelConfig, ModelConfig, ProviderModelConfig
+from shared.solution_authoring.runner import (
+    FauxModelConfig,
+    ModelConfig,
+    ProviderModelConfig,
+)
 
 RELAY_TOKEN_ENV = "SOLUTION_AUTHORING_RELAY_TOKEN"
 RELAY_BASE_URL_ENV = "SOLUTION_AUTHORING_RELAY_BASE_URL"

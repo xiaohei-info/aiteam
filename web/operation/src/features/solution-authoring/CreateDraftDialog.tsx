@@ -9,12 +9,16 @@ import { Selector } from "@astryxdesign/core/Selector";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import type { DraftCreateInput, ImageRecognition } from "./types";
+import type { DraftCreateInput, ImageRecognition, SolutionMode } from "./types";
 import { usePublishedModels } from "./usePublishedModels";
 
 const RECOGNITION_OPTIONS = [
   { value: "none", label: "不识别图片（图片列为待人工处理项）" },
   { value: "vision", label: "用所选模型识别图片" },
+];
+const MODE_OPTIONS = [
+  { value: "group", label: "组群完成：多位专家协作，需要群主与群聊编排规则" },
+  { value: "solo", label: "单人完成：1 位专家，应用后直接私聊，不建群" },
 ];
 const MAX_SUPPLEMENT = 2000;
 
@@ -29,6 +33,7 @@ export function CreateDraftDialog({ isOpen, onClose, onCreate }: Props): ReactNo
   const models = usePublishedModels(isOpen);
   const [title, setTitle] = useState("");
   const [model, setModel] = useState("");
+  const [mode, setMode] = useState<SolutionMode>("group");
   const [recognition, setRecognition] = useState<ImageRecognition>("none");
   const [supplement, setSupplement] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +60,7 @@ export function CreateDraftDialog({ isOpen, onClose, onCreate }: Props): ReactNo
     setSubmitting(true);
     setError(null);
     const failure = await onCreate({
-      title: title.trim(), platform_model_ref: selected.ref, image_recognition: recognition, supplement: supplement.trim(),
+      title: title.trim(), platform_model_ref: selected.ref, image_recognition: recognition, supplement: supplement.trim(), solution_mode: mode,
     });
     setSubmitting(false);
     if (failure) setError(failure);
@@ -70,6 +75,15 @@ export function CreateDraftDialog({ isOpen, onClose, onCreate }: Props): ReactNo
             <VStack gap={4}>
               <FormLayout>
                 <TextInput label="标题" value={title} onChange={setTitle} placeholder="例如：制造业来料质检方案" description="仅运营端内部可见" isRequired isDisabled={submitting} />
+                <Selector
+                  label="方案类型"
+                  options={MODE_OPTIONS}
+                  value={mode}
+                  onChange={(value) => setMode(value as SolutionMode)}
+                  description="创建后不能更改；AI 会按所选类型生成，群主与编排规则需要你确认"
+                  isRequired
+                  isDisabled={submitting}
+                />
                 <Selector
                   label="生成模型"
                   options={models.options}
@@ -112,7 +126,7 @@ export function CreateDraftDialog({ isOpen, onClose, onCreate }: Props): ReactNo
           <LayoutFooter hasDivider>
             <HStack gap={2} hAlign="end">
               <Button label="取消" variant="ghost" onClick={close} isDisabled={submitting} />
-              <Button label="创建" onClick={() => void submit()} isLoading={submitting} />
+              <Button label="创建" variant="primary" onClick={() => void submit()} isLoading={submitting} />
             </HStack>
           </LayoutFooter>
         }

@@ -33,6 +33,7 @@ import { useGrantsApi } from "../grants/useGrantsApi";
 import type { Department, Member } from "../grants/types";
 import type { EmployeeConfig, RecruitModelPolicy, SolutionInstance, SolutionPackage } from "../experts/types";
 import { ModelPicker } from "../platform-models/ModelPicker";
+import { capabilityLabel, renderRules, solutionModeLabel } from "./solutionInfo";
 import { toPolicy, useRecruitModels } from "../platform-models/useRecruitModels";
 
 export function SolutionsPage(): ReactNode {
@@ -411,6 +412,29 @@ function SolutionDetailOverlay({ solution, onClose }: {
                   </Grid>
                 )}
               </VStack>
+              <HStack gap={2} align="center" wrap="wrap">
+                <Badge label={solutionModeLabel(solution.mode)} variant="info" />
+                <Text type="supporting" color="secondary">
+                  {solution.mode === "solo" ? "应用后直接私聊，不建群" : "应用后可建群，由协调专家按规则编排"}
+                </Text>
+              </HStack>
+              {solution.mode !== "solo" && solution.orchestration_rules && (
+                <VStack gap={1}>
+                  <Heading level={3}>群聊编排规则</Heading>
+                  <Text color="secondary" style={{ whiteSpace: "pre-wrap" }}>
+                    {renderRules(solution.orchestration_rules, new Map(experts.map((expert) => [expert.template_id, expert.display_name])))}
+                  </Text>
+                </VStack>
+              )}
+              {(solution.recommended_capabilities?.length ?? 0) > 0 && (
+                <VStack gap={1}>
+                  <Heading level={3}>推荐的 skill 与 MCP</Heading>
+                  <Text type="supporting" color="secondary">仅供参考，不会随方案安装；成员使用时若需要，会先询问本人是否安装。</Text>
+                  <HStack gap={1} wrap="wrap">
+                    {solution.recommended_capabilities!.map((item) => <Token key={`${item.kind}:${item.ref}`} label={capabilityLabel(item)} size="sm" />)}
+                  </HStack>
+                </VStack>
+              )}
               {(solution.coordinator_instructions || solution.output_requirements || solution.workflow_skill_ref) && (
                 <MetadataList columns="single">
                   {solution.coordinator_instructions && (
@@ -452,12 +476,19 @@ function SolutionInstanceCard({
         <HStack gap={2} align="center" wrap="wrap">
           <Heading level={3}>{instance.display_name}</Heading>
           <Badge label={instance.status} variant={instance.status === "applied" ? "success" : "neutral"} />
+          <Badge label={solutionModeLabel(instance.mode)} variant="info" />
         </HStack>
         <Text type="supporting">版本 v{instance.solution_version}</Text>
         <MetadataList columns="single">
           <MetadataListItem label="专家数量"><Text>{instance.expert_employee_ids.length}</Text></MetadataListItem>
           <MetadataListItem label="协调专家"><Text>{instance.coordinator_employee_id ? employeeNames.get(instance.coordinator_employee_id) ?? "已删除专家" : "—"}</Text></MetadataListItem>
           {instance.coordinator_instructions && <MetadataListItem label="协作说明"><Text color="secondary">{instance.coordinator_instructions}</Text></MetadataListItem>}
+          {instance.mode !== "solo" && instance.orchestration_rules && (
+            <MetadataListItem label="群聊编排规则"><Text color="secondary" style={{ whiteSpace: "pre-wrap" }}>{renderRules(instance.orchestration_rules, employeeNames)}</Text></MetadataListItem>
+          )}
+          {(instance.recommended_capabilities?.length ?? 0) > 0 && (
+            <MetadataListItem label="推荐能力"><Text color="secondary">{instance.recommended_capabilities!.map(capabilityLabel).join("；")}</Text></MetadataListItem>
+          )}
           {instance.output_requirements && <MetadataListItem label="预期交付物"><Text color="secondary">{instance.output_requirements}</Text></MetadataListItem>}
         </MetadataList>
       </VStack>

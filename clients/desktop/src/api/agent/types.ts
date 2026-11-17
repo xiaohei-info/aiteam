@@ -532,12 +532,31 @@ export interface SolutionProjection {
   coordinator_instructions?: string
   workflow_skill_ref?: Record<string, unknown>
   output_requirements?: string
+  /** solo：单人方案，直接私聊；group：组群方案。缺省按组群（旧方案）。 */
+  mode?: 'solo' | 'group'
+  /** 群聊编排规则（成员引用为 employee_id）；建群时由 Agent 校验并带入。 */
+  orchestration_rules?: string
+  /** 方案推荐的 skill / MCP：只是提示，不授权、不触发安装。 */
+  recommended_capabilities?: { kind: 'skill' | 'mcp'; ref: string; display_name?: string; purpose?: string }[]
   config_version?: number
   coordinator_employee_id?: string | null
   expert_employee_ids?: string[]
   tenant_id?: string
   member_id?: string
   [key: string]: unknown
+}
+
+// GET /api/agent/capabilities：用户在对话中同意安装的本机个人能力（只在本机、只对本人生效）。
+export interface LocalCapability {
+  kind: 'mcp'
+  ref: string
+  display_name: string
+  url: string
+  tools: string[]
+  source: 'user_url'
+  reason: string
+  approved_by: string
+  created_at: string
 }
 
 // -------------------- 本地附件 / 产物 --------------------

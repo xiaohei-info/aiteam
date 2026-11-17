@@ -1,0 +1,78 @@
+/* 草稿工作台的分区样式：所有颜色来自主题令牌（亮 / 暗模式自动切换），不写死色值。 */
+.box {
+  --sa-line: var(--color-border-emphasized, color-mix(in srgb, currentColor 22%, transparent));
+  --sa-soft: var(--color-border, color-mix(in srgb, currentColor 12%, transparent));
+  --sa-muted: var(--color-background-muted, color-mix(in srgb, currentColor 6%, transparent));
+  border: 1px solid var(--sa-line);
+  border-radius: 10px;
+  background: var(--color-background-card, var(--color-background-surface, transparent));
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scroll-margin-top: 16px;
+}
+.boxHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.boxTitle { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.label { margin: 0; }
+.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px dashed var(--sa-line);
+}
+.row:last-child { border-bottom: 0; }
+.rowMain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rowSide { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.inset {
+  border: 1px solid var(--sa-soft); border-radius: 8px; background: var(--sa-muted);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.inset ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.foot {
+  margin: 0 -18px -16px; padding: 14px 18px; border-top: 1px solid var(--sa-line);
+  background: var(--sa-muted); border-radius: 0 0 10px 10px; display: flex; flex-direction: column; gap: 10px;
+}
+.item { padding: 12px 0; border-bottom: 1px dashed var(--sa-line); }
+.item:last-child { border-bottom: 0; }
+
+/* 流程步骤条：填色分段，状态同时写成文字。 */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.step {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 6px; border-radius: 6px;
+  background: var(--color-background-muted, color-mix(in srgb, currentColor 6%, transparent));
+}
+.stepDone { background: var(--color-background-green, color-mix(in srgb, #2e9e5b 24%, transparent)); }
+.stepCurrent {
+  background: var(--color-background-blue, color-mix(in srgb, #3b6cf0 26%, transparent)); font-weight: 600;
+  outline: 1px solid var(--color-border-blue, color-mix(in srgb, #3b6cf0 60%, transparent));
+}
+@media (max-width: 700px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* 需要使用者处理的分区：橙色边框 + 左侧色条 + 淡底，一眼能和已完成的分区区分。 */
+.attention {
+  border-color: var(--color-border-orange, currentColor);
+  box-shadow: inset 4px 0 0 var(--color-border-orange, currentColor);
+  background: color-mix(in srgb, var(--color-background-orange, transparent) 10%, var(--color-background-card, var(--color-background-surface, transparent)));
+}
+.todo {
+  border: 1px solid var(--color-border-orange, currentColor);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-background-orange, transparent) 14%, transparent);
+  padding: 14px 18px; display: flex; flex-direction: column; gap: 8px;
+}
+.todoDone {
+  border-color: var(--color-border-green, currentColor);
+  background: color-mix(in srgb, var(--color-background-green, transparent) 14%, transparent);
+}
+.todo ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.todo li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px dashed var(--color-border-orange, currentColor); }
+.todo li:first-child { border-top: 0; }
+.todo li > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+/* 点「去处理」后目标分区闪一下：即使页面没有滚动，也能看出该看哪里。 */
+.flash { animation: sa-flash 1.8s ease-out; outline: none; }
+@keyframes sa-flash {
+  0%, 40% { box-shadow: 0 0 0 4px var(--color-border-orange, currentColor), inset 4px 0 0 var(--color-border-orange, currentColor); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.box:focus { outline: none; }

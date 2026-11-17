@@ -6,6 +6,7 @@ import type {
   DraftDetail,
   DraftList,
   DraftSummary,
+  ConfirmItem,
   FindingResolution,
   GeneratedSolution,
   GenerationJob,
@@ -25,6 +26,7 @@ export interface SolutionAuthoringApi {
   generate: (draftId: string, idempotencyKey: string) => Promise<GenerationJob>;
   updatePackage: (draftId: string, version: number, body: GeneratedSolution) => Promise<DraftDetail>;
   resolveFinding: (draftId: string, findingId: string, resolution: FindingResolution) => Promise<DraftDetail>;
+  confirm: (draftId: string, item: ConfirmItem) => Promise<DraftDetail>;
   submitReview: (draftId: string) => Promise<DraftDetail>;
   approve: (draftId: string, note: string) => Promise<DraftDetail>;
   reject: (draftId: string, note: string) => Promise<DraftDetail>;
@@ -70,6 +72,7 @@ export function useSolutionAuthoringApi(): SolutionAuthoringApi {
       async resolveFinding(draftId, findingId, resolution) {
         return required(await client.post<DraftDetail>(`${draft(draftId)}/findings/${findingId}/resolve`, { body: { resolution } }));
       },
+      async confirm(draftId, item) { return required(await client.post<DraftDetail>(`${draft(draftId)}/confirm`, { body: { item } })); },
       async submitReview(draftId) { return required(await client.post<DraftDetail>(`${draft(draftId)}/submit-review`)); },
       async approve(draftId, note) { return required(await client.post<DraftDetail>(`${draft(draftId)}/approve`, { body: { note } })); },
       async reject(draftId, note) { return required(await client.post<DraftDetail>(`${draft(draftId)}/reject`, { body: { note } })); },

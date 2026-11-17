@@ -273,12 +273,27 @@ export interface LoadedSolutionProjection {
   coordinator_instructions?: string;
   workflow_skill_ref?: Record<string, unknown> | null;
   output_requirements?: string;
+  mode?: "solo" | "group";
+  orchestration_rules?: string;
+  recommended_capabilities?: Record<string, unknown>[];
   config_version?: number;
   coordinator_employee_id?: string | null;
   expert_employee_ids?: string[];
   tenant_id?: string;
   member_id?: string;
   [key: string]: unknown;
+}
+
+export interface LocalCapability {
+  kind: "mcp";
+  ref: string;
+  display_name: string;
+  url: string;
+  tools: string[];
+  source: "user_url";
+  reason: string;
+  approved_by: string;
+  created_at: string;
 }
 
 export interface FrozenSnapshot {
@@ -615,6 +630,22 @@ export class AgentSqliteStore {
         referenced_at TEXT
       );
       CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
+
+      -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。
+      CREATE TABLE IF NOT EXISTS local_capability (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp')),
+        ref TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        tools_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user_url')),
+        reason TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind, ref)
+      );
 
       CREATE TABLE IF NOT EXISTS approval_record (
         id TEXT PRIMARY KEY,
@@ -1505,6 +1536,21 @@ export class AgentSqliteStore {
 
   listSnapshots(tenantId?: string, memberId?: string): FrozenSnapshot[] {
     return (this.db.prepare("SELECT projection_json, tenant_id, member_id FROM frozen_snapshot WHERE (? IS NULL OR tenant_id = '' OR tenant_id = ?) AND (? IS NULL OR member_id = '' OR member_id = ?) ORDER BY employee_id").all(tenantId ?? null, tenantId ?? null, memberId ?? null, memberId ?? null) as { projection_json: string; tenant_id: string; member_id: string }[]).map((row) => ({ ...publicAvatarProjection(JSON.parse(row.projection_json) as FrozenSnapshot), ...(row.tenant_id ? { tenant_id: row.tenant_id } : {}), ...(row.member_id ? { member_id: row.member_id } : {}) }));
+  }
+
+  listLocalCapabilities(tenantId: string, memberId: string): LocalCapability[] {
+    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as { kind: "mcp"; ref: string; display_name: string; url: string; tools_json: string; source: "user_url"; reason: string; approved_by: string; created_at: string }[])
+      .map(({ tools_json, ...row }) => ({ ...row, tools: JSON.parse(tools_json) as string[] }));
+  }
+
+  /** Inserts or replaces one personal capability of this owner; never touches another member's rows. */
+  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at">, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.reason, item.approved_by, now);
+  }
+
+  deleteLocalCapability(tenantId: string, memberId: string, kind: "mcp", ref: string): boolean {
+    return this.db.prepare("DELETE FROM local_capability WHERE tenant_id = ? AND member_id = ? AND kind = ? AND ref = ?").run(tenantId, memberId, kind, ref).changes > 0;
   }
 
   listSolutions(tenantId?: string, memberId?: string): LoadedSolutionProjection[] {

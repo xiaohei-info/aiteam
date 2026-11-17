@@ -9,6 +9,7 @@ import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
+import styles from "./workbench.module.css";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -17,7 +18,9 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { RulesSection } from "./RulesSection";
 import type { Evidence, EvidenceSource, GeneratedExpert, GeneratedSolution } from "./types";
+import { removalBlocker, validateRules } from "./workflow";
 
 export interface SaveFailure {
   message: string;
@@ -67,6 +70,12 @@ function validate(solution: GeneratedSolution): string | null {
       return `专家「${expert.display_name || expert.key}」的名称、分类、岗位描述和系统提示词都不能为空`;
     }
   }
+  // 规则为空交给「提交前检查」把关（旧草稿也能保存其它修改）；写了就必须引用有效。
+  const rules = solution.orchestration_rules ?? "";
+  if (rules.trim()) {
+    const problem = validateRules(rules, solution.experts.map((expert) => expert.key), "group");
+    if (problem) return problem;
+  }
   return null;
 }
 
@@ -103,6 +112,9 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
   }
 
   function removeExpert(key: string) {
+    const blocker = removalBlocker(draft?.orchestration_rules, key);
+    if (blocker) { setError(blocker); return; }
+    setError(null);
     setDraft((value) => {
       if (!value) return value;
       const experts = value.experts.filter((expert) => expert.key !== key);
@@ -124,13 +136,13 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
     if (!failure.conflict) setError(failure.message);
   }
 
-  const coordinator = current.experts.find((expert) => expert.key === current.coordinator_key);
+  const mode = current.mode ?? (current.experts.length === 1 ? "solo" : "group");
 
   return (
-    <Card>
+    <section className={styles.box} aria-label="方案正文">
       <VStack gap={5}>
         <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-          <Heading level={2}>方案正文</Heading>
+          <Heading level={3} accessibilityLevel={2}>方案正文</Heading>
           {canEdit && !editing && <Button label="编辑正文" variant="secondary" onClick={startEditing} isDisabled={busy} />}
         </HStack>
 
@@ -139,16 +151,19 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
             <TextInput label="方案名称" value={current.display_name} onChange={(display_name) => setDraft({ ...current, display_name })} isRequired isDisabled={busy} />
             <TextArea label="方案描述" value={current.description} onChange={(description) => setDraft({ ...current, description })} rows={3} maxLength={1000} isRequired isDisabled={busy} />
             <TextInput label="标签" value={tagsText} onChange={setTagsText} description="用逗号分隔，最多 8 个" isOptional isDisabled={busy} />
-            <Selector
+            {mode === "group" && <Selector
               label="协调专家"
               options={current.experts.map((expert) => ({ value: expert.key, label: expert.display_name || expert.key }))}
               value={current.coordinator_key}
               onChange={(coordinator_key) => setDraft({ ...current, coordinator_key })}
               isRequired
               isDisabled={busy}
-            />
-            <TextArea label="协作说明" value={current.coordinator_instructions} onChange={(coordinator_instructions) => setDraft({ ...current, coordinator_instructions })} rows={4} maxLength={4000} isOptional isDisabled={busy} />
+            />}
+            {mode === "group" && <TextArea label="协作说明" value={current.coordinator_instructions} onChange={(coordinator_instructions) => setDraft({ ...current, coordinator_instructions })} rows={4} maxLength={4000} isOptional isDisabled={busy} />}
             <TextArea label="交付要求" value={current.output_requirements} onChange={(output_requirements) => setDraft({ ...current, output_requirements })} rows={4} maxLength={4000} isOptional isDisabled={busy} />
+            {mode === "group" && (
+              <RulesSection solution={current} editing busy={busy} onChange={(orchestration_rules) => setDraft({ ...current, orchestration_rules })} />
+            )}
           </FormLayout>
         ) : (
           <VStack gap={3}>
@@ -157,9 +172,8 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
               <Text>{current.description}</Text>
             </VStack>
             {current.tags.length > 0 && <HStack gap={2} wrap="wrap">{current.tags.map((tag) => <Badge key={tag} label={tag} />)}</HStack>}
-            <VStack gap={1}><Text weight="semibold">协调专家</Text><Text>{coordinator?.display_name ?? current.coordinator_key}</Text></VStack>
-            <VStack gap={1}><Text weight="semibold">协作说明</Text><Text>{current.coordinator_instructions || "（未填写）"}</Text></VStack>
             <VStack gap={1}><Text weight="semibold">交付要求</Text><Text>{current.output_requirements || "（未填写）"}</Text></VStack>
+            {mode === "group" && <Text type="supporting" color="secondary">群主、成员分工与编排规则见上方「团队与群聊编排」。</Text>}
             <VStack gap={1}><Text weight="semibold">方案依据</Text><EvidenceList items={current.evidence} sources={evidenceSources} /></VStack>
           </VStack>
         )}
@@ -187,9 +201,10 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
                   <HStack gap={2} vAlign="center" wrap="wrap">
                     <Text weight="semibold">{expert.display_name}</Text>
                     <Badge label={expert.category} />
-                    {expert.key === current.coordinator_key && <Badge label="协调专家" variant="info" />}
+                    {mode === "group" && expert.key === current.coordinator_key && <Badge label="群主" variant="info" />}
                   </HStack>
                   <Text>{expert.description}</Text>
+
                   <VStack gap={1}><Text type="supporting" weight="semibold">系统提示词</Text><Text textWrap="pretty">{expert.system_prompt}</Text></VStack>
                   <VStack gap={1}><Text type="supporting" weight="semibold">依据</Text><EvidenceList items={expert.evidence} sources={evidenceSources} /></VStack>
                 </VStack>
@@ -208,11 +223,11 @@ export function PackageEditor({ solution, version, evidenceSources, canEdit, bus
         )}
         {editing && (
           <HStack gap={2}>
-            <Button label={conflict ? "覆盖保存" : "保存"} onClick={() => void save()} isLoading={busy} />
+            <Button label={conflict ? "覆盖保存" : "保存"} variant="primary" onClick={() => void save()} isLoading={busy} />
             <Button label={conflict ? "放弃我的修改" : "取消"} variant="ghost" onClick={stopEditing} isDisabled={busy} />
           </HStack>
         )}
       </VStack>
-    </Card>
+    </section>
   );
 }

@@ -16,6 +16,20 @@ export const EvidenceSchema = Type.Object({
   quote: Type.Optional(Type.String({ maxLength: 300, description: "支撑该内容的原文短句（可省略）" })),
 }, strict);
 
+export const SkillRefSchema = Type.Object({
+  skill_id: Type.String({ minLength: 1, maxLength: 64, description: "平台 skill 目录里的 skill_id，只能取自任务提示里列出的目录" }),
+  version: Type.String({ minLength: 1, maxLength: 64 }),
+  content_hash: Type.String({ minLength: 1, maxLength: 128 }),
+  reason: Type.Optional(Type.String({ maxLength: 200, description: "为什么需要这个 skill" })),
+}, strict);
+
+export const McpSchema = Type.Object({
+  key: Type.String({ pattern: "^[a-z][a-z0-9_-]{0,63}$", description: "连接器标识：小写字母开头，仅小写字母、数字、下划线、连字符" }),
+  display_name: Type.String({ minLength: 1, maxLength: 80 }),
+  purpose: Type.Optional(Type.String({ maxLength: 200, description: "用它做什么" })),
+  required: Type.Optional(Type.Boolean({ description: "没有它专家是否无法工作" })),
+}, strict);
+
 export const ExpertSchema = Type.Object({
   key: Type.String({ pattern: "^[a-z][a-z0-9_]{1,39}$", description: "方案内唯一标识：小写字母开头，仅小写字母、数字、下划线" }),
   display_name: Type.String({ minLength: 1, maxLength: 40, description: "专家名称" }),
@@ -23,6 +37,8 @@ export const ExpertSchema = Type.Object({
   description: Type.String({ minLength: 1, maxLength: 200, description: "面向使用者的岗位描述" }),
   system_prompt: Type.String({ minLength: 1, maxLength: 8000, description: "该专家的系统提示词：职责、工作方法、输出要求" }),
   evidence: Type.Array(EvidenceSchema, { minItems: 1, maxItems: 8, description: "该专家依据的来源片段" }),
+  skills: Type.Optional(Type.Array(SkillRefSchema, { maxItems: 10, description: "该专家需要的平台 skill（没有合适的就留空，不要编造）" })),
+  mcps: Type.Optional(Type.Array(McpSchema, { maxItems: 10, description: "该专家需要的外部系统连接器声明" })),
 }, strict);
 
 export const SolutionSchema = Type.Object({
@@ -32,6 +48,8 @@ export const SolutionSchema = Type.Object({
   coordinator_key: Type.String({ minLength: 1, maxLength: 40, description: "协调专家，必须等于 experts 中某一项的 key" }),
   coordinator_instructions: Type.Optional(Type.String({ maxLength: 4000, description: "专家之间如何协作" })),
   output_requirements: Type.Optional(Type.String({ maxLength: 4000, description: "方案最终交付物的要求" })),
+  mode: Type.Optional(Type.Union([Type.Literal("solo"), Type.Literal("group")], { description: "solo：仅 1 位专家；group：2 位以上专家并写出群聊编排规则" })),
+  orchestration_rules: Type.Optional(Type.String({ maxLength: 8000, description: "群聊编排规则（仅 group）：用 @{专家key} 引用成员" })),
   experts: Type.Array(ExpertSchema, { minItems: 1, maxItems: 12 }),
   evidence: Type.Optional(Type.Array(EvidenceSchema, { maxItems: 8, description: "方案整体依据的来源片段" })),
 }, strict);
@@ -63,6 +81,10 @@ export interface RecognizedImage {
   reason: string;
 }
 
+export function solutionMode(solution: Pick<GeneratedSolution, "mode" | "experts">): "solo" | "group" {
+  return solution.mode ?? (solution.experts.length === 1 ? "solo" : "group");
+}
+
 /** 结构校验之外的一致性检查。返回问题列表（给模型看的中文说明），为空表示通过。 */
 export function solutionProblems(solution: GeneratedSolution, knownChunkIds: ReadonlySet<string>): string[] {
   const problems: string[] = [];
@@ -70,6 +92,19 @@ export function solutionProblems(solution: GeneratedSolution, knownChunkIds: Rea
   const duplicated = keys.filter((key, index) => keys.indexOf(key) !== index);
   if (duplicated.length) problems.push(`experts[].key 重复：${[...new Set(duplicated)].join("、")}`);
   if (!keys.includes(solution.coordinator_key)) problems.push(`coordinator_key「${solution.coordinator_key}」不在 experts[].key 中`);
+
+  const mode = solutionMode(solution);
+  const rules = solution.orchestration_rules ?? "";
+  if (mode === "solo") {
+    if (keys.length !== 1) problems.push("solo 方案必须恰好 1 位专家");
+    if (rules.trim()) problems.push("solo 方案不需要 orchestration_rules，请留空");
+  } else {
+    if (keys.length < 2) problems.push("group 方案至少需要 2 位专家");
+    const stripped = rules.replace(/@\{([^{}\s]+)\}/gu, "");
+    if (stripped.includes("@{")) problems.push("orchestration_rules 里有格式不正确的成员引用，应写成 @{专家key}");
+    const unknownRefs = [...new Set([...rules.matchAll(/@\{([^{}\s]+)\}/gu)].map((match) => match[1]!))].filter((ref) => !keys.includes(ref));
+    if (unknownRefs.length) problems.push(`orchestration_rules 引用了不在 experts[].key 中的成员：${unknownRefs.join("、")}`);
+  }
 
   const blank = (value: string | undefined) => value !== undefined && value.trim() === "";
   if (blank(solution.display_name)) problems.push("display_name 不能只有空白");
@@ -91,8 +126,12 @@ export function solutionProblems(solution: GeneratedSolution, knownChunkIds: Rea
 }
 
 /** 补齐可省略字段，输出与宿主 schema 完全同形的对象。 */
-export function normalizeSolution(solution: GeneratedSolution): Required<Omit<GeneratedSolution, "experts" | "evidence">> & {
-  experts: Array<Omit<GeneratedExpert, "evidence"> & { evidence: Required<Evidence>[] }>;
+export function normalizeSolution(solution: GeneratedSolution): Required<Omit<GeneratedSolution, "experts" | "evidence" | "mode" | "orchestration_rules">> & { mode: "solo" | "group"; orchestration_rules: string } & {
+  experts: Array<Omit<GeneratedExpert, "evidence" | "skills" | "mcps"> & {
+    evidence: Required<Evidence>[];
+    skills: Array<Required<NonNullable<GeneratedExpert["skills"]>[number]>>;
+    mcps: Array<Required<NonNullable<GeneratedExpert["mcps"]>[number]>>;
+  }>;
   evidence: Required<Evidence>[];
 } {
   const evidence = (items: Evidence[] | undefined) => (items ?? []).map((item) => ({ chunk_id: item.chunk_id, quote: item.quote ?? "" }));
@@ -100,6 +139,8 @@ export function normalizeSolution(solution: GeneratedSolution): Required<Omit<Ge
     display_name: solution.display_name.trim(),
     description: solution.description.trim(),
     tags: [...new Set((solution.tags ?? []).map((tag) => tag.trim()).filter(Boolean))],
+    mode: solutionMode(solution),
+    orchestration_rules: (solution.orchestration_rules ?? "").trim(),
     coordinator_key: solution.coordinator_key,
     coordinator_instructions: solution.coordinator_instructions ?? "",
     output_requirements: solution.output_requirements ?? "",
@@ -110,6 +151,8 @@ export function normalizeSolution(solution: GeneratedSolution): Required<Omit<Ge
       description: expert.description.trim(),
       system_prompt: expert.system_prompt.trim(),
       evidence: evidence(expert.evidence),
+      skills: (expert.skills ?? []).map((skill) => ({ ...skill, reason: skill.reason ?? "" })),
+      mcps: (expert.mcps ?? []).map((mcp) => ({ ...mcp, purpose: mcp.purpose ?? "", required: mcp.required ?? false })),
     })),
     evidence: evidence(solution.evidence),
   };

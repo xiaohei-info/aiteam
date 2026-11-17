@@ -326,6 +326,45 @@ test("Agent conversation permissions default to read-only and update through the
   }
 });
 
+test("A solution's orchestration rules become the group's custom orchestration; solo solutions never form a group", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const snap = (id: string) => ({ employee_id: id, tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: `${id}-s`, display_name: id });
+  const expert = (id: string) => ({ employee_id: id, tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: id, display_name: id, revoked: false, synced_at: now });
+  const solution = (id: string, extra: Record<string, unknown>) => ({ solution_instance_id: id, tenant_id: "tenant-1", member_id: "member-1", version: "1", display_name: id, coordinator_employee_id: "lead", expert_employee_ids: ["lead", "worker"], ...extra });
+  fixture.store.replaceProjections([expert("lead"), expert("worker")], [
+    solution("with-rules", { mode: "group", orchestration_rules: "1. @{lead} 先拆解\n2. @{worker} 执行" }),
+    solution("bad-ref", { mode: "group", orchestration_rules: "@{ghost} 做事" }),
+    solution("legacy", {}),
+    solution("solo-1", { mode: "solo", expert_employee_ids: ["lead"] }),
+  ], [snap("lead"), snap("worker")]);
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const create = (solutionId: string) => fetch(`${base}/api/agent/conversations`, { method: "POST", headers: { Authorization: "Bearer test", "Content-Type": "application/json" }, body: JSON.stringify({ kind: "group", solution_instance_id: solutionId }) });
+  try {
+    const ok = await create("with-rules");
+    assert.equal(ok.status, 201);
+    const id = (await ok.json() as { data: { id: string } }).data.id;
+    assert.deepEqual(fixture.store.getConversationMetadata(id)?.orchestration, { mode: "custom", format: "collaboration-markdown-v1", prompt: "1. @{lead} 先拆解\n2. @{worker} 执行" });
+    const bad = await create("bad-ref");
+    assert.equal(bad.status, 422);
+    assert.equal((await bad.json() as { code: string }).code, "invalid_orchestration_reference");
+    const solo = await create("solo-1");
+    assert.equal(solo.status, 422);
+    assert.equal((await solo.json() as { code: string }).code, "solo_solution_has_no_group");
+    const legacy = await create("legacy");
+    assert.equal(legacy.status, 201);
+    const legacyId = (await legacy.json() as { data: { id: string } }).data.id;
+    assert.equal(fixture.store.getConversationMetadata(legacyId)?.orchestration ?? null, null);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
 test("Agent group creation binds an authorized coordinator and rejects cross-roster input", async () => {
   const fixture = await createFixture();
   const now = new Date().toISOString();
@@ -692,8 +731,8 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    // 87 with GET /api/agent/events (全局活动信号，供桌面端做列表补丁与按需订阅)。
-    assert.equal(frontendOperations.length, 87);
+    // 89 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口。
+    assert.equal(frontendOperations.length, 89);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -1245,6 +1284,29 @@ test("close() ends open SSE streams instead of waiting for clients to disconnect
   } finally {
     for (const reader of readers) await reader.cancel().catch(() => undefined);
     await http.close().catch(() => undefined);
+    await fixture.close();
+  }
+});
+
+test("personal capabilities are listed and revoked per owner, and a missing one is 404", async () => {
+  const fixture = await createFixture();
+  fixture.store.putLocalCapability("tenant-1", "member-1", { kind: "mcp", ref: "notion", display_name: "Notion", url: "https://example.com/mcp", tools: ["search"], source: "user_url", reason: "", approved_by: "member-1" });
+  fixture.store.putLocalCapability("tenant-1", "member-2", { kind: "mcp", ref: "other", display_name: "Other", url: "https://example.com/o", tools: ["x"], source: "user_url", reason: "", approved_by: "member-2" });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = { Authorization: "Bearer test" };
+  try {
+    const listed = await (await fetch(`${base}/api/agent/capabilities`, { headers })).json() as { data: { ref: string }[] };
+    assert.deepEqual(listed.data.map((item) => item.ref), ["notion"]);
+    assert.equal((await fetch(`${base}/api/agent/capabilities/mcp/other`, { method: "DELETE", headers })).status, 404);
+    assert.equal((await fetch(`${base}/api/agent/capabilities/mcp/notion`, { method: "DELETE", headers })).status, 200);
+    assert.deepEqual(fixture.store.listLocalCapabilities("tenant-1", "member-1"), []);
+    assert.equal(fixture.store.listLocalCapabilities("tenant-1", "member-2").length, 1);
+  } finally {
+    await http.close();
     await fixture.close();
   }
 });

@@ -1169,3 +1169,6 @@
     padding: 12px;
   }
 }
+
+/* 方案卡复用人才卡结构；摘要区不可点击。 */
+.tm-agent-summary.static { cursor: default; }

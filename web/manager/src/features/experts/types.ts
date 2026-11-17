@@ -83,6 +83,13 @@ export interface SolutionPackageExpertSummary {
   enabled?: boolean;
 }
 
+export interface RecommendedCapability {
+  kind: "skill" | "mcp";
+  ref: string;
+  display_name?: string;
+  purpose?: string;
+}
+
 /**
  * 可应用行业方案包（对齐 Pi-native SolutionPackage）。
  * 专家能力来自各自模板；方案只描述固定 roster、协调专家和协作说明。
@@ -97,6 +104,12 @@ export interface SolutionPackage {
   coordinator_instructions?: string;
   workflow_skill_ref?: Record<string, unknown> | null;
   output_requirements?: string;
+  /** solo：单人方案；group：组群方案。旧方案没有该字段，按组群处理。 */
+  mode?: "solo" | "group";
+  /** 群聊编排规则；成员引用为专家模板 ID。 */
+  orchestration_rules?: string;
+  /** 推荐的 skill / MCP：只是提示，不授权、不自动安装。 */
+  recommended_capabilities?: RecommendedCapability[];
   experts?: SolutionPackageExpertSummary[];
   tags?: string[];
 }
@@ -207,6 +220,10 @@ export interface SolutionInstance {
   coordinator_instructions?: string;
   workflow_skill_ref?: Record<string, unknown> | null;
   output_requirements?: string;
+  mode?: "solo" | "group";
+  /** 群聊编排规则；成员引用已换成本企业的员工 ID。 */
+  orchestration_rules?: string;
+  recommended_capabilities?: RecommendedCapability[];
   config_version?: number;
   created_at: string | null;
   updated_at: string | null;

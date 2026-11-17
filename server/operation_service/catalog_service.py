@@ -11,24 +11,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-
 from shared.contracts.crosstier import CatalogReleaseNotify
-from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
 from shared.contracts.enums import CatalogStatus, CatalogType
+from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
 from shared.errors import Conflict, NotFound, ValidationProblem
 
 from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
 from .catalog_gateway import CatalogManagerGateway
 from .catalog_repository import CatalogEntry, CatalogRepository
-from .catalog_scope import TemplateOutOfScope, VisibleScope, normalize_scope, scope_allows
 from .catalog_schemas import (
     CatalogDetailView,
     CatalogEntryResponse,
+    ExpertBinding,
     PublishTemplateRequest,
     RegisterExpertTemplateRequest,
     RegisterSolutionTemplateRequest,
     SetVisibilityRequest,
-    ExpertBinding,
+)
+from .catalog_scope import (
+    TemplateOutOfScope,
+    VisibleScope,
+    normalize_scope,
+    scope_allows,
 )
 
 _INITIAL_VERSION = "1"
@@ -258,6 +262,9 @@ class CatalogService:
                     "coordinator_template_id": coordinator_id,
                     "coordinator_instructions": coordinator_instructions,
                     "output_requirements": (req.output_requirements or "").strip(),
+                    "mode": req.mode,
+                    "orchestration_rules": req.orchestration_rules.strip(),
+                    "recommended_capabilities": [item.model_dump(mode="json") for item in req.recommended_capabilities],
                     "expert_template_versions": template_versions,
                     "tags": req.tags,
                 },
@@ -555,6 +562,9 @@ class CatalogService:
             coordinator_template_id=payload.get("coordinator_template_id", ""),
             coordinator_instructions=payload.get("coordinator_instructions", ""),
             output_requirements=payload.get("output_requirements", ""),
+            mode=payload.get("mode", "group"),
+            orchestration_rules=payload.get("orchestration_rules", ""),
+            recommended_capabilities=payload.get("recommended_capabilities", []),
             experts=experts,
             tags=payload.get("tags", []),
             hidden_expert_count=len(hidden_ids),

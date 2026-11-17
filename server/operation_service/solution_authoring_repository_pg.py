@@ -40,7 +40,7 @@ _TABLES: dict[type, tuple[LiteralString, LiteralString]] = {
     FindingRow: ("solution_sensitive_finding", "finding_id"),
     EventRow: ("solution_review_event", "event_id"),
 }
-_JSON_COLUMNS = frozenset({"package", "evidence_sources", "warnings", "usage", "publish_state"})
+_JSON_COLUMNS = frozenset({"package", "evidence_sources", "warnings", "usage", "publish_state", "confirmations"})
 
 
 def _columns(cls: type) -> list[str]:
@@ -81,6 +81,9 @@ _JOBS_LATEST = sql.SQL("SELECT DISTINCT ON (draft_id) {} FROM {} ORDER BY draft_
     sql.SQL(", ").join(map(sql.Identifier, _columns(JobRow))), sql.Identifier(_TABLES[JobRow][0]),
 )
 _SOURCE_COUNTS = sql.SQL("SELECT draft_id, count(*) AS n FROM {} GROUP BY draft_id").format(sql.Identifier(_TABLES[SourceRow][0]))
+_OPEN_FINDING_COUNTS = sql.SQL("SELECT draft_id, count(*) AS n FROM {} WHERE status = 'open' GROUP BY draft_id").format(
+    sql.Identifier(_TABLES[FindingRow][0]),
+)
 _JOB_FOR_UPDATE = _select(JobRow, "job_id = %s FOR UPDATE")
 _JOB_CLAIMABLE = _select(
     JobRow,
@@ -140,6 +143,11 @@ class _PgTx(_Tx):
     def source_counts(self) -> dict[str, int]:
         with self._conn.cursor(row_factory=dict_row) as cursor:
             records = cursor.execute(_SOURCE_COUNTS).fetchall()
+        return {str(record["draft_id"]): int(record["n"]) for record in records}
+
+    def open_finding_counts(self) -> dict[str, int]:
+        with self._conn.cursor(row_factory=dict_row) as cursor:
+            records = cursor.execute(_OPEN_FINDING_COUNTS).fetchall()
         return {str(record["draft_id"]): int(record["n"]) for record in records}
 
     def put_source(self, row: SourceRow) -> None:

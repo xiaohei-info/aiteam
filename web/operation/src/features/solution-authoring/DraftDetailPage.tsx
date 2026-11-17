@@ -9,6 +9,7 @@ import { BreadcrumbItem, Breadcrumbs } from "@astryxdesign/core/Breadcrumbs";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { DropdownMenu, DropdownMenuItem } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -18,13 +19,21 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
+import { Box, Row, Rows } from "./Box";
+import { ChecklistPanel } from "./ChecklistPanel";
+import { ExpertsOverview } from "./ExpertsOverview";
 import { FindingsPanel } from "./FindingsPanel";
 import { draftStatus, eventAction, formatTime, jobError, jobStatus } from "./labels";
 import { PackageEditor, type SaveFailure } from "./PackageEditor";
 import { SourcesPanel } from "./SourcesPanel";
+import { TeamSection } from "./TeamSection";
+import { TodoBanner } from "./TodoBanner";
+import { WorkflowStepper } from "./WorkflowStepper";
+import { checklist, friendlyError, orchestrationState, primaryAction, workflowSteps } from "./workflow";
 import {
   CONTENT_STATUSES,
   EDITABLE_STATUSES,
+  type ConfirmItem,
   type DraftDetail,
   type FindingResolution,
   type GeneratedSolution,
@@ -80,7 +89,7 @@ function confirmCopy(pending: Confirm | null): ConfirmCopy {
 }
 
 function message(err: unknown, fallback: string): string {
-  return err instanceof Error && err.message ? err.message : fallback;
+  return err instanceof Error && err.message ? friendlyError(err.message) : fallback;
 }
 
 export function DraftDetailPage(): ReactNode {
@@ -102,6 +111,8 @@ export function DraftDetailPage(): ReactNode {
   // 同一次「开始生成」的重试沿用同一个幂等键：网络失败后再点不会排出第二个任务。
   const generateKey = useRef<string | null>(null);
   const sequence = useRef(0);
+  // 页头「上传资料」主操作借它打开资料面板里的文件选择。
+  const pickerRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!draftId) return;
@@ -169,6 +180,7 @@ export function DraftDetailPage(): ReactNode {
   const canReject = isAdmin && (detail.status === "in_review" || (detail.status === "approved" && !detail.publish_started));
   const job = detail.latest_job;
   const copy = confirmCopy(confirm);
+  const primary = detail.status === "archived" ? null : primaryAction(detail, isAdmin, editing);
 
   /** 逐个上传：前面的已经入库，所以无论后面成败都刷新清单，并汇总成功与失败。 */
   async function upload(files: File[]) {
@@ -211,6 +223,29 @@ export function DraftDetailPage(): ReactNode {
     const failure = await run(() => api.updatePackage(draftId!, baseVersion, next), "保存失败", false);
     return failure && { message: failure.message, conflict: failure.code === "conflict" };
   }
+
+  function runPrimary() {
+    if (!primary) return;
+    if (primary.kind === "upload") pickerRef.current?.click();
+    else if (primary.kind === "generate") void generate();
+    else if (primary.kind === "submit") void run(() => api.submitReview(draftId!), "提交失败");
+    else if (primary.kind === "approve") void run(() => api.approve(draftId!, ""), "操作失败");
+    else if (primary.kind === "publish") setConfirm({ kind: "publish" });
+  }
+
+  /** 界面上是「确认群主与编排规则」一个动作；后端按两项分别记录，这里依次提交。 */
+  const confirmTeam = (items: ConfirmItem[]) => void run(async () => {
+    let next: DraftDetail | undefined;
+    for (const item of items) next = await api.confirm(draftId, item);
+    return next;
+  }, "确认失败");
+  /** 更换群主：直接保存正文（带当前版本），原来的确认随内容变化自动作废。 */
+  const changeCoordinator = (key: string) => {
+    if (!detail.package) return;
+    void run(() => api.updatePackage(draftId, detail.version, { ...detail.package!, coordinator_key: key }), "更换群主失败");
+  };
+  const teamState = orchestrationState(detail.gates);
+  const isGroup = (detail.package?.mode ?? detail.solution_mode ?? "group") === "group";
 
   const resolve = (findingId: string, resolution: FindingResolution) => void run(() => api.resolveFinding(draftId, findingId, resolution), "处理失败");
 
@@ -260,26 +295,31 @@ export function DraftDetailPage(): ReactNode {
             生成模型 {detail.platform_model_ref.model_id} · 图片识别{detail.image_recognition === "vision" ? "已开启" : "未开启"} · 最近更新 {formatTime(detail.updated_at)}
           </Text>
         </VStack>
-        <HStack gap={2} wrap="wrap">
-          {canEditContent && (
-            <Button
-              label="提交审核"
-              onClick={() => void run(() => api.submitReview(draftId), "提交失败")}
-              isDisabled={busy || editing || detail.open_finding_count > 0}
-              tooltip={editing ? EDITING_HINT : detail.open_finding_count > 0 ? "还有待处理的敏感项" : undefined}
-            />
-          )}
-          {isAdmin && detail.status === "in_review" && (
-            <Button label="审核通过" onClick={() => void run(() => api.approve(draftId, ""), "操作失败")} isDisabled={busy} />
-          )}
-          {canReject && <Button label="驳回" variant="secondary" onClick={() => setRejecting(true)} isDisabled={busy} />}
-          {isAdmin && detail.status === "approved" && (
-            <Button label="发布到目录" onClick={() => setConfirm({ kind: "publish" })} isDisabled={busy} />
-          )}
-          {detail.status === "generating" && <Button label="取消生成" variant="secondary" onClick={() => setConfirm({ kind: "cancel" })} isDisabled={busy} />}
-          {canArchive && <Button label="删除" variant="ghost" onClick={() => setConfirm({ kind: "archive" })} isDisabled={busy} />}
-        </HStack>
+        <VStack gap={1} hAlign="end">
+          <HStack gap={2} wrap="wrap" vAlign="center">
+            {primary && primary.kind !== "submit" && (
+              <Button
+                label={primary.label}
+                variant="primary"
+                size="lg"
+                onClick={runPrimary}
+                isDisabled={busy || primary.disabledReason !== undefined}
+              />
+            )}
+            {detail.status === "generating" && <Button label="取消生成" variant="secondary" onClick={() => setConfirm({ kind: "cancel" })} isDisabled={busy} />}
+            {(canReject || canArchive) && (
+              <DropdownMenu button={{ label: "更多操作", children: "更多", variant: "secondary", isDisabled: busy }} menuWidth={160}>
+                {canReject && <DropdownMenuItem label="驳回" onClick={() => setRejecting(true)} />}
+                {canArchive && <DropdownMenuItem label="删除" onClick={() => setConfirm({ kind: "archive" })} />}
+              </DropdownMenu>
+            )}
+          </HStack>
+          {primary && primary.kind !== "submit" && primary.disabledReason && <Text type="supporting" color="secondary">{primary.disabledReason}</Text>}
+        </VStack>
       </HStack>
+
+      {detail.status !== "archived" && <WorkflowStepper steps={workflowSteps(detail)} />}
+      {detail.package && canEditContent && <TodoBanner rows={checklist(detail)} />}
 
       {actionError && (
         <Banner status="error" title={actionError.title} description={actionError.description} isDismissable onDismiss={() => setActionError(null)} />
@@ -310,19 +350,22 @@ export function DraftDetailPage(): ReactNode {
         />
       )}
 
-      <SourcesPanel
-        sources={detail.sources}
-        canEdit={canEditSources}
-        hasContent={detail.package !== null}
-        isContentLocked={editing}
-        busy={busy}
-        onUpload={(files) => void upload(files)}
-        onDelete={(source) => setConfirm({ kind: "deleteSource", source })}
-        onGenerate={() => { if (detail.package) setConfirm({ kind: "regenerate" }); else void generate(); }}
-      />
-
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
+        <VStack gap={6} style={{ flex: "1 1 560px", minWidth: 0 }}>
       {detail.package && (
         <>
+          {isGroup && teamState.applicable && (
+            <TeamSection
+              solution={detail.package}
+              state={teamState}
+              canEdit={canEditContent}
+              isLocked={editing}
+              busy={busy}
+              onChangeCoordinator={changeCoordinator}
+              onConfirm={confirmTeam}
+            />
+          )}
+          <ExpertsOverview solution={detail.package} />
           <FindingsPanel
             findings={detail.findings}
             solution={detail.package}
@@ -344,18 +387,44 @@ export function DraftDetailPage(): ReactNode {
         </>
       )}
 
-      <Card>
-        <VStack gap={3}>
-          <Heading level={2}>操作记录</Heading>
-          <VStack as="ol" gap={1} aria-label="操作记录" style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {detail.events.map((event, index) => (
-              <li key={`${event.created_at}-${index}`}>
-                <Text type="supporting">{formatTime(event.created_at)} · {eventAction(event.action)} · {event.actor_id}</Text>
-              </li>
-            ))}
-          </VStack>
         </VStack>
-      </Card>
+        <VStack as="aside" gap={6} aria-label="发布清单与资料" style={{ flex: "0 1 340px", minWidth: 280 }}>
+      {detail.package && canEditContent && (
+        <ChecklistPanel
+          rows={checklist(detail)}
+          submit={primary?.kind === "submit" ? primary : null}
+          busy={busy}
+          onSubmit={runPrimary}
+        />
+      )}
+      <SourcesPanel
+        sources={detail.sources}
+        canEdit={canEditSources}
+        hasContent={detail.package !== null}
+        isContentLocked={editing}
+        busy={busy}
+        onUpload={(files) => void upload(files)}
+        onDelete={(source) => setConfirm({ kind: "deleteSource", source })}
+        hideUpload={primary?.kind === "upload"}
+        hideGenerate={primary?.kind === "generate"}
+        pickerRef={pickerRef}
+        onGenerate={() => { if (detail.package) setConfirm({ kind: "regenerate" }); else void generate(); }}
+      />
+
+      <Box title="操作记录">
+        <Rows label="操作记录">
+          {detail.events.map((event, index) => (
+            <Row
+              key={`${event.created_at}-${index}`}
+              main={<Text>{eventAction(event.action)}</Text>}
+              side={<Text type="supporting" color="secondary">{formatTime(event.created_at)} · {event.actor_id}</Text>}
+            />
+          ))}
+        </Rows>
+      </Box>
+
+        </VStack>
+      </div>
 
       <AlertDialog
         isOpen={confirm !== null}

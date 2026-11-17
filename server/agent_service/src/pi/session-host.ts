@@ -1,4 +1,4 @@
-import { connectorTools } from "../connectors.js";
+import { capabilityInstallTool, connectorTools, personalConnectorTools } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -1362,8 +1362,12 @@ export class SessionHost {
       ] : []),
     ];
     const connectors = record ? connectorTools(this.options.store, { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId }, authorization.employeeId, record.conversationId, authorization.snapshot) : [];
-    for (const tool of connectors) allowed.add(tool.name);
-    tools.push(...connectors);
+    // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
+    const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
+    const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner)] : [];
+    for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
+    tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
@@ -1959,6 +1963,7 @@ export class SessionHost {
         workflow ? `方案工作流技能：${workflow}` : "",
         instructions ? `方案协作说明：${instructions}` : "",
         requirements ? `方案交付要求：${requirements}` : "",
+        recommendedCapabilityContext(solution.recommended_capabilities),
       ].filter(Boolean).join("\n"));
     }
     const freeDescription = !metadata?.orchestration && !solution ? groupContextField(metadata?.description) : undefined;
@@ -2447,6 +2452,27 @@ function uniqueStrings(...values: unknown[]): string[] {
     }
   }
   return [...seen];
+}
+
+/**
+ * Solution-recommended skills / MCP as a hint only: nothing is installed or authorized by it. The model may ask the user
+ * (capability_install) only when the task truly needs one; URLs are never invented from this list.
+ */
+export function recommendedCapabilityContext(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  const items = value.slice(0, 24).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const kind = row.kind === "skill" || row.kind === "mcp" ? row.kind : undefined;
+    const ref = groupContextField(row.ref);
+    if (!kind || !ref) return [];
+    const name = groupContextField(row.display_name);
+    const purpose = groupContextField(row.purpose);
+    return [`${kind === "mcp" ? "MCP" : "skill"} ${name && name !== ref ? `${name}（${ref}）` : ref}${purpose ? `：${purpose}` : ""}`];
+  });
+  return items.length
+    ? `方案推荐的能力（仅供参考，并未安装或授权）：${items.join("；")}。只有任务确实需要、且用户给出了可用地址时，才可以请求用户安装，不得自行编造地址。`
+    : "";
 }
 
 function groupContextField(value: unknown): string | undefined {

@@ -53,6 +53,40 @@ export function validateConnectorSelection(store: AgentSqliteStore, owner: TaskO
   if (ids.some(id => !available.some(c => c.connector_id === id && c.status === "enabled"))) throw new AutomationError(422, "connector_unavailable", "A selected connector is not authorized or installed locally");
 }
 
+interface McpTarget { url: string; token_env?: string }
+
+/** One MCP tool call over a fresh transport; the credential stays in the process environment and is redacted from the result. */
+async function callMcpTool(config: McpTarget, input: { tool: string; arguments: Record<string, unknown> }, signal?: AbortSignal) {
+  if (signal?.aborted) throw new Error("Connector call cancelled");
+  const timeout = AbortSignal.timeout(30_000);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const token = config.token_env ? process.env[config.token_env] : undefined;
+  const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { redirect: "error", signal: combined, headers: token ? { Authorization: `Bearer ${token}` } : {} } });
+  const client = new Client({ name: "aiteam-connector", version: "1.0.0" });
+  try {
+    await client.connect(transport, { signal: combined });
+    const inventory = await client.listTools({}, { signal: combined });
+    if (!inventory.tools.some(tool => tool.name === input.tool)) throw new Error();
+    const result = await client.callTool({ name: input.tool, arguments: input.arguments }, undefined, { signal: combined, timeout: 30_000 });
+    let text = JSON.stringify(result);
+    if (token) text = text.split(token).join("[凭据已隐藏]");
+    return { content: [{ type: "text" as const, text: text.slice(0, 50_000) }], details: undefined, isError: Boolean(result.isError) };
+  } catch { return { content: [{ type: "text" as const, text: "连接器调用未能确认成功，请检查服务与审批记录；不要自动重试有副作用的操作。" }], details: undefined, isError: true }; }
+  finally { await client.close().catch(() => undefined); await transport.close().catch(() => undefined); }
+}
+
+/** Lists the tools an MCP server really exposes; used to check an install request before it is stored. */
+export async function listMcpTools(url: string, signal?: AbortSignal): Promise<string[]> {
+  const timeout = AbortSignal.timeout(15_000);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { redirect: "error", signal: combined } });
+  const client = new Client({ name: "aiteam-connector", version: "1.0.0" });
+  try {
+    await client.connect(transport, { signal: combined });
+    return (await client.listTools({}, { signal: combined })).tools.map(tool => tool.name);
+  } finally { await client.close().catch(() => undefined); await transport.close().catch(() => undefined); }
+}
+
 /** Each call uses a fresh transport and current grants. Credentials never enter model-visible arguments. */
 export function connectorTools(store: AgentSqliteStore, owner: TaskOwner, employeeId: string, conversationId: string, snapshot: FrozenSnapshot): ToolDefinition[] {
   const task = store.automation.forConversation(conversationId);
@@ -71,22 +105,74 @@ export function connectorTools(store: AgentSqliteStore, owner: TaskOwner, employ
       const config = localConnectors(owner).find(c => c.connector_id === connector.connector_id);
       const input = params as { tool: string; arguments: Record<string, unknown> };
       if (!config || !config.tools.includes(input.tool) || !input.arguments || Array.isArray(input.arguments) || typeof input.arguments !== "object") throw new Error("Connector tool is not authorized");
-      if (signal?.aborted) throw new Error("Connector call cancelled");
-      const timeout = AbortSignal.timeout(30_000);
-      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-      const token = config.token_env ? process.env[config.token_env] : undefined;
-      const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { redirect: "error", signal: combined, headers: token ? { Authorization: `Bearer ${token}` } : {} } });
-      const client = new Client({ name: "aiteam-connector", version: "1.0.0" });
-      try {
-        await client.connect(transport, { signal: combined });
-        const inventory = await client.listTools({}, { signal: combined });
-        if (!inventory.tools.some(tool => tool.name === input.tool)) throw new Error();
-        const result = await client.callTool({ name: input.tool, arguments: input.arguments }, undefined, { signal: combined, timeout: 30_000 });
-        let text = JSON.stringify(result);
-        if (token) text = text.split(token).join("[凭据已隐藏]");
-        return { content: [{ type: "text" as const, text: text.slice(0, 50_000) }], details: undefined, isError: Boolean(result.isError) };
-      } catch { return { content: [{ type: "text" as const, text: "连接器调用未能确认成功，请检查服务与审批记录；不要自动重试有副作用的操作。" }], details: undefined, isError: true }; }
-      finally { await client.close().catch(() => undefined); await transport.close().catch(() => undefined); }
+      return callMcpTool(config, input, signal);
     },
   } as ToolDefinition));
+}
+
+const REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+const TOOL_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function validMcpUrl(value: string): URL {
+  const url = new URL(value);
+  const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
+  if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password || url.hash || url.search) throw new Error("invalid MCP url");
+  return url;
+}
+
+/**
+ * Personal MCP connectors the user approved in conversation. They are local to this member, carry no credentials,
+ * never alter Manager configuration, and every call still goes through the external-tool approval gate.
+ * An employee snapshot with an explicit tool allowlist can still exclude them (`connector_my_<ref>`).
+ */
+export function personalConnectorTools(store: AgentSqliteStore, owner: TaskOwner, snapshot: FrozenSnapshot): ToolDefinition[] {
+  return store.listLocalCapabilities(owner.tenantId, owner.memberId).filter(item => item.kind === "mcp" && permitsConnectorTool(snapshot, `my_${item.ref}`)).map(item => ({
+    name: `connector_my_${item.ref}`,
+    label: item.display_name,
+    description: `Call a tool of ${item.display_name}, an MCP server the user installed for themselves. Allowed tools: ${item.tools.join(", ")}. External actions require approval.`,
+    parameters: Type.Object({ tool: Type.String({ enum: item.tools }), arguments: Type.Record(Type.String(), Type.Unknown()) }, { additionalProperties: false }),
+    execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
+      const current = store.listLocalCapabilities(owner.tenantId, owner.memberId).find(row => row.kind === "mcp" && row.ref === item.ref);
+      const input = params as { tool: string; arguments: Record<string, unknown> };
+      if (!current || !current.tools.includes(input.tool) || !input.arguments || Array.isArray(input.arguments) || typeof input.arguments !== "object") throw new Error("Connector tool is not authorized");
+      return callMcpTool({ url: current.url }, input, signal);
+    },
+  } as ToolDefinition));
+}
+
+/**
+ * The model may only *ask* to install: this tool is unknown to the approval classifier, so it always needs a human
+ * decision, and the approval preview shows the URL. After approval the server is contacted and its real tool list stored.
+ * No credentials can be passed through the model; a server that needs one is not supported here.
+ */
+export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner): ToolDefinition {
+  return {
+    name: "capability_install",
+    label: "Install MCP capability",
+    description: "Ask the user to install an MCP server for themselves. Call it only when the task truly needs a capability you do not have, "
+      + "and only with an https (or localhost) URL the user gave you or the solution recommended. Never invent URLs. The user must approve; do not retry after a denial.",
+    parameters: Type.Object({
+      kind: Type.Literal("mcp"),
+      ref: Type.String({ description: "short id: lowercase letters, digits, - or _" }),
+      display_name: Type.String({ minLength: 1, maxLength: 120 }),
+      url: Type.String({ description: "MCP endpoint (streamable HTTP)" }),
+      reason: Type.String({ maxLength: 200, description: "why the task needs it" }),
+    }, { additionalProperties: false }),
+    execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
+      const input = params as { ref: string; display_name: string; url: string; reason: string };
+      try {
+        if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
+        const url = validMcpUrl(input.url);
+        const tools = (await listMcpTools(url.toString(), signal)).filter(name => TOOL_RE.test(name)).slice(0, 50);
+        if (!tools.length) throw new Error("no tools");
+        store.putLocalCapability(owner.tenantId, owner.memberId, {
+          kind: "mcp", ref: input.ref, display_name: input.display_name.slice(0, 120), url: url.toString(), tools,
+          source: "user_url", reason: (input.reason ?? "").slice(0, 200), approved_by: owner.memberId,
+        });
+        return { content: [{ type: "text" as const, text: `已安装 ${input.display_name}，可用工具：${tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
+      } catch {
+        return { content: [{ type: "text" as const, text: "安装未完成：地址无效、服务无法连接或没有可用工具。请让用户检查地址。" }], details: undefined, isError: true };
+      }
+    },
+  } as ToolDefinition;
 }

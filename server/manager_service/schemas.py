@@ -679,6 +679,9 @@ class SolutionInstanceOut(BaseModel):
     coordinator_instructions: str = Field(default="", description="自然语言协作说明")
     workflow_skill_ref: dict[str, Any] | None = Field(default=None, description="方案工作流 Skill 固定版本引用。")
     output_requirements: str = Field(default="", description="方案交付要求")
+    mode: Literal["solo", "group"] = Field(default="group", description="solo：单人方案，应用后直接私聊；group：组群方案")
+    orchestration_rules: str = Field(default="", description="群聊编排规则；成员引用为本 tenant 的 employee_id（@{employee_id}）")
+    recommended_capabilities: list[dict[str, Any]] = Field(default_factory=list, description="推荐的 skill / MCP（非强制提示）")
     config_version: int = Field(default=1, ge=1)
     created_at: datetime | None = None
     updated_at: datetime | None = None

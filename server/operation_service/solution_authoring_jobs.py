@@ -244,13 +244,17 @@ class GenerationJobExecutor:
         try:
             outcome = self._runner.generate(
                 chunks, model=model, budget=self._budget,
-                system_prompt=generate_system_prompt(), task_prompt=generate_task_prompt(draft.supplement), abort=lease.lost,
+                system_prompt=generate_system_prompt(), task_prompt=generate_task_prompt(draft.supplement, mode=draft.solution_mode), abort=lease.lost,
             )
         except WorkerError as error:
             raise _JobFailure(error.code, str(error), _sum(usage, error.usage)) from error
         usage = _sum(usage, outcome.usage)
 
         solution = outcome.result.solution
+        if solution.mode != draft.solution_mode:
+            raise _JobFailure(
+                "schema_invalid", f"the model produced a {solution.mode} solution but this draft is {draft.solution_mode}", usage,
+            )
         package = solution.model_dump(mode="json")
         by_id = {chunk.chunk_id: chunk for chunk in chunks}
         now = self._clock()
@@ -274,6 +278,7 @@ class GenerationJobExecutor:
             changes={
                 "package": package, "status": "ready_for_review", "evidence_sources": evidence, "warnings": warnings,
                 "prompt_version": PROMPT_VERSION, "usage": usage.model_dump(mode="json"), "review_note": "", "publish_state": {},
+                "confirmations": {},
             },
             new_findings=findings, replace_findings=True,
             event=("generation_succeeded", f"{len(solution.experts)} experts, {len(findings)} findings"),

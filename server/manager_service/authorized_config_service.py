@@ -156,6 +156,9 @@ class AuthorizedConfigService:
                     "coordinator_instructions": sol_instance.coordinator_instructions or "",
                     "workflow_skill_ref": sol_instance.workflow_skill_ref,
                     "output_requirements": sol_instance.output_requirements or "",
+                    "mode": sol_instance.mode or "group",
+                    "orchestration_rules": sol_instance.orchestration_rules or "",
+                    "recommended_capabilities": list(sol_instance.recommended_capabilities or []),
                 })
 
         revoked_ids = [

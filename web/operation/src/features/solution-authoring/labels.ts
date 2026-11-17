@@ -1,6 +1,16 @@
 /** 状态、错误码等到中文文案的映射。未知取值原样显示，不吞掉。 */
 import type { BadgeVariant } from "@astryxdesign/core/Badge";
-import type { DraftStatus, DraftSummary, FindingStatus, GeneratedSolution, JobStatus } from "./types";
+import type {
+  ConfirmItem,
+  DraftStatus,
+  DraftSummary,
+  FindingStatus,
+  Gate,
+  GateKey,
+  GeneratedSolution,
+  JobStatus,
+  SolutionMode,
+} from "./types";
 
 const DRAFT_STATUS: Record<DraftStatus, { label: string; variant: BadgeVariant }> = {
   draft: { label: "待生成", variant: "neutral" },
@@ -138,6 +148,9 @@ const EVENT_ACTIONS: Record<string, string> = {
   generation_succeeded: "生成完成",
   generation_failed: "生成失败",
   generation_cancelled: "取消生成",
+  confirmed_coordinator: "确认群主",
+  confirmed_rules: "确认编排规则",
+  confirmed_capabilities: "确认能力清单（已取消该步骤）",
   package_edited: "编辑正文",
   finding_redacted: "脱敏处理",
   finding_removed: "删除敏感内容",
@@ -191,3 +204,53 @@ export function generationNote(
   }
   return null;
 }
+
+/** 草稿在列表 / 详情里的「下一步」：说明现在该做什么（或在等谁）。`cta` 是进入详情的菜单项文案。 */
+export function nextStep(
+  draft: Pick<DraftSummary, "status" | "open_finding_count" | "source_count">, isAdmin: boolean,
+): { hint: string; cta: string } | null {
+  const open = draft.open_finding_count ?? 0;
+  switch (draft.status) {
+    case "draft":
+      return draft.source_count === 0
+        ? { hint: "下一步：上传行业资料后开始生成", cta: "上传资料" }
+        : { hint: "下一步：点击进入，确认资料后开始生成", cta: "查看详情" };
+    case "ready_for_review":
+      return open > 0
+        ? { hint: `下一步：处理 ${open} 项敏感项，再提交审核`, cta: "处理敏感项" }
+        : { hint: "下一步：核对正文，确认无误后提交审核", cta: "核对并提交审核" };
+    case "in_review":
+      return isAdmin
+        ? { hint: "下一步：审核通过或驳回", cta: "去审核" }
+        : { hint: "等待管理员审核，暂无需操作", cta: "查看详情" };
+    case "approved":
+      return isAdmin
+        ? { hint: "下一步：发布到目录", cta: "去发布" }
+        : { hint: "审核已通过，等待管理员发布", cta: "查看详情" };
+    case "rejected":
+      return { hint: "已被驳回：按驳回理由修改后重新提交", cta: "修改并重新提交" };
+    default:
+      return null;
+  }
+}
+
+const GATE_LABELS: Record<ConfirmItem | "findings", string> = {
+  findings: "敏感项已全部处理",
+  coordinator: "群主已确认",
+  rules: "群聊编排规则已确认",
+};
+
+export function gateLabel(key: GateKey): string {
+  return GATE_LABELS[key] ?? key;
+}
+
+/** 未通过原因：按 key 与后端消息特征本地化，认不出的原样显示。 */
+export function gateReason(gate: Gate): string {
+  if (gate.ok) return "";
+  if (gate.key === "findings") return `还有 ${/^(\d+)/.exec(gate.message)?.[1] ?? ""} 项敏感项待处理`.replace("有  项", "有敏感项");
+  if (gate.message.includes("required for a group")) return "组群方案必须写出群聊编排规则";
+  if (gate.message.includes("changed after")) return "内容在确认后被修改，需要重新确认";
+  return "尚未确认";
+}
+
+export const MODE_LABEL: Record<SolutionMode, string> = { solo: "单人", group: "组群" };

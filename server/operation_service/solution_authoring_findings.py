@@ -15,7 +15,11 @@ from typing import Any
 
 from shared.errors import Conflict
 from shared.solution_authoring.schemas import AgentFinding, SourceChunk
-from shared.solution_authoring.sensitive_scan import fields_containing, mask, scan_solution
+from shared.solution_authoring.sensitive_scan import (
+    fields_containing,
+    mask,
+    scan_solution,
+)
 
 from .solution_authoring_repository import FindingRow
 

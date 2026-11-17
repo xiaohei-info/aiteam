@@ -15,6 +15,7 @@ from shared.contracts.platform_provider import PlatformModelRef
 from shared.solution_authoring.prompts import MAX_SUPPLEMENT_CHARS
 from shared.solution_authoring.schemas import GeneratedSolution
 
+from .solution_authoring_gates import CONFIRM_ITEMS, evaluate_gates
 from .solution_authoring_repository import (
     DraftRow,
     EventRow,
@@ -28,6 +29,9 @@ DraftStatus = Literal[
 ]
 ImageRecognition = Literal["none", "vision"]
 FindingResolution = Literal["redact", "remove", "accept_public", "acknowledge"]
+SolutionMode = Literal["solo", "group"]
+ConfirmItem = Literal["coordinator", "rules"]
+assert set(CONFIRM_ITEMS) == {"coordinator", "rules"}
 
 
 class _Strict(BaseModel):
@@ -43,6 +47,7 @@ class DraftCreate(_Strict):
         default="none", description="图片识别方式：none 不识别（图片记为待人工处理项）；vision 用所选多模态模型识别",
     )
     supplement: str = Field(default="", max_length=MAX_SUPPLEMENT_CHARS, description="对生成侧重点的补充说明；不能覆盖平台规则")
+    solution_mode: SolutionMode = Field(default="group", description="solo：单人方案（1 位专家、不建群）；group：组群方案（群主 + 群聊编排规则）")
 
     @field_validator("title")
     @classmethod
@@ -64,6 +69,10 @@ class FindingResolve(_Strict):
             "accept_public 确认该内容可公开；acknowledge 确认已知悉（仅用于不在正文中的提示项）"
         ),
     )
+
+
+class ConfirmRequest(_Strict):
+    item: ConfirmItem = Field(description="要确认的内容：群主 / 群聊编排规则 / 能力清单（skill 与 MCP）")
 
 
 class ReviewNote(_Strict):
@@ -181,6 +190,7 @@ class DraftOut(_Strict):
     status: DraftStatus
     platform_model_ref: PlatformModelRef
     image_recognition: ImageRecognition
+    solution_mode: SolutionMode = "group"
     version: int
     published_solution_id: str | None = None
     created_by: str
@@ -196,10 +206,22 @@ class DraftOut(_Strict):
 class DraftSummaryOut(DraftOut):
     latest_job: JobBriefOut | None = None
     source_count: int = Field(default=0, ge=0, description="草稿已上传的资料数量；为 0 时不能生成")
+    open_finding_count: int = Field(default=0, ge=0, description="待处理的敏感项数量；大于 0 时不能提交审核")
 
     @classmethod
-    def summarize(cls, row: DraftRow, job: JobRow | None, source_count: int = 0) -> DraftSummaryOut:
-        return cls(**_draft_fields(row), latest_job=JobBriefOut.of(job) if job is not None else None, source_count=source_count)
+    def summarize(
+        cls, row: DraftRow, job: JobRow | None, source_count: int = 0, open_finding_count: int = 0,
+    ) -> DraftSummaryOut:
+        return cls(
+            **_draft_fields(row), latest_job=JobBriefOut.of(job) if job is not None else None,
+            source_count=source_count, open_finding_count=open_finding_count,
+        )
+
+
+class GateOut(_Strict):
+    key: Literal["findings", "coordinator", "rules"]
+    ok: bool
+    message: str = Field(default="", description="未通过时的原因（英文，前端按 key 本地化）")
 
 
 class DraftDetailOut(DraftOut):
@@ -216,6 +238,7 @@ class DraftDetailOut(DraftOut):
     open_finding_count: int
     events: list[EventOut] = Field(default_factory=list)
     latest_job: JobOut | None = None
+    gates: list[GateOut] = Field(default_factory=list, description="提交审核前必须满足的条件；正文尚未生成时为空")
 
     @classmethod
     def assemble(
@@ -236,6 +259,10 @@ class DraftDetailOut(DraftOut):
             open_finding_count=sum(1 for item in findings if item.status == "open"),
             events=[EventOut.of(item) for item in events],
             latest_job=JobOut.of(job) if job is not None else None,
+            gates=[
+                GateOut(key=gate.key, ok=gate.ok, message=gate.message)  # type: ignore[arg-type]
+                for gate in evaluate_gates(row.package, row.confirmations, open_findings=sum(1 for item in findings if item.status == "open"))
+            ] if row.package is not None else [],
         )
 
 
@@ -243,7 +270,7 @@ def _draft_fields(row: DraftRow) -> dict[str, Any]:
     return {
         "draft_id": row.draft_id, "title": row.title, "status": row.status,
         "platform_model_ref": PlatformModelRef(provider_id=row.model_provider_id, model_id=row.model_id),
-        "image_recognition": row.image_recognition, "version": row.version,
+        "image_recognition": row.image_recognition, "solution_mode": row.solution_mode, "version": row.version,
         "published_solution_id": row.published_solution_id, "created_by": row.created_by, "updated_by": row.updated_by,
         "created_at": row.created_at, "updated_at": row.updated_at,
     }

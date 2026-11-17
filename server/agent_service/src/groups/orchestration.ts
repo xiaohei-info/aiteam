@@ -79,6 +79,23 @@ export function validateFreeGroup(input: {
   }
 }
 
+/**
+ * Orchestration carried by an authorized solution. Solo solutions are private chats and never form a group;
+ * group solutions bring their rules (member references already translated to employee ids by Manager).
+ * Legacy solutions without rules keep the previous behavior (null = no orchestration).
+ */
+export function solutionOrchestration(
+  solution: { mode?: unknown; orchestration_rules?: unknown }, roster: readonly string[],
+): GroupOrchestration | null {
+  if (solution.mode === "solo") {
+    throw new GroupConfigurationError("solo_solution_has_no_group", "A solo solution is used in a private chat, not a group");
+  }
+  const rules = typeof solution.orchestration_rules === "string" ? solution.orchestration_rules.trim() : "";
+  if (!rules) return null;
+  validateMemberReferences(rules, roster);
+  return parseOrchestration({ mode: "custom", format: "collaboration-markdown-v1", prompt: rules });
+}
+
 /** Preserve the complete business rule; optional recent history is budgeted separately. */
 export function orchestrationContext(orchestration: GroupOrchestration, description: string | null, coordinator: boolean): string {
   if (!coordinator) return "你是群成员：完成协调人或用户交给你的具体任务，返回实际结果，不自行启动整套协作流程。";

@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+from shared.contracts.crosstier import ExpertTemplateDetail, RecommendedCapability, SolutionPackage
 from shared.contracts.tenancy import TenantContext
 from shared.contracts.platform_provider import PlatformModelRef
 from shared.contracts.platform_skill import PlatformSkillRef
@@ -232,6 +232,8 @@ class _FakeRecruitRepo:
             coordinator_instructions=kw.get("coordinator_instructions", ""),
             workflow_skill_ref=kw.get("workflow_skill_ref"),
             output_requirements=kw.get("output_requirements", ""),
+            mode=kw.get("mode", "group"), orchestration_rules=kw.get("orchestration_rules", ""),
+            recommended_capabilities=list(kw.get("recommended_capabilities") or []),
             knowledge_refs=list(kw["knowledge_refs"]), skill_refs=list(kw["skill_refs"]),
             planner_prompt=kw.get("planner_prompt", ""),
             subtask_prompt=kw.get("subtask_prompt", ""),
@@ -1580,3 +1582,54 @@ def test_apply_solution_each_expert_owns_provider_match():
     assert events[0].action == "apply_solution"
     assert len(events[0].detail["match_audits"]) == 2
     assert "secret" not in events[0].detail
+
+
+# ---- 方案类型与群聊编排 ----
+
+
+def _group_package(rules: str, **extra) -> SolutionPackage:
+    base = _solution_package()
+    return base.model_copy(update={"mode": "group", "orchestration_rules": rules, **extra})
+
+
+def test_apply_group_solution_rewrites_template_refs_to_employee_ids():
+    catalog = _fake_catalog()
+    catalog.seed_solution(_group_package(
+        "1. @{tpl-a} 先分析\n2. @{tpl-b} 汇总",
+        recommended_capabilities=[RecommendedCapability(kind="skill", ref="sk-1", purpose="读表")],
+    ))
+    svc, *_ = _build_service(catalog)
+    inst = svc.apply_solution(
+        _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"),
+    ).solution_instance
+    a, b = inst.expert_employee_ids
+    assert inst.mode == "group"
+    assert inst.orchestration_rules == f"1. @{{{a}}} 先分析\n2. @{{{b}}} 汇总"
+    assert [item["ref"] for item in inst.recommended_capabilities] == ["sk-1"]
+
+
+def test_apply_solution_rejects_rules_that_reference_unknown_members_before_any_write():
+    catalog = _fake_catalog()
+    catalog.seed_solution(_group_package("@{ghost} 先做"))
+    svc, emp, _, recruit, _ = _build_service(catalog)
+    with pytest.raises(Conflict):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
+    assert recruit.list_solution_instances(_ctx("t-a")) == []
+
+
+def test_solo_solution_needs_exactly_one_expert_and_no_rules():
+    catalog = _fake_catalog()
+    catalog.seed_solution(_solution_package().model_copy(update={"mode": "solo"}))  # 两位专家
+    svc, *_ = _build_service(catalog)
+    with pytest.raises(Conflict):
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
+
+
+def test_legacy_package_without_rules_still_applies_as_group():
+    catalog = _fake_catalog()
+    catalog.seed_solution(_solution_package())
+    svc, *_ = _build_service(catalog)
+    inst = svc.apply_solution(
+        _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"),
+    ).solution_instance
+    assert (inst.mode, inst.orchestration_rules) == ("group", "")

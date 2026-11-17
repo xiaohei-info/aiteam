@@ -24,6 +24,8 @@ export interface DraftSummary {
   status: DraftStatus;
   platform_model_ref: ModelRef;
   image_recognition: ImageRecognition;
+  /** 旧服务端没给时按组群处理。 */
+  solution_mode?: SolutionMode;
   version: number;
   published_solution_id: string | null;
   created_by: string;
@@ -33,6 +35,8 @@ export interface DraftSummary {
   latest_job: JobBrief | null;
   /** 已上传的资料数量；旧服务端没给时为 undefined，按「可能有资料」处理。 */
   source_count?: number;
+  /** 待处理的敏感项数量；旧服务端没给时为 undefined。 */
+  open_finding_count?: number;
 }
 
 export interface DraftList {
@@ -45,6 +49,15 @@ export interface DraftList {
 
 export interface Evidence { chunk_id: string; quote?: string; }
 
+export type SolutionMode = "solo" | "group";
+export type GateKey = "findings" | "coordinator" | "rules";
+export type ConfirmItem = Exclude<GateKey, "findings">;
+
+export interface ExpertSkillRef { skill_id: string; version: string; content_hash: string; reason: string; }
+export interface ExpertMcpDecl { key: string; display_name: string; purpose: string; required: boolean; }
+/** 提交审核前必须满足的条件；message 为后端英文原因，前端按 key 本地化。 */
+export interface Gate { key: GateKey; ok: boolean; message: string; }
+
 export interface GeneratedExpert {
   key: string;
   display_name: string;
@@ -52,12 +65,16 @@ export interface GeneratedExpert {
   description: string;
   system_prompt: string;
   evidence: Evidence[];
+  skills?: ExpertSkillRef[];
+  mcps?: ExpertMcpDecl[];
 }
 
 export interface GeneratedSolution {
   display_name: string;
   description: string;
   tags: string[];
+  mode?: SolutionMode;
+  orchestration_rules?: string;
   coordinator_key: string;
   coordinator_instructions: string;
   output_requirements: string;
@@ -129,6 +146,8 @@ export interface DraftDetail extends Omit<DraftSummary, "latest_job"> {
   open_finding_count: number;
   events: ReviewEvent[];
   latest_job: GenerationJob | null;
+  /** 正文生成后才有；旧服务端没给时为空。 */
+  gates?: Gate[];
 }
 
 export interface DraftCreateInput {
@@ -136,6 +155,7 @@ export interface DraftCreateInput {
   platform_model_ref: ModelRef;
   image_recognition: ImageRecognition;
   supplement: string;
+  solution_mode: SolutionMode;
 }
 
 /** 可增删资料、可发起生成的状态。 */

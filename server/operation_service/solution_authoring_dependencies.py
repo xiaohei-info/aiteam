@@ -19,8 +19,15 @@ from .catalog_dependencies import get_catalog_service
 from .platform_provider_repository import PlatformProviderRepository
 from .platform_provider_service import build_platform_provider_service, newapi_urls
 from .solution_authoring_jobs import GenerationJobExecutor
-from .solution_authoring_models import ModelConfigResolver, PlatformModelCatalog, build_model_config_resolver
-from .solution_authoring_repository import MemorySolutionAuthoringRepository, SolutionAuthoringRepository
+from .solution_authoring_models import (
+    ModelConfigResolver,
+    PlatformModelCatalog,
+    build_model_config_resolver,
+)
+from .solution_authoring_repository import (
+    MemorySolutionAuthoringRepository,
+    SolutionAuthoringRepository,
+)
 from .solution_authoring_service import SolutionAuthoringService
 from .solution_authoring_storage import SourceFileStore
 

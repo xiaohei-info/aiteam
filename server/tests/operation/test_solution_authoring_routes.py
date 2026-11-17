@@ -184,6 +184,12 @@ def test_findings_expose_only_masked_text(client, env):
     assert all(PHONE not in event["summary"] for event in detail["events"])
 
 
+def _confirm_all(client, url: str) -> None:
+    for gate in client.get(url, headers=_auth()).json()["data"]["gates"]:
+        if gate["key"] != "findings" and not gate["ok"]:
+            assert client.post(f"{url}/confirm", json={"item": gate["key"]}, headers=_auth()).status_code == 200
+
+
 def test_edit_resolve_review_and_publish_over_http(client, env):
     draft_id = _generated(client, env)
     url = f"{BASE}/drafts/{draft_id}"
@@ -207,6 +213,9 @@ def test_edit_resolve_review_and_publish_over_http(client, env):
     _problem(client.post(f"{url}/findings/{detail['findings'][0]['finding_id']}/resolve", json={"resolution": "delete"}, headers=_auth()), 422, "validation_error")
 
     _problem(client.post(f"{url}/publish", headers=_auth(ADMIN, "admin")), 409, "invalid_transition")
+    # 敏感项都处理了，但群主与编排规则还没确认：仍不能提交审核。
+    _problem(client.post(f"{url}/submit-review", headers=_auth()), 409, "conflict")
+    _confirm_all(client, url)
     assert client.post(f"{url}/submit-review", headers=_auth()).json()["data"]["status"] == "in_review"
     _problem(client.post(f"{url}/reject", json={"note": " "}, headers=_auth(ADMIN, "admin")), 422, "validation_error")
     approved = client.post(f"{url}/approve", json={"note": "可以发布"}, headers=_auth(ADMIN, "admin"))
@@ -237,6 +246,7 @@ def test_archiving_an_approved_draft_needs_the_reviewer_role(client, env):
     for item in client.get(url, headers=_auth()).json()["data"]["findings"]:
         resolution = "redact" if item["field_path"] else "acknowledge"
         client.post(f"{url}/findings/{item['finding_id']}/resolve", json={"resolution": resolution}, headers=_auth())
+    _confirm_all(client, url)
     assert client.post(f"{url}/submit-review", headers=_auth()).status_code == 200
     assert client.post(f"{url}/approve", json={"note": ""}, headers=_auth(ADMIN, "admin")).status_code == 200
     _problem(client.delete(url, headers=_auth()), 403, "forbidden")

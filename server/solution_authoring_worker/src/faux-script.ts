@@ -22,6 +22,8 @@ function generateScript(job: GenerateJob): FauxResponseStep[] {
       description: `基于 ${sources} 份资料生成的方案草稿（测试模型输出，内容仅用于联调）。`,
       tags: ["测试生成"],
       coordinator_key: "coordinator",
+      mode: "group",
+      orchestration_rules: "1. @{coordinator} 先拆解任务并分派\n2. @{domain_expert} 依据资料执行并回报\n3. @{coordinator} 汇总后交付",
       coordinator_instructions: "协调专家先拆解任务，再分派给业务专家，最后汇总并复核交付物。",
       output_requirements: "交付物需列出依据的资料位置，并标明待人工确认的事项。",
       experts: [

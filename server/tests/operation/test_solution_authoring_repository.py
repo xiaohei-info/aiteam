@@ -201,6 +201,22 @@ def test_findings_are_added_updated_and_replaced_with_the_draft(repo, clock):
     assert [row.finding_id for row in repo.list_findings(draft.draft_id)] == [fresh.finding_id]
 
 
+def test_count_open_findings_by_draft_only_counts_unresolved_findings(repo, clock):
+    bare = _draft(repo, clock, title="无敏感项")
+    mixed = _draft(repo, clock, title="部分已处理")
+    done = _draft(repo, clock, title="全部已处理")
+    open_a, open_b, closed = (_finding(clock, mixed.draft_id, excerpt=f"1380000111{i}") for i in range(3))
+    only = _finding(clock, done.draft_id)
+    repo.update_draft(mixed.draft_id, "op1", lambda current, findings: DraftChange(new_findings=[open_a, open_b, closed]))
+    repo.update_draft(done.draft_id, "op1", lambda current, findings: DraftChange(new_findings=[only]))
+    resolve = {"status": "redacted", "resolved_by": "op1", "resolved_at": clock()}
+    repo.update_draft(mixed.draft_id, "op1", lambda current, findings: DraftChange(finding_updates={closed.finding_id: resolve}))
+    repo.update_draft(done.draft_id, "op1", lambda current, findings: DraftChange(finding_updates={only.finding_id: resolve}))
+    counts = repo.count_open_findings_by_draft()
+    assert counts.get(mixed.draft_id) == 2
+    assert bare.draft_id not in counts and done.draft_id not in counts
+
+
 # ---- 资料 ----
 
 def test_sources_get_increasing_seq_that_is_not_reused_after_removal(repo, clock):

@@ -91,6 +91,7 @@ def _solution(chunk_id: str, *, extra: str = f"联系电话 {PHONE}。") -> dict
     return {
         "display_name": "来料质检方案", "description": "覆盖来料检验与不合格品处理。", "tags": ["质检"],
         "coordinator_key": "lead", "coordinator_instructions": "先拆解再分派。", "output_requirements": "列出依据。",
+        "orchestration_rules": "1. @{lead} 先拆解并分派\n2. @{inspector} 执行检验并回报",
         "experts": [
             {"key": "lead", "display_name": "质检协调专家", "category": "质量管理", "description": "统筹质检任务。",
              "system_prompt": f"你是质检协调专家。{extra}", "evidence": [{"chunk_id": chunk_id, "quote": "来料检验"}]},
@@ -110,6 +111,7 @@ class Runner:
         self.chunks: list = []
         self.prompts: list[tuple[str, str]] = []
         self.before_return = lambda: None
+        self.solution: dict | None = None  # 指定时代替默认的两位专家组群方案
         self.closed = False
         self.aborts: list = []
 
@@ -121,7 +123,7 @@ class Runner:
             raise self.generate_error
         first = chunks[0]
         result = AuthoringResult(
-            solution=GeneratedSolution.model_validate(_solution(first.chunk_id)),
+            solution=GeneratedSolution.model_validate(self.solution or _solution(first.chunk_id)),
             findings=[AgentFinding(kind="company", chunk_id=first.chunk_id, excerpt="华东某客户", note="资料中出现客户名称")],
         )
         self.before_return()
@@ -189,6 +191,13 @@ def _resolve_all(env: Env, draft_id: str) -> None:
     for item in env.service.get_draft(draft_id).findings:
         if item.status == "open":
             env.service.resolve_finding(draft_id, item.finding_id, "op1", "redact" if item.field_path else "acknowledge")
+    _confirm_all(env, draft_id)
+
+
+def _confirm_all(env: Env, draft_id: str) -> None:
+    for gate in env.service.get_draft(draft_id).gates:
+        if gate.key != "findings" and not gate.ok:
+            env.service.confirm(draft_id, "op1", gate.key)
 
 
 # ---- 草稿与资料 ----
@@ -276,7 +285,7 @@ def test_a_successful_job_writes_content_evidence_and_findings_together(env, cap
 
     assert detail.status == "ready_for_review" and detail.package is not None
     assert [expert.key for expert in detail.package.experts] == ["lead", "inspector"]
-    assert (detail.prompt_version, detail.usage["total_tokens"]) == ("v1", 100)
+    assert (detail.prompt_version, detail.usage["total_tokens"]) == ("v2", 100)
     assert detail.latest_job is not None and (detail.latest_job.status, detail.latest_job.attempt) == ("succeeded", 1)
     chunk_id = env.runner.chunks[0].chunk_id
     assert list(detail.evidence_sources) == [chunk_id] and chunk_id.startswith("s1-c")
@@ -781,3 +790,69 @@ def test_end_to_end_with_the_real_worker_and_the_faux_model(env):
     assert published.published_solution_id
     package = env.catalog.pull_solution_package(solution_id=published.published_solution_id)
     assert len(package.experts) == 2 and PHONE not in package.model_dump_json()
+
+
+# ---- 方案类型：发布换算 ----
+
+def test_publish_carries_mode_and_rewrites_rule_references_to_template_ids(env):
+    draft_id = env.generated()
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    published = env.service.publish(draft_id, "admin")
+    sid = published.published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert package.mode == "group"
+    assert package.orchestration_rules == f"1. @{{{sid}-lead}} 先拆解并分派\n2. @{{{sid}-inspector}} 执行检验并回报"
+
+
+def test_publish_carries_skills_and_mcps_as_non_binding_recommendations(env):
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": "读 Excel"}]
+    body["experts"][0]["mcps"] = [{"key": "mes", "display_name": "MES", "purpose": "读取工单", "required": True}]
+    # 另一位专家也声明同一个 MCP：方案级推荐里只出现一次。
+    body["experts"][1]["mcps"] = [{"key": "mes", "display_name": "MES 重复", "purpose": "", "required": False}]
+    env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    _resolve_all(env, draft_id)
+    # 声明 skill / MCP 不增加提交闸门。
+    assert [gate.key for gate in env.service.get_draft(draft_id).gates] == ["findings", "coordinator", "rules"]
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    sid = env.service.publish(draft_id, "admin").published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert [(item.kind, item.ref, item.purpose) for item in package.recommended_capabilities] == [
+        ("skill", "sk-1", "读 Excel"), ("mcp", "mes", "读取工单"),
+    ]
+    # 不绑定到专家：专家模板上没有 skill 引用与连接器要求。
+    for key in ("lead", "inspector"):
+        entry = env.catalog.get_entry(CatalogType.EXPERT_TEMPLATE, f"{sid}-{key}")
+        assert (entry.platform_skill_refs, entry.required_connectors, entry.optional_connectors) == ([], [], [])
+
+
+def test_a_solo_draft_publishes_without_rules_or_coordinator_confirmation(env):
+    draft_id = env.draft(solution_mode="solo")
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.runner.solution = {**_solution("s1-c1"), "mode": "solo", "orchestration_rules": "", "experts": _solution("s1-c1")["experts"][:1]}
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True
+    detail = env.service.get_draft(draft_id)
+    assert detail.status == "ready_for_review" and detail.solution_mode == "solo"
+    assert [gate.key for gate in detail.gates] == ["findings"]
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    sid = env.service.publish(draft_id, "admin").published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert (package.mode, package.orchestration_rules, len(package.experts)) == ("solo", "", 1)
+
+
+def test_a_job_fails_when_the_model_returns_the_wrong_mode(env):
+    draft_id = env.draft(solution_mode="solo")
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True  # runner 默认生成 2 位专家的组群方案
+    detail = env.service.get_draft(draft_id)
+    assert detail.status == "draft" and detail.package is None
+    assert detail.latest_job is not None and detail.latest_job.error_code == "schema_invalid"

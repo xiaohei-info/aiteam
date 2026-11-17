@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.envelope import ProblemFieldError
 from shared.contracts.platform_provider import PlatformModelRef
+from shared.contracts.crosstier import RecommendedCapability
 from shared.errors import (
     Conflict,
     Forbidden,
@@ -30,6 +31,7 @@ from shared.errors import (
     ValidationProblem,
 )
 from shared.solution_authoring.isolated_parse import parse_source_isolated
+from shared.solution_authoring.orchestration import rewrite_member_refs
 from shared.solution_authoring.parsing import SourceParseError
 from shared.solution_authoring.schemas import GeneratedSolution
 from shared.solution_authoring.sensitive_scan import (
@@ -44,6 +46,11 @@ from .catalog_schemas import (
     RegisterSolutionTemplateRequest,
 )
 from .solution_authoring_findings import assert_no_unresolved, reconcile_findings
+from .solution_authoring_gates import (
+    confirm_digest,
+    evaluate_gates,
+    required_confirmations,
+)
 from .solution_authoring_models import ModelConfigResolver
 from .solution_authoring_repository import (
     DraftChange,
@@ -139,13 +146,17 @@ class SolutionAuthoringService:
             draft_id=str(uuid.uuid4()), title=body.title,
             model_provider_id=body.platform_model_ref.provider_id, model_id=body.platform_model_ref.model_id,
             created_by=actor_id, updated_by=actor_id, created_at=now, updated_at=now,
-            image_recognition=body.image_recognition, supplement=body.supplement.strip(),
+            image_recognition=body.image_recognition, supplement=body.supplement.strip(), solution_mode=body.solution_mode,
         )
         return DraftOut.of(self._repo.create_draft(row))
 
     def list_drafts(self) -> list[DraftSummaryOut]:
         counts = self._repo.count_sources_by_draft()
-        return [DraftSummaryOut.summarize(row, job, counts.get(row.draft_id, 0)) for row, job in self._repo.list_drafts_with_latest_job()]
+        open_counts = self._repo.count_open_findings_by_draft()
+        return [
+            DraftSummaryOut.summarize(row, job, counts.get(row.draft_id, 0), open_counts.get(row.draft_id, 0))
+            for row, job in self._repo.list_drafts_with_latest_job()
+        ]
 
     def cancel_generation(self, draft_id: str, actor_id: str) -> DraftDetailOut:
         """取消进行中的生成；没有进行中的任务时原样返回（幂等）。"""
@@ -300,8 +311,28 @@ class SolutionAuthoringService:
 
     def submit_review(self, draft_id: str, actor_id: str) -> DraftDetailOut:
         def decide(draft: DraftRow, findings: list[FindingRow]) -> DraftChange:
-            assert_no_unresolved(_require_content(draft, "submitting for review"), findings)
+            package = _require_content(draft, "submitting for review")
+            assert_no_unresolved(package, findings)
+            blocked = next((gate for gate in evaluate_gates(package, draft.confirmations, open_findings=0) if not gate.ok), None)
+            if blocked is not None:
+                raise Conflict(blocked.message)
             return DraftChange(changes={"status": "in_review", "review_note": ""}, event=("submitted_for_review", ""))
+
+        self._repo.update_draft(draft_id, actor_id, decide)
+        return self.get_draft(draft_id)
+
+    def confirm(self, draft_id: str, actor_id: str, item: str) -> DraftDetailOut:
+        """运营确认群主 / 编排规则 / 能力清单。确认记录的是当时内容的摘要，之后内容被改动则自动失效。"""
+        now = self._clock()
+
+        def decide(draft: DraftRow, _findings: list[FindingRow]) -> DraftChange:
+            package = _require_content(draft, "confirming")
+            if item not in required_confirmations(package):
+                raise ValidationProblem(f"{item} does not need to be confirmed for this draft")
+            if item == "rules" and not str(package.get("orchestration_rules", "")).strip():
+                raise ValidationProblem("orchestration rules are required for a group solution")
+            record = {"by": actor_id, "at": now.isoformat(), "digest": confirm_digest(package, item)}
+            return DraftChange(changes={"confirmations": {**draft.confirmations, item: record}}, event=(f"confirmed_{item}", ""))
 
         self._repo.update_draft(draft_id, actor_id, decide)
         return self.get_draft(draft_id)
@@ -366,6 +397,9 @@ class SolutionAuthoringService:
             coordinator_template_id=expert_ids[package.coordinator_key],
             coordinator_instructions=package.coordinator_instructions,
             output_requirements=package.output_requirements, tags=package.tags,
+            mode=package.mode, recommended_capabilities=_recommended_capabilities(package),
+            # 草稿里的成员引用是专家 key，目录里换成专家模板 ID；Manager 应用时再换成员工 ID。
+            orchestration_rules=rewrite_member_refs(package.orchestration_rules, expert_ids),
         )
         self._ensure_registered(catalog, CatalogType.SOLUTION_TEMPLATE, solution_id, lambda: catalog.register_solution_template(solution))
         for template_id in expert_ids.values():
@@ -393,3 +427,18 @@ class SolutionAuthoringService:
     def _ensure_published(catalog: CatalogPublisher, catalog_type: CatalogType, template_id: str) -> None:
         if catalog.get_entry(catalog_type, template_id).status != CatalogStatus.PUBLISHED:
             catalog.publish_template(catalog_type, template_id, PublishTemplateRequest())
+
+
+def _recommended_capabilities(package: GeneratedSolution) -> list[RecommendedCapability]:
+    """把各专家的 skill / MCP 声明合并成方案级的推荐清单（去重、保序）。只是提示，不绑定到专家。"""
+    seen: dict[tuple[str, str], RecommendedCapability] = {}
+    for expert in package.experts:
+        for skill in expert.skills:
+            seen.setdefault(("skill", skill.skill_id), RecommendedCapability(
+                kind="skill", ref=skill.skill_id, display_name=skill.skill_id, purpose=skill.reason,
+            ))
+        for mcp in expert.mcps:
+            seen.setdefault(("mcp", mcp.key), RecommendedCapability(
+                kind="mcp", ref=mcp.key, display_name=mcp.display_name, purpose=mcp.purpose,
+            ))
+    return list(seen.values())[:24]
