@@ -294,7 +294,7 @@ describe("DraftDetailPage", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "质检方案" })).toBeInTheDocument();
     expect(screen.getByText(/2 KB · 3 段文字 · 1 张图片/)).toBeInTheDocument();
     expect(screen.getByText("文字过长，超出部分未读取")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: "来料质检方案" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 4, name: "来料质检方案" })).toBeInTheDocument();
     expect(screen.getAllByText("识别置信度低，请核对原图").length).toBeGreaterThan(0);
 
     const findings = screen.getByRole("list", { name: "敏感项清单" });
@@ -384,7 +384,7 @@ describe("DraftDetailPage", () => {
       },
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
@@ -397,7 +397,7 @@ describe("DraftDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "覆盖保存" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "覆盖保存" })).not.toBeInTheDocument());
     expect(calls.filter((call) => call.method === "PUT")[1]!.body).toMatchObject({ version: 4, package: { display_name: "新名称" } });
-    expect(screen.getByRole("button", { name: "编辑正文" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑概览" })).toBeInTheDocument();
   });
 
   it("保存被拒绝（非冲突）时显示原因并保留修改", async () => {
@@ -406,7 +406,7 @@ describe("DraftDetailPage", () => {
       [`PUT ${BASE}/${DRAFT_ID}/package`]: () => json({ status: 422, code: "validation_error", title: "Unprocessable", detail: "evidence may only cite source excerpts that belong to this draft" }, 422),
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText(/evidence may only cite/)).toBeInTheDocument();
@@ -414,14 +414,16 @@ describe("DraftDetailPage", () => {
     expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
   });
 
-  it("正文编辑期间锁住处理敏感项、提交审核与重新生成；取消后恢复", async () => {
+  it("有分区编辑期间锁住处理敏感项、提交审核、重新生成与其它分区；取消后恢复", async () => {
     const calls = mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [{ ...PHONE_FINDING }] })) });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     for (const name of ["脱敏", "从正文删除", "确认可公开", "提交审核", "重新生成"]) {
       expect(isDisabled(screen.getByRole("button", { name }))).toBe(true);
     }
     expect(screen.getByText(/请先保存或取消修改，再处理敏感项/)).toBeInTheDocument();
+    // 一次只编辑一节：其它分区的编辑按钮暂不可用。
+    expect(isDisabled(screen.getByRole("button", { name: "编辑专家 检验专家" }))).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "脱敏" }));
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
     expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);

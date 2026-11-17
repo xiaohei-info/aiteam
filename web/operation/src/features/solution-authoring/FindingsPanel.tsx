@@ -17,7 +17,7 @@ interface Props {
   /** 当前正文：用来把命中位置说成「专家「××」的系统提示词」。 */
   solution: GeneratedSolution | null;
   canResolve: boolean;
-  /** 正文正在编辑：处理敏感项会改正文，先锁住，避免和未保存的修改冲突。 */
+  /** 有分区正在编辑：处理敏感项会改正文，先锁住，避免和未保存的修改冲突。 */
   isLocked: boolean;
   busy: boolean;
   onResolve: (findingId: string, resolution: FindingResolution) => void;
@@ -38,7 +38,7 @@ export function FindingsPanel({ findings, solution, canResolve, isLocked, busy, 
             发布到公共目录前，每一项都要处理完；这里只显示脱敏后的片段。检查范围是会对外发布的正文（名称、描述、标签、协作说明、交付要求、专家提示词）；「依据」里的资料摘录只在运营端内部展示，不会随方案发布。
           </Text>
           {canResolve && isLocked && open > 0 && (
-            <Text type="supporting" color="secondary">正文正在编辑：请先保存或取消修改，再处理敏感项。</Text>
+            <Text type="supporting" color="secondary">有分区正在编辑：请先保存或取消修改，再处理敏感项。</Text>
           )}
         </VStack>
         {findings.length === 0 ? (

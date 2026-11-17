@@ -15,29 +15,18 @@ function solution(rules: string): GeneratedSolution {
 }
 
 describe("RulesSection", () => {
-  it("只读时把成员引用显示成名字，未知引用带文字标记", () => {
-    render(<RulesSection solution={solution("@{lead} 先拆解，@{ghost} 执行")} editing={false} busy={false} onChange={() => {}} />);
-    expect(screen.getByText("@协调员")).toBeInTheDocument();
-    expect(screen.getByText("@ghost（未知成员）")).toBeInTheDocument();
-  });
-
-  it("没有规则时提示去补充", () => {
-    render(<RulesSection solution={solution("")} editing={false} busy={false} onChange={() => {}} />);
-    expect(screen.getByText(/还没有编排规则/)).toBeInTheDocument();
-  });
-
   it("编辑时「插入成员」把引用追加到规则末尾", () => {
     const onChange = vi.fn();
-    render(<RulesSection solution={solution("1. 先拆解")} editing busy={false} onChange={onChange} />);
+    render(<RulesSection solution={solution("1. 先拆解")} busy={false} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "插入成员 质检员" }));
     expect(onChange).toHaveBeenCalledWith("1. 先拆解 @{qc}");
   });
 
   it("编辑时即时校验引用：非法引用显示原因，合法显示通过", () => {
-    const { rerender } = render(<RulesSection solution={solution("@{ghost} 做事")} editing busy={false} onChange={() => {}} />);
+    const { rerender } = render(<RulesSection solution={solution("@{ghost} 做事")} busy={false} onChange={() => {}} />);
     expect(screen.getByText(/引用了方案外的成员/)).toBeInTheDocument();
     expect(screen.queryByText("成员引用都有效")).not.toBeInTheDocument();
-    rerender(<RulesSection solution={solution("@{lead} 先做")} editing busy={false} onChange={() => {}} />);
+    rerender(<RulesSection solution={solution("@{lead} 先做")} busy={false} onChange={() => {}} />);
     expect(screen.getByText("成员引用都有效")).toBeInTheDocument();
   });
 });

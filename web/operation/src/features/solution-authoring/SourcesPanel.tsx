@@ -16,7 +16,7 @@ interface Props {
   sources: SourceDocument[];
   canEdit: boolean;
   hasContent: boolean;
-  /** 正文正在编辑：重新生成会整体替换正文，先锁住。 */
+  /** 有分区正在编辑：重新生成会整体替换正文，先锁住。 */
   isContentLocked: boolean;
   busy: boolean;
   onUpload: (files: File[]) => void;
@@ -31,7 +31,7 @@ interface Props {
 }
 
 export function SourcesPanel({ sources, canEdit, hasContent, isContentLocked, busy, onUpload, onDelete, onGenerate, pickerRef, hideUpload, hideGenerate }: Props): ReactNode {
-  const generateHint = sources.length === 0 ? "请先上传至少一份资料" : isContentLocked ? "请先保存或取消正文修改" : undefined;
+  const generateHint = sources.length === 0 ? "请先上传至少一份资料" : isContentLocked ? "请先保存或取消正在编辑的分区" : undefined;
   const ownRef = useRef<HTMLInputElement>(null);
   const inputRef = pickerRef ?? ownRef;
 

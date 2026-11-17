@@ -22,6 +22,9 @@
 }
 .row:last-child { border-bottom: 0; }
 .rowMain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* 可展开的行（专家）：头部与 .row 同排版，展开内容在下方。 */
+.rowHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.item > .inset { margin-top: 10px; }
 .rowSide { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .inset {
   border: 1px solid var(--sa-soft); border-radius: 8px; background: var(--sa-muted);

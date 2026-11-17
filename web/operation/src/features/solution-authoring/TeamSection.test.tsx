@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TeamSection } from "./TeamSection";
 import { orchestrationState, checklist } from "./workflow";
 import type { Gate, GeneratedSolution } from "./types";
@@ -14,16 +14,18 @@ const solution = {
 } as unknown as GeneratedSolution;
 const gate = (key: Gate["key"], ok: boolean, message = ""): Gate => ({ key, ok, message });
 
-function renderTeam(gates: Gate[], props: Partial<{ canEdit: boolean; isLocked: boolean }> = {}) {
+function renderTeam(gates: Gate[], props: Partial<{ canEdit: boolean; active: string | null }> = {}) {
   const onConfirm = vi.fn();
   const onChangeCoordinator = vi.fn();
+  const onSave = vi.fn().mockResolvedValue(null);
   render(
     <TeamSection
-      solution={solution} state={orchestrationState(gates)} canEdit={props.canEdit ?? true}
-      isLocked={props.isLocked ?? false} busy={false} onChangeCoordinator={onChangeCoordinator} onConfirm={onConfirm}
+      solution={solution} version={1} state={orchestrationState(gates)} canEdit={props.canEdit ?? true}
+      active={props.active ?? null} onActiveChange={() => {}} onSave={onSave}
+      busy={false} onChangeCoordinator={onChangeCoordinator} onConfirm={onConfirm}
     />,
   );
-  return { onConfirm, onChangeCoordinator };
+  return { onConfirm, onChangeCoordinator, onSave };
 }
 
 describe("TeamSection", () => {
@@ -55,10 +57,29 @@ describe("TeamSection", () => {
     expect(screen.getByText(/还没有编排规则，请先/)).toBeInTheDocument();
   });
 
-  it("正文编辑中锁住确认与更换", () => {
-    renderTeam([gate("coordinator", false), gate("rules", false)], { isLocked: true });
+  it("其它分区编辑中锁住确认、更换群主与本节编辑", () => {
+    renderTeam([gate("coordinator", false), gate("rules", false)], { active: "overview" });
+    expect((screen.getByRole("button", { name: "编辑规则" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "确认群主与编排规则" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "设「质检员」为群主" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("TeamSection 就地编辑规则", () => {
+  it("只改规则与协作说明并带上版本；非法引用不保存", async () => {
+    const { onSave } = renderTeam([gate("coordinator", true), gate("rules", true)]);
+    fireEvent.click(screen.getByRole("button", { name: "编辑规则" }));
+    const rules = screen.getByLabelText(/群聊编排规则/);
+    fireEvent.change(rules, { target: { value: "@{ghost} 做事" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/引用了方案外的成员/).length).toBeGreaterThan(0);
+    fireEvent.change(rules, { target: { value: "1. @{qc} 先检验" } });
+    fireEvent.change(screen.getByLabelText(/协作说明/), { target: { value: "按批次" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0]![0]).toMatchObject({ orchestration_rules: "1. @{qc} 先检验", coordinator_instructions: "按批次", coordinator_key: "lead" });
+    expect(onSave.mock.calls[0]![1]).toBe(1);
   });
 });
 

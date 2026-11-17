@@ -21,10 +21,12 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { Box, Row, Rows } from "./Box";
 import { ChecklistPanel } from "./ChecklistPanel";
-import { ExpertsOverview } from "./ExpertsOverview";
+import { CapabilitiesSection } from "./CapabilitiesSection";
+import { ExpertsSection } from "./ExpertsSection";
 import { FindingsPanel } from "./FindingsPanel";
 import { draftStatus, eventAction, formatTime, jobError, jobStatus } from "./labels";
-import { PackageEditor, type SaveFailure } from "./PackageEditor";
+import { OverviewSection } from "./OverviewSection";
+import type { SaveFailure, SectionProps } from "./sectionEdit";
 import { SourcesPanel } from "./SourcesPanel";
 import { TeamSection } from "./TeamSection";
 import { TodoBanner } from "./TodoBanner";
@@ -43,7 +45,7 @@ import { useSolutionAuthoringApi } from "./useSolutionAuthoringApi";
 
 const LIST_PATH = "/solution-authoring";
 const POLL_MS = 2000;
-const EDITING_HINT = "请先保存或取消正文修改";
+const EDITING_HINT = "请先保存或取消正在编辑的分区";
 
 /** 需要二次确认的动作：都会删除或整体替换内容，或对企业可见。 */
 type Confirm =
@@ -106,8 +108,9 @@ export function DraftDetailPage(): ReactNode {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
-  // 正文有未保存的修改：锁住会改动或整体替换正文的其它操作，避免修改被冲掉。
-  const [editing, setEditing] = useState(false);
+  // 正在就地编辑的分区（同一时间只有一节）：锁住会改动或整体替换正文的其它操作，避免修改被冲掉。
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const editing = activeSection !== null;
   // 同一次「开始生成」的重试沿用同一个幂等键：网络失败后再点不会排出第二个任务。
   const generateKey = useRef<string | null>(null);
   const sequence = useRef(0);
@@ -245,6 +248,10 @@ export function DraftDetailPage(): ReactNode {
     void run(() => api.updatePackage(draftId, detail.version, { ...detail.package!, coordinator_key: key }), "更换群主失败");
   };
   const teamState = orchestrationState(detail.gates);
+  const sectionProps: SectionProps | null = detail.package ? {
+    solution: detail.package, version: detail.version, canEdit: canEditContent, busy,
+    active: activeSection, onActiveChange: setActiveSection, onSave: savePackage,
+  } : null;
   const isGroup = (detail.package?.mode ?? detail.solution_mode ?? "group") === "group";
 
   const resolve = (findingId: string, resolution: FindingResolution) => void run(() => api.resolveFinding(draftId, findingId, resolution), "处理失败");
@@ -352,20 +359,20 @@ export function DraftDetailPage(): ReactNode {
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
         <VStack gap={6} style={{ flex: "1 1 560px", minWidth: 0 }}>
-      {detail.package && (
+      {detail.package && sectionProps && (
         <>
+          {/* 分区不按版本重建：服务端数据刷新不能清掉某一节未保存的修改。 */}
+          <OverviewSection {...sectionProps} evidenceSources={detail.evidence_sources} />
           {isGroup && teamState.applicable && (
             <TeamSection
-              solution={detail.package}
+              {...sectionProps}
               state={teamState}
-              canEdit={canEditContent}
-              isLocked={editing}
-              busy={busy}
               onChangeCoordinator={changeCoordinator}
               onConfirm={confirmTeam}
             />
           )}
-          <ExpertsOverview solution={detail.package} />
+          <ExpertsSection {...sectionProps} evidenceSources={detail.evidence_sources} />
+          <CapabilitiesSection {...sectionProps} />
           <FindingsPanel
             findings={detail.findings}
             solution={detail.package}
@@ -373,16 +380,6 @@ export function DraftDetailPage(): ReactNode {
             isLocked={editing}
             busy={busy}
             onResolve={resolve}
-          />
-          {/* 不按版本重建编辑器：服务端数据刷新不能清掉未保存的修改。 */}
-          <PackageEditor
-            solution={detail.package}
-            version={detail.version}
-            evidenceSources={detail.evidence_sources}
-            canEdit={canEditContent}
-            busy={busy}
-            onSave={savePackage}
-            onEditingChange={setEditing}
           />
         </>
       )}

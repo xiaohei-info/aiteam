@@ -65,7 +65,7 @@ export function orchestrationState(gates: Gate[] | undefined): OrchestrationStat
   const blocked = own.some((gate) => !gate.ok && gate.message.includes("required for a group"));
   const stale = own.some((gate) => !gate.ok && gate.message.includes("changed after"));
   const reason = pending.length === 0 ? ""
-    : blocked ? "还没有编排规则，请先在「编辑正文」里补充，或重新生成"
+    : blocked ? "还没有编排规则，请先点「编辑规则」补充，或重新生成"
       : stale ? "确认后内容有改动，需要重新确认" : "还没有确认";
   return { applicable: own.length > 0, ok: pending.length === 0, pending, stale, blocked, reason };
 }

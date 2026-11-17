@@ -1,5 +1,5 @@
 /**
- * 群聊编排规则：只读时把 `@{key}` 渲染成成员名字（未知引用带「未知成员」文字标记），编辑时带「插入成员」按钮与即时校验。
+ * 群聊编排规则编辑器：「插入成员」按钮（@ 引用）与即时校验。只读展示在 TeamSection（引用渲染成成员名字）。
  * 单人方案不显示。校验口径与后端 `validate_member_refs` 一致（见 workflow.ts）。
  */
 import type { ReactNode } from "react";
@@ -11,38 +11,20 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { GeneratedSolution } from "./types";
-import { ruleParts, validateRules } from "./workflow";
+import { validateRules } from "./workflow";
 
 const MAX_RULES = 8000;
 
 interface Props {
   solution: GeneratedSolution;
-  editing: boolean;
   busy: boolean;
   onChange: (rules: string) => void;
 }
 
-export function RulesSection({ solution, editing, busy, onChange }: Props): ReactNode {
+export function RulesSection({ solution, busy, onChange }: Props): ReactNode {
   const rules = solution.orchestration_rules ?? "";
   const keys = solution.experts.map((expert) => expert.key);
   const problem = validateRules(rules, keys, "group");
-
-  if (!editing) {
-    return (
-      <VStack gap={2}>
-        <Text weight="semibold">群聊编排规则</Text>
-        {rules.trim() ? (
-          <Text style={{ whiteSpace: "pre-wrap" }}>
-            {ruleParts(rules, solution).map((part, index) => part.kind === "text"
-              ? <span key={index}>{part.text}</span>
-              : <strong key={index}>{part.known ? `@${part.name}` : `@${part.key}（未知成员）`}</strong>)}
-          </Text>
-        ) : (
-          <Text color="secondary">还没有编排规则：点击「编辑正文」补充，或重新生成。</Text>
-        )}
-      </VStack>
-    );
-  }
 
   function insert(key: string) {
     const gap = rules && !rules.endsWith("\n") && !rules.endsWith(" ") ? " " : "";
