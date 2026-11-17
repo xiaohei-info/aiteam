@@ -33,7 +33,10 @@ import { useGrantsApi } from "../grants/useGrantsApi";
 import type { Department, Member } from "../grants/types";
 import type { EmployeeConfig, RecruitModelPolicy, SolutionInstance, SolutionPackage } from "../experts/types";
 import { ModelPicker } from "../platform-models/ModelPicker";
-import { capabilityLabel, renderRules, solutionModeLabel } from "./solutionInfo";
+import { capabilityLabel, renderRules, solutionModeLabel, solutionSummary } from "./solutionInfo";
+import { SolutionOverview } from "./SolutionOverview";
+import { useCapabilityApi } from "../capability/useCapabilityApi";
+import type { SkillCatalog } from "../capability/types";
 import { toPolicy, useRecruitModels } from "../platform-models/useRecruitModels";
 
 export function SolutionsPage(): ReactNode {
@@ -42,7 +45,10 @@ export function SolutionsPage(): ReactNode {
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useExpertsApi();
   const grantsApi = useGrantsApi();
+  const capabilityApi = useCapabilityApi();
 
+  // 本企业技能目录，用于标注推荐 skill「企业已具备 / 缺失」；读不到不影响方案浏览与应用（显示「无法确认」）。
+  const [skills, setSkills] = useState<SkillCatalog[] | null>(null);
   const [solutions, setSolutions] = useState<SolutionPackage[]>([]);
   const [solutionInstances, setSolutionInstances] = useState<SolutionInstance[]>([]);
   const [employees, setEmployees] = useState<EmployeeConfig[]>([]);
@@ -56,11 +62,13 @@ export function SolutionsPage(): ReactNode {
     setLoading(true);
     setError(null);
     try {
-      const [s, si, employeeItems] = await Promise.all([
+      const [s, si, employeeItems, skillItems] = await Promise.all([
         api.listSolutions(),
         api.listSolutionInstances(),
         api.listEmployees(),
+        capabilityApi.listSkills().catch(() => null),
       ]);
+      setSkills(skillItems);
       setSolutions(s);
       setSolutionInstances(si);
       setEmployees(employeeItems);
@@ -69,7 +77,7 @@ export function SolutionsPage(): ReactNode {
     } finally {
       setLoading(false);
     }
-  }, [api, i18n]);
+  }, [api, capabilityApi, i18n]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -113,9 +121,14 @@ export function SolutionsPage(): ReactNode {
               >
                 <VStack gap={3}>
                   <VStack gap={1}>
-                    <Heading level={3}>{s.display_name}</Heading>
+                    <HStack gap={2} align="center" wrap="wrap">
+                      <Heading level={3}>{s.display_name}</Heading>
+                      <Badge label={`${solutionModeLabel(s.mode)}方案`} variant="info" />
+                    </HStack>
                     <Text type="supporting">版本 v{s.version}</Text>
                   </VStack>
+                  {s.description && <Text color="secondary">{s.description}</Text>}
+                  <Text type="supporting" color="secondary" data-testid="solution-summary">{solutionSummary(s, skills)}</Text>
                   {s.tags && s.tags.length > 0 && (
                     <HStack gap={1} wrap="wrap">
                       {s.tags.map((tag) => <Token key={tag} label={tag} size="sm" />)}
@@ -166,12 +179,14 @@ export function SolutionsPage(): ReactNode {
       {detailFor && (
         <SolutionDetailOverlay
           solution={detailFor}
+          skills={skills}
           onClose={() => setDetailFor(null)}
         />
       )}
       {applyFor && (
         <SolutionApplyDialog
           solution={applyFor}
+          skills={skills}
           employees={employees}
           api={api}
           grantsApi={grantsApi}
@@ -195,6 +210,7 @@ export function SolutionsPage(): ReactNode {
 
 function SolutionApplyDialog({
   solution,
+  skills,
   employees,
   api,
   grantsApi,
@@ -202,6 +218,7 @@ function SolutionApplyDialog({
   onApplied,
 }: {
   solution: SolutionPackage;
+  skills: readonly SkillCatalog[] | null;
   employees: EmployeeConfig[];
   api: ReturnType<typeof useExpertsApi>;
   grantsApi: ReturnType<typeof useGrantsApi>;
@@ -295,13 +312,14 @@ function SolutionApplyDialog({
     <Dialog isOpen purpose="form" width={640} maxHeight="85vh" aria-label={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }}>
       <VStack gap={4}>
         <DialogHeader title={`应用${solution.display_name}`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />
-        <Text color="secondary">应用后会在当前企业创建方案专家，并将其归属到下方部门；所选部门也会作为部门授权范围。未归属部门时请选择“未设置”。成员授权仍按下方选择生效。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
         {error && <Banner status="error" title={error} />}
+        <SolutionOverview solution={solution} skills={skills} compact />
+        <Text type="supporting" color="secondary">应用后会在当前企业创建方案专家（已招募的复用），并将其归属到下方部门；所选部门也会作为部门授权范围。未归属部门时请选择“未设置”。成员授权仍按下方选择生效。企业知识库由 Manager 统一维护，不在方案中重复配置或复制。</Text>
         {models.error && <Banner status="error" title={models.error} />}
         {loading ? <Text role="status">加载成员和部门…</Text> : (
           <VStack gap={3}>
             <VStack gap={2} data-testid="solution-expert-models">
-              <Heading level={3}>专家使用的模型</Heading>
+              <Heading level={4}>专家使用的模型</Heading>
               {newExperts.length > 1 && (
                 <ModelPicker
                   label="新建专家全部使用"
@@ -356,15 +374,12 @@ function SolutionApplyDialog({
   );
 }
 
-function SolutionDetailOverlay({ solution, onClose }: {
+function SolutionDetailOverlay({ solution, skills, onClose }: {
   solution: SolutionPackage;
+  skills: readonly SkillCatalog[] | null;
   onClose: () => void;
 }): ReactNode {
   const i18n = useI18n();
-  const experts = solution.experts ?? [];
-  const coordinator = solution.coordinator_template_id
-    ? experts.find((expert) => expert.template_id === solution.coordinator_template_id)
-    : undefined;
   return (
     <Dialog
       isOpen
@@ -391,54 +406,11 @@ function SolutionDetailOverlay({ solution, onClose }: {
                   {solution.tags.map((tag) => <Token key={tag} label={tag} size="sm" />)}
                 </HStack>
               )}
-              <VStack gap={2}>
-                <Heading level={3}>方案团队</Heading>
-                {experts.length === 0 ? (
-                  <EmptyState isCompact headingLevel={4} title="暂无方案专家" />
-                ) : (
-                  <Grid columns={{ minWidth: 240, repeat: "fit" }} gap={2}>
-                    {experts.map((expert) => (
-                      <Card key={`${expert.template_id}@${expert.version}`} variant="muted" padding={3}>
-                        <VStack gap={1}>
-                          <HStack gap={2} align="center" wrap="wrap">
-                            <Text weight="bold">{expert.display_name}</Text>
-                            {coordinator?.template_id === expert.template_id && <Badge label="协调专家" variant="info" />}
-                            {expert.category && <Badge label={expert.category} />}
-                          </HStack>
-                          {expert.persona && <Text color="secondary">{expert.persona}</Text>}
-                        </VStack>
-                      </Card>
-                    ))}
-                  </Grid>
-                )}
-              </VStack>
-              <HStack gap={2} align="center" wrap="wrap">
-                <Badge label={solutionModeLabel(solution.mode)} variant="info" />
-                <Text type="supporting" color="secondary">
-                  {solution.mode === "solo" ? "应用后直接私聊，不建群" : "应用后可建群，由协调专家按规则编排"}
-                </Text>
-              </HStack>
-              {solution.mode !== "solo" && solution.orchestration_rules && (
-                <VStack gap={1}>
-                  <Heading level={3}>群聊编排规则</Heading>
-                  <Text color="secondary" style={{ whiteSpace: "pre-wrap" }}>
-                    {renderRules(solution.orchestration_rules, new Map(experts.map((expert) => [expert.template_id, expert.display_name])))}
-                  </Text>
-                </VStack>
-              )}
-              {(solution.recommended_capabilities?.length ?? 0) > 0 && (
-                <VStack gap={1}>
-                  <Heading level={3}>推荐的 skill 与 MCP</Heading>
-                  <Text type="supporting" color="secondary">仅供参考，不会随方案安装；成员使用时若需要，会先询问本人是否安装。</Text>
-                  <HStack gap={1} wrap="wrap">
-                    {solution.recommended_capabilities!.map((item) => <Token key={`${item.kind}:${item.ref}`} label={capabilityLabel(item)} size="sm" />)}
-                  </HStack>
-                </VStack>
-              )}
+              <SolutionOverview solution={solution} skills={skills} />
               {(solution.coordinator_instructions || solution.output_requirements || solution.workflow_skill_ref) && (
                 <MetadataList columns="single">
                   {solution.coordinator_instructions && (
-                    <MetadataListItem label="协作说明"><Text color="secondary">{solution.coordinator_instructions}</Text></MetadataListItem>
+                    <MetadataListItem label="群主协作说明"><Text color="secondary">{solution.coordinator_instructions}</Text></MetadataListItem>
                   )}
                   {solution.output_requirements && (
                     <MetadataListItem label="预期交付物"><Text color="secondary">{solution.output_requirements}</Text></MetadataListItem>
