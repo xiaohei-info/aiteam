@@ -1,0 +1,26 @@
+AIFred — macOS 安装说明（Developer ID 签名 + Apple 公证）
+
+一、安装
+1. 将 AIFred.app 拖到旁边的 Applications（应用程序）快捷方式。
+2. 等待复制完成，从“应用程序”文件夹打开 AIFred。
+3. 首次打开时，系统可能询问是否允许 AIFred 访问麦克风或通知，请按需允许。
+
+二、验证来源（可选）
+本安装包由 Apple 公证，可直接双击打开，无需清除隔离标记，也不需要管理员权限。应用本体与安装盘都已装订公证票据，即使首次打开时没联网也能通过校验。
+
+在“终端”中可以自行核对签名与公证票据：
+
+  codesign --verify --deep --strict --verbose=2 /Applications/AIFred.app
+  spctl -a -vvv -t exec /Applications/AIFred.app
+  xcrun stapler validate /Applications/AIFred.app
+  xcrun stapler validate ~/Downloads/AIFred_0.1.0_aarch64_release.dmg
+
+第一条无输出即签名完整；第二条应输出 accepted、source=Notarized Developer ID；后两条（第二条路径换成实际下载的 DMG）应输出 The validate action worked。
+
+三、遇到问题
+- 若提示“无法验证开发者”或“已损坏”，请先确认网络可访问 Apple 公证服务后重试；仍失败请把 spctl 的输出发给开发者，不要跳过系统安全检查。
+- 若应用启动后 Agent 无法连接，请检查本机网络与安装说明附带的服务地址配置，不要使用第三方“一键放行”工具覆盖应用签名。
+
+重要说明
+- 本安装包使用 Developer ID Application 证书签名，并通过 Apple 公证（notarization）。
+- 安装包里不再附带“修复应用无法打开.command”脚本；任何重新签名（codesign --sign -）都会破坏公证票据，请不要对 AIFred.app 做本地临时签名。
