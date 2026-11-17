@@ -425,12 +425,32 @@ def test_authorized_config_no_db_503():
 _SKILL_MD = "---\nname: sheet\ndescription: 读表\n---\n读表格。"
 
 
+def _shaped(files):
+    """与仓库 SQL 一致的结构判断：数组、1–64 个文件、含 SKILL.md、内容总计不超过 1 MiB。"""
+    return (isinstance(files, list) and 1 <= len(files) <= 64
+            and any(isinstance(f, dict) and f.get("path") == "SKILL.md" for f in files)
+            and sum(len(str(f.get("content", "")).encode()) for f in files if isinstance(f, dict)) <= 1024 * 1024)
+
+
 def _catalog_with(rows):
     class _Repo:
+        def __init__(self):
+            self.calls = []
+
         def list_skills(self, ctx):
-            return rows
+            raise AssertionError("可自装技能不得读取全量技能（含文件内容）")
+
+        def list_skill_summaries(self, ctx):
+            self.calls.append(("summaries",))
+            return [
+                SimpleNamespace(skill_id=row.skill_id, display_name=row.display_name, version=row.version,
+                                binding_policy=row.binding_policy, visibility=row.visibility, config=row.config,
+                                content_hash=row.content_hash, package_shaped=_shaped(row.files))
+                for row in rows
+            ]
 
         def get_skill_by_skill_id(self, ctx, *, skill_id):
+            self.calls.append(("one", skill_id))
             return next((row for row in rows if row.skill_id == skill_id), None)
 
     class _Catalog:
@@ -481,6 +501,27 @@ def test_installable_package_is_signed_for_the_calling_member_and_out_of_scope_s
     assert (result.package.tenant_id, result.package.member_id, result.package.key_id) == ("t-a", "m-1", "k1")
     assert [key.key_id for key in result.signing_keys] == ["k1"]
     for skill_id in ("secret", "missing"):
+        with pytest.raises(NotFound):
+            service.installable_skill_package(_ctx("t-a", user_id="m-1"), skill_id)
+
+
+def test_installable_list_reads_summaries_only_and_package_reads_exactly_one_row():
+    rows = [_skill_row("sheet"), _skill_row("other"), _skill_row("off", binding_policy="disabled")]
+    service = _installer(rows)
+    repo = service._capability._repo
+    service.installable_skills(_ctx("t-a", user_id="m-1"))
+    assert repo.calls == [("summaries",)]
+    repo.calls.clear()
+    service.installable_skill_package(_ctx("t-a", user_id="m-1"), "sheet")
+    assert repo.calls == [("one", "sheet")]
+
+
+def test_private_disabled_and_tampered_skills_are_404_on_package_fetch():
+    tampered = _skill_row("tampered")
+    tampered.files = [{"path": "SKILL.md", "content": _SKILL_MD + "\n改过。"}]
+    service = _installer([_skill_row("secret", visibility="private"), _skill_row("off", binding_policy="disabled"), tampered,
+                          _skill_row("legacy", files=[{"path": "references/a.md", "content": "x"}])])
+    for skill_id in ("secret", "off", "tampered", "legacy"):
         with pytest.raises(NotFound):
             service.installable_skill_package(_ctx("t-a", user_id="m-1"), skill_id)
 

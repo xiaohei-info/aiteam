@@ -131,3 +131,24 @@ def test_signed_distribution_after_metadata_edit_uses_verified_bytes_and_require
         s.execute("UPDATE skill_catalog SET files=%s::jsonb WHERE id=%s", ('[{"path":"SKILL.md","content":"# tampered"}]', created.catalog_id))
         s.execute("UPDATE skill_catalog SET binding_policy='opt_in' WHERE id=%s", (created.catalog_id,))
     assert service._resolve_skill_packages(ctx, [{"skills": ["distributed"]}]) == []
+
+
+def test_installable_summaries_judge_package_shape_in_sql_without_returning_files(migrated_db, two_tenants):
+    router = PgTenantRouter(migrated_db)
+    ctx = TenantContext(tenant_id=two_tenants[0], user_id="fixture", roles=["owner"])
+    repo = CapabilityCatalogRepository(router)
+    service = CapabilityCatalogService(repo)
+    ready = service.create_skill(ctx, SkillCatalogIn(skill_id="sum-ready", version="1", files=FILES))
+    service.create_skill(ctx, SkillCatalogIn(skill_id="sum-draft"))
+    for skill_id, files in (("sum-scalar", '"legacy"'), ("sum-object", '{"legacy":true}'),
+                            ("sum-no-skill-md", '[{"path":"a.md","content":"x"}]')):
+        row = service.create_skill(ctx, SkillCatalogIn(skill_id=skill_id, version="1"))
+        with router.session(ctx) as s:
+            s.execute("UPDATE skill_catalog SET files=%s::jsonb, content_hash='h' WHERE id=%s", (files, row.catalog_id))
+    summaries = {row.skill_id: row for row in repo.list_skill_summaries(ctx)}
+    assert not hasattr(summaries["sum-ready"], "files")
+    assert summaries["sum-ready"].package_shaped and summaries["sum-ready"].content_hash == ready.content_hash
+    for skill_id in ("sum-draft", "sum-scalar", "sum-object", "sum-no-skill-md"):
+        assert summaries[skill_id].package_shaped is False, skill_id
+    other = TenantContext(tenant_id=two_tenants[1], user_id="other", roles=["owner"])
+    assert not any(row.skill_id.startswith("sum-") for row in repo.list_skill_summaries(other))

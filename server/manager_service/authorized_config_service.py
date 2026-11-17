@@ -247,36 +247,42 @@ class AuthorizedConfigService:
 
     # ---- 成员在对话中自行安装技能（设计 §11.1）----
 
-    def _self_installable(self, ctx: TenantContext) -> list:
-        """企业目录里成员可自行安装的技能：可见范围为 tenant/public、未停用、包可执行。
-
-        私有（private）技能只能由管理员绑定到专家，成员不能自装——这是企业的管控点。
-        """
+    def _self_install_repo(self, ctx: TenantContext):
         if self._capability is None or self._skill_signer is None:
             raise ServiceUnavailable("技能安装暂不可用：企业未配置技能目录或技能签名")
         require_active(self._members.get_member(ctx, ctx.user_id))
-        repo = getattr(self._capability, "_repo", None)
-        if repo is None or not hasattr(repo, "list_skills"):
-            return []
-        rows = [_catalog_row_to_out(row) for row in repo.list_skills(ctx)]
-        return [
-            out for out in rows
-            if out.visibility in ("tenant", "public") and out.binding_policy != "disabled"
-            and getattr(out, "package_status", "invalid") == "ready" and out.content_hash
-        ]
+        return getattr(self._capability, "_repo", None)
+
+    @staticmethod
+    def _member_may_self_install(item) -> bool:
+        """成员可自装：可见范围为 tenant/public、未停用、有内容指纹。
+
+        私有（private）技能只能由管理员绑定到专家，成员不能自装——这是企业的管控点。
+        包是否可执行另行判断：列表看库内结构判断，取包时做完整校验。
+        """
+        return item.visibility in ("tenant", "public") and item.binding_policy != "disabled" and bool(item.content_hash)
 
     def installable_skills(self, ctx: TenantContext) -> list[InstallableSkill]:
+        """企业目录里成员可自行安装的技能（只读摘要，不读出技能文件内容）。"""
+        repo = self._self_install_repo(ctx)
+        if repo is None or not hasattr(repo, "list_skill_summaries"):
+            return []
         return [
             InstallableSkill(
-                skill_id=out.skill_id, display_name=out.display_name, version=out.version,
-                content_hash=out.content_hash, source_skill_id=str(out.config.get("source_skill_id") or ""),
+                skill_id=row.skill_id, display_name=row.display_name, version=row.version,
+                content_hash=row.content_hash,
+                source_skill_id=str((row.config if isinstance(row.config, dict) else {}).get("source_skill_id") or ""),
             )
-            for out in self._self_installable(ctx)
+            for row in repo.list_skill_summaries(ctx)
+            if row.package_shaped and self._member_may_self_install(row)
         ]
 
     def installable_skill_package(self, ctx: TenantContext, skill_id: str) -> InstallableSkillPackage:
-        out = next((item for item in self._self_installable(ctx) if item.skill_id == skill_id), None)
-        signed = self._sign(ctx, out) if out is not None else None
+        """按 skill_id 单查一条，完整校验后为当前成员签名；不可自装或包不可执行一律 404。"""
+        repo = self._self_install_repo(ctx)
+        row = repo.get_skill_by_skill_id(ctx, skill_id=skill_id) if repo is not None and hasattr(repo, "get_skill_by_skill_id") else None
+        out = _catalog_row_to_out(row) if row is not None else None
+        signed = self._sign(ctx, out) if out is not None and self._member_may_self_install(out) else None
         if signed is None:
             raise NotFound("该技能不在本企业可自行安装的技能目录中")
         assert self._skill_signer is not None
