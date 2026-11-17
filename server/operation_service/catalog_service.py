@@ -462,6 +462,12 @@ class CatalogService:
             return True  # 缺失的专家由后面的“方案不完整”冲突报告，不当作范围外
         return self._visible_to(entry, tenant_id)
 
+    def _expert_name(self, template_id: str) -> str:
+        try:
+            return self._repo.get(CatalogType.EXPERT_TEMPLATE, template_id).display_name
+        except NotFound:
+            return ""
+
     def pull_expert_template_detail(
         self, *, template_id: str, version: str | None = None, tenant_id: str | None = None
     ):
@@ -506,7 +512,11 @@ class CatalogService:
 
         version 为 None 时返回最新已发布版本。只返回 PUBLISHED 状态的方案。
         """
-        from shared.contracts.crosstier import ExpertTemplateDetail, SolutionPackage
+        from shared.contracts.crosstier import (
+            ExpertTemplateDetail,
+            HiddenExpertRef,
+            SolutionPackage,
+        )
         from shared.errors import Conflict, NotFound
 
         entry = self._repo.get(CatalogType.SOLUTION_TEMPLATE, solution_id)
@@ -532,9 +542,11 @@ class CatalogService:
             binding_overrides = {}
         experts: list[ExpertTemplateDetail] = []
         hidden_ids: set[str] = set()
+        hidden_refs: list[HiddenExpertRef] = []
         for expert_id in binding_order:
             if tenant_id is not None and not self._expert_visible(expert_id, tenant_id):
                 hidden_ids.add(expert_id)
+                hidden_refs.append(HiddenExpertRef(template_id=expert_id, display_name=self._expert_name(expert_id)))
                 continue
             try:
                 pinned_version = template_versions.get(expert_id) if isinstance(template_versions, dict) else None
@@ -568,6 +580,7 @@ class CatalogService:
             experts=experts,
             tags=payload.get("tags", []),
             hidden_expert_count=len(hidden_ids),
+            hidden_experts=hidden_refs,
         )
 
     def list_published_expert_templates(self, *, tenant_id: str | None = None):

@@ -20,10 +20,12 @@ class OrchestrationRefError(ValueError):
     各端据此给出面向用户的中文提示，消息本身只用于日志与测试。
     """
 
-    def __init__(self, message: str, *, kind: str, member: str | None = None) -> None:
+    def __init__(self, message: str, *, kind: str, member: str | None = None, members: list[str] | None = None) -> None:
         super().__init__(message)
         self.kind = kind
         self.member = member
+        # 全部有问题的引用（member 是其中第一个），供各端把名单完整告诉用户。
+        self.members = members if members is not None else ([member] if member else [])
 
 
 def referenced_members(rules: str) -> list[str]:
@@ -40,7 +42,7 @@ def validate_member_refs(rules: str, members: set[str] | frozenset[str]) -> None
     _check_well_formed(rules)
     outside = [member for member in referenced_members(rules) if member not in members]
     if outside:
-        raise OrchestrationRefError(f"Orchestration rules reference a member outside this solution: {outside[0]}", kind="outside", member=outside[0])
+        raise OrchestrationRefError(f"Orchestration rules reference a member outside this solution: {outside[0]}", kind="outside", member=outside[0], members=outside)
 
 
 def rewrite_member_refs(rules: str, mapping: Mapping[str, str]) -> str:
@@ -48,5 +50,5 @@ def rewrite_member_refs(rules: str, mapping: Mapping[str, str]) -> str:
     _check_well_formed(rules)
     missing = [member for member in referenced_members(rules) if member not in mapping]
     if missing:
-        raise OrchestrationRefError(f"Orchestration rules reference an unmapped member: {missing[0]}", kind="unmapped", member=missing[0])
+        raise OrchestrationRefError(f"Orchestration rules reference an unmapped member: {missing[0]}", kind="unmapped", member=missing[0], members=missing)
     return _REF.sub(lambda match: "@{" + mapping[match.group(1)] + "}", rules)

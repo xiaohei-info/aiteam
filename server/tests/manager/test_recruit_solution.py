@@ -1614,7 +1614,8 @@ def test_apply_solution_rejects_rules_that_reference_unknown_members_before_any_
     svc, emp, _, recruit, _ = _build_service(catalog)
     with pytest.raises(Conflict, match="对您的企业不可见") as caught:
         svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
-    assert "ghost" not in str(caught.value)  # 内部引用 ID 不展示给用户
+    # 管理员要拿着它去找运营：没有名称时至少给出 ID
+    assert "ID：ghost" in str(caught.value)
     assert recruit.list_solution_instances(_ctx("t-a")) == []
 
 
@@ -1634,3 +1635,19 @@ def test_legacy_package_without_rules_still_applies_as_group():
         _ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"),
     ).solution_instance
     assert (inst.mode, inst.orchestration_rules) == ("group", "")
+
+
+def test_hidden_expert_is_named_with_its_id_in_the_apply_error():
+    from shared.contracts.crosstier import HiddenExpertRef
+
+    catalog = _fake_catalog()
+    catalog.seed_solution(_group_package(
+        "@{tpl-a} 先做\n@{tpl-x} 复核\n@{tpl-y} 汇总",
+        hidden_experts=[HiddenExpertRef(template_id="tpl-x", display_name="合规复核专家")],
+    ))
+    svc, *_ = _build_service(catalog)
+    with pytest.raises(Conflict) as caught:
+        svc.apply_solution(_ctx("t-a"), ApplySolutionRequest(expert_models=EXPERT_MODELS, solution_id="sol-1"))
+    message = str(caught.value)
+    assert "「合规复核专家」（ID：tpl-x）" in message
+    assert "ID：tpl-y" in message  # 没有名称的也列出，不丢

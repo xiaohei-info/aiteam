@@ -656,11 +656,25 @@ def _derive_solution_expert_slug(solution_id: str, version: str, idx: int) -> st
     return f"sol_{sid}_{ver}_e{idx}"
 
 
-def _rules_error_message(exc: OrchestrationRefError) -> str:
-    """把编排规则的引用错误翻成企业管理员看得懂的原因（引用 ID 只是内部标识，不展示）。"""
+def _expert_names(package) -> dict[str, str]:
+    """方案里已知专家的 模板 id → 名称（含已停用的、因发布范围被隐藏的）。"""
+    names = {t.template_id: t.display_name for t in package.experts}
+    names.update({h.template_id: h.display_name for h in getattr(package, "hidden_experts", [])})
+    return names
+
+
+def _rules_error_message(exc: OrchestrationRefError, package) -> str:
+    """把编排规则的引用错误翻成管理员看得懂的原因，并列出有问题的专家名称与 ID，方便向平台运营反馈。"""
     if exc.kind == "malformed":
         return "该方案的群聊编排规则格式有误，无法应用，请联系平台运营修正后重新发布"
-    return "该方案的群聊编排规则引用了对您的企业不可见的专家（可能被发布范围排除或已下架），无法应用；请联系平台运营调整方案或发布范围"
+    names = _expert_names(package)
+    listed = "、".join(
+        f"「{names[m]}」（ID：{m}）" if names.get(m) else f"ID：{m}" for m in exc.members
+    )
+    return (
+        f"该方案的群聊编排规则引用了对您的企业不可见的专家：{listed}。"
+        "可能被发布范围排除或已下架，无法应用；请把上述专家名称与 ID 反馈给平台运营，调整方案或发布范围"
+    )
 
 
 def _check_solution_mode(package, template_ids: set[str]) -> None:
@@ -674,7 +688,7 @@ def _check_solution_mode(package, template_ids: set[str]) -> None:
     try:
         validate_member_refs(package.orchestration_rules, template_ids)
     except OrchestrationRefError as exc:
-        raise Conflict(_rules_error_message(exc)) from exc
+        raise Conflict(_rules_error_message(exc, package)) from exc
 
 
 def _rules_for_tenant(package, template_employees: dict[str, str]) -> str:
@@ -682,7 +696,7 @@ def _rules_for_tenant(package, template_employees: dict[str, str]) -> str:
     try:
         return rewrite_member_refs(package.orchestration_rules, template_employees)
     except OrchestrationRefError as exc:
-        raise Conflict(_rules_error_message(exc)) from exc
+        raise Conflict(_rules_error_message(exc, package)) from exc
 
 
 def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:

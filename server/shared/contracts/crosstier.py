@@ -157,6 +157,15 @@ class RecommendedCapability(BaseModel):
     purpose: str = Field(default="", max_length=200)
 
 
+class HiddenExpertRef(BaseModel):
+    """方案内因发布范围对本企业不可见的专家：只带名称与模板 id。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str
+    display_name: str = ""
+
+
 class SolutionPackage(BaseModel):
     """F07 应用方案：Manager 向 Operator 拉行业方案包（响应）。在本 tenant 展开为 solution instance。
 
@@ -186,6 +195,10 @@ class SolutionPackage(BaseModel):
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
     hidden_expert_count: int = Field(default=0, ge=0, description="方案内因发布范围对本企业不可见、未下发的专家数")
+    hidden_experts: list[HiddenExpertRef] = Field(
+        default_factory=list, max_length=64,
+        description="不可见专家的名称与模板 id，仅用于编排规则引用到它们时告诉管理员该找运营问什么；不含专家内容",
+    )
 
 
 # ---- Agent → Manager（用户端主动访问）----
