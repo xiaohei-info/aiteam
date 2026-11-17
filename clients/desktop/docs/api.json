@@ -8059,6 +8059,110 @@
           }
         ],
         "description": "旧上下文记忆保存结果。直接重置：saved 已提交保存，empty 无可保存内容，skipped 请求 save_memory=false，retain_disabled 员工未开启记忆写入，policy Manager 策略拒绝（403/404/409）。保存失败（默认不重置，需 on_memory_failure=proceed 才重置）：unauthorized 登录失效（401）或本机授权不可用，too_large 内容超出 Manager 上限，manager_unavailable Manager 不可用或返回错误，retention_unverified 记忆保存服务未就绪或应答无法确认是否已保存，timeout 请求超时。"
+      },
+      "LocalCapability": {
+        "type": "object",
+        "required": [
+          "kind",
+          "ref",
+          "display_name",
+          "url",
+          "tools",
+          "source",
+          "reason",
+          "approved_by",
+          "created_at"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "能力类型；目前只有 MCP。",
+            "enum": [
+              "mcp"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "description": "能力标识。"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "展示名称。"
+          },
+          "url": {
+            "type": "string",
+            "description": "MCP 地址（不含凭据）。"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "tools 字段值。"
+            },
+            "description": "安装时从服务端读到的工具。"
+          },
+          "source": {
+            "type": "string",
+            "description": "来源：用户在对话中同意的地址。",
+            "enum": [
+              "user_url"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "需要它的原因。"
+          },
+          "approved_by": {
+            "type": "string",
+            "description": "同意安装的成员。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "安装时间。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "用户在本机授权安装的个人能力；只在本机、只对本人会话生效。"
+      },
+      "LocalCapabilityDeleteEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "removed"
+            ],
+            "properties": {
+              "removed": {
+                "type": "boolean",
+                "description": "是否已撤销。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Local Capability Delete Envelope 数据结构。"
+      },
+      "LocalCapabilityListEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocalCapability"
+            },
+            "description": "data 列表元素。"
+          }
+        },
+        "description": "Local Capability List Envelope 数据结构。"
       }
     }
   },
@@ -8651,14 +8755,21 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["data"],
+                  "required": [
+                    "data"
+                  ],
                   "properties": {
                     "data": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["signed_out"],
+                      "required": [
+                        "signed_out"
+                      ],
                       "properties": {
-                        "signed_out": { "type": "boolean", "const": true }
+                        "signed_out": {
+                          "type": "boolean",
+                          "const": true
+                        }
                       }
                     }
                   }
@@ -8673,7 +8784,9 @@
             "$ref": "#/components/responses/ManagerUnavailable"
           }
         },
-        "tags": ["agent"]
+        "tags": [
+          "agent"
+        ]
       }
     },
     "/api/agent/reset-password": {
@@ -12504,28 +12617,44 @@
       "get": {
         "operationId": "listConversationApprovals",
         "summary": "列出会话审批记录",
-        "responses": {"200": {"description": "审批记录"}}
+        "responses": {
+          "200": {
+            "description": "审批记录"
+          }
+        }
       }
     },
     "/api/agent/conversations/{conversation_id}/approvals/{approval_id}/decision": {
       "post": {
         "operationId": "decideConversationApproval",
         "summary": "提交会话审批决定",
-        "responses": {"200": {"description": "审批决定结果"}}
+        "responses": {
+          "200": {
+            "description": "审批决定结果"
+          }
+        }
       }
     },
     "/api/agent/conversations/{conversation_id}/introduction": {
       "post": {
         "operationId": "introduceConversationEmployee",
         "summary": "请求员工自我介绍",
-        "responses": {"202": {"description": "已受理"}}
+        "responses": {
+          "202": {
+            "description": "已受理"
+          }
+        }
       }
     },
     "/api/agent/conversations/{conversation_id}/receipts/{idempotency_key}": {
       "get": {
         "operationId": "getConversationReceipt",
         "summary": "读取会话幂等收据",
-        "responses": {"200": {"description": "收据"}}
+        "responses": {
+          "200": {
+            "description": "收据"
+          }
+        }
       }
     },
     "/api/agent/conversations/{conversation_id}/attachments": {
@@ -23252,6 +23381,166 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities": {
+      "get": {
+        "operationId": "listLocalCapabilities",
+        "summary": "列出个人能力",
+        "description": "列出当前成员在对话中同意安装的本机个人能力（MCP）。只在本机，不上传、不改企业配置。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "当前成员的个人能力列表。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalCapabilityListEnvelope"
+                },
+                "examples": {
+                  "list": {
+                    "summary": "已安装的 MCP",
+                    "value": {
+                      "data": [
+                        {
+                          "kind": "mcp",
+                          "ref": "notion",
+                          "display_name": "Notion",
+                          "url": "https://example.com/mcp",
+                          "tools": [
+                            "search"
+                          ],
+                          "source": "user_url",
+                          "reason": "读取页面",
+                          "approved_by": "member-1",
+                          "created_at": "2026-11-17T00:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/{capability_kind}/{capability_ref}": {
+      "delete": {
+        "operationId": "deleteLocalCapability",
+        "summary": "撤销个人能力",
+        "description": "撤销当前成员的一项个人能力，立即失效。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mcp"
+              ],
+              "description": "capability kind 字段值。"
+            },
+            "in": "path",
+            "name": "capability_kind",
+            "required": true,
+            "description": "能力类型；目前只有 MCP。",
+            "example": "mcp"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "capability ref 字段值。"
+            },
+            "in": "path",
+            "name": "capability_ref",
+            "required": true,
+            "description": "能力标识。",
+            "example": "notion"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "个人能力撤销结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalCapabilityDeleteEnvelope"
+                },
+                "examples": {
+                  "removed": {
+                    "summary": "已撤销",
+                    "value": {
+                      "data": {
+                        "removed": true
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
