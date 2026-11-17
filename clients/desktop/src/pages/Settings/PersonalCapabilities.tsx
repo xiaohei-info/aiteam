@@ -10,7 +10,8 @@ export default function PersonalCapabilities() {
   const [error, setError] = useState('')
   const [busyRef, setBusyRef] = useState<string | null>(null)
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  // 挂载时置回 true：开发版 StrictMode 会先卸载再挂载一次，只在卸载时置 false 会让请求结果永远写不回页面。
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const load = useCallback(async () => {
     try {

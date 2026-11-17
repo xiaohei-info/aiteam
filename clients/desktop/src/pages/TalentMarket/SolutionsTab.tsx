@@ -34,7 +34,8 @@ export default function SolutionsTab({ query }: { query: string }) {
   // 企业目录里本人可自装的技能；读不到为 null（推荐 skill 不标「企业未提供」）。
   const [installableSkills, setInstallableSkills] = useState<InstallableSkill[] | null>(null)
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  // 挂载时置回 true：开发版 StrictMode 会先卸载再挂载一次，只在卸载时置 false 会让请求结果永远写不回页面。
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true)
