@@ -12,10 +12,15 @@ export function renderRules(rules: string | undefined, names: ReadonlyMap<string
   return (rules ?? "").replace(REF, (_m, id: string) => names.has(id) ? `@${names.get(id)}` : `@${id}（未知成员）`);
 }
 
+/** skill 的 ref 是平台 skill_id（UUID），只展示名称；MCP 的 ref 是可读标识，名称后带上。 */
+export function capabilityName(item: RecommendedCapability): string {
+  if (!item.display_name || item.display_name === item.ref) return item.ref;
+  return item.kind === "skill" ? item.display_name : `${item.display_name}（${item.ref}）`;
+}
+
 export function capabilityLabel(item: RecommendedCapability): string {
   const kind = item.kind === "mcp" ? "MCP" : "skill";
-  const name = item.display_name && item.display_name !== item.ref ? `${item.display_name}（${item.ref}）` : item.ref;
-  return `${kind} · ${name}${item.purpose ? `：${item.purpose}` : ""}`;
+  return `${kind} · ${capabilityName(item)}${item.purpose ? `：${item.purpose}` : ""}`;
 }
 
 export interface CapabilityStatus {

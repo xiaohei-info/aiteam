@@ -15,6 +15,8 @@ describe("solutionInfo", () => {
 
   it("推荐能力标签带类型与用途", () => {
     expect(capabilityLabel({ kind: "mcp", ref: "mes", display_name: "MES", purpose: "读工单" })).toBe("MCP · MES（mes）：读工单");
+    // skill 的 ref 是平台 skill_id（UUID），只展示名称
+    expect(capabilityLabel({ kind: "skill", ref: "3f9c9e2a-7b1d", display_name: "抽样检验", purpose: "" })).toBe("skill · 抽样检验");
     expect(capabilityLabel({ kind: "skill", ref: "sk-1" })).toBe("skill · sk-1");
   });
 });

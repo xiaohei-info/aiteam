@@ -846,8 +846,8 @@ def test_publish_carries_skills_and_mcps_as_non_binding_recommendations(env):
     env.service.approve(draft_id, "admin", "")
     sid = env.service.publish(draft_id, "admin").published_solution_id
     package = env.catalog.pull_solution_package(solution_id=sid)
-    assert [(item.kind, item.ref, item.purpose) for item in package.recommended_capabilities] == [
-        ("skill", "sk-1", "读 Excel"), ("mcp", "mes", "读取工单"),
+    assert [(item.kind, item.ref, item.display_name, item.purpose) for item in package.recommended_capabilities] == [
+        ("skill", "sk-1", "读表", "读 Excel"), ("mcp", "mes", "MES", "读取工单"),
     ]
     # 不绑定到专家：专家模板上没有 skill 引用与连接器要求。
     for key in ("lead", "inspector"):

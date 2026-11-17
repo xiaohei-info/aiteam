@@ -126,7 +126,8 @@ export default function SolutionDetailPanel({ solution, experts, localCapabiliti
                     <div className={styles.itemList}>
                       {capabilities.map(item => {
                         const status = capabilityReadiness(item, localCapabilities)
-                        const name = item.display_name && item.display_name !== item.ref ? `${item.display_name}（${item.ref}）` : item.ref
+                        // skill 的 ref 是平台 skill_id（UUID），只展示名称；MCP 名称后带上标识
+                        const name = !item.display_name || item.display_name === item.ref ? item.ref : item.kind === 'skill' ? item.display_name : `${item.display_name}（${item.ref}）`
                         return (
                           <div key={`${item.kind}:${item.ref}`} className={styles.itemRow} data-testid="solution-detail-capability">
                             <span className={styles.itemIcon}>{item.kind === 'mcp' ? <Plug size={14} strokeWidth={1.8} /> : <BookOpen size={14} strokeWidth={1.8} />}</span>

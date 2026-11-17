@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -92,6 +93,8 @@ MAX_TOTAL_BYTES = 100 * 1024 * 1024
 MAX_IDEMPOTENCY_KEY_CHARS = 200
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+_logger = logging.getLogger(__name__)
 
 
 class CatalogPublisher(Protocol):
@@ -280,6 +283,19 @@ class SolutionAuthoringService:
         self._repo.update_draft(draft_id, actor_id, decide, expected_version=body.version)
         return self.get_draft(draft_id)
 
+    def _skill_names(self, package: GeneratedSolution) -> dict[str, str]:
+        """发布时给推荐 skill 取平台目录里的名称（skill_id 是 UUID，下游没法读）。
+
+        只影响展示：目录读不到时退回展示 skill_id，不因此阻断发布。
+        """
+        if not any(expert.skills for expert in package.experts):
+            return {}
+        try:
+            return {item.skill_id: item.display_name for item in self._skill_catalog() if item.display_name}
+        except Exception:  # noqa: BLE001
+            _logger.warning("platform skill catalog unavailable while publishing; falling back to skill ids", exc_info=True)
+            return {}
+
     def _check_skill_refs(self, package: dict[str, Any]) -> None:
         """手动保存也按平台已发布目录校验全部 skill 引用：选择后被下架、改版或手填的引用不落库。
 
@@ -435,7 +451,7 @@ class SolutionAuthoringService:
             coordinator_template_id=expert_ids[package.coordinator_key],
             coordinator_instructions=package.coordinator_instructions,
             output_requirements=package.output_requirements, tags=package.tags,
-            mode=package.mode, recommended_capabilities=_recommended_capabilities(package),
+            mode=package.mode, recommended_capabilities=_recommended_capabilities(package, self._skill_names(package)),
             orchestration_rules=catalog_rules,
         )
         self._ensure_registered(catalog, CatalogType.SOLUTION_TEMPLATE, solution_id, lambda: catalog.register_solution_template(solution))
@@ -466,13 +482,16 @@ class SolutionAuthoringService:
             catalog.publish_template(catalog_type, template_id, PublishTemplateRequest())
 
 
-def _recommended_capabilities(package: GeneratedSolution) -> list[RecommendedCapability]:
-    """把各专家的 skill / MCP 声明合并成方案级的推荐清单（去重、保序）。只是提示，不绑定到专家。"""
+def _recommended_capabilities(package: GeneratedSolution, skill_names: dict[str, str]) -> list[RecommendedCapability]:
+    """把各专家的 skill / MCP 声明合并成方案级的推荐清单（去重、保序）。只是提示，不绑定到专家。
+
+    skill 的展示名取平台目录名称（`skill_names`），取不到时退回 skill_id。
+    """
     seen: dict[tuple[str, str], RecommendedCapability] = {}
     for expert in package.experts:
         for skill in expert.skills:
             seen.setdefault(("skill", skill.skill_id), RecommendedCapability(
-                kind="skill", ref=skill.skill_id, display_name=skill.skill_id, purpose=skill.reason,
+                kind="skill", ref=skill.skill_id, display_name=skill_names.get(skill.skill_id, skill.skill_id)[:80], purpose=skill.reason,
             ))
         for mcp in expert.mcps:
             seen.setdefault(("mcp", mcp.key), RecommendedCapability(

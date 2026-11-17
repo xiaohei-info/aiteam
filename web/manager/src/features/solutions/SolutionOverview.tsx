@@ -13,7 +13,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import type { SkillCatalog } from "../capability/types";
 import type { SolutionPackage } from "../experts/types";
-import { capabilityStatus, renderRules, solutionModeLabel } from "./solutionInfo";
+import { capabilityName, capabilityStatus, renderRules, solutionModeLabel } from "./solutionInfo";
 
 export function SolutionOverview({ solution, skills, compact = false }: {
   solution: SolutionPackage;
@@ -91,7 +91,7 @@ export function SolutionOverview({ solution, skills, compact = false }: {
             <VStack as="ul" gap={1} aria-label="推荐能力" style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {capabilities.map((item) => {
                 const status = capabilityStatus(item, skills);
-                const name = item.display_name && item.display_name !== item.ref ? `${item.display_name}（${item.ref}）` : item.ref;
+                const name = capabilityName(item);
                 return (
                   <HStack as="li" key={`${item.kind}:${item.ref}`} gap={2} align="center" wrap="wrap" data-testid="solution-capability">
                     <Badge label={item.kind === "mcp" ? "MCP" : "skill"} />
