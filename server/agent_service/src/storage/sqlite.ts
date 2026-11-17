@@ -302,6 +302,8 @@ export interface LocalCapability {
   source: "user_url" | "enterprise_catalog";
   /** Installed skill version; empty for an MCP. */
   version: string;
+  /** Platform skill id an enterprise-catalog skill was installed from (matches solution recommendations); empty otherwise. */
+  source_ref: string;
   reason: string;
   approved_by: string;
   created_at: string;
@@ -654,6 +656,7 @@ export class AgentSqliteStore {
         tools_json TEXT NOT NULL,
         source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
         version TEXT NOT NULL DEFAULT '',
+        source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         approved_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -729,6 +732,7 @@ export class AgentSqliteStore {
       "ALTER TABLE schedule_retry ADD COLUMN schedule_generation INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE conversation_participant_session ADD COLUMN removed_at TEXT",
       "ALTER TABLE approval_record ADD COLUMN resolution_json TEXT",
+      "ALTER TABLE local_capability ADD COLUMN source_ref TEXT NOT NULL DEFAULT ''",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
@@ -1554,14 +1558,14 @@ export class AgentSqliteStore {
   }
 
   listLocalCapabilities(tenantId: string, memberId: string): LocalCapability[] {
-    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
+    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
       .map(({ tools_json, ...row }) => ({ ...row, tools: JSON.parse(tools_json) as string[] }));
   }
 
   /** Inserts or replaces one personal capability of this owner; never touches another member's rows. */
-  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version"> & { version?: string }, now = new Date().toISOString()): void {
-    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.reason, item.approved_by, now);
+  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version" | "source_ref"> & { version?: string; source_ref?: string }, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now);
   }
 
   deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {
@@ -2155,6 +2159,7 @@ export class AgentSqliteStore {
         tools_json TEXT NOT NULL,
         source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
         version TEXT NOT NULL DEFAULT '',
+        source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         approved_by TEXT NOT NULL,
         created_at TEXT NOT NULL,

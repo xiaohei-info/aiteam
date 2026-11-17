@@ -68,9 +68,9 @@ test("an Agent database from before personal skills keeps its MCP rows and accep
     old.close();
     const store = new AgentSqliteStore(path);
     try {
-      store.putLocalCapability("t", "m", { kind: "skill", ref: "sheet", display_name: "读表", url: "", tools: [], version: "2", source: "enterprise_catalog", reason: "", approved_by: "m" });
-      assert.deepEqual(store.listLocalCapabilities("t", "m").map((item) => [item.kind, item.ref, item.version, item.tools]),
-        [["mcp", "notion", "", ["search"]], ["skill", "sheet", "2", []]]);
+      store.putLocalCapability("t", "m", { kind: "skill", ref: "sheet", display_name: "读表", url: "", tools: [], version: "2", source_ref: "plat-sheet", source: "enterprise_catalog", reason: "", approved_by: "m" });
+      assert.deepEqual(store.listLocalCapabilities("t", "m").map((item) => [item.kind, item.ref, item.version, item.tools, item.source_ref]),
+        [["mcp", "notion", "", ["search"], ""], ["skill", "sheet", "2", [], "plat-sheet"]]);
       assert.equal(store.deleteLocalCapability("t", "m", "skill", "sheet"), true);
     } finally { store.close(); }
     // 再次打开不会重复迁移或丢数据。

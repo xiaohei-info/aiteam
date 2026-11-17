@@ -160,7 +160,7 @@ test("a skill can only be installed from the enterprise catalog; a newer version
     assert.notEqual((await run(install, { kind: "skill", ref: "plat-sheet", reason: "读表" })).isError, true);
     assert.deepEqual(installed, ["sheet@1"]);
     const row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0];
-    assert.deepEqual([row?.kind, row?.ref, row?.version, row?.source, row?.url], ["skill", "sheet", "1", "enterprise_catalog", ""]);
+    assert.deepEqual([row?.kind, row?.ref, row?.version, row?.source, row?.url, row?.source_ref], ["skill", "sheet", "1", "enterprise_catalog", "", "plat-sheet"]);
 
     // 同版本已装：不打扰用户。
     assert.equal((await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "sheet", reason: "" }, skills)).ok, false);

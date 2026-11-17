@@ -8169,6 +8169,7 @@
           "tools",
           "source",
           "version",
+          "source_ref",
           "reason",
           "approved_by",
           "created_at"
@@ -8235,6 +8236,10 @@
           "version": {
             "type": "string",
             "description": "技能版本；MCP 为空。"
+          },
+          "source_ref": {
+            "type": "string",
+            "description": "企业目录技能对应的平台 skill ID（与方案推荐能力对应）；其他为空。"
           },
           "reason": {
             "type": "string",

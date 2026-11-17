@@ -561,6 +561,8 @@ export interface LocalCapability {
   source: 'user_url' | 'enterprise_catalog'
   /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
   version?: string
+  /** 企业目录技能对应的平台 skill ID（与方案推荐能力对应）；旧版 Agent 不返回。 */
+  source_ref?: string
   reason: string
   approved_by: string
   created_at: string

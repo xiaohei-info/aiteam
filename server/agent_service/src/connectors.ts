@@ -248,7 +248,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
           return fail("安装未完成：技能包校验失败或企业服务暂不可用，请稍后再试。");
         }
         store.putLocalCapability(owner.tenantId, owner.memberId, {
-          kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version,
+          kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: found.source_skill_id,
           source: "enterprise_catalog", reason: String(input.reason ?? "").slice(0, 200), approved_by: owner.memberId,
         });
         return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一轮对话起可用。` }], details: undefined };

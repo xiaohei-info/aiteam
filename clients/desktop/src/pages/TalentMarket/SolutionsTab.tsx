@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { LoaderCircle, MessageCircle, RefreshCw, ShieldAlert, User, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { agentApi } from '../../api/agent'
-import type { ExpertProjection, SolutionProjection } from '../../api/agent/types'
+import type { ExpertProjection, LocalCapability, SolutionProjection } from '../../api/agent/types'
 import GoldenDotsLoading from '../../components/Loading/GoldenDotsLoading'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { classifyRequestError, type RequestErrorInfo } from '../../lib/requestError'
 import { useAgentAuthStore } from '../../stores/agentAuth'
 import { useChatStore } from '../../stores/chat'
 import { startTalentEmployeeChat } from './talentEmployeeChat'
+import SolutionDetailPanel from './SolutionDetailPanel'
 import {
   recommendedSummary,
   solutionMembers,
@@ -27,6 +28,9 @@ export default function SolutionsTab({ query }: { query: string }) {
   const [actionError, setActionError] = useState('')
   const [startingId, setStartingId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  // 打开详情的方案；本机个人能力用于在详情里标注推荐能力「已就绪」，读不到为 null（不标注）。
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [localCapabilities, setLocalCapabilities] = useState<LocalCapability[] | null>(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
@@ -34,8 +38,11 @@ export default function SolutionsTab({ query }: { query: string }) {
     if (!background) setLoading(true)
     setError(null)
     try {
-      const [solutionRes, expertRes] = await Promise.all([agentApi.listSolutions(), agentApi.listExperts()])
+      const [solutionRes, expertRes, capabilities] = await Promise.all([
+        agentApi.listSolutions(), agentApi.listExperts(), agentApi.listLocalCapabilities().catch(() => null),
+      ])
       if (!alive.current) return
+      setLocalCapabilities(capabilities)
       setSolutions(solutionRes.solutions.filter(item => item.status === undefined || item.status === 'applied'))
       setExperts(expertRes.experts)
     } catch (err) {
@@ -123,8 +130,21 @@ export default function SolutionsTab({ query }: { query: string }) {
     )
   }
 
+  const detail = detailId ? solutions.find(item => item.solution_instance_id === detailId) : undefined
+
   return (
     <section className="tm-section" aria-label="行业方案">
+      {detail && (
+        <SolutionDetailPanel
+          solution={detail}
+          experts={experts}
+          localCapabilities={localCapabilities}
+          starting={startingId === detail.solution_instance_id}
+          actionError={actionError}
+          onStart={() => void start(detail)}
+          onClose={() => setDetailId(null)}
+        />
+      )}
       {actionError && <div className="tm-error" role="alert"><span>{actionError}</span></div>}
       <div className="tm-solution-toolbar">{refreshButton}</div>
       <div className="tm-agent-grid">
@@ -143,7 +163,12 @@ export default function SolutionsTab({ query }: { query: string }) {
               className="tm-agent-row"
               style={{ '--tm-index': index } as CSSProperties}
             >
-              <div className="tm-agent-summary static">
+              <button
+                type="button"
+                className="tm-agent-summary"
+                onClick={() => { setActionError(''); setDetailId(solution.solution_instance_id) }}
+                aria-label={`查看 ${solution.display_name} 详情`}
+              >
                 <span className="tm-agent-head">
                   <span className="tm-agent-avatar" aria-hidden="true">
                     {mode === 'solo' ? <User size={26} strokeWidth={1.6} /> : <Users size={26} strokeWidth={1.6} />}
@@ -169,7 +194,7 @@ export default function SolutionsTab({ query }: { query: string }) {
                     <span>推荐能力</span><strong>{recommended ? `${solution.recommended_capabilities?.length ?? 0} 项` : '无'}</strong>
                   </span>
                 </span>
-              </div>
+              </button>
               <span className="tm-agent-actions">
                 {action.kind === 'unavailable' ? (
                   <>

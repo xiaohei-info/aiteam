@@ -1,4 +1,4 @@
-import type { ExpertProjection, SolutionProjection } from '../../api/agent/types.ts'
+import type { ExpertProjection, LocalCapability, SolutionProjection } from '../../api/agent/types.ts'
 
 export type SolutionStart =
   | { kind: 'chat'; employeeId: string; label: '开始私聊' }
@@ -38,4 +38,22 @@ export function recommendedSummary(solution: Pick<SolutionProjection, 'recommend
   const skills = items.filter(item => item.kind === 'skill').length
   const mcps = items.filter(item => item.kind === 'mcp').length
   return [skills ? `${skills} 个 skill` : '', mcps ? `${mcps} 个 MCP` : ''].filter(Boolean).join('、')
+}
+
+export type RecommendedCapability = NonNullable<SolutionProjection['recommended_capabilities']>[number]
+
+/**
+ * 推荐能力在本机的状态（Agent 本地可知）：本人已安装 → 已就绪；否则 MCP 需在本机安装，
+ * skill 在对话中需要时会先询问再从企业技能目录安装。本机能力读不到（null）时不下结论。
+ */
+export function capabilityReadiness(item: RecommendedCapability, local: readonly LocalCapability[] | null): { label: string; ready: boolean } | null {
+  if (local === null) return null
+  const installed = local.some(cap => cap.kind === item.kind && (cap.ref === item.ref || (item.kind === 'skill' && cap.source_ref === item.ref)))
+  if (installed) return { label: '已就绪', ready: true }
+  return { label: item.kind === 'mcp' ? '需在本机安装' : '需要时询问安装', ready: false }
+}
+
+/** 编排规则只读渲染：`@{employee_id}` 换成 `@名字`；找不到的成员保留 ID 并标注。 */
+export function renderSolutionRules(rules: string | undefined, names: ReadonlyMap<string, string>): string {
+  return (rules ?? '').replace(/@\{([^{}\s]+)\}/g, (_m, id: string) => names.has(id) ? `@${names.get(id)}` : `@${id}（未授权到本机的成员）`)
 }
