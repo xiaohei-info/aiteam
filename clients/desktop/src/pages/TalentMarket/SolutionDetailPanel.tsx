@@ -122,7 +122,7 @@ export default function SolutionDetailPanel({ solution, experts, localCapabiliti
                 {sectionHeader('能力', '推荐的 skill 与 MCP', <Plug size={17} strokeWidth={1.8} />)}
                 {capabilities.length === 0 ? <p className={styles.mutedText}>该方案没有推荐能力。</p> : (
                   <>
-                    <p className={styles.mutedText}>仅供参考，不会自动安装。对话中确实需要时，Agent 会先询问你，同意后才安装。</p>
+                    <p className={styles.mutedText} style={{ marginBottom: 10 }}>仅供参考，不会自动安装。对话中确实需要时，Agent 会先询问你，同意后才安装。</p>
                     <div className={styles.itemList}>
                       {capabilities.map(item => {
                         const status = capabilityReadiness(item, localCapabilities)

@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
+import { BookOpen, ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
 import { useApprovalStore, type PendingApproval } from '../../stores/approvals'
 import { parseCapabilityInstall, renameProblem, type CapabilityInstallPreview } from './capabilityInstall'
 
@@ -129,7 +129,9 @@ export default function ApprovalDialog() {
   const item = pending[0]
   const install = parseCapabilityInstall(item.toolName, item.summary)
   const meta = install
-    ? { label: '安装个人能力（MCP）', icon: Globe, tone: '#4488ff' }
+    ? install.kind === 'skill'
+      ? { label: '安装个人能力（技能）', icon: BookOpen, tone: '#4488ff' }
+      : { label: '安装个人能力（MCP）', icon: Globe, tone: '#4488ff' }
     : riskMeta[item.riskLevel] ?? riskMeta.unknown
   const Icon = meta.icon
   const remain = remainingSeconds(item, Date.now())
