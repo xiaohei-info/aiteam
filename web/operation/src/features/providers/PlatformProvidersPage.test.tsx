@@ -92,6 +92,21 @@ describe("PlatformProvidersPage", () => {
     expect(screen.getByRole("button", { name: "发布模型" })).toBeInTheDocument();
   });
 
+  it("价格弹窗：底部「保存价格版本」在表单外，仍按表单提交新价格", async () => {
+    providerApi.list.mockResolvedValue([PROVIDER]);
+    providerApi.models.mockResolvedValue([
+      { model: { provider_id: "p1", model_id: "priced-draft", display_name: "", capabilities: {}, status: "draft", source: "discovery", version: 1, updated_at: "2026-01-01T00:00:00Z" }, rate: { rate_id: "r2", provider_id: "p1", model_id: "priced-draft", pricing_version: 1, pricing_status: "known", billing_mode: "token", input_usd_per_million: "0", output_usd_per_million: "0", cache_read_usd_per_million: null, cache_write_usd_per_million: null, request_usd: null, currency: "USD", source: "manual", effective_from: "2026-01-01T00:00:00Z" } },
+    ]);
+    providerApi.setRate.mockResolvedValue(null);
+    render(<MemoryRouter><PlatformProvidersPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByText("priced-draft")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "价格" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置价格" }));
+    fireEvent.change(screen.getByLabelText(/输入价格/), { target: { value: "0.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存价格版本" }));
+    await waitFor(() => expect(providerApi.setRate).toHaveBeenCalledWith("p1", expect.objectContaining({ model_id: "priced-draft", input_usd_per_million: "0.5", output_usd_per_million: "0" })));
+  });
+
   it("模型配置 tab 列出上游渠道，不显示 Key，可测试连接和删除", async () => {
     providerApi.list.mockResolvedValue([PROVIDER]);
     providerApi.channels.mockResolvedValue([CHANNEL]);

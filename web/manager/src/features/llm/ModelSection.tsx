@@ -79,7 +79,6 @@ export function ModelSection({ providers, models, editor, working, onOpenCreate,
       {editor.mode === "create" && (
         <Dialog isOpen purpose="form" width={620} aria-label="新增模型" onOpenChange={(isOpen) => { if (!isOpen && !working) onCancel(); }} data-testid="model-create-form">
           <Layout
-            height="auto"
             header={<DialogHeader title="新增模型" onOpenChange={(isOpen) => { if (!isOpen && !working) onCancel(); }} />}
             content={
               <LayoutContent>

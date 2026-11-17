@@ -4,6 +4,7 @@ import { ApiError } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
@@ -55,13 +56,15 @@ export function ChangePasswordDialog({ policy, onClose }: { policy: PasswordPoli
 
   return (
     <Dialog isOpen purpose="form" width={460} aria-label="设置新密码" onOpenChange={(open) => { if (!open && !working) onClose(); }}>
+      <Layout
+        header={<DialogHeader title="设置新密码" onOpenChange={(open) => { if (!open && !working) onClose(); }} />}
+        content={
+          <LayoutContent>
       <VStack gap={4}>
-        <DialogHeader title="设置新密码" onOpenChange={(open) => { if (!open && !working) onClose(); }} />
         {done ? (
           <>
             <Banner status="success" title="新密码已生效" />
             <Text color="secondary">其它设备上的登录已失效，需用新密码重新登录；当前页面不受影响。</Text>
-            <HStack justify="end"><Button label="完成" variant="primary" onClick={onClose} /></HStack>
           </>
         ) : (
           <>
@@ -74,13 +77,24 @@ export function ChangePasswordDialog({ policy, onClose }: { policy: PasswordPoli
             <TextInput label="确认新密码" type="password" value={confirm} onChange={setConfirm} isRequired isDisabled={working}
               status={mismatch ? { type: "error", message: "两次输入不一致" } : undefined}
               onEnter={() => void submit()} {...({ autoComplete: "new-password" } as Record<string, string>)} />
-            <HStack justify="end" gap={2}>
-              <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-              <Button label="确认" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={!canSubmit} />
-            </HStack>
           </>
         )}
       </VStack>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            {done ? (
+              <HStack justify="end"><Button label="完成" variant="primary" onClick={onClose} /></HStack>
+            ) : (
+              <HStack justify="end" gap={2}>
+                  <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
+                  <Button label="确认" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={!canSubmit} />
+              </HStack>
+            )}
+          </LayoutFooter>
+        }
+      />
     </Dialog>
   );
 }

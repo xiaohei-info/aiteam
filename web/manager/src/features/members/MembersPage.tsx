@@ -364,7 +364,6 @@ function MemberEditDialog({ member, departments, working, onClose, onSave }: Mem
       data-testid="member-editor"
     >
       <Layout
-        height="auto"
         header={<DialogHeader title={i18n.t("manager.members.edit_title")} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }} />}
         content={
           <LayoutContent>

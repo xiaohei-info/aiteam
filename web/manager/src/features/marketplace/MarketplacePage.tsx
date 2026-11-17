@@ -14,6 +14,8 @@ import { ApiError, DigitalEmployeeAvatar, EnterpriseRole, hasRole } from "@aitea
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { HStack } from "@astryxdesign/core/HStack";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
@@ -423,11 +425,11 @@ function RecruitDepartmentDialog({
       aria-label={`招募${template.display_name}`}
       onOpenChange={(open) => { if (!open && !working) onClose(); }}
     >
+      <Layout
+        header={<DialogHeader title={`为${template.display_name}设置部门`} onOpenChange={(open) => { if (!open && !working) onClose(); }} />}
+        content={
+          <LayoutContent>
       <VStack gap={4}>
-        <DialogHeader
-          title={`为${template.display_name}设置部门`}
-          onOpenChange={(open) => { if (!open && !working) onClose(); }}
-        />
         <Text color="secondary">请选择该专家使用的模型和所属部门；不归属部门时请选择“未设置”。所选部门也会沿用为该专家的部门授权范围。</Text>
         {error && <Banner status="error" title={error} />}
         {models.error && <Banner status="error" title={models.error} />}
@@ -449,11 +451,18 @@ function RecruitDepartmentDialog({
           isLoading={loading}
           dataTestId="recruit-departments-selector"
         />
-        <div>
-          <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
-          <Button label="招募" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={working || loading || !modelKey} />
-        </div>
       </VStack>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack justify="end" gap={2}>
+              <Button label="取消" variant="secondary" onClick={onClose} isDisabled={working} />
+              <Button label="招募" variant="primary" onClick={() => void submit()} isLoading={working} isDisabled={working || loading || !modelKey} />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
     </Dialog>
   );
 }

@@ -441,8 +441,9 @@ export function DocumentsPanel({ spaceId, spaceName, canWrite, embedded = false,
 
   return (
     <DocumentsPanelFrame embedded={embedded} spaceName={spaceName} onClose={onClose}>
+      {/* 嵌在页面里随内容增高；作为弹窗时固定标题与底部按钮、中间滚动。 */}
       <Layout
-        height="auto"
+        height={embedded ? "auto" : "fill"}
         header={embedded ? undefined : <DialogHeader title={`文档摄入 · ${spaceName}`} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }} />}
         content={
           <LayoutContent>
@@ -587,8 +588,11 @@ function DocumentDetailDialog({
   const textChars = analytics?.text_chars ?? document.text_chars;
   return (
     <Dialog isOpen aria-label={`文档详情 · ${document.display_name}`} onOpenChange={(open) => { if (!open) onClose(); }} width={620} maxHeight="80vh" purpose="form">
+      <Layout
+        header={<DialogHeader title={`文档详情 · ${document.display_name}`} onOpenChange={(open) => { if (!open) onClose(); }} />}
+        content={
+          <LayoutContent>
       <VStack gap={3}>
-        <DialogHeader title={`文档详情 · ${document.display_name}`} onOpenChange={(open) => { if (!open) onClose(); }} />
         <Card><VStack gap={2}>
           <Text>文件：{document.file_name || "未命名文件"}</Text>
           <Text type="supporting">类型：{document.file_type || "未知"} · 大小：{formatBytes(document.file_size)}</Text>
@@ -597,8 +601,11 @@ function DocumentDetailDialog({
           <Text type="supporting">文本：{textChars == null ? "未知" : `${textChars.toLocaleString()} 字符`} · 绑定：{analytics?.binding_count ?? 0} 个（就绪 {analytics?.ready_binding_count ?? 0}，过期 {analytics?.stale_binding_count ?? 0}，撤销 {analytics?.revoked_binding_count ?? 0}）</Text>
           {analytics?.error_code && <Text type="supporting">最近错误：{analytics.error_code}</Text>}
         </VStack></Card>
-        <HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack>
       </VStack>
+          </LayoutContent>
+        }
+        footer={<LayoutFooter hasDivider><HStack justify="end"><Button label="关闭" variant="secondary" onClick={onClose} /></HStack></LayoutFooter>}
+      />
     </Dialog>
   );
 }

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
-import { Dialog } from "@astryxdesign/core/Dialog";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -178,5 +179,34 @@ export function PlatformProvidersPage() {
 function RateDialog({ item, busy, onClose, onSave }: { item: PlatformModelWithRate; busy: boolean; onClose: () => void; onSave: (input: Record<string, unknown>) => Promise<void> }) {
   const [input, setInput] = useState(item.rate?.input_usd_per_million ?? ""); const [output, setOutput] = useState(item.rate?.output_usd_per_million ?? ""); const [cacheRead, setCacheRead] = useState(item.rate?.cache_read_usd_per_million ?? ""); const [cacheWrite, setCacheWrite] = useState(item.rate?.cache_write_usd_per_million ?? "");
   function submit(event: FormEvent) { event.preventDefault(); void onSave({ model_id: item.model.model_id, pricing_status: "known", billing_mode: "token", input_usd_per_million: input, output_usd_per_million: output, cache_read_usd_per_million: cacheRead || null, cache_write_usd_per_million: cacheWrite || null, source: "manual" }); }
-  return <Dialog isOpen purpose="form" width={560} aria-label="设置模型价格" onOpenChange={(open) => { if (!open && !busy) onClose(); }}><form onSubmit={submit}><VStack gap={3}><Heading level={2}>{item.model.model_id} · USD / 1M tokens</Heading><TextInput label="输入价格" value={input} onChange={setInput} isRequired /><TextInput label="输出价格" value={output} onChange={setOutput} isRequired /><TextInput label="缓存读取价格" value={cacheRead} onChange={setCacheRead} isOptional /><TextInput label="缓存写入价格" value={cacheWrite} onChange={setCacheWrite} isOptional /><HStack justify="end" gap={2}><Button label="取消" onClick={onClose} isDisabled={busy} /><Button label="保存价格版本" type="submit" variant="primary" isLoading={busy} /></HStack></VStack></form></Dialog>;
+  const formRef = useRef<HTMLFormElement>(null);
+  const submitForm = () => formRef.current?.requestSubmit();
+  // 标题与操作按钮固定，中间内容滚动；按钮在表单外，用 requestSubmit 保留表单原生校验。
+  return (
+    <Dialog isOpen purpose="form" width={560} aria-label="设置模型价格" onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <Layout
+        header={<DialogHeader title={`${item.model.model_id} · USD / 1M tokens`} onOpenChange={(open) => { if (!open && !busy) onClose(); }} />}
+        content={
+          <LayoutContent>
+            <form ref={formRef} onSubmit={submit} aria-label="模型价格">
+              <VStack gap={3}>
+                <TextInput label="输入价格" value={input} onChange={setInput} isRequired onEnter={submitForm} />
+                <TextInput label="输出价格" value={output} onChange={setOutput} isRequired onEnter={submitForm} />
+                <TextInput label="缓存读取价格" value={cacheRead} onChange={setCacheRead} isOptional onEnter={submitForm} />
+                <TextInput label="缓存写入价格" value={cacheWrite} onChange={setCacheWrite} isOptional onEnter={submitForm} />
+              </VStack>
+            </form>
+          </LayoutContent>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <HStack justify="end" gap={2}>
+              <Button label="取消" onClick={onClose} isDisabled={busy} />
+              <Button label="保存价格版本" variant="primary" isLoading={busy} onClick={submitForm} />
+            </HStack>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
+  );
 }
