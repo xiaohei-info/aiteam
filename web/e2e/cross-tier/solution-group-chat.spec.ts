@@ -382,3 +382,172 @@ test.describe("Pi solution → fixed participant group chat", () => {
     expect((await getEntries(request, agentLogin.token, conversationId)).length).toBeGreaterThan(0);
   });
 });
+
+// ---- 方案「单人 / 组群」类型与编排（设计 §7：solo 无建群入口；group 建群后编排生效） ----
+
+type Prepared = {
+  opHeaders: { Authorization: string };
+  managerHeaders: { Authorization: string };
+  agentToken: string;
+  tenantId: string;
+  memberId: string;
+  modelRef: { provider_id: string; model_id: string };
+  tag: string;
+};
+
+/** 选一个已发布且有价格的平台模型，并准备一个普通成员（管理员角色会绕过授权）。前置不满足时跳过并返回 null。 */
+async function prepareTiers(request: APIRequestContext): Promise<Prepared | null> {
+  const opLogin = await apiLogin(request, "operation", defaultCredentials("operation"));
+  const managerLogin = await apiLogin(request, "manager", defaultCredentials("manager"));
+  let agentToken = (await apiLogin(request, "agent", defaultCredentials("agent"))).token;
+  const opHeaders = bearer(opLogin.token);
+  const managerHeaders = bearer(managerLogin.token);
+  const tag = randomUUID().replace(/-/g, "").slice(0, 12);
+
+  const providersResponse = await request.get(`${TIER_API_ORIGIN.operation}/api/operation/providers`, { headers: opHeaders, failOnStatusCode: false });
+  if (await skipUnavailable(providersResponse, "operator-provider")) return null;
+  const providers = ((await requireOk(providersResponse, "operator-provider")).data ?? []) as JsonRecord[];
+  const provider = providers.find((item) => item.status === "published");
+  if (!provider || typeof provider.provider_id !== "string") { test.skip(true, "[operator-provider] no published provider"); return null; }
+  const modelsResponse = await request.get(`${TIER_API_ORIGIN.operation}/api/operation/providers/${provider.provider_id}/models`, { headers: opHeaders, failOnStatusCode: false });
+  if (await skipUnavailable(modelsResponse, "operator-model")) return null;
+  const items = (((await requireOk(modelsResponse, "operator-model")).data as JsonRecord | undefined)?.items ?? []) as JsonRecord[];
+  const preferred = process.env.E2E_PROVIDER_MODEL?.trim();
+  const selectable = (item: JsonRecord) => isSelectablePlatformModel(item as PlatformModelAvailability);
+  const picked = items.find((item) => selectable(item) && (!preferred || (item.model as JsonRecord | undefined)?.model_id === preferred)) ?? items.find(selectable);
+  const model = picked?.model as JsonRecord | undefined;
+  if (!model || typeof model.model_id !== "string") { test.skip(true, "[operator-model] no published priced model"); return null; }
+
+  const whoami = (await requireOk(await request.get(`${TIER_API_ORIGIN.manager}/api/manager/whoami`, { headers: managerHeaders, failOnStatusCode: false }), "manager-whoami")).data as JsonRecord;
+  const tenantId = String(whoami.tenant_id);
+  let memberId = String(whoami.user_id);
+  const roles = Array.isArray(whoami.roles) ? whoami.roles : [];
+  if (roles.includes("owner") || roles.includes("enterprise_admin")) {
+    const account = `138${Date.now().toString().slice(-8)}`;
+    const secret = `E2e-Pass-${tag}`;
+    const created = await requireOk(await request.post(`${TIER_API_ORIGIN.manager}/api/manager/members`, {
+      data: { account, initial_password: secret, display_name: `E2E Mode Member ${tag}`, roles: ["member"], department_ids: [], must_reset: false },
+      headers: { ...managerHeaders, "Content-Type": "application/json" }, failOnStatusCode: false,
+    }), "manager-create-mode-member");
+    memberId = String((created.data as JsonRecord).id);
+    const login = await requireOk(await request.post(`${TIER_API_ORIGIN.agent}/api/agent/login`, {
+      data: { account, password: secret, tenant_id: tenantId }, failOnStatusCode: false,
+    }), "agent-mode-member-login");
+    agentToken = String((login.data as JsonRecord).token);
+  }
+  return { opHeaders, managerHeaders, agentToken, tenantId, memberId, modelRef: { provider_id: provider.provider_id, model_id: model.model_id }, tag };
+}
+
+/** Operator 登记并发布专家模板与方案模板，Manager 应用给该成员，Agent 同步。返回方案实例与本机投影。 */
+async function publishApplySync(
+  request: APIRequestContext, env: Prepared, roles: string[], solution: (templateIds: string[]) => JsonRecord,
+): Promise<{ instance: JsonRecord; projected: JsonRecord; templateIds: string[] } | null> {
+  const templateIds: string[] = [];
+  for (const role of roles) {
+    const registered = await request.post(`${TIER_API_ORIGIN.operation}/api/operation/catalog/expert-templates`, {
+      data: { template_id: `e2e-mode-${role}-${env.tag}`, display_name: `E2E Mode ${role} ${env.tag}`, category: "E2E", system_prompt: `You are the ${role} expert. Reply briefly.`, platform_skill_refs: [], description: `${role} expert` },
+      headers: { ...env.opHeaders, "Content-Type": "application/json" }, failOnStatusCode: false,
+    });
+    if (await skipUnavailable(registered, `operator-expert-${role}`)) return null;
+    const templateId = String(((await requireOk(registered, `operator-expert-${role}`)).data as JsonRecord).template_id);
+    await requireOk(await request.post(`${TIER_API_ORIGIN.operation}/api/operation/catalog/expert_template/${templateId}/publish`, { data: {}, headers: env.opHeaders, failOnStatusCode: false }), `operator-publish-${role}`);
+    templateIds.push(templateId);
+  }
+  const solutionId = `e2e-mode-${roles.length > 1 ? "group" : "solo"}-${env.tag}`;
+  const template = { solution_id: solutionId, expert_template_ids: templateIds, tags: ["e2e"], ...solution(templateIds) };
+  await requireOk(await request.post(`${TIER_API_ORIGIN.operation}/api/operation/catalog/solution-templates`, {
+    data: template, headers: { ...env.opHeaders, "Content-Type": "application/json" }, failOnStatusCode: false,
+  }), "operator-solution");
+  await requireOk(await request.post(`${TIER_API_ORIGIN.operation}/api/operation/catalog/solution_template/${solutionId}/publish`, { data: {}, headers: env.opHeaders, failOnStatusCode: false }), "operator-solution-publish");
+
+  const applied = await request.post(`${TIER_API_ORIGIN.manager}/api/manager/recruit/solutions`, {
+    data: {
+      solution_id: solutionId, solution_version: "1", member_ids: [env.memberId], department_ids: [],
+      expert_models: Object.fromEntries(templateIds.map((id) => [id, { provider_ref: env.modelRef.provider_id, model: env.modelRef.model_id }])),
+    },
+    headers: { ...env.managerHeaders, "Content-Type": "application/json", "Idempotency-Key": `e2e-mode-apply-${env.tag}` }, failOnStatusCode: false,
+  });
+  if (!applied.ok()) {
+    const text = await applied.text();
+    if (applied.status() === 503 || /NewAPI|provider.?access|relay|credential/i.test(text)) { test.skip(true, `[manager-apply] prerequisite unavailable: ${text.slice(0, 800)}`); return null; }
+    throw new Error(`[manager-apply] HTTP ${applied.status()}: ${text.slice(0, 800)}`);
+  }
+  const instance = ((await body(applied)).data as JsonRecord).solution_instance as JsonRecord;
+
+  const agentHeaders = bearer(env.agentToken);
+  const synced = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/grants/sync`, {
+    data: { tenant_id: env.tenantId, member_id: env.memberId, known_versions: {} },
+    headers: { ...agentHeaders, "Content-Type": "application/json" }, failOnStatusCode: false,
+  });
+  expect(synced.ok(), `[agent-sync] HTTP ${synced.status()}`).toBeTruthy();
+  const projections = (await requireOk(await request.get(`${TIER_API_ORIGIN.agent}/api/agent/grants/solutions`, { headers: agentHeaders, failOnStatusCode: false }), "agent-solutions")).data as JsonRecord[];
+  const projected = projections.find((item) => item.solution_instance_id === instance.id);
+  expect(projected, `[agent-solutions] expected ${String(instance.id)}`).toBeTruthy();
+  return { instance, projected: projected!, templateIds };
+}
+
+
+test.describe("方案单人 / 组群类型与编排", () => {
+  test("单人方案：只招 1 人、无群主；不能建群，直接私聊专家", async ({ request }) => {
+    test.setTimeout(180_000);
+    const env = await prepareTiers(request);
+    if (!env) return;
+    const result = await publishApplySync(request, env, ["solo"], () => ({
+      display_name: `E2E Solo ${env.tag}`, description: "单人方案 E2E", mode: "solo", output_requirements: "列出依据",
+      recommended_capabilities: [{ kind: "mcp", ref: "mes", display_name: "MES", purpose: "读工单" }],
+    }));
+    if (!result) return;
+    const { instance, projected } = result;
+    expect(instance.mode).toBe("solo");
+    expect(instance.expert_employee_ids as string[]).toHaveLength(1);
+    expect(instance.coordinator_employee_id ?? null).toBeNull();
+    expect(projected.mode).toBe("solo");
+    expect(projected.recommended_capabilities).toEqual([expect.objectContaining({ kind: "mcp", ref: "mes" })]);
+
+    const agentHeaders = { ...bearer(env.agentToken), "Content-Type": "application/json" };
+    const group = await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
+      data: { title: `E2E solo group ${env.tag}`, kind: "group", solution_instance_id: instance.id }, headers: agentHeaders, failOnStatusCode: false,
+    });
+    expect(group.status(), "单人方案不能建群").toBe(422);
+    expect(((await body(group)) as JsonRecord).code).toBe("solo_solution_has_no_group");
+
+    const employeeId = (instance.expert_employee_ids as string[])[0]!;
+    const chat = (await requireOk(await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
+      data: { title: `E2E solo chat ${env.tag}`, entry_employee_id: employeeId }, headers: agentHeaders, failOnStatusCode: false,
+    }), "agent-solo-private")).data as JsonRecord;
+    expect(chat.kind).not.toBe("group");
+    await prompt(request, env.agentToken, String(chat.id), "请简单回复");
+    const entries = await waitForAssistant(request, env.agentToken, String(chat.id), [employeeId]);
+    expect(assistantFrom(entries, employeeId)).toBeTruthy();
+  });
+
+  test("组群方案：规则引用在应用时换成员工 ID，建群后编排生效、无 @ 由群主接手", async ({ request }) => {
+    test.setTimeout(180_000);
+    const env = await prepareTiers(request);
+    if (!env) return;
+    const result = await publishApplySync(request, env, ["lead", "worker"], (ids) => ({
+      display_name: `E2E Group Rules ${env.tag}`, description: "组群编排 E2E", mode: "group",
+      coordinator_template_id: ids[0], orchestration_rules: `1. @{${ids[0]}} 先拆解任务\n2. @{${ids[1]}} 执行并回报`,
+    }));
+    if (!result) return;
+    const { instance, projected, templateIds } = result;
+    const [leadId, workerId] = instance.expert_employee_ids as string[];
+    expect(instance.mode).toBe("group");
+    expect(instance.coordinator_employee_id).toBe(leadId);
+    const rules = String(instance.orchestration_rules);
+    expect(rules).toBe(`1. @{${leadId}} 先拆解任务\n2. @{${workerId}} 执行并回报`);
+    for (const templateId of templateIds) expect(rules).not.toContain(templateId);
+    expect(projected.orchestration_rules).toBe(rules);
+
+    const group = (await requireOk(await request.post(`${TIER_API_ORIGIN.agent}/api/agent/conversations`, {
+      data: { title: `E2E rules group ${env.tag}`, kind: "group", solution_instance_id: instance.id },
+      headers: { ...bearer(env.agentToken), "Content-Type": "application/json" }, failOnStatusCode: false,
+    }), "agent-rules-group")).data as JsonRecord;
+    expect(group.coordinator_employee_id).toBe(leadId);
+    expect(group.orchestration).toMatchObject({ mode: "custom", format: "collaboration-markdown-v1", prompt: rules });
+
+    await prompt(request, env.agentToken, String(group.id), "请开始");
+    const entries = await waitForAssistant(request, env.agentToken, String(group.id), [leadId!]);
+    expect(assistantFrom(entries, leadId!)).toBeTruthy();
+  });
+});
