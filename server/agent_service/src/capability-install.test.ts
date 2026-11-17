@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { createFixture } from "./test-fixture.js";
 import { approvalRiskForTool } from "./approval-service.js";
 import { capabilityInstallTool, checkCapabilityInstall, personalConnectorTools } from "./connectors.js";
+import { SkillVerificationError } from "./skills.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
 const snapshot: Record<string, unknown> = { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", tools: [] };
@@ -193,3 +194,31 @@ test("solo solution context matches only applied solo solutions whose single mem
   assert.doesNotMatch(text, /组群 C|已撤销 D|别人 E/);
   assert.equal(soloSolutionContext([], "e1"), "");
 });
+
+test("a re-install whose package fails signature verification is refused and the installed version keeps working", async () => {
+  const fixture = await createFixture();
+  try {
+    let catalog = [{ skill_id: "sheet", display_name: "读表", version: "1", content_hash: "h1", source_skill_id: "plat-sheet" }];
+    let failWith: Error | undefined;
+    const skills = {
+      list: async () => catalog,
+      install: async () => { if (failWith) throw failWith; },
+    };
+    const install = capabilityInstallTool(fixture.store, owner, skills);
+    assert.notEqual((await run(install, { kind: "skill", ref: "sheet", reason: "" })).isError, true);
+
+    // 企业换了签名密钥后，新包验签不过：明确「不可以安装」，并说明已装版本仍可用。
+    catalog = [{ ...catalog[0]!, version: "2", content_hash: "h2" }];
+    failWith = new SkillVerificationError("unknown skill signing key id");
+    const refused = await run(install, { kind: "skill", ref: "sheet", reason: "", resolution: { action: "replace" } }) as { isError?: boolean; content?: { text: string }[] };
+    assert.equal(refused.isError, true);
+    assert.match(refused.content?.[0]?.text ?? "", /不可以安装.*已装的 1 版不受影响，仍可继续使用/);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "1");
+
+    // 企业服务不可用：不是「不可以安装」，是稍后再试。
+    failWith = new Error("manager down");
+    const later = await run(install, { kind: "skill", ref: "sheet", reason: "", resolution: { action: "replace" } }) as { content?: { text: string }[] };
+    assert.match(later.content?.[0]?.text ?? "", /稍后再试/);
+  } finally { await fixture.close(); }
+});
+

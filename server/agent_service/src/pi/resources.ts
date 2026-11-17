@@ -130,7 +130,15 @@ export function createControlledResourceLoader(
     const names = new Set(skills.skills.map((skill) => skill.name));
     for (const ref of personalSkills.refs) {
       try {
-        const loaded = skillResourcePaths(personalSkills.cache, skillScope, [ref], verification);
+        // Installed personal skills verify with the keys pinned at install, so a later key rotation or
+        // revocation does not take them away (restrictions apply to new installs only). Installs made before
+        // pinning verify with the current keys once and are pinned from then on.
+        const pinned = personalSkills.cache.installedVerification(skillScope, ref);
+        const loaded = skillResourcePaths(personalSkills.cache, skillScope, [ref], pinned ?? verification);
+        if (!pinned && verification.publicKeys && ref.includes("@")) {
+          const [skillId, version] = ref.split("@") as [string, string];
+          try { personalSkills.cache.pinInstalled(skillScope, skillId, version, verification.publicKeys, new Date()); } catch { /* best effort */ }
+        }
         const fresh = loaded.skills.filter((skill) => !names.has(skill.name));
         for (const skill of fresh) names.add(skill.name);
         skills.skills.push(...fresh); skills.diagnostics.push(...loaded.diagnostics);

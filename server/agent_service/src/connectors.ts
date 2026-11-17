@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentSqliteStore, CapabilityResolution, FrozenSnapshot } from "./storage/sqlite.js";
 import { AutomationError, type TaskOwner } from "./storage/automation-tasks.js";
+import { SkillVerificationError } from "./skills.js";
 
 interface LocalConnector extends TaskOwner {
   connector_id: string; display_name: string; url: string; tools: string[]; token_env?: string;
@@ -244,8 +245,13 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
         }
         try {
           await skills!.install(found.skill_id, signal);
-        } catch {
-          return fail("安装未完成：技能包校验失败或企业服务暂不可用，请稍后再试。");
+        } catch (error) {
+          if (!(error instanceof SkillVerificationError)) return fail("安装未完成：企业服务暂不可用，请稍后再试。");
+          // 签名校验不过（通常是企业更换或吊销了签名密钥）：不可以安装；已装的版本不动，照常可用。
+          const kept = installed.find(item => item.kind === "skill" && item.ref === found.skill_id);
+          return fail(kept
+            ? `不可以安装：「${found.display_name || found.skill_id}」${found.version} 的技能包签名校验未通过（企业可能更换了签名密钥）。本机已装的 ${kept.version ?? ""} 版不受影响，仍可继续使用。`
+            : `不可以安装：「${found.display_name || found.skill_id}」的技能包签名校验未通过（企业可能更换了签名密钥）。请告诉用户联系企业管理员。`);
         }
         store.putLocalCapability(owner.tenantId, owner.memberId, {
           kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: found.source_skill_id,

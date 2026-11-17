@@ -90,6 +90,8 @@ export function canonicalSignedSkillPackageBytes(pkg: SkillPackage, tenantId: st
 }
 
 const KEYRING_FILE = ".aiteam-keyring.json";
+/** Per-skill record of the keys and time a personal skill was verified at install (`<skill_id>.installed.json`). */
+const INSTALLED_SUFFIX = ".installed.json";
 const DEFAULT_OFFLINE_TTL_SECONDS = 24 * 60 * 60;
 const KEY_METADATA_FIELDS = new Set(["key_id", "public_key", "algorithm", "status", "not_before", "expires_at", "revoked_at"]);
 
@@ -305,7 +307,8 @@ export class SkillCache {
           if (version.isSymbolicLink()) throw new SkillVerificationError("symlink in skill cache");
           if (!version.isDirectory() || !keep.has(version.name)) rmSync(join(scopeRoot, entry.name, version.name), { recursive: true, force: true });
         }
-      } else if (entry.isFile() && entry.name !== KEYRING_FILE && entry.name.endsWith(".json") && !allowed.has(entry.name.slice(0, -".json".length))) {
+      } else if (entry.isFile() && entry.name !== KEYRING_FILE && entry.name.endsWith(".json")
+        && !allowed.has(entry.name.endsWith(INSTALLED_SUFFIX) ? entry.name.slice(0, -INSTALLED_SUFFIX.length) : entry.name.slice(0, -".json".length))) {
         rmSync(join(scopeRoot, entry.name), { force: true });
       }
     }
@@ -321,8 +324,42 @@ export class SkillCache {
    * Adds one verified package (a personal skill the user approved) without pruning anything else in this cache.
    * The signing keys come from the Manager response that carried the package and become this scope's offline keyring.
    */
-  install(scope: SkillScope, envelope: SignedSkillPackage, publicKeys: readonly SkillSigningKeyMetadata[]): void {
-    this.reconcile(scope, [envelope], [envelope.package.skill_id], { publicKeys: [...publicKeys] }, { authoritative: false });
+  install(scope: SkillScope, envelope: SignedSkillPackage, publicKeys: readonly SkillSigningKeyMetadata[], now: Date = new Date()): void {
+    // Verifies before writing anything: a package that fails (e.g. signed with a key no longer valid) throws
+    // here and the version already installed stays untouched.
+    this.reconcile(scope, [envelope], [envelope.package.skill_id], { publicKeys: [...publicKeys], now }, { authoritative: false });
+    this.pinInstalled(scope, envelope.package.skill_id, envelope.package.version, publicKeys, now);
+  }
+
+  /**
+   * Restrictions are not retroactive: a personal skill stays usable after the enterprise rotates or revokes its
+   * signing keys. It is verified with the keys and the time recorded when it was installed (signature and every
+   * file hash are still checked, so tampering is still detected). Undefined when this version was never pinned.
+   */
+  installedVerification(scope: SkillScope, ref: string): SkillVerificationOptions | undefined {
+    try {
+      const { skillId, version } = parseRef(ref);
+      const path = join(this.scopeRoot(scope), `${skillId}${INSTALLED_SUFFIX}`);
+      this.assertNoSymlink(path);
+      if (!existsSync(path)) return undefined;
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      if (raw.skill_id !== skillId || (version !== undefined && raw.version !== version) || typeof raw.installed_at !== "string" || !Array.isArray(raw.keys)) return undefined;
+      const installedAt = new Date(raw.installed_at);
+      if (!Number.isFinite(installedAt.getTime())) return undefined;
+      return { publicKeys: normalizeKeySet(raw.keys as unknown as SkillSigningKeyMetadata[]), now: installedAt };
+    } catch { return undefined; }
+  }
+
+  /** Records the keys a personal skill version verified with; used by install and to adopt installs made before pinning. */
+  pinInstalled(scope: SkillScope, skillId: string, version: string, publicKeys: readonly SkillSigningKeyMetadata[], now: Date): void {
+    safeSegment(skillId, "skill_id"); safeSegment(version, "version");
+    const scopeRoot = this.scopeRoot(scope);
+    this.assertDirectory(scopeRoot);
+    const path = join(scopeRoot, `${skillId}${INSTALLED_SUFFIX}`);
+    this.assertNoSymlink(path);
+    const temp = `${path}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(temp, JSON.stringify({ skill_id: skillId, version, installed_at: now.toISOString(), keys: normalizeKeySet(publicKeys) }), { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(temp, path);
   }
 
   /** Removes every cached version of one skill and its current pointer. */
@@ -333,6 +370,7 @@ export class SkillCache {
     this.assertNoSymlink(join(scopeRoot, skillId));
     rmSync(join(scopeRoot, skillId), { recursive: true, force: true });
     rmSync(join(scopeRoot, `${skillId}.json`), { force: true });
+    rmSync(join(scopeRoot, `${skillId}${INSTALLED_SUFFIX}`), { force: true });
   }
 
   pathsFor(scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): string[] {
