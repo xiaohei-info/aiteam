@@ -731,8 +731,8 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    // 89 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口。
-    assert.equal(frontendOperations.length, 89);
+    // 90 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口 + 企业可自装技能列表。
+    assert.equal(frontendOperations.length, 90);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
