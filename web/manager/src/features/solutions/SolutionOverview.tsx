@@ -3,7 +3,9 @@
  * 方案详情与「应用方案」弹窗共用同一信息结构（设计 §3.4 / §3.7）。
  */
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@astryxdesign/core/Badge";
+import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Grid } from "@astryxdesign/core/Grid";
@@ -22,6 +24,7 @@ export function SolutionOverview({ solution, skills, compact = false }: {
   /** 应用弹窗里只列名字，不展开专家介绍。 */
   compact?: boolean;
 }): ReactNode {
+  const navigate = useNavigate();
   const experts = (solution.experts ?? []).filter((expert) => expert.enabled !== false);
   const solo = solution.mode === "solo";
   const capabilities = solution.recommended_capabilities ?? [];
@@ -98,6 +101,14 @@ export function SolutionOverview({ solution, skills, compact = false }: {
                     <Text weight="bold">{name}</Text>
                     <Badge label={status.label} variant={status.variant} />
                     {item.purpose && <Text type="supporting" color="secondary">{item.purpose}</Text>}
+                    {status.fixable && (
+                      <Button
+                        label={status.label === "企业缺失" ? `去技能管理安装 ${name}` : `去技能管理处理 ${name}`}
+                        variant="ghost" size="sm" onClick={() => navigate("/skill-market")}
+                      >
+                        {status.label === "企业缺失" ? "去技能管理安装" : "去技能管理处理"}
+                      </Button>
+                    )}
                   </HStack>
                 );
               })}

@@ -453,7 +453,9 @@ function SolutionInstanceCard({
         <Text type="supporting">版本 v{instance.solution_version}</Text>
         <MetadataList columns="single">
           <MetadataListItem label="专家数量"><Text>{instance.expert_employee_ids.length}</Text></MetadataListItem>
-          <MetadataListItem label="协调专家"><Text>{instance.coordinator_employee_id ? employeeNames.get(instance.coordinator_employee_id) ?? "已删除专家" : "—"}</Text></MetadataListItem>
+          {instance.mode !== "solo" && (
+            <MetadataListItem label="群主"><Text>{instance.coordinator_employee_id ? employeeNames.get(instance.coordinator_employee_id) ?? "已删除专家" : "—"}</Text></MetadataListItem>
+          )}
           {instance.coordinator_instructions && <MetadataListItem label="协作说明"><Text color="secondary">{instance.coordinator_instructions}</Text></MetadataListItem>}
           {instance.mode !== "solo" && instance.orchestration_rules && (
             <MetadataListItem label="群聊编排规则"><Text color="secondary" style={{ whiteSpace: "pre-wrap" }}>{renderRules(instance.orchestration_rules, employeeNames)}</Text></MetadataListItem>

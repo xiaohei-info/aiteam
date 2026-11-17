@@ -681,9 +681,9 @@ def _check_solution_mode(package, template_ids: set[str]) -> None:
     """写 employee 之前校验方案类型与编排规则：不一致、引用无法对应的方案整单拒绝。"""
     if package.mode == "solo":
         if len(template_ids) != 1:
-            raise Conflict("a solo solution must have exactly one enabled expert")
+            raise Conflict("这是单人方案，但启用的专家不是正好 1 位，无法应用；请把方案名称反馈给平台运营修正")
         if package.orchestration_rules.strip():
-            raise Conflict("a solo solution must not carry orchestration rules")
+            raise Conflict("这是单人方案，却带了群聊编排规则，无法应用；请把方案名称反馈给平台运营修正")
         return
     try:
         validate_member_refs(package.orchestration_rules, template_ids)
