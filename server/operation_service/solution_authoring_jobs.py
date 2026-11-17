@@ -24,7 +24,6 @@ from shared.solution_authoring.isolated_parse import parse_source_isolated
 from shared.solution_authoring.parsing import ParseLimits, SourceParseError
 from shared.solution_authoring.prompts import (
     PROMPT_VERSION,
-    SkillCatalogItem,
     generate_system_prompt,
     generate_task_prompt,
 )
@@ -56,6 +55,7 @@ from .solution_authoring_repository import (
     JobRow,
     SolutionAuthoringRepository,
 )
+from .solution_authoring_skills import SkillCatalogLoader, drop_unresolved_skills
 from .solution_authoring_storage import SourceFileStore, SourceStorageError
 
 logger = logging.getLogger(__name__)
@@ -138,7 +138,7 @@ class GenerationJobExecutor:
         budget: AuthoringBudget | None = None,
         parse_limits: ParseLimits | None = None,
         clock: Callable[[], datetime] | None = None,
-        skill_catalog: Callable[[], Sequence[SkillCatalogItem]] | None = None,
+        skill_catalog: SkillCatalogLoader | None = None,
     ):
         self._repo, self._store, self._models, self._runner = repo, store, models, runner
         # 平台已发布 skill 目录；未配置视为空目录（模型不得引用任何 skill）。
@@ -269,7 +269,7 @@ class GenerationJobExecutor:
                 "schema_invalid", f"the model produced a {solution.mode} solution but this draft is {draft.solution_mode}", usage,
             )
         package = solution.model_dump(mode="json")
-        dropped = _drop_unknown_skills(package, catalog)
+        dropped = drop_unresolved_skills(package, catalog)
         by_id = {chunk.chunk_id: chunk for chunk in chunks}
         now = self._clock()
         findings = initial_findings(package, outcome.result.findings, by_id, draft_id=job.draft_id, now=now)
@@ -305,25 +305,6 @@ class GenerationJobExecutor:
             event=("generation_succeeded", f"{len(solution.experts)} experts, {len(findings)} findings"),
         )
         return change, usage
-
-
-def _drop_unknown_skills(package: dict[str, Any], catalog: Sequence[SkillCatalogItem]) -> list[tuple[str, str]]:
-    """宿主校验：只保留平台目录里存在且版本、内容哈希一致的 skill，其余从正文剔除。返回 (位置, 原因码)。"""
-    published = {item.skill_id: item for item in catalog}
-    dropped: list[tuple[str, str]] = []
-    for expert in package.get("experts", []):
-        kept = []
-        for ref in expert.get("skills", []):
-            item = published.get(ref["skill_id"])
-            if item and item.version == ref["version"] and item.content_hash == ref["content_hash"]:
-                kept.append(ref)
-                continue
-            dropped.append((
-                f"专家「{expert.get('display_name', '')}」 · {ref['skill_id']}@{ref['version']}",
-                "version_mismatch" if item else "not_in_catalog",
-            ))
-        expert["skills"] = kept
-    return dropped
 
 
 def install_solution_authoring_worker_lifespan(

@@ -18,20 +18,24 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from shared.contracts.crosstier import RecommendedCapability
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.envelope import ProblemFieldError
 from shared.contracts.platform_provider import PlatformModelRef
-from shared.contracts.crosstier import RecommendedCapability
 from shared.errors import (
     Conflict,
     Forbidden,
     InvalidTransition,
     NotFound,
     RequestTooLarge,
+    ServiceUnavailable,
     ValidationProblem,
 )
 from shared.solution_authoring.isolated_parse import parse_source_isolated
-from shared.solution_authoring.orchestration import OrchestrationRefError, rewrite_member_refs
+from shared.solution_authoring.orchestration import (
+    OrchestrationRefError,
+    rewrite_member_refs,
+)
 from shared.solution_authoring.parsing import SourceParseError
 from shared.solution_authoring.schemas import GeneratedSolution
 from shared.solution_authoring.sensitive_scan import (
@@ -69,6 +73,13 @@ from .solution_authoring_schemas import (
     JobOut,
     PackageUpdate,
     SourceOut,
+)
+from .solution_authoring_skills import (
+    NOT_IN_CATALOG,
+    VERSION_MISMATCH,
+    SkillCatalogLoader,
+    has_skill_refs,
+    unresolved_skills,
 )
 from .solution_authoring_storage import SourceFileStore, sha256_hex
 
@@ -130,12 +141,15 @@ class SolutionAuthoringService:
         models: ModelConfigResolver,
         catalog: Callable[[], CatalogPublisher],
         clock: Callable[[], datetime] | None = None,
+        skill_catalog: SkillCatalogLoader | None = None,
     ):
         self._repo = repo
         self._store = store
         self._models = models
         self._catalog = catalog
         self._clock = clock or (lambda: datetime.now(UTC))
+        # 平台已发布 skill 目录（与生成时同一口径）；未配置视为空目录。
+        self._skill_catalog = skill_catalog or list
 
     # ---- 草稿 ----
 
@@ -251,6 +265,7 @@ class SolutionAuthoringService:
     def update_package(self, draft_id: str, actor_id: str, body: PackageUpdate) -> DraftDetailOut:
         package = body.package.model_dump(mode="json")
         cited = body.package.evidence_chunk_ids()
+        self._check_skill_refs(package)
         now = self._clock()
 
         def decide(draft: DraftRow, findings: list[FindingRow]) -> DraftChange:
@@ -264,6 +279,23 @@ class SolutionAuthoringService:
 
         self._repo.update_draft(draft_id, actor_id, decide, expected_version=body.version)
         return self.get_draft(draft_id)
+
+    def _check_skill_refs(self, package: dict[str, Any]) -> None:
+        """手动保存也按平台已发布目录校验全部 skill 引用：选择后被下架、改版或手填的引用不落库。
+
+        校验整份正文（不只本次改动的分区），这样已失效的引用在下一次保存时就会暴露，而不是等到发布前人工发现。
+        """
+        if not has_skill_refs(package):
+            return
+        try:
+            catalog = list(self._skill_catalog())
+        except Exception as exc:  # noqa: BLE001 — 目录读不到时不放行未经校验的引用
+            raise ServiceUnavailable("平台技能目录暂时读不到，请稍后再保存") from exc
+        bad = unresolved_skills(package, catalog)
+        if bad:
+            reasons = {NOT_IN_CATALOG: "平台目录里没有或已下架", VERSION_MISMATCH: "版本或内容与平台已发布的不一致"}
+            listed = "；".join(f"{where}（{reasons[code]}）" for where, code in bad)
+            raise ValidationProblem(f"有 skill 不是平台已发布的版本：{listed}。请在「能力清单」里移除，或换成已发布版本后再保存。")
 
     def resolve_finding(self, draft_id: str, finding_id: str, actor_id: str, resolution: FindingResolution) -> DraftDetailOut:
         now = self._clock()

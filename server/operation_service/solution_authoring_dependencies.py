@@ -76,6 +76,7 @@ def get_model_config_resolver() -> ModelConfigResolver:
 def get_solution_authoring_service() -> SolutionAuthoringService:
     return SolutionAuthoringService(
         get_solution_authoring_repository(), get_source_file_store(), get_model_config_resolver(), get_catalog_service,
+        skill_catalog=build_skill_catalog(),
     )
 
 

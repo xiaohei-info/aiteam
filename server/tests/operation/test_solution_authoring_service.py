@@ -160,7 +160,9 @@ class Env:
         self.gateway = Gateway()
         providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
         self.catalog = CatalogService(CatalogRepository(), self.gateway, platform_providers=providers)
-        self.service = SolutionAuthoringService(self.repo, self.store, self.models, lambda: self.catalog, self.clock)
+        # 平台已发布 skill 目录（测试里可改）；保存与生成共用。
+        self.skills: list = []
+        self.service = SolutionAuthoringService(self.repo, self.store, self.models, lambda: self.catalog, self.clock, skill_catalog=lambda: self.skills)
         self.executor = GenerationJobExecutor(self.repo, self.store, self.models, self.runner, owner="w1", clock=self.clock)
 
     def draft(self, **overrides) -> str:
@@ -826,6 +828,9 @@ def test_publish_fails_with_a_clear_conflict_and_registers_nothing_when_rule_ref
 
 
 def test_publish_carries_skills_and_mcps_as_non_binding_recommendations(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h", display_name="读表", summary="")]
     draft_id = env.generated()
     detail = env.service.get_draft(draft_id)
     body = detail.package.model_dump(mode="json")
@@ -922,3 +927,57 @@ def test_an_unreadable_skill_catalog_fails_the_job_before_generation(env):
     job = env.service.get_draft(draft_id).latest_job
     assert job is not None and (job.status, job.error_code) == ("failed", "skill_catalog_unavailable")
     assert env.runner.prompts == []
+
+
+def test_manual_save_rejects_skill_refs_that_are_not_published_versions(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="2", content_hash="h2", display_name="读表", summary="")]
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [
+        {"skill_id": "sk-1", "version": "1", "content_hash": "h1", "reason": "旧版"},
+        {"skill_id": "ghost", "version": "1", "content_hash": "x", "reason": "下架"},
+    ]
+    with pytest.raises(ValidationProblem) as caught:
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    message = str(caught.value)
+    assert "sk-1@1（版本或内容与平台已发布的不一致）" in message and "ghost@1（平台目录里没有或已下架）" in message
+    assert env.service.get_draft(draft_id).version == detail.version  # 没有落库
+
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "2", "content_hash": "h2", "reason": "读表"}]
+    saved = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    assert [ref.skill_id for ref in saved.package.experts[0].skills] == ["sk-1"]
+
+
+def test_a_skill_unpublished_after_selection_blocks_the_next_save_of_any_section(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h", display_name="读表", summary="")]
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    detail = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    env.skills = []  # 被下架
+    body = detail.package.model_dump(mode="json") | {"display_name": "只改名称"}
+    with pytest.raises(ValidationProblem, match="能力清单"):
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+
+
+def test_saving_without_skills_never_reads_the_catalog_and_an_unreadable_catalog_is_503(env):
+    def broken():
+        raise OSError("db down")
+
+    draft_id = env.generated()
+    env.service._skill_catalog = broken
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json") | {"display_name": "新名称"}
+    detail = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    assert detail.package.display_name == "新名称"
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    with pytest.raises(ServiceUnavailable):
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+
