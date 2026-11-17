@@ -51,6 +51,18 @@ test('recommended capability readiness comes from locally installed personal cap
   assert.equal(capabilityReadiness({ kind: 'mcp', ref: 'mes' }, null), null)
 })
 
+test('a recommended skill the enterprise does not offer for self-install says so; installed ones stay ready', () => {
+  const installed = [local({ kind: 'skill', ref: 'tenant-sheet', source: 'enterprise_catalog', source_ref: 'plat-sheet' })]
+  const offered = [{ skill_id: 'tenant-report', display_name: '报告', version: '1', content_hash: 'h', source_skill_id: 'plat-report' }]
+  // 已装的：企业之后不再提供也照常「已就绪」（限制只管以后的安装）。
+  assert.deepEqual(capabilityReadiness({ kind: 'skill', ref: 'plat-sheet' }, installed, []), { label: '已就绪', ready: true })
+  assert.deepEqual(capabilityReadiness({ kind: 'skill', ref: 'plat-report' }, installed, offered), { label: '需要时询问安装', ready: false })
+  assert.deepEqual(capabilityReadiness({ kind: 'skill', ref: 'plat-ghost' }, installed, offered), { label: '企业未提供，请联系管理员', ready: false })
+  // 企业可自装列表读不到：不下「未提供」的结论；MCP 不受影响。
+  assert.deepEqual(capabilityReadiness({ kind: 'skill', ref: 'plat-ghost' }, installed, null), { label: '需要时询问安装', ready: false })
+  assert.deepEqual(capabilityReadiness({ kind: 'mcp', ref: 'crm' }, installed, []), { label: '需在本机安装', ready: false })
+})
+
 test('orchestration rules render member ids as names and flag unknown members', () => {
   const names = new Map([['e1', '质检协调']])
   assert.equal(renderSolutionRules('1. @{e1} 先拆解\n2. @{e9} 执行', names), '1. @质检协调 先拆解\n2. @e9（未授权到本机的成员） 执行')

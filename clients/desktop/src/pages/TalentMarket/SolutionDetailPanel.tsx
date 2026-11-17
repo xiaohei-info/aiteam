@@ -1,6 +1,6 @@
 import { Ban, BookOpen, ChevronLeft, Crown, ListChecks, MessageCircle, Plug, ScrollText, User, Users } from 'lucide-react'
 import styles from './TalentDetailPanel.module.css'
-import type { ExpertProjection, LocalCapability, SolutionProjection } from '../../api/agent/types'
+import type { ExpertProjection, InstallableSkill, LocalCapability, SolutionProjection } from '../../api/agent/types'
 import { useDialogFocus } from '../../hooks/useDialogFocus'
 import { useGlobalShortcutClose } from '../../hooks/useGlobalShortcut'
 import {
@@ -16,6 +16,8 @@ interface SolutionDetailPanelProps {
   experts: readonly ExpertProjection[]
   /** 本人在本机已安装的个人能力；读取失败为 null，推荐能力不标注状态。 */
   localCapabilities: readonly LocalCapability[] | null
+  /** 企业目录里本人可自装的技能；读不到为 null。 */
+  installableSkills?: readonly InstallableSkill[] | null
   starting: boolean
   actionError?: string
   onStart: () => void
@@ -26,7 +28,7 @@ interface SolutionDetailPanelProps {
  * 方案详情（设计 §3.6）：成员与群主、编排规则（只读）、推荐的 skill / MCP 及本机状态、交付要求。
  * 版式复用专家详情（TalentDetailPanel）的整页面板与卡片样式。
  */
-export default function SolutionDetailPanel({ solution, experts, localCapabilities, starting, actionError, onStart, onClose }: SolutionDetailPanelProps) {
+export default function SolutionDetailPanel({ solution, experts, localCapabilities, installableSkills, starting, actionError, onStart, onClose }: SolutionDetailPanelProps) {
   const panelRef = useDialogFocus<HTMLElement>({ active: true })
   useGlobalShortcutClose({ active: true, layer: 'panel', onClose })
   const mode = solutionMode(solution)
@@ -125,7 +127,7 @@ export default function SolutionDetailPanel({ solution, experts, localCapabiliti
                     <p className={styles.mutedText} style={{ marginBottom: 10 }}>仅供参考，不会自动安装。对话中确实需要时，Agent 会先询问你，同意后才安装。</p>
                     <div className={styles.itemList}>
                       {capabilities.map(item => {
-                        const status = capabilityReadiness(item, localCapabilities)
+                        const status = capabilityReadiness(item, localCapabilities, installableSkills)
                         // skill 的 ref 是平台 skill_id（UUID），只展示名称；MCP 名称后带上标识
                         const name = !item.display_name || item.display_name === item.ref ? item.ref : item.kind === 'skill' ? item.display_name : `${item.display_name}（${item.ref}）`
                         return (

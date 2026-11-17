@@ -1,4 +1,4 @@
-import type { ExpertProjection, LocalCapability, SolutionProjection } from '../../api/agent/types.ts'
+import type { ExpertProjection, InstallableSkill, LocalCapability, SolutionProjection } from '../../api/agent/types.ts'
 
 export type SolutionStart =
   | { kind: 'chat'; employeeId: string; label: '开始私聊' }
@@ -43,14 +43,23 @@ export function recommendedSummary(solution: Pick<SolutionProjection, 'recommend
 export type RecommendedCapability = NonNullable<SolutionProjection['recommended_capabilities']>[number]
 
 /**
- * 推荐能力在本机的状态（Agent 本地可知）：本人已安装 → 已就绪；否则 MCP 需在本机安装，
- * skill 在对话中需要时会先询问再从企业技能目录安装。本机能力读不到（null）时不下结论。
+ * 推荐能力在本机的状态（Agent 本地可知）：本人已安装 → 已就绪（企业之后停用、私有或删除都不影响）；
+ * 否则 MCP 需在本机安装；skill 看企业是否提供给本人自装：提供 → 需要时询问安装，不提供 → 企业未提供。
+ * 本机能力读不到（null）时不下结论；企业可自装列表读不到（null/省略）时按「需要时询问安装」。
  */
-export function capabilityReadiness(item: RecommendedCapability, local: readonly LocalCapability[] | null): { label: string; ready: boolean } | null {
+export function capabilityReadiness(
+  item: RecommendedCapability,
+  local: readonly LocalCapability[] | null,
+  installable?: readonly InstallableSkill[] | null,
+): { label: string; ready: boolean } | null {
   if (local === null) return null
   const installed = local.some(cap => cap.kind === item.kind && (cap.ref === item.ref || (item.kind === 'skill' && cap.source_ref === item.ref)))
   if (installed) return { label: '已就绪', ready: true }
-  return { label: item.kind === 'mcp' ? '需在本机安装' : '需要时询问安装', ready: false }
+  if (item.kind === 'mcp') return { label: '需在本机安装', ready: false }
+  if (installable && !installable.some(skill => skill.skill_id === item.ref || skill.source_skill_id === item.ref)) {
+    return { label: '企业未提供，请联系管理员', ready: false }
+  }
+  return { label: '需要时询问安装', ready: false }
 }
 
 /** 编排规则只读渲染：`@{employee_id}` 换成 `@名字`；找不到的成员保留 ID 并标注。 */

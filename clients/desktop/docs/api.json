@@ -8296,6 +8296,56 @@
           }
         },
         "description": "Local Capability List Envelope 数据结构。"
+      },
+      "InstallableSkill": {
+        "type": "object",
+        "required": [
+          "skill_id",
+          "display_name",
+          "version",
+          "content_hash",
+          "source_skill_id"
+        ],
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "description": "企业技能目录里的技能 ID。"
+          },
+          "display_name": {
+            "type": "string",
+            "description": "展示名称。"
+          },
+          "version": {
+            "type": "string",
+            "description": "可安装的版本。"
+          },
+          "content_hash": {
+            "type": "string",
+            "description": "技能包内容哈希。"
+          },
+          "source_skill_id": {
+            "type": "string",
+            "description": "对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "当前成员可在对话中自行安装的企业技能（只读，来自企业技能目录）。"
+      },
+      "InstallableSkillListEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstallableSkill"
+            },
+            "description": "data 列表元素。"
+          }
+        },
+        "description": "Installable Skill List Envelope 数据结构。"
       }
     }
   },
@@ -23684,6 +23734,53 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/installable-skills": {
+      "get": {
+        "operationId": "listInstallableSkills",
+        "summary": "列出企业可自装技能",
+        "description": "经企业端读取当前成员可在对话中自行安装的技能（企业技能目录里全员可见、未停用的）。只读；用于标注方案推荐的技能是否企业已提供。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallableSkillListEnvelope"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "422": {
             "$ref": "#/components/responses/ValidationError"

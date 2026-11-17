@@ -549,6 +549,16 @@ export interface SolutionProjection {
 // GET /api/agent/capabilities：用户在对话中同意安装的本机个人能力（只在本机、只对本人生效）。
 export type LocalCapabilityKind = 'mcp' | 'skill'
 
+/** 当前成员可在对话中自行安装的企业技能（企业技能目录里全员可见、未停用）。 */
+export interface InstallableSkill {
+  skill_id: string
+  display_name: string
+  version: string
+  content_hash: string
+  /** 对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。 */
+  source_skill_id: string
+}
+
 export interface LocalCapability {
   kind: LocalCapabilityKind
   ref: string

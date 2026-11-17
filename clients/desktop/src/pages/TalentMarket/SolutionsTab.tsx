@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { LoaderCircle, MessageCircle, RefreshCw, ShieldAlert, User, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { agentApi } from '../../api/agent'
-import type { ExpertProjection, LocalCapability, SolutionProjection } from '../../api/agent/types'
+import type { ExpertProjection, InstallableSkill, LocalCapability, SolutionProjection } from '../../api/agent/types'
 import GoldenDotsLoading from '../../components/Loading/GoldenDotsLoading'
 import RequestErrorState from '../../components/RequestState/RequestErrorState'
 import { classifyRequestError, type RequestErrorInfo } from '../../lib/requestError'
@@ -31,6 +31,8 @@ export default function SolutionsTab({ query }: { query: string }) {
   // 打开详情的方案；本机个人能力用于在详情里标注推荐能力「已就绪」，读不到为 null（不标注）。
   const [detailId, setDetailId] = useState<string | null>(null)
   const [localCapabilities, setLocalCapabilities] = useState<LocalCapability[] | null>(null)
+  // 企业目录里本人可自装的技能；读不到为 null（推荐 skill 不标「企业未提供」）。
+  const [installableSkills, setInstallableSkills] = useState<InstallableSkill[] | null>(null)
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
 
@@ -38,11 +40,13 @@ export default function SolutionsTab({ query }: { query: string }) {
     if (!background) setLoading(true)
     setError(null)
     try {
-      const [solutionRes, expertRes, capabilities] = await Promise.all([
+      const [solutionRes, expertRes, capabilities, installable] = await Promise.all([
         agentApi.listSolutions(), agentApi.listExperts(), agentApi.listLocalCapabilities().catch(() => null),
+        agentApi.listInstallableSkills().catch(() => null),
       ])
       if (!alive.current) return
       setLocalCapabilities(capabilities)
+      setInstallableSkills(installable)
       setSolutions(solutionRes.solutions.filter(item => item.status === undefined || item.status === 'applied'))
       setExperts(expertRes.experts)
     } catch (err) {
@@ -139,6 +143,7 @@ export default function SolutionsTab({ query }: { query: string }) {
           solution={detail}
           experts={experts}
           localCapabilities={localCapabilities}
+          installableSkills={installableSkills}
           starting={startingId === detail.solution_instance_id}
           actionError={actionError}
           onStart={() => void start(detail)}

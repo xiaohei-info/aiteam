@@ -68,6 +68,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/grants/solutions'],
   // 个人能力（MCP）：对话中经本人审批安装，仅本机；这里只列出与撤销。
   ['GET', '/api/agent/capabilities'],
+  ['GET', '/api/agent/capabilities/installable-skills'],
   ['DELETE', '/api/agent/capabilities/{capability_kind}/{capability_ref}'],
   ['GET', '/api/agent/grants/readiness'],
   ['GET', '/api/agent/grants/experts/{employee_id}/readiness'],
