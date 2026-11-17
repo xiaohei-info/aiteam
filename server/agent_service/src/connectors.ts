@@ -111,6 +111,8 @@ export function connectorTools(store: AgentSqliteStore, owner: TaskOwner, employ
 }
 
 const REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+/** The approval summary carries the full URL (and the replaced one), so its length is bounded to keep the record within its schema. */
+const MAX_MCP_URL = 1024;
 const TOOL_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 function validMcpUrl(value: string): URL {
@@ -154,6 +156,7 @@ export function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner
   let url: URL;
   try {
     if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
+    if (String(input.url).length > MAX_MCP_URL) throw new Error("url too long");
     url = validMcpUrl(input.url);
   } catch {
     return { ok: false, message: "安装未完成：标识或地址无效（地址须为 https 或本机地址，且不含账号、查询串）。请让用户检查。" };

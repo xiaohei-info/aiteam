@@ -40,7 +40,10 @@ export default function SolutionsTab({ query }: { query: string }) {
       setExperts(expertRes.experts)
     } catch (err) {
       console.error(err)
-      if (alive.current) setError(classifyRequestError(err, '方案加载失败，请稍后重试。'))
+      if (!alive.current) return
+      // 后台刷新失败只提示，保留已有列表；首次加载失败才整页报错。
+      if (background) setActionError('方案刷新失败，当前显示的可能不是最新，请稍后再刷新。')
+      else setError(classifyRequestError(err, '方案加载失败，请稍后重试。'))
     } finally {
       if (alive.current && !background) setLoading(false)
     }

@@ -120,6 +120,9 @@ test("a same-ref install is bounced to the model unless the user explicitly aske
     assert.equal(summary.url, long);
     assert.deepEqual(summary.replaces, { display_name: "Notion", url });
 
+    // 超长地址在审批前被拒绝，保证审批摘要不超出记录上限。
+    assert.equal(checkCapabilityInstall(fixture.store, owner, { ...input, ref: "y", url: `https://example.com/${"a".repeat(1100)}` }).ok, false);
+
     // 全新 ref：没有 replaces 字段；无效地址在审批前就被拒绝。
     const fresh = checkCapabilityInstall(fixture.store, owner, { ...input, ref: "other" });
     assert.equal(fresh.ok && "replaces" in JSON.parse(fresh.summary), false);

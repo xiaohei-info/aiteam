@@ -734,7 +734,7 @@ const ApprovalRecordSchema = Type.Object({
   id: Type.String({ minLength: 1 }), approval_batch_id: Type.String({ minLength: 1 }), conversation_id: Type.String({ minLength: 1 }),
   participant_employee_id: Type.Union([Type.String(), Type.Null()]), session_id: Type.String({ minLength: 1 }),
   snapshot_version: Type.String({ minLength: 1 }), permission_revision: Type.String({ minLength: 1 }), tool_call_id: Type.String({ minLength: 1 }),
-  tool_name: Type.String({ minLength: 1 }), canonical_args_hmac: Type.String({ minLength: 1 }), redacted_summary: Type.String({ maxLength: 1_000 }),
+  tool_name: Type.String({ minLength: 1 }), canonical_args_hmac: Type.String({ minLength: 1 }), redacted_summary: Type.String({ maxLength: 4_096 }),
   risk_level: Type.Union([Type.Literal("bash"), Type.Literal("write"), Type.Literal("edit"), Type.Literal("external"), Type.Literal("unknown")]),
   status: Type.Union([Type.Literal("pending"), Type.Literal("approved"), Type.Literal("executing"), Type.Literal("succeeded"), Type.Literal("rejected"), Type.Literal("invalidated"), Type.Literal("expired"), Type.Literal("uncertain")]),
   approved_by: Type.Union([Type.String(), Type.Null()]), approved_at: Type.Union([Type.String(), Type.Null()]), expires_at: Type.String(),
