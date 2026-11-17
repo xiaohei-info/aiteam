@@ -259,6 +259,10 @@ class CatalogEntryResponse(ExpertTemplateProfile):
     )
     coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的模板 id")
     coordinator_instructions: str = Field(default="", max_length=4000)
+    # 行业方案的类型、群聊编排规则与推荐能力（只读展示；专家模板为 null / 空）。
+    mode: Literal["solo", "group"] | None = Field(default=None, description="行业方案类型：solo 单人 / group 组群；专家模板为 null")
+    orchestration_rules: str = Field(default="", description="群聊编排规则，成员引用为 @{专家模板 id}")
+    recommended_capabilities: list[RecommendedCapability] = Field(default_factory=list, description="方案推荐的 skill / MCP（非强制）")
 
 
 # ---- 详情视图（对齐前端 CatalogItem，返回完整 payload 顶层字段）----

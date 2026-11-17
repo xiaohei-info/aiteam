@@ -935,6 +935,44 @@ describe("详情页", () => {
     });
   });
 
+  it("行业方案详情只读展示类型、编排规则与推荐能力", async () => {
+    mockFetch.mockResolvedValue(
+      singleResponse(
+        makeCatalogItem({
+          catalog_type: "solution_template",
+          template_id: "sol-qc",
+          display_name: "来料质检方案",
+          status: "published",
+          visible_scope: null,
+          mode: "group",
+          expert_template_ids: ["tpl-lead", "tpl-insp"],
+          orchestration_rules: "1. @{tpl-lead} 拆解任务\n2. @{tpl-insp} 检验",
+          recommended_capabilities: [
+            { kind: "skill", ref: "3f9c-uuid", display_name: "抽样检验", purpose: "GB/T 2828" },
+            { kind: "mcp", ref: "mes", display_name: "MES", purpose: "读工单" },
+          ],
+        }),
+      ),
+    );
+    renderCatalogDetail(makeSystemAdminSession(), "sol-qc", "solution_template");
+    const playbook = await screen.findByTestId("solution-playbook");
+    expect(playbook).toHaveTextContent("组群方案");
+    expect(playbook).toHaveTextContent("@{tpl-insp} 检验");
+    expect(playbook).toHaveTextContent("抽样检验");
+    expect(playbook).not.toHaveTextContent("3f9c-uuid");
+    expect(playbook).toHaveTextContent("MES（mes）");
+  });
+
+  it("单人方案详情不展示编排规则", async () => {
+    mockFetch.mockResolvedValue(
+      singleResponse(makeCatalogItem({ catalog_type: "solution_template", template_id: "sol-solo", display_name: "合同审核", status: "published", visible_scope: null, mode: "solo", expert_template_ids: ["tpl-legal"] })),
+    );
+    renderCatalogDetail(makeSystemAdminSession(), "sol-solo", "solution_template");
+    const playbook = await screen.findByTestId("solution-playbook");
+    expect(playbook).toHaveTextContent("单人方案");
+    expect(playbook).not.toHaveTextContent("编排规则");
+  });
+
   it("详情加载失败展示错误", async () => {
     mockFetch.mockResolvedValue(
       problemResponse(404, "not_found", "目录项不存在"),

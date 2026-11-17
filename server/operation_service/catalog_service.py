@@ -15,6 +15,10 @@ from shared.contracts.crosstier import CatalogReleaseNotify
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.expert_profile import EXPERT_PROFILE_FIELDS, profile_from_payload
 from shared.errors import Conflict, NotFound, ValidationProblem
+from shared.solution_authoring.orchestration import (
+    OrchestrationRefError,
+    validate_member_refs,
+)
 
 from .catalog_avatar import normalize_avatar_for_service, safe_avatar_for_response
 from .catalog_gateway import CatalogManagerGateway
@@ -95,6 +99,18 @@ def _profile_projection(payload: dict) -> dict:
     return {**profile_from_payload(payload).model_dump(), "updated_at": _updated_at(payload)}
 
 
+def _solution_projection(entry: CatalogEntry) -> dict:
+    """行业方案的类型、规则与推荐能力（只读）；专家模板不带。"""
+    if entry.catalog_type != CatalogType.SOLUTION_TEMPLATE:
+        return {}
+    payload = entry.payload or {}
+    return {
+        "mode": "solo" if payload.get("mode") == "solo" else "group",
+        "orchestration_rules": payload.get("orchestration_rules", "") or "",
+        "recommended_capabilities": payload.get("recommended_capabilities", []) or [],
+    }
+
+
 def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
     payload = entry.payload or {}
     return CatalogEntryResponse(
@@ -117,6 +133,7 @@ def _to_response(entry: CatalogEntry) -> CatalogEntryResponse:
         expert_bindings=payload.get("expert_bindings"),
         coordinator_template_id=payload.get("coordinator_template_id", ""),
         coordinator_instructions=payload.get("coordinator_instructions", ""),
+        **_solution_projection(entry),
     )
 
 
@@ -184,6 +201,7 @@ def _to_detail_view(entry: CatalogEntry) -> CatalogDetailView:
         expert_template_ids=payload.get("expert_template_ids", []),
         coordinator_template_id=payload.get("coordinator_template_id", ""),
         coordinator_instructions=payload.get("coordinator_instructions", ""),
+        **_solution_projection(entry),
     )
 
 
@@ -379,6 +397,17 @@ class CatalogService:
         _top_fields = {'catalog_type', 'template_id', 'version', 'display_name',
                        'status', 'visible_scope', 'payload'}
         payload_updates = {k: v for k, v in changes.items() if k not in _top_fields}
+        # expert_bindings 是拉取方案时的权威名单：只改 expert_template_ids 时按新名单重建，
+        # 已有专家保留原启用状态，否则改了专家名单也不会生效。
+        if (
+            entry.catalog_type == CatalogType.SOLUTION_TEMPLATE
+            and "expert_template_ids" in payload_updates and "expert_bindings" not in payload_updates
+        ):
+            enabled = {b.get("template_id"): b.get("enabled", True) for b in (entry.payload or {}).get("expert_bindings") or []}
+            payload_updates["expert_bindings"] = [
+                {"template_id": tid, "sequence_no": idx, "enabled": enabled.get(tid, True)}
+                for idx, tid in enumerate(payload_updates["expert_template_ids"], start=1)
+            ]
         top_updates = {k: v for k, v in changes.items() if k in _top_fields}
         if payload_updates:
             new_payload = {**(entry.payload or {}), **payload_updates, "updated_at": _now_iso()}
@@ -409,6 +438,18 @@ class CatalogService:
             raise ValidationProblem(
                 f"coordinator_template_id {coordinator_id!r} must be one of the enabled experts: {sorted(enabled_ids)}"
             )
+        # 类型与编排规则在目录里只读：改专家或群主时不能让它们失效，否则企业应用时才会失败。
+        if payload.get("mode") == "solo" and len(enabled_ids) != 1:
+            raise ValidationProblem("这是单人方案，必须正好启用 1 位专家；如需多位专家，请在行业文档生成里改成组群方案后重新发布")
+        rules = (payload.get("orchestration_rules") or "").strip()
+        if rules:
+            try:
+                validate_member_refs(rules, frozenset(enabled_ids))
+            except OrchestrationRefError as exc:
+                listed = "、".join(exc.members) if exc.members else ""
+                raise ValidationProblem(
+                    f"群聊编排规则引用了不在已启用专家里的成员{f'：{listed}' if listed else ''}；请保留这些专家，或在行业文档生成里修改规则后重新发布"
+                ) from exc
 
 
     def list_entry_details(

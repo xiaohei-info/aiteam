@@ -826,3 +826,40 @@ def test_update_solution_empty_experts_rejected(service):
             CatalogType.SOLUTION_TEMPLATE, "sol-growth",
             {"expert_template_ids": [], "expert_bindings": []},
         )
+
+
+# ---- 方案类型与编排规则：目录里只读展示，改专家/群主时不能让它们失效 ----
+
+def test_solution_detail_carries_mode_rules_and_recommendations(service):
+    service.register_solution_template(_solution(
+        expert_template_ids=["tpl-cmo", "tpl-data"], mode="group",
+        orchestration_rules="1. @{tpl-cmo} 拆解\n2. @{tpl-data} 分析",
+        recommended_capabilities=[{"kind": "mcp", "ref": "mes", "display_name": "MES", "purpose": "读工单"}],
+    ))
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    from operation_service.catalog_service import _to_detail_view, _to_response
+    for view in (_to_response(entry), _to_detail_view(entry)):
+        assert view.mode == "group"
+        assert "@{tpl-data}" in view.orchestration_rules
+        assert [item.ref for item in view.recommended_capabilities] == ["mes"]
+
+
+def test_editing_a_solo_solution_must_keep_exactly_one_expert(service):
+    service.register_solution_template(_solution(mode="solo"))
+    with pytest.raises(ValidationProblem, match="单人方案"):
+        service.update_entry(CatalogType.SOLUTION_TEMPLATE, "sol-growth", {"expert_template_ids": ["tpl-cmo", "tpl-data"]})
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert [b["template_id"] for b in entry.payload["expert_bindings"]] == ["tpl-cmo"]
+
+
+def test_removing_an_expert_still_referenced_by_rules_is_refused(service):
+    service.register_solution_template(_solution(
+        expert_template_ids=["tpl-cmo", "tpl-data"], orchestration_rules="1. @{tpl-cmo} 拆解\n2. @{tpl-data} 分析",
+    ))
+    with pytest.raises(ValidationProblem, match="tpl-data"):
+        service.update_entry(CatalogType.SOLUTION_TEMPLATE, "sol-growth", {"expert_template_ids": ["tpl-cmo"]})
+    # 加专家不影响规则：名单与 bindings 一起更新。
+    service.update_entry(CatalogType.SOLUTION_TEMPLATE, "sol-growth", {"expert_template_ids": ["tpl-cmo", "tpl-data", "tpl-ops"]})
+    entry = service._repo.get(CatalogType.SOLUTION_TEMPLATE, "sol-growth")
+    assert [b["template_id"] for b in entry.payload["expert_bindings"]] == ["tpl-cmo", "tpl-data", "tpl-ops"]
+

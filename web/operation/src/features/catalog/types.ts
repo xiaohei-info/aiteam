@@ -79,6 +79,12 @@ export interface CatalogItem extends Partial<ExpertTemplateProfile> {
   expert_template_ids?: string[];
   coordinator_template_id?: string;
   coordinator_instructions?: string;
+  /** 方案类型；专家模板为 null，旧服务端缺省。 */
+  mode?: "solo" | "group" | null;
+  /** 群聊编排规则，成员引用为 `@{专家模板 ID}`。 */
+  orchestration_rules?: string;
+  /** 方案推荐的 skill / MCP（非强制）。 */
+  recommended_capabilities?: { kind: "skill" | "mcp"; ref: string; display_name?: string; purpose?: string }[];
 }
 
 /** 注册专家模板请求体（对齐 RegisterExpertTemplateRequest, PRD-v2 S02）；展示字段只带填写过的。 */
