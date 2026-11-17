@@ -140,7 +140,7 @@ class JobBriefOut(_Strict):
 
 class FindingOut(_Strict):
     finding_id: str
-    kind: str = Field(description="phone / email / id_card / bank_card / secret / amount / company / person / other / image_unrecognized")
+    kind: str = Field(description="phone / email / id_card / bank_card / secret / amount / company / person / other / image_unrecognized / skill_unresolved")
     origin: Literal["rule", "agent", "system"]
     field_path: str = Field(description="命中的正文字段；空串表示该项不在正文中（只能 acknowledge）")
     masked: str = Field(description="脱敏后的片段")

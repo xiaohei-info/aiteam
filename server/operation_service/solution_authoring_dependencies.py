@@ -13,11 +13,13 @@ from pathlib import Path
 
 from shared.config import load_settings
 from shared.errors import ServiceUnavailable
+from shared.solution_authoring.prompts import SkillCatalogItem
 from shared.solution_authoring.runner import PiWorkerRunner
 
 from .catalog_dependencies import get_catalog_service
 from .platform_provider_repository import PlatformProviderRepository
 from .platform_provider_service import build_platform_provider_service, newapi_urls
+from .platform_skill_market import PlatformSkillRepository
 from .solution_authoring_jobs import GenerationJobExecutor
 from .solution_authoring_models import (
     ModelConfigResolver,
@@ -81,8 +83,28 @@ def build_generation_job_executor() -> GenerationJobExecutor:
     models = get_model_config_resolver()
     return GenerationJobExecutor(
         get_solution_authoring_repository(), get_source_file_store(), models,
-        PiWorkerRunner(allow_faux=models.uses_faux_model),
+        PiWorkerRunner(allow_faux=models.uses_faux_model), skill_catalog=build_skill_catalog(),
     )
+
+
+def build_skill_catalog():
+    """平台已发布 skill 的目录摘要（生成时注入提示词、返回后校验）。没有库时为 None（视为空目录）。"""
+    settings = load_settings("operation")
+    if not settings.db_url:
+        return None
+    repo = PlatformSkillRepository(settings.db_url)
+
+    def catalog() -> list[SkillCatalogItem]:
+        return [
+            SkillCatalogItem(
+                skill_id=row["skill_id"], version=row["published_version"], content_hash=row["content_hash"],
+                display_name=row["display_name"] or row["slug"], summary=row["summary"] or "",
+            )
+            for row in repo.list_internal(status="published")
+            if row["published_version"] and row["content_hash"]
+        ]
+
+    return catalog
 
 
 def worker_enabled() -> bool:

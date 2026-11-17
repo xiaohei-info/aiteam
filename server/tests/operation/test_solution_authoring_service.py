@@ -875,3 +875,50 @@ def test_a_job_fails_when_the_model_returns_the_wrong_mode(env):
     detail = env.service.get_draft(draft_id)
     assert detail.status == "draft" and detail.package is None
     assert detail.latest_job is not None and detail.latest_job.error_code == "schema_invalid"
+
+
+def _skill_env(env: Env, catalog) -> None:
+    env.executor = GenerationJobExecutor(env.repo, env.store, env.models, env.runner, owner="w1", clock=env.clock, skill_catalog=catalog)
+
+
+def test_generation_injects_the_published_skill_catalog_and_drops_unknown_refs(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    item = SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h1", display_name="读表", summary="读取 Excel")
+    _skill_env(env, lambda: [item])
+    body = _solution("s1-c1")
+    body["experts"][0]["skills"] = [
+        {"skill_id": "sk-1", "version": "1", "content_hash": "h1", "reason": "读表"},
+        {"skill_id": "sk-1", "version": "0", "content_hash": "h0", "reason": "旧版"},
+        {"skill_id": "made-up", "version": "1", "content_hash": "x", "reason": "编造"},
+    ]
+    env.runner.solution = body
+    draft_id = env.generated()
+    assert "<skill_catalog>" in env.runner.prompts[-1][1] and "skill_id=sk-1" in env.runner.prompts[-1][1]
+    detail = env.service.get_draft(draft_id)
+    assert [ref.skill_id for ref in detail.package.experts[0].skills] == ["sk-1"]
+    unresolved = sorted((f.note, f.origin, f.field_path) for f in detail.findings if f.kind == "skill_unresolved")
+    assert unresolved == [("not_in_catalog", "system", ""), ("version_mismatch", "system", "")]
+
+
+def test_without_a_catalog_the_prompt_forbids_skills_and_none_survive(env):
+    body = _solution("s1-c1")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    env.runner.solution = body
+    draft_id = env.generated()
+    assert "当前没有可用的平台 skill" in env.runner.prompts[-1][1]
+    assert env.service.get_draft(draft_id).package.experts[0].skills == []
+
+
+def test_an_unreadable_skill_catalog_fails_the_job_before_generation(env):
+    def broken():
+        raise OSError("db down")
+
+    _skill_env(env, broken)
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True
+    job = env.service.get_draft(draft_id).latest_job
+    assert job is not None and (job.status, job.error_code) == ("failed", "skill_catalog_unavailable")
+    assert env.runner.prompts == []

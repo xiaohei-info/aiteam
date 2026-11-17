@@ -77,6 +77,7 @@ const FINDING_KIND: Record<string, string> = {
   person: "人名",
   other: "其他敏感信息",
   image_unrecognized: "未识别的图片",
+  skill_unresolved: "已剔除的 skill 引用",
 };
 
 export function findingKind(kind: string): string {
@@ -102,7 +103,13 @@ const IMAGE_REASONS: Record<string, string> = {
   no_result: "没有识别结果",
 };
 
+const SKILL_REASONS: Record<string, string> = {
+  not_in_catalog: "平台 skill 目录里没有这个 skill（可能是模型编造或已下架），已从正文剔除",
+  version_mismatch: "版本或内容与平台已发布的不一致，已从正文剔除",
+};
+
 export function findingNote(kind: string, note: string): string {
+  if (kind === "skill_unresolved") return SKILL_REASONS[note] ?? note;
   if (kind !== "image_unrecognized") return note;
   return IMAGE_REASONS[note] ?? (note ? `识别失败（${note}）` : "未识别");
 }
