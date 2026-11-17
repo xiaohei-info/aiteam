@@ -95,7 +95,7 @@ test("recommended capabilities become a bounded, non-authorizing hint", () => {
   assert.match(text, /并未安装或授权/);
 });
 
-test("a same-ref install is bounced to the model unless the user explicitly asked to replace; the approval shows the full request", async () => {
+test("a same-ref clash goes to the approval dialog; nothing is overwritten unless the user chose replace or rename", async () => {
   const fixture = await createFixture();
   const { server, url } = await mcpServer([]);
   try {
@@ -103,37 +103,76 @@ test("a same-ref install is bounced to the model unless the user explicitly aske
     const input = { kind: "mcp", ref: "notion", display_name: "Notion", url, reason: "读页面" };
     await run(install, input);
 
-    // 已存在且没有 replace：不进审批，提示里带着已装条目，模型据此去问用户。
-    const clash = checkCapabilityInstall(fixture.store, owner, { ...input, display_name: "Other", url: "https://example.com/other" });
-    assert.equal(clash.ok, false);
-    assert.match(clash.ok ? "" : clash.message, /Notion/);
-    assert.match(clash.ok ? "" : clash.message, new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-    const blocked = await run(install, { ...input, url: "https://example.com/other" });
-    assert.equal(blocked.isError, true);
-    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.url, url);
-
-    // 明确 replace：审批摘要给出完整新地址和被替换的条目，不截断。
+    // 同名不再退回模型：照常进审批，摘要带完整新地址与被替换的条目。
     const long = `https://example.com/${"a".repeat(400)}`;
-    const replace = checkCapabilityInstall(fixture.store, owner, { ...input, url: long, replace: true });
-    assert.equal(replace.ok, true);
-    const summary = JSON.parse(replace.ok ? replace.summary : "{}");
+    const clash = await checkCapabilityInstall(fixture.store, owner, { ...input, url: long });
+    assert.equal(clash.ok, true);
+    const summary = JSON.parse(clash.ok ? clash.summary : "{}");
     assert.equal(summary.url, long);
     assert.deepEqual(summary.replaces, { display_name: "Notion", url });
 
-    // 超长地址在审批前被拒绝，保证审批摘要不超出记录上限。
-    assert.equal(checkCapabilityInstall(fixture.store, owner, { ...input, ref: "y", url: `https://example.com/${"a".repeat(1100)}` }).ok, false);
-
-    // 全新 ref：没有 replaces 字段；无效地址在审批前就被拒绝。
-    const fresh = checkCapabilityInstall(fixture.store, owner, { ...input, ref: "other" });
+    // 超长地址、非本机明文地址在审批前被拒绝；全新 ref 没有 replaces。
+    assert.equal((await checkCapabilityInstall(fixture.store, owner, { ...input, ref: "y", url: `https://example.com/${"a".repeat(1100)}` })).ok, false);
+    assert.equal((await checkCapabilityInstall(fixture.store, owner, { ...input, ref: "x", url: "http://example.com/mcp" })).ok, false);
+    const fresh = await checkCapabilityInstall(fixture.store, owner, { ...input, ref: "other" });
     assert.equal(fresh.ok && "replaces" in JSON.parse(fresh.summary), false);
-    assert.equal(checkCapabilityInstall(fixture.store, owner, { ...input, ref: "x", url: "http://example.com/mcp" }).ok, false);
 
-    // 明确 replace 并经批准后才真的替换。
-    const replaced = await run(install, { ...input, display_name: "Notion 2", replace: true });
-    assert.notEqual(replaced.isError, true);
-    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.display_name, "Notion 2");
+    // 用户没有选择覆盖或改名：不安装。
+    assert.equal((await run(install, { ...input, display_name: "Notion 2" })).isError, true);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.display_name, "Notion");
+
+    // 改名：装到新标识，原条目保留；新标识也被占用则失败。
+    assert.notEqual((await run(install, { ...input, display_name: "Notion 副本", resolution: { action: "rename", ref: "notion2" } })).isError, true);
+    assert.deepEqual(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).map(item => item.ref).sort(), ["notion", "notion2"]);
+    assert.equal((await run(install, { ...input, resolution: { action: "rename", ref: "notion2" } })).isError, true);
+
+    // 覆盖：替换原条目。
+    assert.notEqual((await run(install, { ...input, display_name: "Notion 2", resolution: { action: "replace" } })).isError, true);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.ref === "notion")?.display_name, "Notion 2");
   } finally {
     await new Promise(resolve => server.close(resolve));
     await fixture.close();
   }
+});
+
+test("a skill can only be installed from the enterprise catalog; a newer version needs the user's replace choice", async () => {
+  const fixture = await createFixture();
+  try {
+    let catalog = [{ skill_id: "sheet", display_name: "读表", version: "1", content_hash: "h1", source_skill_id: "plat-sheet" }];
+    const installed: string[] = [];
+    const skills = {
+      list: async () => catalog,
+      install: async (skillId: string) => { installed.push(`${skillId}@${catalog.find(item => item.skill_id === skillId)?.version}`); },
+    };
+    const install = capabilityInstallTool(fixture.store, owner, skills);
+
+    // 不在企业目录：审批前就退回，提示找管理员；没有 Manager 时也退回。
+    const missing = await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "ghost", reason: "" }, skills);
+    assert.equal(missing.ok, false);
+    assert.match(missing.ok ? "" : missing.message, /管理员/);
+    assert.equal((await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "sheet", reason: "" })).ok, false);
+
+    // 推荐清单里的平台 skill_id 能对应到企业目录条目。
+    const byPlatform = await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "plat-sheet", reason: "读表" }, skills);
+    assert.equal(byPlatform.ok, true);
+    assert.equal(JSON.parse(byPlatform.ok ? byPlatform.summary : "{}").ref, "sheet");
+
+    assert.notEqual((await run(install, { kind: "skill", ref: "plat-sheet", reason: "读表" })).isError, true);
+    assert.deepEqual(installed, ["sheet@1"]);
+    const row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0];
+    assert.deepEqual([row?.kind, row?.ref, row?.version, row?.source, row?.url], ["skill", "sheet", "1", "enterprise_catalog", ""]);
+
+    // 同版本已装：不打扰用户。
+    assert.equal((await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "sheet", reason: "" }, skills)).ok, false);
+
+    // 新版本：进审批并标明替换；不选覆盖不装，改名不允许，选覆盖才装。
+    catalog = [{ ...catalog[0]!, version: "2", content_hash: "h2" }];
+    const upgrade = await checkCapabilityInstall(fixture.store, owner, { kind: "skill", ref: "sheet", reason: "" }, skills);
+    assert.deepEqual(JSON.parse(upgrade.ok ? upgrade.summary : "{}").replaces, { display_name: "读表", version: "1" });
+    assert.equal((await run(install, { kind: "skill", ref: "sheet", reason: "" })).isError, true);
+    assert.equal((await run(install, { kind: "skill", ref: "sheet", reason: "", resolution: { action: "rename", ref: "sheet2" } })).isError, true);
+    assert.notEqual((await run(install, { kind: "skill", ref: "sheet", reason: "", resolution: { action: "replace" } })).isError, true);
+    assert.deepEqual(installed, ["sheet@1", "sheet@2"]);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "2");
+  } finally { await fixture.close(); }
 });

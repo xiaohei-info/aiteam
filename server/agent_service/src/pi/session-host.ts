@@ -1,4 +1,4 @@
-import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools } from "../connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type SkillInstaller } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -34,7 +34,7 @@ import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryT
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
-import { skillRefsForSnapshot } from "../skills.js";
+import { skillRefsForSnapshot, type SkillCache } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
 import { ConversationWriteQueue } from "./conversation-write-queue.js";
@@ -212,6 +212,8 @@ export interface SessionHostOptions {
     onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
   ) => ResourceLoader;
   managerClient?: ManagerClient;
+  /** Skills members installed for themselves; kept apart from the snapshot cache, whose sync prunes unknown skills. */
+  personalSkillCache?: SkillCache;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
@@ -1365,7 +1367,7 @@ export class SessionHost {
     // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
-    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner)] : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller))] : [];
     for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
     tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -1412,6 +1414,26 @@ export class SessionHost {
       .catch(() => { record.reconcile = undefined; });
   }
 
+  /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
+  private skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
+    const client = this.options.managerClient;
+    const cache = this.options.personalSkillCache;
+    if (!client?.listInstallableSkills || !client.getInstallableSkillPackage || !cache || !caller.tenantId) return undefined;
+    const scope = { tenantId: caller.tenantId, memberId: caller.userId ?? caller.callerId };
+    return {
+      list: () => client.listInstallableSkills!(caller),
+      install: async (skillId) => {
+        const result = await client.getInstallableSkillPackage!(caller, skillId);
+        cache.install(scope, result.package, result.signing_keys);
+      },
+    };
+  }
+
+  /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
+  removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
+    this.options.personalSkillCache?.remove({ tenantId, memberId }, skillId);
+  }
+
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
     const risk = approvalRiskForTool(tool.name);
     if (!risk) return tool;
@@ -1420,10 +1442,11 @@ export class SessionHost {
     return {
       ...tool,
       execute: async (toolCallId, params, signal, onUpdate, context) => {
-        // Installing a personal MCP: bounce impossible or silently-replacing requests, and show the user the full request.
+        // Installing a personal capability: bounce impossible requests, show the user the full request (and any clash).
         let summary: string | undefined;
-        if (tool.name === "capability_install") {
-          const check = checkCapabilityInstall(this.options.store, owner, params);
+        const install = tool.name === "capability_install";
+        if (install) {
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal);
           if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
           summary = `capability_install: ${check.summary}`;
         }
@@ -1448,9 +1471,13 @@ export class SessionHost {
         expiresAt: authorizationExpiry(authorization),
         signal,
       // Queued after approval, so a request waiting for the user never holds up the other employees.
-      }, () => record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
-        ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, params, signal, onUpdate, context))
-        : execute(toolCallId, params, signal, onUpdate, context))) as ReturnType<ToolDefinition["execute"]>;
+      }, (claimed) => {
+        // The user's replace / rename choice reaches the install tool only through the approval record, never from the model.
+        const effective = install ? { ...(params as Record<string, unknown>), resolution: claimed.resolution } : params;
+        return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
+          ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, effective, signal, onUpdate, context))
+          : execute(toolCallId, effective, signal, onUpdate, context);
+      })) as ReturnType<ToolDefinition["execute"]>;
       },
     } as ToolDefinition;
   }

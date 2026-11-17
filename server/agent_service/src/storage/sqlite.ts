@@ -60,7 +60,11 @@ export interface ApprovalRecord {
   idempotency_key: string;
   created_at: string;
   updated_at: string;
+  /** What the user chose for a capability install that clashes with an installed one (approve only). */
+  resolution: CapabilityResolution | null;
 }
+
+export type CapabilityResolution = { action: "replace" } | { action: "rename"; ref: string };
 
 export type ConversationState = "draft" | "active" | "paused" | "muted" | "archived";
 export type ConversationPermissionMode = "read-only" | "workspace-write" | "full-access";
@@ -284,13 +288,20 @@ export interface LoadedSolutionProjection {
   [key: string]: unknown;
 }
 
+export type LocalCapabilityKind = "mcp" | "skill";
+
 export interface LocalCapability {
-  kind: "mcp";
+  kind: LocalCapabilityKind;
   ref: string;
   display_name: string;
+  /** MCP endpoint; empty for a skill. */
   url: string;
+  /** MCP tool names; empty for a skill. */
   tools: string[];
-  source: "user_url";
+  /** user_url: MCP the user pointed at; enterprise_catalog: skill from the enterprise skill catalog. */
+  source: "user_url" | "enterprise_catalog";
+  /** Installed skill version; empty for an MCP. */
+  version: string;
   reason: string;
   approved_by: string;
   created_at: string;
@@ -406,8 +417,9 @@ interface ReceiptRow {
   failure_detail: string | null;
 }
 
-interface ApprovalRecordRow extends Omit<ApprovalRecord, "consumed"> {
+interface ApprovalRecordRow extends Omit<ApprovalRecord, "consumed" | "resolution"> {
   consumed: number;
+  resolution_json: string | null;
 }
 
 export class ApprovalNotFoundError extends Error {
@@ -635,12 +647,13 @@ export class AgentSqliteStore {
       CREATE TABLE IF NOT EXISTS local_capability (
         tenant_id TEXT NOT NULL,
         member_id TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('mcp')),
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
         ref TEXT NOT NULL,
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        version TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         approved_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -715,9 +728,11 @@ export class AgentSqliteStore {
       "ALTER TABLE schedule_retry ADD COLUMN schedule_id TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE schedule_retry ADD COLUMN schedule_generation INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE conversation_participant_session ADD COLUMN removed_at TEXT",
+      "ALTER TABLE approval_record ADD COLUMN resolution_json TEXT",
     ]) {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
+    this.migrateLocalCapabilityKinds();
     // Retry markers written by an older Agent build did not bind a schedule
     // identity. They cannot be safely replayed after a schedule replacement.
     this.db.prepare("DELETE FROM schedule_retry WHERE schedule_id = '' OR schedule_generation = 0").run();
@@ -1539,17 +1554,17 @@ export class AgentSqliteStore {
   }
 
   listLocalCapabilities(tenantId: string, memberId: string): LocalCapability[] {
-    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as { kind: "mcp"; ref: string; display_name: string; url: string; tools_json: string; source: "user_url"; reason: string; approved_by: string; created_at: string }[])
+    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
       .map(({ tools_json, ...row }) => ({ ...row, tools: JSON.parse(tools_json) as string[] }));
   }
 
   /** Inserts or replaces one personal capability of this owner; never touches another member's rows. */
-  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at">, now = new Date().toISOString()): void {
-    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.reason, item.approved_by, now);
+  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version"> & { version?: string }, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.reason, item.approved_by, now);
   }
 
-  deleteLocalCapability(tenantId: string, memberId: string, kind: "mcp", ref: string): boolean {
+  deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {
     return this.db.prepare("DELETE FROM local_capability WHERE tenant_id = ? AND member_id = ? AND kind = ? AND ref = ?").run(tenantId, memberId, kind, ref).changes > 0;
   }
 
@@ -1759,7 +1774,7 @@ export class AgentSqliteStore {
     return rows.map((row) => this.toReceipt(this.normalizeReceiptOnRead(row)));
   }
 
-  createApprovalRecord(input: Omit<ApprovalRecord, "created_at" | "updated_at" | "decision_revision" | "consumed" | "status" | "approved_by" | "approved_at"> & {
+  createApprovalRecord(input: Omit<ApprovalRecord, "created_at" | "updated_at" | "decision_revision" | "consumed" | "status" | "approved_by" | "approved_at" | "resolution"> & {
     status?: ApprovalStatus;
     decision_revision?: number;
     consumed?: boolean;
@@ -1791,31 +1806,31 @@ export class AgentSqliteStore {
   }
 
   getApprovalRecord(id: string): ApprovalRecord | undefined {
-    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE id = ?").get(id) as unknown as ApprovalRecordRow | undefined;
+    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE id = ?").get(id) as unknown as ApprovalRecordRow | undefined;
     return row ? this.toApprovalRecord(row) : undefined;
   }
 
   getOwnedApprovalRecord(id: string, tenantId: string, memberId: string, conversationId: string): ApprovalRecord | undefined {
-    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE id = ? AND tenant_id = ? AND member_id = ? AND conversation_id = ?").get(id, tenantId, memberId, conversationId) as unknown as ApprovalRecordRow | undefined;
+    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE id = ? AND tenant_id = ? AND member_id = ? AND conversation_id = ?").get(id, tenantId, memberId, conversationId) as unknown as ApprovalRecordRow | undefined;
     return row ? this.toApprovalRecord(row) : undefined;
   }
 
   findApprovalForTool(input: { tenantId: string; memberId: string; conversationId: string; sessionId: string; participantEmployeeId?: string; toolCallId: string; canonicalArgsHmac: string; snapshotVersion: string }): ApprovalRecord | undefined {
-    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND session_id = ? AND participant_employee_id IS ? AND tool_call_id = ? AND canonical_args_hmac = ? AND snapshot_version = ? ORDER BY created_at DESC LIMIT 1").get(input.tenantId, input.memberId, input.conversationId, input.sessionId, input.participantEmployeeId ?? null, input.toolCallId, input.canonicalArgsHmac, input.snapshotVersion) as unknown as ApprovalRecordRow | undefined;
+    const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND session_id = ? AND participant_employee_id IS ? AND tool_call_id = ? AND canonical_args_hmac = ? AND snapshot_version = ? ORDER BY created_at DESC LIMIT 1").get(input.tenantId, input.memberId, input.conversationId, input.sessionId, input.participantEmployeeId ?? null, input.toolCallId, input.canonicalArgsHmac, input.snapshotVersion) as unknown as ApprovalRecordRow | undefined;
     return row ? this.toApprovalRecord(row) : undefined;
   }
 
   listOwnedApprovalRecords(conversationId: string, tenantId: string, memberId: string, includeTerminal = true): ApprovalRecord[] {
     const terminal = includeTerminal ? "1 = 1" : "status IN ('pending', 'approved', 'executing')";
-    const rows = this.db.prepare(`SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND ${terminal} ORDER BY created_at DESC`).all(conversationId, tenantId, memberId) as unknown as ApprovalRecordRow[];
+    const rows = this.db.prepare(`SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND ${terminal} ORDER BY created_at DESC`).all(conversationId, tenantId, memberId) as unknown as ApprovalRecordRow[];
     return rows.map((row) => this.toApprovalRecord(row));
   }
 
-  decideApproval(input: { id: string; tenantId: string; memberId: string; conversationId: string; decision: "approve" | "deny"; expectedRevision?: number; approvedBy: string; idempotencyKey: string; now?: string }): ApprovalRecord {
+  decideApproval(input: { id: string; tenantId: string; memberId: string; conversationId: string; decision: "approve" | "deny"; expectedRevision?: number; approvedBy: string; idempotencyKey: string; resolution?: CapabilityResolution; now?: string }): ApprovalRecord {
     const now = input.now ?? new Date().toISOString();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const current = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE id = ? AND tenant_id = ? AND member_id = ? AND conversation_id = ?").get(input.id, input.tenantId, input.memberId, input.conversationId) as unknown as ApprovalRecordRow | undefined;
+      const current = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE id = ? AND tenant_id = ? AND member_id = ? AND conversation_id = ?").get(input.id, input.tenantId, input.memberId, input.conversationId) as unknown as ApprovalRecordRow | undefined;
       if (!current) throw new ApprovalNotFoundError();
       if (Date.parse(current.expires_at) <= Date.parse(now) && (current.status === "pending" || current.status === "approved")) {
         this.db.prepare("UPDATE approval_record SET status = 'expired', decision_revision = decision_revision + 1, updated_at = ? WHERE id = ?").run(now, input.id);
@@ -1834,9 +1849,9 @@ export class AgentSqliteStore {
       if (current.status === "rejected" && input.decision === "deny") { this.db.exec("COMMIT"); return this.toApprovalRecord(current); }
       if (current.status !== "pending") throw new ApprovalDecisionConflictError();
       const status: ApprovalStatus = input.decision === "approve" ? "approved" : "rejected";
-      this.db.prepare("UPDATE approval_record SET status = ?, approved_by = ?, approved_at = ?, decision_revision = decision_revision + 1, idempotency_key = ?, updated_at = ? WHERE id = ? AND status = 'pending'").run(status, input.decision === "approve" ? input.approvedBy : null, input.decision === "approve" ? now : null, input.idempotencyKey, now, input.id);
+      this.db.prepare("UPDATE approval_record SET status = ?, approved_by = ?, approved_at = ?, decision_revision = decision_revision + 1, idempotency_key = ?, updated_at = ?, resolution_json = ? WHERE id = ? AND status = 'pending'").run(status, input.decision === "approve" ? input.approvedBy : null, input.decision === "approve" ? now : null, input.idempotencyKey, now, input.decision === "approve" && input.resolution ? JSON.stringify(input.resolution) : null, input.id);
       if (input.decision === "deny") this.db.prepare("UPDATE approval_record SET status = 'invalidated', decision_revision = decision_revision + 1, updated_at = ? WHERE approval_batch_id = (SELECT approval_batch_id FROM approval_record WHERE id = ?) AND id <> ? AND status IN ('pending', 'approved')").run(now, input.id, input.id);
-      const next = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at FROM approval_record WHERE id = ?").get(input.id) as unknown as ApprovalRecordRow;
+      const next = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE id = ?").get(input.id) as unknown as ApprovalRecordRow;
       this.db.exec("COMMIT");
       return this.toApprovalRecord(next);
     } catch (error) { try { this.db.exec("ROLLBACK"); } catch { /* transaction already committed */ } throw error; }
@@ -2124,12 +2139,43 @@ export class AgentSqliteStore {
     };
   }
 
+  /** Builds before personal skills only allowed MCP rows; SQLite cannot widen a CHECK, so the table is rebuilt once. */
+  private migrateLocalCapabilityKinds(): void {
+    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_capability'").get() as { sql?: string } | undefined;
+    if (!row?.sql || row.sql.includes("'skill'")) return;
+    this.db.exec(`BEGIN IMMEDIATE;
+      ALTER TABLE local_capability RENAME TO local_capability_v1;
+      CREATE TABLE local_capability (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        ref TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        tools_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        version TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind, ref)
+      );
+      INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at)
+        SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at FROM local_capability_v1;
+      DROP TABLE local_capability_v1;
+      COMMIT;`);
+  }
+
   private toApprovalRecord(row: ApprovalRecordRow): ApprovalRecord {
+    const { resolution_json, ...rest } = row;
+    let resolution: CapabilityResolution | null = null;
+    try { resolution = resolution_json ? JSON.parse(resolution_json) as CapabilityResolution : null; } catch { resolution = null; }
     return {
-      ...row,
+      ...rest,
       consumed: row.consumed === 1,
       status: row.status as ApprovalStatus,
       risk_level: row.risk_level as ApprovalRecord["risk_level"],
+      resolution,
     };
   }
 }

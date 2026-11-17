@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { AgentSqliteStore, FrozenSnapshot } from "./storage/sqlite.js";
+import type { AgentSqliteStore, CapabilityResolution, FrozenSnapshot } from "./storage/sqlite.js";
 import { AutomationError, type TaskOwner } from "./storage/automation-tasks.js";
 
 interface LocalConnector extends TaskOwner {
@@ -142,76 +142,136 @@ export function personalConnectorTools(store: AgentSqliteStore, owner: TaskOwner
   } as ToolDefinition));
 }
 
-export interface CapabilityInstallInput { ref: string; display_name: string; url: string; reason: string; replace?: boolean }
+/** An enterprise-catalog skill the member may install for themselves (Manager `GET /grants/skills`). */
+export interface InstallableSkillInfo { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string }
+/** Manager-backed skill installation; absent when Manager or the personal skill cache is unavailable. */
+export interface SkillInstaller {
+  list(signal?: AbortSignal): Promise<InstallableSkillInfo[]>;
+  /** Fetches the package signed for this member, verifies it and stores it in the personal skill cache. */
+  install(skillId: string, signal?: AbortSignal): Promise<void>;
+}
+
+export interface CapabilityInstallInput {
+  kind: "mcp" | "skill";
+  ref: string;
+  display_name?: string;
+  url?: string;
+  reason?: string;
+  /** Set only by the approval gate from the user's decision; the model cannot pass it (schema forbids extra fields). */
+  resolution?: CapabilityResolution | null;
+}
 export type CapabilityInstallCheck = { ok: true; summary: string } | { ok: false; message: string };
 
+const fail = (text: string) => ({ content: [{ type: "text" as const, text }], details: undefined, isError: true });
+
+async function findSkill(skills: SkillInstaller | undefined, ref: string, signal?: AbortSignal): Promise<InstallableSkillInfo | string> {
+  if (!skills) return "安装未完成：本机暂时无法从企业取技能（未连接企业服务）。";
+  let items: InstallableSkillInfo[];
+  try { items = await skills.list(signal); } catch { return "安装未完成：暂时无法读取企业技能目录，请稍后再试。"; }
+  return items.find(item => item.skill_id === ref) ?? items.find(item => item.source_skill_id === ref)
+    ?? `安装未完成：企业技能目录里没有可自行安装的技能「${ref}」。请告诉用户联系企业管理员把它安装到企业技能目录，并把可见范围设为全员。`;
+}
+
 /**
- * Runs before the approval prompt. Requests that can never succeed (bad ref/URL) or that would silently replace an
- * installed capability of the same ref are bounced back to the model without bothering the user. What the user is
- * asked to approve is the full, untruncated URL plus, for an explicit replacement, the entry being replaced.
- * The summary is stored in the approval record, so it never contains anything but what the install itself accepts.
+ * Runs before the approval prompt. Requests that can never succeed (bad ref/URL, skill not in the enterprise catalog,
+ * the same skill version already installed) are bounced back to the model without bothering the user. A same-ref clash
+ * is NOT bounced: the user decides in the approval dialog (replace / rename / cancel), so the summary names what would
+ * be replaced. The summary is stored in the approval record and holds nothing the install itself does not accept.
  */
-export function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner, params: unknown): CapabilityInstallCheck {
+export async function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner, params: unknown, skills?: SkillInstaller, signal?: AbortSignal): Promise<CapabilityInstallCheck> {
   const input = params as CapabilityInstallInput;
+  const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId);
+  const reason = String(input.reason ?? "").slice(0, 200);
+  if (input.kind === "skill") {
+    const found = await findSkill(skills, String(input.ref ?? ""), signal);
+    if (typeof found === "string") return { ok: false, message: found };
+    const existing = installed.find(item => item.kind === "skill" && item.ref === found.skill_id);
+    if (existing?.version === found.version) return { ok: false, message: `技能「${found.display_name || found.skill_id}」${found.version} 已安装，下一轮对话起可用，无需再装。` };
+    return { ok: true, summary: JSON.stringify({
+      kind: "skill", ref: found.skill_id, display_name: found.display_name.slice(0, 120), version: found.version, source: "enterprise_catalog", reason,
+      ...(existing ? { replaces: { display_name: existing.display_name, version: existing.version } } : {}),
+    }) };
+  }
   let url: URL;
   try {
     if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
-    if (String(input.url).length > MAX_MCP_URL) throw new Error("url too long");
-    url = validMcpUrl(input.url);
+    if (String(input.url ?? "").length > MAX_MCP_URL) throw new Error("url too long");
+    url = validMcpUrl(String(input.url ?? ""));
   } catch {
     return { ok: false, message: "安装未完成：标识或地址无效（地址须为 https 或本机地址，且不含账号、查询串）。请让用户检查。" };
   }
-  const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.kind === "mcp" && item.ref === input.ref);
-  if (existing && input.replace !== true) {
-    return { ok: false, message: `安装未完成：标识 ${input.ref} 已被「${existing.display_name}」（${existing.url}）占用。请先询问用户：覆盖它、换一个标识，还是取消。`
-      + "用户明确要求覆盖时，才带 replace=true 再次调用；要保留两者就换一个新的 ref。不要擅自替换。" };
-  }
-  const summary = JSON.stringify({
-    ref: input.ref,
-    display_name: String(input.display_name ?? "").slice(0, 120),
-    url: url.toString(),
-    reason: String(input.reason ?? "").slice(0, 200),
+  const existing = installed.find(item => item.kind === "mcp" && item.ref === input.ref);
+  return { ok: true, summary: JSON.stringify({
+    kind: "mcp", ref: input.ref, display_name: String(input.display_name ?? "").slice(0, 120), url: url.toString(), reason,
     ...(existing ? { replaces: { display_name: existing.display_name, url: existing.url } } : {}),
-  });
-  return { ok: true, summary };
+  }) };
 }
 
 /**
  * The model may only *ask* to install: this tool is unknown to the approval classifier, so it always needs a human
- * decision, and the approval preview shows the URL. After approval the server is contacted and its real tool list stored.
- * No credentials can be passed through the model; a server that needs one is not supported here.
+ * decision. A clash with an installed capability is resolved by the user in the approval dialog (replace / rename for
+ * MCP / cancel); without that choice nothing is overwritten. MCP: the server is contacted and its real tool list stored;
+ * no credentials pass through the model. Skill: the package signed for this member is verified before it is stored.
  */
-export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner): ToolDefinition {
+export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner, skills?: SkillInstaller): ToolDefinition {
   return {
     name: "capability_install",
-    label: "Install MCP capability",
-    description: "Ask the user to install an MCP server for themselves. Call it only when the task truly needs a capability you do not have, "
-      + "and only with an https (or localhost) URL the user gave you or the solution recommended. Never invent URLs. The user must approve; do not retry after a denial.",
+    label: "Install capability",
+    description: "Ask the user to install a capability for themselves. Call it only when the task truly needs one you do not have. "
+      + "kind=skill: ref is a skill id from the enterprise skill catalog or the solution's recommended skills. "
+      + "kind=mcp: give an https (or localhost) url the user gave you or the solution recommended; never invent URLs. "
+      + "The user must approve (and decides about replacing an installed one); do not retry after a denial.",
     parameters: Type.Object({
-      kind: Type.Literal("mcp"),
-      ref: Type.String({ description: "short id: lowercase letters, digits, - or _" }),
-      display_name: Type.String({ minLength: 1, maxLength: 120 }),
-      url: Type.String({ description: "MCP endpoint (streamable HTTP)" }),
+      kind: Type.Union([Type.Literal("mcp"), Type.Literal("skill")]),
+      ref: Type.String({ description: "mcp: short id (lowercase letters, digits, - or _); skill: the skill id" }),
+      display_name: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+      url: Type.Optional(Type.String({ description: "MCP endpoint (streamable HTTP); not used for a skill" })),
       reason: Type.String({ maxLength: 200, description: "why the task needs it" }),
-      replace: Type.Optional(Type.Boolean({ description: "set true only when the user explicitly asked to overwrite an installed capability with the same ref" })),
     }, { additionalProperties: false }),
     execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
       const input = params as CapabilityInstallInput;
+      const resolution = input.resolution ?? undefined;
+      // Re-checked here as well: the approval may have waited while another install changed the state.
+      const check = await checkCapabilityInstall(store, owner, input, skills, signal);
+      if (!check.ok) return fail(check.message);
+      const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId);
+      if (input.kind === "skill") {
+        const found = await findSkill(skills, input.ref, signal);
+        if (typeof found === "string") return fail(found);
+        if (resolution?.action === "rename") return fail("技能不能改名安装；用户可以选择覆盖或取消。");
+        if (installed.some(item => item.kind === "skill" && item.ref === found.skill_id) && resolution?.action !== "replace") {
+          return fail("已装有该技能的其他版本，用户没有选择覆盖，未安装。");
+        }
+        try {
+          await skills!.install(found.skill_id, signal);
+        } catch {
+          return fail("安装未完成：技能包校验失败或企业服务暂不可用，请稍后再试。");
+        }
+        store.putLocalCapability(owner.tenantId, owner.memberId, {
+          kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version,
+          source: "enterprise_catalog", reason: String(input.reason ?? "").slice(0, 200), approved_by: owner.memberId,
+        });
+        return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一轮对话起可用。` }], details: undefined };
+      }
+      const ref = resolution?.action === "rename" ? resolution.ref : input.ref;
+      if (!REF_RE.test(ref)) return fail("安装未完成：新标识无效。");
+      if (installed.some(item => item.kind === "mcp" && item.ref === ref) && resolution?.action !== "replace") {
+        return fail(resolution?.action === "rename"
+          ? `安装未完成：新标识 ${ref} 也已被占用。请让用户换一个。`
+          : `已安装同名能力 ${ref}，用户没有选择覆盖或改名，未安装。`);
+      }
       try {
-        // Re-checked here as well: the approval may have waited while another install took the same ref.
-        const check = checkCapabilityInstall(store, owner, input);
-        if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true };
-        if (!REF_RE.test(input.ref)) throw new Error("invalid ref");
-        const url = validMcpUrl(input.url);
+        const url = validMcpUrl(String(input.url ?? ""));
         const tools = (await listMcpTools(url.toString(), signal)).filter(name => TOOL_RE.test(name)).slice(0, 50);
         if (!tools.length) throw new Error("no tools");
+        const name = String(input.display_name ?? ref).slice(0, 120);
         store.putLocalCapability(owner.tenantId, owner.memberId, {
-          kind: "mcp", ref: input.ref, display_name: input.display_name.slice(0, 120), url: url.toString(), tools,
-          source: "user_url", reason: (input.reason ?? "").slice(0, 200), approved_by: owner.memberId,
+          kind: "mcp", ref, display_name: name, url: url.toString(), tools,
+          source: "user_url", reason: String(input.reason ?? "").slice(0, 200), approved_by: owner.memberId,
         });
-        return { content: [{ type: "text" as const, text: `已安装 ${input.display_name}，可用工具：${tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
+        return { content: [{ type: "text" as const, text: `已安装 ${name}（标识 ${ref}），可用工具：${tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
       } catch {
-        return { content: [{ type: "text" as const, text: "安装未完成：地址无效、服务无法连接或没有可用工具。请让用户检查地址。" }], details: undefined, isError: true };
+        return fail("安装未完成：地址无效、服务无法连接或没有可用工具。请让用户检查地址。");
       }
     },
   } as ToolDefinition;

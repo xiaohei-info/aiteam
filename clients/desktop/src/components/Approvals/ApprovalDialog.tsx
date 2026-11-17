@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
 import { useApprovalStore, type PendingApproval } from '../../stores/approvals'
-import { parseCapabilityInstall, type CapabilityInstallPreview } from './capabilityInstall'
+import { parseCapabilityInstall, renameProblem, type CapabilityInstallPreview } from './capabilityInstall'
 
 const riskMeta: Record<string, { label: string; icon: typeof Terminal; tone: string }> = {
   bash: { label: '执行本机命令', icon: Terminal, tone: '#ff6666' },
@@ -63,17 +63,33 @@ function CountdownRing({ remain, total, tone }: { remain: number; total: number;
   )
 }
 
-/** 安装个人 MCP：地址完整显示（不截断、不限高），主机名突出；名称与理由是模型写的，单独标注。 */
+/**
+ * 安装个人能力。MCP：地址完整显示（不截断、不限高），主机名突出；名称与理由是模型写的，单独标注。
+ * 技能：来自企业技能目录，显示名称与版本。与已装同名能力冲突时给出冲突说明，由下方按钮选择覆盖 / 改名 / 取消。
+ */
 function InstallPreview({ preview }: { preview: CapabilityInstallPreview }) {
   const label: React.CSSProperties = { fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }
+  const clash = preview.replaces
   return (
     <div style={{ padding: '0 20px', display: 'grid', gap: 10 }}>
-      {preview.replaces && (
+      {clash && (
         <div role="alert" style={{ fontSize: 12, lineHeight: 1.6, color: '#ffaa44', border: '1px solid color-mix(in srgb, #ffaa44 40%, transparent)', borderRadius: 8, padding: '8px 12px', background: 'color-mix(in srgb, #ffaa44 10%, var(--surface-2))' }}>
-          将覆盖已安装的「{preview.replaces.displayName}」，原地址：
-          <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}> {preview.replaces.url}</span>
+          {preview.kind === 'skill' ? (
+            <>已安装「{clash.displayName}」{clash.version ? ` ${clash.version} 版` : ''}。选择「覆盖」换成 {preview.version || '新'} 版，或取消。</>
+          ) : (
+            <>标识 {preview.ref} 已被「{clash.displayName}」占用，原地址：
+              <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}> {clash.url}</span>
+              。请选择覆盖、改名安装或取消。</>
+          )}
         </div>
       )}
+      {preview.kind === 'skill' ? (
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+          <div style={label}>来源：企业技能目录（企业管理员已安装并开放给成员）</div>
+          <div>技能：<strong style={{ color: 'var(--text-primary)' }}>{preview.displayName || preview.ref}</strong>（标识 {preview.ref}{preview.version ? `，版本 ${preview.version}` : ''}）</div>
+          {preview.reason && <div>理由（模型填写）：{preview.reason}</div>}
+        </div>
+      ) : <>
       <div>
         <div style={label}>服务地址（请确认主机名是你信任的）</div>
         <div data-testid="install-url" style={{ fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', color: 'var(--text-muted)' }}>
@@ -85,6 +101,7 @@ function InstallPreview({ preview }: { preview: CapabilityInstallPreview }) {
         <div>名称：{preview.displayName || '—'}（标识 {preview.ref}）</div>
         {preview.reason && <div>理由：{preview.reason}</div>}
       </div>
+      </>}
     </div>
   )
 }
@@ -96,6 +113,10 @@ export default function ApprovalDialog() {
   const dismiss = useApprovalStore((s) => s.dismiss)
   // 仅用于每秒触发重渲染；剩余时间在渲染时取当前时刻，避免空闲期间 state 里的旧时间让首帧偏大
   const [, setTick] = useState(0)
+  // 同名冲突时「改名安装」输入的新标识；null 表示未进入改名。换到下一条审批时清空。
+  const [rename, setRename] = useState<string | null>(null)
+  const currentId = pending[0]?.approvalId
+  useEffect(() => { setRename(null) }, [currentId])
 
   useEffect(() => {
     if (pending.length === 0) return
@@ -172,6 +193,16 @@ export default function ApprovalDialog() {
             <button type="button" onClick={() => dismiss(item.approvalId)} style={ghostBtnStyle}>
               <X size={13} style={{ marginRight: 4 }} />关闭
             </button>
+          ) : install?.replaces ? (
+            <ClashActions
+              preview={install}
+              deciding={deciding}
+              rename={rename}
+              onRename={setRename}
+              onCancel={() => void decide(item.approvalId, 'deny')}
+              onReplace={() => void decide(item.approvalId, 'approve', { action: 'replace' })}
+              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { action: 'rename', ref })}
+            />
           ) : (
             <>
               <button
@@ -203,6 +234,52 @@ export default function ApprovalDialog() {
       </div>
     </div>,
     document.body,
+  )
+}
+
+/** 同名冲突：取消 / 改名安装（仅 MCP）/ 覆盖。没有「允许」按钮，避免默认覆盖。 */
+function ClashActions({ preview, deciding, rename, onRename, onCancel, onReplace, onRenameSubmit }: {
+  preview: CapabilityInstallPreview
+  deciding: boolean
+  rename: string | null
+  onRename: (value: string | null) => void
+  onCancel: () => void
+  onReplace: () => void
+  onRenameSubmit: (ref: string) => void
+}) {
+  const dim = (style: React.CSSProperties) => ({ ...style, opacity: deciding ? 0.5 : 1 })
+  if (rename !== null) {
+    const problem = renameProblem(rename, preview.ref)
+    return (
+      <div style={{ display: 'grid', gap: 8, width: '100%' }}>
+        <label style={{ display: 'grid', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+          新的标识（原有的「{preview.replaces?.displayName}」保留不动）
+          <input
+            autoFocus
+            value={rename}
+            disabled={deciding}
+            aria-invalid={Boolean(problem)}
+            onChange={(event) => onRename(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter' && !problem) onRenameSubmit(rename.trim()) }}
+            style={{ fontSize: 13, fontFamily: 'monospace', padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text-primary)' }}
+          />
+        </label>
+        {problem && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{problem}</span>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button type="button" disabled={deciding} onClick={() => onRename(null)} style={dim(ghostBtnStyle)}>返回</button>
+          <button type="button" disabled={deciding || Boolean(problem)} onClick={() => onRenameSubmit(rename.trim())} style={{ ...primaryBtnStyle, opacity: deciding || problem ? 0.6 : 1 }}>改名安装</button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <>
+      <button type="button" disabled={deciding} onClick={onCancel} style={dim(ghostBtnStyle)}>取消安装</button>
+      {preview.kind === 'mcp' && (
+        <button type="button" disabled={deciding} onClick={() => onRename(`${preview.ref}-2`.slice(0, 64))} style={dim(ghostBtnStyle)}>改名安装</button>
+      )}
+      <button type="button" disabled={deciding} onClick={onReplace} style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : 1 }}>覆盖</button>
+    </>
   )
 }
 

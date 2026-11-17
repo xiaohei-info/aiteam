@@ -112,6 +112,8 @@ export function createControlledResourceLoader(
   sessionId?: string,
   onAccessDenied?: (error: unknown) => void,
   onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
+  /** Skills the member installed for themselves (`skill@version`). Optional: one that fails to verify is skipped, not fatal. */
+  personalSkills?: { cache: SkillCache; refs: readonly string[] },
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -124,6 +126,17 @@ export function createControlledResourceLoader(
   const skills = skillScope && cache
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
+  if (skillScope && personalSkills) {
+    const names = new Set(skills.skills.map((skill) => skill.name));
+    for (const ref of personalSkills.refs) {
+      try {
+        const loaded = skillResourcePaths(personalSkills.cache, skillScope, [ref], verification);
+        const fresh = loaded.skills.filter((skill) => !names.has(skill.name));
+        for (const skill of fresh) names.add(skill.name);
+        skills.skills.push(...fresh); skills.diagnostics.push(...loaded.diagnostics);
+      } catch { /* a revoked, expired or tampered personal skill is simply not loaded */ }
+    }
+  }
   const leaseConfig = hindsightRuntimeConfig ? normalizeHindsightRuntimeConfig(hindsightRuntimeConfig, managerUrl) : undefined;
   const memoryPolicy = authorization ? getMemoryPolicy(authorization.snapshot, leaseConfig) : undefined;
   const baseUrl = leaseConfig?.base_url;

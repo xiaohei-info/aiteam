@@ -1,4 +1,4 @@
-import type { LocalCapability } from './types.ts'
+import type { LocalCapability, LocalCapabilityKind } from './types.ts'
 
 import type { ServiceApiClient } from './client'
 
@@ -9,7 +9,7 @@ export async function listLocalCapabilities(client: RequestClient): Promise<Loca
   return (await client.request<LocalCapability[] | null>({ method: 'GET', path: '/api/agent/capabilities' })) ?? []
 }
 
-export async function deleteLocalCapability(client: RequestClient, kind: 'mcp', ref: string): Promise<void> {
+export async function deleteLocalCapability(client: RequestClient, kind: LocalCapabilityKind, ref: string): Promise<void> {
   await client.request({
     method: 'DELETE',
     path: `/api/agent/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}`,

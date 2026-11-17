@@ -193,7 +193,7 @@ export const agentApi = {
   listExperts: () => listExperts(getClient()),
   listSolutions: () => listSolutions(getClient()),
   listLocalCapabilities: () => listLocalCapabilities(getClient()),
-  deleteLocalCapability: (kind: 'mcp', ref: string) => deleteLocalCapability(getClient(), kind, ref),
+  deleteLocalCapability: (kind: 'mcp' | 'skill', ref: string) => deleteLocalCapability(getClient(), kind, ref),
   getExpertReadiness: (employeeId: string) => getExpertReadiness(getClient(), employeeId),
 
   // -------- 员工记忆 --------

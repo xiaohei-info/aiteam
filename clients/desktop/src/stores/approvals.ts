@@ -10,6 +10,7 @@
  */
 import { create } from 'zustand'
 import { agentApi, AgentApiError } from '../api/agent'
+import type { CapabilityResolution } from '../api/agent/approvals'
 import type { PiSseEventData } from '../api/agent/types'
 import { notifyApprovalRequired } from '../lib/systemNotifications'
 
@@ -36,7 +37,7 @@ export interface PendingApproval {
 interface ApprovalStore {
   pending: PendingApproval[]
   addFromSse: (event: PiSseEventData, conversationId: string) => void
-  decide: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>
+  decide: (approvalId: string, decision: 'approve' | 'deny', resolution?: CapabilityResolution) => Promise<void>
   dismiss: (approvalId: string) => void
   pruneExpired: () => void
 }
@@ -74,7 +75,7 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
     get().pruneExpired()
   },
 
-  decide: async (approvalId, decision) => {
+  decide: async (approvalId, decision, resolution) => {
     const item = get().pending.find((p) => p.approvalId === approvalId)
     if (!item || item.phase === 'deciding') return
     set((state) => ({
@@ -87,6 +88,8 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
         decision,
         crypto.randomUUID(),
         item.decisionRevision,
+        undefined,
+        decision === 'approve' ? resolution : undefined,
       )
       set((state) => ({ pending: state.pending.filter((p) => p.approvalId !== approvalId) }))
     } catch (error) {

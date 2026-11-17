@@ -317,6 +317,24 @@ export class SkillCache {
     }
   }
 
+  /**
+   * Adds one verified package (a personal skill the user approved) without pruning anything else in this cache.
+   * The signing keys come from the Manager response that carried the package and become this scope's offline keyring.
+   */
+  install(scope: SkillScope, envelope: SignedSkillPackage, publicKeys: readonly SkillSigningKeyMetadata[]): void {
+    this.reconcile(scope, [envelope], [envelope.package.skill_id], { publicKeys: [...publicKeys] }, { authoritative: false });
+  }
+
+  /** Removes every cached version of one skill and its current pointer. */
+  remove(scope: SkillScope, skillId: string): void {
+    safeSegment(skillId, "skill_id");
+    const scopeRoot = this.scopeRoot(scope);
+    if (!existsSync(scopeRoot)) return;
+    this.assertNoSymlink(join(scopeRoot, skillId));
+    rmSync(join(scopeRoot, skillId), { recursive: true, force: true });
+    rmSync(join(scopeRoot, `${skillId}.json`), { force: true });
+  }
+
   pathsFor(scope: SkillScope, refs: readonly string[], verification: SkillVerificationOptions = {}): string[] {
     const scopeRoot = this.scopeRoot(scope);
     if (!existsSync(scopeRoot)) return [];

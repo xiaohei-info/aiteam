@@ -48,6 +48,7 @@ const sandbox = new LocalSandbox();
 mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
 if (environment === "production" && process.platform !== "win32") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
+const personalSkillCache = new SkillCache(join(dataRoot, "capabilities", "personal-skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // Before any session runs: legacy folders move to the conversation-named layout, then artifacts
 // captured by older builds are matched against the files in their (moved) folders.
@@ -69,6 +70,7 @@ const sessionHost = new SessionHost({
   model: configured.model,
   useFauxModel,
   managerClient,
+  personalSkillCache,
   executionAuthorization,
   sandbox,
   // Faux responses are test artifacts, never billable usage.
@@ -89,6 +91,11 @@ const sessionHost = new SessionHost({
   ) => createControlledResourceLoader(
     snapshotSystemPrompt(authorization), skillCache, authorization, workspace, agentDir, managerUrl,
     hindsightRuntimeConfig, approvalService, approvalConversationId ?? conversationId, sessionId, onAccessDenied, onMemoryStatus,
+    authorization?.caller.tenantId ? {
+      cache: personalSkillCache,
+      refs: store.listLocalCapabilities(authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId)
+        .filter((item) => item.kind === "skill").map((item) => `${item.ref}@${item.version}`),
+    } : undefined,
   ),
 });
 

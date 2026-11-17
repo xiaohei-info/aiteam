@@ -7135,7 +7135,7 @@
           },
           "redacted_summary": {
             "type": "string",
-            "maxLength": 1000,
+            "maxLength": 4096,
             "description": "redacted summary 字段值。"
           },
           "risk_level": {
@@ -7285,6 +7285,60 @@
           "updated_at": {
             "type": "string",
             "description": "updated at 字段值。"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "action"
+                    ],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "replace"
+                        ],
+                        "description": "action 字段值。"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "resolution 对象。"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "action",
+                      "ref"
+                    ],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "rename"
+                        ],
+                        "description": "action 字段值。"
+                      },
+                      "ref": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                        "description": "新的能力标识"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "resolution 对象。"
+                  }
+                ],
+                "description": "安装个人能力与已装同名能力冲突时，用户的选择：覆盖或改名。只对 capability_install 的批准有效。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "resolution 字段值。"
           }
         },
         "additionalProperties": false,
@@ -7347,6 +7401,51 @@
             "type": "integer",
             "minimum": 0,
             "description": "expected revision 字段值。"
+          },
+          "capability_resolution": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "replace"
+                    ],
+                    "description": "action 字段值。"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "capability resolution 对象。"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "action",
+                  "ref"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "rename"
+                    ],
+                    "description": "action 字段值。"
+                  },
+                  "ref": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                    "description": "新的能力标识"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "capability resolution 对象。"
+              }
+            ],
+            "description": "安装个人能力与已装同名能力冲突时，用户的选择：覆盖或改名。只对 capability_install 的批准有效。"
           }
         },
         "additionalProperties": false,
@@ -8069,17 +8168,30 @@
           "url",
           "tools",
           "source",
+          "version",
           "reason",
           "approved_by",
           "created_at"
         ],
         "properties": {
           "kind": {
-            "type": "string",
-            "description": "能力类型；目前只有 MCP。",
-            "enum": [
-              "mcp"
-            ]
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "mcp"
+                ],
+                "description": "旧资源类型。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "skill"
+                ],
+                "description": "旧资源类型。"
+              }
+            ],
+            "description": "能力类型：MCP 或技能。"
           },
           "ref": {
             "type": "string",
@@ -8091,7 +8203,7 @@
           },
           "url": {
             "type": "string",
-            "description": "MCP 地址（不含凭据）。"
+            "description": "MCP 地址（不含凭据）；技能为空。"
           },
           "tools": {
             "type": "array",
@@ -8099,14 +8211,30 @@
               "type": "string",
               "description": "tools 字段值。"
             },
-            "description": "安装时从服务端读到的工具。"
+            "description": "安装时从服务端读到的 MCP 工具；技能为空。"
           },
           "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "user_url"
+                ],
+                "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "enterprise_catalog"
+                ],
+                "description": "source 字段值。"
+              }
+            ],
+            "description": "来源：user_url 用户同意的 MCP 地址；enterprise_catalog 企业技能目录。"
+          },
+          "version": {
             "type": "string",
-            "description": "来源：用户在对话中同意的地址。",
-            "enum": [
-              "user_url"
-            ]
+            "description": "技能版本；MCP 为空。"
           },
           "reason": {
             "type": "string",
@@ -23413,7 +23541,7 @@
       "get": {
         "operationId": "listLocalCapabilities",
         "summary": "列出个人能力",
-        "description": "列出当前成员在对话中同意安装的本机个人能力（MCP）。只在本机，不上传、不改企业配置。",
+        "description": "列出当前成员在对话中同意安装的本机个人能力（MCP 与技能）。只在本机，不上传、不改企业配置。",
         "security": [
           {
             "bearerAuth": []
@@ -23487,15 +23615,13 @@
           {
             "schema": {
               "type": "string",
-              "enum": [
-                "mcp"
-              ],
+              "pattern": "^(mcp|skill)$",
               "description": "capability kind 字段值。"
             },
             "in": "path",
             "name": "capability_kind",
             "required": true,
-            "description": "能力类型；目前只有 MCP。",
+            "description": "能力类型：mcp 或 skill。",
             "example": "mcp"
           },
           {

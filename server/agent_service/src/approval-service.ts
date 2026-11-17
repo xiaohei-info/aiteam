@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ApprovalRecord, ApprovalStatus, AgentSqliteStore } from "./storage/sqlite.js";
+import type { ApprovalRecord, ApprovalStatus, AgentSqliteStore, CapabilityResolution } from "./storage/sqlite.js";
 import { encodeScope } from "./runtime-lease-cache.js";
 
 export type ApprovalRisk = "bash" | "write" | "edit" | "external" | "unknown";
@@ -44,6 +44,12 @@ export class ApprovalDeniedError extends Error {
 export class ApprovalExpiredError extends Error {
   constructor(message = "Tool approval expired") { super(message); this.name = "ApprovalExpiredError"; }
 }
+/** A capability resolution was sent for a tool that does not take one, or is malformed. */
+export class ApprovalResolutionError extends Error {
+  constructor(message = "capability_resolution is only accepted when approving a capability install") { super(message); this.name = "ApprovalResolutionError"; }
+}
+const RENAME_REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+
 export class ApprovalPermissionError extends Error {
   constructor(message = "Tool is not permitted by the conversation permission") { super(message); this.name = "ApprovalPermissionError"; }
 }
@@ -78,7 +84,8 @@ export class ApprovalService {
     return approvalRiskForTool(toolName);
   }
 
-  async execute<T>(request: ApprovalRequest, operation: () => Promise<T>): Promise<T> {
+  /** `operation` receives the claimed record, so a tool can honour the user's capability resolution. */
+  async execute<T>(request: ApprovalRequest, operation: (claimed: ApprovalRecord) => Promise<T>): Promise<T> {
     if ((request.riskLevel === "write" || request.riskLevel === "edit") && request.permissionMode === "read-only") {
       // Approval may never upgrade the Conversation's sandbox permission.
       // read-only is rejected before an ApprovalRecord is created.
@@ -106,7 +113,7 @@ export class ApprovalService {
     const record = existing ?? this.create(request, hash, autoApprove);
     const claimed = await this.waitAndClaim(record, request);
     try {
-      const result = await operation();
+      const result = await operation(claimed);
       this.store.finishApproval(claimed.id, "succeeded");
       return result;
     } catch (error) {
@@ -131,7 +138,14 @@ export class ApprovalService {
     expectedRevision?: number;
     approvedBy: string;
     idempotencyKey: string;
+    resolution?: CapabilityResolution;
   }): ApprovalRecord {
+    if (input.resolution !== undefined) {
+      const target = this.store.getApprovalRecord(input.id);
+      const valid = input.decision === "approve" && target?.tool_name === "capability_install"
+        && (input.resolution.action === "replace" || (input.resolution.action === "rename" && RENAME_REF_RE.test(input.resolution.ref)));
+      if (target && !valid) throw new ApprovalResolutionError();
+    }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
     const record = this.store.decideApproval(input);
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);

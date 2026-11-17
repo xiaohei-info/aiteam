@@ -547,13 +547,20 @@ export interface SolutionProjection {
 }
 
 // GET /api/agent/capabilities：用户在对话中同意安装的本机个人能力（只在本机、只对本人生效）。
+export type LocalCapabilityKind = 'mcp' | 'skill'
+
 export interface LocalCapability {
-  kind: 'mcp'
+  kind: LocalCapabilityKind
   ref: string
   display_name: string
+  /** MCP 地址；技能为空。 */
   url: string
+  /** MCP 工具；技能为空。 */
   tools: string[]
-  source: 'user_url'
+  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业技能目录。 */
+  source: 'user_url' | 'enterprise_catalog'
+  /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
+  version?: string
   reason: string
   approved_by: string
   created_at: string

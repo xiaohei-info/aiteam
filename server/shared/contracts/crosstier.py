@@ -203,6 +203,27 @@ class SolutionPackage(BaseModel):
 
 # ---- Agent → Manager（用户端主动访问）----
 
+class InstallableSkill(BaseModel):
+    """成员可在对话中自行安装的企业技能（只读摘要，不含文件内容）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str = Field(description="企业技能目录里的 skill_id")
+    display_name: str = ""
+    version: str
+    content_hash: str
+    source_skill_id: str = Field(default="", description="来自平台技能市场时的平台 skill_id，供方案推荐清单对应")
+
+
+class InstallableSkillPackage(BaseModel):
+    """为当前成员签名的技能包与验签公钥（仅公钥材料）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package: SignedSkillPackage
+    signing_keys: list[SkillSigningKeyMetadata] = Field(default_factory=list)
+
+
 class AuthorizedConfigPullRequest(BaseModel):
     """F10 授权配置同步（请求）：Agent 带本地投影版本/etag，Manager 只回增量。"""
 

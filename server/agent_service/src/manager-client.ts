@@ -149,6 +149,8 @@ export interface ManagerKnowledgeSpace {
   deployment_kind: "managed" | "nas";
 }
 
+export interface InstallableSkill { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string }
+
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
   managerOrigin?: string;
@@ -165,6 +167,10 @@ export interface ManagerClient {
   /** With `memoryScope`, the returned bank is the conversation's own, never the employee's shared one. */
   pullMemoryRuntimeConfig?(caller: AuthenticatedCaller, employeeId: string, memoryScope?: string): Promise<HindsightRuntimeConfig>;
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
+  /** Enterprise-catalog skills this member may install for themselves (read-only). */
+  listInstallableSkills?(caller: AuthenticatedCaller): Promise<InstallableSkill[]>;
+  /** The package signed for this member plus public verification keys. */
+  getInstallableSkillPackage?(caller: AuthenticatedCaller, skillId: string): Promise<{ package: SignedSkillPackage; signing_keys: SkillSigningKeyMetadata[] }>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
   /** Manager enforces owner/enterprise_admin; the gateway only forwards. */
   createDepartment?(caller: AuthenticatedCaller, input: { department_slug: string; display_name: string; parent_id?: string }): Promise<unknown>;
@@ -302,6 +308,22 @@ export class HttpManagerClient implements ManagerClient {
       snapshots.push(normalizeSnapshot(value.snapshot, caller.tenantId, caller.userId ?? caller.callerId));
     }
     return snapshots;
+  }
+
+  async listInstallableSkills(caller: AuthenticatedCaller): Promise<InstallableSkill[]> {
+    const value = this.unwrap(await this.request("/api/manager/grants/skills", caller));
+    if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid installable skill list");
+    return value.map((raw) => {
+      const item = (raw ?? {}) as Record<string, unknown>;
+      if (typeof item.skill_id !== "string" || !item.skill_id || typeof item.version !== "string" || typeof item.content_hash !== "string") throw new ManagerUnavailableError("Manager returned an invalid installable skill");
+      return { skill_id: item.skill_id, display_name: typeof item.display_name === "string" ? item.display_name : "", version: item.version, content_hash: item.content_hash, source_skill_id: typeof item.source_skill_id === "string" ? item.source_skill_id : "" };
+    });
+  }
+
+  async getInstallableSkillPackage(caller: AuthenticatedCaller, skillId: string): Promise<{ package: SignedSkillPackage; signing_keys: SkillSigningKeyMetadata[] }> {
+    const value = this.unwrap(await this.request(`/api/manager/grants/skills/${encodeURIComponent(skillId)}/package`, caller)) as { package?: unknown; signing_keys?: unknown };
+    if (!value || typeof value !== "object" || !Array.isArray(value.signing_keys)) throw new ManagerUnavailableError("Manager returned an invalid skill package");
+    return { package: normalizeSignedSkillPackage(value.package), signing_keys: value.signing_keys.map(normalizeSkillSigningKey) };
   }
 
   async getOrgTree(caller: AuthenticatedCaller): Promise<unknown> {
