@@ -65,7 +65,7 @@ describe("CapabilitiesSection 添加 skill", () => {
     expect(await screen.findByTestId("capability-add")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "ClawHub 外部市场" }));
     fireEvent.click(await screen.findByRole("button", { name: "下载并选择" }));
-    expect(await screen.findByText(/保存后新增：clawhub-claw-report@1.0.0/)).toBeInTheDocument();
+    expect(await screen.findByText(/保存后新增：clawhub-claw-report v1.0.0/)).toBeInTheDocument();
     expect(download).toHaveBeenCalledWith("claw", "report", "1.0.0");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
@@ -88,3 +88,17 @@ describe("CapabilitiesSection 添加 skill", () => {
     expect(onSave.mock.calls[0]![0].experts[0].skills).toHaveLength(1);
   });
 });
+
+describe("CapabilitiesSection 展示", () => {
+  it("skill 按内部技能市场的名称和版本展示，而不是平台 skill_id", async () => {
+    render(
+      <CapabilitiesSection
+        solution={solution()} version={7} canEdit busy={false}
+        active={null} onActiveChange={() => {}} onSave={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("skill · 读表 v1")).toBeInTheDocument();
+    expect(screen.queryByText(/skill · ps-1/)).not.toBeInTheDocument();
+  });
+});
+

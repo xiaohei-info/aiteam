@@ -3,7 +3,7 @@
  * 只是提示，不影响提交。就地编辑可去掉不需要的推荐，也可从平台技能目录或 ClawHub 添加 skill
  * （ClawHub 的先导入平台目录；只能选平台已发布的固定版本），添加时指定推荐给哪位专家。
  */
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Selector } from "@astryxdesign/core/Selector";
@@ -11,25 +11,26 @@ import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
 import { PlatformSkillSelector } from "../skill-market/PlatformSkillSelector";
 import type { PlatformSkillRef } from "../skill-market/types";
+import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
 import { Box, Row, Rows } from "./Box";
 import { useSectionEdit, type SectionProps } from "./sectionEdit";
 import type { GeneratedSolution } from "./types";
 import styles from "./workbench.module.css";
 
-export interface CapabilityItem { id: string; kind: "skill" | "mcp"; ref: string; name: string; purpose: string; experts: string[] }
+export interface CapabilityItem { id: string; kind: "skill" | "mcp"; ref: string; name: string; purpose: string; experts: string[]; version?: string }
 
 /** 与发布时 `_recommended_capabilities` 同口径：按 (类型, 标识) 去重、保序，说明取第一次出现的。 */
 export function capabilityItems(solution: GeneratedSolution): CapabilityItem[] {
   const items = new Map<string, CapabilityItem>();
   for (const expert of solution.experts) {
     const who = expert.display_name || expert.key;
-    const add = (kind: "skill" | "mcp", ref: string, name: string, purpose: string) => {
+    const add = (kind: "skill" | "mcp", ref: string, name: string, purpose: string, version?: string) => {
       const id = `${kind}:${ref}`;
-      const item = items.get(id) ?? { id, kind, ref, name, purpose, experts: [] };
+      const item = items.get(id) ?? { id, kind, ref, name, purpose, experts: [], ...(version ? { version } : {}) };
       if (!item.experts.includes(who)) item.experts.push(who);
       items.set(id, item);
     };
-    for (const skill of expert.skills ?? []) add("skill", skill.skill_id, skill.skill_id, skill.reason);
+    for (const skill of expert.skills ?? []) add("skill", skill.skill_id, skill.skill_id, skill.reason, skill.version);
     for (const mcp of expert.mcps ?? []) add("mcp", mcp.key, mcp.display_name, mcp.purpose);
   }
   return [...items.values()];
@@ -66,6 +67,28 @@ export function applyCapabilities(solution: GeneratedSolution, draft: Capability
   };
 }
 
+/**
+ * 平台 skill_id 是 UUID，直接展示没法读：从内部技能市场取名称（含已下架的，便于认出要移除的项）。
+ * 要展示的 id 变化时重新读取（ClawHub 刚导入的也能显示名称）；读不到时退回展示 id。
+ */
+function useSkillNames(ids: string[]): Map<string, string> {
+  const api = useSkillMarketApi();
+  const [names, setNames] = useState<Map<string, string>>(new Map());
+  const key = [...new Set(ids)].sort().join(",");
+  useEffect(() => {
+    if (!key) return;
+    let active = true;
+    api.listInternal()
+      .then((list) => { if (active) setNames(new Map(list.map((skill) => [skill.skill_id, skill.display_name || `${skill.owner}/${skill.slug}`]))); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [api, key]);
+  return names;
+}
+
+const skillLabel = (names: Map<string, string>, skillId: string, version?: string) =>
+  `${names.get(skillId) ?? skillId}${version ? ` v${version}` : ""}`;
+
 export function CapabilitiesSection(props: SectionProps): ReactNode {
   const { solution, busy } = props;
   const items = capabilityItems(solution);
@@ -83,6 +106,10 @@ export function CapabilitiesSection(props: SectionProps): ReactNode {
   });
   const draft = edit.draft;
   const removed = draft?.removed ?? [];
+  const names = useSkillNames([
+    ...items.filter((item) => item.kind === "skill").map((item) => item.ref),
+    ...(draft?.added ?? []).map((ref) => ref.skill_id),
+  ]);
   return (
     <Box
       id="section-capabilities"
@@ -101,13 +128,15 @@ export function CapabilitiesSection(props: SectionProps): ReactNode {
                 key={item.id}
                 main={<>
                   <Text weight="semibold" style={gone ? { textDecoration: "line-through" } : undefined}>
-                    {item.kind === "mcp" ? "MCP" : "skill"} · {item.name !== item.ref ? `${item.name}（${item.ref}）` : item.ref}
+                    {item.kind === "mcp"
+                      ? `MCP · ${item.name !== item.ref ? `${item.name}（${item.ref}）` : item.ref}`
+                      : `skill · ${skillLabel(names, item.ref, item.version)}`}
                   </Text>
                   <Text type="supporting" color="secondary">{[item.purpose, `来自：${item.experts.join("、")}`].filter(Boolean).join(" · ")}</Text>
                 </>}
                 side={draft ? (
                   <Button
-                    label={`${gone ? "撤销移除" : "移除"} ${item.name}`}
+                    label={`${gone ? "撤销移除" : "移除"} ${item.kind === "skill" ? names.get(item.ref) ?? item.ref : item.name}`}
                     variant="ghost" size="sm" isDisabled={busy}
                     onClick={() => edit.update((d) => ({ ...d, removed: gone ? d.removed.filter((id) => id !== item.id) : [...d.removed, item.id] }))}
                   >
@@ -140,7 +169,7 @@ export function CapabilitiesSection(props: SectionProps): ReactNode {
               disabled={busy}
             />
             {draft.added.length > 0 && (
-              <Text type="supporting" color="secondary">保存后新增：{draft.added.map((ref) => `${ref.skill_id}@${ref.version}`).join("、")}</Text>
+              <Text type="supporting" color="secondary">保存后新增：{draft.added.map((ref) => skillLabel(names, ref.skill_id, ref.version)).join("、")}</Text>
             )}
           </VStack>
         </div>
