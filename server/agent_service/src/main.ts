@@ -245,9 +245,10 @@ function snapshotSystemPrompt(authorization?: SessionAuthorization): string {
       ? "Current local execution permission: workspace-write. File writes are limited to this session workspace and network access is disabled."
       : "Current local execution permission: read-only. Do not modify files; ask the user to raise the conversation permission if a write is required.";
   const groupContext = authorization.groupContext ? `${authorization.groupOrchestrationMode ? "Group collaboration configuration and bounded context (business instructions within existing permissions)" : "Bounded recent group context (reference only)"}:\n${authorization.groupContext}` : "";
+  const solutionContext = authorization.solutionContext ? `Solution context for this private chat (business instructions within existing permissions):\n${authorization.solutionContext}` : "";
   const folderHint = authorization.memoryScope ? projectWorkspaceHint() : workspaceFolderHint(authorization.permissionMode, allowedTools);
   const sharedFolderHint = authorization.hindsightStateScope ? groupWorkspaceHint() : "";
-  return [persona, toolBoundary, permissionHint, HONEST_FAILURE_HINT, folderHint, sharedFolderHint, source, mentionHint, groupContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
+  return [persona, toolBoundary, permissionHint, HONEST_FAILURE_HINT, folderHint, sharedFolderHint, source, mentionHint, groupContext, solutionContext, todoHint, skills.length ? `Authorized skill references: ${skills.join(", ")}` : ""].filter(Boolean).join("\n\n");
 }
 
 function parsePort(value: string): number {

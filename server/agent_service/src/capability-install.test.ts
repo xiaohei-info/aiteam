@@ -82,7 +82,7 @@ test("install refuses unsafe or invalid requests without storing anything", asyn
   } finally { await fixture.close(); }
 });
 
-import { recommendedCapabilityContext } from "./pi/session-host.js";
+import { recommendedCapabilityContext, soloSolutionContext } from "./pi/session-host.js";
 
 test("recommended capabilities become a bounded, non-authorizing hint", () => {
   assert.equal(recommendedCapabilityContext(undefined), "");
@@ -175,4 +175,21 @@ test("a skill can only be installed from the enterprise catalog; a newer version
     assert.deepEqual(installed, ["sheet@1", "sheet@2"]);
     assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "2");
   } finally { await fixture.close(); }
+});
+
+test("solo solution context matches only applied solo solutions whose single member is the employee", () => {
+  const base = { tenant_id: "t", member_id: "m", version: "1" };
+  const text = soloSolutionContext([
+    { ...base, solution_instance_id: "a", display_name: "单人 A", mode: "solo", status: "applied", expert_employee_ids: ["e1"], recommended_capabilities: [{ kind: "mcp", ref: "mes" }] },
+    // 旧方案没有 mode：按专家数推断。
+    { ...base, solution_instance_id: "b", display_name: "旧单人 B", expert_employee_ids: ["e1"] },
+    { ...base, solution_instance_id: "c", display_name: "组群 C", mode: "group", status: "applied", expert_employee_ids: ["e1", "e2"] },
+    { ...base, solution_instance_id: "d", display_name: "已撤销 D", mode: "solo", status: "revoked", expert_employee_ids: ["e1"] },
+    { ...base, solution_instance_id: "e", display_name: "别人 E", mode: "solo", status: "applied", expert_employee_ids: ["e2"] },
+  ], "e1");
+  assert.match(text, /单人 A/);
+  assert.match(text, /MCP mes/);
+  assert.match(text, /旧单人 B/);
+  assert.doesNotMatch(text, /组群 C|已撤销 D|别人 E/);
+  assert.equal(soloSolutionContext([], "e1"), "");
 });
