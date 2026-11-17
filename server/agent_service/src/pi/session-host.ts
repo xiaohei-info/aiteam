@@ -1,4 +1,4 @@
-import { connectorTools } from "../connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type SkillInstaller } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,7 +23,7 @@ import {
 import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import type { AuthenticatedCaller } from "../http/auth.js";
 import { isManagerAccessDenial, ManagerAuthorizationError, ManagerPolicyDeniedError, ManagerTimeoutError, ManagerUnavailableError, ManagerValidationError, MemoryRetainUnverifiedError, type HindsightRuntimeConfig, type ManagerClient } from "../manager-client.js";
-import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot } from "../storage/sqlite.js";
+import type { AgentSqliteStore, ConversationMetadata, ConversationPermissionMode, ConversationRecord, FrozenSnapshot, LoadedSolutionProjection } from "../storage/sqlite.js";
 import type { ContextSegment, SegmentEvaluation, SegmentOutcome } from "../storage/context-segments.js";
 import { createDelegateEmployeeTool, createMentionEmployeeTool, type DelegateEmployeeInput } from "../tools/delegate.js";
 import { GroupMessageDeliveryService, type GroupMessageCommand, type GroupMessageReply, type GroupMessageSource } from "../services/group-message-delivery.js";
@@ -34,7 +34,7 @@ import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryT
 import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
-import { skillRefsForSnapshot } from "../skills.js";
+import { skillRefsForSnapshot, type SkillCache } from "../skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
 import { ConversationWriteQueue } from "./conversation-write-queue.js";
@@ -177,6 +177,8 @@ export interface SessionAuthorization {
   hindsightExpiresAt?: number;
   groupMessageSource?: { type: "human" | "employee"; id: string; displayName?: string };
   groupContext?: string;
+  /** Private chats only: the solo solutions this employee was applied through (name, delivery requirements, recommended capabilities). */
+  solutionContext?: string;
   groupOrchestrationMode?: "auto" | "custom";
   background?: boolean;
   generation?: number;
@@ -212,6 +214,8 @@ export interface SessionHostOptions {
     onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
   ) => ResourceLoader;
   managerClient?: ManagerClient;
+  /** Skills members installed for themselves; kept apart from the snapshot cache, whose sync prunes unknown skills. */
+  personalSkillCache?: SkillCache;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
@@ -1362,8 +1366,12 @@ export class SessionHost {
       ] : []),
     ];
     const connectors = record ? connectorTools(this.options.store, { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId }, authorization.employeeId, record.conversationId, authorization.snapshot) : [];
-    for (const tool of connectors) allowed.add(tool.name);
-    tools.push(...connectors);
+    // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
+    const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
+    const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller))] : [];
+    for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
+    tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
@@ -1408,13 +1416,43 @@ export class SessionHost {
       .catch(() => { record.reconcile = undefined; });
   }
 
+  /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
+  private skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
+    const client = this.options.managerClient;
+    const cache = this.options.personalSkillCache;
+    if (!client?.listInstallableSkills || !client.getInstallableSkillPackage || !cache || !caller.tenantId) return undefined;
+    const scope = { tenantId: caller.tenantId, memberId: caller.userId ?? caller.callerId };
+    return {
+      list: () => client.listInstallableSkills!(caller),
+      install: async (skillId) => {
+        const result = await client.getInstallableSkillPackage!(caller, skillId);
+        cache.install(scope, result.package, result.signing_keys);
+      },
+    };
+  }
+
+  /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
+  removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
+    this.options.personalSkillCache?.remove({ tenantId, memberId }, skillId);
+  }
+
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
     const risk = approvalRiskForTool(tool.name);
     if (!risk) return tool;
     const execute = tool.execute.bind(tool);
+    const owner = { tenantId: authorization.caller.tenantId ?? "", memberId: authorization.caller.userId ?? authorization.caller.callerId };
     return {
       ...tool,
-      execute: async (toolCallId, params, signal, onUpdate, context) => this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
+      execute: async (toolCallId, params, signal, onUpdate, context) => {
+        // Installing a personal capability: bounce impossible requests, show the user the full request (and any clash).
+        let summary: string | undefined;
+        const install = tool.name === "capability_install";
+        if (install) {
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal);
+          if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
+          summary = `capability_install: ${check.summary}`;
+        }
+        return this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
         memberId: authorization.caller.userId ?? authorization.caller.callerId,
         conversationId: record.conversationId,
@@ -1429,14 +1467,20 @@ export class SessionHost {
         promptReceiptRef: record.activePromptReceipt,
         toolName: tool.name,
         args: params,
+        ...(summary ? { summary } : {}),
         riskLevel: risk,
         permissionMode: record.permissionMode,
         expiresAt: authorizationExpiry(authorization),
         signal,
       // Queued after approval, so a request waiting for the user never holds up the other employees.
-      }, () => record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
-        ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, params, signal, onUpdate, context))
-        : execute(toolCallId, params, signal, onUpdate, context))) as ReturnType<ToolDefinition["execute"]>,
+      }, (claimed) => {
+        // The user's replace / rename choice reaches the install tool only through the approval record, never from the model.
+        const effective = install ? { ...(params as Record<string, unknown>), resolution: claimed.resolution } : params;
+        return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
+          ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, effective, signal, onUpdate, context))
+          : execute(toolCallId, effective, signal, onUpdate, context);
+      })) as ReturnType<ToolDefinition["execute"]>;
+      },
     } as ToolDefinition;
   }
 
@@ -1512,7 +1556,9 @@ export class SessionHost {
     const generation = caller.tenantId
       ? ((this.executionAuthorization.get(caller.tenantId, memberId) ?? this.executionAuthorization.register(caller))?.generation ?? 0)
       : 0;
-    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient, generation, ...(metadata?.project ? { memoryScope: projectMemoryScope(record.conversationId) } : {}), ...(record.sharedWorkspace ? { hindsightStateScope: groupMemberStateScope(record.conversationId, employeeId) } : {}) };
+    const solutionContext = metadata?.kind !== "group" && !metadata?.coordinator_employee_id && !metadata?.project
+      ? soloSolutionContext(this.options.store.listSolutions(caller.tenantId, memberId), employeeId) : "";
+    return { caller, employeeId, snapshot, mentionedEmployeeIds, rosterEmployeeIds, peerMentionAllowed, permissionMode: metadata?.permission_mode ?? "read-only", managerClient: this.options.managerClient, generation, ...(solutionContext ? { solutionContext } : {}), ...(metadata?.project ? { memoryScope: projectMemoryScope(record.conversationId) } : {}), ...(record.sharedWorkspace ? { hindsightStateScope: groupMemberStateScope(record.conversationId, employeeId) } : {}) };
   }
 
   private async disposeSession(record: SessionRecord): Promise<void> {
@@ -1959,6 +2005,7 @@ export class SessionHost {
         workflow ? `方案工作流技能：${workflow}` : "",
         instructions ? `方案协作说明：${instructions}` : "",
         requirements ? `方案交付要求：${requirements}` : "",
+        recommendedCapabilityContext(solution.recommended_capabilities),
       ].filter(Boolean).join("\n"));
     }
     const freeDescription = !metadata?.orchestration && !solution ? groupContextField(metadata?.description) : undefined;
@@ -2447,6 +2494,50 @@ function uniqueStrings(...values: unknown[]): string[] {
     }
   }
   return [...seen];
+}
+
+/**
+ * Solution-recommended skills / MCP as a hint only: nothing is installed or authorized by it. The model may ask the user
+ * (capability_install) only when the task truly needs one; URLs are never invented from this list.
+ */
+/**
+ * A solo solution is used by chatting privately with its single expert, so the conversation carries no
+ * solution id. Its business context is found by membership instead: applied solo solutions whose only
+ * member is this employee (an employee reused by several solo solutions gets each, capped).
+ */
+export function soloSolutionContext(solutions: readonly LoadedSolutionProjection[], employeeId: string): string {
+  const matches = solutions.filter((solution) => {
+    const ids = Array.isArray(solution.expert_employee_ids) ? solution.expert_employee_ids : [];
+    const solo = solution.mode === "solo" || (solution.mode === undefined && ids.length === 1);
+    const applied = typeof solution.status !== "string" || solution.status === "applied";
+    return solo && applied && ids.length === 1 && ids[0] === employeeId;
+  }).slice(0, 3);
+  return matches.map((solution) => {
+    const name = groupContextField(solution.display_name) ?? solution.solution_instance_id;
+    const requirements = groupContextField(solution.output_requirements);
+    return [
+      `当前单人方案：${name}`,
+      requirements ? `方案交付要求：${requirements}` : "",
+      recommendedCapabilityContext(solution.recommended_capabilities),
+    ].filter(Boolean).join("\n");
+  }).join("\n\n");
+}
+
+export function recommendedCapabilityContext(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  const items = value.slice(0, 24).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const kind = row.kind === "skill" || row.kind === "mcp" ? row.kind : undefined;
+    const ref = groupContextField(row.ref);
+    if (!kind || !ref) return [];
+    const name = groupContextField(row.display_name);
+    const purpose = groupContextField(row.purpose);
+    return [`${kind === "mcp" ? "MCP" : "skill"} ${name && name !== ref ? `${name}（${ref}）` : ref}${purpose ? `：${purpose}` : ""}`];
+  });
+  return items.length
+    ? `方案推荐的能力（仅供参考，并未安装或授权）：${items.join("；")}。只有任务确实需要时才可以用 capability_install 请求用户安装：skill 填上面的标识（只能装企业技能目录里有的）；MCP 必须由用户给出可用地址，不得自行编造地址。`
+    : "";
 }
 
 function groupContextField(value: unknown): string | undefined {

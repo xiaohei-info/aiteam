@@ -43,7 +43,11 @@ from shared.solution_authoring.runner import (
 )
 from shared.solution_authoring.schemas import AuthoringUsage, ImageAsset, SourceChunk
 
-from .solution_authoring_findings import IMAGE_UNRECOGNIZED, initial_findings
+from .solution_authoring_findings import (
+    IMAGE_UNRECOGNIZED,
+    SKILL_UNRESOLVED,
+    initial_findings,
+)
 from .solution_authoring_models import ModelConfigResolver
 from .solution_authoring_repository import (
     DraftChange,
@@ -51,6 +55,7 @@ from .solution_authoring_repository import (
     JobRow,
     SolutionAuthoringRepository,
 )
+from .solution_authoring_skills import SkillCatalogLoader, drop_unresolved_skills
 from .solution_authoring_storage import SourceFileStore, SourceStorageError
 
 logger = logging.getLogger(__name__)
@@ -133,8 +138,11 @@ class GenerationJobExecutor:
         budget: AuthoringBudget | None = None,
         parse_limits: ParseLimits | None = None,
         clock: Callable[[], datetime] | None = None,
+        skill_catalog: SkillCatalogLoader | None = None,
     ):
         self._repo, self._store, self._models, self._runner = repo, store, models, runner
+        # 平台已发布 skill 目录；未配置视为空目录（模型不得引用任何 skill）。
+        self._skill_catalog = skill_catalog or list
         self._owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
         self._lease_seconds = lease_seconds
         self._budget = budget or AuthoringBudget()
@@ -240,21 +248,38 @@ class GenerationJobExecutor:
         if lease.lost.is_set() or self._shutting_down.is_set():
             raise _JobFailure("abandoned", "the job was taken over or the host is shutting down", usage)
 
+        try:
+            catalog = list(self._skill_catalog())
+        except Exception as exc:  # noqa: BLE001 — 目录读不到就不生成，避免模型凭空编 skill；任务可重试
+            raise _JobFailure("skill_catalog_unavailable", f"the platform skill catalog could not be read ({type(exc).__name__})", usage) from exc
+
         lease.advance("analyzing")
         try:
             outcome = self._runner.generate(
-                chunks, model=model, budget=self._budget,
-                system_prompt=generate_system_prompt(), task_prompt=generate_task_prompt(draft.supplement), abort=lease.lost,
+                chunks, model=model, budget=self._budget, system_prompt=generate_system_prompt(),
+                task_prompt=generate_task_prompt(draft.supplement, mode="solo" if draft.solution_mode == "solo" else "group", skills=catalog), abort=lease.lost,
             )
         except WorkerError as error:
             raise _JobFailure(error.code, str(error), _sum(usage, error.usage)) from error
         usage = _sum(usage, outcome.usage)
 
         solution = outcome.result.solution
+        if solution.mode != draft.solution_mode:
+            raise _JobFailure(
+                "schema_invalid", f"the model produced a {solution.mode} solution but this draft is {draft.solution_mode}", usage,
+            )
         package = solution.model_dump(mode="json")
+        dropped = drop_unresolved_skills(package, catalog)
         by_id = {chunk.chunk_id: chunk for chunk in chunks}
         now = self._clock()
         findings = initial_findings(package, outcome.result.findings, by_id, draft_id=job.draft_id, now=now)
+        findings.extend(
+            FindingRow(
+                finding_id=str(uuid.uuid4()), draft_id=job.draft_id, kind=SKILL_UNRESOLVED, origin="system", created_at=now,
+                locator=locator[:400], note=reason,
+            )
+            for locator, reason in dropped
+        )
         findings.extend(
             FindingRow(
                 finding_id=str(uuid.uuid4()), draft_id=job.draft_id, kind=IMAGE_UNRECOGNIZED, origin="system", created_at=now,
@@ -274,6 +299,7 @@ class GenerationJobExecutor:
             changes={
                 "package": package, "status": "ready_for_review", "evidence_sources": evidence, "warnings": warnings,
                 "prompt_version": PROMPT_VERSION, "usage": usage.model_dump(mode="json"), "review_note": "", "publish_state": {},
+                "confirmations": {},
             },
             new_findings=findings, replace_findings=True,
             event=("generation_succeeded", f"{len(solution.experts)} experts, {len(findings)} findings"),

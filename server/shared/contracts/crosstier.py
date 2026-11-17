@@ -145,6 +145,27 @@ class ExpertTemplateDetail(ExpertTemplateProfile):
     updated_at: datetime | None = Field(default=None, description="模板最近一次注册/编辑/发布时间；旧模板为 null")
 
 
+class RecommendedCapability(BaseModel):
+    """方案推荐的 Agent 能力（skill / MCP）。只是提示：不绑定到专家，不参与授权；
+    用户端对话中确实需要时，才询问用户是否安装。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["skill", "mcp"]
+    ref: str = Field(min_length=1, max_length=64, description="skill 为平台 skill_id；mcp 为连接器标识")
+    display_name: str = Field(default="", max_length=80)
+    purpose: str = Field(default="", max_length=200)
+
+
+class HiddenExpertRef(BaseModel):
+    """方案内因发布范围对本企业不可见的专家：只带名称与模板 id。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str
+    display_name: str = ""
+
+
 class SolutionPackage(BaseModel):
     """F07 应用方案：Manager 向 Operator 拉行业方案包（响应）。在本 tenant 展开为 solution instance。
 
@@ -163,12 +184,45 @@ class SolutionPackage(BaseModel):
     coordinator_instructions: str = Field(default="", max_length=4000, description="可选的自然语言协作说明，不定义执行状态机")
     workflow_skill_ref: dict[str, Any] | None = Field(default=None, description="可选的已发布固定版本方案工作流 Skill 引用")
     output_requirements: str = Field(default="", description="可选的方案交付要求")
+    mode: Literal["solo", "group"] = Field(default="group", description="solo：单人方案（1 位专家、不建群）；group：组群方案")
+    orchestration_rules: str = Field(
+        default="", max_length=16000,
+        description="群聊编排规则（collaboration-markdown-v1）；成员用 @{专家模板 id} 引用，Manager 应用时换成员工 ID。solo 为空",
+    )
+    recommended_capabilities: list[RecommendedCapability] = Field(
+        default_factory=list, max_length=24, description="推荐的 skill / MCP（非强制，仅供用户端对话中提示）",
+    )
     experts: list[ExpertTemplateDetail] = Field(default_factory=list, description="模板中的专家列表（按固定顺序）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
     hidden_expert_count: int = Field(default=0, ge=0, description="方案内因发布范围对本企业不可见、未下发的专家数")
+    hidden_experts: list[HiddenExpertRef] = Field(
+        default_factory=list, max_length=64,
+        description="不可见专家的名称与模板 id，仅用于编排规则引用到它们时告诉管理员该找运营问什么；不含专家内容",
+    )
 
 
 # ---- Agent → Manager（用户端主动访问）----
+
+class InstallableSkill(BaseModel):
+    """成员可在对话中自行安装的企业技能（只读摘要，不含文件内容）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str = Field(description="企业技能目录里的 skill_id")
+    display_name: str = ""
+    version: str
+    content_hash: str
+    source_skill_id: str = Field(default="", description="来自平台技能市场时的平台 skill_id，供方案推荐清单对应")
+
+
+class InstallableSkillPackage(BaseModel):
+    """为当前成员签名的技能包与验签公钥（仅公钥材料）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package: SignedSkillPackage
+    signing_keys: list[SkillSigningKeyMetadata] = Field(default_factory=list)
+
 
 class AuthorizedConfigPullRequest(BaseModel):
     """F10 授权配置同步（请求）：Agent 带本地投影版本/etag，Manager 只回增量。"""

@@ -23,21 +23,26 @@ from shared.contracts.enums import EnterpriseRole
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict, Forbidden, NotFound
+from shared.solution_authoring.orchestration import (
+    OrchestrationRefError,
+    rewrite_member_refs,
+    validate_member_refs,
+)
 
 from .employee_config_repository import EmployeeConfigRepository, EmployeeConfigRow
 from .operator_catalog import OperatorCatalogPort
-from .recruit_model_guard import collect_model_errors, validate_recruit_model
 from .platform_skill_service import PlatformSkillService
-from .recruit_order_repository import RecruitOrderRepository, RecruitmentOrderRow
+from .recruit_model_guard import collect_model_errors, validate_recruit_model
+from .recruit_order_repository import RecruitmentOrderRow, RecruitOrderRepository
 from .recruit_repository import RecruitRepository, SolutionInstanceRow
 from .repository_member import GrantRepository, MemberDeptRepository
 from .schemas import (
-    RecruitModelPolicy,
     ApplySolutionRequest,
     ApplySolutionResult,
     RecruitExpertRequest,
     RecruitExpertResult,
     RecruitmentOrderOut,
+    RecruitModelPolicy,
     SolutionApplyRecordOut,
     SolutionInstanceOut,
     validate_uuid_string_list,
@@ -290,6 +295,7 @@ class RecruitService:
         active_template_ids = {template.template_id for template in ordered_experts}
         if coordinator_template_id not in active_template_ids:
             raise Conflict("solution coordinator must be one of the enabled experts")
+        _check_solution_mode(package, active_template_ids)
         # Reuse an existing live employee when the solution references a template that
         # this tenant already recruited. The source template id is the stable identity;
         # solution-derived slugs must only be generated for genuinely new employees.
@@ -360,6 +366,7 @@ class RecruitService:
         employee_ids = []
         match_audits = []
         coordinator_employee_id = None
+        template_employees: dict[str, str] = {}
         for template, previous, slug, recommended, match, skills, model_change in prepared:
             existing = self._employees.get_by_source_template(ctx, source_template_id=template.template_id)
             if previous is not None and (existing is None or existing.employee_id != previous.employee_id):
@@ -391,6 +398,7 @@ class RecruitService:
                 order_out = _order_out(self._orders.update(ctx, order.mark_succeeded(row.employee_id)))
                 match_audits.append(_match_detail(recommended, match))
             employee_ids.append(row.employee_id)
+            template_employees[template.template_id] = row.employee_id
             if template.template_id == coordinator_template_id:
                 coordinator_employee_id = row.employee_id
             expert_results.append(RecruitExpertResult(
@@ -401,6 +409,7 @@ class RecruitService:
                 provider_match_candidates=([row.provider_ref] if row.provider_ref else []) if existing else list(match.candidates),
             ))
         grants_applied = self._apply_solution_grants(ctx, employee_ids, department_ids, member_ids)
+        rules = _rules_for_tenant(package, template_employees)
         instance = self._recruit.create_solution_instance(
             ctx, solution_id=package.solution_id, solution_version=package.version,
             display_name=req.display_name_override or package.display_name, expert_employee_ids=employee_ids,
@@ -410,6 +419,9 @@ class RecruitService:
             coordinator_instructions=getattr(package, "coordinator_instructions", ""),
             workflow_skill_ref=getattr(package, "workflow_skill_ref", None),
             output_requirements=getattr(package, "output_requirements", ""),
+            mode=package.mode,
+            orchestration_rules=rules,
+            recommended_capabilities=[item.model_dump(mode="json") for item in package.recommended_capabilities],
         )
         if department_ids or member_ids:
             _upsert_grant(self._grants, ctx, resource_type="solution", resource_id=instance.id,
@@ -644,6 +656,49 @@ def _derive_solution_expert_slug(solution_id: str, version: str, idx: int) -> st
     return f"sol_{sid}_{ver}_e{idx}"
 
 
+def _expert_names(package) -> dict[str, str]:
+    """方案里已知专家的 模板 id → 名称（含已停用的、因发布范围被隐藏的）。"""
+    names = {t.template_id: t.display_name for t in package.experts}
+    names.update({h.template_id: h.display_name for h in getattr(package, "hidden_experts", [])})
+    return names
+
+
+def _rules_error_message(exc: OrchestrationRefError, package) -> str:
+    """把编排规则的引用错误翻成管理员看得懂的原因，并列出有问题的专家名称与 ID，方便向平台运营反馈。"""
+    if exc.kind == "malformed":
+        return "该方案的群聊编排规则格式有误，无法应用，请联系平台运营修正后重新发布"
+    names = _expert_names(package)
+    listed = "、".join(
+        f"「{names[m]}」（ID：{m}）" if names.get(m) else f"ID：{m}" for m in exc.members
+    )
+    return (
+        f"该方案的群聊编排规则引用了对您的企业不可见的专家：{listed}。"
+        "可能被发布范围排除或已下架，无法应用；请把上述专家名称与 ID 反馈给平台运营，调整方案或发布范围"
+    )
+
+
+def _check_solution_mode(package, template_ids: set[str]) -> None:
+    """写 employee 之前校验方案类型与编排规则：不一致、引用无法对应的方案整单拒绝。"""
+    if package.mode == "solo":
+        if len(template_ids) != 1:
+            raise Conflict("这是单人方案，但启用的专家不是正好 1 位，无法应用；请把方案名称反馈给平台运营修正")
+        if package.orchestration_rules.strip():
+            raise Conflict("这是单人方案，却带了群聊编排规则，无法应用；请把方案名称反馈给平台运营修正")
+        return
+    try:
+        validate_member_refs(package.orchestration_rules, template_ids)
+    except OrchestrationRefError as exc:
+        raise Conflict(_rules_error_message(exc, package)) from exc
+
+
+def _rules_for_tenant(package, template_employees: dict[str, str]) -> str:
+    """规则里的 `@{专家模板 id}` 换成本 tenant 的 `@{employee_id}`；换不出来则整单失败（事务回滚）。"""
+    try:
+        return rewrite_member_refs(package.orchestration_rules, template_employees)
+    except OrchestrationRefError as exc:
+        raise Conflict(_rules_error_message(exc, package)) from exc
+
+
 def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:
     return SolutionInstanceOut(
         id=row.id,
@@ -656,6 +711,9 @@ def _solution_out(row: SolutionInstanceRow) -> SolutionInstanceOut:
         coordinator_instructions=row.coordinator_instructions,
         workflow_skill_ref=row.workflow_skill_ref,
         output_requirements=row.output_requirements,
+        mode="solo" if row.mode == "solo" else "group",
+        orchestration_rules=row.orchestration_rules,
+        recommended_capabilities=list(row.recommended_capabilities),
         config_version=row.config_version,
         created_at=row.created_at,
         updated_at=row.updated_at,

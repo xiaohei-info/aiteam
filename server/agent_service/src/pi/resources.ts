@@ -112,6 +112,8 @@ export function createControlledResourceLoader(
   sessionId?: string,
   onAccessDenied?: (error: unknown) => void,
   onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
+  /** Skills the member installed for themselves (`skill@version`). Optional: one that fails to verify is skipped, not fatal. */
+  personalSkills?: { cache: SkillCache; refs: readonly string[] },
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -124,6 +126,25 @@ export function createControlledResourceLoader(
   const skills = skillScope && cache
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
+  if (skillScope && personalSkills) {
+    const names = new Set(skills.skills.map((skill) => skill.name));
+    for (const ref of personalSkills.refs) {
+      try {
+        // Installed personal skills verify with the keys pinned at install, so a later key rotation or
+        // revocation does not take them away (restrictions apply to new installs only). Installs made before
+        // pinning verify with the current keys once and are pinned from then on.
+        const pinned = personalSkills.cache.installedVerification(skillScope, ref);
+        const loaded = skillResourcePaths(personalSkills.cache, skillScope, [ref], pinned ?? verification);
+        if (!pinned && verification.publicKeys && ref.includes("@")) {
+          const [skillId, version] = ref.split("@") as [string, string];
+          try { personalSkills.cache.pinInstalled(skillScope, skillId, version, verification.publicKeys, new Date()); } catch { /* best effort */ }
+        }
+        const fresh = loaded.skills.filter((skill) => !names.has(skill.name));
+        for (const skill of fresh) names.add(skill.name);
+        skills.skills.push(...fresh); skills.diagnostics.push(...loaded.diagnostics);
+      } catch { /* a revoked, expired or tampered personal skill is simply not loaded */ }
+    }
+  }
   const leaseConfig = hindsightRuntimeConfig ? normalizeHindsightRuntimeConfig(hindsightRuntimeConfig, managerUrl) : undefined;
   const memoryPolicy = authorization ? getMemoryPolicy(authorization.snapshot, leaseConfig) : undefined;
   const baseUrl = leaseConfig?.base_url;

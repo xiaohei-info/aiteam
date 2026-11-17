@@ -9,11 +9,16 @@
 
 from __future__ import annotations
 
-from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
+from shared.contracts.crosstier import (
+    AuthorizedConfigPullRequest,
+    AuthorizedConfigPullResponse,
+    InstallableSkill,
+    InstallableSkillPackage,
+)
 from shared.contracts.enums import EnterpriseRole
 from shared.contracts.skill import SignedSkillPackage
 from shared.contracts.tenancy import TenantContext
-from shared.errors import NotFound
+from shared.errors import NotFound, ServiceUnavailable
 
 from .active_principal import require_active
 from .knowledge_access_policy import KnowledgeAccessPolicy
@@ -156,6 +161,9 @@ class AuthorizedConfigService:
                     "coordinator_instructions": sol_instance.coordinator_instructions or "",
                     "workflow_skill_ref": sol_instance.workflow_skill_ref,
                     "output_requirements": sol_instance.output_requirements or "",
+                    "mode": sol_instance.mode or "group",
+                    "orchestration_rules": sol_instance.orchestration_rules or "",
+                    "recommended_capabilities": list(sol_instance.recommended_capabilities or []),
                 })
 
         revoked_ids = [
@@ -184,8 +192,6 @@ class AuthorizedConfigService:
         skill_packages_authoritative=false 明确表示 Agent 保持既有缓存，不阻断 sync。
         仅 Manager 有记录的 skill_id 返回技能包——不泄漏未授权技能。
         """
-        from .custom_skill_package import catalog_package
-
         # Missing signing configuration is an intentional fail-closed downgrade:
         # never send a package that the Agent would have to treat as unsigned.
         if self._capability is None or self._skill_signer is None:
@@ -208,32 +214,79 @@ class AuthorizedConfigService:
                 continue
             if (out.skill_id, out.version) in resolved:
                 continue
-            try:
-                if out.binding_policy == "disabled" or getattr(out, "package_status", "invalid") != "ready":
-                    continue
-                raw_files = out.files
-                if not isinstance(raw_files, list):
-                    continue
-                files = [
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-                    for item in raw_files
-                ]
-                if any(not isinstance(item, dict) for item in files):
-                    continue
-                pkg = catalog_package(
-                    skill_id=out.skill_id, version=out.version, content_hash=out.content_hash,
-                    display_name=out.display_name,
-                    files=files,
-                )
-                if not out.content_hash:
-                    continue
-                packages.append(self._skill_signer.sign(pkg, tenant_id=ctx.tenant_id, member_id=ctx.user_id))
-                resolved.add((out.skill_id, out.version))
-            except (TypeError, ValueError):
-                # Legacy catalog rows without SKILL.md are not executable packages;
-                # skip them while preserving the rest of the authorized config.
+            signed = self._sign(ctx, out)
+            if signed is None:
                 continue
+            packages.append(signed)
+            resolved.add((out.skill_id, out.version))
         return packages
+
+    def _sign(self, ctx: TenantContext, out) -> SignedSkillPackage | None:
+        """把一条可执行的目录技能签成本成员的技能包；停用、草稿、旧格式（无 SKILL.md）返回 None。"""
+        from .custom_skill_package import catalog_package
+
+        if self._skill_signer is None or not out.content_hash:
+            return None
+        if out.binding_policy == "disabled" or getattr(out, "package_status", "invalid") != "ready":
+            return None
+        raw_files = out.files
+        if not isinstance(raw_files, list):
+            return None
+        files = [item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in raw_files]
+        if any(not isinstance(item, dict) for item in files):
+            return None
+        try:
+            pkg = catalog_package(
+                skill_id=out.skill_id, version=out.version, content_hash=out.content_hash,
+                display_name=out.display_name, files=files,
+            )
+        except (TypeError, ValueError):
+            # Legacy catalog rows without SKILL.md are not executable packages.
+            return None
+        return self._skill_signer.sign(pkg, tenant_id=ctx.tenant_id, member_id=ctx.user_id)
+
+    # ---- 成员在对话中自行安装技能（设计 §11.1）----
+
+    def _self_install_repo(self, ctx: TenantContext):
+        if self._capability is None or self._skill_signer is None:
+            raise ServiceUnavailable("技能安装暂不可用：企业未配置技能目录或技能签名")
+        require_active(self._members.get_member(ctx, ctx.user_id))
+        return getattr(self._capability, "_repo", None)
+
+    @staticmethod
+    def _member_may_self_install(item) -> bool:
+        """成员可自装：可见范围为 tenant/public、未停用、有内容指纹。
+
+        私有（private）技能只能由管理员绑定到专家，成员不能自装——这是企业的管控点。
+        包是否可执行另行判断：列表看库内结构判断，取包时做完整校验。
+        """
+        return item.visibility in ("tenant", "public") and item.binding_policy != "disabled" and bool(item.content_hash)
+
+    def installable_skills(self, ctx: TenantContext) -> list[InstallableSkill]:
+        """企业目录里成员可自行安装的技能（只读摘要，不读出技能文件内容）。"""
+        repo = self._self_install_repo(ctx)
+        if repo is None or not hasattr(repo, "list_skill_summaries"):
+            return []
+        return [
+            InstallableSkill(
+                skill_id=row.skill_id, display_name=row.display_name, version=row.version,
+                content_hash=row.content_hash,
+                source_skill_id=str((row.config if isinstance(row.config, dict) else {}).get("source_skill_id") or ""),
+            )
+            for row in repo.list_skill_summaries(ctx)
+            if row.package_shaped and self._member_may_self_install(row)
+        ]
+
+    def installable_skill_package(self, ctx: TenantContext, skill_id: str) -> InstallableSkillPackage:
+        """按 skill_id 单查一条，完整校验后为当前成员签名；不可自装或包不可执行一律 404。"""
+        repo = self._self_install_repo(ctx)
+        row = repo.get_skill_by_skill_id(ctx, skill_id=skill_id) if repo is not None and hasattr(repo, "get_skill_by_skill_id") else None
+        out = _catalog_row_to_out(row) if row is not None else None
+        signed = self._sign(ctx, out) if out is not None and self._member_may_self_install(out) else None
+        if signed is None:
+            raise NotFound("该技能不在本企业可自行安装的技能目录中")
+        assert self._skill_signer is not None
+        return InstallableSkillPackage(package=signed, signing_keys=self._skill_signer.public_metadata())
 
     def _capability_get(self, ctx: TenantContext, skill_id: str):
         """取 catalog 规则条目；找不到或未配返回 None。"""

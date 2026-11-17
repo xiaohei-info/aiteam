@@ -13,7 +13,12 @@ from fastapi import APIRouter, Depends, Request
 
 from shared.auth import tenant_context_from
 from shared.contracts.auth import TokenClaims
-from shared.contracts.crosstier import AuthorizedConfigPullRequest, AuthorizedConfigPullResponse
+from shared.contracts.crosstier import (
+    AuthorizedConfigPullRequest,
+    AuthorizedConfigPullResponse,
+    InstallableSkill,
+    InstallableSkillPackage,
+)
 from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden, ValidationProblem
@@ -151,3 +156,32 @@ async def pull_authorized_config(
     ctx = tenant_context_from(claims)
     svc = _authorized_config_service(request)
     return Envelope[AuthorizedConfigPullResponse](data=svc.pull(ctx, body))
+
+
+@router.get(
+    "/grants/skills",
+    description="列出当前成员可在对话中自行安装的企业技能（可见范围 tenant/public、未停用、包可执行）。只读。",
+    summary="列出可自行安装的技能",
+    operation_id="manager_grants_installable_skills",
+)
+async def list_installable_skills(
+    request: Request,
+    claims: TokenClaims = Depends(_token_claims),
+) -> ListEnvelope[InstallableSkill]:
+    ctx = tenant_context_from(claims)
+    return ListEnvelope[InstallableSkill](data=_authorized_config_service(request).installable_skills(ctx))
+
+
+@router.get(
+    "/grants/skills/{skill_id}/package",
+    description="取为当前成员签名的技能包与验签公钥。技能不在可自行安装范围内返回 404。只读。",
+    summary="取可自行安装技能的签名包",
+    operation_id="manager_grants_installable_skill_package",
+)
+async def get_installable_skill_package(
+    skill_id: str,
+    request: Request,
+    claims: TokenClaims = Depends(_token_claims),
+) -> Envelope[InstallableSkillPackage]:
+    ctx = tenant_context_from(claims)
+    return Envelope[InstallableSkillPackage](data=_authorized_config_service(request).installable_skill_package(ctx, skill_id))

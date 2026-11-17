@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>方案单人 / 组群与群聊编排 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:1fr 260px;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd;margin-bottom:10px}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+pre{background:#f9fafb;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:12px;white-space:pre-wrap;margin:6px 0}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>方案单人 / 组群</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>行业方案：单人 / 组群、群聊编排、能力清单与运营端 UI 重构 <small>2026-11-17 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：方案没有类型、群主与编排规则靠 AI 黑盒、所需 skill / MCP 看不见，运营端页面又难操作 → 方案带类型与编排规则并由运营确认，应用后自动招募，桌面端可一键建群 → 每一端发布前后都看得见、管得住。</p>
+<div class="grid3">
+<div class="card"><b>方案分「单人 / 组群」</b><p class="note">单人 = 1 位专家、不建群；组群 = 2–12 位专家，必须有群主与编排规则（复用 collaboration-markdown-v1）。</p></div>
+<div class="card"><b>三端各管一段</b><p class="note">运营端生成并确认 → 企业端应用即招募并换算成员 ID → 桌面端人才市场展示方案、一键建群。</p></div>
+<div class="card"><b>看得见的清单与重构后的页面</b><p class="note">专家所需 skill / MCP 提前显示；运营端列表与详情改为「状态 + 唯一主操作 + 文字阻塞说明」。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-17-方案单人组群与群聊编排-需求与设计.md</code>。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:24%">现在的问题</th><th style="width:44%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>方案没有类型，一个专家的方案也被当作团队</td><td>新增 <code>mode: solo | group</code>；solo 恰 1 位专家、无群主与规则；group 2–12 位</td><td>运营、企业管理员</td></tr>
+<tr><td>只有 ≤4000 字的自然语言「协作说明」，不参与建群</td><td>新增 <code>orchestration_rules</code>（collaboration-markdown-v1，<code>@{成员}</code> 引用），随方案下发，建群时直接作为群编排</td><td>桌面用户</td></tr>
+<tr><td>群主由 AI 给出，运营没有明确确认的入口</td><td>AI 给建议，运营显式「确认群主 / 规则 / 能力清单」后才能提交审核</td><td>运营、审核人</td></tr>
+<tr><td>需要哪些 skill / MCP 到用了才发现</td><td>生成产物按专家带 <code>skills</code>（只能引用平台目录）与 <code>mcps</code>（仅声明）；草稿页、企业端应用前、桌面详情都显示</td><td>运营、企业管理员、用户</td></tr>
+<tr><td>桌面人才市场只有专家，无法按方案建群</td><td>加「方案」页签，详情展示成员 / 编排 / 清单；组群方案「用此方案建群」，单人方案「开始私聊」</td><td>桌面用户</td></tr>
+<tr><td>运营端页面：只有标题可点、详情堆 5 个卡片和 6 条 Banner、禁用原因藏在 tooltip</td><td>重构为步骤条 + 唯一主操作 + 发布清单 + 分区就地编辑，状态和阻塞原因直接写成文字</td><td>运营、审核人</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事：</b>不保证 AI 生成的编排规则质量（只保证格式与引用合法，是否合理由运营确认）；不保证 MCP 在用户机器上可用（声明不等于已安装，企业端无法得知本机连接器状态）；已发布的旧方案没有类型与规则，按「组群、无规则」兼容；UI 的主观观感需要你看截图验收。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">运营端 · 草稿列表</button>
+<button data-p="u2">运营端 · 详情工作台</button>
+<button data-p="u3">运营端 · 编排规则编辑</button>
+<button data-p="u4">企业端 · 应用方案</button>
+<button data-p="u5">桌面端 · 人才市场方案</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>行业文档生成</b></div>
+<div class="body">
+<p><span class="tag on">未完成 6</span><span class="tag gray">待我处理 2</span><span class="tag gray">等待审核 1</span><span class="tag gray">全部 9</span></p>
+<div class="box">
+<div class="row"><span><b>注塑质检方案</b> <span class="tag op">组群</span> <span class="tag warn">待处理</span></span><span><span class="btn pri">处理 2 项敏感项</span></span></div>
+<div class="row"><span class="note">还差：2 项敏感项 · 群主已确认 · 编排规则待确认</span><span class="note">更新于 10 分钟前</span></div>
+</div>
+<div class="box">
+<div class="row"><span><b>来料检验助手</b> <span class="tag mg">单人</span> <span class="tag">审核中</span></span><span><span class="btn">查看详情</span></span></div>
+<div class="row"><span class="note">等待管理员审核，暂无需操作</span><span class="note">更新于 1 小时前</span></div>
+</div>
+</div></div>
+<p class="note">要点：整行可点；一行 = 状态 + 下一步 + 阻塞原因 + 唯一主按钮；危险操作（取消 / 删除）收进「更多」。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>注塑质检方案 · 详情</b></div>
+<div class="body">
+<div class="steps"><span class="done">资料</span><span class="done">生成</span><span class="cur">确认</span><span>审核</span><span>发布</span></div>
+<div class="cols">
+<div>
+<div class="box"><h4>团队与群聊编排</h4>
+<div class="row"><span>群主：质检协调专家</span><span class="tag warn">待确认</span></div>
+<div class="row"><span>成员：4 位专家</span><span class="btn">编辑</span></div>
+<div class="row"><span>编排规则：1,240 字，引用 4 位成员</span><span class="btn">编辑规则</span></div></div>
+<div class="box"><h4>专家与所需能力</h4>
+<div class="row"><span>检验专家</span><span><span class="tag ok">skill ×2</span><span class="tag">MCP ×1 · 需本机安装</span></span></div>
+<div class="row"><span>质检协调专家</span><span><span class="tag ok">skill ×1</span></span></div></div>
+<div class="box"><h4>敏感项</h4><div class="row"><span>电话号码 1********1 · 专家提示词</span><span class="btn">脱敏</span></div></div>
+</div>
+<div>
+<div class="box"><h4>发布清单</h4>
+<div class="row"><span>敏感项已处理</span><span class="tag bad">还差 2</span></div>
+<div class="row"><span>群主已确认</span><span class="tag ok">✔</span></div>
+<div class="row"><span>编排规则已确认</span><span class="tag bad">✖</span></div>
+<div class="row"><span>skill 引用可用</span><span class="tag ok">✔</span></div>
+<p style="margin-top:8px"><span class="btn dis">提交审核</span></p>
+<p class="note">按钮不可用的原因写在上面，不藏在提示里。</p></div>
+<div class="box"><h4>资料 / 操作记录</h4><p class="note">可折叠</p></div>
+</div>
+</div></div></div>
+<p class="note">要点：主区分节就地编辑，不再整页「编辑 / 保存」；右侧固定发布清单；现在该做什么一眼可见。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>编排规则（collaboration-markdown-v1）</b></div>
+<div class="body">
+<p><span class="btn">插入成员 @</span> <span class="tag ok">引用校验通过</span></p>
+<div class="cols">
+<div><pre>## 发言顺序
+1. @{lead} 先拆解任务并分派
+2. @{inspector} 执行来料检验并回报
+## 交接与结束
+@{lead} 汇总后结束，交付检验报告</pre></div>
+<div class="box"><h4>预览</h4>
+<div class="row"><span>质检协调专家（群主）</span><span class="tag">先发言</span></div>
+<div class="row"><span>检验专家</span><span class="tag">执行</span></div>
+<p class="note">未知成员 @{foo}：<span class="tag bad">无法保存</span></p></div>
+</div></div></div>
+<p class="note">要点：编辑时就校验引用；预览把 @key 渲染成成员；规则编辑后「规则已确认」自动作废。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>应用方案：注塑质检方案</b></div>
+<div class="body">
+<p><span class="tag op">组群</span> 将招募 4 位专家，应用后桌面端可一键建群</p>
+<div class="box"><h4>成员与模型（必选）</h4>
+<div class="row"><span>质检协调专家（群主）</span><span class="input">选择模型 ▾</span></div>
+<div class="row"><span>检验专家（已招募）</span><span class="input">model-1 ▾</span></div></div>
+<div class="box"><h4>所需能力</h4>
+<div class="row"><span>skill：来料检验规程</span><span class="tag ok">企业已具备</span></div>
+<div class="row"><span>skill：缺陷分类</span><span class="tag warn">将自动安装</span></div>
+<div class="row"><span>MCP：MES 连接器</span><span class="tag gray">需用户本机安装</span></div></div>
+<p><span class="btn pri">应用并招募</span></p>
+</div></div>
+<p class="note">要点：应用前看清成员、群主、所需 skill / MCP；MCP 不显示「已就绪」，避免误导。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>人才市场</b></div>
+<div class="body">
+<p><span class="tag gray">专家</span><span class="tag on">方案</span></p>
+<div class="grid2">
+<div class="box"><h4>注塑质检方案 <span class="tag op">组群</span></h4>
+<p class="note">4 位成员 · skill ×3 · MCP ×1</p>
+<p><span class="btn pri">用此方案建群</span> <span class="btn">详情</span></p></div>
+<div class="box"><h4>来料检验助手 <span class="tag mg">单人</span></h4>
+<p class="note">1 位专家</p>
+<p><span class="btn pri">开始私聊</span> <span class="btn">详情</span></p></div>
+</div>
+<p class="note">详情含：成员与群主、编排规则（只读）、skill / MCP 清单（MCP 显示本机是否已安装）、交付要求。</p>
+</div></div>
+<p class="note">要点：只显示本成员已授权的方案；单人方案没有建群入口。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站；会话内容不上传；平台模型状态单写者；Manager 租户数据经 TenantContext / RLS；MCP 只声明不下发凭据。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 520" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="150" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="310" width="1090" height="190" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="332" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 新建草稿（选类型）</text><text x="40" y="86" fill="#667085">上传资料 → worker 生成</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 运营确认</text><text x="280" y="86" fill="#667085">群主 / 规则 / 能力清单</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ 审核 → 发布到目录</text><text x="520" y="86" fill="#667085">@{key} 换成 @{template_id}</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">目录 payload（jsonb）</text><text x="770" y="86" fill="#667085">mode + orchestration_rules</text>
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">④ 拉方案包（SolutionPackage）</text><text x="520" y="226" fill="#667085">应用前预览 skill / MCP</text>
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">⑤ 应用即招募</text><text x="280" y="226" fill="#667085">@{template_id} → @{employee_id}</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ 授权并下发投影</text><text x="40" y="226" fill="#667085">mode / 规则 / 成员能力摘要</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">solution_instance（新列）</text><text x="770" y="226" fill="#667085">mode、orchestration_rules</text>
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ Agent 同步授权投影</text><text x="40" y="406" fill="#667085">主动 pull</text>
+<rect x="270" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="390">⑧ 人才市场「方案」页签</text><text x="280" y="406" fill="#667085">成员 / 编排 / 清单</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑨ 用此方案建群</text><text x="520" y="406" fill="#667085">带 orchestration 建群</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">本地库：群 + 编排</text><text x="770" y="406" fill="#667085">会话内容不上传</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/><path d="M470 74 H510"/><path d="M710 74 H760"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M510 214 H470"/><path d="M270 214 H230"/>
+<path d="M130 238 V300 V370" stroke-dasharray="4 3"/>
+<path d="M230 394 H270"/><path d="M470 394 H510"/><path d="M710 394 H760"/>
+</g>
+<text x="620" y="150" font-size="11" fill="#667085">Manager 拉取（服务间调用）</text>
+<text x="140" y="305" font-size="11" fill="#667085">Agent 主动 pull（无入站）</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有：Manager 拉 Operator、Agent 主动访问 Manager、Agent 本机内部；没有入站到用户机器。</p>
+</div>
+
+<h3>3.2 主流程</h3>
+<div class="flow">
+<div class="s"><b>新建</b>选单人 / 组群</div><div class="a">→</div>
+<div class="s"><b>生成</b>成员 / 群主建议 / 规则 / 清单</div><div class="a">→</div>
+<div class="s"><b>确认</b>运营逐项确认</div><div class="a">→</div>
+<div class="s"><b>审核发布</b>规则按模板 ID 入目录</div><div class="a">→</div>
+<div class="s"><b>应用</b>招募 + 规则换员工 ID</div><div class="a">→</div>
+<div class="s"><b>建群</b>桌面带编排建群</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>情形</th><th>运营端</th><th>企业端应用</th><th>桌面端</th></tr>
+<tr><td><span class="tag ok">单人方案</span></td><td>1 位专家，无群主 / 规则</td><td>只招 1 人，不要求协调员</td><td>「开始私聊」，无建群入口</td></tr>
+<tr><td><span class="tag ok">组群方案</span></td><td>群主 + 规则确认后才能提交审核</td><td>招募全部专家，规则换算为员工 ID</td><td>「用此方案建群」，群自带编排</td></tr>
+<tr><td><span class="tag warn">旧方案（无类型 / 规则）</span></td><td>可重新生成发布新版本</td><td>按「组群、无规则」应用</td><td>建群行为与现在一致</td></tr>
+<tr><td><span class="tag warn">skill 被下架</span></td><td>阻塞提交审核并说明</td><td>应用前预览标红</td><td>详情标注不可用</td></tr>
+<tr><td><span class="tag bad">规则引用无法换算</span></td><td>编辑时即报错</td><td>整单 422 回滚，不留半成品</td><td>不可达</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features/solution-authoring</code>（列表 224 行、详情 392 行等）、<code>web/manager/src/features/marketplace</code>、<code>clients/desktop/src/pages/TalentMarket</code>。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag op">web/operation</span></td><td><b>新</b>：新建草稿选类型；详情改工作台（步骤条、发布清单、团队与编排、专家与能力、就地编辑）；编排规则编辑器（插入成员、引用校验、预览）；列表重做（分段筛选带计数、整行可点、状态 + 下一步 + 阻塞原因、类型徽标）；错误中文化</td><td>P1 / P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td><b>新</b>：应用方案弹窗重排——成员、群主、skill / MCP 清单、模型选择；应用历史显示类型</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td><b>新</b>：人才市场「专家 | 方案」页签、方案卡与详情、「用此方案建群」「开始私聊」；遵循桌面设计规范</td><td>P4</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag">web/shared</span></td><td>类型与错误文案映射集中管理</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>三态（加载 / 空 / 错误）、键盘可达、状态不只靠颜色；更新现有 44 条前端用例并新增；Playwright 端到端</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更（新）</b>：<code>GeneratedSolution</code> + <code>mode / orchestration_rules</code>；<code>GeneratedExpert</code> + <code>skills / mcps</code>；<code>SolutionPackage</code> + <code>mode / orchestration_rules</code></td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>草稿创建带类型；worker 提示词按类型分支并注入平台 skill 目录摘要；宿主校验 skill 与 <code>@{key}</code>；确认接口与提交审核闸门；发布时 skills → <code>platform_skill_refs</code>、mcps → connectors、规则换模板 ID</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><code>solution_instance</code> 迁移（新列，幂等）；<code>apply_solution</code> 分 solo / group，规则换员工 ID，失败整单回滚；投影下发新增字段；应用前预览数据</td><td>P3</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td>按方案建群时校验并带上 <code>orchestration</code>；无规则回退旧行为；<code>SolutionProjection</code> 新字段</td><td>P4</td><td class="sz M">M</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b><code>SolutionPackage</code> 是 <code>extra="forbid"</code>，必须先升级 Manager 再升级 Operator，否则旧 Manager 会拒绝新字段；Manager 迁移每次整体重跑，新列必须可重复执行。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:20%">变更</th><th>内容</th><th style="width:18%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>GeneratedSolution / GeneratedExpert</code></td><td>新增 mode、orchestration_rules、skills、mcps（均有默认，旧草稿可读）</td><td>Operator 草稿、worker schema、前端类型</td><td class="sz M">中</td></tr>
+<tr><td>草稿「确认」记录</td><td>写入现有事件表；草稿正文在 jsonb 内，无需 DDL</td><td>oper 库</td><td class="sz S">低</td></tr>
+<tr><td><code>/api/operation/solution-authoring/*</code></td><td>创建带 mode；详情带确认与闸门明细；新增 <code>POST …/confirm</code></td><td>运营端 API</td><td class="sz L">高</td></tr>
+<tr><td><code>RegisterSolutionTemplateRequest</code></td><td>+ mode、orchestration_rules（目录 payload jsonb，无需 Operator 目录迁移）</td><td>目录写入</td><td class="sz M">中</td></tr>
+<tr><td><code>SolutionPackage</code>（forbid）</td><td>+ mode、orchestration_rules</td><td>Operator → Manager 共享契约</td><td class="sz L">高</td></tr>
+<tr><td><code>solution_instance</code></td><td>+ mode、orchestration_rules 列</td><td>Manager 租户库</td><td class="sz M">中</td></tr>
+<tr><td><code>SolutionProjection</code></td><td>+ mode、orchestration_rules、成员能力摘要（optional）</td><td>Manager → Agent → 桌面</td><td class="sz L">高</td></tr>
+<tr><td>专家模板</td><td>不新增字段：skills → platform_skill_refs，mcps → connectors</td><td>Operator 目录</td><td class="sz S">低</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>以上属共享跨端契约与北向 API 路径变更，需按 AGENTS.md §8「高风险操作」确认后再实施。建议发布顺序：Manager → Operator → Agent / 桌面；新字段全部可缺省，保证旧版本互通。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:14%">阶段</th><th>内容</th><th style="width:20%">依赖</th><th style="width:30%">验收</th></tr>
+<tr><td>P0 验证</td><td>小规模验证：worker 稳定产出规则与 skills；生成前能取平台 skill 摘要；key → 模板 ID → 员工 ID 换算样例</td><td>样例资料 3 份</td><td>各生成 5 次，引用合法率 ≥95%、skill 命中率 ≥90%；换算单测通过</td></tr>
+<tr><td>P1 契约与运营端后端</td><td>共享契约、草稿 / 生成 / 闸门 / 确认 / 发布换算；最小前端接入</td><td>P0、高风险确认</td><td>单人只能 1 专家；组群缺群主或规则无法提交审核；发布后目录含 mode 与规则；旧草稿可读</td></tr>
+<tr><td>P2 运营端 UI 重构</td><td>列表、新建、详情工作台、规则编辑器、能力清单、错误中文化</td><td>P1</td><td>每个状态唯一主操作 + 文字阻塞说明；用例全绿；你验收前后对比截图</td></tr>
+<tr><td>P3 企业端应用</td><td>迁移、应用换算与落库、投影下发、应用前预览、弹窗重排</td><td>P1（Manager 先发布）</td><td>solo 只招 1 人；group 实例带员工 ID 规则；失败整单回滚；跨租户回归通过</td></tr>
+<tr><td>P4 桌面端</td><td>Agent 建群带编排；人才市场方案页签与详情；私聊 / 建群入口</td><td>P3</td><td>建群后群详情有编排卡；单人无建群入口；旧方案行为不变；e2e 通过</td></tr>
+</table>
+<p class="note">P2 与 P3 可并行；P4 依赖 P3 与 Agent 改动。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">单人 = 1 位专家且不建群</span><span class="tag ok">编排复用 collaboration-markdown-v1</span><span class="tag ok">skill / MCP：声明 + 展示 + 可编辑</span><span class="tag ok">先设计后分 4 期</span></p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:24%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>群主与规则由 AI 建议还是创建时就填</td><td>AI 建议 + 运营确认：创建时专家 key 还不存在，无法预填</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>2</td><td>生成后能否更换群主</td><td>可以；换后「群主确认」作废</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>3</td><td>MCP 声明复用 required / optional_connectors，不新增专家模板字段（修正你上一轮选择）</td><td>同意复用：Agent 连接器本质就是 MCP；代价是「用途」只存在于草稿，发布后只剩标识</td><td><span class="tag bad">P1</span></td></tr>
+<tr><td>4</td><td>桌面「方案」页签的数据范围</td><td>仅本成员已授权方案（读本机投影，不新增 Manager 接口）</td><td><span class="tag warn">P4</span></td></tr>
+<tr><td>5</td><td>单人方案是否也能建群</td><td>不能；想让单人专家入群走既有「自定义群」</td><td><span class="tag warn">P4</span></td></tr>
+<tr><td>6</td><td>P0 达标阈值</td><td>引用合法率 ≥95%、skill 命中率 ≥90%；不达标则宿主加自动修复重试</td><td><span class="tag bad">P0</span></td></tr>
+<tr><td>7</td><td>企业端应用前是否显示 skill「已具备 / 缺失」</td><td>显示；MCP 只提示「需本机安装」</td><td><span class="tag warn">P3</span></td></tr>
+<tr><td>8</td><td>UI 重构验收方式</td><td>每期前后对比截图 + 可点击测试环境，由你验收</td><td><span class="tag warn">P2</span></td></tr>
+</table>
+<div class="callout green"><b>建议你最先拍板：</b>#1（决定闸门形态）、#3（决定是否多一个共享契约字段）、#4（决定桌面方案页签范围）。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>

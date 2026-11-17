@@ -11,6 +11,10 @@ import { useGrantsApi } from "../../grants/useGrantsApi";
 
 vi.mock("../../experts/useExpertsApi", () => ({ useExpertsApi: vi.fn() }));
 vi.mock("../../grants/useGrantsApi", () => ({ useGrantsApi: vi.fn() }));
+// 本企业技能目录：null 表示读取失败。不用 vi.fn，原因同 platformModelsApi。
+let currentSkills: unknown[] | null = [];
+const capabilityApi = { listSkills: async () => { if (currentSkills === null) throw new Error("forbidden"); return currentSkills; } };
+vi.mock("../../capability/useCapabilityApi", () => ({ useCapabilityApi: () => capabilityApi }));
 const platformModels = {
   providers: [],
   models: [{
@@ -242,7 +246,7 @@ describe("SolutionsPage", () => {
     const dialog = await screen.findByRole("dialog", { name: "测试方案" });
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText("架构师")).toBeInTheDocument();
-    expect(screen.getByText("协调专家")).toBeInTheDocument();
+    expect(within(dialog).getByText("群主")).toBeInTheDocument();
     expect(screen.getByText("先分析再汇总")).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -309,5 +313,84 @@ describe("SolutionsPage", () => {
     await applyDefaultSolution();
     await waitFor(() => expect(screen.getByTestId("goto-experts")).toBeInTheDocument());
     expect(screen.getByTestId("goto-experts")).toHaveAttribute("href", "/experts");
+  });
+
+  describe("方案概览（设计 §3.4 / §3.7）", () => {
+    const group = {
+      solution_id: "sol-g", version: "2", display_name: "质检组群", mode: "group",
+      experts: [
+        { template_id: "tpl-a", version: "1", display_name: "质检协调" },
+        { template_id: "tpl-b", version: "1", display_name: "检验员" },
+      ],
+      coordinator_template_id: "tpl-a",
+      orchestration_rules: "1. @{tpl-a} 先拆解\n2. @{tpl-b} 执行检验",
+      recommended_capabilities: [
+        { kind: "skill", ref: "ps-1", display_name: "读表", purpose: "读取 Excel" },
+        { kind: "skill", ref: "ps-2", purpose: "写报告" },
+        { kind: "mcp", ref: "mes", display_name: "MES", purpose: "读工单" },
+      ],
+    } as SolutionPackage;
+    const installed = [{ catalog_id: "c1", skill_id: "tenant-sheet", display_name: "读表", version: "1", install_policy: "on_demand", binding_policy: "opt_in", visibility: "tenant", config: { source_skill_id: "ps-1" }, catalog_version: 1 }];
+
+    afterEach(() => { currentSkills = []; });
+
+    it("目录卡片显示类型、成员数、群主与缺失的 skill 数", async () => {
+      currentSkills = installed;
+      const api = mockApi();
+      (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([group]);
+      renderPage(["owner"]);
+      const card = await screen.findByRole("article", { name: "质检组群" });
+      expect(within(card).getByText("组群方案")).toBeInTheDocument();
+      expect(within(card).getByTestId("solution-summary").textContent).toBe("2 位专家 · 群主 质检协调 · 推荐能力 3 项（1 项 skill 企业缺失）");
+    });
+
+    it("应用弹窗按 成员/群主 → 规则 → 能力清单 → 模型 排列，并标注 skill 状态与 MCP 需本机安装", async () => {
+      currentSkills = installed;
+      const api = mockApi();
+      (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([group]);
+      renderPage(["owner"]);
+      await screen.findByRole("article", { name: "质检组群" });
+      fireEvent.click(screen.getAllByRole("button", { name: "应用方案" })[0]!);
+      const dialog = await screen.findByRole("dialog", { name: "应用质检组群" });
+      const overview = within(dialog).getByTestId("solution-overview");
+      expect(within(overview).getByTestId("solution-overview-members").textContent).toContain("质检协调群主");
+      expect(within(overview).getByTestId("solution-overview-rules").textContent).toBe("1. @质检协调 先拆解\n2. @检验员 执行检验");
+      const rows = within(overview).getAllByTestId("solution-capability").map((row) => row.textContent);
+      expect(rows[0]).toContain("企业已具备");
+      expect(rows[1]).toContain("企业缺失");
+      expect(rows[2]).toContain("成员需在本机安装");
+      // 概览在模型选择之前。
+      const models = await within(dialog).findByTestId("solution-expert-models");
+      expect(overview.compareDocumentPosition(models) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("技能目录读不到时 skill 显示「无法确认」，方案仍可浏览", async () => {
+      currentSkills = null;
+      const api = mockApi();
+      (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([group]);
+      renderPage(["owner"]);
+      await screen.findByRole("article", { name: "质检组群" });
+      fireEvent.click(screen.getByText("查看详情"));
+      const dialog = await screen.findByRole("dialog", { name: "质检组群" });
+      const rows = within(dialog).getAllByTestId("solution-capability").map((row) => row.textContent);
+      expect(rows.slice(0, 2).every((text) => text?.includes("无法确认"))).toBe(true);
+      // 技能目录读取失败不算页面错误：没有带文字的错误提示（组件库的空播报区不算）。
+      expect(screen.queryAllByRole("alert").filter((el) => el.textContent?.trim())).toEqual([]);
+      expect(screen.queryByText("forbidden")).not.toBeInTheDocument();
+    });
+
+    it("单人方案：不显示群主与编排规则，说明私聊使用", async () => {
+      const api = mockApi();
+      (api.listSolutions as ReturnType<typeof vi.fn>).mockResolvedValue([{ ...group, mode: "solo", experts: group.experts!.slice(0, 1), orchestration_rules: "", recommended_capabilities: [] }]);
+      renderPage(["owner"]);
+      const card = await screen.findByRole("article", { name: "质检组群" });
+      expect(within(card).getByText("单人方案")).toBeInTheDocument();
+      expect(within(card).getByTestId("solution-summary").textContent).toBe("1 位专家 · 私聊使用");
+      fireEvent.click(screen.getByText("查看详情"));
+      const dialog = await screen.findByRole("dialog", { name: "质检组群" });
+      expect(within(dialog).queryByText("群主")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("群聊编排规则")).not.toBeInTheDocument();
+      expect(within(dialog).getByText(/不建群/)).toBeInTheDocument();
+    });
   });
 });

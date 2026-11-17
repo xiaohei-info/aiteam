@@ -1,3 +1,8 @@
+/**
+ * 平台 skill 选择器：内部技能市场（只列已发布版本）+ ClawHub 外部市场（下载导入后选择）。
+ * 只能选中平台已发布的固定版本；导入后若「自动开放」已关闭，需先在技能市场开放才能选。
+ * 目录登记的专家技能与行业文档生成的能力清单共用。
+ */
 import { useEffect, useState } from "react";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -10,13 +15,17 @@ import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { useSkillMarketApi } from "../../skill-market/useSkillMarketApi";
-import type { ExternalSkill, InternalSkill, PlatformSkillRef } from "../../skill-market/types";
+import { useSkillMarketApi } from "./useSkillMarketApi";
+import type { ExternalSkill, InternalSkill, PlatformSkillRef } from "./types";
 
-interface ExpertSkillSelectorProps {
+interface PlatformSkillSelectorProps {
   value: PlatformSkillRef[];
   onChange: (value: PlatformSkillRef[]) => void;
   disabled: boolean;
+  /** 区块标题；null 不显示（嵌在已有标题的分区里时）。 */
+  title?: string | null;
+  /** 导入后未开放时的提示里说明「开放后才能……」。 */
+  purpose?: string;
 }
 
 function refFor(skill: InternalSkill): PlatformSkillRef | null {
@@ -24,7 +33,7 @@ function refFor(skill: InternalSkill): PlatformSkillRef | null {
   return { skill_id: skill.skill_id, version: skill.published_version, content_hash: skill.content_hash };
 }
 
-export function ExpertSkillSelector({ value, onChange, disabled }: ExpertSkillSelectorProps) {
+export function PlatformSkillSelector({ value, onChange, disabled, title = "技能（可选）", purpose = "绑定专家" }: PlatformSkillSelectorProps) {
   const api = useSkillMarketApi();
   const [tab, setTab] = useState<"internal" | "external">("internal");
   const [internal, setInternal] = useState<InternalSkill[]>([]);
@@ -67,7 +76,7 @@ export function ExpertSkillSelector({ value, onChange, disabled }: ExpertSkillSe
       const downloaded = await api.download(skill.owner, skill.slug, skill.latest_version);
       if (!downloaded) return;
       if (downloaded.status !== "published") {
-        setMessage("技能已下载到内部市场，当前自动开放已关闭；开放后才能绑定专家。");
+        setMessage(`技能已下载到内部市场，当前自动开放已关闭；在技能市场开放后才能${purpose}。`);
         return;
       }
       const ref = { skill_id: downloaded.skill_id, version: downloaded.version, content_hash: downloaded.content_hash };
@@ -83,9 +92,9 @@ export function ExpertSkillSelector({ value, onChange, disabled }: ExpertSkillSe
 
   return (
     <VStack gap={3}>
-      <Heading level={3}>技能（可选）</Heading>
+      {title && <Heading level={3}>{title}</Heading>}
       {message && <Banner status="info" title={message} />}
-      <TabList aria-label="专家技能来源" value={tab} onChange={(next) => setTab(next as typeof tab)} hasDivider>
+      <TabList aria-label="技能来源" value={tab} onChange={(next) => setTab(next as typeof tab)} hasDivider>
         <Tab value="internal" label="内部技能市场" />
         <Tab value="external" label="ClawHub 外部市场" />
       </TabList>

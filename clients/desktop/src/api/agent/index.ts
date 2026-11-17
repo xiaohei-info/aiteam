@@ -38,6 +38,7 @@ import {
   updateConversationSegment,
 } from './conversations'
 import { getExpertReadiness, listExperts, listSolutions } from './experts'
+import { deleteLocalCapability, listInstallableSkills, listLocalCapabilities } from './capabilities'
 import { deleteEmployeeMemory, getEmployeeMemorySummary, listEmployeeMemories } from './employeeMemories'
 import type {
   OfficeFeed,
@@ -191,6 +192,9 @@ export const agentApi = {
   // -------- 员工/专家 --------
   listExperts: () => listExperts(getClient()),
   listSolutions: () => listSolutions(getClient()),
+  listLocalCapabilities: () => listLocalCapabilities(getClient()),
+  listInstallableSkills: () => listInstallableSkills(getClient()),
+  deleteLocalCapability: (kind: 'mcp' | 'skill', ref: string) => deleteLocalCapability(getClient(), kind, ref),
   getExpertReadiness: (employeeId: string) => getExpertReadiness(getClient(), employeeId),
 
   // -------- 员工记忆 --------

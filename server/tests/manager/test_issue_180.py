@@ -136,6 +136,9 @@ class TestSolutionsTrimming:
             "coordinator_instructions": "",
             "workflow_skill_ref": None,
             "output_requirements": "",
+            "mode": "group",
+            "orchestration_rules": "",
+            "recommended_capabilities": [],
         }]
 
     def test_member_without_solution_grant_sees_nothing(self):

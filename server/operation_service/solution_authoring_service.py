@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from shared.contracts.crosstier import RecommendedCapability
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.envelope import ProblemFieldError
 from shared.contracts.platform_provider import PlatformModelRef
@@ -27,9 +29,14 @@ from shared.errors import (
     InvalidTransition,
     NotFound,
     RequestTooLarge,
+    ServiceUnavailable,
     ValidationProblem,
 )
 from shared.solution_authoring.isolated_parse import parse_source_isolated
+from shared.solution_authoring.orchestration import (
+    OrchestrationRefError,
+    rewrite_member_refs,
+)
 from shared.solution_authoring.parsing import SourceParseError
 from shared.solution_authoring.schemas import GeneratedSolution
 from shared.solution_authoring.sensitive_scan import (
@@ -44,6 +51,11 @@ from .catalog_schemas import (
     RegisterSolutionTemplateRequest,
 )
 from .solution_authoring_findings import assert_no_unresolved, reconcile_findings
+from .solution_authoring_gates import (
+    confirm_digest,
+    evaluate_gates,
+    required_confirmations,
+)
 from .solution_authoring_models import ModelConfigResolver
 from .solution_authoring_repository import (
     DraftChange,
@@ -63,6 +75,13 @@ from .solution_authoring_schemas import (
     PackageUpdate,
     SourceOut,
 )
+from .solution_authoring_skills import (
+    NOT_IN_CATALOG,
+    VERSION_MISMATCH,
+    SkillCatalogLoader,
+    has_skill_refs,
+    unresolved_skills,
+)
 from .solution_authoring_storage import SourceFileStore, sha256_hex
 
 EDITABLE_STATUSES = ("draft", "ready_for_review", "rejected")  # 可增删资料、可发起生成
@@ -74,6 +93,8 @@ MAX_TOTAL_BYTES = 100 * 1024 * 1024
 MAX_IDEMPOTENCY_KEY_CHARS = 200
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+_logger = logging.getLogger(__name__)
 
 
 class CatalogPublisher(Protocol):
@@ -123,12 +144,15 @@ class SolutionAuthoringService:
         models: ModelConfigResolver,
         catalog: Callable[[], CatalogPublisher],
         clock: Callable[[], datetime] | None = None,
+        skill_catalog: SkillCatalogLoader | None = None,
     ):
         self._repo = repo
         self._store = store
         self._models = models
         self._catalog = catalog
         self._clock = clock or (lambda: datetime.now(UTC))
+        # 平台已发布 skill 目录（与生成时同一口径）；未配置视为空目录。
+        self._skill_catalog = skill_catalog or list
 
     # ---- 草稿 ----
 
@@ -139,13 +163,17 @@ class SolutionAuthoringService:
             draft_id=str(uuid.uuid4()), title=body.title,
             model_provider_id=body.platform_model_ref.provider_id, model_id=body.platform_model_ref.model_id,
             created_by=actor_id, updated_by=actor_id, created_at=now, updated_at=now,
-            image_recognition=body.image_recognition, supplement=body.supplement.strip(),
+            image_recognition=body.image_recognition, supplement=body.supplement.strip(), solution_mode=body.solution_mode,
         )
         return DraftOut.of(self._repo.create_draft(row))
 
     def list_drafts(self) -> list[DraftSummaryOut]:
         counts = self._repo.count_sources_by_draft()
-        return [DraftSummaryOut.summarize(row, job, counts.get(row.draft_id, 0)) for row, job in self._repo.list_drafts_with_latest_job()]
+        open_counts = self._repo.count_open_findings_by_draft()
+        return [
+            DraftSummaryOut.summarize(row, job, counts.get(row.draft_id, 0), open_counts.get(row.draft_id, 0))
+            for row, job in self._repo.list_drafts_with_latest_job()
+        ]
 
     def cancel_generation(self, draft_id: str, actor_id: str) -> DraftDetailOut:
         """取消进行中的生成；没有进行中的任务时原样返回（幂等）。"""
@@ -240,6 +268,7 @@ class SolutionAuthoringService:
     def update_package(self, draft_id: str, actor_id: str, body: PackageUpdate) -> DraftDetailOut:
         package = body.package.model_dump(mode="json")
         cited = body.package.evidence_chunk_ids()
+        self._check_skill_refs(package)
         now = self._clock()
 
         def decide(draft: DraftRow, findings: list[FindingRow]) -> DraftChange:
@@ -253,6 +282,36 @@ class SolutionAuthoringService:
 
         self._repo.update_draft(draft_id, actor_id, decide, expected_version=body.version)
         return self.get_draft(draft_id)
+
+    def _skill_names(self, package: GeneratedSolution) -> dict[str, str]:
+        """发布时给推荐 skill 取平台目录里的名称（skill_id 是 UUID，下游没法读）。
+
+        只影响展示：目录读不到时退回展示 skill_id，不因此阻断发布。
+        """
+        if not any(expert.skills for expert in package.experts):
+            return {}
+        try:
+            return {item.skill_id: item.display_name for item in self._skill_catalog() if item.display_name}
+        except Exception:  # noqa: BLE001
+            _logger.warning("platform skill catalog unavailable while publishing; falling back to skill ids", exc_info=True)
+            return {}
+
+    def _check_skill_refs(self, package: dict[str, Any]) -> None:
+        """手动保存也按平台已发布目录校验全部 skill 引用：选择后被下架、改版或手填的引用不落库。
+
+        校验整份正文（不只本次改动的分区），这样已失效的引用在下一次保存时就会暴露，而不是等到发布前人工发现。
+        """
+        if not has_skill_refs(package):
+            return
+        try:
+            catalog = list(self._skill_catalog())
+        except Exception as exc:  # noqa: BLE001 — 目录读不到时不放行未经校验的引用
+            raise ServiceUnavailable("平台技能目录暂时读不到，请稍后再保存") from exc
+        bad = unresolved_skills(package, catalog)
+        if bad:
+            reasons = {NOT_IN_CATALOG: "平台目录里没有或已下架", VERSION_MISMATCH: "版本或内容与平台已发布的不一致"}
+            listed = "；".join(f"{where}（{reasons[code]}）" for where, code in bad)
+            raise ValidationProblem(f"有 skill 不是平台已发布的版本：{listed}。请在「能力清单」里移除，或换成已发布版本后再保存。")
 
     def resolve_finding(self, draft_id: str, finding_id: str, actor_id: str, resolution: FindingResolution) -> DraftDetailOut:
         now = self._clock()
@@ -300,8 +359,28 @@ class SolutionAuthoringService:
 
     def submit_review(self, draft_id: str, actor_id: str) -> DraftDetailOut:
         def decide(draft: DraftRow, findings: list[FindingRow]) -> DraftChange:
-            assert_no_unresolved(_require_content(draft, "submitting for review"), findings)
+            package = _require_content(draft, "submitting for review")
+            assert_no_unresolved(package, findings)
+            blocked = next((gate for gate in evaluate_gates(package, draft.confirmations, open_findings=0) if not gate.ok), None)
+            if blocked is not None:
+                raise Conflict(blocked.message)
             return DraftChange(changes={"status": "in_review", "review_note": ""}, event=("submitted_for_review", ""))
+
+        self._repo.update_draft(draft_id, actor_id, decide)
+        return self.get_draft(draft_id)
+
+    def confirm(self, draft_id: str, actor_id: str, item: str) -> DraftDetailOut:
+        """运营确认群主 / 编排规则 / 能力清单。确认记录的是当时内容的摘要，之后内容被改动则自动失效。"""
+        now = self._clock()
+
+        def decide(draft: DraftRow, _findings: list[FindingRow]) -> DraftChange:
+            package = _require_content(draft, "confirming")
+            if item not in required_confirmations(package):
+                raise ValidationProblem(f"{item} does not need to be confirmed for this draft")
+            if item == "rules" and not str(package.get("orchestration_rules", "")).strip():
+                raise ValidationProblem("orchestration rules are required for a group solution")
+            record = {"by": actor_id, "at": now.isoformat(), "digest": confirm_digest(package, item)}
+            return DraftChange(changes={"confirmations": {**draft.confirmations, item: record}}, event=(f"confirmed_{item}", ""))
 
         self._repo.update_draft(draft_id, actor_id, decide)
         return self.get_draft(draft_id)
@@ -353,6 +432,12 @@ class SolutionAuthoringService:
         expert_ids: dict[str, str] = plan["expert_template_ids"]
         package = GeneratedSolution.model_validate(draft.package)
         catalog = self._catalog()
+        # 草稿里的成员引用是专家 key，目录里换成专家模板 ID；Manager 应用时再换成员工 ID。
+        # 先换算再向目录登记任何东西：换不出来就明确失败，不留下半个已登记的方案。
+        try:
+            catalog_rules = rewrite_member_refs(package.orchestration_rules, expert_ids)
+        except OrchestrationRefError as exc:
+            raise Conflict("该草稿的群聊编排规则引用了不在专家名单里的成员，无法发布；请回到草稿修正编排规则后重新提交审核") from exc
 
         for expert in package.experts:
             request = RegisterExpertTemplateRequest(
@@ -366,6 +451,8 @@ class SolutionAuthoringService:
             coordinator_template_id=expert_ids[package.coordinator_key],
             coordinator_instructions=package.coordinator_instructions,
             output_requirements=package.output_requirements, tags=package.tags,
+            mode=package.mode, recommended_capabilities=_recommended_capabilities(package, self._skill_names(package)),
+            orchestration_rules=catalog_rules,
         )
         self._ensure_registered(catalog, CatalogType.SOLUTION_TEMPLATE, solution_id, lambda: catalog.register_solution_template(solution))
         for template_id in expert_ids.values():
@@ -393,3 +480,21 @@ class SolutionAuthoringService:
     def _ensure_published(catalog: CatalogPublisher, catalog_type: CatalogType, template_id: str) -> None:
         if catalog.get_entry(catalog_type, template_id).status != CatalogStatus.PUBLISHED:
             catalog.publish_template(catalog_type, template_id, PublishTemplateRequest())
+
+
+def _recommended_capabilities(package: GeneratedSolution, skill_names: dict[str, str]) -> list[RecommendedCapability]:
+    """把各专家的 skill / MCP 声明合并成方案级的推荐清单（去重、保序）。只是提示，不绑定到专家。
+
+    skill 的展示名取平台目录名称（`skill_names`），取不到时退回 skill_id。
+    """
+    seen: dict[tuple[str, str], RecommendedCapability] = {}
+    for expert in package.experts:
+        for skill in expert.skills:
+            seen.setdefault(("skill", skill.skill_id), RecommendedCapability(
+                kind="skill", ref=skill.skill_id, display_name=skill_names.get(skill.skill_id, skill.skill_id)[:80], purpose=skill.reason,
+            ))
+        for mcp in expert.mcps:
+            seen.setdefault(("mcp", mcp.key), RecommendedCapability(
+                kind="mcp", ref=mcp.key, display_name=mcp.display_name, purpose=mcp.purpose,
+            ))
+    return list(seen.values())[:24]

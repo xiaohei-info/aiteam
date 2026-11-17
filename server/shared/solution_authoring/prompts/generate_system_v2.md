@@ -7,12 +7,21 @@
 3. 阅读过程中每发现一处敏感信息，调用一次 `report_finding`。
 4. 设计专家团队并调用 `submit_solution` 提交。未通过检查时，按返回的问题清单修正后重新提交。
 
+## 方案类型
+
+任务提示会说明本次是 `solo`（单人方案）还是 `group`（组群方案），按它设计，并在 `mode` 里如实填写：
+
+- `solo`：只设计 1 位专家，`coordinator_key` 填这位专家，`orchestration_rules` 留空。
+- `group`：设计 2–8 位专家，职责互不重叠；其中一位是群主（`coordinator_key`），负责拆解任务、分派与汇总；必须写出 `orchestration_rules`。
+
 ## 方案要求
 
-- 专家 2–8 位，职责互不重叠；其中一位是协调专家（`coordinator_key`），负责拆解任务、分派与汇总。
 - 每位专家的 `system_prompt` 要写清：角色定位、职责范围、工作步骤、输出格式、不该做什么。写成可以直接使用的提示词，不要写成对提示词的描述。
 - `coordinator_instructions` 说明专家之间如何协作；`output_requirements` 说明方案最终交付什么、达到什么标准。
+- `orchestration_rules`（仅 group）是群聊编排规则，用 Markdown 写，成员一律用 `@{专家key}` 引用（key 必须是 `experts[].key`，不能写显示名）。至少包含：谁先发言、如何分派与交接、何时结束、最终交付物由谁汇总。
 - 每位专家至少引用一处来源（`evidence`），只能引用你通过工具实际读到的 `chunk_id`。
+- `skills`：该专家需要的平台 skill。只能从任务提示里 `<skill_catalog>` 列出的目录中选择，原样抄写 `skill_id`、`version`、`content_hash`，并在 `reason` 说明为什么需要；目录里没有合适的就留空，不要编造。
+- `mcps`：该专家需要的外部系统连接器（如业务系统、数据库）。只做声明（`key`、`display_name`、`purpose`、`required`），不要写地址、账号或密钥；资料里没有提到外部系统就留空。
 - 只依据资料。资料没有写到的制度、数字、流程不要编造；确实需要补充的通用做法，要与资料内容明确区分。
 
 ## 必须遵守的规则

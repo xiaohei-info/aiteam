@@ -16,7 +16,13 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from shared.errors import Conflict, InvalidTransition, NotFound, RequestTooLarge, ValidationProblem
+from shared.errors import (
+    Conflict,
+    InvalidTransition,
+    NotFound,
+    RequestTooLarge,
+    ValidationProblem,
+)
 
 ACTIVE_JOB_STATUSES = frozenset({"queued", "parsing", "analyzing"})
 
@@ -43,6 +49,9 @@ class DraftRow:
     publish_state: dict[str, Any] = field(default_factory=dict)
     published_solution_id: str | None = None
     version: int = 1
+    solution_mode: str = "group"
+    # 运营确认记录：{"coordinator"|"rules": {"by": 操作人, "at": ISO 时间}}；相关内容被编辑后对应项作废。
+    confirmations: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,9 @@ class _Tx(ABC):
     def source_counts(self) -> dict[str, int]:
         """每个有资料的草稿的资料数量（draft_id → 数量），一次读取；没有资料的草稿不出现。"""
     @abstractmethod
+    def open_finding_counts(self) -> dict[str, int]:
+        """每个有待处理敏感项的草稿的待处理数量（draft_id → 数量），一次读取；没有待处理项的草稿不出现。"""
+    @abstractmethod
     def jobs(self, draft_id: str) -> list[JobRow]: ...
     @abstractmethod
     def latest_jobs(self) -> dict[str, JobRow]:
@@ -200,6 +212,11 @@ class SolutionAuthoringRepository(ABC):
         """列表用：各草稿的资料数量，一次批量读取，与草稿数量无关。没有资料的草稿不在结果里。"""
         with self._transaction() as tx:
             return tx.source_counts()
+
+    def count_open_findings_by_draft(self) -> dict[str, int]:
+        """列表用：各草稿待处理的敏感项数量，一次批量读取，与草稿数量无关。"""
+        with self._transaction() as tx:
+            return tx.open_finding_counts()
 
     def update_draft(self, draft_id: str, actor_id: str, decide: Decide, *, expected_version: int | None = None) -> DraftRow:
         """锁住草稿后调用 `decide(草稿, 发现项)`；它返回的变更与审计事件一起提交，抛错则整体回滚。
@@ -427,11 +444,11 @@ class _MemoryStore:
     findings: dict[str, FindingRow] = field(default_factory=dict)
     events: list[EventRow] = field(default_factory=list)
 
-    def snapshot(self) -> "_MemoryStore":
+    def snapshot(self) -> _MemoryStore:
         # 行都是不可变对象：浅拷贝容器即可回滚。
         return _MemoryStore(dict(self.drafts), dict(self.sources), dict(self.jobs), dict(self.findings), list(self.events))
 
-    def restore(self, other: "_MemoryStore") -> None:
+    def restore(self, other: _MemoryStore) -> None:
         self.drafts, self.sources, self.jobs = other.drafts, other.sources, other.jobs
         self.findings, self.events = other.findings, other.events
 
@@ -456,6 +473,13 @@ class _MemoryTx(_Tx):
         counts: dict[str, int] = {}
         for row in self._store.sources.values():
             counts[row.draft_id] = counts.get(row.draft_id, 0) + 1
+        return counts
+
+    def open_finding_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in self._store.findings.values():
+            if row.status == "open":
+                counts[row.draft_id] = counts.get(row.draft_id, 0) + 1
         return counts
 
     def put_source(self, row: SourceRow) -> None:

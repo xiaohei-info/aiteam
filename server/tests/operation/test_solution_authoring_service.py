@@ -91,6 +91,7 @@ def _solution(chunk_id: str, *, extra: str = f"联系电话 {PHONE}。") -> dict
     return {
         "display_name": "来料质检方案", "description": "覆盖来料检验与不合格品处理。", "tags": ["质检"],
         "coordinator_key": "lead", "coordinator_instructions": "先拆解再分派。", "output_requirements": "列出依据。",
+        "orchestration_rules": "1. @{lead} 先拆解并分派\n2. @{inspector} 执行检验并回报",
         "experts": [
             {"key": "lead", "display_name": "质检协调专家", "category": "质量管理", "description": "统筹质检任务。",
              "system_prompt": f"你是质检协调专家。{extra}", "evidence": [{"chunk_id": chunk_id, "quote": "来料检验"}]},
@@ -110,6 +111,7 @@ class Runner:
         self.chunks: list = []
         self.prompts: list[tuple[str, str]] = []
         self.before_return = lambda: None
+        self.solution: dict | None = None  # 指定时代替默认的两位专家组群方案
         self.closed = False
         self.aborts: list = []
 
@@ -121,7 +123,7 @@ class Runner:
             raise self.generate_error
         first = chunks[0]
         result = AuthoringResult(
-            solution=GeneratedSolution.model_validate(_solution(first.chunk_id)),
+            solution=GeneratedSolution.model_validate(self.solution or _solution(first.chunk_id)),
             findings=[AgentFinding(kind="company", chunk_id=first.chunk_id, excerpt="华东某客户", note="资料中出现客户名称")],
         )
         self.before_return()
@@ -158,7 +160,9 @@ class Env:
         self.gateway = Gateway()
         providers = type("Providers", (), {"validate_model_ref": lambda self, ref, require_published=False: ref})()
         self.catalog = CatalogService(CatalogRepository(), self.gateway, platform_providers=providers)
-        self.service = SolutionAuthoringService(self.repo, self.store, self.models, lambda: self.catalog, self.clock)
+        # 平台已发布 skill 目录（测试里可改）；保存与生成共用。
+        self.skills: list = []
+        self.service = SolutionAuthoringService(self.repo, self.store, self.models, lambda: self.catalog, self.clock, skill_catalog=lambda: self.skills)
         self.executor = GenerationJobExecutor(self.repo, self.store, self.models, self.runner, owner="w1", clock=self.clock)
 
     def draft(self, **overrides) -> str:
@@ -189,6 +193,13 @@ def _resolve_all(env: Env, draft_id: str) -> None:
     for item in env.service.get_draft(draft_id).findings:
         if item.status == "open":
             env.service.resolve_finding(draft_id, item.finding_id, "op1", "redact" if item.field_path else "acknowledge")
+    _confirm_all(env, draft_id)
+
+
+def _confirm_all(env: Env, draft_id: str) -> None:
+    for gate in env.service.get_draft(draft_id).gates:
+        if gate.key != "findings" and not gate.ok:
+            env.service.confirm(draft_id, "op1", gate.key)
 
 
 # ---- 草稿与资料 ----
@@ -276,7 +287,7 @@ def test_a_successful_job_writes_content_evidence_and_findings_together(env, cap
 
     assert detail.status == "ready_for_review" and detail.package is not None
     assert [expert.key for expert in detail.package.experts] == ["lead", "inspector"]
-    assert (detail.prompt_version, detail.usage["total_tokens"]) == ("v1", 100)
+    assert (detail.prompt_version, detail.usage["total_tokens"]) == ("v2", 100)
     assert detail.latest_job is not None and (detail.latest_job.status, detail.latest_job.attempt) == ("succeeded", 1)
     chunk_id = env.runner.chunks[0].chunk_id
     assert list(detail.evidence_sources) == [chunk_id] and chunk_id.startswith("s1-c")
@@ -781,3 +792,192 @@ def test_end_to_end_with_the_real_worker_and_the_faux_model(env):
     assert published.published_solution_id
     package = env.catalog.pull_solution_package(solution_id=published.published_solution_id)
     assert len(package.experts) == 2 and PHONE not in package.model_dump_json()
+
+
+# ---- 方案类型：发布换算 ----
+
+def test_publish_carries_mode_and_rewrites_rule_references_to_template_ids(env):
+    draft_id = env.generated()
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    published = env.service.publish(draft_id, "admin")
+    sid = published.published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert package.mode == "group"
+    assert package.orchestration_rules == f"1. @{{{sid}-lead}} 先拆解并分派\n2. @{{{sid}-inspector}} 执行检验并回报"
+
+
+def test_publish_fails_with_a_clear_conflict_and_registers_nothing_when_rule_references_cannot_be_mapped(env, monkeypatch):
+    from operation_service import solution_authoring_service as module
+    from shared.solution_authoring.orchestration import OrchestrationRefError
+
+    draft_id = env.generated()
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+
+    def broken(rules, mapping):
+        raise OrchestrationRefError("unmapped", kind="unmapped", member="ghost")
+
+    monkeypatch.setattr(module, "rewrite_member_refs", broken)
+    with pytest.raises(Conflict, match="编排规则"):
+        env.service.publish(draft_id, "admin")
+    assert env.catalog.list_catalog() == []
+    assert env.service.get_draft(draft_id).published_solution_id is None
+
+
+def test_publish_carries_skills_and_mcps_as_non_binding_recommendations(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h", display_name="读表", summary="")]
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": "读 Excel"}]
+    body["experts"][0]["mcps"] = [{"key": "mes", "display_name": "MES", "purpose": "读取工单", "required": True}]
+    # 另一位专家也声明同一个 MCP：方案级推荐里只出现一次。
+    body["experts"][1]["mcps"] = [{"key": "mes", "display_name": "MES 重复", "purpose": "", "required": False}]
+    env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    _resolve_all(env, draft_id)
+    # 声明 skill / MCP 不增加提交闸门。
+    assert [gate.key for gate in env.service.get_draft(draft_id).gates] == ["findings", "coordinator", "rules"]
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    sid = env.service.publish(draft_id, "admin").published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert [(item.kind, item.ref, item.display_name, item.purpose) for item in package.recommended_capabilities] == [
+        ("skill", "sk-1", "读表", "读 Excel"), ("mcp", "mes", "MES", "读取工单"),
+    ]
+    # 不绑定到专家：专家模板上没有 skill 引用与连接器要求。
+    for key in ("lead", "inspector"):
+        entry = env.catalog.get_entry(CatalogType.EXPERT_TEMPLATE, f"{sid}-{key}")
+        assert (entry.platform_skill_refs, entry.required_connectors, entry.optional_connectors) == ([], [], [])
+
+
+def test_a_solo_draft_publishes_without_rules_or_coordinator_confirmation(env):
+    draft_id = env.draft(solution_mode="solo")
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.runner.solution = {**_solution("s1-c1"), "mode": "solo", "orchestration_rules": "", "experts": _solution("s1-c1")["experts"][:1]}
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True
+    detail = env.service.get_draft(draft_id)
+    assert detail.status == "ready_for_review" and detail.solution_mode == "solo"
+    assert [gate.key for gate in detail.gates] == ["findings"]
+    _resolve_all(env, draft_id)
+    env.service.submit_review(draft_id, "op1")
+    env.service.approve(draft_id, "admin", "")
+    sid = env.service.publish(draft_id, "admin").published_solution_id
+    package = env.catalog.pull_solution_package(solution_id=sid)
+    assert (package.mode, package.orchestration_rules, len(package.experts)) == ("solo", "", 1)
+
+
+def test_a_job_fails_when_the_model_returns_the_wrong_mode(env):
+    draft_id = env.draft(solution_mode="solo")
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True  # runner 默认生成 2 位专家的组群方案
+    detail = env.service.get_draft(draft_id)
+    assert detail.status == "draft" and detail.package is None
+    assert detail.latest_job is not None and detail.latest_job.error_code == "schema_invalid"
+
+
+def _skill_env(env: Env, catalog) -> None:
+    env.executor = GenerationJobExecutor(env.repo, env.store, env.models, env.runner, owner="w1", clock=env.clock, skill_catalog=catalog)
+
+
+def test_generation_injects_the_published_skill_catalog_and_drops_unknown_refs(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    item = SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h1", display_name="读表", summary="读取 Excel")
+    _skill_env(env, lambda: [item])
+    body = _solution("s1-c1")
+    body["experts"][0]["skills"] = [
+        {"skill_id": "sk-1", "version": "1", "content_hash": "h1", "reason": "读表"},
+        {"skill_id": "sk-1", "version": "0", "content_hash": "h0", "reason": "旧版"},
+        {"skill_id": "made-up", "version": "1", "content_hash": "x", "reason": "编造"},
+    ]
+    env.runner.solution = body
+    draft_id = env.generated()
+    assert "<skill_catalog>" in env.runner.prompts[-1][1] and "skill_id=sk-1" in env.runner.prompts[-1][1]
+    detail = env.service.get_draft(draft_id)
+    assert [ref.skill_id for ref in detail.package.experts[0].skills] == ["sk-1"]
+    unresolved = sorted((f.note, f.origin, f.field_path) for f in detail.findings if f.kind == "skill_unresolved")
+    assert unresolved == [("not_in_catalog", "system", ""), ("version_mismatch", "system", "")]
+
+
+def test_without_a_catalog_the_prompt_forbids_skills_and_none_survive(env):
+    body = _solution("s1-c1")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    env.runner.solution = body
+    draft_id = env.generated()
+    assert "当前没有可用的平台 skill" in env.runner.prompts[-1][1]
+    assert env.service.get_draft(draft_id).package.experts[0].skills == []
+
+
+def test_an_unreadable_skill_catalog_fails_the_job_before_generation(env):
+    def broken():
+        raise OSError("db down")
+
+    _skill_env(env, broken)
+    draft_id = env.draft()
+    env.service.add_source(draft_id, "op1", "质量手册.md", MANUAL)
+    env.service.request_generation(draft_id, "op1", "k1")
+    assert env.executor.run_once() is True
+    job = env.service.get_draft(draft_id).latest_job
+    assert job is not None and (job.status, job.error_code) == ("failed", "skill_catalog_unavailable")
+    assert env.runner.prompts == []
+
+
+def test_manual_save_rejects_skill_refs_that_are_not_published_versions(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="2", content_hash="h2", display_name="读表", summary="")]
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [
+        {"skill_id": "sk-1", "version": "1", "content_hash": "h1", "reason": "旧版"},
+        {"skill_id": "ghost", "version": "1", "content_hash": "x", "reason": "下架"},
+    ]
+    with pytest.raises(ValidationProblem) as caught:
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    message = str(caught.value)
+    assert "sk-1@1（版本或内容与平台已发布的不一致）" in message and "ghost@1（平台目录里没有或已下架）" in message
+    assert env.service.get_draft(draft_id).version == detail.version  # 没有落库
+
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "2", "content_hash": "h2", "reason": "读表"}]
+    saved = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    assert [ref.skill_id for ref in saved.package.experts[0].skills] == ["sk-1"]
+
+
+def test_a_skill_unpublished_after_selection_blocks_the_next_save_of_any_section(env):
+    from shared.solution_authoring.prompts import SkillCatalogItem
+
+    env.skills = [SkillCatalogItem(skill_id="sk-1", version="1", content_hash="h", display_name="读表", summary="")]
+    draft_id = env.generated()
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    detail = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    env.skills = []  # 被下架
+    body = detail.package.model_dump(mode="json") | {"display_name": "只改名称"}
+    with pytest.raises(ValidationProblem, match="能力清单"):
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+
+
+def test_saving_without_skills_never_reads_the_catalog_and_an_unreadable_catalog_is_503(env):
+    def broken():
+        raise OSError("db down")
+
+    draft_id = env.generated()
+    env.service._skill_catalog = broken
+    detail = env.service.get_draft(draft_id)
+    body = detail.package.model_dump(mode="json") | {"display_name": "新名称"}
+    detail = env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+    assert detail.package.display_name == "新名称"
+    body = detail.package.model_dump(mode="json")
+    body["experts"][0]["skills"] = [{"skill_id": "sk-1", "version": "1", "content_hash": "h", "reason": ""}]
+    with pytest.raises(ServiceUnavailable):
+        env.service.update_package(draft_id, "op1", PackageUpdate(version=detail.version, package=GeneratedSolution.model_validate(body)))
+

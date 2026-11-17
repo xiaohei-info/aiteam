@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from shared.contracts.crosstier import RecommendedCapability
 from shared.contracts.enums import CatalogStatus, CatalogType
 from shared.contracts.expert_profile import (
     ConnectorKey,
@@ -31,8 +32,8 @@ from shared.contracts.expert_profile import (
 )
 from shared.contracts.platform_skill import PlatformSkillRef
 
-from .catalog_scope import VisibleScope
 from .catalog_avatar import AVATAR_MAX_DATA_URL_LENGTH, validate_avatar_value
+from .catalog_scope import VisibleScope
 
 
 class ExpertBinding(BaseModel):
@@ -131,6 +132,11 @@ class RegisterSolutionTemplateRequest(BaseModel):
     output_requirements: str = Field(
         default="", max_length=4000, description="可选的方案交付要求；随方案包下发（SolutionPackage.output_requirements）",
     )
+    mode: Literal["solo", "group"] = Field(default="group", description="solo：单人方案（1 位专家、不建群）；group：组群方案")
+    orchestration_rules: str = Field(
+        default="", max_length=16000, description="群聊编排规则（collaboration-markdown-v1），成员用 @{专家模板 id} 引用；solo 为空",
+    )
+    recommended_capabilities: list[RecommendedCapability] = Field(default_factory=list, max_length=24, description="推荐的 skill / MCP（非强制）")
     tags: list[str] = Field(default_factory=list, description="方案标签分类")
 
 
@@ -253,6 +259,10 @@ class CatalogEntryResponse(ExpertTemplateProfile):
     )
     coordinator_template_id: str = Field(default="", description="方案内被指定为协调专家的模板 id")
     coordinator_instructions: str = Field(default="", max_length=4000)
+    # 行业方案的类型、群聊编排规则与推荐能力（只读展示；专家模板为 null / 空）。
+    mode: Literal["solo", "group"] | None = Field(default=None, description="行业方案类型：solo 单人 / group 组群；专家模板为 null")
+    orchestration_rules: str = Field(default="", description="群聊编排规则，成员引用为 @{专家模板 id}")
+    recommended_capabilities: list[RecommendedCapability] = Field(default_factory=list, description="方案推荐的 skill / MCP（非强制）")
 
 
 # ---- 详情视图（对齐前端 CatalogItem，返回完整 payload 顶层字段）----

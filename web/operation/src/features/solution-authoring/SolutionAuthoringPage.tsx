@@ -1,5 +1,5 @@
 /** 行业文档生成：草稿列表与新建入口。 */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PlatformRole, hasRole, newIdempotencyKey } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
@@ -18,14 +18,14 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { CreateDraftDialog } from "./CreateDraftDialog";
 import { useSession } from "../../auth/session";
 import { DraftRowActions, type RowAction } from "./DraftRowActions";
-import { draftStatus, formatTime, generationNote } from "./labels";
+import { draftStatus, formatTime, generationNote, MODE_LABEL, nextStep } from "./labels";
 import type { DraftCreateInput, DraftSummary } from "./types";
 import { useSolutionAuthoringApi } from "./useSolutionAuthoringApi";
 
 type DraftRow = DraftSummary & Record<string, unknown>;
 type Filter = "open" | "all";
 
-interface PendingAction { action: Exclude<RowAction, "continue">; draft: DraftSummary; }
+interface PendingAction { action: Exclude<RowAction, "open" | "continue">; draft: DraftSummary; }
 
 /** 「未完成」= 还没发布到目录的草稿。 */
 const isOpen = (draft: DraftSummary) => draft.status !== "published";
@@ -98,12 +98,14 @@ export function SolutionAuthoringPage(): ReactNode {
   }, [load]);
 
   const onRowAction = useCallback((action: RowAction, draft: DraftSummary) => {
-    if (action === "continue") {
+    if (action === "open") {
+      navigate(`/solution-authoring/${draft.draft_id}`);
+    } else if (action === "continue") {
       void perform(() => api.generate(draft.draft_id, newIdempotencyKey()), "继续生成失败");
     } else {
       setPending({ action, draft });
     }
-  }, [api, perform]);
+  }, [api, perform, navigate]);
 
   const confirmPending = useCallback(async () => {
     if (!pending) return;
@@ -130,16 +132,26 @@ export function SolutionAuthoringPage(): ReactNode {
   }, [api, navigate]);
 
   const columns = useMemo<TableColumn<DraftRow>[]>(() => [
-    { key: "title", header: "标题", width: proportional(2), renderCell: (row) => <Link to={`/solution-authoring/${row.draft_id}`}>{row.title}</Link> },
+    {
+      key: "title", header: "标题", width: proportional(2),
+      renderCell: (row) => (
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          <Link to={`/solution-authoring/${row.draft_id}`} data-draft-id={row.draft_id}>{row.title}</Link>
+          <Badge label={MODE_LABEL[row.solution_mode ?? "group"]} variant="info" />
+        </HStack>
+      ),
+    },
     {
       key: "status", header: "状态", width: proportional(1.5),
       renderCell: (row) => {
         const status = draftStatus(row.status);
         const note = generationNote(row, workerAvailable, Date.now() + clockOffset);
+        const step = row.status === "generating" ? null : nextStep(row, isAdmin);
         return (
           <VStack gap={1}>
             <Badge label={status.label} variant={status.variant} />
             {note && <Text type="supporting" color="secondary">{note.tone === "secondary" ? "" : "⚠ "}{note.text}</Text>}
+            {step && <Text type="supporting" color="secondary">{step.hint}</Text>}
           </VStack>
         );
       },
@@ -152,6 +164,15 @@ export function SolutionAuthoringPage(): ReactNode {
     },
   ], [workerAvailable, clockOffset, isAdmin, busy, onRowAction]);
 
+  // 整行可点：点到链接 / 按钮 / 菜单以外的位置，同样进入详情（Table 没有行点击属性，在容器上按行委托）。
+  const onTableClick = useCallback((event: MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("a, button, input, [role='menu'], [role='menuitem']")) return;
+    const draftId = target.closest("tbody tr")?.querySelector<HTMLElement>("[data-draft-id]")?.dataset.draftId;
+    if (draftId) navigate(`/solution-authoring/${draftId}`);
+  }, [navigate]);
+
+  const openCount = useMemo(() => drafts.filter(isOpen).length, [drafts]);
   const visible = useMemo(() => (filter === "open" ? drafts.filter(isOpen) : drafts), [drafts, filter]);
 
   return (
@@ -161,11 +182,11 @@ export function SolutionAuthoringPage(): ReactNode {
           <Heading level={1}>行业文档生成</Heading>
           <Text color="secondary">上传行业资料，由 AI 生成行业解决方案草稿；人工审核通过后发布到行业解决方案目录。</Text>
         </VStack>
-        <Button label="新建草稿" onClick={() => setCreating(true)} />
+        <Button label="新建草稿" variant="primary" onClick={() => setCreating(true)} />
       </HStack>
       <SegmentedControl label="草稿筛选" value={filter} onChange={(value) => setFilter(value as Filter)}>
-        <SegmentedControlItem value="open" label="未完成" />
-        <SegmentedControlItem value="all" label="全部" />
+        <SegmentedControlItem value="open" label={`未完成 ${openCount}`} />
+        <SegmentedControlItem value="all" label={`全部 ${drafts.length}`} />
       </SegmentedControl>
       {!workerAvailable && (
         <Banner status="warning" title="生成服务未启用" description="排队中的生成任务不会被执行。请联系平台运维启用后再生成。" />
@@ -176,7 +197,8 @@ export function SolutionAuthoringPage(): ReactNode {
       ) : error ? (
         <Banner status="error" title={error} endContent={<Button label="重试" variant="ghost" onClick={() => void load()} />} />
       ) : (
-        <Card padding={0}>
+        <Card padding={0} data-draft-table onClick={onTableClick}>
+          <style>{"[data-draft-table] tbody tr:has([data-draft-id]) { cursor: pointer; }"}</style>
           <Table
             aria-label="方案草稿"
             tableProps={{ "aria-label": "方案草稿" }}

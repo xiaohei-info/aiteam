@@ -278,6 +278,36 @@ test("group participant sessions receive bounded roster and solution context", a
   }
 });
 
+test("a private chat with a solo solution's expert carries that solution's requirements and recommended capabilities", async () => {
+  const fixture = await createFixture();
+  const now = new Date().toISOString();
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const contexts: string[] = [];
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "质检专家", revoked: false, synced_at: now },
+    ], [
+      { solution_instance_id: "solo-1", tenant_id: "tenant-1", member_id: "member-1", version: "1:1", display_name: "来料质检", status: "applied", mode: "solo", expert_employee_ids: ["employee-1"], output_requirements: "列出检验依据", recommended_capabilities: [{ kind: "skill", ref: "sheet", purpose: "读表" }] },
+      { solution_instance_id: "group-1", tenant_id: "tenant-1", member_id: "member-1", version: "1:1", display_name: "组群方案", status: "applied", mode: "group", expert_employee_ids: ["employee-1", "other"] },
+    ], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snap-1", display_name: "质检专家" }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    const host = fixture.createHost(undefined, undefined, (_id, authorization) => {
+      contexts.push(authorization?.solutionContext ?? "");
+      return createControlledResourceLoader("test system prompt");
+    });
+    fixture.faux.setResponses([fauxAssistantMessage("done")]);
+    await host.prompt("conversation-1", "开始", undefined, caller);
+    assert.equal(contexts.length, 1);
+    assert.match(contexts[0]!, /当前单人方案：来料质检/);
+    assert.match(contexts[0]!, /列出检验依据/);
+    assert.match(contexts[0]!, /skill sheet：读表/);
+    assert.doesNotMatch(contexts[0]!, /组群方案/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost publishes a terminal event when Manager runtime setup fails", async () => {
   const fixture = await createFixture();
   const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };

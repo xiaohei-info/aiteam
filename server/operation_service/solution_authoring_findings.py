@@ -15,11 +15,17 @@ from typing import Any
 
 from shared.errors import Conflict
 from shared.solution_authoring.schemas import AgentFinding, SourceChunk
-from shared.solution_authoring.sensitive_scan import fields_containing, mask, scan_solution
+from shared.solution_authoring.sensitive_scan import (
+    fields_containing,
+    mask,
+    scan_solution,
+)
 
 from .solution_authoring_repository import FindingRow
 
 IMAGE_UNRECOGNIZED = "image_unrecognized"
+# 模型引用了平台目录里没有（或版本不符）的 skill：宿主已从正文剔除，留一条提示项让运营知悉。
+SKILL_UNRESOLVED = "skill_unresolved"
 _REOPENED = {"status": "open", "resolved_by": None, "resolved_at": None}
 
 

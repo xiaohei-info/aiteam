@@ -166,6 +166,8 @@ def test_solution_hides_invisible_experts_and_reports_count(service):
 
     partial = service.pull_solution_package(solution_id="sol", tenant_id="t-retail")
     assert [e.template_id for e in partial.experts] == ["lead"] and partial.hidden_expert_count == 1
+    assert [(h.template_id, h.display_name) for h in partial.hidden_experts] == [("mfg-only", partial.hidden_experts[0].display_name)]
+    assert partial.hidden_experts[0].display_name and full.hidden_experts == []
 
 
 def test_solution_with_invisible_coordinator_is_not_available(service):

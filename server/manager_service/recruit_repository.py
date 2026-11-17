@@ -38,6 +38,9 @@ class SolutionInstanceRow:
     coordinator_instructions: str = ""
     workflow_skill_ref: dict | None = None
     output_requirements: str = ""
+    mode: str = "group"
+    orchestration_rules: str = ""
+    recommended_capabilities: list = field(default_factory=list)
     knowledge_refs: list[str] = field(default_factory=list)  # Deprecated compatibility projection.
     skill_refs: list[str] = field(default_factory=list)  # Deprecated compatibility projection.
     planner_prompt: str = ""  # Deprecated compatibility projection.
@@ -71,7 +74,8 @@ _SOLUTION_COLUMNS = (
     "id, solution_id, solution_version, display_name, status, expert_employee_ids, "
     "knowledge_refs, skill_refs, planner_prompt, subtask_prompt, aggregate_prompt, "
     "default_grants_meta, template_meta, config_version, created_at, updated_at, "
-    "coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements"
+    "coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements, "
+    "mode, orchestration_rules, recommended_capabilities"
 )
 
 
@@ -104,6 +108,9 @@ def _row_to_solution(row: Any) -> SolutionInstanceRow:
         coordinator_instructions=_row_value(row, 17, "") or "",
         workflow_skill_ref=_row_value(row, 18),
         output_requirements=_row_value(row, 19, "") or "",
+        mode=_row_value(row, 20, "group") or "group",
+        orchestration_rules=_row_value(row, 21, "") or "",
+        recommended_capabilities=list(_row_value(row, 22, []) or []),
     )
 
 
@@ -187,6 +194,9 @@ class RecruitRepository:
         coordinator_instructions: str = "",
         workflow_skill_ref: dict | None = None,
         output_requirements: str = "",
+        mode: str = "group",
+        orchestration_rules: str = "",
+        recommended_capabilities: list | None = None,
         status: str = "applied",
     ) -> SolutionInstanceRow:
         """在本 tenant 建方案实例（展开后的真相）。tenant_id 取自 ctx（D22）。"""
@@ -198,9 +208,10 @@ class RecruitRepository:
                     expert_employee_ids, knowledge_refs, skill_refs,
                     planner_prompt, subtask_prompt, aggregate_prompt,
                     default_grants_meta, template_meta, config_version,
-                    coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements
+                    coordinator_employee_id, coordinator_instructions, workflow_skill_ref, output_requirements,
+                    mode, orchestration_rules, recommended_capabilities
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING """ + _SOLUTION_COLUMNS,
                 (
@@ -214,6 +225,7 @@ class RecruitRepository:
                     coordinator_employee_id, coordinator_instructions,
                     json.dumps(workflow_skill_ref) if workflow_skill_ref is not None else None,
                     output_requirements,
+                    mode, orchestration_rules, json.dumps(recommended_capabilities or []),
                 ),
             ).fetchone()
         return _row_to_solution(row)

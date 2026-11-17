@@ -229,7 +229,7 @@ describe("CreateDraftDialog", () => {
     expect(await screen.findByText("详情页")).toBeInTheDocument();
     expect(calls.find((call) => call.method === "POST")?.body).toEqual({
       title: "注塑质检方案", platform_model_ref: { provider_id: "provider-1", model_id: "vision-model" },
-      image_recognition: "vision", supplement: "侧重来料检验",
+      image_recognition: "vision", supplement: "侧重来料检验", solution_mode: "group",
     });
   });
 
@@ -294,7 +294,7 @@ describe("DraftDetailPage", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "质检方案" })).toBeInTheDocument();
     expect(screen.getByText(/2 KB · 3 段文字 · 1 张图片/)).toBeInTheDocument();
     expect(screen.getByText("文字过长，超出部分未读取")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 3, name: "来料质检方案" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 4, name: "来料质检方案" })).toBeInTheDocument();
     expect(screen.getAllByText("识别置信度低，请核对原图").length).toBeGreaterThan(0);
 
     const findings = screen.getByRole("list", { name: "敏感项清单" });
@@ -304,7 +304,7 @@ describe("DraftDetailPage", () => {
     // 命中位置说成编辑页上的字段名，而不是后端的字段路径。
     expect(within(findings).getByText(/出现在正文：专家「质检协调专家」的系统提示词/)).toBeInTheDocument();
     expect(within(findings).queryByText(/experts\[0\]/)).not.toBeInTheDocument();
-    expect(screen.getByText("2 项待处理")).toBeInTheDocument();
+    expect(screen.getByText("待你处理 · 2 项")).toBeInTheDocument();
     // 正文里的项给三种处理方式；不在正文里的只能确认已知悉。
     expect(within(findings).getAllByRole("button").map((button) => button.textContent)).toEqual(["脱敏", "从正文删除", "确认可公开", "确认已知悉"]);
   });
@@ -384,7 +384,7 @@ describe("DraftDetailPage", () => {
       },
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
@@ -397,7 +397,7 @@ describe("DraftDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "覆盖保存" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "覆盖保存" })).not.toBeInTheDocument());
     expect(calls.filter((call) => call.method === "PUT")[1]!.body).toMatchObject({ version: 4, package: { display_name: "新名称" } });
-    expect(screen.getByRole("button", { name: "编辑正文" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "编辑概览" })).toBeInTheDocument();
   });
 
   it("保存被拒绝（非冲突）时显示原因并保留修改", async () => {
@@ -406,7 +406,7 @@ describe("DraftDetailPage", () => {
       [`PUT ${BASE}/${DRAFT_ID}/package`]: () => json({ status: 422, code: "validation_error", title: "Unprocessable", detail: "evidence may only cite source excerpts that belong to this draft" }, 422),
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     fireEvent.change(screen.getByLabelText(/方案名称/), { target: { value: "新名称" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByText(/evidence may only cite/)).toBeInTheDocument();
@@ -414,14 +414,16 @@ describe("DraftDetailPage", () => {
     expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
   });
 
-  it("正文编辑期间锁住处理敏感项、提交审核与重新生成；取消后恢复", async () => {
+  it("有分区编辑期间锁住处理敏感项、提交审核、重新生成与其它分区；取消后恢复", async () => {
     const calls = mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ findings: [{ ...PHONE_FINDING }] })) });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑正文" }));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑概览" }));
     for (const name of ["脱敏", "从正文删除", "确认可公开", "提交审核", "重新生成"]) {
       expect(isDisabled(screen.getByRole("button", { name }))).toBe(true);
     }
     expect(screen.getByText(/请先保存或取消修改，再处理敏感项/)).toBeInTheDocument();
+    // 一次只编辑一节：其它分区的编辑按钮暂不可用。
+    expect(isDisabled(screen.getByRole("button", { name: "编辑专家 检验专家" }))).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "脱敏" }));
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
     expect(calls.filter((call) => call.method !== "GET")).toHaveLength(0);
@@ -499,8 +501,9 @@ describe("DraftDetailPage", () => {
 
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: approved });
     const admin = renderDetail("system_admin");
-    expect(await screen.findByRole("button", { name: "删除" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "驳回" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "更多操作" }));
+    expect(await screen.findByRole("menuitem", { name: "删除" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "驳回" })).toBeInTheDocument();
     expect(screen.queryByText("上一次发布没有完成")).not.toBeInTheDocument();
     admin.unmount();
 
@@ -508,8 +511,9 @@ describe("DraftDetailPage", () => {
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "approved", findings: [], publish_started: true })) });
     const midway = renderDetail("system_admin");
     expect(await screen.findByText("上一次发布没有完成")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "驳回" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "发布到目录" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "驳回" })).not.toBeInTheDocument();
+    // 发布中途失败：主操作改为「重新发布」，提示继续发布而不是从头来。
+    expect(screen.getByRole("button", { name: "重新发布" })).toBeInTheDocument();
     midway.unmount();
 
     mockApi({ [`GET ${BASE}/${DRAFT_ID}`]: () => json(detail({ status: "published", findings: [], publish_started: true, published_solution_id: "sa-abc" })) });
@@ -533,7 +537,7 @@ describe("DraftDetailPage", () => {
       [`DELETE ${BASE}/${DRAFT_ID}`]: () => new Response(null, { status: 204 }),
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await clickMore("删除");
     expect(await screen.findByText(/已上传的资料原件会被删除/)).toBeInTheDocument();
     expect(calls.some((call) => call.method === "DELETE")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
@@ -583,6 +587,12 @@ function summary(overrides: Partial<DraftSummary>): DraftSummary {
   return { ...SUMMARY, ...overrides };
 }
 
+/** 详情页：打开页头「更多操作」菜单并点其中一项（驳回、删除等次要操作收在这里）。 */
+async function clickMore(item: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "更多操作" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 async function openRowMenu(draftId: string, item: string) {
   const row = (await screen.findAllByRole("row")).find((candidate) => candidate.querySelector(`a[href$="${draftId}"]`));
   expect(row).toBeDefined();
@@ -601,7 +611,10 @@ describe("草稿列表的筛选与行操作", () => {
     renderList();
     expect(await screen.findByRole("link", { name: "未完成方案" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "已发布方案" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: "全部" }));
+    // 筛选项带数量：未完成 1，全部 2；未带 solution_mode 的旧数据显示为组群。
+    expect(screen.getByRole("radio", { name: "未完成 1" })).toBeInTheDocument();
+    expect(screen.getAllByText("组群").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("radio", { name: "全部 2" }));
     expect(await screen.findByRole("link", { name: "已发布方案" })).toBeInTheDocument();
   });
 
@@ -655,9 +668,9 @@ describe("草稿列表的筛选与行操作", () => {
   });
 
   it.each([
-    ["draft", ["继续生成", "删除"]],
-    ["generating", ["取消生成", "删除"]],
-    ["ready_for_review", ["删除"]],
+    ["draft", ["查看详情", "继续生成", "删除"]],
+    ["generating", ["查看详情", "取消生成", "删除"]],
+    ["ready_for_review", ["核对并提交审核", "删除"]],
   ] as const)("%s 状态的草稿只出现可用的菜单项", async (status, expected) => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status, latest_job: status === "generating" ? job({ status: "parsing" }) : null })]) });
     renderList();
@@ -666,9 +679,9 @@ describe("草稿列表的筛选与行操作", () => {
   });
 
   it.each([
-    ["没有资料（source_count 为 0）", 0, ["删除"]],
-    ["有资料", 2, ["继续生成", "删除"]],
-    ["旧服务端没给资料数量，照旧显示", undefined, ["继续生成", "删除"]],
+    ["没有资料（source_count 为 0）", 0, ["上传资料", "删除"]],
+    ["有资料", 2, ["查看详情", "继续生成", "删除"]],
+    ["旧服务端没给资料数量，照旧显示", undefined, ["查看详情", "继续生成", "删除"]],
   ] as const)("草稿%s时的菜单项", async (_name, sourceCount, expected) => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "draft", source_count: sourceCount })]) });
     renderList();
@@ -680,7 +693,24 @@ describe("草稿列表的筛选与行操作", () => {
     mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "approved" })]) });
     renderList();
     await screen.findByRole("link", { name: "质检方案" });
-    expect(screen.queryByRole("button", { name: /的操作$/ })).not.toBeInTheDocument();
+    // 非管理员不能删除已通过的草稿，但菜单里仍有进入详情的入口。
+    fireEvent.click(screen.getByRole("button", { name: /的操作$/ }));
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["查看详情"]);
+  });
+
+  it("点击整行（不只是标题）进入详情；点操作菜单不触发；行内显示下一步提示", async () => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "ready_for_review", open_finding_count: 2 })]) });
+    renderList();
+    expect(await screen.findByText("下一步：处理 2 项敏感项，再提交审核")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("model-1"));
+    expect(await screen.findByText("详情页")).toBeInTheDocument();
+  });
+
+  it("菜单里的「进入详情」项跳转到详情页", async () => {
+    mockApi({ [`GET ${BASE}`]: () => listResponse([summary({ status: "ready_for_review" })]) });
+    renderList();
+    await openRowMenu(DRAFT_ID, "核对并提交审核");
+    expect(await screen.findByText("详情页")).toBeInTheDocument();
   });
 
   it("继续生成：用新的幂等键发起生成并刷新列表", async () => {
@@ -790,7 +820,7 @@ describe("草稿详情的取消生成", () => {
       [`DELETE ${BASE}/${DRAFT_ID}`]: () => new Response(null, { status: 204 }),
     });
     renderDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await clickMore("删除");
     fireEvent.click(await screen.findByRole("button", { name: "确认删除" }));
     expect(await screen.findByText("列表页")).toBeInTheDocument();
     expect(calls.filter((call) => call.method !== "GET").map((call) => call.method)).toEqual(["POST", "DELETE"]);

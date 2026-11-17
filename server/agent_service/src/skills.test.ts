@@ -440,3 +440,60 @@ test("authorized expert list exposes signed skill display names without changing
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an installed personal skill stays usable after the enterprise rotates or revokes its signing key", async () => {
+  const oldKey = generateKeyPairSync("ed25519");
+  const newKey = generateKeyPairSync("ed25519");
+  const scope = { tenantId: "tenant-a", memberId: "member-a" };
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "aiteam-personal-pin-")));
+  try {
+    const cache = new SkillCache(root);
+    cache.install(scope, signed(oldKey, "review", "skill-old"), [metadata(oldKey, "skill-old")]);
+    // 企业换了密钥并吊销旧钥：当前公钥列表里旧钥已是 revoked。
+    const rotated = [metadata(newKey, "skill-new"), metadata(oldKey, "skill-old", "revoked", { revoked_at: new Date().toISOString() })];
+    assert.equal(cache.pathsFor(scope, ["review@1"], { publicKeys: rotated }).length, 0);
+    assert.equal(cache.pathsFor(scope, ["review@1"], cache.installedVerification(scope, "review@1")).length, 1);
+
+    const loader = createControlledResourceLoader("system", undefined, {
+      caller: { callerId: "member-a", userId: "member-a", tenantId: "tenant-a", roles: [] },
+      employeeId: "e1",
+      snapshot: { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", skills: [], skill_signing_keys: rotated },
+    }, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { cache, refs: ["review@1"] });
+    await loader.reload();
+    assert.deepEqual(loader.getSkills().skills.map((skill) => skill.name), ["review"]);
+
+    // 重新安装用旧钥签的包：不可以安装，已装的版本原样保留。
+    assert.throws(() => cache.install(scope, signed(oldKey, "review", "skill-old"), rotated), SkillVerificationError);
+    assert.equal(cache.pathsFor(scope, ["review@1"], cache.installedVerification(scope, "review@1")).length, 1);
+    // 用新钥签的包可以正常重装。
+    cache.install(scope, signed(newKey, "review", "skill-new"), rotated);
+    assert.equal(cache.pathsFor(scope, ["review@1"], { publicKeys: rotated }).length, 1);
+
+    // 撤销时连同安装记录一起删除。
+    cache.remove(scope, "review");
+    assert.equal(cache.installedVerification(scope, "review@1"), undefined);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a personal skill installed before pinning is pinned on first successful load", async () => {
+  const oldKey = generateKeyPairSync("ed25519");
+  const newKey = generateKeyPairSync("ed25519");
+  const scope = { tenantId: "tenant-a", memberId: "member-a" };
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "aiteam-personal-legacy-")));
+  try {
+    const cache = new SkillCache(root);
+    // 旧版本安装：只走 reconcile，没有安装记录。
+    cache.reconcile(scope, [signed(oldKey, "review", "skill-old")], ["review"], { publicKeys: [metadata(oldKey, "skill-old")] }, { authoritative: false });
+    assert.equal(cache.installedVerification(scope, "review@1"), undefined);
+    const caller = { callerId: "member-a", userId: "member-a", tenantId: "tenant-a", roles: [] };
+    const load = async (keys: SkillSigningKeyMetadata[]) => {
+      const loader = createControlledResourceLoader("system", undefined, { caller, employeeId: "e1", snapshot: { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", skills: [], skill_signing_keys: keys } },
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { cache, refs: ["review@1"] });
+      await loader.reload();
+      return loader.getSkills().skills.map((skill) => skill.name);
+    };
+    assert.deepEqual(await load([metadata(oldKey, "skill-old")]), ["review"]);
+    assert.ok(cache.installedVerification(scope, "review@1"));
+    assert.deepEqual(await load([metadata(newKey, "skill-new")]), ["review"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

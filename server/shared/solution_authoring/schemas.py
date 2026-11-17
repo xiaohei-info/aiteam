@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .orchestration import OrchestrationRefError, validate_member_refs
+
 PROTOCOL_VERSION = 1
 
 ChunkOrigin = Literal["text", "image"]
@@ -76,6 +78,35 @@ class Evidence(_Strict):
     quote: str = Field(default="", max_length=MAX_QUOTE_CHARS)
 
 
+_MCP_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+SolutionMode = Literal["solo", "group"]
+
+
+class ExpertSkillRef(_Strict):
+    """专家所需的平台 skill：固定版本引用，只能指向平台目录里已发布的 skill（由宿主校验）。"""
+
+    skill_id: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+    content_hash: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=200, description="为什么需要这个 skill")
+
+
+class ExpertMcpDecl(_Strict):
+    """专家所需的 MCP 连接器声明。只声明，不含地址与凭据；由用户在本机安装。"""
+
+    key: str = Field(max_length=64, description="连接器标识，与用户端连接器 ID 同规则")
+    display_name: str = Field(min_length=1, max_length=80)
+    purpose: str = Field(default="", max_length=200)
+    required: bool = False
+
+    @field_validator("key")
+    @classmethod
+    def _valid_key(cls, value: str) -> str:
+        if not _MCP_KEY_RE.fullmatch(value):
+            raise ValueError("key must match ^[a-z][a-z0-9_-]{0,63}$")
+        return value
+
+
 class GeneratedExpert(_Strict):
     """生成的专家。`key` 只在本方案内唯一，发布时才换成目录里的 template_id。"""
 
@@ -85,6 +116,18 @@ class GeneratedExpert(_Strict):
     description: str = Field(min_length=1, max_length=200)
     system_prompt: str = Field(min_length=1, max_length=8000)
     evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_EVIDENCE_PER_ITEM)
+    skills: list[ExpertSkillRef] = Field(default_factory=list, max_length=10)
+    mcps: list[ExpertMcpDecl] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _unique_capabilities(self) -> GeneratedExpert:
+        skills = [(item.skill_id, item.version) for item in self.skills]
+        if len(set(skills)) != len(skills):
+            raise ValueError("duplicate skill in one expert")
+        mcps = [item.key for item in self.mcps]
+        if len(set(mcps)) != len(mcps):
+            raise ValueError("duplicate mcp in one expert")
+        return self
 
     @field_validator("key")
     @classmethod
@@ -112,6 +155,19 @@ class GeneratedSolution(_Strict):
     output_requirements: str = Field(default="", max_length=4000)
     experts: list[GeneratedExpert] = Field(min_length=1, max_length=MAX_EXPERTS)
     evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_EVIDENCE_PER_ITEM)
+    mode: SolutionMode = Field(description="solo：1 位专家、不建群；group：2 位以上专家，需要群主与编排规则")
+    orchestration_rules: str = Field(
+        default="", max_length=8000,
+        description="群聊编排规则（collaboration-markdown-v1），用 @{专家 key} 引用成员；solo 必须为空",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_mode(cls, data: object) -> object:
+        # 旧草稿没有 mode：按专家数推断，保证已有草稿可读、可编辑。
+        if isinstance(data, dict) and "mode" not in data and isinstance(data.get("experts"), list):
+            return {**data, "mode": "solo" if len(data["experts"]) == 1 else "group"}
+        return data
 
     @field_validator("display_name", "description")
     @classmethod
@@ -129,12 +185,24 @@ class GeneratedSolution(_Strict):
         return cleaned
 
     @model_validator(mode="after")
-    def _consistent_team(self) -> "GeneratedSolution":
+    def _consistent_team(self) -> GeneratedSolution:
         keys = [expert.key for expert in self.experts]
         if len(set(keys)) != len(keys):
             raise ValueError("expert keys must be unique")
         if self.coordinator_key not in keys:
             raise ValueError("coordinator_key must reference one of experts[].key")
+        if self.mode == "solo":
+            if len(keys) != 1:
+                raise ValueError("a solo solution must have exactly one expert")
+            if self.orchestration_rules.strip():
+                raise ValueError("orchestration_rules must be empty for a solo solution")
+        else:
+            if len(keys) < 2:
+                raise ValueError("a group solution must have at least two experts")
+            try:
+                validate_member_refs(self.orchestration_rules, frozenset(keys))
+            except OrchestrationRefError as exc:
+                raise ValueError(str(exc)) from exc
         return self
 
     def evidence_chunk_ids(self) -> set[str]:

@@ -31,6 +31,8 @@ export interface ApprovalRecord {
   redacted_summary: string
   risk_level: ApprovalRiskLevel
   status: ApprovalStatus
+  /** 用户对同名冲突的选择；旧版 Agent 不返回。 */
+  resolution?: CapabilityResolution | null
   approved_by: string | null
   approved_at: string | null
   expires_at: string
@@ -41,6 +43,8 @@ export interface ApprovalRecord {
 }
 
 export type ApprovalDecision = 'approve' | 'deny'
+/** 安装个人能力与已装同名能力冲突时，用户在弹窗里的选择；只随 capability_install 的「允许」提交。 */
+export type CapabilityResolution = { action: 'replace' } | { action: 'rename'; ref: string }
 
 export const approvals = (client: AgentApiClient) => ({
   listApprovals: (conversationId: string, signal?: AbortSignal) =>
@@ -56,11 +60,16 @@ export const approvals = (client: AgentApiClient) => ({
     idempotencyKey: string,
     expectedRevision?: number,
     signal?: AbortSignal,
+    resolution?: CapabilityResolution,
   ) =>
     client.request<{ data: ApprovalRecord }>({
       method: 'POST',
       path: `/api/agent/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}/decision`,
-      body: expectedRevision === undefined ? { decision } : { decision, expected_revision: expectedRevision },
+      body: {
+        decision,
+        ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }),
+        ...(resolution ? { capability_resolution: resolution } : {}),
+      },
       idempotencyKey,
       raw: true,
       signal,

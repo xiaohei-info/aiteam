@@ -16,6 +16,7 @@ import type { MarketTemplate, MarketCategory, MarketTemplateDetail, RecruitRespo
 import GoldenDotsLoading from '../../components/Loading/GoldenDotsLoading'
 import AgentCard from './AgentCard'
 import RecruitAliasDialog from './RecruitAliasDialog'
+import SolutionsTab from './SolutionsTab'
 import TalentDetailPanel from './TalentDetailPanel'
 import type { TalentFilters } from './TalentFilterSidebar'
 import TalentSortSelect, { type TalentSortKey } from './TalentSortSelect'
@@ -189,6 +190,7 @@ export default function TalentMarket() {
   const [activeCategory, setActiveCategory] = useState('all')
   const [profileFilters, setProfileFilters] = useState<ProfileFilters>(INITIAL_PROFILE_FILTERS)
   const [sort, setSort] = useState<TalentSortKey>('composite')
+  const [tab, setTab] = useState<'experts' | 'solutions'>('experts')
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 260)
@@ -439,19 +441,35 @@ export default function TalentMarket() {
           </div>
         </section>
 
-        {actionError && (
+        <nav className="tm-category-nav" aria-label="人才市场类型">
+          {([['experts', '专家'], ['solutions', '方案']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              className={`tm-category-tab ${tab === key ? 'active' : ''}`}
+              onClick={() => setTab(key)}
+              aria-pressed={tab === key}
+              type="button"
+            >
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+
+        {tab === 'solutions' && <SolutionsTab query={debouncedSearch} />}
+
+        {tab === 'experts' && actionError && (
           <div className="tm-error">
             <span>{actionError}</span>
           </div>
         )}
 
-        {refreshNotice && (
+        {tab === 'experts' && refreshNotice && (
           <div className="tm-error" role="status">
             <span>{refreshNotice}</span>
           </div>
         )}
 
-        {loadError ? (
+        {tab !== 'experts' ? null : loadError ? (
           <RequestErrorState
             error={loadError}
             onRetry={() => void handleRefreshList()}

@@ -52,6 +52,24 @@ class SkillCatalogRow:
 
 
 @dataclass(frozen=True)
+class SkillCatalogSummaryRow:
+    """技能目录摘要行：不含 files，供成员可自装列表使用（不必把整包内容读出数据库）。
+
+    package_shaped 由库内对 files 的结构判断得出：数组、1–64 个文件、含 SKILL.md、内容总计不超过
+    1 MiB，与 catalog_package 的结构约束一致。哈希与 frontmatter 的完整校验只在取单个包签名时做。
+    """
+
+    skill_id: str
+    display_name: str
+    version: str
+    binding_policy: str
+    visibility: str
+    config: dict
+    content_hash: str
+    package_shaped: bool
+
+
+@dataclass(frozen=True)
 class ConnectorCatalogRow:
     """连接器目录行（runtime 无关，D16）。resource_id 即 connector_id。
 
@@ -98,6 +116,16 @@ def _row_to_skill(row: Any) -> SkillCatalogRow:
         catalog_version=row[10],
     )
 
+
+# 结构判断放在 CASE 里：files 不是数组时不能调用 jsonb_array_length / jsonb_array_elements。
+_SKILL_SUMMARY_SQL = (
+    "SELECT skill_id, display_name, version, binding_policy, visibility, config, content_hash, "
+    "CASE WHEN jsonb_typeof(files) = 'array' AND jsonb_array_length(files) BETWEEN 1 AND 64 THEN "
+    "  EXISTS (SELECT 1 FROM jsonb_array_elements(files) f WHERE f->>'path' = 'SKILL.md') "
+    "  AND (SELECT COALESCE(SUM(octet_length(f->>'content')), 0) FROM jsonb_array_elements(files) f) <= 1048576 "
+    "ELSE false END "
+    "FROM skill_catalog ORDER BY created_at"
+)
 
 _CONNECTOR_COLS = "id, connector_id, display_name, visibility, grant_scope, config, catalog_version"
 
@@ -191,6 +219,18 @@ class CapabilityCatalogRepository:
                 "SELECT " + _SKILL_COLS + " FROM skill_catalog ORDER BY created_at",
             ).fetchall()
         return [_row_to_skill(r) for r in rows]
+
+    def list_skill_summaries(self, ctx: TenantContext) -> list[SkillCatalogSummaryRow]:
+        """列出本租户技能摘要，不读出 files 内容（文件结构判断在库内完成）。"""
+        with self._router.session(ctx) as s:
+            rows = s.execute(_SKILL_SUMMARY_SQL).fetchall()
+        return [
+            SkillCatalogSummaryRow(
+                skill_id=r[0], display_name=r[1], version=r[2], binding_policy=r[3], visibility=r[4],
+                config=r[5] or {}, content_hash=r[6] or "", package_shaped=bool(r[7]),
+            )
+            for r in rows
+        ]
 
     def get_skill_by_skill_id(self, ctx: TenantContext, *, skill_id: str) -> SkillCatalogRow | None:
         """按 tenant + skill_id（业务键）取单条；不存在返回 None（供 M2 投影使用）。"""

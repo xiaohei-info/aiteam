@@ -173,6 +173,56 @@ function ExpertDetailSections({
   );
 }
 
+/**
+ * 方案类型、群聊编排规则与推荐能力：由行业文档生成产出，目录里只读。
+ * 改专家或群主时后端会按类型与规则校验（单人方案只能 1 位专家、规则引用的专家必须保留）。
+ */
+function SolutionPlaybook({ item, editing }: { item: CatalogItem; editing: boolean }): ReactNode {
+  const solo = item.mode === "solo";
+  const capabilities = item.recommended_capabilities ?? [];
+  return (
+    <DetailSection title="方案类型与群聊编排（只读）">
+      <VStack gap={3} data-testid="solution-playbook">
+        <HStack gap={2} align="center" wrap="wrap">
+          <Badge label={solo ? "单人方案" : "组群方案"} variant="info" />
+          <Text type="supporting" color="secondary">
+            {solo ? "企业应用后成员直接私聊这位专家，不建群" : "企业应用后成员可一键建群，由群主按编排规则组织协作"}
+          </Text>
+        </HStack>
+        {editing && (
+          <Text type="supporting" color="secondary">
+            类型与规则在「行业文档生成」里修改。{solo ? "单人方案只能保留 1 位专家。" : "规则里引用的专家不能从团队里移除。"}
+          </Text>
+        )}
+        {!solo && (
+          <VStack gap={1}>
+            <Text type="supporting" weight="semibold">编排规则（@{"{"}专家模板 ID{"}"}）</Text>
+            <Text as="p" color={item.orchestration_rules ? "primary" : "secondary"} style={{ whiteSpace: "pre-wrap" }}>
+              {item.orchestration_rules || "没有编排规则（旧方案，建群后按默认方式协作）"}
+            </Text>
+          </VStack>
+        )}
+        <VStack gap={1}>
+          <Text type="supporting" weight="semibold">推荐能力（非强制，成员需要时再询问安装）</Text>
+          {capabilities.length === 0 ? <Text color="secondary">—</Text> : (
+            <VStack as="ul" gap={1} aria-label="推荐能力" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {capabilities.map((cap) => (
+                <HStack as="li" key={`${cap.kind}:${cap.ref}`} gap={2} align="center" wrap="wrap">
+                  <Badge label={cap.kind === "mcp" ? "MCP" : "skill"} variant="neutral" />
+                  <Text weight="semibold">
+                    {cap.kind === "skill" ? cap.display_name || cap.ref : cap.display_name && cap.display_name !== cap.ref ? `${cap.display_name}（${cap.ref}）` : cap.ref}
+                  </Text>
+                  {cap.purpose && <Text type="supporting" color="secondary">{cap.purpose}</Text>}
+                </HStack>
+              ))}
+            </VStack>
+          )}
+        </VStack>
+      </VStack>
+    </DetailSection>
+  );
+}
+
 function SolutionDetailSections({ draft, onChange, editing }: {
   draft: CatalogItem;
   onChange: (next: CatalogItem) => void;
@@ -180,6 +230,7 @@ function SolutionDetailSections({ draft, onChange, editing }: {
 }): ReactNode {
   return (
     <>
+      <SolutionPlaybook item={draft} editing={editing} />
       <DetailSection title="配置专家团队 (expert_template_ids)">
         {editing ? (
           <TextArea

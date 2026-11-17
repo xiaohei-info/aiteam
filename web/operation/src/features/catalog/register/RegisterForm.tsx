@@ -7,7 +7,7 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { type FormEvent, useEffect, useState } from "react";
 import { BasicInfoFields } from "./BasicInfoFields";
 import { ExpertTemplateFields } from "./ExpertTemplateFields";
-import { ExpertSkillSelector } from "./ExpertSkillSelector";
+import { PlatformSkillSelector } from "../../skill-market/PlatformSkillSelector";
 import { ExpertProfileFields } from "./ExpertProfileFields";
 import { SolutionTemplateFields } from "./SolutionTemplateFields";
 import { TeamMemberSelector } from "./TeamMemberSelector";
@@ -177,7 +177,7 @@ export function RegisterForm({ api, catalogType, onDone, onCancel }: RegisterFor
                 onSystemPromptChange={setSystemPrompt}
                 onDescriptionChange={setExpertDescription}
               />
-              <ExpertSkillSelector value={platformSkillRefs} onChange={setPlatformSkillRefs} disabled={disabled} />
+              <PlatformSkillSelector value={platformSkillRefs} onChange={setPlatformSkillRefs} disabled={disabled} />
               <ExpertProfileFields value={profile} disabled={disabled} errors={profileErrors} onChange={setProfile} />
             </>
           ) : (

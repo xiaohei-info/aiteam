@@ -25,8 +25,12 @@ from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
 
-from .solution_authoring_dependencies import get_solution_authoring_service, worker_enabled
+from .solution_authoring_dependencies import (
+    get_solution_authoring_service,
+    worker_enabled,
+)
 from .solution_authoring_schemas import (
+    ConfirmRequest,
     DraftCreate,
     DraftDetailOut,
     DraftOut,
@@ -229,6 +233,20 @@ def submit_review(
     claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
 ) -> Envelope[DraftDetailOut]:
     return Envelope[DraftDetailOut](data=service.submit_review(str(draft_id), claims.user_id))
+
+
+@router.post(
+    "/drafts/{draft_id}/confirm", summary="确认群主 / 编排规则", operation_id="operation_solution_authoring_confirm",
+    description=(
+        "运营确认生成结果里的一项决定：coordinator（群主）、rules（群聊编排规则）。"
+        "确认记录的是当时的内容；之后该内容被编辑，确认自动失效，需要再次确认。提交审核要求所有适用项都已确认。"
+    ),
+)
+def confirm(
+    draft_id: UUID, body: ConfirmRequest,
+    claims: TokenClaims = Depends(_operator), service: SolutionAuthoringService = Depends(get_solution_authoring_service),
+) -> Envelope[DraftDetailOut]:
+    return Envelope[DraftDetailOut](data=service.confirm(str(draft_id), claims.user_id, body.item))
 
 
 @router.post(
