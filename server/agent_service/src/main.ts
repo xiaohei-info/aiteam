@@ -77,6 +77,7 @@ const sessionHost = new SessionHost({
   useFauxModel,
   managerClient,
   personalSkillCache,
+  customSkillStore,
   executionAuthorization,
   sandbox,
   // Faux responses are test artifacts, never billable usage.
