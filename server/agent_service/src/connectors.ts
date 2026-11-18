@@ -695,7 +695,7 @@ export async function importCustomSkill(
   store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
   request: { source: "folder" | "zip" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
   signal?: AbortSignal,
-): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[] }> {
+): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[]; results?: CustomSkillInstallResultItem[] }> {
   const origin = { kind: request.source, label: request.url?.trim() || (request.source === "folder" ? "本机文件夹" : request.source === "zip" ? "本机 zip" : request.source === "text" ? "粘贴 SKILL.md" : request.url?.trim() || ""), ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
   let files: { path: string; content: Buffer }[];
   if (request.source === "folder") {
@@ -737,19 +737,54 @@ export async function importCustomSkill(
     }
     return { scan: items };
   }
-  const root = request.roots?.[0] ?? roots[0]!;
+  const chosen = request.roots?.length ? request.roots : roots;
+  // 批量：一次装多个。逐个装，某个失败不影响其余；失败的在结果里给出原因。
+  if (chosen.length > 1) {
+    const results: CustomSkillInstallResultItem[] = [];
+    for (const root of chosen) {
+      const label = root || "（包根）";
+      try {
+        const pkg = normalizeSkillAtRoot(safe, root, origin);
+        const capability = installOneCustomSkill(store, custom, owner, pkg, request.replace === true);
+        results.push({ root, name: capability.ref, ok: true });
+      } catch (error) {
+        const reason = error instanceof Error && error.message ? error.message : "安装失败。";
+        results.push({ root, name: "", ok: false, reason });
+      }
+    }
+    return { results };
+  }
+  const root = chosen[0]!;
   const pkg = normalizeSkillAtRoot(safe, root, origin);
+  const capability = installOneCustomSkill(store, custom, owner, pkg, request.replace === true);
+  return { capability };
+}
+
+export interface CustomSkillInstallResultItem {
+  root: string;
+  name: string;
+  ok: boolean;
+  reason?: string;
+}
+
+/** 装一个技能：与企业技能同名拒绝；同名自定义技能须 replace。 */
+function installOneCustomSkill(
+  store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
+  pkg: CustomSkillPackage, replace: boolean,
+): LocalCapability {
   const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter((item) => item.kind === "skill" && item.ref === pkg.name);
   if (existing.some((item) => item.source !== "user_import")) {
     throw new CustomSkillError("invalid_skill_package", `已安装企业技能「${existing[0]!.display_name}」，同名自定义技能无法安装；请改 SKILL.md 里的 name。`);
   }
-  if (existing.length > 0 && !request.replace) throw new SkillInstallError("skill_exists", `已安装自定义技能「${existing[0]!.display_name}」${existing[0]!.version} 版；确认后覆盖。`);
+  if (existing.length > 0 && !replace) {
+    throw new SkillInstallError("skill_exists", `已安装自定义技能「${existing[0]!.display_name}」${existing[0]!.version} 版；确认后覆盖。`);
+  }
   const record = custom.install({ tenantId: owner.tenantId, memberId: owner.memberId }, pkg);
   store.putLocalCapability(owner.tenantId, owner.memberId, {
-    kind: "skill", ref: record.name, display_name: pkg.description ? record.name : record.name, url: record.origin.url ?? record.origin.label, tools: [],
+    kind: "skill", ref: record.name, display_name: record.name, url: record.origin.url ?? record.origin.label, tools: [],
     source: "user_import", version: record.version, source_ref: "", reason: "", approved_by: owner.memberId,
   });
-  return { capability: store.listLocalCapabilities(owner.tenantId, owner.memberId).find((item) => item.kind === "skill" && item.ref === record.name)! };
+  return store.listLocalCapabilities(owner.tenantId, owner.memberId).find((item) => item.kind === "skill" && item.ref === record.name)!;
 }
 
 /**

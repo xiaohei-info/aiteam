@@ -33,7 +33,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<CustomSkillPreview | null>(null)
   const [scan, setScan] = useState<CustomSkillScanItem[] | null>(null)
-  const [picked, setPicked] = useState<string | null>(null)
+  const [picked, setPicked] = useState<string[]>([])
 
   const current = SOURCES.find((item) => item.id === source)!
 
@@ -60,14 +60,14 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       })
       if (result?.scan) {
         setScan(result.scan)
-        setPicked(result.scan.find((item) => item.ok)?.root ?? null)
+        setPicked(result.scan.filter((item) => item.ok).map((item) => item.root))
         setPreview(null)
         return
       }
       if (!result?.preview) throw new Error('没有返回预览')
       setPreview(result.preview)
       setScan(null)
-      setPicked(null)
+      setPicked([])
       if (source === 'text') setText('')
     } catch (err) {
       setError(errorText(err))
@@ -82,17 +82,25 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
         ...(source === 'folder' || source === 'zip' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
         ...(source === 'url' ? { url } : {}),
-        ...(scan ? { roots: [picked ?? ''] } : {}),
+        ...(scan ? { roots: picked } : {}),
         preview: false,
       })
-      if (!result?.capability) throw new Error('安装未完成')
+      if (result?.results) {
+        const failed = result.results.filter((item) => !item.ok)
+        await onInstalled()
+        if (failed.length > 0) {
+          setError(`已装 ${result.results.length - failed.length} 个，${failed.length} 个失败：${failed.map((item) => `${item.root || '包根'}（${item.reason ?? '失败'}）`).join('；')}`)
+          return
+        }
+      }
+      if (!result?.capability && !result?.results) throw new Error('安装未完成')
       await onInstalled()
       onClose()
     } catch (err) {
       setError(errorText(err))
       setPreview(null)
       setScan(null)
-      setPicked(null)
+      setPicked([])
     } finally { setBusy(null) }
   }
 
@@ -102,12 +110,13 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
 
   return <div className="mcp-form custom-skill-import">
     {scan && <div className="skill-scan" aria-label="包内技能清单">
-      <p className="mcp-note">这个包里有 {scan.length} 个技能，选一个安装：</p>
+      <p className="mcp-note">这个包里有 {scan.length} 个技能，勾选要安装的：</p>
       <ul>
         {scan.map((item) => <li key={item.root} className={item.ok ? '' : 'invalid'}>
           <label>
-            <input type="radio" name="skill-root" disabled={!item.ok} checked={picked === item.root}
-              onChange={() => setPicked(item.root)} />
+            <input type="checkbox" aria-label={`选择 ${item.root || '包根'}`} disabled={!item.ok}
+              checked={picked.includes(item.root)}
+              onChange={() => setPicked((current) => current.includes(item.root) ? current.filter((root) => root !== item.root) : [...current, item.root])} />
             <span className="skill-scan-copy">
               <strong>{item.ok ? (item.name || item.root || '（包根）') : item.root || '（包根）'}</strong>
               <span>{item.ok ? `${item.description} · ${item.file_count} 个文件 · ${formatFileSize(item.total_bytes)}` : item.reason}</span>
@@ -160,7 +169,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     <footer>
       <button type="button" onClick={onClose}>取消</button>
       {scan
-        ? <button type="button" className="skill-install" disabled={busy === true || !picked} onClick={() => void install()}>{busy ? '正在安装…' : '安装所选'}</button>
+        ? <button type="button" className="skill-install" disabled={busy === true || picked.length === 0} onClick={() => void install()}>{busy ? '正在安装…' : picked.length > 1 ? `安装所选 ${picked.length} 个` : '安装所选'}</button>
         : preview
           ? <button type="button" className="skill-install" disabled={busy === true} onClick={() => void install()}>{busy ? '正在安装…' : '安装'}</button>
           : <button type="button" className="skill-install" disabled={busy || !ready} onClick={() => void check()}>

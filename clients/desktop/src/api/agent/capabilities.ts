@@ -82,10 +82,19 @@ export interface CustomSkillImportRequest {
   replace?: boolean
 }
 
+/** 批量安装时逐个技能的结果；失败项带 reason。 */
+export interface CustomSkillInstallResultItem {
+  root: string
+  name: string
+  ok: boolean
+  reason?: string
+}
+
 export interface CustomSkillImportResult {
   preview: CustomSkillPreview | null
   scan: CustomSkillScanItem[] | null
   capability: LocalCapability | null
+  results: CustomSkillInstallResultItem[] | null
 }
 
 /** 导入自定义技能；preview 为 true 时只校验并返回预览，不安装。 */
