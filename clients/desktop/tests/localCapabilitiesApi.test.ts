@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cancelMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listLocalCapabilities, probeMcpServer, reopenMcpLogin, startMcpLogin, updateMcpToken } from '../src/api/agent/capabilities.ts'
+import { cancelMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, importCustomSkill, installMcpServer, listCapabilityAutoInstall, listLocalCapabilities, probeMcpServer, reopenMcpLogin, startMcpLogin, updateMcpToken } from '../src/api/agent/capabilities.ts'
 import { isDocumentedRequest } from '../src/api/agent/contract.ts'
 import { approvals } from '../src/api/agent/approvals.ts'
-import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled } from '../src/pages/Capabilities/capabilityLabels.ts'
+import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, isAutoInstalled } from '../src/pages/Capabilities/capabilityLabels.ts'
 
 test('personal capabilities use the documented endpoints and encode the ref', async () => {
   const calls: { method: string; path: string }[] = []
@@ -79,4 +79,25 @@ test('MCP auth calls use documented endpoints, encode ids and send the token onl
   for (const c of calls) assert.ok(isDocumentedRequest(c.method, c.path), `${c.method} ${c.path}`)
   assert.ok(!keys.some(k => k.includes('secret-value')), 'token never in a path')
   assert.deepEqual(calls[3]?.body, { token: 'secret-value' })
+})
+
+test('自定义技能导入走文档化端点，preview 与安装用同一地址', async () => {
+  const calls: { method: string; path: string; body?: unknown }[] = []
+  const client = { request: async (o: { method: string; path: string; body?: unknown }) => { calls.push(o); return { preview: null, capability: null } } }
+  await importCustomSkill(client as never, { source: 'text', skill_md: '---\nname: x\ndescription: y\n---\n', preview: true })
+  await importCustomSkill(client as never, { source: 'url', url: 'https://github.com/a/b', replace: true })
+  assert.deepEqual(calls.map(c => `${c.method} ${c.path}`), [
+    'POST /api/agent/capabilities/skills/custom',
+    'POST /api/agent/capabilities/skills/custom',
+  ])
+  assert.deepEqual(calls[0]!.body, { source: 'text', skill_md: '---\nname: x\ndescription: y\n---\n', preview: true })
+  assert.deepEqual(calls[1]!.body, { source: 'url', url: 'https://github.com/a/b', replace: true })
+})
+
+test('自定义技能来源与文件完整性有对应文案', () => {
+  assert.equal(capabilitySourceLabel({ kind: 'skill', source: 'user_import' }), '自定义')
+  assert.deepEqual(customSkillIntegrityLabel({ source: 'user_import', integrity: 'ok' }), { text: '文件未改动', attention: false })
+  assert.deepEqual(customSkillIntegrityLabel({ source: 'user_import', integrity: 'modified' }), { text: '文件被改动，已停用', attention: true })
+  assert.equal(customSkillIntegrityLabel({ source: 'enterprise_catalog' }), null)
+  assert.equal(customSkillIntegrityLabel({ source: 'user_import' }), null)
 })
