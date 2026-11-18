@@ -7,7 +7,7 @@ vi.mock("./useMcpMarketApi", () => ({ useMcpMarketApi: () => api }));
 
 const server = (extra: Record<string, unknown> = {}) => ({
   server_id: "s1", ref: "mes", display_name: "MES 查询", summary: "查批次", url: "https://mcp.example.com/mes", tools: ["search"],
-  requires_credentials: false, platform_revision: 1, published: true, enabled: false, enabled_revision: null, update_available: false, ...extra,
+  auth: "none", auth_header: "", oauth_scopes: "", timeout_ms: 30000, oauth_client: "dynamic", platform_revision: 1, published: true, enabled: false, enabled_revision: null, update_available: false, ...extra,
 });
 
 beforeEach(() => {

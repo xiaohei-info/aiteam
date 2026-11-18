@@ -28,3 +28,6 @@ export type { TokenClaims, UserPrincipal, AuthSession } from "./auth.js";
 
 export { isSelectablePlatformModel } from "./platform-models.js";
 export type { PlatformModelAvailability } from "./platform-models.js";
+
+export { parseMcpConfig, suggestMcpRef } from "./mcp-config.js";
+export type { McpConfigCandidate, McpConfigRejected, McpConfigParseResult } from "./mcp-config.js";

@@ -20,6 +20,12 @@ function statusBadge(item: McpMarketServer): { label: string; variant: "success"
 }
 
 /** 企业端 MCP 市场：把平台已发布的 MCP 启用到本企业，成员即可在对话中自行安装（设计 §11.3）。 */
+const AUTH_LABEL: Record<McpMarketServer["auth"], string> = {
+  none: "无需鉴权",
+  oauth: "成员浏览器登录",
+  bearer: "成员访问令牌",
+};
+
 export function McpMarketPage(): ReactNode {
   const api = useMcpMarketApi();
   const [market, setMarket] = useState<McpMarket | null>(null);
@@ -54,7 +60,7 @@ export function McpMarketPage(): ReactNode {
     <VStack as="section" gap={5}>
       <VStack gap={1}>
         <Heading level={1}>MCP 市场</Heading>
-        <Text color="secondary">MCP 由平台审核登记。启用后，本企业成员可以在对话中自行安装（不需要凭据的才可自装）；停用只影响以后的安装，成员已装的不受影响。</Text>
+        <Text color="secondary">MCP 由平台审核登记。启用后，本企业成员可以在对话中或「设置 · 个人能力」自行安装；需要鉴权的由成员用自己的账号登录或填自己的令牌，企业端不保存成员凭据。停用只影响以后的安装，成员已装的不受影响。</Text>
       </VStack>
       {notice && <Banner status="success" title={notice} />}
       {error && <Banner status="error" title={error} />}
@@ -71,11 +77,11 @@ export function McpMarketPage(): ReactNode {
                     <HStack gap={2} align="center" wrap="wrap">
                       <Heading level={3}>{item.display_name}</Heading>
                       {badge && <Badge label={badge.label} variant={badge.variant} />}
-                      {item.requires_credentials && <Badge label="需要凭据（成员不可自装）" variant="neutral" />}
+                      {item.auth !== "none" && <Badge label={AUTH_LABEL[item.auth]} variant="info" />}
                     </HStack>
                     <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                     <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                    <Text color="secondary">标识 {item.ref} · 工具：{item.tools.join("、")}</Text>
+                    <Text color="secondary">标识 {item.ref} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                   </VStack>
                   <HStack gap={2}>
                     {item.enabled && (
