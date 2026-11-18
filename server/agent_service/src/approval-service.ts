@@ -380,10 +380,27 @@ export function approvalRiskForTool(toolName: string): ApprovalRisk | undefined 
   if (toolName === "write") return "write";
   if (toolName === "edit") return "edit";
   if (SAFE_TOOLS.has(toolName)) return undefined;
+  // 成员自己装的 MCP（connector_my_*）：用户在自己机器上装好并授权过，调用不再每次弹审批。
+  // 只读会话例外——那里不允许写操作，调用前仍会弹框告知（见 personalConnectorRisk）。
+  if (isPersonalConnectorTool(toolName)) return undefined;
   // External connectors, memory retain and every unrecognized tool are treated
   // as side-effecting. A remote readOnlyHint cannot lower this classification.
   if (toolName === "hindsight_retain" || toolName === "memory_retain" || /^(?:external|connector|jira)[._:-]/iu.test(toolName)) return "external";
   return "unknown";
+}
+
+/** 成员在本机自己安装的 MCP 连接器工具名（`connector_my_<ref>`），见 connectors.ts personalConnectorTools。 */
+export function isPersonalConnectorTool(toolName: string): boolean {
+  return /^connector_my_[a-z0-9_-]{1,63}$/iu.test(toolName);
+}
+
+/**
+ * 个人连接器在只读会话下的风险：不弹框就等于静默失败，所以仍按外部动作处理。
+ * 非只读会话返回 undefined——装在本机、用户已授权过，调用不再每次确认。
+ */
+export function personalConnectorRisk(toolName: string, permissionMode: string): ApprovalRisk | undefined {
+  if (!isPersonalConnectorTool(toolName)) return undefined;
+  return permissionMode === "read-only" ? "external" : undefined;
 }
 
 type JsonLikeValue = string | number | boolean | null | undefined | JsonLikeValue[] | { [key: string]: JsonLikeValue };

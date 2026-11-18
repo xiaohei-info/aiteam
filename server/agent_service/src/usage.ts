@@ -73,6 +73,43 @@ export interface UsageCapture {
   pricing?: RuntimePricingSnapshot | null;
 }
 
+/** 成员自己装的 MCP 工具名（`connector_my_<ref>`），与 approval-service 同口径。 */
+export function isPersonalCapabilityTool(toolName: string): boolean {
+  return /^connector_my_[a-z0-9_-]{1,63}$/iu.test(toolName);
+}
+
+/**
+ * 本次运行是否用了成员自己装的能力（本机 MCP 或本机导入的技能）。
+ * 用户的选择：用了之后不计入用量上报，所以整次运行的 token/费用不进 outbox。
+ * - MCP：助手消息里的 `connector_my_*` 工具调用。
+ * - 技能：Pi 把 `/skill:` 展开成 `<skill name=... location=...>` 放在用户消息里，
+ *   `location` 指向技能目录；是否为本机导入由 `ownsSkillLocation` 判定。
+ */
+export function usedPersonalCapability(
+  entries: readonly SessionEntry[],
+  ownsSkillLocation: (location: string) => boolean,
+): boolean {
+  for (const entry of entries) {
+    if (entry.type === "message" && entry.message.role === "assistant") {
+      const content = entry.message.content;
+      if (!Array.isArray(content)) continue;
+      for (const part of content) {
+        if ((part as { type?: unknown }).type === "toolCall" && isPersonalCapabilityTool((part as { name?: unknown }).name as string)) return true;
+      }
+      continue;
+    }
+    if (entry.type !== "message" || entry.message.role !== "user") continue;
+    const content = entry.message.content;
+    const texts = (Array.isArray(content) ? content : [{ type: "text", text: content }])
+      .map((part) => (typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : ""));
+    for (const text of texts) {
+      const match = /^<skill name="[^"]+" location="([^"]+)">/mu.exec(text);
+      if (match && ownsSkillLocation(match[1]!)) return true;
+    }
+  }
+  return false;
+}
+
 /** Build the only shape allowed into the Agent→Manager usage outbox. */
 export function aggregateUsage(capture: UsageCapture): UsageSummary {
   const start = new Date(capture.startedAt);

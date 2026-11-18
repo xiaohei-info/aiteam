@@ -33,7 +33,7 @@ import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { checklistUnfinished, TODO_RECONCILE_PROMPT, TODO_RECONCILE_SKIPPED, TODO_RECONCILE_TYPE } from "./todo-reconcile.js";
 import { CONTEXT_RESET_ENTRY_TYPE, failureText, redactSecrets, serializePiEvent } from "./event-sse.js";
 import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
-import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
+import { aggregateUsage, measureWorkUsage, usedPersonalCapability, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot, type SkillCache } from "../skills.js";
@@ -44,7 +44,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, personalConnectorRisk } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -1472,7 +1472,7 @@ export class SessionHost {
   }
 
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
-    const risk = approvalRiskForTool(tool.name);
+    const risk = approvalRiskForTool(tool.name) ?? personalConnectorRisk(tool.name, record.permissionMode);
     if (!risk) return tool;
     const execute = tool.execute.bind(tool);
     const owner = { tenantId: authorization.caller.tenantId ?? "", memberId: authorization.caller.userId ?? authorization.caller.callerId };
@@ -1892,13 +1892,24 @@ export class SessionHost {
             ...owner, employeeId, startedAt, endedAt: Date.now(), entries, settled: outcome === "succeeded",
             pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
           };
+          // 用了成员自己装在本机的能力（MCP / 导入的技能）的运行不计入用量上报：
+          // 它们不是企业配置的，token 与费用不该计到企业头上。
+          const personal = !this.options.useFauxModel && usedPersonalCapability(entries, (location) =>
+            this.options.customSkillStore?.ownsLocation({ tenantId: owner.tenantId, memberId: owner.memberId }, location) ?? false);
           const committed = this.options.store.workRecords.finish(workId, owner, {
             outcome, endedAt: capture.endedAt, endOrdinal: entriesBefore + entries.length,
             firstEntryId: entries[0]?.id ?? null, lastEntryId: entries.at(-1)?.id ?? null,
             firstEntryAt: workEntryTime(entries[0]), lastEntryAt: workEntryTime(entries.at(-1)),
             usage: this.options.useFauxModel ? null : measureWorkUsage(entries, capture.pricing),
-          }, this.options.useFauxModel ? undefined : aggregateUsage(capture));
-          if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
+          }, personal ? undefined : this.options.useFauxModel ? undefined : aggregateUsage(capture));
+          if (personal) {
+            appLogger.log("info", "usage.skipped_personal_capability", {
+              work_id: workId, conversation_id: record.conversationId, employee_id: employeeId,
+              tenant_id: owner.tenantId, member_id: owner.memberId,
+            });
+          } else if (committed && !this.options.useFauxModel) {
+            await this.options.usageRecorder?.(capture, authorization.caller);
+          }
         }
       } finally {
         // Read what the global settle signal needs before the active state is cleared: the abort

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createFixture } from "./test-fixture.js";
-import { approvalRiskForTool } from "./approval-service.js";
+import { approvalRiskForTool, personalConnectorRisk } from "./approval-service.js";
 import { capabilityInstallTool, checkCapabilityInstall, installSkillDirectly, personalConnectorTools, SkillInstallError } from "./connectors.js";
 import { SkillVerificationError } from "./skills.js";
 
@@ -35,9 +35,14 @@ test("installing asks for a human decision, stores the real tool list, and the p
   const calls: string[] = [];
   const { server, url } = await mcpServer(calls);
   try {
-    // 安装工具与个人连接器调用都必须经人工审批。
+    // 安装工具必须经人工审批；成员自己装的 MCP 默认不再每次弹（只读会话例外，见下方）。
     assert.equal(approvalRiskForTool("capability_install"), "unknown");
-    assert.equal(approvalRiskForTool("connector_my_notion"), "external");
+    assert.equal(approvalRiskForTool("connector_my_notion"), undefined);
+    assert.equal(personalConnectorRisk("connector_my_notion", "read-only"), "external");
+    assert.equal(personalConnectorRisk("connector_my_notion", "workspace-write"), undefined);
+    assert.equal(personalConnectorRisk("connector_my_notion", "full-access"), undefined);
+    // 企业配置的连接器仍然每次弹。
+    assert.equal(approvalRiskForTool("connector_notion"), "external");
 
     const install = capabilityInstallTool(fixture.store, owner);
     const ok = await run(install, { kind: "mcp", ref: "notion", display_name: "Notion", url, reason: "读页面" });

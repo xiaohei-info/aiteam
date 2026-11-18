@@ -222,6 +222,12 @@ export class CustomSkillStore {
     return read && !read.modified ? join(read.dir, "files") : undefined;
   }
 
+  /** True when `location` (a skill block's `location`) is one of this member's imported skills. */
+  ownsLocation(scope: { tenantId: string; memberId: string }, location: string): boolean {
+    const target = resolve(location);
+    return this.list(scope).some((item) => this.pathFor(scope, item.record.name) === target);
+  }
+
   remove(scope: { tenantId: string; memberId: string }, name: string): boolean {
     const dir = this.skillDir(scope, name);
     if (!existsSync(dir)) return false;

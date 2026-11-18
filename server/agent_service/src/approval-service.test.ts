@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalService, POLICY_APPROVER, approvalRiskForTool } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalService, POLICY_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -26,6 +26,21 @@ test("approval classification gates every requested side-effect class and keeps 
   assert.equal(approvalRiskForTool("connector:jira"), "external");
   assert.equal(approvalRiskForTool("future_tool"), "unknown");
   assert.equal(approvalRiskForTool("read"), undefined);
+});
+
+test("member-installed MCP connectors skip the per-call prompt, except in a read-only conversation", () => {
+  // 成员自己装在本机的 MCP：装的时候已授权过，之后调用不再每次弹框。
+  assert.equal(isPersonalConnectorTool("connector_my_notion"), true);
+  assert.equal(approvalRiskForTool("connector_my_notion"), undefined);
+  assert.equal(personalConnectorRisk("connector_my_notion", "workspace-write"), undefined);
+  assert.equal(personalConnectorRisk("connector_my_notion", "full-access"), undefined);
+  // 只读会话不允许写：仍然弹框，让用户看到“这次调用不被允许”。
+  assert.equal(personalConnectorRisk("connector_my_notion", "read-only"), "external");
+  // 企业配置的连接器与名字相近的其他工具不受影响。
+  assert.equal(isPersonalConnectorTool("connector_notion"), false);
+  assert.equal(isPersonalConnectorTool("connector_my_"), false);
+  assert.equal(approvalRiskForTool("connector_notion"), "external");
+  assert.equal(personalConnectorRisk("connector_notion", "read-only"), undefined);
 });
 
 test("approval is pending before the operation, CAS-approved, and consumed once", async () => {

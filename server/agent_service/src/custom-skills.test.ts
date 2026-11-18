@@ -75,6 +75,10 @@ test("CustomSkillStore 安装后可列出、路径可加载，文件被改动后
     assert.ok(dir && dir.endsWith("files"));
 
     const filesDir = join(root, "tenant-1", "member-1", "excel-report", "files");
+    // ownsLocation：技能块里的 location 指向本机导入的技能目录时才成立。
+    assert.equal(store.ownsLocation(scope, filesDir), true);
+    assert.equal(store.ownsLocation(scope, join(root, "tenant-1", "member-1", "other", "files")), false);
+    assert.equal(store.ownsLocation(scope, join(root, "enterprise", "doc-search")), false);
     writeFileSync(join(filesDir, "SKILL.md"), `${SKILL_MD}\n改过了\n`);
     const after = store.list(scope);
     assert.equal(after[0]!.modified, true);
