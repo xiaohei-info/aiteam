@@ -1,4 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillPackage, readSkillFolder, unzipEntries } from "./custom-skills.js";
+export { CustomSkillError } from "./custom-skills.js";
+import { readFile as readFileAsync } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Type } from "typebox";
@@ -669,6 +672,49 @@ async function installPlannedSkill(store: AgentSqliteStore, owner: TaskOwner, pl
 
 export class SkillInstallError extends Error {
   constructor(readonly code: "skill_not_installable" | "skill_installed" | "skill_exists" | "skill_install_failed" | "skill_signature_invalid" | "manager_unavailable", message: string) { super(message); this.name = "SkillInstallError"; }
+}
+
+/**
+ * Desktop «能力» page: the member imports their own skill (folder / zip / pasted SKILL.md / https URL).
+ * Unsigned, so it is stored in a separate local store with a per-file hash instead of the signed SkillCache.
+ * `preview` only validates and reports; otherwise it installs, refusing to shadow an enterprise skill.
+ */
+export async function importCustomSkill(
+  store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
+  request: { source: "folder" | "zip" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean },
+  signal?: AbortSignal,
+): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability }> {
+  const origin = { kind: request.source, label: request.url?.trim() || (request.source === "folder" ? "本机文件夹" : request.source === "zip" ? "本机 zip" : request.source === "text" ? "粘贴 SKILL.md" : request.url?.trim() || ""), ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
+  let files: { path: string; content: Buffer }[];
+  if (request.source === "folder") {
+    if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择文件夹。");
+    files = await readSkillFolder(request.path);
+  } else if (request.source === "zip") {
+    if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择 zip。");
+    files = unzipEntries(await readFileAsync(request.path));
+  } else if (request.source === "text") {
+    if (!request.skill_md) throw new CustomSkillError("invalid_skill_package", "没有粘贴 SKILL.md 内容。");
+    files = [{ path: "SKILL.md", content: Buffer.from(request.skill_md, "utf8") }];
+  } else {
+    if (!request.url) throw new CustomSkillError("invalid_skill_package", "没有填网址。");
+    const fetched = await fetchSkillFromUrl(request.url, signal);
+    files = fetched.files; origin.kind = "url"; origin.label = fetched.origin.label; origin.url = fetched.origin.url;
+  }
+  const pkg = normalizeSkillPackage(files, origin);
+  if (request.preview) {
+    return { preview: { name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), files: pkg.files.slice(0, 20).map((file) => file.path), origin_label: pkg.origin.label } };
+  }
+  const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter((item) => item.kind === "skill" && item.ref === pkg.name);
+  if (existing.some((item) => item.source !== "user_import")) {
+    throw new CustomSkillError("invalid_skill_package", `已安装企业技能「${existing[0]!.display_name}」，同名自定义技能无法安装；请改 SKILL.md 里的 name。`);
+  }
+  if (existing.length > 0 && !request.replace) throw new SkillInstallError("skill_exists", `已安装自定义技能「${existing[0]!.display_name}」${existing[0]!.version} 版；确认后覆盖。`);
+  const record = custom.install({ tenantId: owner.tenantId, memberId: owner.memberId }, pkg);
+  store.putLocalCapability(owner.tenantId, owner.memberId, {
+    kind: "skill", ref: record.name, display_name: pkg.description ? record.name : record.name, url: record.origin.url ?? record.origin.label, tools: [],
+    source: "user_import", version: record.version, source_ref: "", reason: "", approved_by: owner.memberId,
+  });
+  return { capability: store.listLocalCapabilities(owner.tenantId, owner.memberId).find((item) => item.kind === "skill" && item.ref === record.name)! };
 }
 
 /**

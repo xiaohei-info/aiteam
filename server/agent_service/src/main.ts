@@ -17,6 +17,7 @@ import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } from "./skills.js";
+import { CustomSkillStore } from "./custom-skills.js";
 import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
 import { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
@@ -50,6 +51,7 @@ mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
 if (environment === "production" && process.platform !== "win32") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const personalSkillCache = new SkillCache(join(dataRoot, "capabilities", "personal-skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
+const customSkillStore = new CustomSkillStore(join(dataRoot, "capabilities", "custom-skills"));
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // Before any session runs: legacy folders move to the conversation-named layout, then artifacts
 // captured by older builds are matched against the files in their (moved) folders.
@@ -98,8 +100,11 @@ const sessionHost = new SessionHost({
     authorization?.caller.tenantId ? {
       cache: personalSkillCache,
       refs: store.listLocalCapabilities(authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId)
-        .filter((item) => item.kind === "skill").map((item) => `${item.ref}@${item.version}`),
+        .filter((item) => item.kind === "skill" && item.source !== "user_import").map((item) => `${item.ref}@${item.version}`),
     } : undefined,
+    authorization?.caller.tenantId
+      ? { store: customSkillStore, scope: { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } }
+      : undefined,
   ),
 });
 

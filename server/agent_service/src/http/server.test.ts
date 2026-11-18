@@ -733,8 +733,9 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
     }
     // 100 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口 + 企业可自装技能列表
     //       + MCP 鉴权 8 个（登录进度/取消/回调/探测/添加 MCP/重新登录/更新令牌/清除凭据）
-    //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能。
-    assert.equal(frontendOperations.length, 102);
+    //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能
+    //      + 导入自定义技能（设计 2026-11-18 §3）。
+    assert.equal(frontendOperations.length, 103);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);

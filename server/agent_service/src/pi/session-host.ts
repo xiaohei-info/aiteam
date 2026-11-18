@@ -37,6 +37,7 @@ import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot, type SkillCache } from "../skills.js";
+import type { CustomSkillStore } from "../custom-skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
 import { ConversationWriteQueue } from "./conversation-write-queue.js";
@@ -218,6 +219,8 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   /** Skills members installed for themselves; kept apart from the snapshot cache, whose sync prunes unknown skills. */
   personalSkillCache?: SkillCache;
+  /** Skills the member imported themselves (folder / zip / pasted / https URL); loaded with the session, never uploaded. */
+  customSkillStore?: CustomSkillStore;
   /** Sign-in and encrypted credentials of personal MCP servers (MCP鉴权与配置导入). */
   mcpAuth?: McpAuthService;
   customTools?: ToolDefinition[];
@@ -1459,9 +1462,13 @@ export class SessionHost {
 
   get mcpAuth(): McpAuthService | undefined { return this.options.mcpAuth; }
 
+  /** Local store of the member's self-imported skills (design 2026-11-18 §3). */
+  get customSkillStore(): CustomSkillStore | undefined { return this.options.customSkillStore; }
+
   /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
   removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
     this.options.personalSkillCache?.remove({ tenantId, memberId }, skillId);
+    this.options.customSkillStore?.remove({ tenantId, memberId }, skillId);
   }
 
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
