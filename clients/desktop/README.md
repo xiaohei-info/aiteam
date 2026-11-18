@@ -52,6 +52,16 @@ pnpm tauri:build:mac:installer --debug
 
 签名流程：内嵌可执行文件（`Contents/Resources/agent/runtime/node`、各 `*.node`、esbuild 等）先逐个以 Hardened Runtime + 时间戳签名（Node 用 `src-tauri/Entitlements.agent.plist`），再重签应用本体（`src-tauri/Entitlements.plist`）并校验 `codesign --deep --strict`；随后把 `.app` 打 zip 提交公证并 stapling（保证拖出 DMG 后的应用离线首次启动也不弹窗），再打包 DMG、给 DMG 本体签名、提交公证并 stapling，最后用 `spctl` 验收。每次发版因此有两次公证上传（`.app` zip 与 DMG）。公证提交失败会自动重试 3 次（上传偶发中断时不必重新构建）。
 
+**随包 Node 的权限说明**（`src-tauri/Entitlements.agent.plist`，只作用于 `Contents/Resources/agent/runtime/node`，主程序只有 `allow-jit`）：
+
+| 权限 | 用途 |
+| --- | --- |
+| `allow-jit` | V8 即时编译 |
+| `allow-unsigned-executable-memory` | V8 需要的可执行内存 |
+| `disable-library-validation` | Node 要加载 `*.node` 原生扩展，它们来自不同上游、由本团队重新签名 |
+
+三项都不要随意去掉：不放开时，随包 Node 会因 Agent 包的签名问题反复弹出 Node 权限允许弹窗（实际观察到的现象，未做根因分析）。要收紧权限，请在签名版安装包上逐项去掉，确认内嵌 Agent 能拉起且不再弹窗后再改。
+
 ### 首次配置证书与公证凭据
 
 1. 在 [Apple Developer](https://developer.apple.com/account/resources/certificates/add) 创建 **Developer ID Application** 证书：生成 CSR（`openssl req -new -newkey rsa:2048 -nodes -keyout developerID.key -out developerID.csr -subj "/CN=AIFred Distribution"`）、上传、下载 `.cer`。

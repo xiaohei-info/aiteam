@@ -6,6 +6,11 @@
     随包 Node Agent 运行时（Contents/Resources/agent/runtime/node）的 entitlements。
     V8 需要 JIT 与可执行内存；原生扩展（*.node）来自不同上游、由本团队重新签名，
     因此关闭库校验以保证加载。
+
+    三项权限都不要随意去掉：不放开时，随包 Node 会因 Agent 包的签名问题，
+    在应用里反复弹出 Node 的权限允许弹窗（负责人实际观察到的现象；
+    具体系统机制未做根因分析）。如需收紧，必须在签名版安装包上逐项去掉并实测
+    内嵌 Agent 能正常拉起、不再弹窗后再合入。
   -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
