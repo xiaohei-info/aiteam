@@ -610,6 +610,51 @@ test("a member's own MCP is offered even when the expert snapshot has an explici
   }
 });
 
+test("skills reach an expert without `read` through a read that opens only skill files", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    // 技能属于成员的 Agent 能力，不受专家工具清单限制（设计 2026-11-17 §10）：Pi 只在有 read 时列出技能。
+    const skillDir = join(fixture.root, "personal-skills", "sheet");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: sheet\ndescription: read spreadsheets\n---\nSKILL BODY");
+    const secret = join(fixture.root, "secret.txt");
+    writeFileSync(secret, "TOP SECRET");
+    const host = fixture.createHost(undefined, undefined, () => {
+      const loader = createControlledResourceLoader("test system prompt");
+      const skill = { name: "sheet", description: "read spreadsheets", filePath: join(skillDir, "SKILL.md"), baseDir: skillDir, sourceInfo: {} as never, disableModelInvocation: false };
+      Object.defineProperty(loader, "getSkills", { value: () => ({ skills: [skill], diagnostics: [] }) });
+      return loader;
+    });
+    let offered: string[] = [];
+    let prompt = "";
+    fixture.faux.setResponses([
+      (context) => {
+        offered = (context.tools ?? []).map((tool) => tool.name);
+        prompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage(fauxToolCall("read", { path: join(skillDir, "SKILL.md") }), { stopReason: "toolUse" });
+      },
+      fauxAssistantMessage(fauxToolCall("read", { path: secret }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await host.prompt("conversation-1", "read the sheet", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.ok(offered.includes("read"), offered.join(","));
+    assert.ok(!offered.includes("bash") && !offered.includes("write"), "no other coding tool is granted");
+    assert.match(prompt, /<available_skills>[\s\S]*sheet/);
+    const results = (await host.entries("conversation-1")).flatMap((entry) => entry.type === "message" && entry.message.role === "toolResult"
+      ? [entry.message.content.map((part) => part.type === "text" ? part.text : "").join("")] : []);
+    assert.match(results[0] ?? "", /SKILL BODY/);
+    assert.doesNotMatch(results.join("\n"), /TOP SECRET/);
+    assert.match(results[1] ?? "", /only opens files of the installed skills/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost reminds the model about a stale checklist without storing or showing the reminder", async () => {
   const fixture = await createFixture();
   try {

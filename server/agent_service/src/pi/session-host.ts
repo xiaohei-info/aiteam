@@ -4,6 +4,7 @@ import { appLogger, makeRequestContext, requestContext, safeError } from "../obs
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { access as accessFile, readFile as readFileAsync } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
@@ -1337,14 +1338,19 @@ export class SessionHost {
     const operations = this.options.sandbox && workspace
       ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode, record?.extraRoots ?? [])
       : undefined;
+    // Skills (the member's own ones included) are Agent capabilities, not the expert's (design 2026-11-17 §10).
+    // Pi offers skills only to a session with a `read` tool, so an expert whose allowlist has no `read` gets one
+    // that opens nothing but the files of the skills loaded into this session.
+    const skillRead = !allowed.has("read") && record?.resourceLoader ? skillOnlyReadTool(record.resourceLoader, workspace ?? record.workspace) : undefined;
+    if (skillRead) allowed.add("read");
     const codingTools = operations && workspace
       ? [
           createBashToolDefinition(workspace, { operations: operations.bash }),
-          createReadToolDefinition(workspace, { operations: operations.read }),
+          skillRead ?? createReadToolDefinition(workspace, { operations: operations.read }),
           createWriteToolDefinition(workspace, { operations: operations.write }),
           createEditToolDefinition(workspace, { operations: operations.edit }),
         ]
-      : [];
+      : skillRead ? [skillRead] : [];
     const localDirectoryTools = record && localDirectoryToolNames.length > 0
       ? createLocalDirectoryTools(this.localDirectoryService, localDirectoryToolNames, () => ({
           caller: authorization.caller,
@@ -2659,4 +2665,26 @@ export function conversationFoldersHint(roots: readonly string[], mode: Conversa
       ? "You may read and modify files in them under the same rules as the working folder."
       : "They are the user's own folders; change them only when the task asks for it.";
   return [`The user added these folders to this conversation. Use absolute paths to reach them. ${access}`, ...roots.map((root) => `- ${root}`)].join("\n");
+}
+
+/**
+ * A `read` tool restricted to the directories of the skills loaded into a session; undefined when none are.
+ * Paths are resolved through symlinks before the containment check.
+ */
+function skillOnlyReadTool(loader: ResourceLoader, cwd: string): ToolDefinition | undefined {
+  const roots = loader.getSkills().skills.flatMap((skill) => { try { return [realpathSync(skill.baseDir)]; } catch { return []; } });
+  if (roots.length === 0) return undefined;
+  const inside = (path: string) => {
+    const real = realpathSync(resolve(cwd, path));
+    if (!roots.some((root) => { const rel = relative(root, real); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); })) {
+      throw new Error("This read tool only opens files of the installed skills listed in the system prompt.");
+    }
+    return real;
+  };
+  return createReadToolDefinition(cwd, {
+    operations: {
+      readFile: async (path) => readFileAsync(inside(path)),
+      access: async (path) => accessFile(inside(path)),
+    },
+  }) as unknown as ToolDefinition;
 }
