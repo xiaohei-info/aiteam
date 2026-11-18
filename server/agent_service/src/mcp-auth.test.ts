@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bearerHeaders, McpAuthService, McpCredentialStore, probeMcpAuth, validBearerHeader } from "./mcp-auth.js";
 import { createFixture } from "./test-fixture.js";
-import { installMcpDirectly, listMcpTools, McpInstallError, updateMcpToken, verifyMcpBearer } from "./connectors.js";
+import { capabilityInstallTool, installMcpDirectly, listMcpTools, McpInstallError, personalConnectorTools, updateMcpToken, verifyMcpBearer } from "./connectors.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
 
@@ -16,11 +16,11 @@ async function body(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString();
 }
 
-function rpc(res: ServerResponse, message: { id?: unknown; method?: string }) {
+function rpc(res: ServerResponse, message: { id?: unknown; method?: string }, echo = "ok") {
   if (message.id === undefined) { res.writeHead(202); res.end(); return; }
   const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "t", version: "1" } }
     : message.method === "tools/list" ? { tools: [{ name: "activity_summary", description: "s", inputSchema: { type: "object" } }] }
-      : { content: [{ type: "text", text: "ok" }] };
+      : { content: [{ type: "text", text: echo }] };
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 }
@@ -30,7 +30,7 @@ function rpc(res: ServerResponse, message: { id?: unknown; method?: string }) {
  * and authorization-server metadata, dynamic registration, PKCE code exchange, refresh); `mode=bearer` wants a fixed
  * token in `header`.
  */
-async function authServer(mode: "oauth" | "bearer" | "open", options: { token?: string; header?: string; expiresIn?: number } = {}) {
+async function authServer(mode: "oauth" | "bearer" | "open", options: { token?: string; header?: string; expiresIn?: number; rejectRefresh?: boolean; echoCredential?: boolean } = {}) {
   const issued = new Set<string>();
   const seen = { registrations: 0, tokenRequests: [] as URLSearchParams[], authHeaders: [] as string[] };
   let base = "";
@@ -56,6 +56,11 @@ async function authServer(mode: "oauth" | "bearer" | "open", options: { token?: 
     if (req.method === "POST" && url.pathname === "/token") {
       const form = new URLSearchParams(await body(req));
       seen.tokenRequests.push(form);
+      if (options.rejectRefresh && form.get("grant_type") === "refresh_token") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "invalid_grant", error_description: "refresh token revoked" }));
+        return;
+      }
       const access = `access-${seen.tokenRequests.length}`;
       issued.add(access);
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -76,7 +81,8 @@ async function authServer(mode: "oauth" | "bearer" | "open", options: { token?: 
         res.end();
         return;
       }
-      return rpc(res, message);
+      // A careless server that echoes the credential back in a tool result.
+      return rpc(res, message, options.echoCredential ? `you sent ${value}` : "ok");
     }
     res.writeHead(404); res.end();
   });
@@ -372,6 +378,93 @@ test("HTTP: a rejected token leaves the approval pending, the callback only serv
   } finally {
     await http.close();
     await host.dispose();
+    bearer.server.close();
+    oauth.server.close();
+    await fixture.close();
+  }
+});
+
+const snapshot = { employee_id: "e1", version: "1", snapshot_version: "s1", display_name: "E", tools: [] } as never;
+const call = (tool: { execute: (...args: never[]) => Promise<unknown> }, params: unknown) =>
+  (tool.execute as (id: string, p: unknown, s?: AbortSignal) => Promise<{ isError?: boolean; content: { text: string }[] }>)("t", params, undefined);
+
+test("a refresh the provider rejects turns into «sign in again» without opening the browser", async () => {
+  const fixture = await createFixture();
+  const root = mkdtempSync(join(tmpdir(), "mcp-refresh-"));
+  const oauth = await authServer("oauth", { rejectRefresh: true });
+  const opened: string[] = [];
+  const auth = service(root, opened);
+  try {
+    const pending = await installMcpDirectly(fixture.store, owner, { service: auth }, { ref: "cr-test", url: oauth.url, display_name: "Cycplus" });
+    const state = new URL(pending.login!.authorization_url).searchParams.get("state");
+    assert.equal(await auth.callback({ state, code: "c1" }), true);
+    const [tool] = personalConnectorTools(fixture.store, owner, snapshot, { service: auth });
+    assert.equal((await call(tool!, { tool: "activity_summary", arguments: {} })).isError, false, "signed in: the call works");
+
+    // The access token expires and the provider revokes the refresh token.
+    auth.credentials.update(owner, "cr-test", oauth.url, (current) => current && { ...current, obtained_at: Date.now() - 7_200_000 });
+    oauth.issued.clear();
+    const result = await call(tool!, { tool: "activity_summary", arguments: {} });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0]!.text, /需要重新登录 Cycplus.*设置 · 个人能力/u);
+    assert.equal(oauth.seen.tokenRequests.at(-1)?.get("grant_type"), "refresh_token");
+    assert.equal(opened.length, 1, "only the first sign-in opened the browser");
+    assert.equal(auth.status(owner, "cr-test", oauth.url, "oauth").auth_status, "needs_login");
+    // Once the tokens are gone the tool explains what to do before even calling the server.
+    const before = oauth.seen.authHeaders.length;
+    assert.match((await call(tool!, { tool: "activity_summary", arguments: {} })).content[0]!.text, /需要重新登录/u);
+    assert.equal(oauth.seen.authHeaders.length, before);
+  } finally {
+    oauth.server.close();
+    await fixture.close();
+  }
+});
+
+test("tokens never reach the model or the logs: tool results, install results and stdout/stderr", async () => {
+  const fixture = await createFixture();
+  const root = mkdtempSync(join(tmpdir(), "mcp-leak-"));
+  const token = "tok-d41f7e9a2c";
+  const bearer = await authServer("bearer", { token, header: "X-API-Key", echoCredential: true });
+  const oauth = await authServer("oauth", { echoCredential: true });
+  const auth = service(root);
+  const written: string[] = [];
+  const out = process.stdout.write.bind(process.stdout);
+  const err = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((chunk: unknown, ...rest: never[]) => { written.push(String(chunk)); return out(chunk as never, ...rest); }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: unknown, ...rest: never[]) => { written.push(String(chunk)); return err(chunk as never, ...rest); }) as typeof process.stderr.write;
+  const seenByModel: string[] = [];
+  try {
+    // Bearer through the model's install tool: the member's token comes from the approval, never from the model.
+    const install = capabilityInstallTool(fixture.store, owner, undefined, undefined, { service: auth });
+    const installed = await (install.execute as unknown as (id: string, p: unknown) => Promise<{ content: { text: string }[] }>)("t", {
+      kind: "mcp", ref: "crm", url: bearer.url, display_name: "CRM", reason: "", credential: { token, header: "X-API-Key" },
+    });
+    seenByModel.push(JSON.stringify(installed));
+    const parameters = JSON.stringify(install.parameters);
+    assert(!parameters.includes("credential") && !parameters.includes("token"), "the model's install schema has no credential field");
+
+    await installMcpDirectly(fixture.store, owner, { service: auth }, { ref: "crm2", url: bearer.url, credential: { token, header: "X-API-Key" } });
+    const pending = await installMcpDirectly(fixture.store, owner, { service: auth }, { ref: "cr-test", url: oauth.url });
+    const state = new URL(pending.login!.authorization_url).searchParams.get("state")!;
+    assert.equal(await auth.callback({ state, code: "secret-code-77" }), true);
+
+    for (const tool of personalConnectorTools(fixture.store, owner, snapshot, { service: auth })) {
+      // Both fake servers expose the same tool.
+      seenByModel.push(JSON.stringify(await call(tool, { tool: "activity_summary", arguments: {} })));
+      seenByModel.push(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+    }
+    const echoed = seenByModel.join("\n");
+    assert.match(echoed, /凭据已隐藏/u, "the echoing server really tried to leak the credential");
+    const stored = auth.credentials.get(owner, "cr-test", oauth.url)!;
+    const secrets = [token, stored.tokens!.access_token, stored.tokens!.refresh_token!, state, "secret-code-77"];
+    for (const secret of secrets) {
+      assert(!echoed.includes(secret), `model-visible text holds ${secret.slice(0, 4)}…`);
+      assert(!written.join("").includes(secret), `logs hold ${secret.slice(0, 4)}…`);
+      assert(!JSON.stringify(fixture.store.listLocalCapabilities("tenant-1", "member-1")).includes(secret), "capability rows hold no secret");
+    }
+  } finally {
+    process.stdout.write = out;
+    process.stderr.write = err;
     bearer.server.close();
     oauth.server.close();
     await fixture.close();
