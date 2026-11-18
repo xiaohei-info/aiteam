@@ -227,3 +227,28 @@ def test_get_grant_not_found_404():
         c = _client("postgresql://fake/fake")
         r = c.get("/api/manager/grants/missing", headers=_hdr())
         assert r.status_code == 404
+
+
+def test_installable_skills_routes_are_not_captured_by_grant_detail():
+    """GET /grants/skills 不能被 /grants/{grant_id} 先匹配：那样 'skills' 会当授权 id 去查 uuid 列而 500。"""
+    from shared.contracts.crosstier import InstallableSkill, InstallableSkillPackage
+
+    grant_svc = _fake_grant_svc()
+    grant_svc.get_grant.side_effect = AssertionError("grant detail must not handle /grants/skills")
+    fake_auth_cfg = MagicMock()
+    fake_auth_cfg.installable_skills.return_value = [
+        InstallableSkill(skill_id="sheet", display_name="表格", version="1.0.0", content_hash="h1"),
+    ]
+    fake_auth_cfg.installable_skill_package.return_value = InstallableSkillPackage.model_construct(
+        package={"skill_id": "sheet"}, signing_keys=[])
+    with patch("manager_service.routes_member.build_member_dept_service", return_value=(MagicMock(), grant_svc)), \
+         patch("manager_service.routes_member._auth_service", return_value=MagicMock()), \
+         patch("manager_service.routes_grants.AuthorizedConfigService", return_value=fake_auth_cfg):
+        c = _client("postgresql://fake/fake")
+        r = c.get("/api/manager/grants/skills", headers=_hdr(roles=("member",)))
+        assert r.status_code == 200, r.text
+        assert [item["skill_id"] for item in r.json()["data"]] == ["sheet"]
+        r = c.get("/api/manager/grants/skills/sheet/package", headers=_hdr(roles=("member",)))
+        assert r.status_code == 200, r.text
+    grant_svc.get_grant.assert_not_called()
+    fake_auth_cfg.installable_skill_package.assert_called_once()
