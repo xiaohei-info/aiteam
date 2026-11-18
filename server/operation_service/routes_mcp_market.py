@@ -8,9 +8,14 @@ from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
 from shared.contracts.enums import PlatformRole
 from shared.contracts.envelope import Envelope, ListEnvelope
-from shared.contracts.platform_mcp import PlatformMcpServer, PlatformMcpServerFields
+from shared.contracts.platform_mcp import (
+    PlatformMcpServer,
+    PlatformMcpServerFields,
+    PlatformMcpServerPull,
+)
 from shared.errors import AppError
 
+from .mcp_probe import McpProbeRequest, McpProbeResult, probe_mcp
 from .platform_mcp_market import PlatformMcpRepository
 
 router = APIRouter(prefix="/api/operation/mcp-market", tags=["operation", "mcp-market"])
@@ -43,12 +48,12 @@ async def list_servers(request: Request, _claims: TokenClaims = Depends(_claims)
     return ListEnvelope(data=_repo(request).list())
 
 
-@router.post("/servers", summary="登记平台 MCP", description="登记一个免凭据或需凭据的 MCP 端点，初始为草稿。", operation_id="operation_mcp_market_create", status_code=status.HTTP_201_CREATED)
+@router.post("/servers", summary="登记平台 MCP", description="登记一个 MCP 端点（无需鉴权 / 成员浏览器登录 / 成员访问令牌），初始为草稿。应用密钥只写不读，加密保存。", operation_id="operation_mcp_market_create", status_code=status.HTTP_201_CREATED)
 async def create_server(body: PlatformMcpServerFields, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformMcpServer]:
     return Envelope(data=_repo(request).create(body))
 
 
-@router.put("/servers/{server_id}", summary="修改平台 MCP", description="修改名称、用途、地址、工具或凭据要求；标识不可改，每次修改修订号加 1。", operation_id="operation_mcp_market_update")
+@router.put("/servers/{server_id}", summary="修改平台 MCP", description="修改名称、用途、地址、工具或鉴权设置；标识不可改，每次修改修订号加 1。应用密钥不传保持不变、空字符串清除。", operation_id="operation_mcp_market_update")
 async def update_server(server_id: str, body: PlatformMcpServerFields, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformMcpServer]:
     return Envelope(data=_repo(request).update(server_id, body))
 
@@ -64,7 +69,14 @@ async def unpublish_server(server_id: str, request: Request, _claims: TokenClaim
 
 
 @router.get("/pull/servers", summary="拉取已发布 MCP 目录", description="供 Manager 服务间调用，返回已发布的平台 MCP。", operation_id="operation_mcp_market_pull_list")
-async def pull_published(request: Request) -> ListEnvelope[PlatformMcpServer]:
+async def pull_published(request: Request) -> ListEnvelope[PlatformMcpServerPull]:
     from shared.service_token import verify_service_token
     verify_service_token(request)
-    return ListEnvelope(data=_repo(request).list(status="published"))
+    # Only this service-to-service pull carries the decrypted application secret; Manager re-encrypts it.
+    return ListEnvelope(data=_repo(request).list_for_pull())
+
+
+@router.post("/probe", summary="探测 MCP", description="不保存任何内容地连接一次 MCP：判断鉴权方式、读取工具列表。仅 https，拒绝内网/本机/保留地址，不跟随重定向，10 秒超时，响应上限 1 MiB；test_token 只用于这一次，不保存、不记日志。", operation_id="operation_mcp_market_probe")
+def probe_server(body: McpProbeRequest, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[McpProbeResult]:
+    probe = getattr(request.app.state, "_mcp_probe", None) or probe_mcp
+    return Envelope(data=probe(body))

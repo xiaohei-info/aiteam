@@ -12,7 +12,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 
 from .mcp_catalog import McpCatalogRepository, McpMarketService
-from .openapi_schemas import McpCatalogEntryOut, McpMarketOut
+from .openapi_schemas import McpCatalogEntryOut, McpMarketOut, McpOAuthClientOut
 
 
 class _ManagerNotConfigured(AppError):
@@ -33,6 +33,7 @@ def _service(request: Request) -> McpMarketService:
         operator=request.app.state._operator_catalog,
         repo=McpCatalogRepository(router),
         members=MemberDeptService(repo=MemberDeptRepository(router)),
+        crypto=getattr(request.app.state, "_crypto_service", None),
     )
     request.app.state._mcp_market_service = service
     return service
@@ -55,8 +56,12 @@ def build_mcp_market_router(verifier) -> APIRouter:
     def disable(server_id: str, request: Request, claims: TokenClaims = Depends(require)) -> None:
         _service(request).disable(tenant_context_from(claims), server_id)
 
-    @router.get("/grants/mcp-servers", summary="列出可自行安装的 MCP", description="列出本企业已启用、免凭据、当前成员可在对话中自行安装的平台 MCP。只读。", operation_id="manager_grants_installable_mcp_servers")
+    @router.get("/grants/mcp-servers", summary="列出可自行安装的 MCP", description="列出本企业已启用、当前成员可自行安装的平台 MCP（含需鉴权的：成员在本机自行登录或填写令牌）。只读，不含任何凭据。", operation_id="manager_grants_installable_mcp_servers")
     def installable(request: Request, claims: TokenClaims = Depends(require)) -> ListEnvelope[InstallableMcpServer]:
         return ListEnvelope(data=_service(request).installable(tenant_context_from(claims)))
+
+    @router.get("/grants/mcp-servers/{server_id}/oauth-client", summary="取平台预登记的 MCP 应用", description="成员本机 Agent 仅在登录 / 刷新令牌时调用，取回平台为该 MCP 登记的应用编号与密钥；只放内存，不落盘。仅本企业已启用、oauth 且平台已登记应用的条目。", operation_id="manager_grants_mcp_oauth_client")
+    def oauth_client(server_id: str, request: Request, claims: TokenClaims = Depends(require)) -> Envelope[McpOAuthClientOut]:
+        return Envelope(data=McpOAuthClientOut(**_service(request).oauth_client(tenant_context_from(claims), server_id)))
 
     return router

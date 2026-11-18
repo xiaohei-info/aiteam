@@ -15,16 +15,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .expert_profile import ExpertTemplateProfile
-from .skill import SignedSkillPackage, SkillSigningKeyMetadata
 from .platform_provider import PlatformModelRef
 from .platform_skill import PlatformSkillRef
+from .skill import SignedSkillPackage, SkillSigningKeyMetadata
 from .snapshot import EmployeeExecutionSnapshot
 from .summary import AuditSummaryEvent, UsageSummary
-
 
 # ---- Operator → Manager（云侧）----
 
@@ -220,7 +218,7 @@ class InstallableSkill(BaseModel):
 
 
 class InstallableMcpServer(BaseModel):
-    """成员可在对话中自行安装的平台 MCP（企业已启用、免凭据；设计 §11.3）。"""
+    """成员可自行安装的平台 MCP（企业已启用；设计 §11.3）。需鉴权的条目由成员在本机自行登录 / 填写令牌（设计 2026-11-18）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -231,6 +229,11 @@ class InstallableMcpServer(BaseModel):
     url: str = Field(description="端点地址（https）；以企业目录为准，模型给出的地址被忽略")
     tools: list[str] = Field(description="声明的工具名；安装时只保留与服务端实际工具的交集")
     revision: int = Field(ge=1, description="企业启用时的平台修订号")
+    auth: Literal["none", "oauth", "bearer"] = Field(default="none", description="鉴权方式：none 无需；oauth 成员在服务方网页登录；bearer 成员填写服务方发的访问令牌")
+    auth_header: str = Field(default="", description="bearer：携带令牌的请求头名；空表示 Authorization: Bearer")
+    oauth_scopes: str = Field(default="", description="oauth：登录时申请的权限范围（空格分隔）")
+    timeout_ms: int = Field(default=30000, ge=1000, le=300000, description="单次工具调用超时（毫秒）")
+    oauth_client: Literal["preregistered", "dynamic"] = Field(default="dynamic", description="oauth：preregistered 平台已登记应用编号（登录时经 oauth-client 接口取回）；dynamic 成员登录时自动注册")
 
 
 class InstallableSkillPackage(BaseModel):

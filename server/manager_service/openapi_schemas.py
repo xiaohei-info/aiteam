@@ -12,7 +12,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.contracts.platform_provider import PlatformModel, PlatformModelRate, PlatformProvider
+from shared.contracts.platform_provider import (
+    PlatformModel,
+    PlatformModelRate,
+    PlatformProvider,
+)
 
 from .schemas import UsageRollupOut
 
@@ -69,7 +73,11 @@ class McpMarketServerOut(BaseModel):
     summary: str = Field(default="", description="用途说明。")
     url: str = Field(description="端点地址（https）。")
     tools: list[str] = Field(default_factory=list, description="声明的工具名。")
-    requires_credentials: bool = Field(default=False, description="是否需要凭据；需要凭据的不进成员可装列表。")
+    auth: Literal["none", "oauth", "bearer"] = Field(default="none", description="鉴权方式：none 无需；oauth 成员在服务方网页登录；bearer 成员填写访问令牌。凭据由成员本机保存。")
+    auth_header: str = Field(default="", description="bearer：携带令牌的请求头名；空表示 Authorization: Bearer。")
+    oauth_scopes: str = Field(default="", description="oauth：登录时申请的权限范围。")
+    timeout_ms: int = Field(default=30000, description="单次工具调用超时（毫秒）。")
+    oauth_client: Literal["preregistered", "dynamic"] = Field(default="dynamic", description="oauth：preregistered 平台已登记应用；dynamic 成员登录时自动注册。应用密钥不返回。")
     platform_revision: int | None = Field(default=None, description="平台当前修订号；已下架或平台不可达时为空。")
     published: bool = Field(description="平台是否仍在发布。")
     enabled: bool = Field(description="本企业是否已启用。")
@@ -81,6 +89,14 @@ class McpMarketOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     platform_available: bool = Field(description="平台 MCP 目录是否可读；不可读时只列出已启用项。")
     servers: list[McpMarketServerOut] = Field(default_factory=list, description="平台 MCP 列表。")
+
+
+class McpOAuthClientOut(BaseModel):
+    """平台预登记的 OAuth 应用（仅成员 Agent 登录 / 刷新时取用）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    client_id: str = Field(description="服务方发的应用编号。")
+    client_secret: str | None = Field(default=None, description="应用密钥；未登记时不返回。成员 Agent 只放内存。")
 
 
 class McpCatalogEntryOut(BaseModel):
