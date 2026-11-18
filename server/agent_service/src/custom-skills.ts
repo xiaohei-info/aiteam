@@ -110,6 +110,23 @@ export function normalizeSkillPackage(files: { path: string; content: Buffer }[]
   const safe = files.map((file) => ({ path: safeRelativePath(file.path), content: file.content }));
   const root = skillRootOf(safe);
   if (root === undefined) throw new CustomSkillError("invalid_skill_package", "找不到 SKILL.md：技能根目录要直接含 SKILL.md，或只有一个顶层文件夹含 SKILL.md。");
+  return normalizeSkillAtRoot(safe, root, origin);
+}
+
+/** 一个文件夹 / 压缩包里可能有多个技能：列出所有含 SKILL.md 的目录（每个技能一个根），按路径排序去重。 */
+export function scanSkillRoots(files: { path: string; content: Buffer }[]): string[] {
+  const safe = files.map((file) => safeRelativePath(file.path));
+  const roots = new Set<string>();
+  for (const path of safe) {
+    const parts = path.split(sep);
+    if (parts[parts.length - 1] !== "SKILL.md") continue;
+    roots.add(parts.length === 1 ? "" : parts.slice(0, -1).join(sep));
+  }
+  return [...roots].sort();
+}
+
+/** 校验并规范化指定根下的技能文件。 */
+export function normalizeSkillAtRoot(safe: { path: string; content: Buffer }[], root: string, origin: CustomSkillPackage["origin"]): CustomSkillPackage {
   checkLimits(safe);
   const prefix = root ? root + sep : "";
   const inRoot = safe.filter((file) => !root || file.path.startsWith(prefix))

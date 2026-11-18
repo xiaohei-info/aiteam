@@ -83,7 +83,7 @@ test('MCP auth calls use documented endpoints, encode ids and send the token onl
 
 test('自定义技能导入走文档化端点，preview 与安装用同一地址', async () => {
   const calls: { method: string; path: string; body?: unknown }[] = []
-  const client = { request: async (o: { method: string; path: string; body?: unknown }) => { calls.push(o); return { preview: null, capability: null } } }
+  const client = { request: async (o: { method: string; path: string; body?: unknown }) => { calls.push(o); return { preview: null, scan: null, capability: null } } }
   await importCustomSkill(client as never, { source: 'text', skill_md: '---\nname: x\ndescription: y\n---\n', preview: true })
   await importCustomSkill(client as never, { source: 'url', url: 'https://github.com/a/b', replace: true })
   assert.deepEqual(calls.map(c => `${c.method} ${c.path}`), [
@@ -109,4 +109,19 @@ test('file:// 地址还原成绝对路径（Tauri 文件选择会返回 URL）',
   assert.equal(toLocalPath('/Users/edy/skills/x'), '/Users/edy/skills/x')
   assert.equal(toLocalPath('file:///C:/Users/edy/skills/x'), 'C:/Users/edy/skills/x')
   assert.equal(toLocalPath('file:///Users/edy/%E6%96%87%E6%A1%A3'), '/Users/edy/文档')
+})
+
+test('一个包里多个技能：检查返回清单，安装带 roots', async () => {
+  const calls: { body?: Record<string, unknown> }[] = []
+  const client = { request: async (o: { body?: Record<string, unknown> }) => {
+    calls.push(o)
+    return calls.length === 1
+      ? { preview: null, scan: [{ root: '01-weekly-report', name: 'weekly-report', description: '周报', file_count: 1, total_bytes: 760, ok: true }, { root: '04-bad-name', name: '', description: '', file_count: 1, total_bytes: 100, ok: false, reason: 'name 不合规' }], capability: null }
+      : { preview: null, scan: null, capability: null }
+  } }
+  const first = await importCustomSkill(client as never, { source: 'zip', path: '/tmp/a.zip', preview: true })
+  assert.equal(first?.scan?.length, 2)
+  assert.equal(first?.scan?.[1]?.ok, false)
+  await importCustomSkill(client as never, { source: 'zip', path: '/tmp/a.zip', roots: ['01-weekly-report'] })
+  assert.deepEqual(calls[1]!.body, { source: 'zip', path: '/tmp/a.zip', roots: ['01-weekly-report'] })
 })

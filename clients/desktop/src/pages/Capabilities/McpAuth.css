@@ -61,3 +61,14 @@
 .skill-preview-files { margin: 6px 0 0; padding-left: 48px; color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .skill-install { background: var(--brand); color: var(--text-on-brand); }
 .skill-busy { position: absolute; right: 12px; bottom: 12px; }
+
+/* 一个包里扫出多个技能时的选择清单 */
+.skill-scan { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.skill-scan ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.skill-scan li { border: 1px solid var(--border); border-radius: var(--radius-md); }
+.skill-scan li.invalid { opacity: .7; }
+.skill-scan label { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; cursor: pointer; }
+.skill-scan li.invalid label { cursor: not-allowed; }
+.skill-scan-copy { display: grid; gap: 2px; min-width: 0; }
+.skill-scan-copy strong { color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }
+.skill-scan-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }

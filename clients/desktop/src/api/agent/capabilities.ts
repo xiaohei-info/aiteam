@@ -58,17 +58,33 @@ export interface CustomSkillPreview {
   origin_label: string
 }
 
+/** 一个包（文件夹 / zip / 网址）里可能有多个技能：检查后先列出，选一个再装。 */
+export interface CustomSkillScanItem {
+  /** 包内技能根（相对包根）；包根本身就是技能时为空串。 */
+  root: string
+  name: string
+  description: string
+  file_count: number
+  total_bytes: number
+  /** false 表示校验不过（reason 有中文原因），不会被安装。 */
+  ok: boolean
+  reason?: string
+}
+
 export interface CustomSkillImportRequest {
   source: CustomSkillSource
   path?: string
   skill_md?: string
   url?: string
   preview?: boolean
+  /** 安装包内指定的技能根；一次装一个。缺省取第一个。 */
+  roots?: string[]
   replace?: boolean
 }
 
 export interface CustomSkillImportResult {
   preview: CustomSkillPreview | null
+  scan: CustomSkillScanItem[] | null
   capability: LocalCapability | null
 }
 

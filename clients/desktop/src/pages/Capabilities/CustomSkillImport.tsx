@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { agentApi, AgentApiError } from '../../api/agent'
-import type { CustomSkillPreview, CustomSkillSource } from '../../api/agent/capabilities'
+import type { CustomSkillPreview, CustomSkillScanItem, CustomSkillSource } from '../../api/agent/capabilities'
 import { formatFileSize } from '../../lib/fileCache'
 import { toLocalPath } from '../../lib/localSkillPath'
 
@@ -32,6 +32,8 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   const [busy, setBusy] = useState<boolean | null>(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<CustomSkillPreview | null>(null)
+  const [scan, setScan] = useState<CustomSkillScanItem[] | null>(null)
+  const [picked, setPicked] = useState<string | null>(null)
 
   const current = SOURCES.find((item) => item.id === source)!
 
@@ -56,8 +58,16 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
         ...(source === 'url' ? { url } : {}),
         preview: true,
       })
+      if (result?.scan) {
+        setScan(result.scan)
+        setPicked(result.scan.find((item) => item.ok)?.root ?? null)
+        setPreview(null)
+        return
+      }
       if (!result?.preview) throw new Error('没有返回预览')
       setPreview(result.preview)
+      setScan(null)
+      setPicked(null)
       if (source === 'text') setText('')
     } catch (err) {
       setError(errorText(err))
@@ -72,6 +82,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
         ...(source === 'folder' || source === 'zip' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
         ...(source === 'url' ? { url } : {}),
+        ...(scan ? { roots: [picked ?? ''] } : {}),
         preview: false,
       })
       if (!result?.capability) throw new Error('安装未完成')
@@ -80,6 +91,8 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     } catch (err) {
       setError(errorText(err))
       setPreview(null)
+      setScan(null)
+      setPicked(null)
     } finally { setBusy(null) }
   }
 
@@ -88,6 +101,22 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       : url.trim().length > 0
 
   return <div className="mcp-form custom-skill-import">
+    {scan && <div className="skill-scan" aria-label="包内技能清单">
+      <p className="mcp-note">这个包里有 {scan.length} 个技能，选一个安装：</p>
+      <ul>
+        {scan.map((item) => <li key={item.root} className={item.ok ? '' : 'invalid'}>
+          <label>
+            <input type="radio" name="skill-root" disabled={!item.ok} checked={picked === item.root}
+              onChange={() => setPicked(item.root)} />
+            <span className="skill-scan-copy">
+              <strong>{item.ok ? (item.name || item.root || '（包根）') : item.root || '（包根）'}</strong>
+              <span>{item.ok ? `${item.description} · ${item.file_count} 个文件 · ${formatFileSize(item.total_bytes)}` : item.reason}</span>
+            </span>
+          </label>
+        </li>)}
+      </ul>
+    </div>}
+
     <div className="skill-source-tabs" role="tablist" aria-label="技能来源">
       {SOURCES.map((item) => {
         const Icon = item.icon
@@ -130,11 +159,13 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
 
     <footer>
       <button type="button" onClick={onClose}>取消</button>
-      {preview
-        ? <button type="button" className="skill-install" disabled={busy === true} onClick={() => void install()}>{busy ? '正在安装…' : '安装'}</button>
-        : <button type="button" className="skill-install" disabled={busy || !ready} onClick={() => void check()}>
-          {busy ? '正在检查…' : '检查'}
-        </button>}
+      {scan
+        ? <button type="button" className="skill-install" disabled={busy === true || !picked} onClick={() => void install()}>{busy ? '正在安装…' : '安装所选'}</button>
+        : preview
+          ? <button type="button" className="skill-install" disabled={busy === true} onClick={() => void install()}>{busy ? '正在安装…' : '安装'}</button>
+          : <button type="button" className="skill-install" disabled={busy || !ready} onClick={() => void check()}>
+            {busy ? '正在检查…' : '检查'}
+          </button>}
     </footer>
     {busy && <LoaderCircle className="file-access-spinner skill-busy" size={13} aria-hidden="true" />}
   </div>

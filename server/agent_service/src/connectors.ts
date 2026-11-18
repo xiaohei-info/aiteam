@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillPackage, readSkillFolder, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
 export { CustomSkillError } from "./custom-skills.js";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -679,11 +679,23 @@ export class SkillInstallError extends Error {
  * Unsigned, so it is stored in a separate local store with a per-file hash instead of the signed SkillCache.
  * `preview` only validates and reports; otherwise it installs, refusing to shadow an enterprise skill.
  */
+export interface CustomSkillScanItem {
+  /** 包内根路径（相对包根）；包根本身就是技能时为 ""。 */
+  root: string;
+  name: string;
+  description: string;
+  file_count: number;
+  total_bytes: number;
+  /** 校验不通过时为 false，reason 给具体中文原因；这种不会被安装。 */
+  ok: boolean;
+  reason?: string;
+}
+
 export async function importCustomSkill(
   store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
-  request: { source: "folder" | "zip" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean },
+  request: { source: "folder" | "zip" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
   signal?: AbortSignal,
-): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability }> {
+): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[] }> {
   const origin = { kind: request.source, label: request.url?.trim() || (request.source === "folder" ? "本机文件夹" : request.source === "zip" ? "本机 zip" : request.source === "text" ? "粘贴 SKILL.md" : request.url?.trim() || ""), ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
   let files: { path: string; content: Buffer }[];
   if (request.source === "folder") {
@@ -700,10 +712,33 @@ export async function importCustomSkill(
     const fetched = await fetchSkillFromUrl(request.url, signal);
     files = fetched.files; origin.kind = "url"; origin.label = fetched.origin.label; origin.url = fetched.origin.url;
   }
-  const pkg = normalizeSkillPackage(files, origin);
-  if (request.preview) {
-    return { preview: { name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), files: pkg.files.slice(0, 20).map((file) => file.path), origin_label: pkg.origin.label } };
+  const safe = files.map((file) => ({ path: file.path, content: file.content }));
+  // 一个文件夹 / 压缩包里可能有多个技能：先扫描出所有含 SKILL.md 的目录。
+  const roots = request.roots?.length ? request.roots : scanSkillRoots(safe);
+  if (roots.length === 0) {
+    throw new CustomSkillError("invalid_skill_package", "这个包里找不到任何 SKILL.md。");
   }
+  if (request.preview) {
+    const items: CustomSkillScanItem[] = roots.map((root) => {
+      try {
+        const pkg = normalizeSkillAtRoot(safe, root, origin);
+        return { root, name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), ok: true };
+      } catch (error) {
+        // 一个技能不合规不该让整个包扫不出来：标出来，用户只装能用的。
+        const reason = error instanceof Error && error.message ? error.message : "技能包校验失败。";
+        const files = safe.filter((file) => root && file.path.startsWith(root + "/"));
+        return { root, name: "", description: "", file_count: files.length, total_bytes: files.reduce((sum, file) => sum + file.content.length, 0), ok: false, reason };
+      }
+    });
+    // 只有一个技能时保持原来的单技能预览，界面不必改。
+    if (items.length === 1) {
+      const pkg = normalizeSkillAtRoot(safe, roots[0]!, origin);
+      return { preview: { name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), files: pkg.files.slice(0, 20).map((file) => file.path), origin_label: pkg.origin.label } };
+    }
+    return { scan: items };
+  }
+  const root = request.roots?.[0] ?? roots[0]!;
+  const pkg = normalizeSkillAtRoot(safe, root, origin);
   const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter((item) => item.kind === "skill" && item.ref === pkg.name);
   if (existing.some((item) => item.source !== "user_import")) {
     throw new CustomSkillError("invalid_skill_package", `已安装企业技能「${existing[0]!.display_name}」，同名自定义技能无法安装；请改 SKILL.md 里的 name。`);

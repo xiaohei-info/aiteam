@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CustomSkillError, CustomSkillStore, normalizeSkillPackage, readSkillFolder, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillError, CustomSkillStore, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
 
 const SKILL_MD = "---\nname: excel-report\ndescription: 按模板生成周报\n---\n\n# 周报\n";
 
@@ -110,4 +110,34 @@ test("readSkillFolder 接受 file:// 文件夹地址", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("scanSkillRoots 找出包内所有技能根（含包根本身就是技能）", () => {
+  const files = [
+    { path: "01-weekly-report/SKILL.md", content: Buffer.from(SKILL_MD) },
+    { path: "02-ppt-outline/SKILL.md", content: Buffer.from(SKILL_MD) },
+    { path: "02-ppt-outline/templates/page-types.md", content: Buffer.from("x") },
+  ];
+  assert.deepEqual(scanSkillRoots(files), ["01-weekly-report", "02-ppt-outline"]);
+
+  const single = [{ path: "SKILL.md", content: Buffer.from(SKILL_MD) }];
+  assert.deepEqual(scanSkillRoots(single), [""]);
+
+  const none = [{ path: "README.md", content: Buffer.from("x") }];
+  assert.deepEqual(scanSkillRoots(none), []);
+});
+
+test("多个技能根时逐个规范化，互不影响", () => {
+  const files = [
+    { path: "01-weekly-report/SKILL.md", content: Buffer.from("---\nname: weekly-report\ndescription: 周报\n---\n") },
+    { path: "02-ppt-outline/SKILL.md", content: Buffer.from("---\nname: ppt-outline\ndescription: PPT\n---\n") },
+    { path: "02-ppt-outline/templates/page-types.md", content: Buffer.from("页型") },
+  ];
+  const roots = scanSkillRoots(files);
+  const a = normalizeSkillAtRoot(files, roots[0]!, { kind: "zip", label: "本机 zip" });
+  const b = normalizeSkillAtRoot(files, roots[1]!, { kind: "zip", label: "本机 zip" });
+  assert.equal(a.name, "weekly-report");
+  assert.deepEqual(a.files.map((file) => file.path), ["SKILL.md"]);
+  assert.equal(b.name, "ppt-outline");
+  assert.deepEqual(b.files.map((file) => file.path), ["SKILL.md", "templates/page-types.md"]);
 });
