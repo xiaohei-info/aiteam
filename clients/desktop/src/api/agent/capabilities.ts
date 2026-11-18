@@ -1,4 +1,4 @@
-import type { CapabilityAutoInstall, InstallableSkill, LocalCapability, LocalCapabilityKind } from './types.ts'
+import type { CapabilityAutoInstall, InstallableSkill, LocalCapability, LocalCapabilityKind, McpBearerCredential, McpInstallRequest, McpInstallResult, McpLogin, McpProbe } from './types.ts'
 
 import type { ServiceApiClient } from './client'
 
@@ -29,4 +29,55 @@ export async function listCapabilityAutoInstall(client: RequestClient): Promise<
 /** 撤销后从平台目录安装该种能力恢复为每次审批；已装能力不受影响。 */
 export async function deleteCapabilityAutoInstall(client: RequestClient, kind: LocalCapabilityKind): Promise<void> {
   await client.request({ method: 'DELETE', path: `/api/agent/capabilities/auto-install/${encodeURIComponent(kind)}` })
+}
+
+// -------------------- MCP 鉴权（设计 2026-11-18 MCP鉴权与配置导入） --------------------
+// 令牌只在桌面端 → 本机 Agent 之间流转，不经过对话、不交给模型。
+
+/** 不带凭据请求一次，判断该地址无需鉴权、需要浏览器登录还是需要访问令牌。 */
+export async function probeMcpServer(client: RequestClient, url: string): Promise<McpProbe | null> {
+  return client.request<McpProbe>({ method: 'POST', path: '/api/agent/capabilities/mcp/probe', body: { url } })
+}
+
+/** 添加个人 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */
+export async function installMcpServer(client: RequestClient, body: McpInstallRequest): Promise<McpInstallResult> {
+  return (await client.request<McpInstallResult>({ method: 'POST', path: '/api/agent/capabilities/mcp', body })) ?? { capability: null, login: null }
+}
+
+/** 重新登录已安装的 MCP；令牌仍可用时返回 null。 */
+export async function startMcpLogin(client: RequestClient, ref: string): Promise<McpLogin | null> {
+  const data = await client.request<{ login: McpLogin | null }>({ method: 'POST', path: `/api/agent/capabilities/mcp/${encodeURIComponent(ref)}/auth` })
+  return data?.login ?? null
+}
+
+/** 更新访问令牌：Agent 先用它读一次工具列表，被拒则不保存。 */
+export async function updateMcpToken(client: RequestClient, ref: string, credential: McpBearerCredential): Promise<void> {
+  await client.request({ method: 'PUT', path: `/api/agent/capabilities/mcp/${encodeURIComponent(ref)}/token`, body: credential })
+}
+
+/** 退出登录 / 清除令牌；MCP 保留安装。 */
+export async function deleteMcpCredential(client: RequestClient, ref: string): Promise<void> {
+  await client.request({ method: 'DELETE', path: `/api/agent/capabilities/mcp/${encodeURIComponent(ref)}/credential` })
+}
+
+export async function getMcpLogin(client: RequestClient, loginId: string): Promise<McpLogin | null> {
+  return client.request<McpLogin>({ method: 'GET', path: `/api/agent/mcp-auth/logins/${encodeURIComponent(loginId)}` })
+}
+
+/** 让本机 Agent 用系统浏览器再次打开登录页；桌面端只传登录编号，不传网址。 */
+export async function reopenMcpLogin(client: RequestClient, loginId: string): Promise<boolean> {
+  const data = await client.request<{ opened: boolean }>({ method: 'POST', path: `/api/agent/mcp-auth/logins/${encodeURIComponent(loginId)}/open` })
+  return data?.opened === true
+}
+
+export async function cancelMcpLogin(client: RequestClient, loginId: string): Promise<void> {
+  await client.request({ method: 'POST', path: `/api/agent/mcp-auth/logins/${encodeURIComponent(loginId)}/cancel` })
+}
+
+/** 批准安装需要浏览器登录的 MCP 后，读取该审批对应的登录进度；还没开始登录时为 null。 */
+export async function getApprovalMcpLogin(client: RequestClient, conversationId: string, approvalId: string): Promise<McpLogin | null> {
+  return client.request<McpLogin | null>({
+    method: 'GET',
+    path: `/api/agent/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}/auth`,
+  })
 }

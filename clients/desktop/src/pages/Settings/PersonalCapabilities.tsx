@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BookOpen, LoaderCircle, Plug, ShieldCheck, Zap } from 'lucide-react'
+import { AlertCircle, BookOpen, LoaderCircle, Plug, Plus, ShieldCheck, Zap } from 'lucide-react'
 import '../../components/FileAccess/FileAccess.css'
 import { agentApi } from '../../api/agent'
-import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind } from '../../api/agent/types'
-import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled } from './personalCapabilityLabels'
+import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
+import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled, mcpAuthStatusLabel } from './personalCapabilityLabels'
+import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
 
 /** 用户在对话中同意安装的个人能力：只在本机、只对本人会话生效，可随时撤销。 */
 export default function PersonalCapabilities() {
@@ -12,6 +13,9 @@ export default function PersonalCapabilities() {
   const [grants, setGrants] = useState<CapabilityAutoInstall[]>([])
   const [error, setError] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
+  // MCP 鉴权窗口（MCP 鉴权 2026-11-18 §3.6）：添加 MCP / 等待登录 / 更新令牌。
+  const [dialog, setDialog] = useState<{ type: 'add' } | { type: 'login'; item: LocalCapability; login: McpLogin } | { type: 'token'; item: LocalCapability } | null>(null)
+  const [notice, setNotice] = useState('')
   const alive = useRef(true)
   // 挂载时置回 true：开发版 StrictMode 会先卸载再挂载一次，只在卸载时置 false 会让请求结果永远写不回页面。
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
@@ -38,6 +42,13 @@ export default function PersonalCapabilities() {
     }
   }
   const revoke = (item: LocalCapability) => run(`${item.kind}:${item.ref}`, () => agentApi.deleteLocalCapability(item.kind, item.ref), '撤销失败')
+  const relogin = (item: LocalCapability) => run(`${item.kind}:${item.ref}`, async () => {
+    setNotice('')
+    const login = await agentApi.startMcpLogin(item.ref)
+    if (login) setDialog({ type: 'login', item, login })
+    else setNotice(`${item.display_name} 的登录仍然有效，无需重新登录。`)
+  }, '重新登录失败')
+  const signOut = (item: LocalCapability) => run(`${item.kind}:${item.ref}`, () => agentApi.deleteMcpCredential(item.ref), item.auth === 'bearer' ? '清除令牌失败' : '退出登录失败')
   const revokeGrant = (kind: LocalCapabilityKind) => run(`auto:${kind}`, () => agentApi.deleteCapabilityAutoInstall(kind), '撤销授权失败')
 
   return <section id="personal-capabilities" className="settings-card glass-panel" aria-labelledby="settings-capabilities-title">
@@ -50,8 +61,12 @@ export default function PersonalCapabilities() {
       {items && <span className={`file-access-status ${items.length ? 'granted' : ''}`}>
         {items.length ? `已安装 ${items.length} 个` : '未安装'}
       </span>}
+      <button type="button" className="file-access-revoke" style={{ color: 'var(--brand)' }} onClick={() => setDialog({ type: 'add' })}>
+        <Plus size={13} aria-hidden="true" />添加 MCP
+      </button>
     </div>
     {error && <p role="alert" className="file-access-error"><AlertCircle size={14} aria-hidden="true" /><span>{error}</span></p>}
+    {notice && <p role="status" className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>{notice}</span></p>}
     {grants.length > 0 && <ul className="file-access-grants" aria-label="自动安装授权">
       {grants.map(grant => <li key={`auto:${grant.kind}`}>
         <span className="file-access-directory-icon"><Zap size={17} strokeWidth={1.7} aria-hidden="true" /></span>
@@ -67,7 +82,7 @@ export default function PersonalCapabilities() {
     {items === null && !error ? <p className="file-access-note" role="status"><LoaderCircle className="file-access-spinner" size={14} aria-hidden="true" />正在读取…</p>
       : items && items.length === 0 ? <div className="file-access-empty">
         <Plug size={20} strokeWidth={1.5} aria-hidden="true" />
-        <div><strong>还没有安装个人能力</strong><p>对话中 Agent 需要某个 MCP 或企业技能时，会先询问你，同意后才会安装。</p></div>
+        <div><strong>还没有安装个人能力</strong><p>对话中 Agent 需要某个 MCP 或企业技能时，会先询问你，同意后才会安装；也可以点右上角「添加 MCP」自己添加。</p></div>
       </div> : <ul className="file-access-grants" aria-label="已安装的个人能力">
         {(items ?? []).map(item => <li key={`${item.kind}:${item.ref}`}>
           <span className="file-access-directory-icon">{item.kind === 'skill'
@@ -77,15 +92,29 @@ export default function PersonalCapabilities() {
             <strong style={{ color: 'var(--text-primary)', fontSize: 13 }}>{item.display_name}</strong>
             <span style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
               {item.kind === 'skill' ? '技能' : 'MCP'} · {capabilitySourceLabel(item)}{item.version ? ` · 版本 ${item.version}` : ''}{isAutoInstalled(item) ? ' · 自动安装' : ''}
+              {(() => { const status = mcpAuthStatusLabel(item); return status && <> · <span className={`mcp-auth-badge ${status.attention ? 'attention' : ''}`}>{status.text}</span></> })()}
             </span>
             {item.kind === 'mcp' && <span className="file-access-directory-path" title={item.url}>{item.url}</span>}
             <span style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.6 }}>
               {item.kind === 'skill' ? `标识：${item.ref}` : `工具：${item.tools.join('、') || '—'}`}{item.reason ? ` · 原因：${item.reason}` : ''}
             </span>
           </span>
-          <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} aria-label={`撤销 ${item.display_name}`} onClick={() => void revoke(item)}>撤销</button>
+          <span className="mcp-row-actions">
+            {item.kind === 'mcp' && item.auth === 'oauth' && <>
+              <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} onClick={() => void relogin(item)}>重新登录</button>
+              {item.auth_status === 'signed_in' && <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} onClick={() => void signOut(item)}>退出登录</button>}
+            </>}
+            {item.kind === 'mcp' && item.auth === 'bearer' && <>
+              <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} onClick={() => setDialog({ type: 'token', item })}>更新令牌</button>
+              {item.auth_status === 'token_set' && <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} onClick={() => void signOut(item)}>清除令牌</button>}
+            </>}
+            <button type="button" className="file-access-revoke" disabled={busyKey === `${item.kind}:${item.ref}`} aria-label={`撤销 ${item.display_name}`} onClick={() => void revoke(item)}>撤销</button>
+          </span>
         </li>)}
       </ul>}
-    <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能只包含说明文档，不执行代码。撤销后下一轮对话起失效，不影响企业配置。</span></p>
+    <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能只包含说明文档，不执行代码。登录令牌只加密保存在本机，不交给模型。撤销后下一轮对话起失效，不影响企业配置。</span></p>
+    {dialog?.type === 'add' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'login' && <McpSignInDialog item={dialog.item} login={dialog.login} onCompleted={() => { setDialog(null); void load() }} onClose={() => { setDialog(null); void load() }} />}
+    {dialog?.type === 'token' && <McpTokenDialog item={dialog.item} onSaved={() => { setDialog(null); void load() }} onClose={() => setDialog(null)} />}
   </section>
 }

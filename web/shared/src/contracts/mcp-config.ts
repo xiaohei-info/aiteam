@@ -109,7 +109,7 @@ function candidate(name: string, entry: Json): McpConfigCandidate | McpConfigRej
     }
   }
   const trimmed = name.trim();
-  const ref = trimmed && REF_RE.test(trimmed) ? trimmed : suggestMcpRef(trimmed || new URL(url).pathname.split("/").filter(Boolean).at(-1) || new URL(url).hostname.split(".")[0] || "mcp");
+  const ref = trimmed && REF_RE.test(trimmed) ? trimmed : suggestMcpRef(trimmed || new URL(url).pathname.split("/").filter(Boolean).slice(-1)[0] || new URL(url).hostname.split(".")[0] || "mcp");
   const timeout = timeoutOf(entry.timeout ?? entry.timeout_ms ?? entry.timeoutMs);
   return {
     name: trimmed, ref, refAdjusted: Boolean(trimmed) && ref !== trimmed, url,

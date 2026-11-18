@@ -50,3 +50,16 @@ test('来源为平台目录时标记 platform，弹窗才提供「以后直接�
   const skill = parseCapabilityInstall('capability_install', `capability_install: ${JSON.stringify({ kind: 'skill', ref: 's', version: '1', source: 'enterprise_catalog' })}`)
   assert.equal(skill?.platform, false)
 })
+
+test('MCP 鉴权：带出 oauth 登录主机与 bearer 请求头；旧版 Agent 没有 auth 时为 none', () => {
+  const oauth = parseCapabilityInstall('capability_install', summary({ kind: 'mcp', auth: 'oauth', auth_host: 'mcp-test.cycplus.com' }))
+  assert.equal(oauth?.auth, 'oauth')
+  assert.equal(oauth?.authHost, 'mcp-test.cycplus.com')
+  const bearer = parseCapabilityInstall('capability_install', summary({ auth: 'bearer', auth_header: 'X-API-Key' }))
+  assert.equal(bearer?.auth, 'bearer')
+  assert.equal(bearer?.authHeader, 'X-API-Key')
+  assert.equal(parseCapabilityInstall('capability_install', summary())?.auth, 'none')
+  assert.equal(parseCapabilityInstall('capability_install', summary({ auth: 'weird' }))?.auth, 'none')
+  const skill = parseCapabilityInstall('capability_install', `capability_install: ${JSON.stringify({ kind: 'skill', ref: 's', display_name: 'S', version: '1', auth: 'oauth' })}`)
+  assert.equal(skill?.auth, 'none', '技能没有鉴权')
+})

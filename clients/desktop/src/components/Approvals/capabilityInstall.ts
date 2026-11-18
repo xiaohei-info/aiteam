@@ -24,6 +24,12 @@ export interface CapabilityInstallPreview {
   source: string
   /** 来源是平台目录：弹窗可提供「以后直接安装」。 */
   platform: boolean
+  /** MCP 鉴权方式（MCP 鉴权 2026-11-18）：oauth 批准后到服务方网页登录；bearer 在弹窗里填令牌。旧版 Agent 为 none。 */
+  auth: 'none' | 'oauth' | 'bearer'
+  /** oauth：服务方登录页主机名。 */
+  authHost: string
+  /** bearer：携带令牌的请求头名；空 = Authorization: Bearer。 */
+  authHeader: string
   replaces?: { displayName: string; url: string; version: string }
 }
 
@@ -41,7 +47,11 @@ export function parseCapabilityInstall(toolName: string, summary: string): Capab
       ? { replaces: { displayName: text(raw.display_name), url: text(raw.url), version: text(raw.version) } }
       : {}
     const source = text(data.source)
-    const base = { kind, ref: text(data.ref), displayName: text(data.display_name), reason: text(data.reason), version: text(data.version), source, platform: source === 'platform_catalog', ...replaces } as const
+    const auth = kind === 'mcp' && (data.auth === 'oauth' || data.auth === 'bearer') ? data.auth : 'none'
+    const base = {
+      kind, ref: text(data.ref), displayName: text(data.display_name), reason: text(data.reason), version: text(data.version), source,
+      platform: source === 'platform_catalog', auth, authHost: text(data.auth_host), authHeader: text(data.auth_header), ...replaces,
+    } as const
     if (kind === 'skill') return base.ref ? { ...base, url: '', host: '', before: '', after: '' } : null
     if (typeof data.url !== 'string' || !data.url) return null
     const url = new URL(data.url)

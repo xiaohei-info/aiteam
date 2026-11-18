@@ -55,6 +55,8 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['POST', '/api/agent/conversations/{conversation_id}/abort'],
   ['GET', '/api/agent/conversations/{conversation_id}/approvals'],
   ['POST', '/api/agent/conversations/{conversation_id}/approvals/{approval_id}/decision'],
+  // 批准安装需要浏览器登录的 MCP 后读取登录进度（MCP 鉴权 2026-11-18）。
+  ['GET', '/api/agent/conversations/{conversation_id}/approvals/{approval_id}/auth'],
   ['GET', '/api/agent/conversations/{conversation_id}/attachments'],
   ['POST', '/api/agent/conversations/{conversation_id}/attachments'],
   ['GET', '/api/agent/conversations/{conversation_id}/artifacts'],
@@ -72,6 +74,17 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/capabilities/auto-install'],
   ['DELETE', '/api/agent/capabilities/auto-install/{capability_kind}'],
   ['DELETE', '/api/agent/capabilities/{capability_kind}/{capability_ref}'],
+  // MCP 鉴权（2026-11-18）：添加 MCP、探测、登录进度/取消、重新登录、更新令牌、清除凭据。
+  // 回调由浏览器直接访问，桌面端不调用；列出是为与契约快照一致。
+  ['POST', '/api/agent/capabilities/mcp'],
+  ['POST', '/api/agent/capabilities/mcp/probe'],
+  ['POST', '/api/agent/capabilities/mcp/{capability_ref}/auth'],
+  ['PUT', '/api/agent/capabilities/mcp/{capability_ref}/token'],
+  ['DELETE', '/api/agent/capabilities/mcp/{capability_ref}/credential'],
+  ['GET', '/api/agent/mcp-auth/logins/{login_id}'],
+  ['POST', '/api/agent/mcp-auth/logins/{login_id}/cancel'],
+  ['POST', '/api/agent/mcp-auth/logins/{login_id}/open'],
+  ['GET', '/api/agent/mcp-auth/callback'],
   ['GET', '/api/agent/grants/readiness'],
   ['GET', '/api/agent/grants/experts/{employee_id}/readiness'],
   ['POST', '/api/agent/employees/{employee_id}/avatar'],

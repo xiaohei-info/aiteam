@@ -1,0 +1,30 @@
+/* 设置「个人能力」MCP 鉴权窗口（MCP 鉴权 2026-11-18）。 */
+.chat-tools-dialog.mcp-dialog { width: min(600px, 100%); }
+.mcp-form { display: grid; gap: 12px; margin-top: 16px; font-size: 13px; }
+.mcp-form label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+.mcp-form input:not([type=checkbox]), .mcp-form textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-primary); font-size: 13px; font-family: inherit; }
+.mcp-form textarea { font-family: monospace; resize: vertical; }
+.mcp-form input:focus-visible, .mcp-form textarea:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+.mcp-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.mcp-form footer button:last-child { background: var(--brand); color: var(--text-on-brand); }
+.mcp-form button { border: 1px solid var(--border); }
+.mcp-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.mcp-label { color: var(--text-muted); font-size: 11px; margin-bottom: 4px; }
+.mcp-link { max-height: 96px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-muted); font-family: monospace; font-size: 11px; word-break: break-all; }
+.mcp-hint { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 8px 12px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.mcp-hint > svg { flex-shrink: 0; margin-top: 3px; color: var(--brand); }
+.mcp-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.mcp-error { margin: 0; color: var(--danger); font-size: 12px; line-height: 1.6; }
+.mcp-imported { display: grid; gap: 6px; }
+.mcp-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-choices button[aria-pressed=true] { border-color: var(--brand); color: var(--brand); }
+.mcp-auth-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--text-secondary); font-size: 12px; }
+.mcp-auth-line strong { color: var(--text-primary); }
+.mcp-advanced summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-secondary); font-size: 12px; list-style: none; }
+.mcp-advanced summary::-webkit-details-marker { display: none; }
+.mcp-advanced[open] summary svg { transform: rotate(180deg); }
+.mcp-advanced .mcp-row { margin-top: 10px; }
+.mcp-check { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px; }
+.mcp-auth-badge { display: inline-block; padding: 1px 6px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.mcp-auth-badge.attention { border-color: var(--danger-border-strong); color: var(--danger); }
+.mcp-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: 220px; flex-shrink: 0; }

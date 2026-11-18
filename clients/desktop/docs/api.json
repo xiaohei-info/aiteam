@@ -7447,6 +7447,28 @@
             ],
             "description": "安装个人能力与已装同名能力冲突时，用户的选择：覆盖或改名。只对 capability_install 的批准有效。"
           },
+          "credential": {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "description": "服务方发的访问令牌；只保存在本机加密文件。"
+              },
+              "header": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "请求头名；缺省为 Authorization: Bearer。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "批准安装需要访问令牌的 MCP 时填写的令牌；只在内存中交给安装步骤，不写入审批记录。",
+            "~optional": true
+          },
           "remember": {
             "type": "boolean",
             "description": "批准并记住：以后从平台目录安装同种能力（MCP 或技能）时直接安装。只对来源为平台目录的 capability_install 的批准有效。"
@@ -8176,7 +8198,13 @@
           "source_ref",
           "reason",
           "approved_by",
-          "created_at"
+          "created_at",
+          "auth",
+          "auth_header",
+          "oauth_scope",
+          "timeout_ms",
+          "auth_status",
+          "auth_expires_at"
         ],
         "properties": {
           "kind": {
@@ -8264,6 +8292,100 @@
             "type": "string",
             "format": "date-time",
             "description": "安装时间。"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none"
+                ],
+                "description": "auth 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "oauth"
+                ],
+                "description": "auth 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "description": "auth 字段值。"
+              }
+            ],
+            "description": "MCP 鉴权方式：none 无需鉴权；oauth 成员在服务方网页登录；bearer 服务方发的访问令牌。技能为 none。"
+          },
+          "auth_header": {
+            "type": "string",
+            "description": "bearer：携带令牌的请求头名；空表示 Authorization: Bearer。"
+          },
+          "oauth_scope": {
+            "type": "string",
+            "description": "oauth：登录时申请的权限范围；空表示按服务方要求。"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "description": "单次工具调用超时（毫秒）。"
+          },
+          "auth_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none"
+                ],
+                "description": "auth status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "signed_in"
+                ],
+                "description": "auth status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "needs_login"
+                ],
+                "description": "auth status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "token_set"
+                ],
+                "description": "auth status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "needs_token"
+                ],
+                "description": "auth status 字段值。"
+              }
+            ],
+            "description": "本机凭据状态：none 无需；signed_in 已登录；needs_login 需要（重新）登录；token_set 已填令牌；needs_token 需要填写令牌。凭据本身不返回。"
+          },
+          "auth_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "description": "auth expires at 字段值。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "oauth：当前令牌到期时间（有刷新令牌时会自动续期）；未知或不适用为 null。"
           }
         },
         "additionalProperties": false,
@@ -8427,6 +8549,412 @@
           }
         },
         "description": "Capability Auto Install List Envelope 数据结构。"
+      },
+      "McpLogin": {
+        "type": "object",
+        "required": [
+          "login_id",
+          "ref",
+          "status",
+          "authorization_url",
+          "auth_host",
+          "expires_at"
+        ],
+        "properties": {
+          "login_id": {
+            "type": "string",
+            "description": "登录会话 ID。"
+          },
+          "ref": {
+            "type": "string",
+            "description": "MCP 标识。"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pending"
+                ],
+                "description": "status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ],
+                "description": "status 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ],
+                "description": "status 字段值。"
+              }
+            ],
+            "description": "pending 等待成员在浏览器登录；completed 已完成；failed 未完成。"
+          },
+          "authorization_url": {
+            "type": "string",
+            "description": "服务方登录页地址（浏览器未自动打开时由成员手动打开）。"
+          },
+          "auth_host": {
+            "type": "string",
+            "description": "服务方登录页的主机名。"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "登录会话失效时间。"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "timeout"
+                ],
+                "description": "error 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "cancelled"
+                ],
+                "description": "error 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "denied"
+                ],
+                "description": "error 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ],
+                "description": "error 字段值。"
+              }
+            ],
+            "description": "失败原因。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "一次 MCP 服务方登录的进度；不含令牌、授权码或 state。"
+      },
+      "McpLoginEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/McpLogin"
+          }
+        },
+        "description": "Mcp Login Envelope 数据结构。"
+      },
+      "McpLoginStartEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "login"
+            ],
+            "properties": {
+              "login": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/McpLogin"
+                  },
+                  {
+                    "type": "null",
+                    "description": "允许为 null。"
+                  }
+                ],
+                "description": "需要到浏览器登录时返回登录进度；已有可用令牌时为 null。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Mcp Login Start Envelope 数据结构。"
+      },
+      "McpLoginCancelEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "cancelled"
+            ],
+            "properties": {
+              "cancelled": {
+                "type": "boolean",
+                "description": "是否已取消。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Mcp Login Cancel Envelope 数据结构。"
+      },
+      "McpProbeRequest": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "MCP 端点地址（streamable HTTP）。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Mcp Probe Request 数据结构。"
+      },
+      "McpProbe": {
+        "type": "object",
+        "required": [
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none"
+                ],
+                "description": "auth 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "oauth"
+                ],
+                "description": "auth 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "bearer"
+                ],
+                "description": "auth 字段值。"
+              }
+            ],
+            "description": "需要的鉴权方式。"
+          },
+          "auth_host": {
+            "type": "string",
+            "description": "oauth：服务方登录页主机名。"
+          },
+          "scope": {
+            "type": "string",
+            "description": "oauth：服务方要求的权限范围。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "不带凭据探测一次的结果。"
+      },
+      "McpProbeEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/McpProbe"
+          }
+        },
+        "description": "Mcp Probe Envelope 数据结构。"
+      },
+      "McpInstallRequest": {
+        "type": "object",
+        "required": [
+          "ref",
+          "url"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "标识：小写字母开头，只含小写字母、数字、- 或 _。"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "展示名称。"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "MCP 端点地址（streamable HTTP）。"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000,
+            "description": "单次工具调用超时（毫秒），默认 30000。"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "用途备注。"
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "已有同名 MCP 时是否覆盖。"
+          },
+          "credential": {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
+                "description": "服务方发的访问令牌；只保存在本机加密文件。"
+              },
+              "header": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "请求头名；缺省为 Authorization: Bearer。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "credential 对象。"
+          },
+          "oauth_client": {
+            "type": "object",
+            "required": [
+              "client_id"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "服务方发的应用编号。"
+              },
+              "client_secret": {
+                "type": "string",
+                "maxLength": 4096,
+                "description": "应用密钥；只保存在本机加密文件。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "高级：服务方不允许自动注册时手动填写的应用编号。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Mcp Install Request 数据结构。"
+      },
+      "McpInstallEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "capability",
+              "login"
+            ],
+            "properties": {
+              "capability": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LocalCapability"
+                  },
+                  {
+                    "type": "null",
+                    "description": "允许为 null。"
+                  }
+                ],
+                "description": "已安装的 MCP；需要先登录时为 null。"
+              },
+              "login": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/McpLogin"
+                  },
+                  {
+                    "type": "null",
+                    "description": "允许为 null。"
+                  }
+                ],
+                "description": "需要成员在浏览器登录时的进度；登录完成后自动完成安装。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Mcp Install Envelope 数据结构。"
+      },
+      "McpTokenRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "description": "新的访问令牌。"
+          },
+          "header": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "请求头名；缺省沿用安装时的设置。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Mcp Token Request 数据结构。"
+      },
+      "McpTokenEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "updated"
+            ],
+            "properties": {
+              "updated": {
+                "type": "boolean",
+                "description": "是否已更新。"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Mcp Token Envelope 数据结构。"
       }
     }
   },
@@ -23976,6 +24504,829 @@
                     "value": {
                       "data": {
                         "removed": true
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/mcp-auth/logins/{login_id}": {
+      "get": {
+        "operationId": "getMcpLogin",
+        "summary": "读取 MCP 登录进度",
+        "description": "读取成员本人的一次服务方登录进度；不含令牌、授权码或 state。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "login id 字段值。"
+            },
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "description": "登录会话 ID。",
+            "example": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "登录进度。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpLoginEnvelope"
+                },
+                "examples": {
+                  "pending": {
+                    "summary": "等待浏览器登录",
+                    "value": {
+                      "data": {
+                        "login_id": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11",
+                        "ref": "cr-test",
+                        "status": "pending",
+                        "authorization_url": "https://mcp-test.cycplus.com/oauth2/authorize?response_type=code&client_id=abc123",
+                        "auth_host": "mcp-test.cycplus.com",
+                        "expires_at": "2026-11-18T10:10:00.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/mcp-auth/logins/{login_id}/cancel": {
+      "post": {
+        "operationId": "cancelMcpLogin",
+        "summary": "取消 MCP 登录",
+        "description": "取消等待中的服务方登录；对应的安装随之失败。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "login id 字段值。"
+            },
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "description": "登录会话 ID。",
+            "example": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "取消结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpLoginCancelEnvelope"
+                },
+                "examples": {
+                  "cancelled": {
+                    "summary": "已取消",
+                    "value": {
+                      "data": {
+                        "cancelled": true
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/mcp-auth/callback": {
+      "get": {
+        "operationId": "mcpAuthCallback",
+        "summary": "MCP 登录回调",
+        "description": "服务方登录页把成员的浏览器带回本机 Agent；只接受本机访问，凭一次性 state 与 PKCE 完成换取令牌。不需要 Agent 登录令牌。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "state 字段值。"
+            },
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "description": "一次性登录状态。",
+            "example": "opaque-one-time-state"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "code 字段值。"
+            },
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "description": "服务方返回的授权码。",
+            "example": "provider-authorization-code"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "error 字段值。"
+            },
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "description": "服务方返回的错误。",
+            "example": "access_denied"
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "给浏览器的结果页。",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string",
+                  "description": "结果页 HTML。"
+                },
+                "examples": {
+                  "done": {
+                    "summary": "登录完成",
+                    "value": "<!doctype html><title>已完成登录</title><p>已完成登录，可以关闭此页面回到 AI Team。</p>"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/mcp/probe": {
+      "post": {
+        "operationId": "probeMcpServer",
+        "summary": "探测 MCP 鉴权方式",
+        "description": "不带凭据请求一次，判断该地址无需鉴权、需要浏览器登录还是需要访问令牌。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpProbeRequest"
+              },
+              "examples": {
+                "url": {
+                  "summary": "探测地址",
+                  "value": {
+                    "url": "https://mcp-test.cycplus.com/mcp/cr-test"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "探测结果。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpProbeEnvelope"
+                },
+                "examples": {
+                  "oauth": {
+                    "summary": "需要浏览器登录",
+                    "value": {
+                      "data": {
+                        "auth": "oauth",
+                        "auth_host": "mcp-test.cycplus.com",
+                        "scope": "profile.read openid"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/mcp": {
+      "post": {
+        "operationId": "installMcpServer",
+        "summary": "添加个人 MCP",
+        "description": "成员自己添加 MCP（不经对话和模型）。需要浏览器登录时返回登录进度，登录完成后自动安装；令牌与应用密钥只保存在本机加密文件。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpInstallRequest"
+              },
+              "examples": {
+                "oauth": {
+                  "summary": "需要登录的 MCP",
+                  "value": {
+                    "ref": "cr-test",
+                    "display_name": "Cycplus 活动数据",
+                    "url": "https://mcp-test.cycplus.com/mcp/cr-test",
+                    "timeout_ms": 30000
+                  }
+                },
+                "bearer": {
+                  "summary": "带访问令牌",
+                  "value": {
+                    "ref": "crm",
+                    "url": "https://crm.example.com/mcp",
+                    "credential": {
+                      "token": "example-token",
+                      "header": "X-API-Key"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已安装，或返回待完成的登录。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpInstallEnvelope"
+                },
+                "examples": {
+                  "login": {
+                    "summary": "等待浏览器登录",
+                    "value": {
+                      "data": {
+                        "capability": null,
+                        "login": {
+                          "login_id": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11",
+                          "ref": "cr-test",
+                          "status": "pending",
+                          "authorization_url": "https://mcp-test.cycplus.com/oauth2/authorize?response_type=code&client_id=abc123",
+                          "auth_host": "mcp-test.cycplus.com",
+                          "expires_at": "2026-11-18T10:10:00.000Z"
+                        }
+                      }
+                    }
+                  },
+                  "installed": {
+                    "summary": "已安装",
+                    "value": {
+                      "data": {
+                        "capability": {
+                          "kind": "mcp",
+                          "ref": "cr-test",
+                          "display_name": "Cycplus 活动数据",
+                          "url": "https://mcp-test.cycplus.com/mcp/cr-test",
+                          "tools": [
+                            "activity_summary"
+                          ],
+                          "source": "user_url",
+                          "version": "",
+                          "source_ref": "",
+                          "reason": "",
+                          "approved_by": "member-1",
+                          "created_at": "2026-11-18T10:00:00.000Z",
+                          "auth": "oauth",
+                          "auth_header": "",
+                          "oauth_scope": "profile.read openid",
+                          "timeout_ms": 30000,
+                          "auth_status": "signed_in",
+                          "auth_expires_at": "2026-11-18T12:00:00.000Z"
+                        },
+                        "login": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/mcp/{capability_ref}/auth": {
+      "post": {
+        "operationId": "startMcpLogin",
+        "summary": "重新登录 MCP",
+        "description": "为已安装、需要浏览器登录的 MCP 重新登录服务方账号；令牌仍可用（或可刷新）时直接返回 login=null。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "capability ref 字段值。"
+            },
+            "in": "path",
+            "name": "capability_ref",
+            "required": true,
+            "description": "MCP 标识。",
+            "example": "notion"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "重新登录。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpLoginStartEnvelope"
+                },
+                "examples": {
+                  "pending": {
+                    "summary": "已打开浏览器",
+                    "value": {
+                      "data": {
+                        "login": {
+                          "login_id": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11",
+                          "ref": "cr-test",
+                          "status": "pending",
+                          "authorization_url": "https://mcp-test.cycplus.com/oauth2/authorize?response_type=code&client_id=abc123",
+                          "auth_host": "mcp-test.cycplus.com",
+                          "expires_at": "2026-11-18T10:10:00.000Z"
+                        }
+                      }
+                    }
+                  },
+                  "refreshed": {
+                    "summary": "令牌仍可用",
+                    "value": {
+                      "data": {
+                        "login": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/mcp/{capability_ref}/token": {
+      "put": {
+        "operationId": "updateMcpToken",
+        "summary": "更新 MCP 访问令牌",
+        "description": "先用新令牌向服务方读一次工具列表，通过后才保存到本机加密文件。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpTokenRequest"
+              },
+              "examples": {
+                "token": {
+                  "summary": "更新令牌",
+                  "value": {
+                    "token": "example-token"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "capability ref 字段值。"
+            },
+            "in": "path",
+            "name": "capability_ref",
+            "required": true,
+            "description": "MCP 标识。",
+            "example": "notion"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "令牌已校验并保存。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpTokenEnvelope"
+                },
+                "examples": {
+                  "updated": {
+                    "summary": "已更新",
+                    "value": {
+                      "data": {
+                        "updated": true
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/mcp/{capability_ref}/credential": {
+      "delete": {
+        "operationId": "deleteMcpCredential",
+        "summary": "退出 MCP 登录 / 清除令牌",
+        "description": "删除本机为该 MCP 保存的登录令牌或访问令牌；MCP 保留安装，下次调用前需重新登录或填写令牌。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "capability ref 字段值。"
+            },
+            "in": "path",
+            "name": "capability_ref",
+            "required": true,
+            "description": "MCP 标识。",
+            "example": "notion"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "本机凭据已删除。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalCapabilityDeleteEnvelope"
+                },
+                "examples": {
+                  "removed": {
+                    "summary": "已退出登录",
+                    "value": {
+                      "data": {
+                        "removed": true
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/conversations/{conversation_id}/approvals/{approval_id}/auth": {
+      "get": {
+        "operationId": "getApprovalMcpLogin",
+        "summary": "读取审批对应的 MCP 登录进度",
+        "responses": {
+          "200": {
+            "description": "登录进度；没有登录时 data 为 null"
+          }
+        }
+      }
+    },
+    "/api/agent/mcp-auth/logins/{login_id}/open": {
+      "post": {
+        "operationId": "openMcpLogin",
+        "summary": "重新打开 MCP 登录页",
+        "description": "用系统默认浏览器再次打开等待中的服务方登录页；桌面端只传登录编号，不传网址。登录已结束时 opened 为 false。",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "login id 字段值。"
+            },
+            "in": "path",
+            "name": "login_id",
+            "required": true,
+            "description": "登录会话 ID。",
+            "example": "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11"
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "是否已重新打开登录页。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "opened"
+                      ],
+                      "properties": {
+                        "opened": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "examples": {
+                  "opened": {
+                    "summary": "已在浏览器打开",
+                    "value": {
+                      "data": {
+                        "opened": true
                       }
                     }
                   }

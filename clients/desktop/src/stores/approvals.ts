@@ -11,7 +11,7 @@
 import { create } from 'zustand'
 import { agentApi, AgentApiError } from '../api/agent'
 import type { CapabilityResolution } from '../api/agent/approvals'
-import type { PiSseEventData } from '../api/agent/types'
+import type { McpLogin, PiSseEventData } from '../api/agent/types'
 import { notifyApprovalRequired } from '../lib/systemNotifications'
 
 const RISK_LABEL: Record<string, string> = {
@@ -29,17 +29,46 @@ export interface PendingApproval {
   totalMs: number | null
   decisionRevision?: number
   employee?: string
-  /** 'deciding' 提交中；'expired' 已过期/冲突失效；'error' 提交失败可重试 */
-  phase: 'pending' | 'deciding' | 'expired' | 'error'
+  /**
+   * 'deciding' 提交中；'expired' 已过期/冲突失效；'error' 提交失败可重试；
+   * 'signing_in' 已批准安装需要浏览器登录的 MCP，等待成员在服务方网页登录（MCP 鉴权 2026-11-18）。
+   */
+  phase: 'pending' | 'deciding' | 'expired' | 'error' | 'signing_in'
   errorMessage?: string
+  /** signing_in：Agent 返回的登录进度；还没开始登录时为空。 */
+  login?: McpLogin | null
+  /** signing_in：进入等待登录的时刻（ms），用于判断迟迟拿不到登录进度。 */
+  signInSince?: number
+}
+
+/** 批准时随决定提交的附加内容。 */
+export interface DecideOptions {
+  resolution?: CapabilityResolution
+  remember?: boolean
+  /** 需要访问令牌的 MCP：令牌只交给本机 Agent。 */
+  credential?: { token: string; header?: string }
+  /** 需要浏览器登录的 MCP：批准后进入等待登录，而不是关闭弹窗。 */
+  signIn?: boolean
 }
 
 interface ApprovalStore {
   pending: PendingApproval[]
   addFromSse: (event: PiSseEventData, conversationId: string) => void
-  decide: (approvalId: string, decision: 'approve' | 'deny', resolution?: CapabilityResolution, remember?: boolean) => Promise<void>
+  decide: (approvalId: string, decision: 'approve' | 'deny', options?: DecideOptions) => Promise<void>
   dismiss: (approvalId: string) => void
+  /** signing_in 时写入最新登录进度。 */
+  setLogin: (approvalId: string, login: McpLogin | null) => void
+  /** 登录失败或读不到进度：保留条目显示原因，由成员关闭。 */
+  failSignIn: (approvalId: string, message: string) => void
   pruneExpired: () => void
+}
+
+/** 令牌被服务方拒绝 / 格式不对：可重填，审批仍有效。 */
+function credentialProblem(error: unknown): string | null {
+  const code = error instanceof AgentApiError ? error.code : undefined
+  if (code === 'invalid_mcp_token') return '服务方拒绝了这个令牌，请检查后重新填写'
+  if (code === 'invalid_approval_credential') return '令牌或请求头名格式不对，请检查后重新填写'
+  return null
 }
 
 export const useApprovalStore = create<ApprovalStore>((set, get) => ({
@@ -75,7 +104,7 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
     get().pruneExpired()
   },
 
-  decide: async (approvalId, decision, resolution, remember) => {
+  decide: async (approvalId, decision, options = {}) => {
     const item = get().pending.find((p) => p.approvalId === approvalId)
     if (!item || item.phase === 'deciding') return
     set((state) => ({
@@ -89,9 +118,16 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
         crypto.randomUUID(),
         item.decisionRevision,
         undefined,
-        decision === 'approve' ? resolution : undefined,
-        decision === 'approve' && remember === true,
+        decision === 'approve' ? options.resolution : undefined,
+        decision === 'approve' && options.remember === true,
+        decision === 'approve' ? options.credential : undefined,
       )
+      if (decision === 'approve' && options.signIn) {
+        set((state) => ({
+          pending: state.pending.map((p) => p.approvalId === approvalId ? { ...p, phase: 'signing_in', login: null, signInSince: Date.now(), errorMessage: undefined } : p),
+        }))
+        return
+      }
       set((state) => ({ pending: state.pending.filter((p) => p.approvalId !== approvalId) }))
     } catch (error) {
       const expired = error instanceof AgentApiError && error.status === 409
@@ -102,11 +138,19 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
               phase: expired ? 'expired' : 'error',
               errorMessage: expired
                 ? '该审批已过期或被处理，请让员工重试'
-                : (error instanceof Error ? error.message : '提交失败，请重试'),
+                : credentialProblem(error) ?? (error instanceof Error ? error.message : '提交失败，请重试'),
             }
           : p),
       }))
     }
+  },
+
+  setLogin: (approvalId, login) => {
+    set((state) => ({ pending: state.pending.map((p) => p.approvalId === approvalId && p.phase === 'signing_in' ? { ...p, login } : p) }))
+  },
+
+  failSignIn: (approvalId, message) => {
+    set((state) => ({ pending: state.pending.map((p) => p.approvalId === approvalId && p.phase === 'signing_in' ? { ...p, errorMessage: message } : p) }))
   },
 
   dismiss: (approvalId) => {
