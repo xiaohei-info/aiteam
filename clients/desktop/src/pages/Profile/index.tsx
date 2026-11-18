@@ -9,17 +9,15 @@ import type { LucideIcon } from 'lucide-react'
 import ProfileInfo from './ProfileInfo'
 import AgentConfig from '../AgentConfig'
 import KnowledgeBase from '../KnowledgeBase'
-import SkillCenter from '../SkillCenter'
 import Settings from '../Settings'
 import TopBar from '../../components/Layout/TopBar'
 
-type TabKey = 'profile' | 'agents' | 'knowledge' | 'skills' | 'settings'
+type TabKey = 'profile' | 'agents' | 'knowledge' | 'settings'
 
 const TABS: { key: TabKey; icon: LucideIcon; label: string }[] = [
   { key: 'profile', icon: User, label: '个人资料' },
   // { key: 'agents', icon: Bot, label: '智能体' },
   // { key: 'knowledge', icon: BookOpen, label: '知识库' },
-  // { key: 'skills', icon: Puzzle, label: '技能中心' },
   { key: 'settings', icon: SettingsIcon, label: '设置' },
 ]
 
@@ -27,7 +25,6 @@ const TAB_COMPONENTS: Record<TabKey, React.ComponentType> = {
   profile: ProfileInfo,
   agents: AgentConfig,
   knowledge: KnowledgeBase,
-  skills: SkillCenter,
   settings: Settings,
 }
 

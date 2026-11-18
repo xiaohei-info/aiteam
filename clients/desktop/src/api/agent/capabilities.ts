@@ -39,6 +39,11 @@ export async function probeMcpServer(client: RequestClient, url: string): Promis
   return client.request<McpProbe>({ method: 'POST', path: '/api/agent/capabilities/mcp/probe', body: { url } })
 }
 
+/** 添加个人技能：只能装企业开放给本人的技能；已装其他版本时须 replace=true（否则 409 skill_exists）。 */
+export async function installSkill(client: RequestClient, skillId: string, replace = false): Promise<LocalCapability | null> {
+  return client.request<LocalCapability>({ method: 'POST', path: '/api/agent/capabilities/skills', body: { skill_id: skillId, ...(replace ? { replace: true } : {}) } })
+}
+
 /** 添加个人 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */
 export async function installMcpServer(client: RequestClient, body: McpInstallRequest): Promise<McpInstallResult> {
   return (await client.request<McpInstallResult>({ method: 'POST', path: '/api/agent/capabilities/mcp', body })) ?? { capability: null, login: null }

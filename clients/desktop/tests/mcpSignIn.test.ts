@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { addMcpProblem, addMcpRequest, signInFailureText, type AddMcpForm } from '../src/lib/mcpSignIn.ts'
-import { mcpAuthStatusLabel } from '../src/pages/Settings/personalCapabilityLabels.ts'
+import { mcpAuthStatusLabel } from '../src/pages/Capabilities/capabilityLabels.ts'
 
 const form = (patch: Partial<AddMcpForm> = {}): AddMcpForm => ({
   ref: 'cr-test', displayName: '', url: 'https://mcp-test.cycplus.com/mcp/cr-test', timeoutMs: 30000, reason: '',

@@ -3,7 +3,7 @@ import test from 'node:test'
 import { cancelMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listLocalCapabilities, probeMcpServer, reopenMcpLogin, startMcpLogin, updateMcpToken } from '../src/api/agent/capabilities.ts'
 import { isDocumentedRequest } from '../src/api/agent/contract.ts'
 import { approvals } from '../src/api/agent/approvals.ts'
-import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled } from '../src/pages/Settings/personalCapabilityLabels.ts'
+import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled } from '../src/pages/Capabilities/capabilityLabels.ts'
 
 test('personal capabilities use the documented endpoints and encode the ref', async () => {
   const calls: { method: string; path: string }[] = []

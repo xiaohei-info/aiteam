@@ -28,3 +28,19 @@
 .mcp-auth-badge { display: inline-block; padding: 1px 6px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 .mcp-auth-badge.attention { border-color: var(--danger-border-strong); color: var(--danger); }
 .mcp-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: 220px; flex-shrink: 0; }
+
+/* 「添加技能」列表 */
+.skill-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.skill-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.skill-list li + li { border-top: 1px solid var(--border); }
+.skill-list-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.skill-list-copy strong { color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
+.skill-list-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.skill-list li > button { flex-shrink: 0; }
+.skill-search { display: flex !important; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.mcp-form .skill-search input { border: 0; padding: 7px 0; background: transparent; }
+/* 「能力」页 */
+.capabilities-heading-action { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 8px; }
+.capabilities-add { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--brand); font-size: 12px; cursor: pointer; }
+.capabilities-add:hover { background: var(--brand-soft); }
+.capabilities-add:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }

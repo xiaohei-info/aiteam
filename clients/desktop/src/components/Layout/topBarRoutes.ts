@@ -16,7 +16,6 @@ const STATIC_ROUTES: Record<string, TopBarRoute> = {
   '/tasks': { title: '自动化', breadcrumbs: [{ label: '自动化' }] },
   '/agents': { title: '智能体', breadcrumbs: [{ label: '智能体' }] },
   '/talents': { title: '人才市场', breadcrumbs: [{ label: '人才市场' }] },
-  '/skills': { title: '技能中心', breadcrumbs: [{ label: '技能中心' }] },
   '/knowledge': { title: '知识库', breadcrumbs: [{ label: '知识库' }] },
   '/knowledge/local-documents': {
     title: '本地文档',
@@ -27,7 +26,7 @@ const STATIC_ROUTES: Record<string, TopBarRoute> = {
   },
   '/workbench': { title: '工作台', breadcrumbs: [{ label: '工作台' }] },
   '/org': { title: '组织架构', breadcrumbs: [{ label: '组织架构' }] },
-  '/mcp': { title: 'MCP 服务', breadcrumbs: [{ label: 'MCP 服务' }] },
+  '/capabilities': { title: '能力', breadcrumbs: [{ label: '能力' }] },
   '/office': { title: '办公室', breadcrumbs: [{ label: '办公室' }] },
   '/settings': { title: '设置', breadcrumbs: [{ label: '设置' }] },
   '/profile': { title: '个人资料', breadcrumbs: [{ label: '个人资料' }] },

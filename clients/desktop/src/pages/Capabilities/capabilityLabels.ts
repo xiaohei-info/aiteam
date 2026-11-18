@@ -1,4 +1,4 @@
-import type { LocalCapability, LocalCapabilityKind } from '../../api/agent/types'
+import type { InstallableSkill, LocalCapability, LocalCapabilityKind } from '../../api/agent/types'
 
 /** `approved_by` of installs approved by the member's auto-install grant (Agent AUTO_INSTALL_APPROVER). */
 export const AUTO_INSTALL_APPROVER = 'policy:auto-install'
@@ -37,4 +37,13 @@ function formatExpiry(ms: number): string {
   const d = new Date(ms)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 「添加技能」列表里一项企业可装技能对本人的状态：未装 / 已装同版本 / 已装其他版本（可换成目录当前版本）。 */
+export type InstallableSkillState = { action: 'install' } | { action: 'installed' } | { action: 'upgrade'; from: string }
+
+export function installableSkillState(skill: Pick<InstallableSkill, 'skill_id' | 'version'>, installed: Pick<LocalCapability, 'kind' | 'ref' | 'version'>[]): InstallableSkillState {
+  const current = installed.find((item) => item.kind === 'skill' && item.ref === skill.skill_id)
+  if (!current) return { action: 'install' }
+  return current.version === skill.version ? { action: 'installed' } : { action: 'upgrade', from: current.version ?? '' }
 }

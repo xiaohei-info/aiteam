@@ -8955,6 +8955,36 @@
           }
         },
         "description": "Mcp Token Envelope 数据结构。"
+      },
+      "SkillInstallRequest": {
+        "type": "object",
+        "required": [
+          "skill_id"
+        ],
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "企业可自装技能列表里的技能 ID（或其平台技能 ID）。"
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "已装其他版本时是否换成目录里的当前版本。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SkillInstallEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/LocalCapability"
+          }
+        }
       }
     }
   },
@@ -25347,6 +25377,104 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/skills": {
+      "post": {
+        "operationId": "installSkill",
+        "summary": "添加个人技能",
+        "description": "成员自己安装企业开放给本人的技能（与对话中审批安装相同：企业目录、签名校验、只装在本机），不经对话与模型。已装其他版本时须 replace=true。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstallRequest"
+              },
+              "examples": {
+                "install": {
+                  "summary": "安装企业开放的技能",
+                  "value": {
+                    "skill_id": "sheet-reader"
+                  }
+                },
+                "upgrade": {
+                  "summary": "换成目录里的当前版本",
+                  "value": {
+                    "skill_id": "sheet-reader",
+                    "replace": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已安装的技能。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInstallEnvelope"
+                },
+                "examples": {
+                  "installed": {
+                    "summary": "已安装",
+                    "value": {
+                      "data": {
+                        "kind": "skill",
+                        "ref": "sheet-reader",
+                        "display_name": "读表",
+                        "url": "",
+                        "tools": [],
+                        "source": "enterprise_catalog",
+                        "version": "2",
+                        "source_ref": "",
+                        "reason": "",
+                        "approved_by": "member-1",
+                        "created_at": "2026-11-18T10:00:00.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"

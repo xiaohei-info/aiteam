@@ -38,7 +38,7 @@ import {
   updateConversationSegment,
 } from './conversations'
 import { getExpertReadiness, listExperts, listSolutions } from './experts'
-import { cancelMcpLogin, reopenMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listInstallableSkills, listLocalCapabilities, probeMcpServer, startMcpLogin, updateMcpToken } from './capabilities'
+import { cancelMcpLogin, installSkill, reopenMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listInstallableSkills, listLocalCapabilities, probeMcpServer, startMcpLogin, updateMcpToken } from './capabilities'
 import { deleteEmployeeMemory, getEmployeeMemorySummary, listEmployeeMemories } from './employeeMemories'
 import type {
   OfficeFeed,
@@ -198,6 +198,7 @@ export const agentApi = {
   listCapabilityAutoInstall: () => listCapabilityAutoInstall(getClient()),
   deleteCapabilityAutoInstall: (kind: 'mcp' | 'skill') => deleteCapabilityAutoInstall(getClient(), kind),
   // MCP 鉴权（2026-11-18）：令牌只在桌面端 → 本机 Agent 之间流转。
+  installSkill: (skillId: string, replace?: boolean) => installSkill(getClient(), skillId, replace),
   probeMcpServer: (url: string) => probeMcpServer(getClient(), url),
   installMcpServer: (body: Parameters<typeof installMcpServer>[1]) => installMcpServer(getClient(), body),
   startMcpLogin: (ref: string) => startMcpLogin(getClient(), ref),
