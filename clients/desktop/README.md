@@ -33,23 +33,70 @@ pnpm dev
 
 以下命令均在项目根目录（`AITeam/`）执行。构建会自动检查 Agent 资源，并运行 `pnpm build` 编译前端。
 
-### 快速打包：附带脚本和说明的测试安装包
-
-**需要在安装盘中显示脚本入口时，请使用以下命令，不要使用普通 `pnpm tauri build`：**
+### 快速打包：签名 + 公证的正式安装包（默认路径）
 
 ```bash
-# Release：包含临时放行脚本和安装说明
+# Release：Developer ID 签名 + Apple 公证（推荐、对外分发用）
 pnpm tauri:build:mac:installer
 
-# Debug：包含临时放行脚本和安装说明
+# 只签名，不公证（本地验收 / 临时分发）
+pnpm tauri:build:mac:installer --skip-notarize
+
+# Debug：开发自测，不公证
 pnpm tauri:build:mac:installer --debug
+
+# 发版用：找不到签名身份直接失败，不静默降级成未签名包
+pnpm tauri:build:mac:installer --require-signed
 ```
 
-默认输出目录分别为 `src-tauri/target-fresh.noindex/release/bundle/dmg/` 和 `src-tauri/target-fresh.noindex/debug/bundle/dmg/`。请选择文件名以 **`_release_with-helper.dmg`** 或 **`_debug_with-helper.dmg`** 结尾的安装包。
+默认输出目录为 `src-tauri/target-fresh.noindex/release/bundle/dmg/`（Debug 为 `.../debug/bundle/dmg/`）。签名成功时产物名为 **`AIFred_0.1.0_aarch64_release.dmg`**，内含与 Apple 公证过的 `AIFred.app`、Applications 快捷方式和 `安装说明.txt`；用户拖入 Applications 后双击即可打开，不需要放行脚本，也不需要管理员权限。
 
-打开后卷名为 **`AIFred Installer`**，其中包含应用、Applications 快捷方式、`修复应用无法打开.command` 和 `安装说明.txt`。脚本会清除下载隔离标记并重新进行本地临时签名，不等同于 Developer ID 签名或 Apple 公证；具体限制见下方说明。
+签名身份解析顺序：`APPLE_SIGNING_IDENTITY` → 钥匙串里第一个 `Developer ID Application` 证书。公证凭据读取 notarytool 钥匙串条目，默认 `AIFred-notary`，可用 `APPLE_NOTARY_PROFILE` 覆盖。找不到证书时默认降级为未签名构建（见下文），发版时应加 `--require-signed`（或设 `APPLE_REQUIRE_SIGNED=1`）让它直接报错。
 
-> 普通的 `AIFred_0.1.0_aarch64.dmg` 不含脚本。若窗口中只有应用和 Applications，请推出旧安装盘，重新打开带 `_with-helper` 后缀的包。
+签名流程：内嵌可执行文件（`Contents/Resources/agent/runtime/node`、各 `*.node`、esbuild 等）先逐个以 Hardened Runtime + 时间戳签名（Node 用 `src-tauri/Entitlements.agent.plist`），再重签应用本体（`src-tauri/Entitlements.plist`）并校验 `codesign --deep --strict`；随后把 `.app` 打 zip 提交公证并 stapling（保证拖出 DMG 后的应用离线首次启动也不弹窗），再打包 DMG、给 DMG 本体签名、提交公证并 stapling，最后用 `spctl` 验收。每次发版因此有两次公证上传（`.app` zip 与 DMG）。公证提交失败会自动重试 3 次（上传偶发中断时不必重新构建）。
+
+**随包 Node 的权限说明**（`src-tauri/Entitlements.agent.plist`，只作用于 `Contents/Resources/agent/runtime/node`，主程序只有 `allow-jit`）：
+
+| 权限 | 用途 |
+| --- | --- |
+| `allow-jit` | V8 即时编译 |
+| `allow-unsigned-executable-memory` | V8 需要的可执行内存 |
+| `disable-library-validation` | Node 要加载 `*.node` 原生扩展，它们来自不同上游、由本团队重新签名 |
+
+三项都不要随意去掉：不放开时，随包 Node 会因 Agent 包的签名问题反复弹出 Node 权限允许弹窗（实际观察到的现象，未做根因分析）。要收紧权限，请在签名版安装包上逐项去掉，确认内嵌 Agent 能拉起且不再弹窗后再改。
+
+### 首次配置证书与公证凭据
+
+1. 在 [Apple Developer](https://developer.apple.com/account/resources/certificates/add) 创建 **Developer ID Application** 证书：生成 CSR（`openssl req -new -newkey rsa:2048 -nodes -keyout developerID.key -out developerID.csr -subj "/CN=AIFred Distribution"`）、上传、下载 `.cer`。
+2. 导入钥匙串（须用 OpenSSL 的 legacy 算法导出，否则 macOS 报 `MAC verification failed`）：
+
+```bash
+openssl pkcs12 -export -legacy -inkey developerID.key -in developerID.crt.pem \
+  -name "Developer ID Application: <团队名> (<TEAMID>)" -out developerID.p12
+security import developerID.p12 -k ~/Library/Keychains/login.keychain-db -P <口令> \
+  -T /usr/bin/codesign -T /usr/bin/security
+security find-identity -v -p codesigning   # 应出现 Developer ID Application: ...
+```
+
+3. 在 App Store Connect → 用户和访问 → 集成 → App Store Connect API 创建 **团队密钥**（访问权限「开发者」即可），下载一次性的 `.p8`，然后保存公证凭据：
+
+```bash
+xcrun notarytool store-credentials "AIFred-notary" \
+  --key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer <Issuer ID>
+xcrun notarytool history --keychain-profile "AIFred-notary"   # 无报错即凭据可用
+```
+
+私钥、`.p8` 与口令不要入库；本机放在仓库外的目录（例如 `~/.apple-signing/devid`），权限 600。
+
+### 发版责任机与证书续期
+
+- 签名与公证只在持有 Developer ID 证书 + `AIFred-notary` 凭据的那台 Mac 上能做（当前是 yufei 的本机；CI 未接入签名与公证）。换机器需按上一节重新导入证书、导出 `.p8` 并存凭据。
+- 证书到期日 **2027-12-17**，到期前需在开发者后台续签证书并重新导入钥匙串，否则签名会失败。
+- 公证提交被 Apple 判定 `Invalid` 时不会重试（重试无意义），脚本会打印 `xcrun notarytool log <id> ...` 的排查命令；只有上传中断类失败才自动重试 3 次。
+
+### 未签名降级构建（无证书机器）
+
+找不到 Developer ID 证书时，脚本仍会产出以前那种**未签名测试包**：文件名带 **`_with-helper`** 后缀，盘内额外包含 `修复应用无法打开.command` 和未签名版 `安装说明.txt`。这种包不等同于 Developer ID 签名或 Apple 公证，只用于可信内测。
 
 ### 普通 Release 版本（不附带脚本）
 
@@ -141,14 +188,16 @@ Applications → /Applications
 安装说明.txt
 ```
 
-用户先将应用拖入 Applications。如遇下载隔离检查拦截，再双击脚本，选择已安装的应用并确认操作。脚本和说明源文件位于 `installer/macos/`；构建 DMG 时不会修改 `.app` 内部内容，用户运行修复脚本时会替换所选应用的现有签名。自定义 DMG 使用系统默认 Finder 布局，不沿用 Tauri DMG 的图标位置或背景配置。
+用户先将应用拖入 Applications。如遇下载隔离检查拦截，再双击脚本，选择已安装的应用并确认操作。脚本和说明源文件位于 `installer/macos/`；构建 DMG 时不会修改 `.app` 内部内容，用户运行修复脚本时会替换所选应用的现有签名。自定义 DMG 使用系统默认 Finder 布局，不沿用 Tauri DMG 的图标位置或背景配置。该脚本只出现在**未签名降级包**（文件名带 `_with-helper`）里，签名并公证过的正式包不含该脚本，因为重新签名会破坏公证票据。
 
 **此脚本删除所选应用的 `com.apple.quarantine` 属性，执行 `codesign --force --deep --sign -` 进行本地临时签名，再以 `codesign --verify --deep --strict --verbose=2` 验证。只有验证通过后才提示打开应用；签名或验证失败会以非零状态退出。它会替换应用及内嵌代码的现有签名，不会完成 Developer ID 签名、Apple 公证、修复损坏文件或关闭 Gatekeeper。** 仅用于可信测试版本；如系统提示包含恶意软件，请停止，不要绕过。脚本本身也可能被 macOS 拦截，无法保证首次双击即可运行；安装说明包含确认可信后通过 `/bin/bash` 显式执行的备用方式。正式发布前应替换为签名、公证流程；本命令不会对最终 DMG 额外签名或公证。
 
 ### 架构与分发注意
 
 - 默认构建当前机器架构；Apple Silicon Mac 上默认为 ARM64，不是 Intel 或 Universal 版本。内嵌 Agent 也必须与目标架构匹配。
-- Release 和 Debug 均不会自动绕过 macOS 安全检查。以上命令没有额外配置 Developer ID 签名或 Apple 公证，正式对外分发仍需完成签名与公证。
+- 普通 `pnpm tauri build`（不带 installer 脚本）只做打包，不补签内嵌 Node、不做公证；正式对外分发请用 `pnpm tauri:build:mac:installer`。
+- 签名需要联网向 Apple 时间戳服务取时间戳；公证需要可达 `appstoreconnect.apple.com`。
+- **本机开了系统代理（Clash / 127.0.0.1:7897）时必须先关掉再跑公证**：实测直连上传 4.26 MB/s，走代理只有 110 KB/s，notarytool 会在上传中途报 `abortedUpload(... deadlineExceeded)`。`notarytool` 只认系统代理，设 `HTTPS_PROXY` 环境变量无效。关代理：`sudo networksetup -setwebproxystate "Wi-Fi" off; sudo networksetup -setsecurewebproxystate "Wi-Fi" off; sudo networksetup -setsocksfirewallproxystate "Wi-Fi" off`，所有 `on` 即恢复。
 - 不要同时对同一个构建目录运行多次打包，以免等待 Cargo 文件锁或产生打包冲突。
 
 ### 内嵌 Agent（Apple Silicon）

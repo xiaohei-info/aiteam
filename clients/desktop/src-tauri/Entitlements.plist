@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    主程序（AIFred）的 Hardened Runtime entitlements。
+    WKWebView 的 WebContent 是系统进程，本身无需授权；这里只为应用内的
+    JavaScript 运行时保留 JIT 能力，其余能力一律不放开（无沙盒、无禁用库校验）。
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>
