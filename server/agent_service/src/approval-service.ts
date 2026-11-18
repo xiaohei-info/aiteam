@@ -66,6 +66,23 @@ export class ApprovalResolutionError extends Error {
 }
 const RENAME_REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
+/** A token was sent for something other than approving the install of an MCP that needs one. */
+export class ApprovalCredentialError extends Error {
+  constructor(message = "credential is only accepted when approving the install of an MCP that needs an access token") { super(message); this.name = "ApprovalCredentialError"; }
+}
+
+/** Auth mode of a `capability_install` MCP approval, read from the summary the Agent itself wrote. */
+export function capabilityInstallAuthOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): string | null {
+  const prefix = "capability_install:";
+  if (record.tool_name !== "capability_install" || !record.redacted_summary.startsWith(prefix)) return null;
+  try {
+    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; auth?: unknown };
+    return data.kind === "mcp" && typeof data.auth === "string" ? data.auth : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `remember` was sent for something other than approving a platform-catalog capability install. */
 export class ApprovalRememberError extends Error {
   constructor(message = "remember is only accepted when approving a capability install from the platform catalog") { super(message); this.name = "ApprovalRememberError"; }
@@ -87,6 +104,11 @@ interface Waiter {
  */
 export class ApprovalService {
   private readonly waiters = new Map<string, Set<Waiter>>();
+  /**
+   * Tokens typed into the approval dialog, held in memory only until the approved install claims them.
+   * Never written to the approval record, the session, events or logs.
+   */
+  private readonly credentials = new Map<string, { value: { token: string; header?: string }; expires: number }>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private onRequired?: (record: ApprovalRecord) => void | Promise<void>;
@@ -165,7 +187,15 @@ export class ApprovalService {
     resolution?: CapabilityResolution;
     /** Approve, and from now on install this kind from the platform catalog without asking (design §11.3). */
     remember?: boolean;
+    /** bearer MCP install: the member's token, handed to the install in memory only. */
+    credential?: { token: string; header?: string };
   }): ApprovalRecord {
+    if (input.credential !== undefined) {
+      const target = this.store.getApprovalRecord(input.id);
+      if (target && (input.decision !== "approve" || capabilityInstallAuthOf(target) !== "bearer" || !input.credential.token)) throw new ApprovalCredentialError();
+      // Stashed before the decision wakes the waiting install, so it is there when the install runs.
+      if (target) this.credentials.set(target.id, { value: input.credential, expires: this.now() + this.ttlMs });
+    }
     if (input.resolution !== undefined) {
       const target = this.store.getApprovalRecord(input.id);
       const valid = input.decision === "approve" && target?.tool_name === "capability_install"
@@ -177,12 +207,27 @@ export class ApprovalService {
       if (target && (input.decision !== "approve" || capabilityInstallOf(target)?.source !== "platform_catalog")) throw new ApprovalRememberError();
     }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
-    const record = this.store.decideApproval(input);
+    let record: ApprovalRecord;
+    try {
+      record = this.store.decideApproval(input);
+    } catch (error) {
+      this.credentials.delete(input.id);
+      throw error;
+    }
+    if (record.status !== "approved") this.credentials.delete(record.id);
     const install = input.remember && record.status === "approved" ? capabilityInstallOf(record) : null;
     if (install?.source === "platform_catalog") this.store.putCapabilityAutoInstall(record.tenant_id, record.member_id, install.kind);
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
     return record;
+  }
+
+  /** One-time hand-over of the token the member typed for this approval; gone after the first read. */
+  takeCredential(approvalId: string): { token: string; header?: string } | undefined {
+    const entry = this.credentials.get(approvalId);
+    this.credentials.delete(approvalId);
+    for (const [id, item] of this.credentials) if (item.expires <= this.now()) this.credentials.delete(id);
+    return entry && entry.expires > this.now() ? entry.value : undefined;
   }
 
   cancelConversation(conversationId: string, tenantId?: string, memberId?: string): void {

@@ -1,4 +1,5 @@
-import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type SkillInstaller } from "../connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -216,6 +217,8 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   /** Skills members installed for themselves; kept apart from the snapshot cache, whose sync prunes unknown skills. */
   personalSkillCache?: SkillCache;
+  /** Sign-in and encrypted credentials of personal MCP servers (MCP鉴权与配置导入). */
+  mcpAuth?: McpAuthService;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
@@ -1368,8 +1371,9 @@ export class SessionHost {
     const connectors = record ? connectorTools(this.options.store, { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId }, authorization.employeeId, record.conversationId, authorization.snapshot) : [];
     // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
-    const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
-    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller))] : [];
+    const mcpAuth = this.mcpRuntimeAuth(authorization.caller);
+    const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot, mcpAuth) : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth)] : [];
     for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
     tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -1435,8 +1439,19 @@ export class SessionHost {
   private mcpCatalog(caller: AuthenticatedCaller): McpCatalog | undefined {
     const client = this.options.managerClient;
     if (!client?.listInstallableMcpServers || !caller.tenantId) return undefined;
-    return { list: () => client.listInstallableMcpServers!(caller) };
+    return {
+      list: () => client.listInstallableMcpServers!(caller),
+      ...(client.getMcpOAuthClient ? { oauthClient: (serverId: string) => client.getMcpOAuthClient!(caller, serverId) } : {}),
+    };
   }
+
+  /** Credentials and sign-in for personal MCP servers of this caller. */
+  mcpRuntimeAuth(caller: AuthenticatedCaller): McpRuntimeAuth {
+    const catalog = this.mcpCatalog(caller);
+    return { ...(this.options.mcpAuth ? { service: this.options.mcpAuth } : {}), ...(catalog ? { catalog } : {}) };
+  }
+
+  get mcpAuth(): McpAuthService | undefined { return this.options.mcpAuth; }
 
   /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
   removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
@@ -1456,11 +1471,12 @@ export class SessionHost {
         let autoInstall = false;
         const install = tool.name === "capability_install";
         if (install) {
-          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller));
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller), this.mcpRuntimeAuth(authorization.caller));
           if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
           summary = `capability_install: ${check.summary}`;
           // The member's own grant (design §11.3): platform-catalog installs of this kind that replace nothing skip the prompt.
-          autoInstall = check.platform && !check.replaces && this.options.store.hasCapabilityAutoInstall(owner.tenantId, owner.memberId, check.kind);
+          // Auto-install skips «may it be installed», never the sign-in: one that still needs it is asked as usual.
+          autoInstall = check.platform && !check.replaces && !check.needsCredential && this.options.store.hasCapabilityAutoInstall(owner.tenantId, owner.memberId, check.kind);
         }
         return this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
@@ -1487,7 +1503,11 @@ export class SessionHost {
       }, (claimed) => {
         // The user's replace / rename choice reaches the install tool only through the approval record, never from the model.
         const effective = install
-          ? { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER }
+          ? (() => {
+            // The token typed into the dialog reaches the install in memory only; the recorded tool call keeps the model's arguments.
+            const credential = this.approvalService.takeCredential(claimed.id);
+            return { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER, approvalId: claimed.id, ...(credential ? { credential } : {}) };
+          })()
           : params;
         return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
           ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, effective, signal, onUpdate, context))

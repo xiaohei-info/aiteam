@@ -9,6 +9,7 @@ import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
+import { McpAuthService, McpCredentialStore } from "./mcp-auth.js";
 import { backfillArtifactPaths } from "./services/artifact-paths.js";
 import { migrateWorkspaceLayout } from "./services/workspace-migration.js";
 import { groupWorkspaceHint, projectWorkspaceHint, workspaceFolderHint } from "./workspace-layout.js";
@@ -61,7 +62,10 @@ const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, m
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
 const executionAuthorization = new ExecutionAuthorizationRegistry();
 const usageFlush = new UsageFlushService(store, managerClient, { authorization: executionAuthorization });
+// Personal MCP sign-in / tokens: encrypted files in the data dir, never uploaded (design 2026-11-18 MCP鉴权与配置导入).
+const mcpAuth = new McpAuthService(new McpCredentialStore(dataRoot));
 const sessionHost = new SessionHost({
+  mcpAuth,
   cwdRoot,
   agentDir,
   sessionDir,
@@ -150,6 +154,8 @@ const boundPort = (() => {
   const address = http.server.address();
   return address && typeof address === "object" ? address.port : port;
 })();
+// The provider sends the member's browser back to this loopback address after sign-in.
+mcpAuth.setCallbackBase(`http://${hostAddress === "::1" ? "[::1]" : "127.0.0.1"}:${boundPort}`);
 if (portFile) writePortFile(portFile, hostAddress, boundPort);
 schedule.start();
 usageFlush.start();

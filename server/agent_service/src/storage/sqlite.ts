@@ -289,6 +289,8 @@ export interface LoadedSolutionProjection {
 }
 
 export type LocalCapabilityKind = "mcp" | "skill";
+export type LocalCapabilityAuth = "none" | "oauth" | "bearer";
+export const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 
 export interface LocalCapability {
   kind: LocalCapabilityKind;
@@ -310,6 +312,14 @@ export interface LocalCapability {
   reason: string;
   approved_by: string;
   created_at: string;
+  /** MCP only: how the server authenticates this member (credentials live in the encrypted local credential file, never here). */
+  auth: LocalCapabilityAuth;
+  /** bearer: request header carrying the token ("" = Authorization: Bearer). */
+  auth_header: string;
+  /** oauth: scopes requested at sign-in ("" = the server's challenge decides). */
+  oauth_scope: string;
+  /** Per tool call; 1 000–300 000 ms. */
+  timeout_ms: number;
 }
 
 export interface FrozenSnapshot {
@@ -750,6 +760,15 @@ export class AgentSqliteStore {
     }
     this.migrateLocalCapabilityKinds();
     this.migrateLocalCapabilitySources();
+    // After the rebuilds above, which recreate local_capability without later columns.
+    for (const statement of [
+      "ALTER TABLE local_capability ADD COLUMN auth TEXT NOT NULL DEFAULT 'none'",
+      "ALTER TABLE local_capability ADD COLUMN auth_header TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE local_capability ADD COLUMN oauth_scope TEXT NOT NULL DEFAULT ''",
+      `ALTER TABLE local_capability ADD COLUMN timeout_ms INTEGER NOT NULL DEFAULT ${DEFAULT_MCP_TIMEOUT_MS}`,
+    ]) {
+      try { this.db.exec(statement); } catch { /* already migrated */ }
+    }
     // Retry markers written by an older Agent build did not bind a schedule
     // identity. They cannot be safely replayed after a schedule replacement.
     this.db.prepare("DELETE FROM schedule_retry WHERE schedule_id = '' OR schedule_generation = 0").run();
@@ -1571,14 +1590,15 @@ export class AgentSqliteStore {
   }
 
   listLocalCapabilities(tenantId: string, memberId: string): LocalCapability[] {
-    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
+    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at, auth, auth_header, oauth_scope, timeout_ms FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
       .map(({ tools_json, ...row }) => ({ ...row, tools: JSON.parse(tools_json) as string[] }));
   }
 
   /** Inserts or replaces one personal capability of this owner; never touches another member's rows. */
-  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version" | "source_ref"> & { version?: string; source_ref?: string }, now = new Date().toISOString()): void {
-    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now);
+  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version" | "source_ref" | "auth" | "auth_header" | "oauth_scope" | "timeout_ms"> & Partial<Pick<LocalCapability, "version" | "source_ref" | "auth" | "auth_header" | "oauth_scope" | "timeout_ms">>, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at, auth, auth_header, oauth_scope, timeout_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now,
+        item.auth ?? "none", item.auth_header ?? "", item.oauth_scope ?? "", item.timeout_ms ?? DEFAULT_MCP_TIMEOUT_MS);
   }
 
   /** Kinds this member lets the platform catalog install without asking (design §11.3). */
