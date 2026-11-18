@@ -181,6 +181,16 @@ src-tauri/        ← Tauri Rust 层（窗口/菜单/通知/安全存储）
 5. **离线不可用**，断网时显示全屏遮罩提示
 6. **路径别名**：`@` 映射到 `src/` 目录
 
+## 依赖审计
+
+`pnpm check:dependencies`（CI 的 `Security checks` 一环）要求生产与开发依赖都没有 high/critical 漏洞。当前登记了一条临时豁免，写在 `package.json` 的 `pnpm.auditConfig.ignoreGhsas`：
+
+| GHSA | 包 | 为什么可以豁免 | 何时移除 |
+| --- | --- | --- | --- |
+| `GHSA-fc5q-39xc-vjpf` | `picomatch`（ReDoS） | 只出现在开发链路（`tailwindcss>chokidar>anymatch>picomatch`、`vite>tinyglobby/fdir>picomatch`），不进产物；且公告的 `first_patched_version` 为空、`4.0.7` 已是最新发布版，升级无法消除 | 上游发修复版本后（最迟 2026-12-15 复核）：删掉该条目并跑 `pnpm check:dependencies` 确认转绿 |
+
+只给「无修复版本 + 仅开发链路」的公告加豁免；生产依赖出现 high/critical 时不要走这条路，按正常流程升级。
+
 ## 技术栈
 
 | 层 | 技术 |
