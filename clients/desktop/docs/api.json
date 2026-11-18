@@ -8268,9 +8268,16 @@
                   "platform_catalog"
                 ],
                 "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "user_import"
+                ],
+                "description": "source 字段值。"
               }
             ],
-            "description": "来源：user_url 用户同意的 MCP 地址；enterprise_catalog 企业自建技能；platform_catalog 平台目录（企业启用的平台 MCP 或从平台技能市场安装的技能）。"
+            "description": "来源：user_url 用户同意的 MCP 地址；enterprise_catalog 企业自建技能；platform_catalog 平台目录（企业启用的平台 MCP 或从平台技能市场安装的技能）；user_import 成员自己导入的技能（本机文件夹/zip/粘贴/网址，未经企业签名）。"
           },
           "version": {
             "type": "string",
@@ -8386,6 +8393,25 @@
               }
             ],
             "description": "oauth：当前令牌到期时间（有刷新令牌时会自动续期）；未知或不适用为 null。"
+          },
+          "integrity": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ok"
+                ],
+                "description": "integrity 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "modified"
+                ],
+                "description": "integrity 字段值。"
+              }
+            ],
+            "description": "仅自定义技能：ok 文件与导入时一致；modified 文件被改动过，已停用。其他能力不返回。"
           }
         },
         "additionalProperties": false,
@@ -8985,6 +9011,137 @@
             "$ref": "#/components/schemas/LocalCapability"
           }
         }
+      },
+      "CustomSkillImportRequest": {
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "folder"
+                ],
+                "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "zip"
+                ],
+                "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "text"
+                ],
+                "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "url"
+                ],
+                "description": "source 字段值。"
+              }
+            ],
+            "description": "folder 本机文件夹；zip 本机压缩包；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "folder / zip：本机绝对路径（桌面端文件选择得到）。"
+          },
+          "skill_md": {
+            "type": "string",
+            "maxLength": 200000,
+            "description": "text：SKILL.md 全文。"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "url：公开 https 地址。"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "true 只校验并返回预览，不安装。"
+          },
+          "replace": {
+            "type": "boolean",
+            "description": "已装同名自定义技能时是否覆盖。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Custom Skill Import Request 数据结构。"
+      },
+      "CustomSkillPreview": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "file_count",
+          "total_bytes",
+          "files",
+          "origin_label"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "技能名（Pi 规则：小写字母、数字、连字符）。"
+          },
+          "description": {
+            "type": "string",
+            "description": "技能说明。"
+          },
+          "file_count": {
+            "type": "integer",
+            "description": "文件数。"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "description": "总字节数。"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "files 字段值。"
+            },
+            "description": "前 20 个相对路径。"
+          },
+          "origin_label": {
+            "type": "string",
+            "description": "来源描述（本机文件夹 / 本机 zip / 粘贴 / 网址）。"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Custom Skill Preview 数据结构。"
+      },
+      "CustomSkillImportEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "properties": {
+              "preview": {
+                "$ref": "#/components/schemas/CustomSkillPreview"
+              },
+              "capability": {
+                "$ref": "#/components/schemas/LocalCapability"
+              }
+            },
+            "additionalProperties": false,
+            "description": "data 对象。"
+          }
+        },
+        "description": "Custom Skill Import Envelope 数据结构。"
       }
     }
   },
@@ -25484,6 +25641,141 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ManagerUnavailable"
+          }
+        },
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/agent/capabilities/skills/custom": {
+      "post": {
+        "operationId": "importCustomSkill",
+        "summary": "导入自定义技能",
+        "description": "成员自己导入技能（本机文件夹 / zip / 粘贴 SKILL.md / 公开 https 网址），只在本机、只对自己的会话生效，不上传、不经企业签名。preview=true 只校验并返回预览；与企业技能同名拒绝；同名自定义技能须 replace=true。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomSkillImportRequest"
+              },
+              "examples": {
+                "folder": {
+                  "summary": "从本机文件夹导入",
+                  "value": {
+                    "source": "folder",
+                    "path": "/Users/edy/skills/excel-report"
+                  }
+                },
+                "text": {
+                  "summary": "粘贴 SKILL.md",
+                  "value": {
+                    "source": "text",
+                    "skill_md": "---\nname: excel-report\ndescription: 按模板生成周报\n---\n"
+                  }
+                },
+                "url": {
+                  "summary": "从公开网址导入",
+                  "value": {
+                    "source": "url",
+                    "url": "https://github.com/example/skills/tree/main/excel-report"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "预览或已安装的技能。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomSkillImportEnvelope"
+                },
+                "examples": {
+                  "preview": {
+                    "summary": "只检查，未安装",
+                    "value": {
+                      "data": {
+                        "preview": {
+                          "name": "excel-report",
+                          "description": "按模板生成周报",
+                          "file_count": 2,
+                          "total_bytes": 19148,
+                          "files": [
+                            "SKILL.md",
+                            "template.xlsx"
+                          ],
+                          "origin_label": "本机文件夹"
+                        },
+                        "capability": null
+                      }
+                    }
+                  },
+                  "installed": {
+                    "summary": "已安装",
+                    "value": {
+                      "data": {
+                        "preview": null,
+                        "capability": {
+                          "kind": "skill",
+                          "ref": "excel-report",
+                          "display_name": "excel-report",
+                          "url": "本机文件夹",
+                          "tools": [],
+                          "source": "user_import",
+                          "version": "0123456789abcdef",
+                          "source_ref": "",
+                          "reason": "",
+                          "approved_by": "member-1",
+                          "created_at": "2026-11-18T10:00:00.000Z",
+                          "integrity": "ok"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/RequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/TooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
           },
           "503": {
             "$ref": "#/components/responses/ManagerUnavailable"

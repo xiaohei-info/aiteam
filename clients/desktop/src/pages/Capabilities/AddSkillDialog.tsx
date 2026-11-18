@@ -8,7 +8,10 @@ import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { InstallableSkill, LocalCapability } from '../../api/agent/types'
 import { installableSkillState } from './capabilityLabels'
+import { CustomSkillImport } from './CustomSkillImport'
 import './McpAuth.css'
+
+type SkillSourceTab = 'catalog' | 'custom'
 
 function listError(error: unknown): string {
   if (error instanceof AgentApiError && error.status === 503) return '暂时无法连接企业服务，请稍后再试。'
@@ -16,6 +19,7 @@ function listError(error: unknown): string {
 }
 
 export function AddSkillDialog({ installed, onInstalled, onClose }: { installed: LocalCapability[]; onInstalled: () => Promise<void> | void; onClose: () => void }) {
+  const [tab, setTab] = useState<SkillSourceTab>('catalog')
   const [skills, setSkills] = useState<InstallableSkill[] | null>(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
@@ -44,8 +48,15 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
     } finally { setBusy(null) }
   }
 
-  return <ChatDialog title="添加技能" description="企业开放给你的技能；只装在本机、只对你自己的会话生效" icon={<BookOpen size={18} />} className="mcp-dialog" onClose={onClose}>
+  return <ChatDialog title="添加技能" description="从企业拿，或导入你自己的技能；只装在本机、只对你自己的会话生效" icon={<BookOpen size={18} />} className="mcp-dialog" onClose={onClose}>
     <div className="mcp-form">
+      <div className="skill-source-tabs" role="tablist" aria-label="技能来源">
+        <button type="button" role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'on' : ''} onClick={() => setTab('catalog')}>从企业拿</button>
+        <button type="button" role="tab" aria-selected={tab === 'custom'} className={tab === 'custom' ? 'on' : ''} onClick={() => setTab('custom')}>自定义</button>
+      </div>
+      {tab === 'custom'
+        ? <CustomSkillImport onInstalled={onInstalled} onClose={onClose} />
+        : <>
       {error ? <p role="alert" className="mcp-error">{error}</p>
         : skills === null ? <p className="mcp-note" role="status"><LoaderCircle className="file-access-spinner" size={13} aria-hidden="true" /> 正在读取企业技能目录…</p>
           : skills.length === 0 ? <p className="mcp-note">企业还没有开放可自行安装的技能。需要某个技能时，请联系企业管理员安装到企业技能目录并设为全员可见。</p>
@@ -77,6 +88,7 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
             </>}
       <p className="mcp-note">技能只包含说明文档，不执行代码；安装后下一轮对话起可用。</p>
       <footer><button type="button" onClick={onClose}>关闭</button></footer>
+        </>}
     </div>
   </ChatDialog>
 }

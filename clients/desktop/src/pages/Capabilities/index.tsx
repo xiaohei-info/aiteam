@@ -12,7 +12,7 @@ import '../Settings/Settings.css'
 import './McpAuth.css'
 import { agentApi } from '../../api/agent'
 import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
-import { autoInstallKindLabel, capabilitySourceLabel, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
+import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
 import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
 import { AddSkillDialog } from './AddSkillDialog'
 
@@ -70,6 +70,7 @@ export default function Capabilities() {
   const row = (item: LocalCapability) => {
     const busy = busyKey === keyOf(item)
     const status = mcpAuthStatusLabel(item)
+    const integrity = customSkillIntegrityLabel(item)
     return <li key={keyOf(item)}>
       <span className="file-access-directory-icon">{item.kind === 'skill'
         ? <BookOpen size={17} strokeWidth={1.7} aria-hidden="true" />
@@ -79,6 +80,7 @@ export default function Capabilities() {
         <span style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
           {capabilitySourceLabel(item)}{item.version ? ` · 版本 ${item.version}` : ''}{isAutoInstalled(item) ? ' · 自动安装' : ''}
           {status && <> · <span className={`mcp-auth-badge ${status.attention ? 'attention' : ''}`}>{status.text}</span></>}
+          {integrity && <> · <span className={`mcp-auth-badge ${integrity.attention ? 'attention' : ''}`}>{integrity.text}</span></>}
         </span>
         {item.kind === 'mcp' && <span className="file-access-directory-path" title={item.url}>{item.url}</span>}
         <span style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.6, overflowWrap: 'anywhere' }}>
@@ -109,7 +111,7 @@ export default function Capabilities() {
           <h2 id={`capabilities-${kind}-title`}>{mcp ? 'MCP' : '技能'}</h2>
           <p>{mcp
             ? '连接外部服务的工具。可以自己添加，或在对话中员工请求时由你批准安装；需要登录的服务，令牌只加密保存在本机。'
-            : '企业开放给你的说明文档类技能。可以自己添加，或在对话中员工请求时由你批准安装。'}</p>
+            : '企业开放给你的说明文档类技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
         </div>
         <span className="capabilities-heading-action">
           {items && <span className={`file-access-status ${list.length ? 'granted' : ''}`} style={{ marginLeft: 0 }}>{list.length ? `已安装 ${list.length} 个` : '未安装'}</span>}
@@ -121,7 +123,7 @@ export default function Capabilities() {
       {loading ? <p className="file-access-note" role="status"><LoaderCircle className="file-access-spinner" size={14} aria-hidden="true" />正在读取…</p>
         : items && list.length === 0 ? <div className="file-access-empty">
           <Icon size={20} strokeWidth={1.5} aria-hidden="true" />
-          <div><strong>{mcp ? '还没有安装 MCP' : '还没有安装技能'}</strong><p>{mcp ? '点右上角「添加 MCP」，粘贴服务方给的配置或地址即可。' : '点右上角「添加技能」，从企业开放的技能里选择安装。'}</p></div>
+          <div><strong>{mcp ? '还没有安装 MCP' : '还没有安装技能'}</strong><p>{mcp ? '点右上角「添加 MCP」，粘贴服务方给的配置或地址即可。' : '点右上角「添加技能」，从企业开放的技能里选，或导入你自己的技能。'}</p></div>
         </div>
           : items && <ul className="file-access-grants" aria-label={mcp ? '已安装的 MCP' : '已安装的技能'}>{list.map(row)}</ul>}
     </section>

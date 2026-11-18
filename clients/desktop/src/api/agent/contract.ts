@@ -77,6 +77,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   // MCP 鉴权（2026-11-18）：添加 MCP、探测、登录进度/取消、重新登录、更新令牌、清除凭据。
   // 回调由浏览器直接访问，桌面端不调用；列出是为与契约快照一致。
   ['POST', '/api/agent/capabilities/skills'],
+  ['POST', '/api/agent/capabilities/skills/custom'],
   ['POST', '/api/agent/capabilities/mcp'],
   ['POST', '/api/agent/capabilities/mcp/probe'],
   ['POST', '/api/agent/capabilities/mcp/{capability_ref}/auth'],

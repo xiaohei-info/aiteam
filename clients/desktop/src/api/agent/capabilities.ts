@@ -44,6 +44,39 @@ export async function installSkill(client: RequestClient, skillId: string, repla
   return client.request<LocalCapability>({ method: 'POST', path: '/api/agent/capabilities/skills', body: { skill_id: skillId, ...(replace ? { replace: true } : {}) } })
 }
 
+// -------------------- 自定义技能（设计 2026-11-18 自定义技能导入） --------------------
+// 只在本机、只对本人会话生效，不上传、不经企业签名；preview=true 只校验返回预览。
+
+export type CustomSkillSource = 'folder' | 'zip' | 'text' | 'url'
+
+export interface CustomSkillPreview {
+  name: string
+  description: string
+  file_count: number
+  total_bytes: number
+  files: string[]
+  origin_label: string
+}
+
+export interface CustomSkillImportRequest {
+  source: CustomSkillSource
+  path?: string
+  skill_md?: string
+  url?: string
+  preview?: boolean
+  replace?: boolean
+}
+
+export interface CustomSkillImportResult {
+  preview: CustomSkillPreview | null
+  capability: LocalCapability | null
+}
+
+/** 导入自定义技能；preview 为 true 时只校验并返回预览，不安装。 */
+export async function importCustomSkill(client: RequestClient, body: CustomSkillImportRequest): Promise<CustomSkillImportResult | null> {
+  return client.request<CustomSkillImportResult>({ method: 'POST', path: '/api/agent/capabilities/skills/custom', body })
+}
+
 /** 添加个人 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */
 export async function installMcpServer(client: RequestClient, body: McpInstallRequest): Promise<McpInstallResult> {
   return (await client.request<McpInstallResult>({ method: 'POST', path: '/api/agent/capabilities/mcp', body })) ?? { capability: null, login: null }

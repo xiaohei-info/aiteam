@@ -575,8 +575,8 @@ export interface LocalCapability {
   url: string
   /** MCP 工具；技能为空。 */
   tools: string[]
-  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业自建技能；platform_catalog：平台目录（MCP 或技能）。 */
-  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog'
+  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业自建技能；platform_catalog：平台目录（MCP 或技能）；user_import：成员自己导入的技能。 */
+  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog' | 'user_import'
   /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
   version?: string
   /** 企业目录技能对应的平台 skill ID（与方案推荐能力对应）；旧版 Agent 不返回。 */
@@ -592,6 +592,10 @@ export interface LocalCapability {
   timeout_ms?: number
   /** 本机凭据状态；凭据本身不返回。 */
   auth_status?: McpAuthStatus
+  /** 仅自定义技能：ok 文件与导入时一致；modified 文件被改动过，已停用。 */
+  integrity?: 'ok' | 'modified'
+  /** 仅自定义技能：来源描述（本机文件夹 / 本机 zip / 粘贴 / 网址）。 */
+  origin_label?: string
   /** oauth：当前令牌到期时间（有刷新令牌时会自动续期）。 */
   auth_expires_at?: string | null
 }
