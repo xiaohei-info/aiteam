@@ -8,6 +8,8 @@ export type ApprovalRisk = "bash" | "write" | "edit" | "external" | "unknown";
 export const POLICY_APPROVER = "policy:full-access";
 /** `approved_by` of capability installs approved by the member's auto-install grant (design §11.3). */
 export const AUTO_INSTALL_APPROVER = "policy:auto-install";
+/** `approved_by` of external tools the member allowed once for this conversation ("本会话不再询问"). */
+export const SESSION_GRANT_APPROVER = "policy:session-grant";
 
 /** Kind and source of a `capability_install` approval, read from the summary the Agent itself wrote; null otherwise. */
 export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): { kind: "mcp" | "skill"; source: string } | null {
@@ -88,6 +90,11 @@ export class ApprovalRememberError extends Error {
   constructor(message = "remember is only accepted when approving a capability install from the platform catalog") { super(message); this.name = "ApprovalRememberError"; }
 }
 
+/** `session_allow` was sent for anything other than approving an external tool. */
+export class ApprovalSessionAllowError extends Error {
+  constructor(message = "session_allow is only accepted when approving an external tool") { super(message); this.name = "ApprovalSessionAllowError"; }
+}
+
 export class ApprovalPermissionError extends Error {
   constructor(message = "Tool is not permitted by the conversation permission") { super(message); this.name = "ApprovalPermissionError"; }
 }
@@ -136,9 +143,13 @@ export class ApprovalService {
     }
     // full-access is an explicit per-conversation opt-out of per-call confirmation for local tools. The call still
     // gets an ApprovalRecord (audit, args hash, single-use claim, lease cap) but is approved by policy without a prompt.
-    // External connectors and unknown tools keep requiring a human decision.
-    const autoApprove = request.permissionMode === "full-access"
-      && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit");
+    // External connectors and unknown tools keep requiring a human decision —— 除非成员在该会话里勾过「本会话不再询问」。
+    // 会话授权只对外部工具有效，且只对当前会话生效（用户选定的口径）。
+    const sessionGranted = request.riskLevel === "external"
+      && this.store.hasApprovalSessionGrant(request.tenantId, request.memberId, request.conversationId, request.toolName);
+    const autoApprove = sessionGranted
+      || (request.permissionMode === "full-access"
+        && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit"));
     const hash = canonicalArgsHmac(request.args);
     const existing = this.store.findApprovalForTool({
       tenantId: request.tenantId,
@@ -155,6 +166,7 @@ export class ApprovalService {
     }
     const approver = request.autoApproveBy === AUTO_INSTALL_APPROVER && request.toolName === "capability_install"
       ? AUTO_INSTALL_APPROVER
+      : sessionGranted ? SESSION_GRANT_APPROVER
       : autoApprove ? POLICY_APPROVER : undefined;
     const record = existing ?? this.create(request, hash, approver);
     const claimed = await this.waitAndClaim(record, request);
@@ -187,6 +199,8 @@ export class ApprovalService {
     resolution?: CapabilityResolution;
     /** Approve, and from now on install this kind from the platform catalog without asking (design §11.3). */
     remember?: boolean;
+    /** Approve, and stop asking for this tool in this conversation (external tools only). */
+    sessionAllow?: boolean;
     /** bearer MCP install: the member's token, handed to the install in memory only. */
     credential?: { token: string; header?: string };
   }): ApprovalRecord {
@@ -206,6 +220,11 @@ export class ApprovalService {
       const target = this.store.getApprovalRecord(input.id);
       if (target && (input.decision !== "approve" || capabilityInstallOf(target)?.source !== "platform_catalog")) throw new ApprovalRememberError();
     }
+    if (input.sessionAllow) {
+      const target = this.store.getApprovalRecord(input.id);
+      // 只写外部工具：本地工具（bash/write/edit）已由「完全访问」负责，不该被会话授权放大。
+      if (target && (input.decision !== "approve" || target.risk_level !== "external")) throw new ApprovalSessionAllowError();
+    }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
     let record: ApprovalRecord;
     try {
@@ -217,6 +236,7 @@ export class ApprovalService {
     if (record.status !== "approved") this.credentials.delete(record.id);
     const install = input.remember && record.status === "approved" ? capabilityInstallOf(record) : null;
     if (install?.source === "platform_catalog") this.store.putCapabilityAutoInstall(record.tenant_id, record.member_id, install.kind);
+    if (input.sessionAllow && record.status === "approved") this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name);
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
     return record;

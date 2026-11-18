@@ -45,7 +45,7 @@ import { validateSchedule } from "../schedule.js";
 import type { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
 import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord, type CapabilityResolution } from "../storage/sqlite.js";
-import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, capabilityInstallAuthOf } from "../approval-service.js";
+import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, ApprovalSessionAllowError, capabilityInstallAuthOf } from "../approval-service.js";
 import { CustomSkillError, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
@@ -833,7 +833,7 @@ const ApprovalRecordSchema = Type.Object({
 }, { $id: "ApprovalRecord", additionalProperties: false });
 const ApprovalListEnvelope = Type.Object({ data: Type.Array(Type.Ref("ApprovalRecord")) }, { $id: "ApprovalListEnvelope" });
 const ApprovalEnvelope = Type.Object({ data: Type.Ref("ApprovalRecord") }, { $id: "ApprovalEnvelope" });
-const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal("approve"), Type.Literal("deny")]), expected_revision: Type.Optional(Type.Integer({ minimum: 0 })), capability_resolution: Type.Optional(CapabilityResolution), credential: Type.Optional({ ...McpBearerCredentialIn, description: "批准安装需要访问令牌的 MCP 时填写的令牌；只在内存中交给安装步骤，不写入审批记录。" }), remember: Type.Optional(Type.Boolean({ description: "批准并记住：以后从平台目录安装同种能力（MCP 或技能）时直接安装。只对来源为平台目录的 capability_install 的批准有效。" })) }, { $id: "ApprovalDecisionRequest", additionalProperties: false });
+const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal("approve"), Type.Literal("deny")]), expected_revision: Type.Optional(Type.Integer({ minimum: 0 })), capability_resolution: Type.Optional(CapabilityResolution), credential: Type.Optional({ ...McpBearerCredentialIn, description: "批准安装需要访问令牌的 MCP 时填写的令牌；只在内存中交给安装步骤，不写入审批记录。" }), remember: Type.Optional(Type.Boolean({ description: "批准并记住：以后从平台目录安装同种能力（MCP 或技能）时直接安装。只对来源为平台目录的 capability_install 的批准有效。" })), session_allow: Type.Optional(Type.Boolean({ description: "批准并记住：本会话内该外部工具（MCP 连接器等）不再询问。只对 risk_level 为 external 的批准有效；会话删除后失效。" })) }, { $id: "ApprovalDecisionRequest", additionalProperties: false });
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
@@ -1639,6 +1639,8 @@ export class AgentHttpServer {
       const resolution = body.capability_resolution as CapabilityResolution | undefined;
       if (body.remember !== undefined && typeof body.remember !== "boolean") throw new HttpProblem(422, "invalid_approval_remember", "remember must be a boolean");
       const remember = body.remember === true;
+      const sessionAllow = body.session_allow === true;
+      if (body.session_allow !== undefined && typeof body.session_allow !== "boolean") throw new HttpProblem(422, "invalid_approval_session_allow", "session_allow must be a boolean");
       const memberId = caller!.userId ?? caller!.callerId;
       let credential: { token: string; header?: string } | undefined;
       if (body.credential !== undefined) {
@@ -1664,12 +1666,13 @@ export class AgentHttpServer {
       const idempotencyKey = this.header(request, "idempotency-key");
       if (!idempotencyKey) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required for approval decisions");
       try {
-        const approval = this.approvals().decide({ id: values.approval_id, tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId, conversationId: values.conversation_id, decision: body.decision, expectedRevision, ...(resolution ? { resolution } : {}), ...(remember ? { remember } : {}), ...(credential ? { credential } : {}), approvedBy: memberId, idempotencyKey });
+        const approval = this.approvals().decide({ id: values.approval_id, tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId, conversationId: values.conversation_id, decision: body.decision, expectedRevision, ...(resolution ? { resolution } : {}), ...(remember ? { remember } : {}), ...(sessionAllow ? { sessionAllow } : {}), ...(credential ? { credential } : {}), approvedBy: memberId, idempotencyKey });
         this.writeJson(response, 200, { data: approvalPublic(approval) });
       } catch (error) {
         if (error instanceof ApprovalNotFoundError) throw new HttpProblem(404, "approval_not_found", error.message);
         if (error instanceof ApprovalResolutionError) throw new HttpProblem(422, "invalid_capability_resolution", error.message);
         if (error instanceof ApprovalRememberError) throw new HttpProblem(422, "invalid_approval_remember", error.message);
+        if (error instanceof ApprovalSessionAllowError) throw new HttpProblem(422, "invalid_approval_session_allow", error.message);
         if (error instanceof ApprovalCredentialError) throw new HttpProblem(422, "invalid_approval_credential", error.message);
         if (error instanceof ApprovalExpiredError) throw new HttpProblem(409, "approval_expired", error.message);
         if (error instanceof ApprovalRevisionConflictError || error instanceof ApprovalDecisionConflictError) throw new HttpProblem(409, "approval_conflict", error.message);

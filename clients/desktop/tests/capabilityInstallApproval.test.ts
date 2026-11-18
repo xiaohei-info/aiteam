@@ -63,3 +63,25 @@ test('MCP 鉴权：带出 oauth 登录主机与 bearer 请求头；旧版 Agent 
   const skill = parseCapabilityInstall('capability_install', `capability_install: ${JSON.stringify({ kind: 'skill', ref: 's', display_name: 'S', version: '1', auth: 'oauth' })}`)
   assert.equal(skill?.auth, 'none', '技能没有鉴权')
 })
+
+test('「本会话不再询问」只对外部工具出现，并随批准提交', async () => {
+  const { readFileSync } = await import('node:fs')
+  const source = readFileSync(new URL('../src/components/Approvals/ApprovalDialog.tsx', import.meta.url), 'utf8')
+  // 复选框只在 risk_level === external 时渲染
+  assert.match(source, /item\.riskLevel === 'external' && !expired/)
+  assert.match(source, /setSessionAllow/)
+  // 三条批准路径都要带上 sessionAllow（普通允许 / 覆盖安装 / 改名安装）
+  const approve = source.slice(source.indexOf('const decide = useApprovalStore'))
+  assert.equal((approve.match(/sessionAllow/g) ?? []).length >= 3, true, '批准路径都应携带 sessionAllow')
+  // 切换审批时清空，避免串到下一条
+  assert.match(source, /setSessionAllow\(false\)/)
+})
+
+test('sessionAllow 只作为独立字段发送，不改动 remember 的既有语义', async () => {
+  const { readFileSync } = await import('node:fs')
+  const api = readFileSync(new URL('../src/api/agent/approvals.ts', import.meta.url), 'utf8')
+  assert.match(api, /session_allow: true/)
+  const store = readFileSync(new URL('../src/stores/approvals.ts', import.meta.url), 'utf8')
+  // 拒绝时不得传授权字段
+  assert.match(store, /decision === 'approve' && options\.sessionAllow === true/)
+})

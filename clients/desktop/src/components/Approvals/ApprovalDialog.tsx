@@ -268,13 +268,15 @@ export default function ApprovalDialog() {
   const [rename, setRename] = useState<string | null>(null)
   // 「以后从平台目录安装时直接安装」：只对平台目录来源出现，换到下一条审批时清空。
   const [remember, setRemember] = useState(false)
+  // 「本会话不再询问该工具」：只对外部工具（MCP 连接器等）出现；会话删除后失效。
+  const [sessionAllow, setSessionAllow] = useState(false)
   // 正在等浏览器登录的条目不挡住新来的审批（新审批有倒计时）。
   const item = pending.find((p) => p.phase !== 'signing_in') ?? pending[0]
   const currentId = item?.approvalId
   // 需要访问令牌的 MCP：令牌与可选请求头名。换到下一条审批、或提交失败（含令牌被拒）时清空。
   const [token, setToken] = useState('')
   const [header, setHeader] = useState('')
-  useEffect(() => { setRename(null); setRemember(false); setToken(''); setHeader('') }, [currentId])
+  useEffect(() => { setRename(null); setRemember(false); setSessionAllow(false); setToken(''); setHeader('') }, [currentId])
   useEffect(() => { if (item?.phase === 'error') setToken('') }, [item?.phase, currentId])
 
   useEffect(() => {
@@ -369,6 +371,23 @@ export default function ApprovalDialog() {
           </label>
         )}
 
+        {/* 外部工具（MCP 连接器等）：本会话内不再询问。会话级，删除会话即失效。 */}
+        {item.riskLevel === 'external' && !expired && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={sessionAllow}
+              disabled={deciding}
+              onChange={(event) => setSessionAllow(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              本会话内不再询问该工具
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)' }}>只对当前会话生效；删除会话后恢复为每次询问。</span>
+            </span>
+          </label>
+        )}
+
         {/* 错误提示（倒计时在头部右上角圆环） */}
         {item.errorMessage && (
           <div style={{ padding: '10px 20px 0', fontSize: 11, color: '#ff6666' }}>
@@ -390,8 +409,8 @@ export default function ApprovalDialog() {
               onRename={setRename}
               onCancel={() => void decide(item.approvalId, 'deny')}
               blocked={needsToken}
-              onReplace={() => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'replace' }, remember: install.platform && remember })}
-              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'rename', ref }, remember: install.platform && remember })}
+              onReplace={() => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'replace' }, remember: install.platform && remember, sessionAllow })}
+              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'rename', ref }, remember: install.platform && remember, sessionAllow })}
             />
           ) : (
             <>
@@ -407,7 +426,7 @@ export default function ApprovalDialog() {
                 type="button"
                 disabled={deciding || needsToken}
                 title={needsToken ? '请先填写访问令牌' : undefined}
-                onClick={() => void decide(item.approvalId, 'approve', { ...authOptions, remember: Boolean(install?.platform) && remember })}
+                onClick={() => void decide(item.approvalId, 'approve', { ...authOptions, remember: Boolean(install?.platform) && remember, sessionAllow })}
                 style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : needsToken ? 0.5 : 1 }}
               >
                 {deciding && (

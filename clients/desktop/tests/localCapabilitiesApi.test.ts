@@ -46,6 +46,15 @@ test('approval decision carries the MCP token only when given', async () => {
   assert.deepEqual(bodies, [{ decision: 'approve', credential: { token: 't', header: 'X-API-Key' } }])
 })
 
+test('approval decision carries session_allow only when asked', async () => {
+  const bodies: unknown[] = []
+  const api = approvals({ request: async (o: { body?: unknown }) => { bodies.push(o.body); return { data: {} } } } as never)
+  // 第 8 位仍是 remember（保持既有调用方语义），sessionAllow 在末尾。
+  await api.decideApproval('c1', 'a1', 'approve', 'k1', undefined, undefined, undefined, true, undefined, true)
+  assert.deepEqual(bodies, [{ decision: 'approve', remember: true, session_allow: true }])
+  // 拒绝时是否写授权由 store 保证（useApprovalStore.decide 只在 approve 传这两个字段）。
+})
+
 test('MCP auth calls use documented endpoints, encode ids and send the token only in the body', async () => {
   const calls: { method: string; path: string; body?: unknown }[] = []
   const reply: Record<string, unknown> = {

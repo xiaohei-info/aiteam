@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalService, POLICY_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -145,4 +145,63 @@ test("approval summary preserves command file paths", async () => {
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("session_allow stops asking for that external tool in this conversation only", async () => {
+  const { root, store } = fixture();
+  try {
+    let required = 0;
+    const service = new ApprovalService(store, { onRequired: () => { required += 1; } });
+    const external = { toolName: "connector:jira", riskLevel: "external" as const, permissionMode: "workspace-write" as const, permissionRevision: "1:workspace-write" };
+    // 第一次：照常弹框，成员勾选「本会话不再询问」后批准。
+    const first = service.execute(request({ ...external, toolCallId: "call-1" }), async () => "ran");
+    while (required === 0) await new Promise((resolve) => setImmediate(resolve));
+    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.tool_call_id === "call-1")!;
+    assert.equal(record.status, "pending");
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "connector:jira"), false);
+    service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k-1", sessionAllow: true });
+    assert.equal(await first, "ran");
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "connector:jira"), true);
+    // 第二次：同一会话不再弹，按策略自动批准，但仍留审批记录。
+    const second = service.execute(request({ ...external, toolCallId: "call-2", args: { issue: "A" } }), async () => "ran-2");
+    assert.equal(await second, "ran-2");
+    assert.equal(required, 1, "同一会话只弹一次");
+    const audit = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.tool_call_id === "call-2")!;
+    assert.equal(audit.approved_by, SESSION_GRANT_APPROVER);
+    // 换一个会话：授权不跟着走。
+    const other = service.execute(request({ ...external, conversationId: "conversation-2", toolCallId: "call-3" }), async () => "x");
+    while (required === 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(required, 2, "换会话要重新询问");
+    other.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("session_allow is refused for local tools and for a denial", async () => {
+  const { root, store } = fixture();
+  try {
+    let required!: ReturnType<ApprovalService["list"]>[number];
+    const service = new ApprovalService(store, { onRequired: (record) => { required = record; } });
+    const pending = service.execute(request({ toolName: "bash", riskLevel: "bash", permissionMode: "workspace-write", permissionRevision: "1:workspace-write" }), async () => "x");
+    while (!required) await new Promise((resolve) => setImmediate(resolve));
+    // decide 同步抛错（不是返回 rejected promise）。
+    assert.throws(
+      () => service.decide({ id: required.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true }),
+      ApprovalSessionAllowError,
+    );
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "bash"), false);
+    pending.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("deleting the conversation clears its session grants", () => {
+  const { root, store } = fixture();
+  try {
+    store.createConversation({ id: "conversation-1", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
+    store.putApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "connector:jira");
+    assert.deepEqual(store.listApprovalSessionGrants("tenant-1", "member-1", "conversation-1"), ["connector:jira"]);
+    assert.equal(store.deleteConversation("conversation-1"), true);
+    assert.deepEqual(store.listApprovalSessionGrants("tenant-1", "member-1", "conversation-1"), []);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

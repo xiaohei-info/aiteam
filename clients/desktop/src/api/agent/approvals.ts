@@ -65,6 +65,8 @@ export const approvals = (client: AgentApiClient) => ({
     remember?: boolean,
     /** 批准安装需要访问令牌的 MCP 时填写的令牌；只交给本机 Agent，不写入审批记录。 */
     credential?: { token: string; header?: string },
+    /** 批准并记住：本会话内该外部工具（MCP 连接器等）不再询问（只对 risk_level=external 有效）。 */
+    sessionAllow?: boolean,
   ) =>
     client.request<{ data: ApprovalRecord }>({
       method: 'POST',
@@ -75,6 +77,7 @@ export const approvals = (client: AgentApiClient) => ({
         ...(resolution ? { capability_resolution: resolution } : {}),
         ...(remember ? { remember: true } : {}),
         ...(credential ? { credential } : {}),
+        ...(sessionAllow ? { session_allow: true } : {}),
       },
       idempotencyKey,
       raw: true,

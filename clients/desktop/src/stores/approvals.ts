@@ -45,6 +45,8 @@ export interface PendingApproval {
 export interface DecideOptions {
   resolution?: CapabilityResolution
   remember?: boolean
+  /** 本会话内不再询问该外部工具（只对 risk_level=external 有效）。 */
+  sessionAllow?: boolean
   /** 需要访问令牌的 MCP：令牌只交给本机 Agent。 */
   credential?: { token: string; header?: string }
   /** 需要浏览器登录的 MCP：批准后进入等待登录，而不是关闭弹窗。 */
@@ -121,6 +123,7 @@ export const useApprovalStore = create<ApprovalStore>((set, get) => ({
         decision === 'approve' ? options.resolution : undefined,
         decision === 'approve' && options.remember === true,
         decision === 'approve' ? options.credential : undefined,
+        decision === 'approve' && options.sessionAllow === true,
       )
       if (decision === 'approve' && options.signIn) {
         set((state) => ({
