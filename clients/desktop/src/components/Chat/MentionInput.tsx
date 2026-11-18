@@ -128,11 +128,12 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(({
   const handleInput = useCallback(() => {
     const el = editRef.current
     if (!el) return
+    // 粘贴（尤其跨应用粘贴）后 selection 可能暂时不在输入框内或 rangeCount 为 0，
+    // 此时不能提前 return，否则 mentionText 不更新、发送按钮一直禁用。
     const sel = window.getSelection()
-    if (!sel || !sel.rangeCount) return
-    const range = sel.getRangeAt(0)
-    const node = range.startContainer
-    if (node.nodeType === Node.TEXT_NODE) {
+    const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null
+    const node = range?.startContainer
+    if (node && node.nodeType === Node.TEXT_NODE) {
       const before = (node.textContent ?? '').slice(0, range.startOffset)
       const atIdx = before.lastIndexOf('@')
       if (atIdx >= 0 && (atIdx === 0 || /\s/.test(before[atIdx - 1]))) {

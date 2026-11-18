@@ -93,7 +93,11 @@ export default function Login() {
     return () => { cancelled = true }
   }, [])
 
-  const syncSavedPasswordForIdentity = (nextEnterprise: string, nextAccount: string) => {
+  /**
+   * 按已保存账号回填密码。`fillEnterprise` 只在账号变化时为真：用户主动清空企业名时
+   * 不能把保存的企业名塞回去（那是用户可见的删除动作）。
+   */
+  const syncSavedPasswordForIdentity = (nextEnterprise: string, nextAccount: string, fillEnterprise = false) => {
     const matched = matchSavedCredentialProfile(savedProfiles, nextEnterprise, nextAccount)
     if (!matched || !nextAccount.trim()) return
     void readSavedLoginCredentials({
@@ -103,7 +107,7 @@ export default function Login() {
       .then((saved) => {
         if (!saved) return
         setPassword(saved.password)
-        if (!nextEnterprise.trim() && saved.enterprise) {
+        if (fillEnterprise && !nextEnterprise.trim() && saved.enterprise) {
           setEnterprise(saved.enterprise)
         }
       })
@@ -284,7 +288,7 @@ export default function Login() {
                 onChange={(e) => {
                   const nextEnterprise = e.target.value
                   setEnterprise(nextEnterprise)
-                  syncSavedPasswordForIdentity(nextEnterprise, account)
+                  syncSavedPasswordForIdentity(nextEnterprise, account, false)
                 }}
                 disabled={Boolean(pendingPasswordReset)}
                 className="w-full rounded-[14px] border border-[var(--border)] bg-surface-0 py-3.5 pl-11 pr-4 text-[13px] text-txt-primary placeholder:text-txt-muted transition-all duration-200 focus:border-brand/25 focus:bg-surface-1"
@@ -305,7 +309,7 @@ export default function Login() {
                 onChange={(e) => {
                   const nextAccount = e.target.value
                   setAccount(nextAccount)
-                  syncSavedPasswordForIdentity(enterprise, nextAccount)
+                  syncSavedPasswordForIdentity(enterprise, nextAccount, true)
                 }}
                 disabled={Boolean(pendingPasswordReset)}
                 className="w-full rounded-[14px] border border-[var(--border)] bg-surface-0 py-3.5 pl-11 pr-4 text-[13px] text-txt-primary placeholder:text-txt-muted transition-all duration-200 focus:border-brand/25 focus:bg-surface-1"

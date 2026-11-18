@@ -26,3 +26,14 @@ test('a failed login or a required password change gives the form back', () => {
   const resetRequired = runLogin.slice(runLogin.indexOf("outcome === 'password_reset_required'"), runLogin.indexOf('return\n'))
   assert.match(resetRequired, /setIsLoading\(false\)/)
 })
+
+test('清空企业名不会被已保存记录填回去（只有账号变化才回填）', () => {
+  const sync = source.slice(source.indexOf('const syncSavedPasswordForIdentity'), source.indexOf('const handleSelectSavedProfile'))
+  assert.match(sync, /fillEnterprise/)
+  assert.match(sync, /if \(fillEnterprise && !nextEnterprise\.trim\(\) && saved\.enterprise\)/)
+  // 企业名输入框的 onChange 明确传 false
+  const enterpriseChange = source.slice(source.indexOf('name="enterprise"'), source.indexOf('name="account"') ?? source.indexOf('autoComplete="username"'))
+  assert.match(enterpriseChange, /syncSavedPasswordForIdentity\(nextEnterprise, account, false\)/)
+  // 账号输入框的 onChange 传 true
+  assert.match(source, /syncSavedPasswordForIdentity\(enterprise, nextAccount, true\)/)
+})
