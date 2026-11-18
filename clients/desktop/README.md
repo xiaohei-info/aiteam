@@ -44,11 +44,14 @@ pnpm tauri:build:mac:installer --skip-notarize
 
 # Debug：开发自测，不公证
 pnpm tauri:build:mac:installer --debug
+
+# 发版用：找不到签名身份直接失败，不静默降级成未签名包
+pnpm tauri:build:mac:installer --require-signed
 ```
 
 默认输出目录为 `src-tauri/target-fresh.noindex/release/bundle/dmg/`（Debug 为 `.../debug/bundle/dmg/`）。签名成功时产物名为 **`AIFred_0.1.0_aarch64_release.dmg`**，内含与 Apple 公证过的 `AIFred.app`、Applications 快捷方式和 `安装说明.txt`；用户拖入 Applications 后双击即可打开，不需要放行脚本，也不需要管理员权限。
 
-签名身份解析顺序：`APPLE_SIGNING_IDENTITY` → 钥匙串里第一个 `Developer ID Application` 证书。公证凭据读取 notarytool 钥匙串条目，默认 `AIFred-notary`，可用 `APPLE_NOTARY_PROFILE` 覆盖。找不到证书时自动降级为未签名构建（见下一节），不会中断构建。
+签名身份解析顺序：`APPLE_SIGNING_IDENTITY` → 钥匙串里第一个 `Developer ID Application` 证书。公证凭据读取 notarytool 钥匙串条目，默认 `AIFred-notary`，可用 `APPLE_NOTARY_PROFILE` 覆盖。找不到证书时默认降级为未签名构建（见下文），发版时应加 `--require-signed`（或设 `APPLE_REQUIRE_SIGNED=1`）让它直接报错。
 
 签名流程：内嵌可执行文件（`Contents/Resources/agent/runtime/node`、各 `*.node`、esbuild 等）先逐个以 Hardened Runtime + 时间戳签名（Node 用 `src-tauri/Entitlements.agent.plist`），再重签应用本体（`src-tauri/Entitlements.plist`）并校验 `codesign --deep --strict`；随后把 `.app` 打 zip 提交公证并 stapling（保证拖出 DMG 后的应用离线首次启动也不弹窗），再打包 DMG、给 DMG 本体签名、提交公证并 stapling，最后用 `spctl` 验收。每次发版因此有两次公证上传（`.app` zip 与 DMG）。公证提交失败会自动重试 3 次（上传偶发中断时不必重新构建）。
 
@@ -84,6 +87,12 @@ xcrun notarytool history --keychain-profile "AIFred-notary"   # 无报错即凭�
 ```
 
 私钥、`.p8` 与口令不要入库；本机放在仓库外的目录（例如 `~/.apple-signing/devid`），权限 600。
+
+### 发版责任机与证书续期
+
+- 签名与公证只在持有 Developer ID 证书 + `AIFred-notary` 凭据的那台 Mac 上能做（当前是 yufei 的本机；CI 未接入签名与公证）。换机器需按上一节重新导入证书、导出 `.p8` 并存凭据。
+- 证书到期日 **2027-12-17**，到期前需在开发者后台续签证书并重新导入钥匙串，否则签名会失败。
+- 公证提交被 Apple 判定 `Invalid` 时不会重试（重试无意义），脚本会打印 `xcrun notarytool log <id> ...` 的排查命令；只有上传中断类失败才自动重试 3 次。
 
 ### 未签名降级构建（无证书机器）
 

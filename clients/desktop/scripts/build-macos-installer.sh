@@ -4,7 +4,8 @@
 #
 # 签名身份解析顺序：APPLE_SIGNING_IDENTITY → 钥匙串里第一个 Developer ID Application。
 # 公证凭据来自 notarytool 钥匙串条目（默认 AIFred-notary，可用 APPLE_NOTARY_PROFILE 覆盖）。
-# 找不到签名身份时降级为未签名构建，并在 DMG 里附带临时放行脚本。
+# 找不到签名身份时降级为未签名构建（附临时放行脚本）；发版时加 --require-signed
+# 或设 APPLE_REQUIRE_SIGNED=1 让它直接失败。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,12 +19,19 @@ fi
 PROFILE=release
 BUILD_ARGS=()
 NOTARIZE=1
+# A release machine without the signing identity would silently ship an unsigned DMG;
+# `--require-signed` turns that into a hard failure for release builds.
+REQUIRE_SIGNED=0
+if [ "${APPLE_REQUIRE_SIGNED:-0}" = 1 ]; then
+  REQUIRE_SIGNED=1
+fi
 for ARG in "$@"; do
   case "$ARG" in
     --debug) PROFILE=debug; BUILD_ARGS=(--debug) ;;
     --skip-notarize) NOTARIZE=0 ;;
+    --require-signed) REQUIRE_SIGNED=1 ;;
     *)
-      printf '不支持的参数：%s\n用法：pnpm tauri:build:mac:installer [--debug] [--skip-notarize]\n' "$ARG" >&2
+      printf '不支持的参数：%s\n用法：pnpm tauri:build:mac:installer [--debug] [--skip-notarize] [--require-signed]\n' "$ARG" >&2
       exit 1
       ;;
   esac
@@ -62,7 +70,9 @@ esac
 
 SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 if [ -z "$SIGN_IDENTITY" ]; then
-  SIGN_IDENTITY=$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+  # `security` can exit non-zero (locked keychain); with `set -e` that would abort the
+  # build before the caller gets a clear "no identity" message, so swallow it here.
+  SIGN_IDENTITY=$( { /usr/bin/security find-identity -v -p codesigning 2>/dev/null || true; } \
     | /usr/bin/sed -n 's/.*"\(Developer ID Application: [^"]*\)"/\1/p' | head -1)
 fi
 
@@ -72,6 +82,10 @@ if [ -n "$SIGN_IDENTITY" ]; then
   printf '签名身份：%s\n' "$SIGN_IDENTITY"
 else
   printf '未找到 Developer ID Application 身份，本次构建不签名、不公证。\n' >&2
+  if [ "$REQUIRE_SIGNED" = 1 ]; then
+    printf '本次构建要求签名（--require-signed 或 APPLE_REQUIRE_SIGNED=1），已中止。\n请确认钥匙串里有 Developer ID Application 证书，或用 APPLE_SIGNING_IDENTITY 指定身份。\n' >&2
+    exit 1
+  fi
   NOTARIZE=0
 fi
 
@@ -132,14 +146,28 @@ fi
 notarize_target() {
   local target="$1"
   local attempt=1
+  local log="$WORK/notarize-$(basename "$target").log"
   while [ "$attempt" -le 3 ]; do
+    # An aborted upload and an Apple "Invalid" verdict both exit non-zero, so the
+    # verdict has to be read from the output: only the upload case is worth retrying.
     if /usr/bin/xcrun notarytool submit "$target" \
-      --keychain-profile "$NOTARY_PROFILE" --wait; then
+      --keychain-profile "$NOTARY_PROFILE" --wait >"$log" 2>&1; then
+      /usr/bin/grep -E '^  (id|status):' "$log" || true
       return 0
     fi
-    printf '第 %s 次公证提交失败，重新提交……\n' "$attempt" >&2
+    /usr/bin/cat "$log" >&2
+    if /usr/bin/grep -qE 'status: (Invalid|Rejected)' "$log"; then
+      local submission
+      submission=$(/usr/bin/sed -n 's/^  id: //p' "$log" | head -1)
+      printf '公证被 Apple 判定无效，重试无意义。查看原因：\n  xcrun notarytool log %s --keychain-profile "%s"\n' \
+        "${submission:-<submission-id>}" "$NOTARY_PROFILE" >&2
+      return 1
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      printf '第 %s 次公证提交失败（多为上传中断），重新提交……\n' "$attempt" >&2
+      sleep 30
+    fi
     attempt=$((attempt + 1))
-    sleep 30
   done
   printf '公证连续 3 次提交失败，请检查网络后重跑。\n' >&2
   return 1
@@ -191,7 +219,9 @@ fi
 mv -f "$WORK/installer.dmg" "$OUTPUT"
 
 if [ "$NOTARIZE" = 1 ]; then
-  # 公证 DMG 本体就够了：Apple 的票据覆盖盘内的 AIFred.app，stapling 后离线也能校验。
+  # The DMG is a separate notarization target: the app's ticket covers the app, while
+  # the DMG ticket makes the disk image itself verifiable offline and gives
+  # `spctl -t open` a primary signature to check.
   notarize_target "$OUTPUT"
   /usr/bin/xcrun stapler staple "$OUTPUT"
   /usr/bin/xcrun stapler validate "$OUTPUT"
