@@ -453,6 +453,14 @@ export class McpAuthService {
     return session ? { ...session.view } : undefined;
   }
 
+  /** Opens the stored sign-in page again (the member closed the tab, or the first open failed). The desktop passes only the id. */
+  reopen(owner: McpOwner, loginId: string): boolean {
+    const session = [...this.sessions.values()].find((item) => item.view.login_id === loginId && item.owner.tenantId === owner.tenantId && item.owner.memberId === owner.memberId);
+    if (!session || session.view.status !== "pending") return false;
+    this.open(session.view.authorization_url);
+    return true;
+  }
+
   cancel(owner: McpOwner, loginId: string): boolean {
     const session = [...this.sessions.values()].find((item) => item.view.login_id === loginId && item.owner.tenantId === owner.tenantId && item.owner.memberId === owner.memberId);
     if (!session || session.view.status !== "pending") return false;

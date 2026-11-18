@@ -229,7 +229,8 @@ test("browser sign-in: one-time state, PKCE code exchange, tokens kept locally, 
 test("a sign-in can be denied, cancelled or time out, and a newer one replaces an older one", async () => {
   const root = mkdtempSync(join(tmpdir(), "mcp-oauth-"));
   const oauth = await authServer("oauth");
-  const auth = service(root, [], 200);
+  const opened: string[] = [];
+  const auth = service(root, opened, 200);
   try {
     const first = await auth.login(owner, "cr-test", oauth.url, {});
     const second = await auth.login(owner, "cr-test", oauth.url, {});
@@ -241,7 +242,13 @@ test("a sign-in can be denied, cancelled or time out, and a newer one replaces a
     await assert.rejects(second.done, { reason: "denied" });
 
     const third = await auth.login(owner, "cr-test", oauth.url, {});
+    // Reopening opens the stored page again, only for the owner and only while pending.
+    const before = opened.length;
+    assert.equal(auth.reopen({ ...owner, memberId: "member-2" }, third.login!.login_id), false);
+    assert.equal(auth.reopen(owner, third.login!.login_id), true);
+    assert.deepEqual(opened.slice(before), [third.login!.authorization_url]);
     assert.equal(auth.cancel(owner, third.login!.login_id), true);
+    assert.equal(auth.reopen(owner, third.login!.login_id), false, "a finished sign-in is not reopened");
     await assert.rejects(third.done, { reason: "cancelled" });
 
     const fourth = await auth.login(owner, "cr-test", oauth.url, {});
@@ -361,6 +368,9 @@ test("HTTP: a rejected token leaves the approval pending, the callback only serv
     assert.equal(started.data.capability, null);
     const progress = await (await fetch(`${base}/api/agent/mcp-auth/logins/${started.data.login.login_id}`, { headers })).json() as { data: { status: string } };
     assert.equal(progress.data.status, "pending");
+    const reopened = await (await fetch(`${base}/api/agent/mcp-auth/logins/${started.data.login.login_id}/open`, { method: "POST", headers })).json() as { data: { opened: boolean } };
+    assert.equal(reopened.data.opened, true);
+    assert.equal((await fetch(`${base}/api/agent/mcp-auth/logins/unknown/open`, { method: "POST", headers })).status, 404);
     const state = new URL(started.data.login.authorization_url).searchParams.get("state")!;
     const done = await fetch(`${base}/api/agent/mcp-auth/callback?state=${encodeURIComponent(state)}&code=c1`);
     assert.match(await done.text(), /已完成登录/u);
