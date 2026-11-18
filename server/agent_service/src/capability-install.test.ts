@@ -46,19 +46,20 @@ test("installing asks for a human decision, stores the real tool list, and the p
     assert.deepEqual(stored.map(item => [item.ref, item.tools, item.source, item.approved_by]), [["notion", ["search"], "user_url", "member-1"]]);
     assert.deepEqual(fixture.store.listLocalCapabilities(owner.tenantId, "member-2"), []);
 
-    const [tool] = personalConnectorTools(fixture.store, owner, snap());
+    const [tool] = personalConnectorTools(fixture.store, owner);
     assert.equal(tool?.name, "connector_my_notion");
     await run(tool!, { tool: "search", arguments: {} });
     assert.deepEqual(calls, ["search"]);
     await assert.rejects(run(tool!, { tool: "delete", arguments: {} }));
-    assert.deepEqual(personalConnectorTools(fixture.store, { ...owner, memberId: "member-2" }, snap()), []);
+    assert.deepEqual(personalConnectorTools(fixture.store, { ...owner, memberId: "member-2" }), []);
 
-    // 员工快照里的显式工具白名单可以排除个人连接器。
-    assert.deepEqual(personalConnectorTools(fixture.store, owner, snap({ tool_policy: { allowed_tools: ["read"] } })), []);
+    // 个人 MCP 属于成员自己的 Agent 能力，不受专家快照工具白名单限制（设计 2026-11-17 §10）：
+    // 企业专家配了显式工具清单时照样可用，调用仍经审批（见上方 external 风险）。
+    assert.deepEqual(personalConnectorTools(fixture.store, owner).map(item => item.name), ["connector_my_notion"]);
 
     // 撤销后立即失效。
     assert.equal(fixture.store.deleteLocalCapability(owner.tenantId, owner.memberId, "mcp", "notion"), true);
-    assert.deepEqual(personalConnectorTools(fixture.store, owner, snap()), []);
+    assert.deepEqual(personalConnectorTools(fixture.store, owner), []);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await fixture.close();

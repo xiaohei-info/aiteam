@@ -587,6 +587,29 @@ test("SessionHost registers todo_update only for an explicitly authorized parent
   }
 });
 
+test("a member's own MCP is offered even when the expert snapshot has an explicit tool allowlist", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    // 个人 MCP 属于成员的 Agent 能力，不受专家工具清单限制（设计 2026-11-17 §10）；另一位成员装的不出现。
+    fixture.store.putLocalCapability("tenant-1", "member-1", { kind: "mcp", ref: "sketch-local", display_name: "sketch-local", url: "http://localhost:31126/mcp", tools: ["get_document_info"], source: "user_url", reason: "", approved_by: "member-1" });
+    fixture.store.putLocalCapability("tenant-1", "member-2", { kind: "mcp", ref: "other", display_name: "other", url: "http://localhost:31127/mcp", tools: ["x"], source: "user_url", reason: "", approved_by: "member-2" });
+    const host = fixture.createHost();
+    let offered: string[] = [];
+    fixture.faux.setResponses([(context) => { offered = (context.tools ?? []).map((tool) => tool.name); return fauxAssistantMessage("done"); }]);
+    await host.prompt("conversation-1", "draw", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.ok(offered.includes("connector_my_sketch-local"), offered.join(","));
+    assert.ok(!offered.includes("connector_my_other"));
+    assert.ok(!offered.includes("bash"), "the allowlist still governs enterprise-configured tools");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost reminds the model about a stale checklist without storing or showing the reminder", async () => {
   const fixture = await createFixture();
   try {

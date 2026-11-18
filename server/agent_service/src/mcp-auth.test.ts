@@ -408,7 +408,7 @@ test("a refresh the provider rejects turns into «sign in again» without openin
     const pending = await installMcpDirectly(fixture.store, owner, { service: auth }, { ref: "cr-test", url: oauth.url, display_name: "Cycplus" });
     const state = new URL(pending.login!.authorization_url).searchParams.get("state");
     assert.equal(await auth.callback({ state, code: "c1" }), true);
-    const [tool] = personalConnectorTools(fixture.store, owner, snapshot, { service: auth });
+    const [tool] = personalConnectorTools(fixture.store, owner, { service: auth });
     assert.equal((await call(tool!, { tool: "activity_summary", arguments: {} })).isError, false, "signed in: the call works");
 
     // The access token expires and the provider revokes the refresh token.
@@ -458,7 +458,7 @@ test("tokens never reach the model or the logs: tool results, install results an
     const state = new URL(pending.login!.authorization_url).searchParams.get("state")!;
     assert.equal(await auth.callback({ state, code: "secret-code-77" }), true);
 
-    for (const tool of personalConnectorTools(fixture.store, owner, snapshot, { service: auth })) {
+    for (const tool of personalConnectorTools(fixture.store, owner, { service: auth })) {
       // Both fake servers expose the same tool.
       seenByModel.push(JSON.stringify(await call(tool, { tool: "activity_summary", arguments: {} })));
       seenByModel.push(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }));

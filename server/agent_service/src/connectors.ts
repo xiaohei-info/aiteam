@@ -169,8 +169,13 @@ function validMcpUrl(value: string): URL {
  * never alter Manager configuration, and every call still goes through the external-tool approval gate.
  * An employee snapshot with an explicit tool allowlist can still exclude them (`connector_my_<ref>`).
  */
-export function personalConnectorTools(store: AgentSqliteStore, owner: TaskOwner, snapshot: FrozenSnapshot, auth?: McpRuntimeAuth): ToolDefinition[] {
-  return store.listLocalCapabilities(owner.tenantId, owner.memberId).filter(item => item.kind === "mcp" && permitsConnectorTool(snapshot, `my_${item.ref}`)).map(item => ({
+/**
+ * The member's own MCP servers. They are the member's Agent capability, not the expert's (design 2026-11-17 §10):
+ * the expert snapshot's tool allowlist covers enterprise-configured tools and does not filter these; every call is
+ * still approval-gated as an external action.
+ */
+export function personalConnectorTools(store: AgentSqliteStore, owner: TaskOwner, auth?: McpRuntimeAuth): ToolDefinition[] {
+  return store.listLocalCapabilities(owner.tenantId, owner.memberId).filter(item => item.kind === "mcp").map(item => ({
     name: `connector_my_${item.ref}`,
     label: item.display_name,
     description: `Call a tool of ${item.display_name}, an MCP server the user installed for themselves. Allowed tools: ${item.tools.join(", ")}. External actions require approval.`,
