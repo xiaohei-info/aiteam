@@ -668,15 +668,16 @@ export class AgentSqliteStore {
         PRIMARY KEY (tenant_id, member_id, kind)
       );
 
-      -- 成员在审批弹窗里勾选的「本会话不再询问该工具」。只在本机、只对当前会话生效；
-      -- 只写外部工具（MCP 连接器等），会话删除时一并清掉。
+      -- 成员在审批弹窗里勾选的「本会话不再询问」。只在本机、只对当前会话生效；
+      -- 外部工具（MCP 连接器等）subject 为空；技能安装为 'skill'（MCP 安装不做）。会话删除时一并清掉。
       CREATE TABLE IF NOT EXISTS approval_session_grant (
         tenant_id TEXT NOT NULL,
         member_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         tool_name TEXT NOT NULL,
+        subject TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, member_id, conversation_id, tool_name)
+        PRIMARY KEY (tenant_id, member_id, conversation_id, tool_name, subject)
       );
 
       -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。
@@ -1632,17 +1633,17 @@ export class AgentSqliteStore {
     return this.db.prepare("DELETE FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? AND kind = ?").run(tenantId, memberId, kind).changes > 0;
   }
 
-  /** 本会话已授权免问的外部工具（审批弹窗的「本会话不再询问」）。 */
-  listApprovalSessionGrants(tenantId: string, memberId: string, conversationId: string): string[] {
-    return (this.db.prepare("SELECT tool_name FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? ORDER BY created_at, tool_name").all(tenantId, memberId, conversationId) as { tool_name: string }[]).map((row) => row.tool_name);
+  /** 本会话已授权免问的工具（审批弹窗的「本会话不再询问」）；subject 见 approval_session_grant。 */
+  listApprovalSessionGrants(tenantId: string, memberId: string, conversationId: string): { tool_name: string; subject: string }[] {
+    return this.db.prepare("SELECT tool_name, subject FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? ORDER BY created_at, tool_name").all(tenantId, memberId, conversationId) as { tool_name: string; subject: string }[];
   }
 
-  hasApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string): boolean {
-    return this.db.prepare("SELECT 1 FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND tool_name = ?").get(tenantId, memberId, conversationId, toolName) !== undefined;
+  hasApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, subject = ""): boolean {
+    return this.db.prepare("SELECT 1 FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND tool_name = ? AND subject = ?").get(tenantId, memberId, conversationId, toolName, subject) !== undefined;
   }
 
-  putApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, now = new Date().toISOString()): void {
-    this.db.prepare("INSERT OR IGNORE INTO approval_session_grant (tenant_id, member_id, conversation_id, tool_name, created_at) VALUES (?, ?, ?, ?, ?)").run(tenantId, memberId, conversationId, toolName, now);
+  putApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, subject = "", now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR IGNORE INTO approval_session_grant (tenant_id, member_id, conversation_id, tool_name, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(tenantId, memberId, conversationId, toolName, subject, now);
   }
 
   deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {

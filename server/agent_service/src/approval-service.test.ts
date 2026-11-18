@@ -200,8 +200,52 @@ test("deleting the conversation clears its session grants", () => {
   try {
     store.createConversation({ id: "conversation-1", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
     store.putApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "connector:jira");
-    assert.deepEqual(store.listApprovalSessionGrants("tenant-1", "member-1", "conversation-1"), ["connector:jira"]);
+    assert.deepEqual(JSON.parse(JSON.stringify(store.listApprovalSessionGrants("tenant-1", "member-1", "conversation-1"))), [{ tool_name: "connector:jira", subject: "" }]);
     assert.equal(store.deleteConversation("conversation-1"), true);
     assert.deepEqual(store.listApprovalSessionGrants("tenant-1", "member-1", "conversation-1"), []);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("session_allow 对技能安装生效（本会话），对 MCP 安装不生效", async () => {
+  const { root, store } = fixture();
+  try {
+    let required = 0;
+    const service = new ApprovalService(store, { onRequired: () => { required += 1; } });
+    const skillInstall = `capability_install:${JSON.stringify({ kind: "skill", ref: "weekly-report", display_name: "周报", version: "2", source: "enterprise_catalog", reason: "" })}`;
+    // 技能安装第一次照常弹，勾「本会话不再询问」后批准。
+    const first = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: skillInstall }), async () => "installed");
+    while (required === 0) await new Promise((resolve) => setImmediate(resolve));
+    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
+    service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true });
+    assert.equal(await first, "installed");
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill"), true);
+    // 第二次技能安装不再弹。
+    assert.equal(await service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-skill-2", summary: skillInstall }), async () => "again"), "again");
+    assert.equal(required, 1, "技能安装只弹一次");
+    // MCP 安装是同一个工具名，但 subject 不同 → 仍要问。
+    const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "crm", display_name: "CRM", url: "https://crm.example.com/mcp", source: "user_url", reason: "" })}`;
+    const mcp = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-mcp", summary: mcpInstall }), async () => "mcp");
+    while (required === 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(required, 2, "MCP 安装不享受技能安装的授权");
+    mcp.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("session_allow 对 MCP 安装（subject 为空）被拒", async () => {
+  const { root, store } = fixture();
+  try {
+    let required!: ReturnType<ApprovalService["list"]>[number];
+    const service = new ApprovalService(store, { onRequired: (record) => { required = record; } });
+    const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "crm", display_name: "CRM", url: "https://crm.example.com/mcp", source: "user_url", reason: "" })}`;
+    const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: mcpInstall }), async () => "x");
+    while (!required) await new Promise((resolve) => setImmediate(resolve));
+    assert.throws(
+      () => service.decide({ id: required.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true }),
+      ApprovalSessionAllowError,
+    );
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", ""), false);
+    pending.catch(() => undefined);
+    service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

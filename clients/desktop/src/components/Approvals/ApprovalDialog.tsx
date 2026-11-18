@@ -371,8 +371,9 @@ export default function ApprovalDialog() {
           </label>
         )}
 
-        {/* 外部工具（MCP 连接器等）：本会话内不再询问。会话级，删除会话即失效。 */}
-        {item.riskLevel === 'external' && !expired && (
+        {/* 外部工具（MCP 连接器等）与技能安装：本会话内不再询问。会话级，删除会话即失效。
+            MCP 安装不给出该选项：审批弹窗还要收集 OAuth 登录 / 访问令牌。 */}
+        {(item.riskLevel === 'external' || install?.kind === 'skill') && !expired && (
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
             <input
               type="checkbox"
@@ -382,7 +383,7 @@ export default function ApprovalDialog() {
               style={{ marginTop: 3 }}
             />
             <span>
-              本会话内不再询问该工具
+              {install?.kind === 'skill' ? '本会话内不再询问安装技能' : '本会话内不再询问该工具'}
               <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)' }}>只对当前会话生效；删除会话后恢复为每次询问。</span>
             </span>
           </label>

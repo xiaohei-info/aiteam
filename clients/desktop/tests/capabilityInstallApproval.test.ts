@@ -67,8 +67,9 @@ test('MCP 鉴权：带出 oauth 登录主机与 bearer 请求头；旧版 Agent 
 test('「本会话不再询问」只对外部工具出现，并随批准提交', async () => {
   const { readFileSync } = await import('node:fs')
   const source = readFileSync(new URL('../src/components/Approvals/ApprovalDialog.tsx', import.meta.url), 'utf8')
-  // 复选框只在 risk_level === external 时渲染
-  assert.match(source, /item\.riskLevel === 'external' && !expired/)
+  // 复选框对外部工具与技能安装渲染（MCP 安装不给：还要收集登录/令牌）
+  assert.match(source, /item\.riskLevel === 'external' \|\| install\?\.kind === 'skill'/)
+  assert.match(source, /本会话内不再询问安装技能/)
   assert.match(source, /setSessionAllow/)
   // 三条批准路径都要带上 sessionAllow（普通允许 / 覆盖安装 / 改名安装）
   const approve = source.slice(source.indexOf('const decide = useApprovalStore'))

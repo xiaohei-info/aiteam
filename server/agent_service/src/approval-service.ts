@@ -23,6 +23,15 @@ export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "
   }
 }
 
+/**
+ * 会话授权的匹配键：外部工具用 tool_name（subject 空）；技能安装用 `capability_install` + subject 'skill'。
+ * MCP 安装不做（审批弹窗还要收集 OAuth 登录 / bearer 令牌）。
+ */
+export function sessionGrantSubject(request: Pick<ApprovalRequest, "toolName" | "summary">): string {
+  if (request.toolName !== "capability_install") return "";
+  return capabilityInstallOf({ tool_name: request.toolName, redacted_summary: request.summary ?? "" })?.kind === "skill" ? "skill" : "";
+}
+
 export interface ApprovalRequest {
   tenantId: string;
   memberId: string;
@@ -144,9 +153,10 @@ export class ApprovalService {
     // full-access is an explicit per-conversation opt-out of per-call confirmation for local tools. The call still
     // gets an ApprovalRecord (audit, args hash, single-use claim, lease cap) but is approved by policy without a prompt.
     // External connectors and unknown tools keep requiring a human decision —— 除非成员在该会话里勾过「本会话不再询问」。
-    // 会话授权只对外部工具有效，且只对当前会话生效（用户选定的口径）。
-    const sessionGranted = request.riskLevel === "external"
-      && this.store.hasApprovalSessionGrant(request.tenantId, request.memberId, request.conversationId, request.toolName);
+    // 会话授权只对当前会话生效：外部工具，以及技能安装（MCP 安装还要收集凭据，不做）。
+    const subject = sessionGrantSubject(request);
+    const sessionGranted = (request.riskLevel === "external" || subject === "skill")
+      && this.store.hasApprovalSessionGrant(request.tenantId, request.memberId, request.conversationId, request.toolName, subject);
     const autoApprove = sessionGranted
       || (request.permissionMode === "full-access"
         && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit"));
@@ -222,8 +232,11 @@ export class ApprovalService {
     }
     if (input.sessionAllow) {
       const target = this.store.getApprovalRecord(input.id);
-      // 只写外部工具：本地工具（bash/write/edit）已由「完全访问」负责，不该被会话授权放大。
-      if (target && (input.decision !== "approve" || target.risk_level !== "external")) throw new ApprovalSessionAllowError();
+      // 只写外部工具与技能安装：本地工具（bash/write/edit）已由「完全访问」负责；
+      // MCP 安装要收集登录/令牌，跳过审批会拿不到凭据。
+      const subject = target ? sessionGrantSubject({ toolName: target.tool_name, summary: target.redacted_summary }) : "";
+      const allowed = target?.risk_level === "external" || subject === "skill";
+      if (target && (input.decision !== "approve" || !allowed)) throw new ApprovalSessionAllowError();
     }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
     let record: ApprovalRecord;
@@ -236,7 +249,10 @@ export class ApprovalService {
     if (record.status !== "approved") this.credentials.delete(record.id);
     const install = input.remember && record.status === "approved" ? capabilityInstallOf(record) : null;
     if (install?.source === "platform_catalog") this.store.putCapabilityAutoInstall(record.tenant_id, record.member_id, install.kind);
-    if (input.sessionAllow && record.status === "approved") this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name);
+    if (input.sessionAllow && record.status === "approved") {
+      const subject = sessionGrantSubject({ toolName: record.tool_name, summary: record.redacted_summary });
+      this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name, subject);
+    }
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
     return record;
