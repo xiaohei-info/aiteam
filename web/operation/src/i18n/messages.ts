@@ -9,6 +9,7 @@ export const operationMessages: LocaleCatalog = {
     "operation.nav.catalog": "目录治理",
     "operation.nav.experts": "专家",
     "operation.nav.skillMarket": "技能市场",
+    "operation.nav.mcpMarket": "MCP 目录",
     "operation.nav.providers": "大模型服务",
     "operation.nav.industrySolutions": "行业解决方案",
     "operation.nav.solutionAuthoring": "行业文档生成",

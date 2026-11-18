@@ -1,4 +1,4 @@
-import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type SkillInstaller } from "../connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type SkillInstaller } from "../connectors.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -41,7 +41,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, approvalRiskForTool } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -1369,7 +1369,7 @@ export class SessionHost {
     // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
-    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller))] : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller))] : [];
     for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
     tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -1431,6 +1431,13 @@ export class SessionHost {
     };
   }
 
+  /** Platform MCP servers the enterprise enabled for this caller (design §11.3); undefined without Manager. */
+  private mcpCatalog(caller: AuthenticatedCaller): McpCatalog | undefined {
+    const client = this.options.managerClient;
+    if (!client?.listInstallableMcpServers || !caller.tenantId) return undefined;
+    return { list: () => client.listInstallableMcpServers!(caller) };
+  }
+
   /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
   removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
     this.options.personalSkillCache?.remove({ tenantId, memberId }, skillId);
@@ -1446,11 +1453,14 @@ export class SessionHost {
       execute: async (toolCallId, params, signal, onUpdate, context) => {
         // Installing a personal capability: bounce impossible requests, show the user the full request (and any clash).
         let summary: string | undefined;
+        let autoInstall = false;
         const install = tool.name === "capability_install";
         if (install) {
-          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal);
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller));
           if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
           summary = `capability_install: ${check.summary}`;
+          // The member's own grant (design §11.3): platform-catalog installs of this kind that replace nothing skip the prompt.
+          autoInstall = check.platform && !check.replaces && this.options.store.hasCapabilityAutoInstall(owner.tenantId, owner.memberId, check.kind);
         }
         return this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
@@ -1468,6 +1478,7 @@ export class SessionHost {
         toolName: tool.name,
         args: params,
         ...(summary ? { summary } : {}),
+        ...(autoInstall ? { autoApproveBy: AUTO_INSTALL_APPROVER } : {}),
         riskLevel: risk,
         permissionMode: record.permissionMode,
         expiresAt: authorizationExpiry(authorization),
@@ -1475,7 +1486,9 @@ export class SessionHost {
       // Queued after approval, so a request waiting for the user never holds up the other employees.
       }, (claimed) => {
         // The user's replace / rename choice reaches the install tool only through the approval record, never from the model.
-        const effective = install ? { ...(params as Record<string, unknown>), resolution: claimed.resolution } : params;
+        const effective = install
+          ? { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER }
+          : params;
         return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
           ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, effective, signal, onUpdate, context))
           : execute(toolCallId, effective, signal, onUpdate, context);

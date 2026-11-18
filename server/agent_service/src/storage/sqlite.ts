@@ -298,8 +298,11 @@ export interface LocalCapability {
   url: string;
   /** MCP tool names; empty for a skill. */
   tools: string[];
-  /** user_url: MCP the user pointed at; enterprise_catalog: skill from the enterprise skill catalog. */
-  source: "user_url" | "enterprise_catalog";
+  /**
+   * user_url: MCP the user pointed at; enterprise_catalog: skill the enterprise built itself;
+   * platform_catalog: MCP / skill from our platform catalog (enabled or installed by the enterprise).
+   */
+  source: "user_url" | "enterprise_catalog" | "platform_catalog";
   /** Installed skill version; empty for an MCP. */
   version: string;
   /** Platform skill id an enterprise-catalog skill was installed from (matches solution recommendations); empty otherwise. */
@@ -645,6 +648,15 @@ export class AgentSqliteStore {
       );
       CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
 
+      -- 成员授权「以后从平台目录安装同种能力时直接安装」（设计 §11.3）。按种类（mcp / skill）各一条，成员可在设置里撤销。
+      CREATE TABLE IF NOT EXISTS capability_autoinstall (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind)
+      );
+
       -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。
       CREATE TABLE IF NOT EXISTS local_capability (
         tenant_id TEXT NOT NULL,
@@ -654,7 +666,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -737,6 +749,7 @@ export class AgentSqliteStore {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
     this.migrateLocalCapabilityKinds();
+    this.migrateLocalCapabilitySources();
     // Retry markers written by an older Agent build did not bind a schedule
     // identity. They cannot be safely replayed after a schedule replacement.
     this.db.prepare("DELETE FROM schedule_retry WHERE schedule_id = '' OR schedule_generation = 0").run();
@@ -1568,6 +1581,23 @@ export class AgentSqliteStore {
       .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now);
   }
 
+  /** Kinds this member lets the platform catalog install without asking (design §11.3). */
+  listCapabilityAutoInstall(tenantId: string, memberId: string): { kind: LocalCapabilityKind; created_at: string }[] {
+    return this.db.prepare("SELECT kind, created_at FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? ORDER BY kind").all(tenantId, memberId) as { kind: LocalCapabilityKind; created_at: string }[];
+  }
+
+  hasCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind): boolean {
+    return this.db.prepare("SELECT 1 FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? AND kind = ?").get(tenantId, memberId, kind) !== undefined;
+  }
+
+  putCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR IGNORE INTO capability_autoinstall (tenant_id, member_id, kind, created_at) VALUES (?, ?, ?, ?)").run(tenantId, memberId, kind, now);
+  }
+
+  deleteCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind): boolean {
+    return this.db.prepare("DELETE FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? AND kind = ?").run(tenantId, memberId, kind).changes > 0;
+  }
+
   deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {
     return this.db.prepare("DELETE FROM local_capability WHERE tenant_id = ? AND member_id = ? AND kind = ? AND ref = ?").run(tenantId, memberId, kind, ref).changes > 0;
   }
@@ -2157,7 +2187,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -2168,6 +2198,34 @@ export class AgentSqliteStore {
       INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at)
         SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at FROM local_capability_v1;
       DROP TABLE local_capability_v1;
+      COMMIT;`);
+  }
+
+  /** Builds before the platform catalog (§11.3) only allowed two sources; SQLite cannot widen a CHECK, so rebuild once. */
+  private migrateLocalCapabilitySources(): void {
+    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_capability'").get() as { sql?: string } | undefined;
+    if (!row?.sql || row.sql.includes("'platform_catalog'")) return;
+    this.db.exec(`BEGIN IMMEDIATE;
+      ALTER TABLE local_capability RENAME TO local_capability_v2;
+      CREATE TABLE local_capability (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        ref TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        tools_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog')),
+        version TEXT NOT NULL DEFAULT '',
+        source_ref TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind, ref)
+      );
+      INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at)
+        SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability_v2;
+      DROP TABLE local_capability_v2;
       COMMIT;`);
   }
 

@@ -59,6 +59,38 @@ class InstalledPlatformSkillOut(BaseModel):
     installed: bool = Field(description="本次是否实际写入安装。")
 
 
+class McpMarketServerOut(BaseModel):
+    """平台 MCP 与本企业启用状态（设计 §11.3）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    server_id: str = Field(description="Operator 平台 MCP ID。")
+    ref: str = Field(description="成员本机安装标识。")
+    display_name: str = Field(description="展示名称。")
+    summary: str = Field(default="", description="用途说明。")
+    url: str = Field(description="端点地址（https）。")
+    tools: list[str] = Field(default_factory=list, description="声明的工具名。")
+    requires_credentials: bool = Field(default=False, description="是否需要凭据；需要凭据的不进成员可装列表。")
+    platform_revision: int | None = Field(default=None, description="平台当前修订号；已下架或平台不可达时为空。")
+    published: bool = Field(description="平台是否仍在发布。")
+    enabled: bool = Field(description="本企业是否已启用。")
+    enabled_revision: int | None = Field(default=None, description="本企业启用时的平台修订号。")
+    update_available: bool = Field(default=False, description="平台有更新的修订。")
+
+
+class McpMarketOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    platform_available: bool = Field(description="平台 MCP 目录是否可读；不可读时只列出已启用项。")
+    servers: list[McpMarketServerOut] = Field(default_factory=list, description="平台 MCP 列表。")
+
+
+class McpCatalogEntryOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    server_id: str = Field(description="Operator 平台 MCP ID。")
+    ref: str = Field(description="成员本机安装标识。")
+    display_name: str = Field(description="展示名称。")
+    source_revision: int = Field(description="启用的平台修订号。")
+
+
 class PlatformModelWithRateOut(BaseModel):
     """Operator model plus its current price card used by Manager configuration."""
 

@@ -75,6 +75,10 @@ class OperatorCatalogPort(ABC):
     def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
         return {"providers": [], "models": []}
 
+    def list_platform_mcp_servers(self) -> list[dict]:
+        """Operator 已发布的平台 MCP（设计 §11.3）。Operator 尚未提供时由调用方按「平台目录不可用」处理。"""
+        return []
+
     def resolve_tenant_access(self, *, tenant_id: str, provider_id: str, model_ids: list[str]) -> dict:
         from shared.errors import NotFound
         raise NotFound("platform tenant access is unavailable")
@@ -160,6 +164,9 @@ class OperatorCatalogClient(OperatorCatalogPort):
     def list_platform_skills(self) -> list[dict]:
         return self._get("/api/operation/skill-market/pull/skills").get("data", [])
 
+    def list_platform_mcp_servers(self) -> list[dict]:
+        return self._get("/api/operation/mcp-market/pull/servers").get("data", [])
+
     def list_platform_catalog(self, *, tenant_id: str | None = None) -> dict:
         """Pull the catalog with an exact tenant-only service target binding."""
         path = "/api/operation/catalog/platform-providers"
@@ -225,6 +232,7 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
         self._solutions_latest: dict[str, SolutionPackage] = {}
         self._platform_skills: dict[tuple[str, str], PlatformSkillPackage] = {}
         self._platform_catalog: dict = {"providers": [], "models": []}
+        self._platform_mcp: list[dict] = []
         self.invalidated: list[tuple[str, str]] = []
         self._hidden: set[tuple[str, str]] = set()  # (tenant_id, template_id / solution_id)
 
@@ -257,6 +265,12 @@ class FakeOperatorCatalogClient(OperatorCatalogPort):
 
     def seed_platform_catalog(self, catalog: dict) -> None:
         self._platform_catalog = catalog
+
+    def seed_platform_mcp(self, servers: list[dict]) -> None:
+        self._platform_mcp = [dict(item) for item in servers]
+
+    def list_platform_mcp_servers(self) -> list[dict]:
+        return [dict(item) for item in self._platform_mcp]
 
     # ---- 只读拉取（红线：不改预置真相）----
     def pull_expert_template(

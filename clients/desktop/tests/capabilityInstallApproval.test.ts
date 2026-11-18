@@ -39,3 +39,14 @@ test('改名安装的新标识要合法且不同于原标识', () => {
   assert.match(renameProblem('CRM 2', 'crm') ?? '', /小写字母/)
   assert.match(renameProblem('crm', 'crm') ?? '', /不能与/)
 })
+
+test('来源为平台目录时标记 platform，弹窗才提供「以后直接安装」', () => {
+  const platform = parseCapabilityInstall('capability_install', summary({ source: 'platform_catalog' }))
+  assert.equal(platform?.source, 'platform_catalog')
+  assert.equal(platform?.platform, true)
+  assert.equal(parseCapabilityInstall('capability_install', summary({ source: 'user_url' }))?.platform, false)
+  // 旧版 Agent 不带 source：不提供勾选。
+  assert.equal(parseCapabilityInstall('capability_install', summary())?.platform, false)
+  const skill = parseCapabilityInstall('capability_install', `capability_install: ${JSON.stringify({ kind: 'skill', ref: 's', version: '1', source: 'enterprise_catalog' })}`)
+  assert.equal(skill?.platform, false)
+})

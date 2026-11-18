@@ -76,7 +76,7 @@ def test_control_plane_openapi_is_documented(tier: str) -> None:
                 "manager_owner_bootstrap",
                 "manager_catalog_notify",
                 "manager_inbox_deliver_from_operation",
-            } or path.startswith("/api/operation/catalog/pull/") or path.startswith("/api/operation/skill-market/pull/"):
+            } or path.startswith("/api/operation/catalog/pull/") or path.startswith("/api/operation/skill-market/pull/") or path.startswith("/api/operation/mcp-market/pull/"):
                 assert operation["security"] == [{"serviceIdentity": []}]
                 assert "403" not in operation["responses"], f"{label} service-token route must not claim role-based 403"
             else:

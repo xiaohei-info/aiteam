@@ -85,19 +85,19 @@ function InstallPreview({ preview }: { preview: CapabilityInstallPreview }) {
       )}
       {preview.kind === 'skill' ? (
         <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-          <div style={label}>来源：企业技能目录（企业管理员已安装并开放给成员）</div>
+          <div style={label}>{preview.platform ? '来源：平台技能市场（企业管理员已安装并开放给成员）' : '来源：企业自建技能（企业管理员已开放给成员）'}</div>
           <div>技能：<strong style={{ color: 'var(--text-primary)' }}>{preview.displayName || preview.ref}</strong>（标识 {preview.ref}{preview.version ? `，版本 ${preview.version}` : ''}）</div>
           {preview.reason && <div>理由（模型填写）：{preview.reason}</div>}
         </div>
       ) : <>
       <div>
-        <div style={label}>服务地址（请确认主机名是你信任的）</div>
+        <div style={label}>{preview.platform ? '来源：平台 MCP 目录（企业管理员已启用），服务地址：' : '服务地址（请确认主机名是你信任的）'}</div>
         <div data-testid="install-url" style={{ fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', color: 'var(--text-muted)' }}>
           {preview.before}<strong style={{ color: 'var(--text-primary)', fontSize: 13 }}>{preview.host}</strong>{preview.after}
         </div>
       </div>
       <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-        <div style={label}>以下名称与理由由模型填写，未经核实</div>
+        <div style={label}>{preview.platform ? '名称来自平台目录；理由由模型填写' : '以下名称与理由由模型填写，未经核实'}</div>
         <div>名称：{preview.displayName || '—'}（标识 {preview.ref}）</div>
         {preview.reason && <div>理由：{preview.reason}</div>}
       </div>
@@ -115,8 +115,10 @@ export default function ApprovalDialog() {
   const [, setTick] = useState(0)
   // 同名冲突时「改名安装」输入的新标识；null 表示未进入改名。换到下一条审批时清空。
   const [rename, setRename] = useState<string | null>(null)
+  // 「以后从平台目录安装时直接安装」：只对平台目录来源出现，换到下一条审批时清空。
+  const [remember, setRemember] = useState(false)
   const currentId = pending[0]?.approvalId
-  useEffect(() => { setRename(null) }, [currentId])
+  useEffect(() => { setRename(null); setRemember(false) }, [currentId])
 
   useEffect(() => {
     if (pending.length === 0) return
@@ -182,6 +184,22 @@ export default function ApprovalDialog() {
           </div>
         )}
 
+        {install?.platform && !expired && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={remember}
+              disabled={deciding}
+              onChange={(event) => setRemember(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              以后从平台目录安装{install.kind === 'skill' ? '技能' : ' MCP'}时直接安装，不再询问
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)' }}>只对平台目录来源生效；可在「设置 · 个人能力」撤销。</span>
+            </span>
+          </label>
+        )}
+
         {/* 错误提示（倒计时在头部右上角圆环） */}
         {item.errorMessage && (
           <div style={{ padding: '10px 20px 0', fontSize: 11, color: '#ff6666' }}>
@@ -202,8 +220,8 @@ export default function ApprovalDialog() {
               rename={rename}
               onRename={setRename}
               onCancel={() => void decide(item.approvalId, 'deny')}
-              onReplace={() => void decide(item.approvalId, 'approve', { action: 'replace' })}
-              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { action: 'rename', ref })}
+              onReplace={() => void decide(item.approvalId, 'approve', { action: 'replace' }, install.platform && remember)}
+              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { action: 'rename', ref }, install.platform && remember)}
             />
           ) : (
             <>
@@ -218,7 +236,7 @@ export default function ApprovalDialog() {
               <button
                 type="button"
                 disabled={deciding}
-                onClick={() => void decide(item.approvalId, 'approve')}
+                onClick={() => void decide(item.approvalId, 'approve', undefined, Boolean(install?.platform) && remember)}
                 style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : 1 }}
               >
                 {deciding && (

@@ -61,6 +61,8 @@ export const approvals = (client: AgentApiClient) => ({
     expectedRevision?: number,
     signal?: AbortSignal,
     resolution?: CapabilityResolution,
+    /** 批准并记住：以后从平台目录安装同种能力时直接安装（只对平台目录来源的 capability_install 有效）。 */
+    remember?: boolean,
   ) =>
     client.request<{ data: ApprovalRecord }>({
       method: 'POST',
@@ -69,6 +71,7 @@ export const approvals = (client: AgentApiClient) => ({
         decision,
         ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }),
         ...(resolution ? { capability_resolution: resolution } : {}),
+        ...(remember ? { remember: true } : {}),
       },
       idempotencyKey,
       raw: true,

@@ -149,7 +149,9 @@ export interface ManagerKnowledgeSpace {
   deployment_kind: "managed" | "nas";
 }
 
-export interface InstallableSkill { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string }
+export interface InstallableSkill { skill_id: string; display_name: string; version: string; content_hash: string; source_skill_id: string; origin: "platform" | "enterprise" }
+/** A credential-free platform MCP the enterprise enabled (design §11.3). */
+export interface InstallableMcpServer { server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[]; revision: number }
 
 export interface ManagerClient {
   /** Stable Manager origin used to partition process-memory runtime material. */
@@ -169,6 +171,8 @@ export interface ManagerClient {
   pullSnapshots?(caller: AuthenticatedCaller, experts: LoadedExpertProjection[]): Promise<FrozenSnapshot[]>;
   /** Enterprise-catalog skills this member may install for themselves (read-only). */
   listInstallableSkills?(caller: AuthenticatedCaller): Promise<InstallableSkill[]>;
+  /** Platform MCP servers the enterprise enabled that this member may install (read-only, design §11.3). */
+  listInstallableMcpServers?(caller: AuthenticatedCaller): Promise<InstallableMcpServer[]>;
   /** The package signed for this member plus public verification keys. */
   getInstallableSkillPackage?(caller: AuthenticatedCaller, skillId: string): Promise<{ package: SignedSkillPackage; signing_keys: SkillSigningKeyMetadata[] }>;
   getOrgTree(caller: AuthenticatedCaller): Promise<unknown>;
@@ -316,7 +320,28 @@ export class HttpManagerClient implements ManagerClient {
     return value.map((raw) => {
       const item = (raw ?? {}) as Record<string, unknown>;
       if (typeof item.skill_id !== "string" || !item.skill_id || typeof item.version !== "string" || typeof item.content_hash !== "string") throw new ManagerUnavailableError("Manager returned an invalid installable skill");
-      return { skill_id: item.skill_id, display_name: typeof item.display_name === "string" ? item.display_name : "", version: item.version, content_hash: item.content_hash, source_skill_id: typeof item.source_skill_id === "string" ? item.source_skill_id : "" };
+      return {
+        skill_id: item.skill_id, display_name: typeof item.display_name === "string" ? item.display_name : "", version: item.version, content_hash: item.content_hash,
+        source_skill_id: typeof item.source_skill_id === "string" ? item.source_skill_id : "",
+        // Older Managers omit origin: treat as enterprise, so nothing becomes auto-installable by accident.
+        origin: item.origin === "platform" ? "platform" : "enterprise",
+      };
+    });
+  }
+
+  async listInstallableMcpServers(caller: AuthenticatedCaller): Promise<InstallableMcpServer[]> {
+    const value = this.unwrap(await this.request("/api/manager/grants/mcp-servers", caller));
+    if (!Array.isArray(value)) throw new ManagerUnavailableError("Manager returned an invalid installable MCP list");
+    return value.map((raw) => {
+      const item = (raw ?? {}) as Record<string, unknown>;
+      if (typeof item.server_id !== "string" || typeof item.ref !== "string" || typeof item.url !== "string" || !Array.isArray(item.tools) || !item.tools.every((tool) => typeof tool === "string")) {
+        throw new ManagerUnavailableError("Manager returned an invalid installable MCP server");
+      }
+      return {
+        server_id: item.server_id, ref: item.ref, display_name: typeof item.display_name === "string" ? item.display_name : item.ref,
+        summary: typeof item.summary === "string" ? item.summary : "", url: item.url, tools: item.tools as string[],
+        revision: typeof item.revision === "number" ? item.revision : 1,
+      };
     });
   }
 

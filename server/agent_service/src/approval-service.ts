@@ -6,6 +6,20 @@ export type ApprovalRisk = "bash" | "write" | "edit" | "external" | "unknown";
 
 /** `approved_by` of records approved by conversation policy instead of a human decision. */
 export const POLICY_APPROVER = "policy:full-access";
+/** `approved_by` of capability installs approved by the member's auto-install grant (design §11.3). */
+export const AUTO_INSTALL_APPROVER = "policy:auto-install";
+
+/** Kind and source of a `capability_install` approval, read from the summary the Agent itself wrote; null otherwise. */
+export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): { kind: "mcp" | "skill"; source: string } | null {
+  const prefix = "capability_install:";
+  if (record.tool_name !== "capability_install" || !record.redacted_summary.startsWith(prefix)) return null;
+  try {
+    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; source?: unknown };
+    return (data.kind === "mcp" || data.kind === "skill") && typeof data.source === "string" ? { kind: data.kind, source: data.source } : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface ApprovalRequest {
   tenantId: string;
@@ -23,6 +37,8 @@ export interface ApprovalRequest {
   /** Complete, already-sanitized preview for tools whose approval needs more than the bounded generic summary. */
   summary?: string;
   riskLevel: ApprovalRisk;
+  /** Only AUTO_INSTALL_APPROVER for `capability_install`: the caller checked the member's auto-install grant. */
+  autoApproveBy?: string;
   permissionMode?: "read-only" | "workspace-write" | "full-access";
   /** The lease/JWT cutoff is an upper bound in addition to the approval TTL. */
   expiresAt?: number;
@@ -49,6 +65,11 @@ export class ApprovalResolutionError extends Error {
   constructor(message = "capability_resolution is only accepted when approving a capability install") { super(message); this.name = "ApprovalResolutionError"; }
 }
 const RENAME_REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+
+/** `remember` was sent for something other than approving a platform-catalog capability install. */
+export class ApprovalRememberError extends Error {
+  constructor(message = "remember is only accepted when approving a capability install from the platform catalog") { super(message); this.name = "ApprovalRememberError"; }
+}
 
 export class ApprovalPermissionError extends Error {
   constructor(message = "Tool is not permitted by the conversation permission") { super(message); this.name = "ApprovalPermissionError"; }
@@ -110,7 +131,10 @@ export class ApprovalService {
     if (existing && (existing.permission_revision !== request.permissionRevision || existing.tool_name !== request.toolName)) {
       throw new ApprovalDeniedError("Approval binding changed; request a new approval");
     }
-    const record = existing ?? this.create(request, hash, autoApprove);
+    const approver = request.autoApproveBy === AUTO_INSTALL_APPROVER && request.toolName === "capability_install"
+      ? AUTO_INSTALL_APPROVER
+      : autoApprove ? POLICY_APPROVER : undefined;
+    const record = existing ?? this.create(request, hash, approver);
     const claimed = await this.waitAndClaim(record, request);
     try {
       const result = await operation(claimed);
@@ -139,6 +163,8 @@ export class ApprovalService {
     approvedBy: string;
     idempotencyKey: string;
     resolution?: CapabilityResolution;
+    /** Approve, and from now on install this kind from the platform catalog without asking (design §11.3). */
+    remember?: boolean;
   }): ApprovalRecord {
     if (input.resolution !== undefined) {
       const target = this.store.getApprovalRecord(input.id);
@@ -146,8 +172,14 @@ export class ApprovalService {
         && (input.resolution.action === "replace" || (input.resolution.action === "rename" && RENAME_REF_RE.test(input.resolution.ref)));
       if (target && !valid) throw new ApprovalResolutionError();
     }
+    if (input.remember) {
+      const target = this.store.getApprovalRecord(input.id);
+      if (target && (input.decision !== "approve" || capabilityInstallOf(target)?.source !== "platform_catalog")) throw new ApprovalRememberError();
+    }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
     const record = this.store.decideApproval(input);
+    const install = input.remember && record.status === "approved" ? capabilityInstallOf(record) : null;
+    if (install?.source === "platform_catalog") this.store.putCapabilityAutoInstall(record.tenant_id, record.member_id, install.kind);
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
     return record;
@@ -178,7 +210,8 @@ export class ApprovalService {
     this.waiters.clear();
   }
 
-  private create(request: ApprovalRequest, hash: string, autoApprove = false): ApprovalRecord {
+  /** `approver` set: the record is approved by that policy without a prompt. */
+  private create(request: ApprovalRequest, hash: string, approver?: string): ApprovalRecord {
     const now = this.now();
     const maxExpiry = now + this.ttlMs;
     const expiry = request.expiresAt !== undefined && Number.isFinite(request.expiresAt)
@@ -205,9 +238,9 @@ export class ApprovalService {
       risk_level: request.riskLevel,
       expires_at: new Date(expiry).toISOString(),
       idempotency_key: encodeScope([request.conversationId, request.sessionId, request.toolCallId]),
-      ...(autoApprove ? { status: "approved" as const, approved_by: POLICY_APPROVER, approved_at: new Date(now).toISOString() } : {}),
+      ...(approver ? { status: "approved" as const, approved_by: approver, approved_at: new Date(now).toISOString() } : {}),
     });
-    if (!autoApprove) void this.onRequired?.(record);
+    if (!approver) void this.onRequired?.(record);
     return record;
   }
 

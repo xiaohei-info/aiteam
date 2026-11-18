@@ -557,6 +557,14 @@ export interface InstallableSkill {
   content_hash: string
   /** 对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。 */
   source_skill_id: string
+  /** platform：来自平台技能市场；enterprise：企业自建。旧版 Agent 不返回。 */
+  origin?: 'platform' | 'enterprise'
+}
+
+/** 成员授权：以后从平台目录安装该种能力时直接安装，不再弹审批。 */
+export interface CapabilityAutoInstall {
+  kind: LocalCapabilityKind
+  created_at: string
 }
 
 export interface LocalCapability {
@@ -567,8 +575,8 @@ export interface LocalCapability {
   url: string
   /** MCP 工具；技能为空。 */
   tools: string[]
-  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业技能目录。 */
-  source: 'user_url' | 'enterprise_catalog'
+  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业自建技能；platform_catalog：平台目录（MCP 或技能）。 */
+  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog'
   /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
   version?: string
   /** 企业目录技能对应的平台 skill ID（与方案推荐能力对应）；旧版 Agent 不返回。 */

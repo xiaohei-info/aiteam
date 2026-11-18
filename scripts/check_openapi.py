@@ -91,7 +91,7 @@ def security_kind(path: str, operation: dict[str, Any]) -> str | None:
     operation_id = str(operation.get("operationId", ""))
     if path.endswith("/ping") or path.startswith(PUBLIC_PREFIXES) or path in {"/api/operation/auth/login", "/api/agent/login", "/api/agent/reset-password"}:
         return None
-    if path.startswith("/api/operation/catalog/pull/") or path.startswith("/api/operation/skill-market/pull/"):
+    if path.startswith("/api/operation/catalog/pull/") or path.startswith("/api/operation/skill-market/pull/") or path.startswith("/api/operation/mcp-market/pull/"):
         return "service"
     if operation_id in SERVICE_OPERATION_IDS:
         return "service"

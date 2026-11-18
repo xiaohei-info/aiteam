@@ -12,6 +12,7 @@ export const managerMessages: LocaleCatalog = {
     "manager.nav.experts": "已招募专家",
     "manager.nav.solutions": "方案目录",
     "manager.nav.skills": "技能管理",
+    "manager.nav.mcpMarket": "MCP 市场",
     "manager.nav.grants": "成员级授权",
     "manager.nav.governance": "企业治理",
     "manager.providers.loading": "Provider 凭据加载中…",

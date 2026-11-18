@@ -21,6 +21,8 @@ export const managerShellConfig: PageShellConfig = {
     { id: "solutions", labelKey: "manager.nav.solutions", path: "/solutions", icon: "board" },
     // manage_employees 门控
     { id: "skills", labelKey: "manager.nav.skills", path: "/skill-market", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
+    // 平台 MCP 启用（设计 §11.3）：owner/enterprise_admin 门控
+    { id: "mcp-market", labelKey: "manager.nav.mcpMarket", path: "/mcp-market", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     // 招募/实例配置/授权构成 Agent 可用专家的完整管理链路；平台模型目录仅作为专家配置内部数据源。
     { id: "marketplace", labelKey: "manager.nav.marketplace", path: "/marketplace", icon: "catalog", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },
     { id: "experts", labelKey: "manager.nav.experts", path: "/experts", icon: "members", requiredRoles: [EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN] },

@@ -213,6 +213,24 @@ class InstallableSkill(BaseModel):
     version: str
     content_hash: str
     source_skill_id: str = Field(default="", description="来自平台技能市场时的平台 skill_id，供方案推荐清单对应")
+    origin: Literal["platform", "enterprise"] = Field(
+        default="enterprise",
+        description="platform：从平台技能市场安装到企业目录；enterprise：企业自建。只有 platform 可使用「以后自动安装」",
+    )
+
+
+class InstallableMcpServer(BaseModel):
+    """成员可在对话中自行安装的平台 MCP（企业已启用、免凭据；设计 §11.3）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    server_id: str = Field(description="Operator 平台 MCP 的 server_id")
+    ref: str = Field(description="成员本机安装时使用的标识")
+    display_name: str
+    summary: str = ""
+    url: str = Field(description="端点地址（https）；以企业目录为准，模型给出的地址被忽略")
+    tools: list[str] = Field(description="声明的工具名；安装时只保留与服务端实际工具的交集")
+    revision: int = Field(ge=1, description="企业启用时的平台修订号")
 
 
 class InstallableSkillPackage(BaseModel):

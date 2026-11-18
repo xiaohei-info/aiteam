@@ -20,6 +20,10 @@ export interface CapabilityInstallPreview {
   /** 技能版本；MCP 为空。 */
   version: string
   reason: string
+  /** 来源：platform_catalog 平台目录 / enterprise_catalog 企业自建技能 / user_url 手动地址；旧版 Agent 为空。 */
+  source: string
+  /** 来源是平台目录：弹窗可提供「以后直接安装」。 */
+  platform: boolean
   replaces?: { displayName: string; url: string; version: string }
 }
 
@@ -36,7 +40,8 @@ export function parseCapabilityInstall(toolName: string, summary: string): Capab
     const replaces = raw && typeof raw === 'object'
       ? { replaces: { displayName: text(raw.display_name), url: text(raw.url), version: text(raw.version) } }
       : {}
-    const base = { kind, ref: text(data.ref), displayName: text(data.display_name), reason: text(data.reason), version: text(data.version), ...replaces } as const
+    const source = text(data.source)
+    const base = { kind, ref: text(data.ref), displayName: text(data.display_name), reason: text(data.reason), version: text(data.version), source, platform: source === 'platform_catalog', ...replaces } as const
     if (kind === 'skill') return base.ref ? { ...base, url: '', host: '', before: '', after: '' } : null
     if (typeof data.url !== 'string' || !data.url) return null
     const url = new URL(data.url)

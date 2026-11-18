@@ -599,7 +599,7 @@ def _security_kind(path: str, operation_id: str) -> str | None:
         return None
     if path.startswith("/api/operation/catalog/pull/"):
         return "service"
-    if path.startswith("/api/operation/skill-market/pull/"):
+    if path.startswith("/api/operation/skill-market/pull/") or path.startswith("/api/operation/mcp-market/pull/"):
         return "service"
     if operation_id in {
         "operation_ingest_rollup",
@@ -2019,6 +2019,7 @@ def enrich_openapi(schema: dict[str, Any], tier: str) -> dict[str, Any]:
         "operation-catalog-pull": "Manager 服务间拉取的已发布目录。",
         "operation-rollup": "脱敏计量与跨企业治理汇总。",
         "skill-market": "平台技能市场浏览、导入和发布。",
+        "mcp-market": "平台 MCP 目录登记、发布与企业启用。",
         "employee-config": "企业 employee/expert 中立配置与生命周期。",
         "employee-prompt": "员工提示词及版本历史。",
         "employee-bindings": "员工与技能、知识、连接器和记忆策略绑定。",

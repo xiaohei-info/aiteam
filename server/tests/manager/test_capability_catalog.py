@@ -246,6 +246,19 @@ def test_operator_managed_skill_ids_and_rows_are_immutable_via_generic_crud():
         svc.delete_skill(ctx, catalog_id=row.catalog_id)
 
 
+@pytest.mark.parametrize("config", [{"source": "operator"}, {"source_skill_id": "plat-x"}, {"source": "custom"}])
+def test_custom_skills_cannot_claim_platform_origin(config):
+    """平台来源的技能可被成员设为自动安装（设计 §11.3），企业自建技能不能写入来源保留键。"""
+    from shared.errors import ValidationProblem
+    svc = CapabilityCatalogService(_FakeRepo())
+    ctx = _ctx("t-a")
+    with pytest.raises(ValidationProblem):
+        svc.create_skill(ctx, SkillCatalogIn(skill_id="forged", config=config))
+    created = svc.create_skill(ctx, SkillCatalogIn(skill_id="honest", config={"lang": "py"}))
+    with pytest.raises(ValidationProblem):
+        svc.update_skill(ctx, SkillCatalogIn(skill_id="honest", config=config), catalog_id=created.catalog_id)
+
+
 def test_skill_id_conflict_within_tenant():
     svc = CapabilityCatalogService(_FakeRepo())
     ctx = _ctx("t-a")

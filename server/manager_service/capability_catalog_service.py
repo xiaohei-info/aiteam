@@ -38,6 +38,16 @@ _CATALOG_WRITE_ROLES = [
 ]
 
 
+_RESERVED_SKILL_CONFIG_KEYS = ("source", "source_skill_id", "source_version", "source_content_hash")
+
+
+def _reject_reserved_skill_config(config: dict | None) -> None:
+    """企业自建技能不能冒充平台技能市场来源（设计 §11.3：平台来源可被成员设为自动安装）。"""
+    reserved = sorted(key for key in (config or {}) if key in _RESERVED_SKILL_CONFIG_KEYS)
+    if reserved:
+        raise ValidationProblem(detail=f"config 不能包含保留键：{', '.join(reserved)}（平台技能只能从技能市场安装）", errors=None)
+
+
 class CapabilityCatalogService:
     """能力目录 CRUD 编排。tenant_id 全程经 TenantContext，不手写过滤（D22）。"""
 
@@ -50,6 +60,7 @@ class CapabilityCatalogService:
         _ensure_can_write(ctx)
         if body.skill_id.startswith("platform-"):
             raise Conflict("platform skill IDs are reserved for Operator-managed installs")
+        _reject_reserved_skill_config(body.config)
         if self._repo.get_skill_by_id(ctx, skill_id=body.skill_id) is not None:
             raise Conflict("skill_id already exists in this tenant")
         files = [f.model_dump(mode="json") for f in body.files]
@@ -77,6 +88,8 @@ class CapabilityCatalogService:
         if body.skill_id != current.skill_id:
             raise Conflict("skill_id is immutable")
         supplied = body.model_fields_set
+        if "config" in supplied:
+            _reject_reserved_skill_config(body.config)
         files = None
         content_hash = None
         if "files" in supplied:

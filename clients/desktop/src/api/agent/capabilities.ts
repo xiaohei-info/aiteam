@@ -1,4 +1,4 @@
-import type { InstallableSkill, LocalCapability, LocalCapabilityKind } from './types.ts'
+import type { CapabilityAutoInstall, InstallableSkill, LocalCapability, LocalCapabilityKind } from './types.ts'
 
 import type { ServiceApiClient } from './client'
 
@@ -19,4 +19,14 @@ export async function deleteLocalCapability(client: RequestClient, kind: LocalCa
     method: 'DELETE',
     path: `/api/agent/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(ref)}`,
   })
+}
+
+/** 本人授权「以后从平台目录安装时直接安装」的能力种类。 */
+export async function listCapabilityAutoInstall(client: RequestClient): Promise<CapabilityAutoInstall[]> {
+  return (await client.request<CapabilityAutoInstall[] | null>({ method: 'GET', path: '/api/agent/capabilities/auto-install' })) ?? []
+}
+
+/** 撤销后从平台目录安装该种能力恢复为每次审批；已装能力不受影响。 */
+export async function deleteCapabilityAutoInstall(client: RequestClient, kind: LocalCapabilityKind): Promise<void> {
+  await client.request({ method: 'DELETE', path: `/api/agent/capabilities/auto-install/${encodeURIComponent(kind)}` })
 }

@@ -972,6 +972,7 @@ def test_operator_catalog_is_read_only_port():
         "list_platform_skills",
         "pull_platform_skill",
         "list_platform_catalog",
+        "list_platform_mcp_servers",
         "resolve_tenant_access",
     }, methods
     # 红线兜底：端口不得出现任何反向写语义方法名。
