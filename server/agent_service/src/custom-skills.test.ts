@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CustomSkillError, CustomSkillStore, normalizeSkillPackage, readSkillFolder, unzipEntries } from "./custom-skills.js";
+import { CustomSkillError, CustomSkillStore, normalizeSkillPackage, readSkillFolder, toLocalPath, unzipEntries } from "./custom-skills.js";
 
 const SKILL_MD = "---\nname: excel-report\ndescription: 按模板生成周报\n---\n\n# 周报\n";
 
@@ -92,4 +92,22 @@ test("CustomSkillError 带可判定的错误码", () => {
   const error = new CustomSkillError("skill_too_large", "太大");
   assert.equal(error.code, "skill_too_large");
   assert.equal(error.message, "太大");
+});
+
+test("file:// 地址还原成绝对路径（Tauri 文件选择会返回 URL）", () => {
+  assert.equal(toLocalPath("file:///Users/edy/Downloads/skill"), "/Users/edy/Downloads/skill");
+  assert.equal(toLocalPath("file://localhost/Users/edy/skill"), "/Users/edy/skill");
+  assert.equal(toLocalPath("/Users/edy/skill"), "/Users/edy/skill");
+  assert.equal(toLocalPath("file:///C:/Users/edy/skill"), "C:/Users/edy/skill");
+  assert.equal(toLocalPath("file:///Users/edy/%E6%96%87%E6%A1%A3"), "/Users/edy/文档");
+});
+
+test("readSkillFolder 接受 file:// 文件夹地址", async () => {
+  const root = folderWith({ "SKILL.md": SKILL_MD });
+  try {
+    const files = await readSkillFolder(`file://${root}`);
+    assert.deepEqual(files.map((file) => file.path), ["SKILL.md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

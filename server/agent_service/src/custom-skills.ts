@@ -234,9 +234,23 @@ export class CustomSkillStore {
   }
 }
 
+/**
+ * 桌面端文件选择可能给 `file:///Users/…`（Tauri `FilePath::Url` 序列化成字符串）；本机按路径读，先还原。
+ * 同时容忍 `file://localhost/…`（URL 规范的主机名写法）。
+ */
+export function toLocalPath(value: string): string {
+  const trimmed = value.trim();
+  if (!/^file:\/\//i.test(trimmed)) return trimmed;
+  const rest = trimmed.slice("file://".length);
+  const path = rest.replace(/^localhost(?=\/)/i, "");
+  const decoded = decodeURIComponent(path);
+  // Windows：file:///C:/Users/x → C:/Users/x
+  return /^\/[A-Za-z]:/.test(decoded) ? decoded.slice(1) : decoded;
+}
+
 /** Collects a folder: relative paths, no symlinks, no .git / .DS_Store / __MACOSX. */
 export async function readSkillFolder(folder: string): Promise<{ path: string; content: Buffer }[]> {
-  const root = resolve(folder);
+  const root = resolve(toLocalPath(folder));
   if (!existsSync(root)) throw new CustomSkillError("invalid_skill_package", `文件夹不存在：${folder}`);
   if (!lstatSync(root).isDirectory()) throw new CustomSkillError("invalid_skill_package", `不是文件夹：${folder}`);
   const out: { path: string; content: Buffer }[] = [];

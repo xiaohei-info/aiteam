@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillPackage, readSkillFolder, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillPackage, readSkillFolder, toLocalPath, unzipEntries } from "./custom-skills.js";
 export { CustomSkillError } from "./custom-skills.js";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -691,7 +691,7 @@ export async function importCustomSkill(
     files = await readSkillFolder(request.path);
   } else if (request.source === "zip") {
     if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择 zip。");
-    files = unzipEntries(await readFileAsync(request.path));
+    files = unzipEntries(await readFileAsync(toLocalPath(request.path)));
   } else if (request.source === "text") {
     if (!request.skill_md) throw new CustomSkillError("invalid_skill_package", "没有粘贴 SKILL.md 内容。");
     files = [{ path: "SKILL.md", content: Buffer.from(request.skill_md, "utf8") }];

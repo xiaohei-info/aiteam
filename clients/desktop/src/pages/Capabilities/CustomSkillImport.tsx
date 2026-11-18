@@ -8,6 +8,8 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { CustomSkillPreview, CustomSkillSource } from '../../api/agent/capabilities'
 import { formatFileSize } from '../../lib/fileCache'
+import { toLocalPath } from '../../lib/localSkillPath'
+
 
 const SOURCES: { id: CustomSkillSource; label: string; icon: typeof FolderOpen; hint: string }[] = [
   { id: 'folder', label: '文件夹', icon: FolderOpen, hint: '选一个含 SKILL.md 的文件夹（可以带模板、脚本、参考资料）。' },
@@ -40,7 +42,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       filters: kind === 'zip' ? [{ name: '技能压缩包', extensions: ['zip'] }] : undefined,
     })
     if (!selected || typeof selected !== 'string') return
-    setPath(selected)
+    setPath(toLocalPath(selected))
     setPreview(null)
   }
 

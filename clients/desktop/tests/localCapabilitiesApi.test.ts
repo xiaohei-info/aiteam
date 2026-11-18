@@ -101,3 +101,12 @@ test('自定义技能来源与文件完整性有对应文案', () => {
   assert.equal(customSkillIntegrityLabel({ source: 'enterprise_catalog' }), null)
   assert.equal(customSkillIntegrityLabel({ source: 'user_import' }), null)
 })
+
+test('file:// 地址还原成绝对路径（Tauri 文件选择会返回 URL）', async () => {
+  const { toLocalPath } = await import('../src/lib/localSkillPath.ts')
+  assert.equal(toLocalPath('file:///Users/edy/skills/x'), '/Users/edy/skills/x')
+  assert.equal(toLocalPath('file://localhost/Users/edy/skills/x'), '/Users/edy/skills/x')
+  assert.equal(toLocalPath('/Users/edy/skills/x'), '/Users/edy/skills/x')
+  assert.equal(toLocalPath('file:///C:/Users/edy/skills/x'), 'C:/Users/edy/skills/x')
+  assert.equal(toLocalPath('file:///Users/edy/%E6%96%87%E6%A1%A3'), '/Users/edy/文档')
+})
