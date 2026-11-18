@@ -115,20 +115,34 @@ svg text{font-family:inherit}
 <div class="pane on" id="u1">
 <div class="win"><div class="bar"><i></i><i></i><i></i><b>添加技能</b></div>
 <div class="body">
-<div class="tabs"><button class="on">企业技能</button><button>自定义</button></div>
-<div class="box"><h4>自定义技能 · 四种来源</h4>
-<div class="row"><span><b>选择文件夹</b> <span class="tag gray">本机</span></span><span class="btn">选择…</span></div>
-<div class="row"><span><b>选择 zip</b> <span class="tag gray">本机</span></span><span class="btn">选择…</span></div>
-<div class="row"><span><b>粘贴 SKILL.md</b> <span class="tag gray">单文件</span></span><span class="btn">粘贴</span></div>
-<div class="row"><span><b>网址导入</b> <span class="tag gray">https</span></span><span><span class="input">https://github.com/…</span></span></div>
-<p style="margin:8px 0 0"><span class="btn pri">检查并导入</span> <span class="btn">取消</span></p>
-<p class="note">先检查：名称、说明、文件数、大小；不安装。粘贴框检查后清空。</p>
+<div class="tabs">
+<button class="on">从企业拿</button><button>文件夹</button><button>zip</button><button>粘贴 SKILL.md</button><button>网址</button>
+</div>
+<div class="box"><h4>当前来源：文件夹 <span class="tag gray">本机</span></h4>
+<div class="row"><span>已选</span><span class="input">/Users/edy/skills/excel-report</span></div>
+<p style="margin:8px 0 0"><span class="btn">重新选择…</span> <span class="btn pri">检查</span> <span class="btn">取消</span></p>
+<p class="note">一次只显示一种来源的控件。切到「粘贴 SKILL.md」才是文本框，切到「网址」才是输入框。</p>
 </div>
 </div></div>
-<p class="note">要点：企业技能页签保持原样；自定义页签一次把四种来源摆在一起，用户不用记规则。</p>
+<p class="note">要点：先选来源再看控件，不并列堆叠；「从企业拿」就是原来的企业技能列表。</p>
 </div>
 
 <div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>添加技能 · 当前来源：网址</b></div>
+<div class="body">
+<div class="tabs">
+<button>从企业拿</button><button>文件夹</button><button>zip</button><button>粘贴 SKILL.md</button><button class="on">网址</button>
+</div>
+<div class="box"><h4>网址导入 <span class="tag gray">https</span></h4>
+<div class="row"><span>地址</span><span><span class="input" style="min-width:340px">https://github.com/anthropics/skills/tree/main/…</span></span></div>
+<p style="margin:8px 0 0"><span class="btn pri">检查</span> <span class="btn">取消</span></p>
+<p class="note">只支持公开地址；支持 GitHub 仓库 / 子目录、单个 .md、zip。</p>
+</div>
+</div></div>
+<p class="note">要点：只有选「网址」时才出现输入框；不会同时摆着文件选择和网址。</p>
+</div>
+
+<div class="pane" id="u3">
 <div class="win"><div class="bar"><i></i><i></i><i></i><b>导入预览</b></div>
 <div class="body"><div class="cols">
 <div>
@@ -255,7 +269,7 @@ svg text{font-family:inherit}
 <p class="lead">已核对：<code>clients/desktop/src/pages/Capabilities</code>（<code>index.tsx</code>、<code>AddSkillDialog.tsx</code>、<code>capabilityLabels.ts</code>、<code>McpAuthDialogs.tsx</code>）。</p>
 <table>
 <tr><th style="width:18%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
-<tr><td><span class="tag ag">clients/desktop</span></td><td>「添加技能」改为两页签；新增自定义导入组件（四个入口 + 预览 + 替换确认）</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>「添加技能」改为来源分段选择（从企业拿 / 文件夹 / zip / 粘贴 / 网址），一次只显示一项；新增统一预览与替换确认</td><td>P2</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag ag">clients/desktop</span></td><td>能力页：来源标签（企业/自定义）、来源网址可复制、篡改提示、「重新导入」入口；空态文案</td><td>P2</td><td class="sz S">S</td></tr>
 <tr><td><span class="tag ag">clients/desktop</span></td><td>API 层：<code>importCustomSkill</code>；<code>LocalCapability</code> 增加 <code>source/integrity</code></td><td>P2</td><td class="sz S">S</td></tr>
 <tr><td><span class="tag ag">clients/desktop</span></td><td>契约快照 <code>docs/api.json</code> 新增路由与 schema（<code>CustomSkillImportRequest/Response</code>、<code>LocalCapability</code> 扩展）</td><td>P2</td><td class="sz S">S</td></tr>
