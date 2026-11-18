@@ -1421,7 +1421,7 @@ export class SessionHost {
   }
 
   /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
-  private skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
+  skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
     const client = this.options.managerClient;
     const cache = this.options.personalSkillCache;
     if (!client?.listInstallableSkills || !client.getInstallableSkillPackage || !cache || !caller.tenantId) return undefined;

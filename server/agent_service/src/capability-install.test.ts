@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createFixture } from "./test-fixture.js";
 import { approvalRiskForTool } from "./approval-service.js";
-import { capabilityInstallTool, checkCapabilityInstall, personalConnectorTools } from "./connectors.js";
+import { capabilityInstallTool, checkCapabilityInstall, installSkillDirectly, personalConnectorTools, SkillInstallError } from "./connectors.js";
 import { SkillVerificationError } from "./skills.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
@@ -222,3 +222,44 @@ test("a re-install whose package fails signature verification is refused and the
   } finally { await fixture.close(); }
 });
 
+
+test("the desktop «添加技能» installs only enterprise-catalog skills, like an approved chat install", async () => {
+  const fixture = await createFixture();
+  try {
+    let catalog = [{ skill_id: "sheet", display_name: "读表", version: "1", content_hash: "h1", source_skill_id: "plat-sheet" }];
+    const installed: string[] = [];
+    let failWith: Error | undefined;
+    const skills = {
+      list: async () => catalog,
+      install: async (skillId: string) => { if (failWith) throw failWith; installed.push(`${skillId}@${catalog.find(item => item.skill_id === skillId)?.version}`); },
+    };
+    const code = async (run: Promise<unknown>) => { try { await run; return "ok"; } catch (error) { assert(error instanceof SkillInstallError); return error.code; } };
+
+    // 没有企业服务 / 不在企业目录：不装。
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, undefined, { skill_id: "sheet" })), "manager_unavailable");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "ghost" })), "skill_not_installable");
+    assert.deepEqual(installed, []);
+
+    // 平台 skill ID 也能对应到企业目录条目；记录由本人批准。
+    const row = await installSkillDirectly(fixture.store, owner, skills, { skill_id: "plat-sheet" });
+    assert.deepEqual([row.kind, row.ref, row.version, row.source, row.approved_by, row.source_ref], ["skill", "sheet", "1", "enterprise_catalog", "member-1", "plat-sheet"]);
+    assert.deepEqual(installed, ["sheet@1"]);
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet" })), "skill_installed");
+
+    // 新版本：不确认不换；确认后换。
+    catalog = [{ ...catalog[0]!, version: "2", content_hash: "h2" }];
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet" })), "skill_exists");
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "1");
+
+    // 签名校验不过 / 企业服务不可用：已装版本不动。
+    failWith = new SkillVerificationError("unknown skill signing key id");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })), "skill_signature_invalid");
+    failWith = new Error("manager down");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })), "skill_install_failed");
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "1");
+
+    failWith = undefined;
+    assert.equal((await installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })).version, "2");
+    assert.deepEqual(installed, ["sheet@1", "sheet@2"]);
+  } finally { await fixture.close(); }
+});

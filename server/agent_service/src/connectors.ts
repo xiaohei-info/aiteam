@@ -611,20 +611,8 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
         const found = plan.skill!;
         if (resolution?.action === "rename") return fail("技能不能改名安装；用户可以选择覆盖或取消。");
         if (plan.existing && resolution?.action !== "replace") return fail("已装有该技能的其他版本，用户没有选择覆盖，未安装。");
-        try {
-          await skills!.install(found.skill_id, signal);
-        } catch (error) {
-          if (!(error instanceof SkillVerificationError)) return fail("安装未完成：企业服务暂不可用，请稍后再试。");
-          // 签名校验不过（通常是企业更换或吊销了签名密钥）：不可以安装；已装的版本不动，照常可用。
-          const kept = plan.existing;
-          return fail(kept
-            ? `不可以安装：「${found.display_name || found.skill_id}」${found.version} 的技能包签名校验未通过（企业可能更换了签名密钥）。本机已装的 ${kept.version ?? ""} 版不受影响，仍可继续使用。`
-            : `不可以安装：「${found.display_name || found.skill_id}」的技能包签名校验未通过（企业可能更换了签名密钥）。请告诉用户联系企业管理员。`);
-        }
-        store.putLocalCapability(owner.tenantId, owner.memberId, {
-          kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: plan.sourceRef,
-          source: plan.source, reason: plan.reason, approved_by: approvedBy,
-        });
+        const outcome = await installPlannedSkill(store, owner, plan, skills!, approvedBy, signal);
+        if ("error" in outcome) return fail(outcome.text);
         return { content: [{ type: "text" as const, text: `已安装技能「${found.display_name || found.skill_id}」${found.version}，下一轮对话起可用。` }], details: undefined };
       }
       const ref = resolution?.action === "rename" ? resolution.ref : plan.ref;
@@ -649,6 +637,52 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
     },
   } as ToolDefinition;
+}
+
+/** Fetches, verifies and records a planned skill; shared by the approved chat install and the desktop «添加技能». */
+async function installPlannedSkill(store: AgentSqliteStore, owner: TaskOwner, plan: InstallPlan, skills: SkillInstaller, approvedBy: string, signal?: AbortSignal): Promise<{ capability: LocalCapability } | { error: "unavailable" | "signature"; text: string }> {
+  const found = plan.skill!;
+  try {
+    await skills.install(found.skill_id, signal);
+  } catch (error) {
+    if (!(error instanceof SkillVerificationError)) return { error: "unavailable", text: "安装未完成：企业服务暂不可用，请稍后再试。" };
+    // 签名校验不过（通常是企业更换或吊销了签名密钥）：不可以安装；已装的版本不动，照常可用。
+    const kept = plan.existing;
+    return {
+      error: "signature",
+      text: kept
+        ? `不可以安装：「${found.display_name || found.skill_id}」${found.version} 的技能包签名校验未通过（企业可能更换了签名密钥）。本机已装的 ${kept.version ?? ""} 版不受影响，仍可继续使用。`
+        : `不可以安装：「${found.display_name || found.skill_id}」的技能包签名校验未通过（企业可能更换了签名密钥）。请告诉用户联系企业管理员。`,
+    };
+  }
+  store.putLocalCapability(owner.tenantId, owner.memberId, {
+    kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: plan.sourceRef,
+    source: plan.source, reason: plan.reason, approved_by: approvedBy,
+  });
+  return { capability: store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.kind === "skill" && item.ref === found.skill_id)! };
+}
+
+export class SkillInstallError extends Error {
+  constructor(readonly code: "skill_not_installable" | "skill_installed" | "skill_exists" | "skill_install_failed" | "skill_signature_invalid" | "manager_unavailable", message: string) { super(message); this.name = "SkillInstallError"; }
+}
+
+/**
+ * Desktop «能力» page «添加技能»: the member installs, by their own action, a skill the enterprise opened to them —
+ * the same catalog, package fetch and signature check as an approved chat install; no conversation, no model.
+ */
+export async function installSkillDirectly(store: AgentSqliteStore, owner: TaskOwner, skills: SkillInstaller | undefined, request: { skill_id: string; replace?: boolean }, signal?: AbortSignal): Promise<LocalCapability> {
+  if (!skills) throw new SkillInstallError("manager_unavailable", "暂时无法连接企业服务，请稍后再试。");
+  const plan = await planInstall(store, owner, { kind: "skill", ref: request.skill_id, reason: "" }, skills, undefined, signal);
+  if (typeof plan === "string") {
+    const installedAlready = store.listLocalCapabilities(owner.tenantId, owner.memberId).some(item => item.kind === "skill" && item.ref === request.skill_id);
+    if (installedAlready && plan.includes("已安装")) throw new SkillInstallError("skill_installed", plan);
+    if (plan.includes("暂时无法") || plan.includes("未连接")) throw new SkillInstallError("manager_unavailable", plan.replace("安装未完成：", ""));
+    throw new SkillInstallError("skill_not_installable", "企业技能目录里没有这个可自行安装的技能，请联系企业管理员。");
+  }
+  if (plan.existing && !request.replace) throw new SkillInstallError("skill_exists", `已安装「${plan.existing.display_name}」${plan.existing.version ?? ""} 版；确认后换成 ${plan.skill!.version} 版。`);
+  const outcome = await installPlannedSkill(store, owner, plan, skills, owner.memberId, signal);
+  if ("error" in outcome) throw new SkillInstallError(outcome.error === "signature" ? "skill_signature_invalid" : "skill_install_failed", outcome.text);
+  return outcome.capability;
 }
 
 /** «添加 MCP» window: tells whether the address needs sign-in or a token, before the member fills in the rest. */
