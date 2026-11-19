@@ -567,6 +567,17 @@ export interface CapabilityAutoInstall {
   created_at: string
 }
 
+/** 成员对某个能力的授权（仅本会话有效）；设置页展示与撤销用。 */
+export interface CapabilityGrant {
+  conversation_id: string
+  kind: LocalCapabilityKind
+  ref: string
+  /** platform_catalog / enterprise_catalog / clawhub_catalog / user_import / user_url。 */
+  source: string
+  /** 当前只有 session。 */
+  scope: string
+}
+
 export interface LocalCapability {
   kind: LocalCapabilityKind
   ref: string

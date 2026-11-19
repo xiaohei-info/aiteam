@@ -18,6 +18,7 @@ import { BookOpen, KeyRound, LogIn, ShieldAlert, Terminal, FilePenLine, FilePlus
 import { agentApi } from '../../api/agent'
 import type { McpLogin } from '../../api/agent/types'
 import { useApprovalStore, type DecideOptions, type PendingApproval } from '../../stores/approvals'
+import { pickCurrent, queuePosition } from '../../lib/approvalQueue'
 import { signInFailureText } from '../../lib/mcpSignIn'
 import { parseCapabilityInstall, renameProblem, sessionGrantAllowed, type CapabilityInstallPreview } from './capabilityInstall'
 
@@ -270,9 +271,10 @@ export default function ApprovalDialog() {
   const [remember, setRemember] = useState(false)
   // 「本会话不再询问该工具」：只对外部工具（MCP 连接器等）出现；会话删除后失效。
   const [sessionAllow, setSessionAllow] = useState(false)
-  // 正在等浏览器登录的条目不挡住新来的审批（新审批有倒计时）。
-  const item = pending.find((p) => p.phase !== 'signing_in') ?? pending[0]
+  // 正在等浏览器登录的条目不挡住新来的审批（新审批有倒计时）；同一会话的多条合并为一个队列卡片。
+  const item = pickCurrent(pending)
   const currentId = item?.approvalId
+  const position = item ? queuePosition(pending, item) : null
   // 需要访问令牌的 MCP：令牌与可选请求头名。换到下一条审批、或提交失败（含令牌被拒）时清空。
   const [token, setToken] = useState('')
   const [header, setHeader] = useState('')
@@ -286,7 +288,7 @@ export default function ApprovalDialog() {
   }, [pending.length, pruneExpired])
 
   if (!item) return null
-  // 多条审批排队：处理完最旧的一条自动露出下一条，不展示队列数量
+  // 多条审批排队：处理完最旧的一条自动露出下一条；同一会话显示「第 N / M 条」
   const watchers = pending.filter((p) => p.phase === 'signing_in' && !p.errorMessage).map((p) => {
     const preview = parseCapabilityInstall(p.toolName, p.summary)
     return <SignInWatcher key={p.approvalId} item={p} ref={preview?.ref ?? ''} url={preview?.url ?? ''} />
@@ -333,6 +335,7 @@ export default function ApprovalDialog() {
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               {meta.label} · <code style={{ fontSize: 11 }}>{item.toolName}</code>
+              {position && position.total > 1 ? <span aria-label="审批队列"> · 第 {position.index} / {position.total} 条</span> : null}
             </div>
           </div>
           {!expired && !signingIn && remain !== null && <CountdownRing remain={remain} total={Math.ceil((item.totalMs ?? remain * 1000) / 1000)} tone={meta.tone} />}
