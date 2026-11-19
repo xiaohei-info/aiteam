@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import APIRouter
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from manager_service.mcp_catalog import McpCatalogRow, McpMarketService
@@ -212,6 +213,90 @@ def test_oauth_client_is_only_for_enabled_preregistered_oauth_entries_and_active
     inactive = McpMarketService(operator=operator, repo=service._repo, members=FakeMembers("disabled"))
     with pytest.raises(PrincipalInactive):
         inactive.oauth_client(MEMBER, "s9")
+
+
+class _FakeGrantRepo:
+    """能力授权仓库替身：只记 has 的结果与调用参数。"""
+
+    def __init__(self, granted: bool = False):
+        self.granted = granted
+        self.calls: list[tuple[str, str]] = []
+
+    def has(self, ctx, *, member_id, capability_kind, capability_ref):
+        self.calls.append((member_id, capability_ref))
+        return self.granted
+
+
+class _FakeAudit:
+    def __init__(self):
+        self.events: list[tuple[str, str, str | None]] = []
+
+    def record(self, ctx, *, actor, action, resource_type=None, resource_id=None):
+        self.events.append((actor, action, resource_id))
+
+
+def test_oauth_client_requires_member_grant_and_records_audit():
+    """密钥下发前校验成员授权，并记一条审计（设计 2026-11-19 §3.4）。"""
+    from cryptography.fernet import Fernet
+
+    from shared.crypto import CryptoService
+    from shared.errors import NotFound
+
+    crypto = CryptoService(Fernet(Fernet.generate_key()))
+    operator = FakeOperatorCatalogClient()
+    operator.seed_platform_mcp([_oauth_server(oauth_client_id="app-1", oauth_client_secret="sec-1")])
+    repo = FakeRepo()
+    service = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto)
+    service.enable(ADMIN, "s9")
+
+    # 未授权 → 不下发密钥。
+    grants = _FakeGrantRepo(granted=False)
+    guarded = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, grants=grants)
+    with pytest.raises(NotFound):
+        guarded.oauth_client(MEMBER, "s9")
+    assert grants.calls == [("m-1", "s9")]
+
+    # 已授权 → 下发并审计。
+    audit = _FakeAudit()
+    allowed = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto,
+                               grants=_FakeGrantRepo(granted=True), audit=audit)
+    assert allowed.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
+    assert audit.events == [("m-1", "mcp.oauth_client.issued", "s9")]
+
+
+def _api_routes(routes):
+    """展开 FastAPI ≥0.130 惰性子路由（`_IncludedRouter` 占位），按真实注册顺序。"""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif (included := getattr(route, "original_router", None)) is not None:
+            yield from _api_routes(included.routes)
+
+
+def _resolved_path(app, path: str, method: str = "GET") -> str | None:
+    """按 Starlette 注册顺序解析 `path`，返回命中路由的 path；未命中返回 None。"""
+    scope = {"type": "http", "method": method, "path": path, "root_path": "", "headers": []}
+    for route in _api_routes(app.routes):
+        match, _ = route.matches(scope)
+        if match.name == "FULL":
+            return route.path
+    return None
+
+
+@pytest.mark.parametrize("path", [
+    "/api/manager/grants/mcp-servers",
+    "/api/manager/grants/skills",
+])
+def test_fixed_grants_prefixes_win_over_grant_id(path):
+    """固定前缀必须先于 `/grants/{grant_id}` 注册，否则会被当成 grant_id 查 uuid 列。
+
+    用真实 manager app 验证，而不是只挂 MCP 路由的 `create_app`——后者抓不到注册顺序。
+    """
+    from manager_service.app import app
+
+    resolved = _resolved_path(app, path)
+    assert resolved == path, f"{path} 被解析成 {resolved!r}（注册顺序不对）"
+    assert resolved != "/api/manager/grants/{grant_id}"
 
 
 def test_oauth_client_route_returns_the_application_to_members():
