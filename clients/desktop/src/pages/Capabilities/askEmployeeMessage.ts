@@ -8,6 +8,6 @@ export function composeCapabilityRequestMessage(input: { requirement: string; li
   const json = input.json.trim()
   if (json) lines.push('', `配置 JSON：\n${json}`)
   lines.push('', '不用自我介绍，直接判断。先回一行「标题：<6-12 字>」作为这次对话的标题，再说明你的判断。')
-  lines.push('要求：先判断该装技能还是 MCP；来源可以是 ClawHub、GitHub、公开网址或粘贴的内容，不做限制；装之前先发 capability_install 让我批准。')
+  lines.push('要求：按我的需求去检索匹配，把候选列给我，等我选定用哪个再发起安装——不要你自己替我选。来源可以是 ClawHub、GitHub、公开网址或粘贴的内容，不做限制；装之前先发 capability_install 让我批准。')
   return lines.join('\n')
 }

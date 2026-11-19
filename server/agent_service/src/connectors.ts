@@ -690,6 +690,7 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       + "kind=mcp: ref may be the id of an MCP the enterprise enabled from the platform catalog (no url needed; the catalog address is used); "
       + "otherwise give an https (or localhost) url the user gave you or the solution recommended; never invent URLs. "
       + "A package that holds several skills needs `root` to name which one; ask the user which when you cannot tell. "
+      + "Install only what the member chose: after a search, show the candidates and wait for the member's pick before calling this. "
       + "If the server needs sign-in or a token, the user does that themselves outside the conversation: never ask for, accept or pass tokens. "
       + "The user must approve (and decides about replacing an installed one); do not retry after a denial.",
     parameters: Type.Object({
@@ -773,7 +774,7 @@ export function capabilitySearchTool(store: AgentSqliteStore, owner: TaskOwner, 
     description: "Find a capability the member needs, in two steps. "
       + "Step 1: look in the enterprise catalog (installable skills and enabled MCP servers) and report what matches. "
       + "Step 2: only if the enterprise has nothing suitable, search outside — ClawHub (clawhub.ai) and GitHub — and report those candidates. "
-      + "Return a short ranked list with each candidate's address. Never install anything here; the install goes through capability_install and needs the member's approval.",
+      + "Return the list and STOP: the member chooses which one to use. Never pick one yourself and never install from this tool — the install goes through capability_install, for the candidate the member selected.",
     parameters: Type.Object({
       query: Type.String({ minLength: 1, maxLength: 120, description: "what the member needs, in a few words (Chinese or English)" }),
     }, { additionalProperties: false }),
