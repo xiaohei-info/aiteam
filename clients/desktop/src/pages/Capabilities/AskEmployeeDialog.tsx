@@ -32,7 +32,8 @@ export function AskEmployeeDialog({ employees, onSent, onClose }: { employees: W
     if (!employee) return
     setBusy(true); setError('')
     const text = composeCapabilityRequestMessage({ requirement, link, json })
-    const title = `让${employee.displayName}帮我装能力`
+    // 装什么要员工判断后才知道，标题只能用成员填的需求。
+    const title = `安装：${requirement.trim().slice(0, 40)}`
     try {
       // 每次新开：不复用该员工的旧会话，需求在干净上下文里被判断。
       const conversation = await agentApi.createConversation({ kind: 'chat', entry_employee_id: employee.employeeId, title, permission_mode: permission })
