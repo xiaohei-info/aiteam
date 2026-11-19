@@ -676,6 +676,16 @@ export class SkillInstallError extends Error {
 
 const SOURCE_LABELS: Record<CustomSkillPackage["origin"]["kind"], string> = { folder: "本机文件夹", zip: "本机 zip", file: "本机 .md 文件", text: "粘贴 SKILL.md", url: "" };
 
+/** 这个根下的技能能不能装；与 preview 用同一套校验，避免预览说不行、安装却去试。 */
+function isInstallableRoot(files: { path: string; content: Buffer }[], root: string): boolean {
+  try {
+    normalizeSkillAtRoot(files, root, { kind: "folder", label: "" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Desktop «能力» page: the member imports their own skill (folder / zip / single .md / pasted SKILL.md / https URL).
  * Unsigned, so it is stored in a separate local store with a per-file hash instead of the signed SkillCache.
@@ -742,7 +752,9 @@ export async function importCustomSkill(
     }
     return { scan: items };
   }
-  const chosen = request.roots?.length ? request.roots : roots;
+  // 不指定 roots 时装所有校验通过的（校验不过的装了也只会失败，不如不进安装清单）。
+  const chosen = request.roots?.length ? request.roots : roots.filter((root) => isInstallableRoot(safe, root));
+  if (chosen.length === 0) throw new CustomSkillError("invalid_skill_package", "这个包里没有可安装的技能。");
   // 批量：一次装多个。逐个装，某个失败不影响其余；失败的在结果里给出原因。
   if (chosen.length > 1) {
     const results: CustomSkillInstallResultItem[] = [];

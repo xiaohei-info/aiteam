@@ -117,6 +117,36 @@ test("单个 .md 文件：装成一个技能，名字取自 frontmatter 而非�
   }
 });
 
+test("批量安装默认只装校验通过的，坏条目不进安装清单", async () => {
+  const fixture = await createFixture();
+  const root = writeFolder({
+    "01-good/SKILL.md": SKILL_A,
+    // Pi 对 name 不规范只给 warning，但仍会加载；这里用 frontmatter 里写死的非法 name 触发拒绝。
+    "02-bad/SKILL.md": "---\nname: Bad_Name\ndescription: 名字不合规\n---\n",
+  });
+  const store = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const scope = { tenantId: "tenant-1", memberId: "member-1" };
+  const host = fixture.createHost(undefined, undefined, undefined, undefined, { customSkillStore: store });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const scanned = await post(base, { source: "folder", path: root, preview: true });
+    assert.equal((scanned.data.data.scan as unknown[]).length, 2);
+    const installed = await post(base, { source: "folder", path: root });
+    assert.equal(installed.status, 200);
+    // 坏条目不进安装清单：只剩一个可装，于是走单技能路径。
+    assert.equal(installed.data.data.capability.ref, "weekly-report");
+    assert.deepEqual(store.list(scope).map((item) => item.record.name), ["weekly-report"]);
+  } finally {
+    await http.close();
+    rmSync(root, { recursive: true, force: true });
+    await fixture.close();
+  }
+});
+
 test("zip 里多个技能：preview 出清单，批量安装所选", async () => {
   const fixture = await createFixture();
   const zip = makeZip({
