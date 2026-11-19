@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { PermissionMode } from '../../api/agent/types'
 import { composeCapabilityRequestMessage } from './askEmployeeMessage.ts'
 import { LoaderCircle, Send, UserRound } from 'lucide-react'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
@@ -13,11 +14,13 @@ import { employeeUnavailableMessage } from '../../lib/employeeAvailability'
  * 能力仍归成员个人（所有会话可用），员工只是代办——它判断完仍要成员批准才落库。
  * 每次新开会话：不复用历史上下文，避免把别的任务混进来。
  */
-export function AskEmployeeDialog({ employees, onSent, onClose }: { employees: WorkbenchEmployee[]; onSent: (conversationId: string, text: string, employeeId: string) => void; onClose: () => void }) {
+export function AskEmployeeDialog({ employees, onSent, onClose }: { employees: WorkbenchEmployee[]; onSent: (conversationId: string, text: string, employeeId: string, title: string) => void; onClose: () => void }) {
   const [employeeId, setEmployeeId] = useState(employees[0]?.employeeId ?? '')
   const [requirement, setRequirement] = useState('')
   const [link, setLink] = useState('')
   const [json, setJson] = useState('')
+  // 权限默认给最高：装能力要下载、落盘、连服务，只读会处处卡住。
+  const [permission, setPermission] = useState<PermissionMode>('full-access')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -28,12 +31,13 @@ export function AskEmployeeDialog({ employees, onSent, onClose }: { employees: W
     const employee = employees.find((item) => item.employeeId === employeeId)
     if (!employee) return
     setBusy(true); setError('')
+    const text = composeCapabilityRequestMessage({ requirement, link, json })
+    const title = `让${employee.displayName}帮我装能力`
     try {
       // 每次新开：不复用该员工的旧会话，需求在干净上下文里被判断。
-      const conversation = await agentApi.createConversation({ kind: 'chat', entry_employee_id: employee.employeeId })
-      await agentApi.sendInitialCapabilityRequest(conversation.id, composeCapabilityRequestMessage({ requirement, link, json }))
-      const text = composeCapabilityRequestMessage({ requirement, link, json })
-      onSent(conversation.id, text, employee.employeeId)
+      const conversation = await agentApi.createConversation({ kind: 'chat', entry_employee_id: employee.employeeId, title, permission_mode: permission })
+      await agentApi.sendInitialCapabilityRequest(conversation.id, text)
+      onSent(conversation.id, text, employee.employeeId, conversation.title || title)
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : '发送失败，请重试')
       setBusy(false)
@@ -54,6 +58,14 @@ export function AskEmployeeDialog({ employees, onSent, onClose }: { employees: W
       </label>
       <label>链接（可选）
         <input value={link} disabled={busy} spellCheck={false} inputMode="url" placeholder="ClawHub / GitHub / MCP 地址" onChange={(event) => setLink(event.target.value)} />
+      </label>
+      <label>对话权限
+        <select value={permission} disabled={busy} onChange={(event) => setPermission(event.target.value as PermissionMode)}>
+          <option value="read-only">只读（只能读文件）</option>
+          <option value="workspace-write">工作区可写（可读写，不联网）</option>
+          <option value="full-access">完全访问（不受限，可联网）</option>
+        </select>
+        <span className="mcp-note">装能力要下载内容、写本机目录、连外部服务，建议「完全访问」。</span>
       </label>
       <label>配置 JSON（可选）
         <textarea rows={4} value={json} disabled={busy} spellCheck={false}

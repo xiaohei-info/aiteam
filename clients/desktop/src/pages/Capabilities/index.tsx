@@ -81,13 +81,13 @@ export default function Capabilities() {
   }
   const closeAndReload = () => { setDialog(null); void load() }
   /** 新开会话并把需求发出去；然后跳到那个会话，用户在那里看到员工判断与审批。 */
-  const sendToEmployee = async (conversationId: string, text: string, employeeId: string) => {
+  const sendToEmployee = async (conversationId: string, text: string, employeeId: string, title: string) => {
     const employee = employees.find((item) => item.employeeId === employeeId)
     setDialog(null)
     setActiveConvId(conversationId)
     addConversation({
       id: conversationId,
-      title: text.slice(0, 28),
+      title,
       agentEmoji: '🤖',
       agentName: employee?.displayName ?? '员工',
       lastMessage: '',
