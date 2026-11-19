@@ -60,12 +60,17 @@ pub fn reveal_in_file_manager(app: tauri::AppHandle, path: String) -> Result<(),
         .join("agent-data");
     let root = data_root.as_path();
     let target = PathBuf::from(&path);
-    if !is_within(&root, &target) {
+    if !is_within(root, &target) {
         return Err("只能显示本应用的技能目录".to_string());
     }
     let resolved = target
         .canonicalize()
         .map_err(|_| "目录不存在".to_string())?;
+    // 字符串层面的包含挡不住 agent-data 内的符号链接：先 canonicalize 再判一次，避免绕出目录。
+    let resolved_root = root.canonicalize().map_err(|_| "应用数据目录不可用".to_string())?;
+    if !is_within(&resolved_root, &resolved) {
+        return Err("只能显示本应用的技能目录".to_string());
+    }
     if !resolved.is_dir() {
         return Err("这不是一个目录".to_string());
     }
