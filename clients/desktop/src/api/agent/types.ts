@@ -576,7 +576,7 @@ export interface LocalCapability {
   /** MCP 工具；技能为空。 */
   tools: string[]
   /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业自建技能；platform_catalog：平台目录（MCP 或技能）；user_import：成员自己导入的技能。 */
-  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog' | 'user_import'
+  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog' | 'user_import' | 'clawhub_catalog'
   /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
   version?: string
   /** 企业目录技能对应的平台 skill ID（与方案推荐能力对应）；旧版 Agent 不返回。 */

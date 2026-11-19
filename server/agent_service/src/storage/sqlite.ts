@@ -305,7 +305,7 @@ export interface LocalCapability {
    * platform_catalog: MCP / skill from our platform catalog (enabled or installed by the enterprise);
    * user_import: skill the member imported themselves (folder / zip / pasted / https URL, never uploaded).
    */
-  source: "user_url" | "enterprise_catalog" | "platform_catalog" | "user_import";
+  source: "user_url" | "enterprise_catalog" | "platform_catalog" | "user_import" | "clawhub_catalog";
   /** Installed skill version; empty for an MCP. */
   version: string;
   /** Platform skill id an enterprise-catalog skill was installed from (matches solution recommendations); empty otherwise. */
@@ -689,7 +689,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -2235,7 +2235,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -2263,7 +2263,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -2277,10 +2277,10 @@ export class AgentSqliteStore {
       COMMIT;`);
   }
 
-  /** Before user-imported skills only three sources existed; SQLite cannot widen a CHECK, so the table is rebuilt once. */
+  /** 早期只有三个/四个 source 取值；SQLite 不能扩宽 CHECK，所以表重建一次。 */
   private migrateLocalCapabilityUserImport(): void {
     const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_capability'").get() as { sql?: string } | undefined;
-    if (!row?.sql || row.sql.includes("'user_import'")) return;
+    if (!row?.sql || row.sql.includes("'clawhub_catalog'")) return;
     this.db.exec(`BEGIN IMMEDIATE;
       ALTER TABLE local_capability RENAME TO local_capability_v3;
       CREATE TABLE local_capability (
@@ -2291,7 +2291,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',

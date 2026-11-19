@@ -25,7 +25,7 @@ export interface CustomSkillPackage {
   description: string;
   files: { path: string; content: Buffer }[];
   /** Where it came from, for the capability row and the UI. */
-  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url" | "clawhub"; label: string; url?: string };
 }
 
 export interface CustomSkillPreview {
@@ -40,12 +40,12 @@ export interface CustomSkillPreview {
 export interface CustomSkillRecord {
   name: string;
   description: string;
-  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url" | "clawhub"; label: string; url?: string };
   version: string;
 }
 
 export class CustomSkillError extends Error {
-  constructor(readonly code: "invalid_skill_package" | "skill_download_failed" | "skill_too_large", message: string) {
+  constructor(readonly code: "invalid_skill_package" | "skill_download_failed" | "skill_too_large" | "skill_ambiguous", message: string) {
     super(message);
     this.name = "CustomSkillError";
   }
@@ -54,7 +54,7 @@ export class CustomSkillError extends Error {
 interface Manifest {
   name: string;
   description: string;
-  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url" | "clawhub"; label: string; url?: string };
   files: { path: string; size: number; sha256: string }[];
   content_hash: string;
 }
@@ -330,6 +330,134 @@ export async function fetchSkillFromUrl(rawUrl: string, signal?: AbortSignal): P
   const buffer = await download(url.toString(), signal);
   if (/\.zip$/i.test(url.pathname)) return { files: unzipEntries(buffer), origin: { kind: "url", label: url.toString(), url: url.toString() } };
   return { files: [{ path: "SKILL.md", content: buffer }], origin: { kind: "url", label: url.toString(), url: url.toString() } };
+}
+
+/** ClawHub 页面地址：`https://clawhub.ai/{owner}/skills/{slug}`；owner 可省（此时需消歧）。 */
+export interface ClawHubParts { owner?: string; slug: string }
+
+export function clawHubParts(value: string): ClawHubParts | undefined {
+  let url: URL;
+  try { url = new URL(String(value ?? "").trim()); } catch { return undefined; }
+  // 只认 clawhub.ai（测试可用 AITEAM_CLAWHUB_BASE_URL 注入本地 mock）。
+  if (url.origin !== clawHubOrigin()) return undefined;
+  const parts = url.pathname.split("/").filter(Boolean);
+  const skills = parts.indexOf("skills");
+  if (skills < 0 || skills + 1 >= parts.length) return undefined;
+  const slug = parts[skills + 1]!;
+  if (!slug) return undefined;
+  const owner = skills > 0 ? parts[skills - 1] : undefined;
+  return { ...(owner ? { owner } : {}), slug };
+}
+
+/** ClawHub 上同名技能的候选（用户没给 owner 时用来挑）。 */
+export interface ClawHubCandidate { owner: string; slug: string; url: string; downloads: number | null }
+
+export interface ClawHubSecurity {
+  status: string;
+  hasWarnings: boolean;
+  scanners: { name: string; status: string; recommendation?: string; severity?: string; verdict?: string; confidence?: string; issueCount?: number }[];
+}
+
+/** ClawHub 的 origin。测试可用 AITEAM_CLAWHUB_BASE_URL 指向本地 mock；每次读，避免模块加载时固化。 */
+function clawHubOrigin(): string {
+  return process.env.AITEAM_CLAWHUB_BASE_URL?.replace(/\/$/, "") || "https://clawhub.ai";
+}
+const CLAWHUB_FILE_TIMEOUT_MS = 20_000;
+
+async function clawHubJson(raw: string, signal?: AbortSignal): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CLAWHUB_FILE_TIMEOUT_MS);
+  signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  try {
+    const response = await fetch(raw, { signal: controller.signal, headers: { accept: "application/json" } });
+    // 409 AMBIGUOUS_SKILL_SLUG 不是错误：正文里的 matches 正是候选清单，交给调用方解析。
+    if (!response.ok && response.status !== 409) throw new CustomSkillError("skill_download_failed", `ClawHub 返回 HTTP ${response.status}。`);
+    return await response.json() as unknown;
+  } catch (error) {
+    if (error instanceof CustomSkillError) throw error;
+    throw new CustomSkillError("skill_download_failed", "连不上 ClawHub，请稍后再试。");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", () => controller.abort());
+  }
+}
+
+/** 没给 owner 时列出同名候选，用下载量排序，界面让用户挑。 */
+export async function clawHubCandidates(slug: string, signal?: AbortSignal): Promise<ClawHubCandidate[]> {
+  const detail = (await clawHubJson(`${clawHubOrigin()}/api/v1/skills/${encodeURIComponent(slug)}`, signal)) as { matches?: { ownerHandle: string; slug: string; url: string }[] };
+  const matches = Array.isArray(detail.matches) ? detail.matches : [];
+  if (matches.length === 0) throw new CustomSkillError("invalid_skill_package", `ClawHub 上找不到技能：${slug}`);
+  const ranked = new Map<string, number | null>();
+  try {
+    const search = (await clawHubJson(`${clawHubOrigin()}/api/v1/search?q=${encodeURIComponent(slug)}&limit=20`, signal)) as { results?: { install?: { reference?: string }; downloads?: number | null }[] };
+    for (const item of search.results ?? []) {
+      const reference = item.install?.reference;
+      if (reference) ranked.set(reference, typeof item.downloads === "number" ? item.downloads : null);
+    }
+  } catch { /* 排序只是锦上添花，拿不到就按原始顺序。 */ }
+  return matches
+    .map((match) => ({
+      owner: match.ownerHandle,
+      slug: match.slug,
+      url: match.url,
+      downloads: ranked.get(`${match.ownerHandle}/${match.slug}`) ?? null,
+    }))
+    .sort((a, b) => (b.downloads ?? -1) - (a.downloads ?? -1));
+}
+
+/**
+ * 平台钩子目录（OpenClaw 的 `hooks/<平台>/`）只在该平台有意义，Pi 没有对应概念。
+ * 其它文件一律保留——技能自带的脚本（如 `scripts/extract-skill.sh`）可能是运行所需的。
+ */
+export function isPlatformHookPath(path: string): boolean {
+  const parts = path.split("/");
+  return parts.length >= 3 && parts[0] === "hooks" && parts[1] !== "" && parts[1] !== undefined;
+}
+
+export interface ClawHubSkill {
+  files: { path: string; content: Buffer }[];
+  origin: CustomSkillPackage["origin"];
+  /** 被跳过的平台专用文件（预览里说明，不静默丢弃）。 */
+  skipped: string[];
+}
+
+/** 从 ClawHub 下载整个技能 ZIP 并解包；`owner` 缺失时先消歧，唯一候选直接用。 */
+export async function fetchClawHubSkill(slug: string, owner: string | undefined, signal?: AbortSignal): Promise<ClawHubSkill> {
+  let handle = owner;
+  if (!handle) {
+    const candidates = await clawHubCandidates(slug, signal);
+    if (candidates.length === 1) handle = candidates[0]!.owner;
+    else throw new CustomSkillError("skill_ambiguous", "这个地址没有写作者，ClawHub 上有多个同名技能，请在界面上选一个。");
+  }
+  const label = `${clawHubOrigin()}/${handle}/skills/${slug}`;
+  const buffer = await download(`${clawHubOrigin()}/api/v1/download?slug=${encodeURIComponent(slug)}&ownerHandle=${encodeURIComponent(handle)}`, signal);
+  const entries = unzipEntries(buffer);
+  const skipped = entries.filter((file) => isPlatformHookPath(file.path)).map((file) => file.path).sort();
+  const files = entries.filter((file) => !isPlatformHookPath(file.path));
+  if (files.length === 0) throw new CustomSkillError("invalid_skill_package", "这个技能包里只有平台专用文件，没有可安装的内容。");
+  return { files, origin: { kind: "clawhub", label: "ClawHub", url: label }, skipped };
+}
+
+/** 安全扫描结论：两个扫描器并列返回，界面不合并成一个词。 */
+export async function clawHubSecurity(slug: string, owner: string, signal?: AbortSignal): Promise<ClawHubSecurity | null> {
+  const raw = (await clawHubJson(`${clawHubOrigin()}/api/v1/skills/${encodeURIComponent(slug)}/scan?ownerHandle=${encodeURIComponent(owner)}`, signal)) as {
+    security?: { status?: string; hasWarnings?: boolean; scanners?: Record<string, { status?: string; recommendation?: string; severity?: string; verdict?: string; confidence?: string; issueCount?: number }> };
+  };
+  const security = raw.security;
+  if (!security) return null;
+  return {
+    status: String(security.status ?? "unknown"),
+    hasWarnings: Boolean(security.hasWarnings),
+    scanners: Object.entries(security.scanners ?? {}).map(([name, value]) => ({
+      name,
+      status: String(value.status ?? "unknown"),
+      ...(value.recommendation ? { recommendation: value.recommendation } : {}),
+      ...(value.severity ? { severity: value.severity } : {}),
+      ...(value.verdict ? { verdict: value.verdict } : {}),
+      ...(value.confidence ? { confidence: value.confidence } : {}),
+      ...(typeof value.issueCount === "number" ? { issueCount: value.issueCount } : {}),
+    })),
+  };
 }
 
 interface GithubParts { owner: string; repo: string; ref?: string; subdir?: string; filePath?: string }

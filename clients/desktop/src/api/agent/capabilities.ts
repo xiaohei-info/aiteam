@@ -47,7 +47,7 @@ export async function installSkill(client: RequestClient, skillId: string, repla
 // -------------------- 自定义技能（设计 2026-11-18 自定义技能导入） --------------------
 // 只在本机、只对本人会话生效，不上传、不经企业签名；preview=true 只校验返回预览。
 
-export type CustomSkillSource = 'folder' | 'zip' | 'file' | 'text' | 'url'
+export type CustomSkillSource = 'folder' | 'zip' | 'file' | 'text' | 'url' | 'clawhub'
 
 export interface CustomSkillPreview {
   name: string
@@ -90,16 +90,46 @@ export interface CustomSkillInstallResultItem {
   reason?: string
 }
 
+/** ClawHub 同名技能的候选；界面列表让用户选。 */
+export interface ClawHubCandidate {
+  owner: string
+  slug: string
+  url: string
+  downloads: number | null
+}
+
+/** ClawHub 安全扫描结论；两个扫描器可能互相冲突，界面并列显示。 */
+export interface ClawHubSecurity {
+  status: string
+  has_warnings: boolean
+  scanners: { name: string; status: string; recommendation?: string; severity?: string; verdict?: string; confidence?: string; issue_count?: number }[]
+}
+
+export interface ClawHubSkillInfo {
+  /** 同名多作者时给界面挑；已确定作者时为 null。 */
+  candidates: ClawHubCandidate[] | null
+  security: ClawHubSecurity | null
+  /** 被跳过的平台专用文件（如 OpenClaw 钩子）。 */
+  skipped: string[]
+}
+
 export interface CustomSkillImportResult {
   preview: CustomSkillPreview | null
   scan: CustomSkillScanItem[] | null
   capability: LocalCapability | null
   results: CustomSkillInstallResultItem[] | null
+  clawhub: ClawHubSkillInfo | null
 }
 
 /** 导入自定义技能；preview 为 true 时只校验并返回预览，不安装。 */
 export async function importCustomSkill(client: RequestClient, body: CustomSkillImportRequest): Promise<CustomSkillImportResult | null> {
   return client.request<CustomSkillImportResult>({ method: 'POST', path: '/api/agent/capabilities/skills/custom', body })
+}
+
+/** 读取本机技能目录（仅本人导入的技能），供「在文件管理器中显示」用。 */
+export async function getLocalSkillPath(client: RequestClient, ref: string): Promise<string | null> {
+  const result = await client.request<{ path: string }>({ method: 'GET', path: `/api/agent/capabilities/skills/${encodeURIComponent(ref)}/local-path` })
+  return result?.path ?? null
 }
 
 /** 添加个人 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */

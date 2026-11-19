@@ -9054,9 +9054,16 @@
                   "url"
                 ],
                 "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "clawhub"
+                ],
+                "description": "source 字段值。"
               }
             ],
-            "description": "folder 本机文件夹；zip 本机压缩包；file 单个 .md 文件；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。"
+            "description": "folder 本机文件夹；zip 本机压缩包；file 单个 .md 文件；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）；clawhub ClawHub 技能地址（https://clawhub.ai/{作者}/skills/{标识}，作者可省）。"
           },
           "path": {
             "type": "string",
@@ -9149,6 +9156,25 @@
           }
         },
         "description": "Custom Skill Import Envelope 数据结构。"
+      },
+      "LocalSkillPathEnvelope": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "本机绝对路径。"
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -25656,6 +25682,54 @@
         "tags": [
           "agent"
         ]
+      }
+    },
+    "/api/agent/capabilities/skills/{skill_ref}/local-path": {
+      "get": {
+        "operationId": "getLocalSkillPath",
+        "summary": "获取本机技能目录",
+        "description": "返回当前成员自己导入（本机存储）的技能的绝对目录，供桌面端在文件管理器中显示。企业/平台签名技能与他人的技能一律 404；不返回文件内容。",
+        "parameters": [
+          {
+            "name": "skill_ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "技能标识。",
+            "example": "weekly-report"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "本机技能目录。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocalSkillPathEnvelope"
+                },
+                "examples": {
+                  "ok": {
+                    "summary": "返回目录",
+                    "value": {
+                      "data": {
+                        "path": "/Users/edy/Library/Application Support/com.aiteam.desktop/agent-data/custom-skills/weekly-report"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证"
+          },
+          "404": {
+            "description": "不存在"
+          }
+        }
       }
     },
     "/api/agent/capabilities/skills/custom": {

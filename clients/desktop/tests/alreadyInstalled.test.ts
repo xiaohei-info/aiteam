@@ -40,6 +40,22 @@ test('批量结果：已装的不计入失败', () => {
   assert.deepEqual(failed.map((item) => item.root), ['03-broken'])
 })
 
+test('安装结果清单的呈现口径：成功列出来，重复只给「重复」', () => {
+  const { installed, already, failed } = partitionInstallResults([
+    { root: '01-weekly-report', name: 'weekly-report', ok: true },
+    { root: '02-ppt-outline', name: 'ppt-outline', ok: true },
+    { root: '05-report-builder', name: '', ok: false, reason: '「weekly-report」已经装好了（3b36116b 版），现在就能用；需要换成这次选的内容才点替换安装。' },
+    { root: '03-broken', name: '', ok: false, reason: 'name 只能用小写字母、数字和连字符。' },
+  ])
+  // 成功的都要列出名字
+  assert.deepEqual(installed.map((item) => item.name), ['weekly-report', 'ppt-outline'])
+  // 重复的只标一条，不把长句当失败原因
+  assert.deepEqual(already.map((item) => item.root), ['05-report-builder'])
+  assert.match(already[0]!.reason!, /已经装好了/)
+  // 真失败的仍带原因
+  assert.deepEqual(failed.map((item) => item.root), ['03-broken'])
+})
+
 test('批量结果：没有已装项时 failed 仍是全部失败项', () => {
   const { installed, already, failed } = partitionInstallResults([
     { root: 'a', name: '', ok: false, reason: '加载失败' },

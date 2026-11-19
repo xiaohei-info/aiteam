@@ -7,8 +7,15 @@ export const AUTO_INSTALL_APPROVER = 'policy:auto-install'
 export function capabilitySourceLabel(item: Pick<LocalCapability, 'kind' | 'source'>): string {
   if (item.source === 'platform_catalog') return item.kind === 'skill' ? '平台技能市场' : '平台 MCP 目录'
   if (item.source === 'enterprise_catalog') return '企业自建技能'
+  // ClawHub 这类有明确平台的来源显示平台名；本地导入（文件夹 / zip / .md / 粘贴）显示「自定义」。
+  if (item.source === 'clawhub_catalog') return 'ClawHub'
   if (item.source === 'user_import') return '自定义'
   return '手动地址'
+}
+
+/** 本机导入的技能（含 ClawHub 下载后落在本机的）可以在文件管理器里显示目录。 */
+export function hasLocalDirectory(item: Pick<LocalCapability, 'kind' | 'source'>): boolean {
+  return item.kind === 'skill' && (item.source === 'user_import' || item.source === 'clawhub_catalog')
 }
 
 export function isAutoInstalled(item: Pick<LocalCapability, 'approved_by'>): boolean {

@@ -3,7 +3,7 @@
  * 先「检查」拿预览，再「安装」；粘贴框检查后清空。来源切换不清掉未安装的草稿。
  */
 import { useState } from 'react'
-import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe, FileText, BadgeCheck } from 'lucide-react'
+import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe, FileText, BadgeCheck, ExternalLink, ShieldAlert, Store } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { CustomSkillPreview, CustomSkillScanItem, CustomSkillSource } from '../../api/agent/capabilities'
@@ -11,6 +11,8 @@ import { formatFileSize } from '../../lib/fileCache'
 import { toLocalPath } from '../../lib/localSkillPath'
 import { canInstall, defaultPicked, installButtonLabel, normalizePicked, togglePicked } from '../../lib/skillScanSelection'
 import { alreadyInstalledText, partitionInstallResults } from '../../lib/alreadyInstalled'
+import { openExternalUrl } from '../../lib/externalOpen'
+import type { ClawHubCandidate, ClawHubSecurity } from '../../api/agent/capabilities'
 import type { CustomSkillInstallResultItem } from '../../api/agent/capabilities'
 
 /** 一次安装的逐条结果：成功 / 重复（已装） / 真失败。 */
@@ -38,6 +40,7 @@ const SOURCES: { id: CustomSkillSource; label: string; icon: typeof FolderOpen; 
   { id: 'file', label: '单个 .md', icon: FileText, hint: '选一个 SKILL.md 文件；技能名取自文件里的 name，与文件名无关。' },
   { id: 'text', label: '粘贴 SKILL.md', icon: ClipboardPaste, hint: '直接粘贴 SKILL.md 全文，只能做单文件技能。' },
   { id: 'url', label: '网址', icon: Globe, hint: '公开 https 地址：GitHub 仓库 / 子目录、单个 .md、zip。' },
+  { id: 'clawhub', label: 'ClawHub', icon: Store, hint: '贴 ClawHub 技能页地址，例如 https://clawhub.ai/作者/skills/标识。' },
 ]
 
 function errorText(error: unknown): string {
@@ -57,6 +60,8 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   const [installed, setInstalled] = useState('')
   /** 安装完成后的结果文案：成功 / 重复 / 失败分行，位置就在原提示处。 */
   const [outcome, setOutcome] = useState('')
+  /** ClawHub 预览附带的信息：同名候选 / 安全结论 / 跳过的平台文件。 */
+  const [clawHub, setClawHub] = useState<{ candidates: ClawHubCandidate[] | null; security: ClawHubSecurity | null; skipped: string[] } | null>(null)
   const [preview, setPreview] = useState<CustomSkillPreview | null>(null)
   const [scan, setScan] = useState<CustomSkillScanItem[] | null>(null)
   const [picked, setPicked] = useState<string[]>([])
@@ -76,13 +81,13 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   }
 
   const check = async () => {
-    setBusy(true); setError(''); setInstalled(''); setOutcome('')
+    setBusy(true); setError(''); setInstalled(''); setOutcome(''); setClawHub(null)
     try {
       const result = await agentApi.importCustomSkill({
         source,
         ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
-        ...(source === 'url' ? { url } : {}),
+        ...(source === 'url' || source === 'clawhub' ? { url } : {}),
         preview: true,
       })
       if (result?.scan) {
@@ -104,13 +109,13 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   }
 
   const install = async () => {
-    setBusy(true); setError(''); setInstalled(''); setOutcome('')
+    setBusy(true); setError(''); setInstalled(''); setOutcome(''); setClawHub(null)
     try {
       const result = await agentApi.importCustomSkill({
         source,
         ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
-        ...(source === 'url' ? { url } : {}),
+        ...(source === 'url' || source === 'clawhub' ? { url } : {}),
         ...(scan ? { roots: normalizePicked(scan, picked) } : {}),
         preview: false,
       })
@@ -189,6 +194,37 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     <p className="mcp-note">{current.hint}</p>
 
     {sourceField}
+
+    {clawHub?.candidates && <div className="skill-scan clawhub-candidates" aria-label="同名技能候选">
+      <p className="mcp-note">这个地址没有写作者，ClawHub 上有多个同名技能，请选一个：</p>
+      <ul>
+        {clawHub.candidates.map((item) => <li key={`${item.owner}/${item.slug}`}>
+          <span className="skill-scan-copy">
+            <strong>{item.slug}<span className="clawhub-owner"> · {item.owner}</span></strong>
+            <span>{item.downloads === null ? '下载量未知' : `${item.downloads.toLocaleString()} 次下载`}</span>
+          </span>
+          <button type="button" className="clawhub-open" onClick={() => void openExternalUrl(item.url)}>
+            <ExternalLink size={12} aria-hidden="true" />打开页面
+          </button>
+        </li>)}
+      </ul>
+    </div>}
+
+    {clawHub?.security && <div className={`clawhub-security ${clawHub.security.has_warnings ? 'warn' : ''}`} aria-label="ClawHub 安全提示">
+      <p className="clawhub-security-title"><ShieldAlert size={13} aria-hidden="true" />ClawHub 安全提示（第三方未签名内容，装之前请确认你信任它）</p>
+      <ul>
+        {clawHub.security.scanners.map((scanner) => <li key={scanner.name}>
+          <span className="clawhub-scanner-name">{scanner.name}</span>
+          <span className={`clawhub-scanner-status ${scanner.status}`}>
+            {scanner.verdict ? `${scanner.verdict}${scanner.confidence ? ` · ${scanner.confidence}` : ''}` : scanner.status}
+          </span>
+          {scanner.recommendation && <span className="clawhub-scanner-reco">{scanner.recommendation === 'DO_NOT_INSTALL' ? '不建议安装' : scanner.recommendation}</span>}
+          {typeof scanner.issue_count === 'number' && <span className="clawhub-scanner-issues">{scanner.issue_count} 项</span>}
+        </li>)}
+      </ul>
+    </div>}
+
+    {clawHub?.skipped && clawHub.skipped.length > 0 && <p className="mcp-note">已跳过 {clawHub.skipped.length} 个平台专用文件（OpenClaw 钩子）：{clawHub.skipped.join('、')}</p>}
 
     {error && <p role="alert" className="mcp-error">{error}</p>}
     {installed && <p className="mcp-note installed-note" role="status"><BadgeCheck size={14} aria-hidden="true" />{installed}</p>}

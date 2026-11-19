@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { zipSync } from "fflate";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import { test } from "node:test";
 import { createFixture } from "./test-fixture.js";
 import { AgentHttpServer } from "./http/server.js";
 import { CustomSkillStore } from "./custom-skills.js";
+import { AgentSqliteStore } from "./storage/sqlite.js";
 
 /**
  * 自定义技能导入的三种多技能 / 单文件场景，走完整 HTTP 入口：
@@ -34,6 +36,44 @@ function writeFolder(files: Record<string, string>): string {
     writeFileSync(target, content);
   }
   return root;
+}
+
+/**
+ * 本地假 ClawHub：只实现接入用到的三个端点，避免测试依赖外网。
+ * `/download` 返回一个含 SKILL.md 与 OpenClaw 钩子的 zip。
+ */
+async function fakeClawHub(handle: string, opts?: { ambiguous?: boolean }): Promise<{ url: string; close: () => Promise<void> }> {
+  const zip = zipSync({
+    "SKILL.md": Buffer.from(SKILL_A),
+    "assets/LEARNINGS.md": Buffer.from("记录"),
+    "hooks/openclaw/handler.js": Buffer.from("openclaw hook"),
+    "scripts/extract-skill.sh": Buffer.from("技能自带脚本"),
+  });
+  let base = "http://127.0.0.1";
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", base);
+    const json = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
+    if (url.pathname === "/api/v1/skills/self-improving-agent") {
+      if (opts?.ambiguous) return json(409, { code: "AMBIGUOUS_SKILL_SLUG", slug: "self-improving-agent", matches: [
+        { ownerHandle: "alice", slug: "self-improving-agent", url: `${base}/alice/skills/self-improving-agent` },
+        { ownerHandle: "bob", slug: "self-improving-agent", url: "http://x/bob/skills/self-improving-agent" },
+      ] });
+      return json(200, { skill: { slug: "self-improving-agent" }, latestVersion: { version: "1.0.0" } });
+    }
+    if (url.pathname === "/api/v1/search") return json(200, { results: [{ install: { reference: "alice/self-improving-agent" }, downloads: 1200 }] });
+    if (url.pathname === "/api/v1/skills/self-improving-agent/scan") return json(200, { security: { status: "clean", hasWarnings: true, scanners: { skillspector: { status: "suspicious", recommendation: "DO_NOT_INSTALL", severity: "CRITICAL", issueCount: 3 }, llm: { status: "clean", verdict: "benign", confidence: "high" } } } });
+    if (url.pathname === "/api/v1/download") {
+      if (url.searchParams.get("ownerHandle") !== handle) { res.writeHead(404); return res.end("wrong owner"); }
+      res.writeHead(200, { "content-type": "application/zip" });
+      return res.end(Buffer.from(zip));
+    }
+    res.writeHead(404); res.end("Not found");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("mock server did not start");
+  base = `http://127.0.0.1:${address.port}`;
+  return { url: base, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
 }
 
 async function post(base: string, body: unknown): Promise<{ status: number; data: any }> {
@@ -113,6 +153,99 @@ test("单个 .md 文件：装成一个技能，名字取自 frontmatter 而非�
   } finally {
     await http.close();
     rmSync(root, { recursive: true, force: true });
+    await fixture.close();
+  }
+});
+
+test("ClawHub：带作者直接下载，跳过 OpenClaw 钩子，来源记 ClawHub", async () => {
+  const mock = await fakeClawHub("alice");
+  const fixture = await createFixture();
+  const store = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const scope = { tenantId: "tenant-1", memberId: "member-1" };
+  const host = fixture.createHost(undefined, undefined, undefined, undefined, { customSkillStore: store });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    // 把 ClawHub 主机指向本地 mock（测试注入）
+    process.env.AITEAM_CLAWHUB_BASE_URL = mock.url;
+    const preview = await post(base, { source: "clawhub", url: `${mock.url}/alice/skills/self-improving-agent`, preview: true });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.data.data.preview.name, "weekly-report");
+    assert.equal(preview.data.data.clawhub.skipped.length, 1, "只跳过 hooks/openclaw/handler.js");
+    assert.deepEqual(preview.data.data.clawhub.skipped, ["hooks/openclaw/handler.js"]);
+    assert.equal(preview.data.data.clawhub.security.scanners.length, 2, "两个扫描器并列");
+    assert.equal(preview.data.data.clawhub.candidates, null, "带作者时不用选");
+
+    const installed = await post(base, { source: "clawhub", url: `${mock.url}/alice/skills/self-improving-agent` });
+    assert.equal(installed.status, 200);
+    const capability = installed.data.data.capability;
+    assert.equal(capability.source, "clawhub_catalog");
+    assert.equal(capability.url, `${mock.url}/alice/skills/self-improving-agent`);
+    // 技能自带脚本保留
+    assert.ok(store.list(scope)[0]!.record.origin.kind === "clawhub");
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+  } finally {
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+    await http.close();
+    await mock.close();
+    await fixture.close();
+  }
+});
+
+test("旧库（CHECK 里没有 clawhub_catalog）也能装 ClawHub 技能", async () => {
+  // 模拟早期迁移后的表：source CHECK 只到 user_import。SQLite 不能扩宽 CHECK，必须靠重建迁移。
+  const fixture = await createFixture();
+  const raw = (fixture.store as unknown as { db: { exec: (sql: string) => void } }).db;
+  raw.exec(`ALTER TABLE local_capability RENAME TO local_capability_old;
+    CREATE TABLE local_capability (
+      tenant_id TEXT NOT NULL, member_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('mcp','skill')),
+      ref TEXT NOT NULL, display_name TEXT NOT NULL, url TEXT NOT NULL, tools_json TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('user_url','enterprise_catalog','platform_catalog','user_import')),
+      version TEXT NOT NULL DEFAULT '', source_ref TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '',
+      approved_by TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, member_id, kind, ref));
+    INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at) SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability_old; DROP TABLE local_capability_old;`);
+  // 重新打开存储触发迁移
+  const reopened = new (fixture.store.constructor as new (path: string) => AgentSqliteStore)(join(fixture.dataRoot, "agent.sqlite"));
+  const store = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const scope = { tenantId: "tenant-1", memberId: "member-1" };
+  reopened.putLocalCapability(scope.tenantId, scope.memberId, {
+    kind: "skill", ref: "self-improving-agent", display_name: "self-improving agent",
+    url: "https://clawhub.ai/pskoett/skills/self-improving-agent", tools: [],
+    source: "clawhub_catalog", version: "4.0.5", source_ref: "", reason: "", approved_by: "member-1",
+  });
+  assert.equal(reopened.listLocalCapabilities(scope.tenantId, scope.memberId)[0]?.source, "clawhub_catalog");
+  reopened.close();
+  await fixture.close();
+});
+
+test("ClawHub：不带作者且同名多个时返回候选，不猜", async () => {
+  const mock = await fakeClawHub("alice", { ambiguous: true });
+  const fixture = await createFixture();
+  const store = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const host = fixture.createHost(undefined, undefined, undefined, undefined, { customSkillStore: store });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    process.env.AITEAM_CLAWHUB_BASE_URL = mock.url;
+    const preview = await post(base, { source: "clawhub", url: `${mock.url}/skills/self-improving-agent`, preview: true });
+    assert.equal(preview.status, 200);
+    const candidates = preview.data.data.clawhub.candidates;
+    assert.equal(candidates.length, 2, "多个同名技能交给界面选");
+    assert.equal(candidates[0].owner, "alice", "按下载量排序");
+    assert.equal(candidates[0].downloads, 1200);
+    assert.ok(candidates[0].url.startsWith("http"), "候选带可点开的链接");
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+  } finally {
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+    await http.close();
+    await mock.close();
     await fixture.close();
   }
 });

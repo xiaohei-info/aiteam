@@ -1,5 +1,10 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import type { ClawHubCandidate, ClawHubSecurity } from "./custom-skills.js";
+
+/** 北向用的 ClawHub 候选/安全结构（避免直接把内部类型暴露到 HTTP 层）。 */
+export type CustomSkillClawHubCandidate = ClawHubCandidate;
+export type CustomSkillClawHubSecurity = ClawHubSecurity;
 export { CustomSkillError } from "./custom-skills.js";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -674,7 +679,7 @@ export class SkillInstallError extends Error {
   constructor(readonly code: "skill_not_installable" | "skill_installed" | "skill_exists" | "skill_install_failed" | "skill_signature_invalid" | "manager_unavailable", message: string) { super(message); this.name = "SkillInstallError"; }
 }
 
-const SOURCE_LABELS: Record<CustomSkillPackage["origin"]["kind"], string> = { folder: "本机文件夹", zip: "本机 zip", file: "本机 .md 文件", text: "粘贴 SKILL.md", url: "" };
+const SOURCE_LABELS: Record<CustomSkillPackage["origin"]["kind"], string> = { folder: "自定义", zip: "自定义", file: "自定义", text: "自定义", url: "网址", clawhub: "ClawHub" };
 
 /** 这个根下的技能能不能装；与 preview 用同一套校验，避免预览说不行、安装却去试。 */
 function isInstallableRoot(files: { path: string; content: Buffer }[], root: string): boolean {
@@ -703,14 +708,45 @@ export interface CustomSkillScanItem {
   reason?: string;
 }
 
+/** 失败原因里带出的技能名（「X」已经装好了…）。 */
+function installedNameFromReason(reason: string): string {
+  const match = /^「([^」]+)」/.exec(reason);
+  return match?.[1] ?? "";
+}
+
+export interface CustomSkillClawHubPreview {
+  /** 同名多作者时给界面挑；只有一个或已确定作者时为 null。 */
+  candidates: CustomSkillClawHubCandidate[] | null;
+  /** ClawHub 的安全扫描结论；拿不到时为 null。 */
+  security: CustomSkillClawHubSecurity | null;
+  /** 被跳过的平台专用文件（OpenClaw 钩子），仅说明用。 */
+  skipped: string[];
+}
+
 export async function importCustomSkill(
   store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
-  request: { source: "folder" | "zip" | "file" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
+  request: { source: "folder" | "zip" | "file" | "text" | "url" | "clawhub"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
   signal?: AbortSignal,
-): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[]; results?: CustomSkillInstallResultItem[] }> {
-  const origin = { kind: request.source, label: request.url?.trim() || SOURCE_LABELS[request.source] || "", ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
+): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[]; results?: CustomSkillInstallResultItem[]; clawhub?: CustomSkillClawHubPreview }> {
+  const origin = { kind: request.source, label: request.source === "clawhub" ? "ClawHub" : (SOURCE_LABELS[request.source] || ""), ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
   let files: { path: string; content: Buffer }[];
-  if (request.source === "folder") {
+  let clawHub: CustomSkillClawHubPreview | undefined;
+  if (request.source === "clawhub") {
+    if (!request.url) throw new CustomSkillError("invalid_skill_package", "没有填 ClawHub 地址。");
+    const parts = clawHubParts(request.url);
+    if (!parts) throw new CustomSkillError("invalid_skill_package", "这不是 ClawHub 技能地址，形如 https://clawhub.ai/{作者}/skills/{标识}。");
+    let handle = parts.owner;
+    if (!handle) {
+      const found = await clawHubCandidates(parts.slug, signal);
+      if (found.length === 1) handle = found[0]!.owner;
+      // 多个同名技能：不猜，把候选交给界面让用户选（选中后用带作者的地址再来一次）。
+      else return { clawhub: { candidates: found, security: null, skipped: [] } };
+    }
+    const fetched = await fetchClawHubSkill(parts.slug, handle, signal);
+    files = fetched.files;
+    origin.kind = "clawhub"; origin.label = "ClawHub"; origin.url = fetched.origin.url;
+    clawHub = { candidates: null, security: await clawHubSecurity(parts.slug, handle, signal), skipped: fetched.skipped };
+  } else if (request.source === "folder") {
     if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择文件夹。");
     files = await readSkillFolder(request.path);
   } else if (request.source === "file") {
@@ -748,9 +784,9 @@ export async function importCustomSkill(
     // 只有一个技能时保持原来的单技能预览，界面不必改。
     if (items.length === 1) {
       const pkg = normalizeSkillAtRoot(safe, roots[0]!, origin);
-      return { preview: { name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), files: pkg.files.slice(0, 20).map((file) => file.path), origin_label: pkg.origin.label } };
+      return { preview: { name: pkg.name, description: pkg.description, file_count: pkg.files.length, total_bytes: pkg.files.reduce((sum, file) => sum + file.content.length, 0), files: pkg.files.slice(0, 20).map((file) => file.path), origin_label: pkg.origin.label }, ...(clawHub ? { clawhub: clawHub } : {}) };
     }
-    return { scan: items };
+    return { scan: items, ...(clawHub ? { clawhub: clawHub } : {}) };
   }
   // 不指定 roots 时装所有校验通过的（校验不过的装了也只会失败，不如不进安装清单）。
   const chosen = request.roots?.length ? request.roots : roots.filter((root) => isInstallableRoot(safe, root));
@@ -759,14 +795,16 @@ export async function importCustomSkill(
   if (chosen.length > 1) {
     const results: CustomSkillInstallResultItem[] = [];
     for (const root of chosen) {
-      const label = root || "（包根）";
+      // 先规范化一次：成功则用它安装，失败则如实报原因，并且仍然带上拿到的名字
+      //（重复时界面要显示技能名，不能只给包内路径）。
       try {
         const pkg = normalizeSkillAtRoot(safe, root, origin);
         const capability = installOneCustomSkill(store, custom, owner, pkg, request.replace === true);
         results.push({ root, name: capability.ref, ok: true });
       } catch (error) {
         const reason = error instanceof Error && error.message ? error.message : "安装失败。";
-        results.push({ root, name: "", ok: false, reason });
+        const name = installedNameFromReason(reason);
+        results.push({ root, name, ok: false, reason });
       }
     }
     return { results };
@@ -790,7 +828,7 @@ function installOneCustomSkill(
   pkg: CustomSkillPackage, replace: boolean,
 ): LocalCapability {
   const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter((item) => item.kind === "skill" && item.ref === pkg.name);
-  if (existing.some((item) => item.source !== "user_import")) {
+  if (existing.some((item) => item.source !== "user_import" && item.source !== "clawhub_catalog")) {
     throw new CustomSkillError("invalid_skill_package", `已安装企业技能「${existing[0]!.display_name}」，同名自定义技能无法安装；请改 SKILL.md 里的 name。`);
   }
   if (existing.length > 0 && !replace) {
@@ -799,7 +837,9 @@ function installOneCustomSkill(
   const record = custom.install({ tenantId: owner.tenantId, memberId: owner.memberId }, pkg);
   store.putLocalCapability(owner.tenantId, owner.memberId, {
     kind: "skill", ref: record.name, display_name: record.name, url: record.origin.url ?? record.origin.label, tools: [],
-    source: "user_import", version: record.version, source_ref: "", reason: "", approved_by: owner.memberId,
+    // ClawHub 来源单独标记，能力页显示平台名；本地导入仍归 user_import（显示「自定义」）。
+    source: record.origin.kind === "clawhub" ? "clawhub_catalog" : "user_import",
+    version: record.version, source_ref: "", reason: "", approved_by: owner.memberId,
   });
   return store.listLocalCapabilities(owner.tenantId, owner.memberId).find((item) => item.kind === "skill" && item.ref === record.name)!;
 }

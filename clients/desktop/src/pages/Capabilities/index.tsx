@@ -12,7 +12,9 @@ import '../Settings/Settings.css'
 import './McpAuth.css'
 import { agentApi } from '../../api/agent'
 import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
-import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
+import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, hasLocalDirectory, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
+import { revealInFileManager } from '../../lib/externalOpen'
+import { isMacUserAgent } from '../../lib/projectConversation'
 import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
 import { AddSkillDialog } from './AddSkillDialog'
 
@@ -61,6 +63,14 @@ export default function Capabilities() {
   }, '重新登录失败')
   const signOut = (item: LocalCapability) => run(keyOf(item), () => agentApi.deleteMcpCredential(item.ref), item.auth === 'bearer' ? '清除令牌失败' : '退出登录失败')
   const revokeGrant = (kind: LocalCapabilityKind) => run(`auto:${kind}`, () => agentApi.deleteCapabilityAutoInstall(kind), '撤销授权失败')
+  /** 在文件管理器中显示本机技能目录（仅本人导入的技能有）。 */
+  const reveal = async (item: LocalCapability) => {
+    try {
+      const path = await agentApi.getLocalSkillPath(item.ref)
+      if (!path) { setError('这个技能没有可显示的本机目录。'); return }
+      await revealInFileManager(path)
+    } catch (error) { setError(error instanceof Error && error.message ? error.message : '打不开文件管理器') }
+  }
   const closeAndReload = () => { setDialog(null); void load() }
 
   const mcps = (items ?? []).filter((item) => item.kind === 'mcp')
@@ -96,6 +106,7 @@ export default function Capabilities() {
           <button type="button" className="file-access-revoke" disabled={busy} onClick={() => setDialog({ type: 'token', item })}>更新令牌</button>
           {item.auth_status === 'token_set' && <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void signOut(item)}>清除令牌</button>}
         </>}
+        {hasLocalDirectory(item) && <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void reveal(item)}>{isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件资源管理器中显示'}</button>}
         <button type="button" className="file-access-revoke" disabled={busy} aria-label={`撤销 ${item.display_name}`} onClick={() => void revoke(item)}>撤销</button>
       </span>
     </li>

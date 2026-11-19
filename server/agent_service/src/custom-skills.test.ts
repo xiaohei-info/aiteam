@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CustomSkillError, CustomSkillStore, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillError, CustomSkillStore, clawHubParts, isPlatformHookPath, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
 
 const SKILL_MD = "---\nname: excel-report\ndescription: 按模板生成周报\n---\n\n# 周报\n";
 
@@ -104,6 +104,29 @@ test("file:// 地址还原成绝对路径（Tauri 文件选择会返回 URL）",
   assert.equal(toLocalPath("/Users/edy/skill"), "/Users/edy/skill");
   assert.equal(toLocalPath("file:///C:/Users/edy/skill"), "C:/Users/edy/skill");
   assert.equal(toLocalPath("file:///Users/edy/%E6%96%87%E6%A1%A3"), "/Users/edy/文档");
+});
+
+test("clawHubParts 只认 clawhub.ai 的 /{作者}/skills/{标识} 地址", () => {
+  assert.deepEqual(clawHubParts("https://clawhub.ai/pskoett/skills/self-improving-agent"), { owner: "pskoett", slug: "self-improving-agent" });
+  // 没写作者也能解析，之后由候选消歧兜底。
+  assert.deepEqual(clawHubParts("https://clawhub.ai/skills/self-improving-agent"), { slug: "self-improving-agent" });
+  assert.equal(clawHubParts("https://example.com/pskoett/skills/x"), undefined);
+  assert.equal(clawHubParts("http://clawhub.ai/pskoett/skills/x"), undefined);
+  assert.equal(clawHubParts("https://clawhub.ai/pskoett"), undefined);
+  assert.equal(clawHubParts("不是网址"), undefined);
+});
+
+test("平台钩子目录跳过，技能自带脚本保留", () => {
+  // OpenClaw 的 hook 机制 Pi 没有，跳过。
+  assert.equal(isPlatformHookPath("hooks/openclaw/handler.js"), true);
+  assert.equal(isPlatformHookPath("hooks/openclaw/handler.test.js"), true);
+  assert.equal(isPlatformHookPath("hooks/claude/index.js"), true);
+  // 技能自带的脚本/模板是运行所需，保留。
+  assert.equal(isPlatformHookPath("scripts/extract-skill.sh"), false);
+  assert.equal(isPlatformHookPath("assets/LEARNINGS.md"), false);
+  assert.equal(isPlatformHookPath("SKILL.md"), false);
+  assert.equal(isPlatformHookPath("references/examples.md"), false);
+  assert.equal(isPlatformHookPath("hooks"), false);
 });
 
 test("readSkillFile 把单个 .md 当作单文件技能（技能名取自内容，不是文件名）", async () => {

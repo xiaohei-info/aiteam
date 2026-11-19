@@ -78,6 +78,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   // 回调由浏览器直接访问，桌面端不调用；列出是为与契约快照一致。
   ['POST', '/api/agent/capabilities/skills'],
   ['POST', '/api/agent/capabilities/skills/custom'],
+  ['GET', '/api/agent/capabilities/skills/{skill_ref}/local-path'],
   ['POST', '/api/agent/capabilities/mcp'],
   ['POST', '/api/agent/capabilities/mcp/probe'],
   ['POST', '/api/agent/capabilities/mcp/{capability_ref}/auth'],

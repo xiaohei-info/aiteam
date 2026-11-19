@@ -75,5 +75,22 @@
 .skill-scan-copy { display: grid; gap: 2px; min-width: 0; }
 .skill-scan-copy strong { color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }
 .skill-scan-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+/* ClawHub：同名候选列表与安全提示。 */
+.clawhub-candidates li { display: flex; align-items: center; gap: 8px; }
+.clawhub-candidates li .skill-scan-copy { flex: 1; }
+.clawhub-owner { color: var(--text-muted); font-weight: 400; }
+.clawhub-open { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface-1); color: var(--text-secondary); font-size: 11.5px; cursor: pointer; }
+.clawhub-security { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.clawhub-security.warn { border-color: var(--danger); }
+.clawhub-security-title { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 11.5px; color: var(--text-secondary); }
+.clawhub-security.warn .clawhub-security-title { color: var(--danger); }
+.clawhub-security ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.clawhub-security li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11.5px; }
+.clawhub-scanner-name { color: var(--text-muted); }
+.clawhub-scanner-status { color: var(--text-secondary); }
+.clawhub-scanner-status.suspicious, .clawhub-scanner-status.malicious { color: var(--danger); }
+.clawhub-scanner-status.clean { color: var(--success); }
+.clawhub-scanner-reco { color: var(--danger); }
+.clawhub-scanner-issues { color: var(--text-muted); }
 /* 安装结果：就一段文案，成功 / 重复 / 失败各占一行，不做列表。 */
 .outcome-note { margin-top: 6px; white-space: pre-line; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
