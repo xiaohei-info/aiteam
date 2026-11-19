@@ -195,6 +195,38 @@ test("ClawHub：带作者直接下载，跳过 OpenClaw 钩子，来源记 ClawH
   }
 });
 
+test("ClawHub 技能也带文件完整性标签，改了文件会标 modified", async () => {
+  const mock = await fakeClawHub("alice");
+  const fixture = await createFixture();
+  const store = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const host = fixture.createHost(undefined, undefined, undefined, undefined, { customSkillStore: store });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}`;
+  const headers = { Authorization: "Bearer test" };
+  try {
+    process.env.AITEAM_CLAWHUB_BASE_URL = mock.url;
+    const installed = await post(base, { source: "clawhub", url: `${mock.url}/alice/skills/self-improving-agent` });
+    assert.equal(installed.data.data.capability.integrity, "ok", "刚装好应为未改动");
+    assert.equal(installed.data.data.capability.origin_label, "ClawHub");
+    // 模拟「用户手动改了本机文件」：完整性应变成 modified 并停用。
+    const dir = store.pathFor({ tenantId: "tenant-1", memberId: "member-1" }, "weekly-report");
+    assert.ok(dir, "应能拿到本机目录");
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: tampered\ndescription: 被改过\n---\n");
+    const listed = await (await fetch(`${base}/api/agent/capabilities`, { headers })).json() as { data: Array<{ ref: string; integrity?: string; source?: string }> };
+    const row = listed.data.find((item) => item.ref === "weekly-report");
+    assert.equal(row?.integrity, "modified", "文件被改后应标 modified");
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+  } finally {
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+    await http.close();
+    await mock.close();
+    await fixture.close();
+  }
+});
+
 test("旧库（CHECK 里没有 clawhub_catalog）也能装 ClawHub 技能", async () => {
   // 模拟早期迁移后的表：source CHECK 只到 user_import。SQLite 不能扩宽 CHECK，必须靠重建迁移。
   const fixture = await createFixture();

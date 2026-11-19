@@ -41,9 +41,12 @@ export function autoInstallKindLabel(kind: LocalCapabilityKind): string {
   return kind === 'skill' ? '从平台技能市场安装技能时直接安装' : '从平台 MCP 目录安装 MCP 时直接安装'
 }
 
-/** 自定义技能的文件完整性（自定义技能导入 2026-11-18 §3.1）；旧版 Agent 不返回时为 null。 */
+/**
+ * 本机导入技能的文件完整性（自定义技能导入 2026-11-18 §3.1；ClawHub 接入 2026-11-19 一并覆盖）。
+ * 旧版 Agent 不返回时为 null。
+ */
 export function customSkillIntegrityLabel(item: Pick<LocalCapability, 'source' | 'integrity'>): { text: string; attention: boolean } | null {
-  if (item.source !== 'user_import' || !item.integrity) return null
+  if ((item.source !== 'user_import' && item.source !== 'clawhub_catalog') || !item.integrity) return null
   return item.integrity === 'modified' ? { text: '文件被改动，已停用', attention: true } : { text: '文件未改动', attention: false }
 }
 

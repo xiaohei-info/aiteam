@@ -2484,8 +2484,9 @@ export class AgentHttpServer {
 
   /** Adds the local sign-in status; the credential itself never leaves this process. */
   private capabilityView(item: StoredCapability, caller: AuthenticatedCaller) {
-    // 自定义技能给出文件完整性：文件被改动过就标出来（不加载，见 resources.ts）。
-    if (item.kind === "skill" && item.source === "user_import") {
+    // 本机导入的技能（含 ClawHub 下载的）给出文件完整性：被改动过就标出来（不加载，见 resources.ts）。
+    // ClawHub 内容同样是未签名第三方内容，风险更高，不能漏掉。
+    if (item.kind === "skill" && (item.source === "user_import" || item.source === "clawhub_catalog")) {
       const store = (this.options.host as SessionHost).customSkillStore;
       const scope = { tenantId: caller.tenantId ?? "", memberId: caller.userId ?? caller.callerId };
       const entry = store?.list(scope).find((row) => row.record.name === item.ref);
