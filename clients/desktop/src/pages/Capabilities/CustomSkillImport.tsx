@@ -165,8 +165,18 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
             placeholder={source === 'clawhub' ? 'https://clawhub.ai/作者/skills/标识' : 'https://github.com/…'} inputMode="url" />
         </label>
 
+  const outcomeGroups = outcome ? outcome.split('\n') : []
+
   return <div className="mcp-form custom-skill-import">
-    {scan && <div className="skill-scan" aria-label="包内技能清单">
+    {outcome && <div className="skill-success" aria-label="安装结果">
+      <p className="skill-success-title"><BadgeCheck size={16} aria-hidden="true" />安装完成</p>
+      <ul>{outcomeGroups.map((line) => <li key={line}>{line}</li>)}</ul>
+      <footer>
+        <button type="button" className="skill-install" onClick={onClose}>完成</button>
+      </footer>
+    </div>}
+
+    {!outcome && scan && <div className="skill-scan" aria-label="包内技能清单">
       <p className="mcp-note">这个包里有 {scan.length} 个技能，勾选要安装的：</p>
       <ul>
         {scan.map((item) => <li key={item.root} className={item.ok ? '' : 'invalid'}>
@@ -183,7 +193,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       </ul>
     </div>}
 
-    <div className="skill-source-tabs" role="tablist" aria-label="技能来源">
+    {!outcome && <div className="skill-source-tabs" role="tablist" aria-label="技能来源">
       {SOURCES.map((item) => {
         const Icon = item.icon
         return <button key={item.id} type="button" role="tab" aria-selected={source === item.id}
@@ -191,12 +201,12 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
           <Icon size={13} aria-hidden="true" />{item.label}
         </button>
       })}
-    </div>
-    <p className="mcp-note">{current.hint}</p>
+    </div>}
+    {!outcome && <p className="mcp-note">{current.hint}</p>}
 
-    {sourceField}
+    {!outcome && sourceField}
 
-    {clawHub?.candidates && <div className="skill-scan clawhub-candidates" aria-label="同名技能候选">
+    {!outcome && clawHub?.candidates && <div className="skill-scan clawhub-candidates" aria-label="同名技能候选">
       <p className="mcp-note">这个地址没有写作者，ClawHub 上有多个同名技能，请选一个：</p>
       <ul>
         {clawHub.candidates.map((item) => <li key={`${item.owner}/${item.slug}`}>
@@ -211,7 +221,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       </ul>
     </div>}
 
-    {clawHub?.security && <div className={`clawhub-security ${clawHub.security.has_warnings ? 'warn' : ''}`} aria-label="ClawHub 安全提示">
+    {!outcome && clawHub?.security && <div className={`clawhub-security ${clawHub.security.has_warnings ? 'warn' : ''}`} aria-label="ClawHub 安全提示">
       <p className="clawhub-security-title"><ShieldAlert size={13} aria-hidden="true" />ClawHub 安全提示（第三方未签名内容，装之前请确认你信任它）</p>
       <ul>
         {clawHub.security.scanners.map((scanner) => <li key={scanner.name}>
@@ -225,13 +235,12 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       </ul>
     </div>}
 
-    {clawHub?.skipped && clawHub.skipped.length > 0 && <p className="mcp-note">已跳过 {clawHub.skipped.length} 个平台专用文件（OpenClaw 钩子）：{clawHub.skipped.join('、')}</p>}
+    {!outcome && clawHub?.skipped && clawHub.skipped.length > 0 && <p className="mcp-note">已跳过 {clawHub.skipped.length} 个平台专用文件（OpenClaw 钩子）：{clawHub.skipped.join('、')}</p>}
 
-    {error && <p role="alert" className="mcp-error">{error}</p>}
-    {installed && <p className="mcp-note installed-note" role="status"><BadgeCheck size={14} aria-hidden="true" />{installed}</p>}
-    {outcome && <p className="mcp-note outcome-note" role="status">{outcome}</p>}
+    {!outcome && error && <p role="alert" className="mcp-error">{error}</p>}
+    {!outcome && installed && <p className="mcp-note installed-note" role="status"><BadgeCheck size={14} aria-hidden="true" />{installed}</p>}
 
-    {preview && <div className="skill-preview" aria-label="技能预览">
+    {!outcome && preview && <div className="skill-preview" aria-label="技能预览">
       <div className="skill-preview-row"><span>名称</span><strong>{preview.name}</strong></div>
       <div className="skill-preview-row"><span>说明</span><span>{preview.description}</span></div>
       <div className="skill-preview-row"><span>文件</span><span>{preview.file_count} 个 · {formatFileSize(preview.total_bytes)}</span></div>
@@ -242,7 +251,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       </ul>
     </div>}
 
-    <footer>
+    {!outcome && <footer>
       <button type="button" onClick={onClose}>取消</button>
       {scan
         ? <button type="button" className="skill-install" disabled={!canInstall(picked.length, busy)} onClick={() => void install()}>{installButtonLabel(picked.length, busy === true)}</button>
@@ -251,7 +260,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
           : <button type="button" className="skill-install" disabled={busy || !ready} onClick={() => void check()}>
             {busy ? '正在检查…' : '检查'}
           </button>}
-    </footer>
+    </footer>}
     {busy && <LoaderCircle className="file-access-spinner skill-busy" size={13} aria-hidden="true" />}
   </div>
 }

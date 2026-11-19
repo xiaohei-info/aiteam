@@ -6,13 +6,13 @@
  * 原先在「设置」页里，现在单独成页；设置页只留一行链接。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BookOpen, LoaderCircle, Plug, Plus, ShieldCheck, Zap } from 'lucide-react'
+import { AlertCircle, BookOpen, ExternalLink, FolderOpen, LoaderCircle, LogIn, Plug, Plus, ShieldCheck, Trash2, Zap } from 'lucide-react'
 import '../../components/FileAccess/FileAccess.css'
 import '../Settings/Settings.css'
 import './McpAuth.css'
 import { agentApi } from '../../api/agent'
 import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
-import { autoInstallKindLabel, capabilitySourceLabel, customSkillIntegrityLabel, hasLocalDirectory, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
+import { autoInstallKindLabel, capabilitySourceLabel, capabilitySourceTone, customSkillIntegrityLabel, hasLocalDirectory, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
 import { revealInFileManager } from '../../lib/externalOpen'
 import { isMacUserAgent } from '../../lib/projectConversation'
 import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
@@ -87,10 +87,14 @@ export default function Capabilities() {
         : <Plug size={17} strokeWidth={1.7} aria-hidden="true" />}</span>
       <span style={{ flex: 1, minWidth: 0, display: 'grid', gap: 4 }}>
         <strong style={{ color: 'var(--text-primary)', fontSize: 13, overflowWrap: 'anywhere' }}>{item.display_name}</strong>
-        <span style={{ color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
-          {capabilitySourceLabel(item)}{item.version ? ` · 版本 ${item.version}` : ''}{isAutoInstalled(item) ? ' · 自动安装' : ''}
-          {status && <> · <span className={`mcp-auth-badge ${status.attention ? 'attention' : ''}`}>{status.text}</span></>}
-          {integrity && <> · <span className={`mcp-auth-badge ${integrity.attention ? 'attention' : ''}`}>{integrity.text}</span></>}
+        <span className="cap-meta">
+          <span className={`cap-source-badge tone-${capabilitySourceTone(item)}`} title={`来源：${capabilitySourceLabel(item)}`}>
+            <span className="cap-source-dot" aria-hidden="true" />{capabilitySourceLabel(item)}
+          </span>
+          {item.version && <span className="cap-meta-text">版本 {item.version}</span>}
+          {isAutoInstalled(item) && <span className="cap-meta-text">自动安装</span>}
+          {status && <span className={`cap-pill ${status.attention ? 'attention' : ''}`}>{status.text}</span>}
+          {integrity && <span className={`cap-pill ${integrity.attention ? 'attention' : ''}`}>{integrity.text}</span>}
         </span>
         {item.kind === 'mcp' && <span className="file-access-directory-path" title={item.url}>{item.url}</span>}
         <span style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.6, overflowWrap: 'anywhere' }}>
@@ -99,15 +103,16 @@ export default function Capabilities() {
       </span>
       <span className="mcp-row-actions">
         {item.kind === 'mcp' && item.auth === 'oauth' && <>
-          <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void relogin(item)}>重新登录</button>
-          {item.auth_status === 'signed_in' && <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void signOut(item)}>退出登录</button>}
+          <button type="button" className="cap-action" disabled={busy} onClick={() => void relogin(item)}><LogIn size={12} aria-hidden="true" />重新登录</button>
+          {item.auth_status === 'signed_in' && <button type="button" className="cap-action" disabled={busy} onClick={() => void signOut(item)}>退出登录</button>}
         </>}
         {item.kind === 'mcp' && item.auth === 'bearer' && <>
-          <button type="button" className="file-access-revoke" disabled={busy} onClick={() => setDialog({ type: 'token', item })}>更新令牌</button>
-          {item.auth_status === 'token_set' && <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void signOut(item)}>清除令牌</button>}
+          <button type="button" className="cap-action" disabled={busy} onClick={() => setDialog({ type: 'token', item })}>更新令牌</button>
+          {item.auth_status === 'token_set' && <button type="button" className="cap-action" disabled={busy} onClick={() => void signOut(item)}>清除令牌</button>}
         </>}
-        {hasLocalDirectory(item) && <button type="button" className="file-access-revoke" disabled={busy} onClick={() => void reveal(item)}>{isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件资源管理器中显示'}</button>}
-        <button type="button" className="file-access-revoke" disabled={busy} aria-label={`撤销 ${item.display_name}`} onClick={() => void revoke(item)}>撤销</button>
+        {item.kind === 'mcp' && <button type="button" className="cap-action" disabled={busy} onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')} title={item.url}><ExternalLink size={12} aria-hidden="true" />打开服务</button>}
+        {hasLocalDirectory(item) && <button type="button" className="cap-action" disabled={busy} onClick={() => void reveal(item)}><FolderOpen size={12} aria-hidden="true" />{isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件资源管理器中显示'}</button>}
+        <button type="button" className="cap-action danger" disabled={busy} onClick={() => void revoke(item)}><Trash2 size={12} aria-hidden="true" />撤销</button>
       </span>
     </li>
   }

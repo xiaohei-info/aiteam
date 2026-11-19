@@ -13,6 +13,21 @@ export function capabilitySourceLabel(item: Pick<LocalCapability, 'kind' | 'sour
   return '手动地址'
 }
 
+/**
+ * 来源徽标的视觉语气。同一类来源共用一种颜色，避免满屏都是灰底小字。
+ * - `brand`：平台/市场来源（有明确发布方）
+ * - `neutral`：企业或本地导入
+ * - `muted`：手动地址
+ */
+export type SourceTone = 'brand' | 'neutral' | 'muted'
+
+export function capabilitySourceTone(item: Pick<LocalCapability, 'kind' | 'source'>): SourceTone {
+  if (item.source === 'platform_catalog' || item.source === 'clawhub_catalog') return 'brand'
+  if (item.source === 'enterprise_catalog') return 'neutral'
+  if (item.source === 'user_import') return 'neutral'
+  return 'muted'
+}
+
 /** 本机导入的技能（含 ClawHub 下载后落在本机的）可以在文件管理器里显示目录。 */
 export function hasLocalDirectory(item: Pick<LocalCapability, 'kind' | 'source'>): boolean {
   return item.kind === 'skill' && (item.source === 'user_import' || item.source === 'clawhub_catalog')

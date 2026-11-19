@@ -131,6 +131,43 @@
 .file-access-instructions .file-access-link { margin-top: 12px; }
 .file-access-retry { margin-top: 12px; }
 
+/* 能力页：来源徽标 + 状态药丸 + 行内操作按钮。
+   徽标用语气色区分「平台/市场」「企业/本地」「手动地址」，不再是一串灰字。 */
+.cap-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.cap-meta-text { color: var(--text-muted); font-size: 11px; }
+.cap-source-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: var(--radius-full);
+  border: 1px solid var(--border); background: var(--surface-glass-subtle);
+  color: var(--text-secondary); font-size: 11px; font-weight: 500; line-height: 1.5;
+}
+.cap-source-badge .cap-source-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .7; }
+.cap-source-badge.tone-brand { border-color: var(--brand-border-soft, var(--border-active)); background: var(--brand-bg-soft); color: var(--brand); }
+.cap-source-badge.tone-neutral { border-color: var(--border-active); background: var(--surface-glass-subtle); color: var(--text-secondary); }
+.cap-source-badge.tone-muted { color: var(--text-muted); }
+.cap-pill {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-full);
+  border: 1px solid var(--border); background: var(--surface-glass-subtle);
+  color: var(--text-muted); font-size: 10.5px; line-height: 1.5;
+}
+.cap-pill.attention { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
+
+/* 行内操作：次要动作用描边小按钮，撤销用危险色；图标 + 文字对齐。 */
+.cap-action {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 30px; padding: 0 10px;
+  border: 1px solid var(--border-hover); border-radius: var(--radius-md);
+  background: var(--surface-glass-subtle); color: var(--text-secondary);
+  font-family: inherit; font-size: 11.5px; font-weight: 500; line-height: 1.5; cursor: pointer;
+  transition: background var(--duration-fast), color var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast);
+}
+.cap-action:hover:not(:disabled) { border-color: var(--border-active); color: var(--text-primary); background: var(--surface-glass); }
+.cap-action.danger { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
+.cap-action.danger:hover:not(:disabled) { border-color: var(--danger-border-strong); background: var(--danger-bg); color: var(--danger); }
+.cap-action:active:not(:disabled) { transform: scale(.98); }
+.cap-action:disabled { opacity: .4; cursor: not-allowed; }
+.cap-action:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+
 .file-access-grants { list-style: none; margin: 0; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
 .file-access-grants li { display: flex; gap: 12px; align-items: center; padding: 12px; }
 .file-access-grants li + li { border-top: 1px solid var(--border); }

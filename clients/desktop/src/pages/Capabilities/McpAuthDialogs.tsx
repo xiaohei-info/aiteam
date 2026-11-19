@@ -127,6 +127,8 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
   const [clash, setClash] = useState(false)
   /** 撞同名已装：展示为状态，不是错误。 */
   const [installed, setInstalled] = useState('')
+  /** 安装完成：只给成功界面，不再显示表单与添加按钮。 */
+  const [done, setDone] = useState('')
   const [busy, setBusy] = useState<'probe' | 'install' | null>(null)
   const [error, setError] = useState('')
   const [login, setLogin] = useState<McpLogin | null>(null)
@@ -175,12 +177,12 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
     const problem = addMcpProblem(current)
     if (problem) { setError(problem); return }
     setBusy('install')
-    setError('')
+    setError(''); setDone('')
     try {
       const result = await agentApi.installMcpServer(addMcpRequest(current))
       set({ token: '', clientSecret: '' })
       if (result.login) setLogin(result.login)
-      else { onInstalled(); onClose() }
+      else { setDone(`已添加「${current.displayName || current.ref}」`); onInstalled() }
     } catch (err) {
       set({ token: '' })
       // 撞同名已装：不是失败，是「已经装好了」的状态；同时给出覆盖入口。
@@ -197,6 +199,15 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
   }
   const problem = form.url.trim() ? addMcpProblem({ ...form, auth: form.auth === 'bearer' ? 'bearer' : null }) : '请填写 MCP 地址'
   const disabled = busy !== null
+  if (done) {
+    return <ChatDialog title="添加 MCP" description="只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
+      <div className="skill-success" aria-label="添加结果">
+        <p className="skill-success-title"><BadgeCheck size={16} aria-hidden="true" />添加完成</p>
+        <ul><li>{done}</li></ul>
+        <footer><button type="button" className="skill-install" onClick={onClose}>完成</button></footer>
+      </div>
+    </ChatDialog>
+  }
   return <ChatDialog title="添加 MCP" description="只装在本机、只对你自己的会话生效" icon={<Plug size={18} />} className="mcp-dialog" onClose={onClose}>
     <form className="mcp-form" onSubmit={(event) => { event.preventDefault(); if (!problem && !disabled) void install() }}>
       <label>粘贴配置（可选）

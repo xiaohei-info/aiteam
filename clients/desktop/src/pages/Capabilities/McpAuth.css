@@ -75,6 +75,16 @@
 .skill-scan-copy { display: grid; gap: 2px; min-width: 0; }
 .skill-scan-copy strong { color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }
 .skill-scan-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+/* 安装完成：只给结果与「完成」，不再显示表单和安装按钮。 */
+.skill-success { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--success-border-soft); border-radius: var(--radius-lg); background: var(--success-bg-soft); }
+.skill-success-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--success); font-size: 13px; font-weight: 600; }
+.skill-success ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.skill-success li { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.skill-success footer { display: flex; justify-content: flex-end; margin-top: 2px; }
+.skill-success .skill-install { min-height: 32px; padding: 0 18px; border: 1px solid var(--brand); border-radius: var(--radius-md); background: var(--brand); color: #1a1a1a; font-size: 12.5px; cursor: pointer; }
+.skill-success .skill-install:hover { filter: brightness(1.05); }
+.skill-success .skill-install:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+
 /* ClawHub：同名候选列表与安全提示。 */
 .clawhub-candidates li { display: flex; align-items: center; gap: 8px; }
 .clawhub-candidates li .skill-scan-copy { flex: 1; }
