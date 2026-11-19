@@ -1430,6 +1430,40 @@ export class SessionHost {
       .catch(() => { record.reconcile = undefined; });
   }
 
+  /**
+   * 把本机新写入的能力授权上报 Manager（仅本会话有效）。
+   * 失败不影响安装结果：Manager 侧只是少一条授权，下次同步或重开会话可补。
+   */
+  async syncCapabilityGrants(caller: AuthenticatedCaller): Promise<void> {
+    const client = this.options.managerClient;
+    if (!client?.putCapabilityGrants || !caller.tenantId) return;
+    const pending = this.options.store.unsyncedCapabilityGrants(caller.tenantId, caller.userId ?? caller.callerId);
+    if (pending.length === 0) return;
+    try {
+      await client.putCapabilityGrants(caller, pending.map((item) => ({
+        conversation_id: item.conversation_id, kind: item.kind, ref: item.ref, source: item.source, scope: item.scope,
+      })));
+      this.options.store.markCapabilityGrantsSynced(
+        caller.tenantId, caller.userId ?? caller.callerId,
+        pending.map((item) => ({ conversationId: item.conversation_id, kind: item.kind, ref: item.ref })),
+      );
+    } catch (error) {
+      appLogger.log("warn", "capability_grant.sync_failed", {
+        tenant_id: caller.tenantId, member_id: caller.userId ?? caller.callerId, error: String(error),
+      });
+    }
+  }
+
+  /** 会话结束：本机与 Manager 同步删除该会话的能力授权（不再满足密钥下发条件）。 */
+  async revokeCapabilityGrants(caller: AuthenticatedCaller, conversationId: string): Promise<void> {
+    this.options.store.deleteCapabilityGrants(caller.tenantId ?? "", caller.userId ?? caller.callerId, conversationId);
+    const client = this.options.managerClient;
+    if (!client?.deleteCapabilityGrants || !caller.tenantId) return;
+    try { await client.deleteCapabilityGrants(caller, conversationId); } catch (error) {
+      appLogger.log("warn", "capability_grant.revoke_failed", { tenant_id: caller.tenantId, conversation_id: conversationId, error: String(error) });
+    }
+  }
+
   /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
   skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
     const client = this.options.managerClient;
@@ -1895,8 +1929,8 @@ export class SessionHost {
             ...owner, employeeId, startedAt, endedAt: Date.now(), entries, settled: outcome === "succeeded",
             pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
           };
-          // 用了成员自己装在本机的能力（MCP / 导入的技能）的运行不计入用量上报：
-          // 它们不是企业配置的，token 与费用不该计到企业头上。
+          // 用了个人能力（本机 MCP / 导入技能）也照常上报整轮用量：个人能力的调用结果会进入后续上下文，
+          // 难以精确拆分到单次调用，统一计入口径一致（设计 2026-11-19 §3.3）。
           const personal = !this.options.useFauxModel && usedPersonalCapability(entries, (location) =>
             this.options.customSkillStore?.ownsLocation({ tenantId: owner.tenantId, memberId: owner.memberId }, location) ?? false);
           const committed = this.options.store.workRecords.finish(workId, owner, {
@@ -1904,13 +1938,14 @@ export class SessionHost {
             firstEntryId: entries[0]?.id ?? null, lastEntryId: entries.at(-1)?.id ?? null,
             firstEntryAt: workEntryTime(entries[0]), lastEntryAt: workEntryTime(entries.at(-1)),
             usage: this.options.useFauxModel ? null : measureWorkUsage(entries, capture.pricing),
-          }, personal ? undefined : this.options.useFauxModel ? undefined : aggregateUsage(capture));
+          }, this.options.useFauxModel ? undefined : aggregateUsage(capture));
           if (personal) {
-            appLogger.log("info", "usage.skipped_personal_capability", {
+            appLogger.log("info", "usage.used_personal_capability", {
               work_id: workId, conversation_id: record.conversationId, employee_id: employeeId,
               tenant_id: owner.tenantId, member_id: owner.memberId,
             });
-          } else if (committed && !this.options.useFauxModel) {
+          }
+          if (committed && !this.options.useFauxModel) {
             await this.options.usageRecorder?.(capture, authorization.caller);
           }
         }

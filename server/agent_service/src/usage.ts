@@ -80,7 +80,9 @@ export function isPersonalCapabilityTool(toolName: string): boolean {
 
 /**
  * 本次运行是否用了成员自己装的能力（本机 MCP 或本机导入的技能）。
- * 用户的选择：用了之后不计入用量上报，所以整次运行的 token/费用不进 outbox。
+ *
+ * 只用于审计与展示：个人能力的调用会影响后续上下文，token 难以精确拆分到单次调用，
+ * 所以口径统一为「用了也正常上报整轮用量」（设计 2026-11-19 §3.3），不再整轮免计。
  * - MCP：助手消息里的 `connector_my_*` 工具调用。
  * - 技能：Pi 把 `/skill:` 展开成 `<skill name=... location=...>` 放在用户消息里，
  *   `location` 指向技能目录；是否为本机导入由 `ownsSkillLocation` 判定。

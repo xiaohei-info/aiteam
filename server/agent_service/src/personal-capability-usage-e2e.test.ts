@@ -19,7 +19,7 @@ function pendingUsageRows(fixture: Awaited<ReturnType<typeof createFixture>>): n
   return rows[0]?.count ?? 0;
 }
 
-test("用了成员自己装的 MCP 的运行不进用量 outbox，普通运行照常计入", async () => {
+test("用了成员自己装的 MCP 的运行也计入用量 outbox（口径统一，不再整轮免计）", async () => {
   const fixture = await createFixture();
   const recorded: string[] = [];
   try {
@@ -32,22 +32,21 @@ test("用了成员自己装的 MCP 的运行不进用量 outbox，普通运行�
     const host = fixture.createHost(undefined, undefined, undefined, undefined, {
       usageRecorder: (_capture, c) => { recorded.push(c.callerId); },
     });
-    // 第一次运行：调用个人 MCP 工具 → 不计入用量
+    // 第一次运行：调用个人 MCP 工具 → 整轮照常计入用量
     fixture.faux.setResponses([
       fauxAssistantMessage(fauxToolCall("connector_my_notion", { tool: "search", arguments: {} }), { stopReason: "toolUse" }),
       fauxAssistantMessage("done"),
     ]);
     await host.prompt("conversation-1", "查一下", undefined, caller);
-    const afterPersonal = pendingUsageRows(fixture);
-    assert.equal(afterPersonal, 0, "用了个人 MCP 的运行不应产生待上报用量");
-    assert.deepEqual(recorded, [], "用了个人 MCP 的运行不应触发上报");
+    assert.equal(pendingUsageRows(fixture), 1, "用了个人 MCP 的运行也应产生待上报用量");
+    assert.deepEqual(recorded, ["member-1"], "用了个人 MCP 的运行也应触发上报");
     await host.dispose();
   } finally {
     await fixture.close();
   }
 });
 
-test("用了本机导入技能的运行不进用量 outbox", async () => {
+test("用了本机导入技能的运行也计入用量 outbox", async () => {
   const fixture = await createFixture();
   const root = mkdtempSync(join(tmpdir(), "aiteam-usage-skill-"));
   try {
@@ -63,7 +62,7 @@ test("用了本机导入技能的运行不进用量 outbox", async () => {
     assert.ok(location);
     fixture.faux.setResponses([fauxAssistantMessage("done")]);
     await host.prompt("conversation-1", `<skill name="weekly-report" location="${location}">\n正文\n</skill>`, undefined, caller);
-    assert.equal(pendingUsageRows(fixture), 0, "用了本机导入技能的运行不应产生待上报用量");
+    assert.equal(pendingUsageRows(fixture), 1, "用了本机导入技能的运行也应产生待上报用量");
     await host.dispose();
   } finally {
     rmSync(root, { recursive: true, force: true });
