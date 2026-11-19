@@ -19,7 +19,7 @@ import { agentApi } from '../../api/agent'
 import type { McpLogin } from '../../api/agent/types'
 import { useApprovalStore, type DecideOptions, type PendingApproval } from '../../stores/approvals'
 import { signInFailureText } from '../../lib/mcpSignIn'
-import { parseCapabilityInstall, renameProblem, type CapabilityInstallPreview } from './capabilityInstall'
+import { parseCapabilityInstall, renameProblem, sessionGrantAllowed, type CapabilityInstallPreview } from './capabilityInstall'
 
 const riskMeta: Record<string, { label: string; icon: typeof Terminal; tone: string }> = {
   bash: { label: '执行本机命令', icon: Terminal, tone: '#ff6666' },
@@ -371,9 +371,10 @@ export default function ApprovalDialog() {
           </label>
         )}
 
-        {/* 外部工具（MCP 连接器等）与技能安装：本会话内不再询问。会话级，删除会话即失效。
-            MCP 安装不给出该选项：审批弹窗还要收集 OAuth 登录 / 访问令牌。 */}
-        {(item.riskLevel === 'external' || install?.kind === 'skill') && !expired && (
+        {/* 外部工具（MCP 连接器等）与目录来源的技能安装：本会话内不再询问。会话级，删除会话即失效。
+            MCP 安装不给出该选项：审批弹窗还要收集 OAuth 登录 / 访问令牌。
+            外部来源技能（ClawHub / 网址 / 粘贴）也不给：未签名内容每次都问。 */}
+        {(item.riskLevel === 'external' || install?.kind === 'skill') && !expired && (install?.kind !== 'skill' || sessionGrantAllowed(install)) && (
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
             <input
               type="checkbox"

@@ -68,6 +68,15 @@ export function parseCapabilityInstall(toolName: string, summary: string): Capab
   }
 }
 
+/**
+ * 该来源是否允许成员勾「本会话不再询问」。
+ * 外部来源（ClawHub / 网址 / 粘贴）不允许：新技能安装每次都问（设计 2026-11-19 §3.2）。
+ */
+export function sessionGrantAllowed(install: CapabilityInstallPreview | null): boolean {
+  if (!install || install.kind !== 'skill') return false
+  return install.source === 'platform_catalog' || install.source === 'enterprise_catalog'
+}
+
 /** 改名安装的新标识：小写字母开头，只含小写字母、数字、- 或 _，且不能与原标识相同。返回错误文案，合法返回 null。 */
 export function renameProblem(value: string, current: string): string | null {
   const ref = value.trim()

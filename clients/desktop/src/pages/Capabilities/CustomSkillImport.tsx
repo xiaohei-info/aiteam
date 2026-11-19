@@ -10,6 +10,7 @@ import type { CustomSkillPreview, CustomSkillScanItem, CustomSkillSource } from 
 import { formatFileSize } from '../../lib/fileCache'
 import { toLocalPath } from '../../lib/localSkillPath'
 import { canInstall, defaultPicked, installButtonLabel, normalizePicked, togglePicked } from '../../lib/skillScanSelection'
+import { buildSkillImportRequest, clawHubCandidateUrl, PACKAGE_SOURCES, resetCheckState } from '../../lib/skillImportRequest'
 import { alreadyInstalledText, partitionInstallResults } from '../../lib/alreadyInstalled'
 import { openExternalUrl } from '../../lib/externalOpen'
 import type { ClawHubCandidate, ClawHubSecurity } from '../../api/agent/capabilities'
@@ -68,6 +69,24 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
 
   const current = SOURCES.find((item) => item.id === source)!
 
+  /** 请求体只带当前来源需要的字段；roots 仅包来源携带。 */
+  const requestBody = (preview: boolean) => buildSkillImportRequest({
+    source,
+    path,
+    text,
+    url,
+    roots: PACKAGE_SOURCES.includes(source) ? normalizePicked(scan ?? [], picked) : [],
+  }, { preview })
+
+  /** 作废当前检查状态（换来源 / 重选文件 / 出错时用）。 */
+  const clearCheck = () => {
+    const fresh = resetCheckState()
+    setPreview(fresh.preview as CustomSkillPreview | null)
+    setScan(fresh.scan as CustomSkillScanItem[] | null)
+    setPicked(fresh.picked)
+    setClawHub(fresh.clawHub as typeof clawHub)
+  }
+
   const pick = async (kind: 'folder' | 'zip' | 'file') => {
     const selected = await open({
       multiple: false,
@@ -77,33 +96,36 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     })
     if (!selected || typeof selected !== 'string') return
     setPath(toLocalPath(selected))
-    setPreview(null)
+    clearCheck()
   }
 
   const check = async () => {
     setBusy(true); setError(''); setInstalled(''); setOutcome(''); setClawHub(null)
     try {
-      const result = await agentApi.importCustomSkill({
-        source,
-        ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
-        ...(source === 'text' ? { skill_md: text } : {}),
-        ...(source === 'url' || source === 'clawhub' ? { url } : {}),
-        preview: true,
-      })
+      const result = await agentApi.importCustomSkill(requestBody(true))
+      // ClawHub 同名多作者：后端只回候选，等成员选定后用带作者的地址再来一次。
+      if (result?.clawhub) {
+        clearCheck()
+        setClawHub(result.clawhub)
+        if (result.clawhub.candidates) {
+          // 只有候选、没有预览：不算错误，让用户从候选里选。
+          return
+        }
+      }
       if (result?.scan) {
+        clearCheck()
+        setClawHub(null)
         setScan(result.scan)
         setPicked(defaultPicked(result.scan))
-        setPreview(null)
         return
       }
       if (!result?.preview) throw new Error('没有返回预览')
+      clearCheck()
+      setClawHub(null)
       setPreview(result.preview)
-      setScan(null)
-      setPicked([])
-      if (source === 'text') setText('')
     } catch (err) {
       const text = alreadyInstalledText(err)
-      if (text) { setInstalled(text); setPreview(null); setScan(null); setPicked([]) }
+      if (text) { setInstalled(text); clearCheck(); setClawHub(null) }
       else setError(errorText(err))
     } finally { setBusy(null) }
   }
@@ -111,14 +133,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   const install = async () => {
     setBusy(true); setError(''); setInstalled(''); setOutcome(''); setClawHub(null)
     try {
-      const result = await agentApi.importCustomSkill({
-        source,
-        ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
-        ...(source === 'text' ? { skill_md: text } : {}),
-        ...(source === 'url' || source === 'clawhub' ? { url } : {}),
-        ...(scan ? { roots: normalizePicked(scan, picked) } : {}),
-        preview: false,
-      })
+      const result = await agentApi.importCustomSkill(requestBody(false))
       if (result?.results) {
         // 「已经装好了」不算失败：成功的列出来，重复的标「重复」，只有真失败才给原因。
         const { installed: done, already, failed } = partitionInstallResults(result.results)
@@ -135,9 +150,8 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       if (text) { setInstalled(text); setError('') }
       else setError(errorText(err))
       setOutcome('')
-      setPreview(null)
-      setScan(null)
-      setPicked([])
+      clearCheck()
+      setClawHub(null)
     } finally { setBusy(null) }
   }
 
@@ -197,7 +211,9 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       {SOURCES.map((item) => {
         const Icon = item.icon
         return <button key={item.id} type="button" role="tab" aria-selected={source === item.id}
-          className={source === item.id ? 'on' : ''} onClick={() => { setSource(item.id); setError(''); setInstalled(''); setOutcome(''); setPreview(null) }}>
+          className={source === item.id ? 'on' : ''} onClick={() => {
+            setSource(item.id); setError(''); setInstalled(''); setOutcome(''); clearCheck()
+          }}>
           <Icon size={13} aria-hidden="true" />{item.label}
         </button>
       })}
@@ -214,6 +230,10 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
             <strong>{item.slug}<span className="clawhub-owner"> · {item.owner}</span></strong>
             <span>{item.downloads === null ? '下载量未知' : `${item.downloads.toLocaleString()} 次下载`}</span>
           </span>
+          <button type="button" className="skill-install" disabled={busy === true}
+            onClick={() => { setUrl(clawHubCandidateUrl(item.owner, item.slug)); void check() }}>
+            选这个
+          </button>
           <button type="button" className="clawhub-open" onClick={() => void openExternalUrl(item.url)}>
             <ExternalLink size={12} aria-hidden="true" />打开页面
           </button>
