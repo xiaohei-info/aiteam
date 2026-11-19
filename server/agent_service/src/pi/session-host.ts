@@ -44,7 +44,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, personalConnectorRisk } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -302,6 +302,8 @@ interface SessionRecord {
   activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
   /** Set when a scheduled run's tool approval expired unattended; the run is aborted and fails with this error. */
   backgroundApprovalFailure?: ApprovalExpiredError;
+  /** 无人值守运行中未获授权而跳过的工具（不中止整次运行，运行结束随结果通知）。 */
+  backgroundSkipped: string[];
   /** The running prompt comes from a schedule; the gate closure outlives each run's authorization object. */
   activeBackground?: boolean;
   /** Set while the hidden checklist turn runs; entriesAt is where its entries start. */
@@ -1168,6 +1170,7 @@ export class SessionHost {
       sessionManager,
       prompting: false,
       aborting: false,
+      backgroundSkipped: [],
       delegateCalls: 0,
       delegatePromptChars: 0,
       listeners: new Set(),
@@ -1545,6 +1548,7 @@ export class SessionHost {
         ...(autoInstall ? { autoApproveBy: AUTO_INSTALL_APPROVER } : {}),
         riskLevel: risk,
         permissionMode: record.permissionMode,
+        unattended: record.activeBackground === true,
         expiresAt: authorizationExpiry(authorization),
         signal,
       // Queued after approval, so a request waiting for the user never holds up the other employees.
@@ -1576,6 +1580,16 @@ export class SessionHost {
     try {
       return await run();
     } catch (error) {
+      // 无人值守的跳过不是失败：已授权能力已执行，未授权动作不中止整次运行（设计 2026-11-19 §3.1）。
+      // 记入跳过清单，运行结束时随结果通知。
+      if (record.activeBackground && error instanceof ApprovalSkippedError) {
+        record.backgroundSkipped.push(error.skipped.toolName);
+        return {
+          content: [{ type: "text" as const, text: `定时任务中「${error.skipped.toolName}」未获授权，已跳过该动作；本次运行继续。` }],
+          details: undefined,
+          isError: true,
+        } as unknown as T;
+      }
       if (!record.activeBackground || !(error instanceof ApprovalExpiredError) || record.aborting) throw error;
       const failure = new ApprovalExpiredError(`定时任务调用 ${toolName} 需要审批，但在有效期内无人处理，已中止本次运行。请把该对话的权限调高，或在审批提示出现时及时处理。`);
       record.backgroundApprovalFailure ??= failure;
@@ -1807,6 +1821,7 @@ export class SessionHost {
     record.prompting = true;
     record.aborting = false;
     record.backgroundApprovalFailure = undefined;
+    record.backgroundSkipped = [];
     record.activeBackground = authorization?.background === true;
     this.publishGlobal({
       type: "prompt_started",
@@ -1996,6 +2011,8 @@ export class SessionHost {
               last_preview: settledSignal.lastPreview,
               last_message_at: new Date().toISOString(),
               assistant_message_count: settledSignal.assistantMessageCount,
+              // 无人值守运行中未获授权而跳过的动作（不中止整次运行，在此告知）。
+              ...(record.backgroundSkipped.length > 0 ? { skipped_actions: [...new Set(record.backgroundSkipped)] } : {}),
             });
           } catch (error) {
             appLogger.log("warn", "global_activity.publish_failed", { conversation_id: record.conversationId, error: error instanceof Error ? error.message : String(error) });

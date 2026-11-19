@@ -1106,6 +1106,8 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   deleteMcpCredential: { responses: { "200": { description: "本机凭据已删除。", examples: { removed: { summary: "已退出登录", value: { data: { removed: true } } } } } } },
   listCapabilityAutoInstall: { responses: { "200": { description: "当前成员的自动安装授权。", examples: { list: { summary: "已授权 MCP 自动安装", value: { data: [{ kind: "mcp", created_at: "2026-11-18T00:00:00.000Z" }] } } } } } },
   deleteCapabilityAutoInstall: { responses: { "200": { description: "自动安装授权撤销结果。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
+  listCapabilityGrants: { responses: { "200": { description: "当前成员的能力授权（仅本会话有效）。", examples: { list: { summary: "已授权 MCP", value: { data: [{ conversation_id: "c-1", kind: "mcp", ref: "cr-test", source: "platform_catalog", scope: "session" }] } } } } } },
+  deleteCapabilityGrants: { responses: { "200": { description: "会话能力授权已撤销。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
   deleteLocalCapability: { responses: { "200": { description: "个人能力撤销结果。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
   listAuthorizedSolutions: { responses: { "200": { description: "本地已装载的方案授权投影。", examples: { list: { summary: "方案列表", value: { data: [EXAMPLE_SOLUTION], page: EXAMPLE_PAGE } } } } } },
   listFrozenSnapshots: { responses: { "200": { description: "本地冻结执行快照列表。", examples: { list: { summary: "快照列表", value: { data: [EXAMPLE_SNAPSHOT], page: EXAMPLE_PAGE } } } } } },

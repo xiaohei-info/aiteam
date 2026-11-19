@@ -1965,6 +1965,30 @@ export class AgentSqliteStore {
     return row ? this.toApprovalRecord(row) : undefined;
   }
 
+  /**
+   * 同会话同工具最近一条已批准记录（节流用）：冷却窗口内复用，不重弹。
+   * 只认已批准且未过期的；被拒绝不算放行。
+   */
+  lastApprovedForTool(tenantId: string, memberId: string, conversationId: string, toolName: string, notBeforeIso: string): ApprovalRecord | undefined {
+    const row = this.db.prepare(
+      `SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json
+       FROM approval_record WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND tool_name = ?
+       AND status IN ('approved', 'executing', 'succeeded', 'uncertain') AND approved_at IS NOT NULL AND approved_at >= ?
+       ORDER BY approved_at DESC LIMIT 1`,
+    ).get(tenantId, memberId, conversationId, toolName, notBeforeIso) as unknown as ApprovalRecordRow | undefined;
+    return row ? this.toApprovalRecord(row) : undefined;
+  }
+
+  /** 同批次是否已有批准（一次审批覆盖整批，设计 2026-11-19 §3.1）。 */
+  batchApproved(batchId: string, notBeforeIso: string): ApprovalRecord | undefined {
+    const row = this.db.prepare(
+      `SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json
+       FROM approval_record WHERE approval_batch_id = ? AND status IN ('approved', 'executing', 'succeeded', 'uncertain')
+       AND approved_at IS NOT NULL AND approved_at >= ? ORDER BY approved_at DESC LIMIT 1`,
+    ).get(batchId, notBeforeIso) as unknown as ApprovalRecordRow | undefined;
+    return row ? this.toApprovalRecord(row) : undefined;
+  }
+
   listOwnedApprovalRecords(conversationId: string, tenantId: string, memberId: string, includeTerminal = true): ApprovalRecord[] {
     const terminal = includeTerminal ? "1 = 1" : "status IN ('pending', 'approved', 'executing')";
     const rows = this.db.prepare(`SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE conversation_id = ? AND tenant_id = ? AND member_id = ? AND ${terminal} ORDER BY created_at DESC`).all(conversationId, tenantId, memberId) as unknown as ApprovalRecordRow[];

@@ -47,6 +47,19 @@ export function sessionGrantAllowed(subject: string): boolean {
   return subject !== "" && subject !== "skill:external";
 }
 
+/** 同工具冷却窗口：窗口内再次调用复用上次批准，不再弹（设计 2026-11-19 §3.1）。 */
+export const APPROVAL_COOLDOWN_MS = 30 * 60_000;
+
+/** 节流与无人值守下「未获授权、已跳过」的动作记录（脱敏：只有工具名与风险级别）。 */
+export interface SkippedAction { toolName: string; riskLevel: ApprovalRisk; reason: "unattended" | "read_only" }
+
+export class ApprovalSkippedError extends Error {
+  constructor(readonly skipped: SkippedAction) {
+    super(`定时任务中未获授权的动作已跳过：${skipped.toolName}`);
+    this.name = "ApprovalSkippedError";
+  }
+}
+
 export interface ApprovalRequest {
   tenantId: string;
   memberId: string;
@@ -69,6 +82,8 @@ export interface ApprovalRequest {
   /** The lease/JWT cutoff is an upper bound in addition to the approval TTL. */
   expiresAt?: number;
   signal?: AbortSignal;
+  /** 定时任务（无人值守）：需人工决策的动作不弹框，跳过并记录，不中止整次运行（设计 2026-11-19 §3.1）。 */
+  unattended?: boolean;
 }
 
 export interface ApprovalServiceOptions {
@@ -189,10 +204,22 @@ export class ApprovalService {
     if (existing && (existing.permission_revision !== request.permissionRevision || existing.tool_name !== request.toolName)) {
       throw new ApprovalDeniedError("Approval binding changed; request a new approval");
     }
+    // 节流：同参数已复用（上面）；否则同工具在冷却窗口内、或同批次已批准，不再弹。
+    const throttleSince = new Date(this.now() - APPROVAL_COOLDOWN_MS).toISOString();
+    const throttled = existing ?? (() => {
+      const batch = this.store.batchApproved(encodeScope([request.sessionId, request.promptReceiptRef ?? request.toolCallId]), throttleSince);
+      if (batch) return batch;
+      return this.store.lastApprovedForTool(request.tenantId, request.memberId, request.conversationId, request.toolName, throttleSince);
+    })();
+    // 无人值守：需要人工决策时不弹框，直接跳过并记录，不中止整次运行。
+    if (request.unattended && !autoApprove && !throttled && !request.autoApproveBy) {
+      throw new ApprovalSkippedError({ toolName: request.toolName, riskLevel: request.riskLevel, reason: "unattended" });
+    }
     const approver = request.autoApproveBy === AUTO_INSTALL_APPROVER && request.toolName === "capability_install"
       ? AUTO_INSTALL_APPROVER
       : sessionGranted ? SESSION_GRANT_APPROVER
-      : autoApprove ? POLICY_APPROVER : undefined;
+      : autoApprove ? POLICY_APPROVER
+      : throttled ? SESSION_GRANT_APPROVER : undefined;
     const record = existing ?? this.create(request, hash, approver);
     const claimed = await this.waitAndClaim(record, request);
     try {
@@ -425,7 +452,14 @@ export class ApprovalService {
   }
 }
 
-const SAFE_TOOLS = new Set([
+/**
+ * 只读工具注册表：新增只读工具改这里，不用动判定分支。
+ *
+ * 设计 2026-11-19 §3.1 把审批从「按工具名黑名单」升级为风险分级：只读 / 查询类不弹。
+ * 注意 Pi SDK 的 ToolDefinition 不暴露 MCP 的 readOnlyHint，所以 MCP 工具声明的只读方法
+ * 无法据此降级；未知工具仍按高风险弹（红线，不保证所有工具都能自动判级）。
+ */
+const READ_ONLY_TOOLS = new Set([
   "read", "grep", "find", "ls", "knowledge_search", "knowledge_get",
   "local_dir_search", "local_dir_read",
   "hindsight_recall", "memory_recall", "todo_update", "mention_employee", "delegate_employee",
@@ -435,12 +469,12 @@ export function approvalRiskForTool(toolName: string): ApprovalRisk | undefined 
   if (toolName === "bash") return "bash";
   if (toolName === "write") return "write";
   if (toolName === "edit") return "edit";
-  if (SAFE_TOOLS.has(toolName)) return undefined;
+  if (READ_ONLY_TOOLS.has(toolName)) return undefined;
   // 成员自己装的 MCP（connector_my_*）：用户在自己机器上装好并授权过，调用不再每次弹审批。
   // 只读会话例外——那里不允许写操作，调用前仍会弹框告知（见 personalConnectorRisk）。
   if (isPersonalConnectorTool(toolName)) return undefined;
   // External connectors, memory retain and every unrecognized tool are treated
-  // as side-effecting. A remote readOnlyHint cannot lower this classification.
+  // as side-effecting. 未知工具一律高风险（红线）。
   if (toolName === "hindsight_retain" || toolName === "memory_retain" || /^(?:external|connector|jira)[._:-]/iu.test(toolName)) return "external";
   return "unknown";
 }

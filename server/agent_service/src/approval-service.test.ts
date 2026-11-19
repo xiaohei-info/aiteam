@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, ApprovalSkippedError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -219,15 +219,18 @@ test("session_allow 对技能安装生效（本会话），对 MCP 安装不生�
     service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true });
     assert.equal(await first, "installed");
     assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill:enterprise_catalog"), true);
-    // 第二次技能安装不再弹。
+    // 第二次技能安装不再弹（会话授权命中）。
     assert.equal(await service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-skill-2", summary: skillInstall }), async () => "again"), "again");
     assert.equal(required, 1, "技能安装只弹一次");
-    // MCP 安装是同一个工具名，但 subject 不同 → 仍要问。
+    // MCP 安装是同一个工具名：会话授权不覆盖它，但同工具冷却窗口仍生效 → 不重弹。
     const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "crm", display_name: "CRM", url: "https://crm.example.com/mcp", source: "user_url", reason: "" })}`;
-    const mcp = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-mcp", summary: mcpInstall }), async () => "mcp");
+    assert.equal(await service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-mcp", summary: mcpInstall }), async () => "mcp"), "mcp");
+    assert.equal(required, 1, "同工具冷却窗口内不重弹");
+    // 换个工具名（模拟另一个工具）仍走自己的审批，不被这次冷却兼底。
+    const other = service.execute(request({ toolName: "connector:jira", riskLevel: "external", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-other", summary: "" }), async () => "other");
     while (required === 1) await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(required, 2, "MCP 安装不享受技能安装的授权");
-    mcp.catch(() => undefined);
+    assert.equal(required, 2, "不同工具不受同工具冷却影响");
+    other.catch(() => undefined);
     service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -258,7 +261,7 @@ test("session_allow 限来源：外部技能不允许，目录技能允许", asy
     const service = new ApprovalService(store, { onRequired: () => undefined });
     const external = `capability_install:${JSON.stringify({ kind: "skill", ref: "weather", display_name: "天气", source: "clawhub_catalog", reason: "" })}`;
     const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: external }), async () => "x");
-    while (service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending")) {
+    for (let i = 0; i < 2000 && service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending"); i += 1) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
@@ -295,7 +298,7 @@ test("批准能力安装后写入能力授权，待上报；会话删除后清�
     const service = new ApprovalService(store, { onRequired: () => undefined });
     const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "cr-test", display_name: "CRM", url: "https://crm.example.com/mcp", source: "platform_catalog", reason: "" })}`;
     const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: mcpInstall }), async () => "x");
-    while (service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending")) {
+    for (let i = 0; i < 2000 && service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending"); i += 1) {
       await new Promise((resolve) => setImmediate(resolve));
     }
     const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
@@ -311,5 +314,50 @@ test("批准能力安装后写入能力授权，待上报；会话删除后清�
 
     store.deleteCapabilityGrants("tenant-1", "member-1", "conversation-1");
     assert.deepEqual(store.listCapabilityGrants("tenant-1", "member-1", "conversation-1"), []);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// 节流（设计 2026-11-19 §3.1）：同工具冷却窗口内复用上次批准，不重弹；拒绝不自动放行。
+test("同工具冷却窗口内复用上次批准，被拒绝的记录不放行", async () => {
+  const { root, store } = fixture();
+  try {
+    let required = 0;
+    const service = new ApprovalService(store, { onRequired: () => { required += 1; } });
+    const run = (toolCallId: string) => service.execute(request({ toolName: "connector:jira", riskLevel: "external", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId, args: { issue: "A-1" } }), async () => "ok");
+
+    const first = run("call-1");
+    while (required === 0) await new Promise((resolve) => setImmediate(resolve));
+    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
+    service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k1" });
+    assert.equal(await first, "ok");
+    // 冷却窗口内、不同参数的同工具调用不再弹。
+    assert.equal(await run("call-2"), "ok");
+    assert.equal(required, 1, "冷却窗口内不重弹");
+
+    // 拒绝过的记录不作为放行依据：另一会话里同工具仍要弹。
+    const other = service.execute(request({ conversationId: "conversation-2", toolName: "connector:jira", riskLevel: "external", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-3", args: { issue: "A-1" } }), async () => "ok");
+    while (required === 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(required, 2, "跨会话不共享冷却");
+    other.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// 无人值守（设计 2026-11-19 §3.1）：定时任务里未授权的动作不弹框、跳过并记录，不中止整次运行。
+test("无人值守时未授权动作被跳过而不是中止", async () => {
+  const { root, store } = fixture();
+  try {
+    let required = 0;
+    const service = new ApprovalService(store, { onRequired: () => { required += 1; } });
+    const unattended = service.execute(request({ toolName: "connector:jira", riskLevel: "external", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", unattended: true }), async () => "ok");
+    await assert.rejects(unattended, ApprovalSkippedError);
+    assert.equal(required, 0, "无人值守不弹审批");
+
+    // 交互会话同样动作仍正常弹。
+    const interactive = service.execute(request({ toolName: "connector:jira", riskLevel: "external", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-2" }), async () => "ok");
+    while (required === 0) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(required, 1);
+    interactive.catch(() => undefined);
+    service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

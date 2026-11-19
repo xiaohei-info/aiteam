@@ -1645,22 +1645,16 @@ async function expiringApprovalFixture() {
   return { fixture, host, bash, caller };
 }
 
-test("a scheduled run whose tool approval expires is aborted and recorded as a failure", async () => {
+test("a scheduled run skips an unapproved tool call and keeps going (design 2026-11-19 §3.1)", async () => {
   const { fixture, host, bash, caller } = await expiringApprovalFixture();
   try {
-    // The model would retry and then invent an answer; only the first call may be reached.
-    fixture.faux.setResponses([bash("bash-1"), bash("bash-2"), fauxAssistantMessage("here are example figures")]);
-    await assert.rejects(
-      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
-      (error: unknown) => error instanceof ApprovalExpiredError && /定时任务调用 bash 需要审批/.test(error.message),
-    );
+    // 无人值守：未授权动作不弹框、跳过并记录，不中止整次运行。
+    fixture.faux.setResponses([bash("bash-1"), fauxAssistantMessage("没有拿到数据，已跳过该动作")]);
+    await host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true });
     const approvals = fixture.store.listOwnedApprovalRecords("conversation-1", "tenant-1", "member-1", true);
-    assert.equal(approvals.length, 1, "no retry after the expiry");
-    const failures = fixture.store.conversationFailures.list("conversation-1");
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0]!.error_code, "approval_expired");
-    assert.match(failures[0]!.error_message, /定时任务/);
-    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    assert.equal(approvals.length, 0, "无人值守不为未授权动作建待审批");
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1"), []);
+    assert.match(JSON.stringify(await host.entries("conversation-1")), /没有拿到数据/);
     await host.dispose();
   } finally {
     await fixture.close();
@@ -1680,19 +1674,15 @@ test("an interactive run keeps handing an expired approval back to the model", a
   }
 });
 
-test("several tool calls expiring in one scheduled turn record a single failure", async () => {
+test("several unapproved tool calls in one scheduled turn are all skipped, not aborted", async () => {
   const { fixture, host, caller } = await expiringApprovalFixture();
   try {
     const twoCalls = fauxAssistantMessage([fauxToolCall("bash", { command: "echo a" }, { id: "bash-a" }), fauxToolCall("bash", { command: "echo b" }, { id: "bash-b" })], { stopReason: "toolUse" });
-    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("here are example figures")]);
-    await assert.rejects(
-      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
-      (error: unknown) => error instanceof ApprovalExpiredError,
-    );
-    const failures = fixture.store.conversationFailures.list("conversation-1");
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0]!.error_code, "approval_expired");
-    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("两步都没能执行")]);
+    await host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true });
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1"), []);
+    assert.equal(fixture.store.listOwnedApprovalRecords("conversation-1", "tenant-1", "member-1", true).length, 0);
+    assert.match(JSON.stringify(await host.entries("conversation-1")), /两步都没能执行/);
     await host.dispose();
   } finally {
     await fixture.close();
