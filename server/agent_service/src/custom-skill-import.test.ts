@@ -42,7 +42,7 @@ function writeFolder(files: Record<string, string>): string {
  * 本地假 ClawHub：只实现接入用到的三个端点，避免测试依赖外网。
  * `/download` 返回一个含 SKILL.md 与 OpenClaw 钩子的 zip。
  */
-async function fakeClawHub(handle: string, opts?: { ambiguous?: boolean }): Promise<{ url: string; close: () => Promise<void> }> {
+export async function fakeClawHub(handle: string, opts?: { ambiguous?: boolean }): Promise<{ url: string; close: () => Promise<void> }> {
   const zip = zipSync({
     "SKILL.md": Buffer.from(SKILL_A),
     "assets/LEARNINGS.md": Buffer.from("记录"),

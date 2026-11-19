@@ -153,6 +153,11 @@ export function normalizeSkillAtRoot(safe: { path: string; content: Buffer }[], 
   }
 }
 
+/** 内容哈希（版本）：同一份内容恒得同一值。审批摘要带它，执行时比对，避免批准后内容被换掉。 */
+export function skillContentHash(pkg: CustomSkillPackage): string {
+  return manifestFor(pkg).contentHash;
+}
+
 function manifestFor(pkg: CustomSkillPackage): { manifest: Manifest; contentHash: string } {
   const files = pkg.files.map((file) => ({ path: file.path, size: file.content.length, sha256: sha256(file.content) }));
   const contentHash = sha256(Buffer.from(JSON.stringify(files)));

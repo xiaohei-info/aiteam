@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createFixture } from "./test-fixture.js";
+import { CustomSkillStore } from "./custom-skills.js";
+import { fakeClawHub } from "./custom-skill-import.test.js";
 import { approvalRiskForTool, personalConnectorRisk } from "./approval-service.js";
 import { capabilityInstallTool, checkCapabilityInstall, installSkillDirectly, personalConnectorTools, SkillInstallError } from "./connectors.js";
 import { SkillVerificationError } from "./skills.js";
@@ -268,4 +273,38 @@ test("the desktop «添加技能» installs only enterprise-catalog skills, like
     assert.equal((await installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })).version, "2");
     assert.deepEqual(installed, ["sheet@1", "sheet@2"]);
   } finally { await fixture.close(); }
+});
+
+test("外部来源的技能（ClawHub / 网址 / 粘贴）也能装，装的是成员个人能力", async () => {
+  const fixture = await createFixture();
+  const custom = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const { url: clawHub, close } = await fakeClawHub("alice");
+  const md = `---\nname: pasted-skill\ndescription: 粘贴进来的技能\n---\n\n正文\n`;
+  try {
+    process.env.AITEAM_CLAWHUB_BASE_URL = clawHub;
+    const install = capabilityInstallTool(fixture.store, owner, undefined, undefined, undefined, custom);
+
+    // ClawHub：地址即来源，装完标 clawhub_catalog，文件在本机目录里。
+    const hub = await run(install, { kind: "skill", source: "clawhub", ref: "weekly-report", url: `${clawHub}/alice/skills/self-improving-agent`, reason: "做周报" });
+    assert.notEqual(hub.isError, true);
+    let row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.ref === "weekly-report");
+    assert.deepEqual([row?.source, row?.display_name], ["clawhub_catalog", "weekly-report"]);
+    assert.ok(custom.pathFor(owner, "weekly-report"), "ClawHub 技能应落到本机自定义技能目录");
+
+    // 粘贴：skill_md 即来源。
+    const pasted = await run(install, { kind: "skill", source: "text", ref: "pasted-skill", skill_md: md, reason: "试试" });
+    assert.notEqual(pasted.isError, true);
+    row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.ref === "pasted-skill");
+    assert.equal(row?.source, "user_import");
+
+    // 批准后内容变了：哈希对不上，拒绝安装。
+    const stale = await run(install, { kind: "skill", source: "text", ref: "pasted-skill", skill_md: md, reason: "", approvedVersion: "deadbeef".repeat(4), resolution: { action: "replace" } });
+    assert.equal(stale.isError, true);
+    assert.match(String((stale as { content?: { text: string }[] }).content?.[0]?.text ?? ""), /内容.*变化/);
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+  } finally {
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+    await close();
+    await fixture.close();
+  }
 });

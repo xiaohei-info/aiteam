@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, skillContentHash, toLocalPath, unzipEntries } from "./custom-skills.js";
 import type { ClawHubCandidate, ClawHubSecurity } from "./custom-skills.js";
 
 /** 北向用的 ClawHub 候选/安全结构（避免直接把内部类型暴露到 HTTP 层）。 */
@@ -293,6 +293,14 @@ export interface CapabilityInstallInput {
   resolution?: CapabilityResolution | null;
   /** Set only by the approval gate: the record was approved by the member's auto-install grant, not a prompt. */
   autoApproved?: boolean;
+  /** skill：来自企业外的来源（clawhub / url / text）。缺省走企业技能目录。MCP 用 url 即可，不用这个字段。 */
+  source?: "clawhub" | "url" | "text";
+  /** source=text：粘贴的 SKILL.md 全文。 */
+  skill_md?: string;
+  /** 包内某个技能根（相对包根，包根本身就是技能时为空串）。包里有多个技能又不指定时报错让用户选。 */
+  root?: string;
+  /** Set only by the approval gate: 批准时那份内容的内容哈希；执行时比对，避免批准后内容被换掉。 */
+  approvedVersion?: string;
 }
 export type CapabilityInstallCheck =
   | {
@@ -304,6 +312,62 @@ export type CapabilityInstallCheck =
 
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], details: undefined, isError: true });
 const INVALID_MCP = "安装未完成：标识或地址无效（地址须为 https 或本机地址，且不含账号、查询串）。请让用户检查。";
+
+/**
+ * 企业外来源的技能：ClawHub / 公开网址 / 粘贴的 SKILL.md。与桌面端「添加技能」共用同一套抓取与校验，
+ * 只是这里是会话里员工判断后发起、装之前仍要成员批准。
+ */
+async function planExternalSkill(store: AgentSqliteStore, owner: TaskOwner, input: CapabilityInstallInput, custom: CustomSkillStore | undefined, signal?: AbortSignal): Promise<InstallPlan | string> {
+  if (!custom) return "安装未完成：本机技能目录不可用，请重启桌面端后重试。";
+  const source = input.source ?? "url";
+  let files: { path: string; content: Buffer }[];
+  let origin: CustomSkillPackage["origin"];
+  if (source === "clawhub") {
+    if (!input.url) return "安装未完成：没有填 ClawHub 地址。";
+    const parts = clawHubParts(input.url);
+    if (!parts) return "安装未完成：这不是 ClawHub 技能地址，形如 https://clawhub.ai/{作者}/skills/{标识}。";
+    let handle = parts.owner;
+    if (!handle) {
+      const found = await clawHubCandidates(parts.slug, signal);
+      if (found.length !== 1) return "安装未完成：ClawHub 上有多个同名技能，请让用户选一个具体地址（带作者）。";
+      handle = found[0]!.owner;
+    }
+    const fetched = await fetchClawHubSkill(parts.slug, handle, signal);
+    files = fetched.files;
+    origin = { kind: "clawhub", label: "ClawHub", url: fetched.origin.url };
+  } else if (source === "url") {
+    if (!input.url) return "安装未完成：没有填技能网址。";
+    const fetched = await fetchSkillFromUrl(input.url, signal);
+    files = fetched.files;
+    origin = { kind: "url", label: fetched.origin.label, url: fetched.origin.url };
+  } else {
+    if (!input.skill_md?.trim()) return "安装未完成：没有粘贴 SKILL.md 内容。";
+    files = [{ path: "SKILL.md", content: Buffer.from(input.skill_md, "utf8") }];
+    origin = { kind: "text", label: "粘贴" };
+  }
+  const roots = scanSkillRoots(files).filter((root) => isInstallableRoot(files, root));
+  if (roots.length === 0) return "安装未完成：这个来源里找不到可安装的技能（每个技能要含 SKILL.md）。";
+  const root = input.root !== undefined ? input.root : roots[0]!;
+  if (!roots.includes(root)) return `安装未完成：指定的技能根不存在。这个包里可选：${roots.join("、") || "（包根）"}。`;
+  if (roots.length > 1 && input.root === undefined) {
+    const names = roots.map((item) => {
+      try { return `${normalizeSkillAtRoot(files, item, origin).name}（${item || "包根"}）`; } catch { return item || "包根"; }
+    });
+    return `安装未完成：这个来源里有 ${roots.length} 个技能，请指定 root 选一个：${names.join("、")}。`;
+  }
+  let pkg: CustomSkillPackage;
+  try { pkg = normalizeSkillAtRoot(files, root, origin); } catch (error) { return error instanceof Error && error.message ? `安装未完成：${error.message}` : "安装未完成：技能包校验失败。"; }
+  const clash = store.listLocalCapabilities(owner.tenantId, owner.memberId)
+    .find(item => item.kind === "skill" && item.ref === pkg.name && item.source !== "user_import" && item.source !== "clawhub_catalog");
+  if (clash) return `安装未完成：已安装企业技能「${clash.display_name}」，同名外部技能无法安装；请让用户改 SKILL.md 里的 name。`;
+  return {
+    kind: "skill", ref: pkg.name, display_name: pkg.name, url: "", declaredTools: [], sourceRef: "",
+    source: origin.kind === "clawhub" ? "clawhub_catalog" : "user_import",
+    external: { pkg, version: skillContentHash(pkg), originLabel: origin.label, originUrl: origin.url ?? "" },
+    reason: "",
+    auth: "none", authHeader: "", scope: "", timeoutMs: DEFAULT_MCP_TIMEOUT_MS, preregistered: false,
+  };
+}
 
 async function findSkill(skills: SkillInstaller | undefined, ref: string, signal?: AbortSignal): Promise<InstallableSkillInfo | string> {
   if (!skills) return "安装未完成：本机暂时无法从企业取技能（未连接企业服务）。";
@@ -326,6 +390,8 @@ interface InstallPlan {
   /** Platform server id of a catalog MCP, platform skill id of a skill; empty otherwise. */
   sourceRef: string;
   skill?: InstallableSkillInfo;
+  /** 企业外来源的技能包（ClawHub / 网址 / 粘贴）：内容与来源都在这里，装进本机自定义技能目录。 */
+  external?: { pkg: CustomSkillPackage; version: string; originLabel: string; originUrl: string };
   existing?: LocalCapability;
   reason: string;
   /** MCP authentication; "none" for a skill. */
@@ -340,9 +406,14 @@ interface InstallPlan {
   preregistered: boolean;
 }
 
-async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: CapabilityInstallInput, skills: SkillInstaller | undefined, mcps: McpCatalog | undefined, signal?: AbortSignal, auth?: McpRuntimeAuth): Promise<InstallPlan | string> {
+async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: CapabilityInstallInput, skills: SkillInstaller | undefined, mcps: McpCatalog | undefined, signal?: AbortSignal, auth?: McpRuntimeAuth, custom?: CustomSkillStore): Promise<InstallPlan | string> {
   const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId);
   const reason = String(input.reason ?? "").slice(0, 200);
+  if (input.kind === "skill" && input.source) {
+    const external = await planExternalSkill(store, owner, input, custom, signal);
+    if (typeof external === "string") return external;
+    return { ...external, reason, existing: installed.find(item => item.kind === "skill" && item.ref === external.ref) };
+  }
   if (input.kind === "skill") {
     const found = await findSkill(skills, String(input.ref ?? ""), signal);
     if (typeof found === "string") return found;
@@ -415,6 +486,13 @@ function needsCredential(plan: InstallPlan, owner: TaskOwner, auth: McpRuntimeAu
 function summaryOf(plan: InstallPlan): string {
   const base = { kind: plan.kind, ref: plan.ref, display_name: plan.display_name, source: plan.source, reason: plan.reason };
   if (plan.kind === "skill") {
+    if (plan.external) {
+      return JSON.stringify({
+        ...base, version: plan.external.version, source: plan.external.pkg.origin.kind === "clawhub" ? "clawhub_catalog" : "user_import",
+        origin_label: plan.external.originLabel, ...(plan.external.originUrl ? { origin_url: plan.external.originUrl } : {}),
+        ...(plan.existing ? { replaces: { display_name: plan.existing.display_name, version: plan.existing.version } } : {}),
+      });
+    }
     return JSON.stringify({ ...base, version: plan.skill!.version, ...(plan.existing ? { replaces: { display_name: plan.existing.display_name, version: plan.existing.version } } : {}) });
   }
   return JSON.stringify({
@@ -425,6 +503,17 @@ function summaryOf(plan: InstallPlan): string {
   });
 }
 
+/** 批准摘要里外部技能的内容哈希（`capability_install:` 之后的 JSON）；其它情况为空。 */
+export function approvedSkillVersion(summary: string): string | undefined {
+  const prefix = "capability_install:";
+  if (!summary.startsWith(prefix)) return undefined;
+  try {
+    const data = JSON.parse(summary.slice(prefix.length).trim()) as { kind?: unknown; origin_label?: unknown; version?: unknown };
+    // 只对「带来源的外部技能」做哈希校验；企业目录技能没有 origin_label。
+    return data.kind === "skill" && typeof data.origin_label === "string" && typeof data.version === "string" ? data.version : undefined;
+  } catch { return undefined; }
+}
+
 /**
  * Runs before the approval prompt. Requests that can never succeed (bad ref/URL, skill not in the enterprise catalog,
  * the same skill version already installed) are bounced back to the model without bothering the user. A same-ref clash
@@ -432,8 +521,8 @@ function summaryOf(plan: InstallPlan): string {
  * be replaced. The summary is stored in the approval record and holds nothing the install itself does not accept;
  * its `source` tells the dialog whether «以后直接安装» may be offered (platform catalog only).
  */
-export async function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner, params: unknown, skills?: SkillInstaller, signal?: AbortSignal, mcps?: McpCatalog, auth?: McpRuntimeAuth): Promise<CapabilityInstallCheck> {
-  const plan = await planInstall(store, owner, params as CapabilityInstallInput, skills, mcps, signal, auth);
+export async function checkCapabilityInstall(store: AgentSqliteStore, owner: TaskOwner, params: unknown, skills?: SkillInstaller, signal?: AbortSignal, mcps?: McpCatalog, auth?: McpRuntimeAuth, custom?: CustomSkillStore): Promise<CapabilityInstallCheck> {
+  const plan = await planInstall(store, owner, params as CapabilityInstallInput, skills, mcps, signal, auth, custom);
   if (typeof plan === "string") return { ok: false, message: plan };
   return { ok: true, summary: summaryOf(plan), kind: plan.kind, platform: plan.source === "platform_catalog", replaces: Boolean(plan.existing), needsCredential: needsCredential(plan, owner, auth) };
 }
@@ -591,29 +680,34 @@ export async function installMcpDirectly(store: AgentSqliteStore, owner: TaskOwn
  * tools the catalog declares); no credentials pass through the model. Skill: the package signed for this member is
  * verified before it is stored.
  */
-export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner, skills?: SkillInstaller, mcps?: McpCatalog, auth?: McpRuntimeAuth): ToolDefinition {
+export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner, skills?: SkillInstaller, mcps?: McpCatalog, auth?: McpRuntimeAuth, custom?: CustomSkillStore): ToolDefinition {
   return {
     name: "capability_install",
     label: "Install capability",
     description: "Ask the user to install a capability for themselves. Call it only when the task truly needs one you do not have. "
-      + "kind=skill: ref is a skill id from the enterprise skill catalog or the solution's recommended skills. "
+      + "kind=skill: ref is a skill id from the enterprise skill catalog or the solution's recommended skills; "
+      + "to install a skill from somewhere else, set source to clawhub / url / text (url is the public https address, text carries the pasted SKILL.md in skill_md). "
       + "kind=mcp: ref may be the id of an MCP the enterprise enabled from the platform catalog (no url needed; the catalog address is used); "
       + "otherwise give an https (or localhost) url the user gave you or the solution recommended; never invent URLs. "
+      + "A package that holds several skills needs `root` to name which one; ask the user which when you cannot tell. "
       + "If the server needs sign-in or a token, the user does that themselves outside the conversation: never ask for, accept or pass tokens. "
       + "The user must approve (and decides about replacing an installed one); do not retry after a denial.",
     parameters: Type.Object({
       kind: Type.Union([Type.Literal("mcp"), Type.Literal("skill")]),
-      ref: Type.String({ description: "mcp: short id (lowercase letters, digits, - or _); skill: the skill id" }),
-      display_name: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
-      url: Type.Optional(Type.String({ description: "MCP endpoint (streamable HTTP); not used for a skill or a catalog MCP" })),
+      ref: Type.String({ description: "mcp: short id (lowercase letters, digits, - or _); skill: the skill name from its SKILL.md frontmatter" }),
+      display_name: Type.Optional(Type.String({ minLength: 1, maxLength: 120, description: "mcp only; a skill takes its name from the package" })),
+      url: Type.Optional(Type.String({ description: "mcp: endpoint (streamable HTTP). skill: source=url / source=clawhub 时的公开地址" })),
       reason: Type.String({ maxLength: 200, description: "why the task needs it" }),
       timeout_ms: Type.Optional(Type.Integer({ minimum: MIN_MCP_TIMEOUT_MS, maximum: MAX_MCP_TIMEOUT_MS, description: "mcp: per tool call timeout in ms when the user's config gives one" })),
+      source: Type.Optional(Type.Union([Type.Literal("clawhub"), Type.Literal("url"), Type.Literal("text")], { description: "skill：企业外来源。缺省 = 企业技能目录。" })),
+      skill_md: Type.Optional(Type.String({ maxLength: 200_000, description: "source=text：SKILL.md 全文。" })),
+      root: Type.Optional(Type.String({ description: "包里指定技能根（相对包根）；包里有多个技能时必须指定。" })),
     }, { additionalProperties: false }),
     execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
       const input = params as CapabilityInstallInput;
       const resolution = input.resolution ?? undefined;
       // Re-planned here as well: the approval may have waited while another install or the catalogs changed.
-      const plan = await planInstall(store, owner, input, skills, mcps, signal, auth);
+      const plan = await planInstall(store, owner, input, skills, mcps, signal, auth, custom);
       if (typeof plan === "string") return fail(plan);
       // Auto-approval covered only a platform-catalog install that replaced nothing and needed no sign-in; anything else needs the user again.
       if (input.autoApproved && (plan.source !== "platform_catalog" || plan.existing || needsCredential(plan, owner, auth))) {
@@ -621,6 +715,22 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       }
       const approvedBy = input.autoApproved ? AUTO_INSTALL_APPROVER : owner.memberId;
       if (plan.kind === "skill") {
+        if (plan.external) {
+          // 企业外来源（ClawHub / 网址 / 粘贴）：装进本机自定义技能目录，不经企业签名缓存。
+          if (!custom) return fail("安装未完成：本机技能目录不可用，请重启桌面端后重试。");
+          if (resolution?.action === "rename") return fail("技能不能改名安装；用户可以选择覆盖或取消。");
+          if (plan.existing && resolution?.action !== "replace") return fail(`已装有「${plan.existing.display_name}」，用户没有选择覆盖，未安装。`);
+          // 批准后内容可能已被换掉：摘要里的哈希与这次下载的必须一致。
+          if (input.approvedVersion && input.approvedVersion !== plan.external.version) {
+            return fail("安装未完成：这个技能的内容在你批准之后发生了变化，请重新发起安装请求。");
+          }
+          try {
+            const capability = installOneCustomSkill(store, custom, owner, plan.external.pkg, resolution?.action === "replace");
+            return { content: [{ type: "text" as const, text: `已安装技能「${capability.display_name}」${capability.version}，下一轮对话起可用。` }], details: undefined };
+          } catch (error) {
+            return fail(error instanceof Error && error.message ? error.message : "安装未完成：技能包装不进本机目录。");
+          }
+        }
         const found = plan.skill!;
         if (resolution?.action === "rename") return fail("技能不能改名安装；用户可以选择覆盖或取消。");
         if (plan.existing && resolution?.action !== "replace") return fail("已装有该技能的其他版本，用户没有选择覆盖，未安装。");

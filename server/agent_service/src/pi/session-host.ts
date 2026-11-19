@@ -1,4 +1,4 @@
-import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import { approvedSkillVersion, capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
 import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
@@ -1382,7 +1382,7 @@ export class SessionHost {
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const mcpAuth = this.mcpRuntimeAuth(authorization.caller);
     const personal = owner ? personalConnectorTools(this.options.store, owner, mcpAuth) : [];
-    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth)] : [];
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth, this.options.customSkillStore)] : [];
     for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
     tools.push(...connectors, ...personal, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
@@ -1484,7 +1484,7 @@ export class SessionHost {
         let autoInstall = false;
         const install = tool.name === "capability_install";
         if (install) {
-          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller), this.mcpRuntimeAuth(authorization.caller));
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller), this.mcpRuntimeAuth(authorization.caller), this.options.customSkillStore);
           if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
           summary = `capability_install: ${check.summary}`;
           // The member's own grant (design §11.3): platform-catalog installs of this kind that replace nothing skip the prompt.
@@ -1519,7 +1519,9 @@ export class SessionHost {
           ? (() => {
             // The token typed into the dialog reaches the install in memory only; the recorded tool call keeps the model's arguments.
             const credential = this.approvalService.takeCredential(claimed.id);
-            return { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER, approvalId: claimed.id, ...(credential ? { credential } : {}) };
+            // 外部来源的技能：批准时记下内容哈希，执行时比对（批准后内容可能已被换掉）。
+            const approvedVersion = approvedSkillVersion(claimed.redacted_summary);
+            return { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER, approvalId: claimed.id, ...(approvedVersion ? { approvedVersion } : {}), ...(credential ? { credential } : {}) };
           })()
           : params;
         return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
