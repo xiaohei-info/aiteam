@@ -160,8 +160,9 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
           <textarea aria-label="SKILL.md 内容" rows={9} value={text} onChange={(event) => setText(event.target.value)}
             placeholder={'---\nname: my-skill\ndescription: 这个技能做什么\n---\n\n# 说明\n'} />
         </label>
-        : <label>网址
-          <input aria-label="技能网址" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/…" inputMode="url" />
+        : <label>{source === 'clawhub' ? 'ClawHub 技能地址' : '网址'}
+          <input aria-label={source === 'clawhub' ? 'ClawHub 技能地址' : '技能网址'} value={url} onChange={(event) => setUrl(event.target.value)}
+            placeholder={source === 'clawhub' ? 'https://clawhub.ai/作者/skills/标识' : 'https://github.com/…'} inputMode="url" />
         </label>
 
   return <div className="mcp-form custom-skill-import">
