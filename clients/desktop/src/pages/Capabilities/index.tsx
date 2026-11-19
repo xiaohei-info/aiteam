@@ -112,8 +112,11 @@ export default function Capabilities() {
         </>}
         {item.kind === 'mcp' && <button type="button" className="cap-action" disabled={busy} onClick={() => window.open(item.url, '_blank', 'noopener,noreferrer')} title={item.url}><ExternalLink size={12} aria-hidden="true" />打开服务</button>}
         {hasLocalDirectory(item) && <button type="button" className="cap-action" disabled={busy} onClick={() => void reveal(item)}><FolderOpen size={12} aria-hidden="true" />{isMacUserAgent(navigator.userAgent) ? '在 Finder 中显示' : '在文件资源管理器中显示'}</button>}
-        <button type="button" className="cap-action danger" disabled={busy} onClick={() => void revoke(item)}><Trash2 size={12} aria-hidden="true" />撤销</button>
       </span>
+      {/* 撤销收成右上角的小图标按钮：不占行内空间，也不跟其他操作抢位置。 */}
+      <button type="button" className="cap-action danger cap-icon-btn" disabled={busy} aria-label={`撤销 ${item.display_name}`} title="撤销" onClick={() => void revoke(item)}>
+        <Trash2 size={13} aria-hidden="true" />
+      </button>
     </li>
   }
 
