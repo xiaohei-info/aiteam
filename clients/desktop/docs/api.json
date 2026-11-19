@@ -9037,6 +9037,13 @@
               {
                 "type": "string",
                 "enum": [
+                  "file"
+                ],
+                "description": "source 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
                   "text"
                 ],
                 "description": "source 字段值。"
@@ -9049,12 +9056,12 @@
                 "description": "source 字段值。"
               }
             ],
-            "description": "folder 本机文件夹；zip 本机压缩包；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。"
+            "description": "folder 本机文件夹；zip 本机压缩包；file 单个 .md 文件；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。"
           },
           "path": {
             "type": "string",
             "maxLength": 4096,
-            "description": "folder / zip：本机绝对路径（桌面端文件选择得到）。"
+            "description": "folder / zip / file：本机绝对路径（桌面端文件选择得到）。"
           },
           "skill_md": {
             "type": "string",

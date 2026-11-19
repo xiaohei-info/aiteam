@@ -1,19 +1,21 @@
 /**
- * 「添加技能 → 自定义」的一屏：一次只显示一种来源（文件夹 / zip / 粘贴 SKILL.md / 网址）。
+ * 「添加技能 → 自定义」的一屏：一次只显示一种来源（文件夹 / zip / 单个 .md / 粘贴 SKILL.md / 网址）。
  * 先「检查」拿预览，再「安装」；粘贴框检查后清空。来源切换不清掉未安装的草稿。
  */
 import { useState } from 'react'
-import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe } from 'lucide-react'
+import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe, FileText } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { CustomSkillPreview, CustomSkillScanItem, CustomSkillSource } from '../../api/agent/capabilities'
 import { formatFileSize } from '../../lib/fileCache'
 import { toLocalPath } from '../../lib/localSkillPath'
+import { batchFailureSummary, canInstall, defaultPicked, installButtonLabel, normalizePicked, togglePicked } from '../../lib/skillScanSelection'
 
 
 const SOURCES: { id: CustomSkillSource; label: string; icon: typeof FolderOpen; hint: string }[] = [
   { id: 'folder', label: '文件夹', icon: FolderOpen, hint: '选一个含 SKILL.md 的文件夹（可以带模板、脚本、参考资料）。' },
   { id: 'zip', label: 'zip', icon: FileArchive, hint: '选一个技能压缩包（.zip）。' },
+  { id: 'file', label: '单个 .md', icon: FileText, hint: '选一个 SKILL.md 文件；技能名取自文件里的 name，与文件名无关。' },
   { id: 'text', label: '粘贴 SKILL.md', icon: ClipboardPaste, hint: '直接粘贴 SKILL.md 全文，只能做单文件技能。' },
   { id: 'url', label: '网址', icon: Globe, hint: '公开 https 地址：GitHub 仓库 / 子目录、单个 .md、zip。' },
 ]
@@ -37,11 +39,12 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
 
   const current = SOURCES.find((item) => item.id === source)!
 
-  const pick = async (kind: 'folder' | 'zip') => {
+  const pick = async (kind: 'folder' | 'zip' | 'file') => {
     const selected = await open({
       multiple: false,
       directory: kind === 'folder',
-      filters: kind === 'zip' ? [{ name: '技能压缩包', extensions: ['zip'] }] : undefined,
+      filters: kind === 'zip' ? [{ name: '技能压缩包', extensions: ['zip'] }]
+        : kind === 'file' ? [{ name: '技能说明', extensions: ['md'] }] : undefined,
     })
     if (!selected || typeof selected !== 'string') return
     setPath(toLocalPath(selected))
@@ -53,14 +56,14 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     try {
       const result = await agentApi.importCustomSkill({
         source,
-        ...(source === 'folder' || source === 'zip' ? { path } : {}),
+        ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
         ...(source === 'url' ? { url } : {}),
         preview: true,
       })
       if (result?.scan) {
         setScan(result.scan)
-        setPicked(result.scan.filter((item) => item.ok).map((item) => item.root))
+        setPicked(defaultPicked(result.scan))
         setPreview(null)
         return
       }
@@ -79,17 +82,17 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     try {
       const result = await agentApi.importCustomSkill({
         source,
-        ...(source === 'folder' || source === 'zip' ? { path } : {}),
+        ...(source === 'folder' || source === 'zip' || source === 'file' ? { path } : {}),
         ...(source === 'text' ? { skill_md: text } : {}),
         ...(source === 'url' ? { url } : {}),
-        ...(scan ? { roots: picked } : {}),
+        ...(scan ? { roots: normalizePicked(scan, picked) } : {}),
         preview: false,
       })
       if (result?.results) {
         const failed = result.results.filter((item) => !item.ok)
         await onInstalled()
         if (failed.length > 0) {
-          setError(`已装 ${result.results.length - failed.length} 个，${failed.length} 个失败：${failed.map((item) => `${item.root || '包根'}（${item.reason ?? '失败'}）`).join('；')}`)
+          setError(batchFailureSummary(result.results))
           return
         }
       }
@@ -104,9 +107,11 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     } finally { setBusy(null) }
   }
 
-  const ready = source === 'folder' || source === 'zip' ? path.trim().length > 0
+  const ready = source === 'folder' || source === 'zip' || source === 'file' ? path.trim().length > 0
     : source === 'text' ? text.trim().length > 0
       : url.trim().length > 0
+
+  const pickedLabel = source === 'file' ? '.md 文件' : source === 'zip' ? '压缩包' : '文件夹'
 
   return <div className="mcp-form custom-skill-import">
     {scan && <div className="skill-scan" aria-label="包内技能清单">
@@ -116,7 +121,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
           <label>
             <input type="checkbox" aria-label={`选择 ${item.root || '包根'}`} disabled={!item.ok}
               checked={picked.includes(item.root)}
-              onChange={() => setPicked((current) => current.includes(item.root) ? current.filter((root) => root !== item.root) : [...current, item.root])} />
+              onChange={() => setPicked((current) => togglePicked(current, item.root))} />
             <span className="skill-scan-copy">
               <strong>{item.ok ? (item.name || item.root || '（包根）') : item.root || '（包根）'}</strong>
               <span>{item.ok ? `${item.description} · ${item.file_count} 个文件 · ${formatFileSize(item.total_bytes)}` : item.reason}</span>
@@ -137,10 +142,10 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     </div>
     <p className="mcp-note">{current.hint}</p>
 
-    {source === 'folder' || source === 'zip'
-      ? <label>已选{source === 'folder' ? '文件夹' : '压缩包'}
+    {source === 'folder' || source === 'zip' || source === 'file'
+      ? <label>已选{pickedLabel}
         <span className="skill-pick">
-          <input aria-label={source === 'folder' ? '文件夹路径' : '压缩包路径'} readOnly value={path} placeholder={`点右侧选择${source === 'folder' ? '文件夹' : 'zip'}…`} />
+          <input aria-label={`${pickedLabel}路径`} readOnly value={path} placeholder={`点右侧选择${pickedLabel}…`} />
           <button type="button" onClick={() => void pick(source)}>选择…</button>
         </span>
       </label>
@@ -169,7 +174,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
     <footer>
       <button type="button" onClick={onClose}>取消</button>
       {scan
-        ? <button type="button" className="skill-install" disabled={busy === true || picked.length === 0} onClick={() => void install()}>{busy ? '正在安装…' : picked.length > 1 ? `安装所选 ${picked.length} 个` : '安装所选'}</button>
+        ? <button type="button" className="skill-install" disabled={!canInstall(picked.length, busy)} onClick={() => void install()}>{installButtonLabel(picked.length, busy === true)}</button>
         : preview
           ? <button type="button" className="skill-install" disabled={busy === true} onClick={() => void install()}>{busy ? '正在安装…' : '安装'}</button>
           : <button type="button" className="skill-install" disabled={busy || !ready} onClick={() => void check()}>

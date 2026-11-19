@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CustomSkillError, CustomSkillStore, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillError, CustomSkillStore, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
 
 const SKILL_MD = "---\nname: excel-report\ndescription: 按模板生成周报\n---\n\n# 周报\n";
 
@@ -104,6 +104,42 @@ test("file:// 地址还原成绝对路径（Tauri 文件选择会返回 URL）",
   assert.equal(toLocalPath("/Users/edy/skill"), "/Users/edy/skill");
   assert.equal(toLocalPath("file:///C:/Users/edy/skill"), "C:/Users/edy/skill");
   assert.equal(toLocalPath("file:///Users/edy/%E6%96%87%E6%A1%A3"), "/Users/edy/文档");
+});
+
+test("readSkillFile 把单个 .md 当作单文件技能（技能名取自内容，不是文件名）", async () => {
+  const root = folderWith({ "我的说明.md": SKILL_MD });
+  try {
+    const files = await readSkillFile(join(root, "我的说明.md"));
+    // Pi 只从 SKILL.md 加载，所以磁盘上的任何 .md 都归一到这个名字。
+    assert.deepEqual(files.map((file) => file.path), ["SKILL.md"]);
+    assert.equal(files[0]!.content.toString("utf8"), SKILL_MD);
+    const pkg = normalizeSkillPackage(files, { kind: "file", label: "本机 .md 文件" });
+    assert.equal(pkg.name, "excel-report");
+    assert.deepEqual(pkg.files.map((file) => file.path), ["SKILL.md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readSkillFile 接受 file:// 地址", async () => {
+  const root = folderWith({ "SKILL.md": SKILL_MD });
+  try {
+    const files = await readSkillFile(`file://${root}/SKILL.md`);
+    assert.deepEqual(files.map((file) => file.path), ["SKILL.md"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readSkillFile 拒绝非 .md、目录和不存在的路径", async () => {
+  const root = folderWith({ "notes.txt": "x" });
+  try {
+    await assert.rejects(() => readSkillFile(join(root, "notes.txt")), /只支持 \.md/);
+    await assert.rejects(() => readSkillFile(root), /不是文件/);
+    await assert.rejects(() => readSkillFile(join(root, "missing.md")), /文件不存在/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("readSkillFolder 接受 file:// 文件夹地址", async () => {

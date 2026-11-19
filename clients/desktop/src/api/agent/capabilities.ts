@@ -47,7 +47,7 @@ export async function installSkill(client: RequestClient, skillId: string, repla
 // -------------------- 自定义技能（设计 2026-11-18 自定义技能导入） --------------------
 // 只在本机、只对本人会话生效，不上传、不经企业签名；preview=true 只校验返回预览。
 
-export type CustomSkillSource = 'folder' | 'zip' | 'text' | 'url'
+export type CustomSkillSource = 'folder' | 'zip' | 'file' | 'text' | 'url'
 
 export interface CustomSkillPreview {
   name: string
@@ -77,7 +77,7 @@ export interface CustomSkillImportRequest {
   skill_md?: string
   url?: string
   preview?: boolean
-  /** 安装包内指定的技能根；一次装一个。缺省取第一个。 */
+  /** 安装包内指定的技能根；一次装一个。缺省取第一个。folder / zip 可能扫出多个技能。 */
   roots?: string[]
   replace?: boolean
 }

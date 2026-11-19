@@ -563,8 +563,8 @@ const SkillInstallRequest = Type.Object({
 }, { $id: "SkillInstallRequest", additionalProperties: false });
 const SkillInstallEnvelope = Type.Object({ data: Type.Ref("LocalCapability") }, { $id: "SkillInstallEnvelope" });
 const CustomSkillImportRequest = Type.Object({
-  source: Type.Union([Type.Literal("folder"), Type.Literal("zip"), Type.Literal("text"), Type.Literal("url")], { description: "folder 本机文件夹；zip 本机压缩包；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。" }),
-  path: Type.Optional(Type.String({ maxLength: 4096, description: "folder / zip：本机绝对路径（桌面端文件选择得到）。" })),
+  source: Type.Union([Type.Literal("folder"), Type.Literal("zip"), Type.Literal("file"), Type.Literal("text"), Type.Literal("url")], { description: "folder 本机文件夹；zip 本机压缩包；file 单个 .md 文件；text 粘贴 SKILL.md；url https 网址（GitHub 仓库/子目录、单个 .md、zip）。" }),
+  path: Type.Optional(Type.String({ maxLength: 4096, description: "folder / zip / file：本机绝对路径（桌面端文件选择得到）。" })),
   skill_md: Type.Optional(Type.String({ maxLength: 200_000, description: "text：SKILL.md 全文。" })),
   url: Type.Optional(Type.String({ maxLength: 2048, description: "url：公开 https 地址。" })),
   preview: Type.Optional(Type.Boolean({ description: "true 只校验并返回预览，不安装。" })),
@@ -1735,7 +1735,7 @@ export class AgentHttpServer {
     this.registerRoute("POST", "/api/agent/capabilities/skills/custom", async (request, response, caller) => {
       const body = await this.readJson(request) as Record<string, unknown>;
       const source = body.source;
-      if (source !== "folder" && source !== "zip" && source !== "text" && source !== "url") throw new HttpProblem(422, "invalid_skill_package", "来源必须是 folder / zip / text / url。");
+      if (source !== "folder" && source !== "zip" && source !== "file" && source !== "text" && source !== "url") throw new HttpProblem(422, "invalid_skill_package", "来源必须是 folder / zip / file / text / url。");
       const store = (this.options.host as SessionHost).customSkillStore;
       if (!store) throw new HttpProblem(422, "invalid_skill_package", "本机技能目录不可用，请重启桌面端。");
       try {
@@ -1762,7 +1762,7 @@ export class AgentHttpServer {
         }
         throw error;
       }
-    }, routeSchema("importCustomSkill", { summary: "导入自定义技能", description: "成员自己导入技能（本机文件夹 / zip / 粘贴 SKILL.md / 公开 https 网址），只在本机、只对自己的会话生效，不上传、不经企业签名。preview=true 只校验并返回预览；与企业技能同名拒绝；同名自定义技能须 replace=true。", body: Type.Ref("CustomSkillImportRequest"), response: { 200: jsonResponse(Type.Ref("CustomSkillImportEnvelope")), 401: problemResponse("Unauthorized"), 409: problemResponse("Conflict"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway") } }));
+    }, routeSchema("importCustomSkill", { summary: "导入自定义技能", description: "成员自己导入技能（本机文件夹 / zip / 单个 .md / 粘贴 SKILL.md / 公开 https 网址），只在本机、只对自己的会话生效，不上传、不经企业签名。preview=true 只校验并返回预览；与企业技能同名拒绝；同名自定义技能须 replace=true。", body: Type.Ref("CustomSkillImportRequest"), response: { 200: jsonResponse(Type.Ref("CustomSkillImportEnvelope")), 401: problemResponse("Unauthorized"), 409: problemResponse("Conflict"), 413: problemResponse("TooLarge"), 422: problemResponse("ValidationError"), 502: problemResponse("BadGateway") } }));
     this.registerRoute("GET", "/api/agent/grants/snapshots", (_request, response, caller) => this.listSnapshots(response, caller!), routeSchema("listFrozenSnapshots", { summary: "列出冻结快照", description: "列出当前成员本地缓存的员工执行快照。", response: { 200: jsonResponse(Type.Ref("SnapshotListEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/readiness", (_request, response, caller) => this.readiness(response, caller!), routeSchema("grantsReadiness", { summary: "检查授权执行就绪状态", description: "检查 Agent runtime 和当前授权专家是否可以执行。", response: { 200: jsonResponse(Type.Ref("ReadinessEnvelope")) } }));
     this.registerRoute("GET", "/api/agent/grants/experts/:employee_id/readiness", (_request, response, caller, fastifyRequest) => this.expertReadiness(response, (fastifyRequest?.params as { employee_id: string }).employee_id, caller!), routeSchema("expertReadiness", { summary: "检查专家就绪状态", description: "检查指定授权专家的本地执行条件。", params: ExpertParams, response: { 200: jsonResponse(Type.Ref("ExpertReadinessEnvelope")) } }));

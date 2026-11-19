@@ -25,7 +25,7 @@ export interface CustomSkillPackage {
   description: string;
   files: { path: string; content: Buffer }[];
   /** Where it came from, for the capability row and the UI. */
-  origin: { kind: "folder" | "zip" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
 }
 
 export interface CustomSkillPreview {
@@ -40,7 +40,7 @@ export interface CustomSkillPreview {
 export interface CustomSkillRecord {
   name: string;
   description: string;
-  origin: { kind: "folder" | "zip" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
   version: string;
 }
 
@@ -54,7 +54,7 @@ export class CustomSkillError extends Error {
 interface Manifest {
   name: string;
   description: string;
-  origin: { kind: "folder" | "zip" | "text" | "url"; label: string; url?: string };
+  origin: { kind: "folder" | "zip" | "file" | "text" | "url"; label: string; url?: string };
   files: { path: string; size: number; sha256: string }[];
   content_hash: string;
 }
@@ -293,6 +293,21 @@ export async function readSkillFolder(folder: string): Promise<{ path: string; c
   };
   await walk(root);
   return out;
+}
+
+/**
+ * Collects one markdown file as a single-file skill package.
+ * Pi only loads a skill from a `SKILL.md`, so the file is placed under that name regardless of what it
+ * is called on disk; the skill name comes from its frontmatter, never from the filename.
+ */
+export async function readSkillFile(file: string): Promise<{ path: string; content: Buffer }[]> {
+  const target = resolve(toLocalPath(file));
+  if (!existsSync(target)) throw new CustomSkillError("invalid_skill_package", `文件不存在：${file}`);
+  const stat = lstatSync(target);
+  if (!stat.isFile()) throw new CustomSkillError("invalid_skill_package", `不是文件：${file}`);
+  if (!/\.md$/i.test(target)) throw new CustomSkillError("invalid_skill_package", "只支持 .md 文件（技能说明）。");
+  if (stat.size > MAX_SINGLE_FILE_BYTES) throw new CustomSkillError("skill_too_large", `文件超过 ${Math.floor(MAX_SINGLE_FILE_BYTES / 1024 / 1024)} MiB：${target}`);
+  return [{ path: "SKILL.md", content: await readFileAsync(target) }];
 }
 
 export interface UrlImport {

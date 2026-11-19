@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, toLocalPath, unzipEntries } from "./custom-skills.js";
 export { CustomSkillError } from "./custom-skills.js";
 import { readFile as readFileAsync } from "node:fs/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -674,8 +674,10 @@ export class SkillInstallError extends Error {
   constructor(readonly code: "skill_not_installable" | "skill_installed" | "skill_exists" | "skill_install_failed" | "skill_signature_invalid" | "manager_unavailable", message: string) { super(message); this.name = "SkillInstallError"; }
 }
 
+const SOURCE_LABELS: Record<CustomSkillPackage["origin"]["kind"], string> = { folder: "本机文件夹", zip: "本机 zip", file: "本机 .md 文件", text: "粘贴 SKILL.md", url: "" };
+
 /**
- * Desktop «能力» page: the member imports their own skill (folder / zip / pasted SKILL.md / https URL).
+ * Desktop «能力» page: the member imports their own skill (folder / zip / single .md / pasted SKILL.md / https URL).
  * Unsigned, so it is stored in a separate local store with a per-file hash instead of the signed SkillCache.
  * `preview` only validates and reports; otherwise it installs, refusing to shadow an enterprise skill.
  */
@@ -693,14 +695,17 @@ export interface CustomSkillScanItem {
 
 export async function importCustomSkill(
   store: AgentSqliteStore, custom: CustomSkillStore, owner: TaskOwner,
-  request: { source: "folder" | "zip" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
+  request: { source: "folder" | "zip" | "file" | "text" | "url"; path?: string; skill_md?: string; url?: string; preview?: boolean; replace?: boolean; roots?: readonly string[] },
   signal?: AbortSignal,
 ): Promise<{ preview?: CustomSkillPreview; capability?: LocalCapability; scan?: CustomSkillScanItem[]; results?: CustomSkillInstallResultItem[] }> {
-  const origin = { kind: request.source, label: request.url?.trim() || (request.source === "folder" ? "本机文件夹" : request.source === "zip" ? "本机 zip" : request.source === "text" ? "粘贴 SKILL.md" : request.url?.trim() || ""), ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
+  const origin = { kind: request.source, label: request.url?.trim() || SOURCE_LABELS[request.source] || "", ...(request.url?.trim() ? { url: request.url.trim() } : {}) } as CustomSkillPackage["origin"];
   let files: { path: string; content: Buffer }[];
   if (request.source === "folder") {
     if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择文件夹。");
     files = await readSkillFolder(request.path);
+  } else if (request.source === "file") {
+    if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择 .md 文件。");
+    files = await readSkillFile(request.path);
   } else if (request.source === "zip") {
     if (!request.path) throw new CustomSkillError("invalid_skill_package", "没有选择 zip。");
     files = unzipEntries(await readFileAsync(toLocalPath(request.path)));
