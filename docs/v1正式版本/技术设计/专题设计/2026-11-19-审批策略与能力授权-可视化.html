@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>审批策略与能力授权 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>审批策略与能力授权</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>审批「该问才问，授权过不再问」 <small>2026-11-19 · 设计草案，未写代码</small></h2>
+<p class="lead">一句话：把审批从「按工具名黑名单」升级为「风险分级 + 节流 + 无人值守 + 授权延续」→ 定时任务不再被审批卡死，无风险动作不打扰，授权过的能力不重复问，MCP 用量与平台密钥口径一致。</p>
+<div class="grid3">
+<div class="card"><b>触发策略</b><p class="note">风险分级（无风险不弹）+ 节流（短时间不重复弹）+ 无人值守（定时任务不弹，未授权动作跳过并记录）。</p></div>
+<div class="card"><b>授权延续</b><p class="note">安装或使用时用户给了权限，之后不再询问；授权仅本会话有效；会话授权限来源，外部未签名内容（新技能安装）每次询问。</p></div>
+<div class="card"><b>计量与密钥</b><p class="note">MCP 用量计入 token 统计（取消整轮免计）；平台密钥按成员对 MCP / 企业信息的权限按需下发并审计。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-19-审批策略与能力授权-需求与设计.md</code>。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:22%">现在的问题</th><th style="width:42%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>定时任务（无人值守）遇到需审批动作会弹框，10 分钟后过期并中止整次运行，提示「请把权限调高」。</td><td>无人值守运行默认不弹框：已授权能力自动执行；未授权动作跳过并记录原因，运行结束后汇总通知，不中止整次运行。</td><td><span class="tag ag">成员</span><span class="tag mg">企业</span></td></tr>
+<tr><td>同一会话同一工具反复调用会反复弹，没有冷却与合并。</td><td>节流：同参数直接复用已有审批；同工具在冷却窗口内不重弹；同批次一次审批覆盖整批；前端把多条待批合并为队列卡片。</td><td><span class="tag ag">成员</span></td></tr>
+<tr><td>无风险任务也弹：未知工具一律按高风险；只读白名单是硬编码，新增只读工具要改代码。</td><td>风险分级表：只读/查询类不弹；本地写改为低风险（节流后弹）；外部与未知仍按高风险必弹。</td><td><span class="tag ag">成员</span></td></tr>
+<tr><td>安装/使用时给了权限，之后仍可能弹；「本会话不再询问」对技能安装不限来源。</td><td>能力授权记录（仅本会话有效）：批准安装/使用时写入授权，本会话内不再问；外部来源（ClawHub / 网址 / 粘贴）新技能安装每次都询问。</td><td><span class="tag ag">成员</span></td></tr>
+<tr><td>用了个人能力（含 MCP）的整轮 token 与费用都不进 outbox，MCP 用量不计入统计。</td><td>取消「整轮免计」：只要用了 MCP 就正常上报整轮用量；个人能力仅用于审计与展示。</td><td><span class="tag mg">企业</span><span class="tag op">运营</span></td></tr>
+<tr><td>企业自有 MCP 的平台应用密钥，任何在职成员的本机都能取。</td><td>下发前校验：企业已启用 + 成员在可安装 / 已授权范围；仅按需下发并记审计。员工自配 MCP 的凭据只在本机，不经过这里。</td><td><span class="tag mg">企业</span></td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（对外口径一致）：</b>不保证所有工具都能自动判级（未知工具仍按高风险弹）；不保证定时任务在存在未授权动作时结果完整（被跳过的动作不会执行）；不保证密钥下发到成员本机后的存储安全（只做按需下发与审计）。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">桌面端 · 审批弹窗</button>
+<button data-p="u2">桌面端 · 定时任务结果</button>
+<button data-p="u3">桌面端 · 能力授权</button>
+<button data-p="u4">企业端 · MCP 目录</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>工具权限审批</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>请求摘要</h4>
+<div class="row"><span>工具</span><span>external_mail.send</span></div>
+<div class="row"><span>风险</span><span class="tag bad">外部动作</span></div>
+<div class="row"><span>来源</span><span class="tag mg">平台目录</span></div>
+<div class="row"><span>参数</span><span>to=… subject=…</span></div>
+<p class="note">摘要已脱敏，令牌类字段不显示。</p></div>
+</div>
+<div>
+<div class="box"><h4>决定</h4>
+<div class="row"><span>本会话不再询问</span><input type="checkbox"></div>
+<div class="row"><span>记住该能力（成员全局）</span><input type="checkbox"></div>
+<div class="row"><span>访问令牌（仅本机内存）</span><span class="input">••••••</span></div>
+<p style="margin-top:8px"><span class="btn pri">允许</span> <span class="btn danger">拒绝</span></p>
+<p class="note">外部来源（ClawHub / 网址 / 粘贴）不显示「本会话不再询问」。</p></div>
+</div></div></div></div>
+<p class="note">要点：审批弹窗保留，但选项按来源受限；授权状态可见。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>定时任务 · 运行结果</b></div>
+<div class="body">
+<div class="box"><h4>本次运行</h4>
+<div class="row"><span>已完成</span><span class="tag ok">3 个动作</span></div>
+<div class="row"><span>未授权跳过</span><span class="tag warn">1 个动作</span></div>
+<div class="row"><span>耗时</span><span>42 秒</span></div>
+<p class="note">跳过：<code>external_crm.write</code>（未授权）。无人值守运行不弹框，不中止整次运行。</p></div>
+</div></div>
+<p class="note">要点：定时任务不再因审批过期而整体失败；未执行的动作被明确记录并通知。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>设置 · 能力授权</b></div>
+<div class="body">
+<div class="box"><h4>已授权能力</h4>
+<div class="row"><span>github</span><span>平台目录 · 成员全局</span><span class="btn">撤销</span></div>
+<div class="row"><span>notion</span><span>平台目录 · 成员全局</span><span class="btn">撤销</span></div>
+<div class="row"><span>我的天气技能</span><span>本机导入 · 本会话</span><span class="btn">撤销</span></div>
+<p class="note">安装或使用时批准即写入；撤销后再次使用会重新询问。</p></div>
+</div></div>
+<p class="note">要点：授权可查看、可撤销，用户能管住「不再询问」的范围。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>企业端 · MCP 目录</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>平台 MCP</h4>
+<div class="row"><span>github</span><span class="tag ok">已启用</span></div>
+<div class="row"><span>notion</span><span class="tag ok">已启用</span></div>
+<div class="row"><span>crm</span><span class="tag gray">未启用</span></div>
+</div>
+</div>
+<div>
+<div class="box"><h4>密钥下发</h4>
+<div class="row"><span>可下发成员</span><span>已授权 12 / 30</span></div>
+<div class="row"><span>审计</span><span>保留 90 天</span></div>
+<p class="note">仅向「已启用 + 已授权」的成员下发应用密钥；不在范围不下发。仅适用于企业自有 MCP；员工自配的 MCP 凭据只在本机，不经过这里。</p></div>
+</div></div></div></div>
+<p class="note">要点：平台密钥按成员权限按需下发，不再无条件给所有在职成员。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站；会话内容不上传；平台模型状态单写者；Manager 租户数据经 TenantContext / RLS。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 560" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="18" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="160" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="18" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="320" width="1090" height="180" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="18" y="342" font-size="13" font-weight="700" fill="#e8590c">用户本机 Desktop + Agent（本地库，会话不上传）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 目录收录</text><text x="40" y="86" fill="#667085">平台 MCP 元信息</text>
+<rect x="270" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="280" y="70">② 发布 / 下架</text><text x="280" y="86" fill="#667085">运营审批</text>
+<rect x="510" y="50" width="200" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="520" y="70">③ 密钥登记</text><text x="520" y="86" fill="#667085">加密入库</text>
+<rect x="760" y="50" width="300" height="48" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="770" y="70">oper：目录 / 修订 / 密钥密文</text><text x="770" y="86" fill="#667085">单写者</text>
+
+<rect x="510" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="520" y="210">④ 启用 / 停用</text><text x="520" y="226" fill="#667085">管理员</text>
+<rect x="270" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="280" y="210">⑤ 可装列表</text><text x="280" y="226" fill="#667085">按授权裁剪</text>
+<rect x="30" y="190" width="200" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ 密钥下发</text><text x="40" y="226" fill="#667085">权限校验 + 审计</text>
+<rect x="760" y="190" width="300" height="48" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="770" y="210">mgr：目录 / 启用 / 授权</text><text x="770" y="226" fill="#667085">RLS</text>
+
+<rect x="30" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="390">⑦ 风险分级</text><text x="40" y="406" fill="#667085">无 / 低 / 高</text>
+<rect x="270" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="280" y="390">⑧ 授权检查</text><text x="280" y="406" fill="#667085">能力 / 会话</text>
+<rect x="510" y="370" width="200" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="520" y="390">⑨ 触发或跳过</text><text x="520" y="406" fill="#667085">交互 / 无人值守</text>
+<rect x="760" y="370" width="300" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="770" y="390">本地：审批 / 授权 / 用量</text><text x="770" y="406" fill="#667085">会话不上传</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M230 74 H270"/><path d="M470 74 H510"/>
+<path d="M610 98 V190" stroke-dasharray="4 3"/>
+<path d="M510 214 H470"/><path d="M270 214 H230"/>
+<path d="M130 238 V370" stroke-dasharray="4 3"/>
+<path d="M230 394 H270"/><path d="M470 394 H510"/>
+</g>
+<text x="620" y="150" font-size="11" fill="#667085">运营发布 → 企业启用（服务间）</text>
+<text x="140" y="310" font-size="11" fill="#667085">成员本机按需取可装列表 / 密钥</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端调用。方向只有：Operator→Manager 服务间调用、Agent 主动访问 Manager、Agent 本机内部；没有入站到用户机器。</p>
+</div>
+
+<h3>3.2 主流程</h3>
+<div class="flow">
+<div class="s"><b>工具调用</b>模型发起 toolCall</div><div class="a">→</div>
+<div class="s"><b>风险分级</b>无风险 / 低 / 高</div><div class="a">→</div>
+<div class="s"><b>场景判定</b>交互 / 无人值守 / 只读</div><div class="a">→</div>
+<div class="s"><b>授权检查</b>能力授权 / 会话授权</div><div class="a">→</div>
+<div class="s"><b>触发或跳过</b>弹框 / 复用 / 跳过</div><div class="a">→</div>
+<div class="s"><b>执行并记录</b>审计 + 用量</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>状态</th><th>交互会话</th><th>无人值守（定时任务）</th><th>只读会话</th></tr>
+<tr><td><span class="tag ok">无风险</span></td><td>直接执行，不弹</td><td>直接执行，不弹</td><td>直接执行</td></tr>
+<tr><td><span class="tag warn">低风险（本地写）</span></td><td>首次弹，冷却窗口内不重弹</td><td>已授权则执行；未授权跳过并记录</td><td>拒绝执行</td></tr>
+<tr><td><span class="tag bad">高风险（外部 / 未知）</span></td><td>必弹；已授权可不弹</td><td>已授权则执行；未授权跳过并记录</td><td>拒绝执行</td></tr>
+<tr><td><span class="tag gray">重复请求</span></td><td colspan="2">同参数复用已有审批；同工具冷却窗口内不重弹；同批次一次审批覆盖整批</td><td>同左</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>clients/desktop/src/stores/approvals.ts</code>、<code>clients/desktop/src/components/Approvals/ApprovalDialog.tsx</code>、<code>clients/desktop/src/pages/Capabilities/CustomSkillImport.tsx</code>。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>审批弹窗：会话授权按来源显隐（外部来源不显示）；新增「记住该能力」选项；授权状态与撤销入口。</td><td>P1 / P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>待批队列：同一会话多条待批合并为一个卡片，按批次展示，避免连续弹窗。</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>设置 · 能力授权页（新）：列出已授权能力（MCP / 技能）、来源、范围，可撤销。</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>定时任务结果：未授权跳过的动作在运行结果里可见（已有 <code>backgroundApprovalFailure</code> 通道，改为「跳过清单」）。</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>MCP 目录：展示「可下发成员数 / 已授权」与密钥下发审计入口（可选，P3）。</td><td>P3</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>无改动。</td><td>—</td><td class="sz S">—</td></tr>
+<tr><td>全部</td><td>i18n、权限控制（按角色显隐）、Playwright 端到端用例、a11y</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th class="sz" style="width:7%">量级</th></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>风险分级表：<code>SAFE_TOOLS</code> 扩展为注册表（工具名 / readOnlyHint / 方法名），无风险直接放行。</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>节流：同参数复用（已有 <code>canonicalArgsHmac</code>）、同工具冷却窗口、同批次 <code>approval_batch_id</code> 合并。</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>无人值守策略：<code>record.activeBackground</code> 下不弹框；已授权执行，未授权跳过并记录，不再中止整次运行。</td><td>P1</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>能力授权存储与查询（新表 <code>member_capability_grant</code>）：安装/使用时写入，调用时命中即放行；会话授权键带来源。</td><td>P2</td><td class="sz L">L</td></tr>
+<tr><td><span class="tag ag">agent_service</span></td><td>用量：移除 <code>usedPersonalCapability</code> 对整轮的上报排除，MCP 运行正常计入 token。</td><td>P4</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><code>GET /grants/mcp-servers/{server_id}/oauth-client</code> 增加权限校验（企业已启用 + 成员在可装 / 已授权范围）与审计。仅针对企业自有 MCP；员工自配 MCP 不受此限。</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag">server/shared</span></td><td>契约（新）：授权来源枚举、能力授权 DTO、跳过原因码。</td><td>P1 / P2</td><td class="sz S">S</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>授权与会话授权键属共享契约，必须先升级下游（Agent / 前端）再发布上游（Manager）；迁移需带 <code>-- deploy-compat: contract</code>，避免再出现「收缩型迁移」被 CI 判失败。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:18%">变更</th><th>内容</th><th style="width:14%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>approval_session_grant</code></td><td>授权键带来源：<code>subject</code> 由 <code>skill</code> 细化为 <code>skill:platform_catalog</code> / <code>skill:external</code>（或新增 <code>source</code> 列）；外部来源不允许写会话授权。</td><td>Agent + 桌面端</td><td class="sz M">中</td></tr>
+<tr><td><code>member_capability_grant</code>（新）</td><td>成员对能力（MCP ref / 技能 id）的授权：tenant、member、capability_kind、capability_ref、source、scope、created_at。</td><td>Agent + 桌面端 + Manager</td><td class="sz L">高</td></tr>
+<tr><td><code>work_records.usage</code></td><td>不再因「用了个人能力」整轮置空；MCP 运行正常计入（逻辑变更，不改表）。</td><td>Agent + Manager 用量</td><td class="sz M">中</td></tr>
+<tr><td><code>oauth_client</code> 路由</td><td>响应结构不变；增加权限校验与审计（新逻辑，不改表）。</td><td>Manager + Agent</td><td class="sz M">中</td></tr>
+<tr><td>审批记录</td><td>复用 <code>approval_batch_id</code> 做批次合并；节流命中不需要新字段（按 <code>canonicalArgsHmac</code> + 时间窗口查询）。</td><td>Agent</td><td class="sz S">低</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b><code>member_capability_grant</code> 新表与授权键细化属共享契约变更，需按 AGENTS.md §8「高风险操作」确认后再实施。建议发布顺序：先升级 Agent / 前端（能读旧键、写新键），再发布 Manager 校验，最后下线旧键。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:12%">阶段</th><th>内容</th><th style="width:22%">依赖</th><th style="width:26%">验收</th></tr>
+<tr><td>P0 验证</td><td>复现定时任务「弹框→过期→中止」；确认 <code>findApprovalForTool</code> 复用条件与 <code>approval_batch_id</code> 语义；确认 MCP 工具 <code>readOnlyHint</code> 可得。</td><td>本机 Agent + 测试会话</td><td>给出三条结论并回填本设计的触发规则</td></tr>
+<tr><td>P1 触发策略</td><td>风险分级表、节流、无人值守不弹、待批队列合并、跳过清单。</td><td>P0</td><td>定时任务不再因审批中止；同参数 / 同工具冷却窗口内不重弹；无风险工具不弹。</td></tr>
+<tr><td>P2 授权延续</td><td><code>member_capability_grant</code> 表 + 安装/使用授权 + 设置页 + 会话授权限来源。</td><td>P1</td><td>安装后同能力不再询问；外部来源不出现会话授权；撤销后恢复询问。</td></tr>
+<tr><td>P3 密钥权限</td><td><code>oauth_client</code> 增加权限校验与审计。</td><td>P2（授权数据）</td><td>未授权成员取不到密钥；下发有审计记录。</td></tr>
+<tr><td>P4 用量</td><td>移除整轮免计，MCP 用量计入 token 统计。</td><td>P1</td><td>用个人 MCP 的运行 token/费用正常进 outbox 与账单。</td></tr>
+</table>
+<p class="note">P1 与 P4 可并行（P4 只改用量口径）；P3 依赖 P2 的授权数据；P2 依赖 P1 的触发与跳过语义。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（不再讨论，仅备查）</h3>
+<p><span class="tag ok">定时任务不弹框，不影响执行</span><span class="tag ok">短时间不重复弹</span><span class="tag ok">无风险任务不弹</span><span class="tag ok">安装 / 使用时授权后不再询问</span><span class="tag ok">MCP 用量计入 token 统计</span><span class="tag ok">平台密钥按成员权限下发</span><span class="tag ok">无人值守未授权动作：跳过并记录</span><span class="tag ok">节流窗口 30 分钟</span><span class="tag ok">能力授权仅本会话有效</span><span class="tag ok">新技能安装每次都询问</span><span class="tag ok">企业自有 MCP 密钥授权后才可取</span></p>
+
+<h3>待决策</h3>
+<p>本轮 5 项已全部拍板（结论见上），无遗留。</p>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>
