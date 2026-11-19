@@ -1685,6 +1685,13 @@ export class AgentSqliteStore {
     ).all(tenantId, memberId, conversationId) as { kind: "mcp" | "skill"; ref: string; source: string; scope: string }[];
   }
 
+  /** 设置页用：列出成员全部会话的能力授权（仅本会话有效，会话删除即消失）。 */
+  listAllCapabilityGrants(tenantId: string, memberId: string): { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[] {
+    return this.db.prepare(
+      "SELECT conversation_id, kind, ref, source, scope FROM capability_grant WHERE tenant_id = ? AND member_id = ? ORDER BY created_at DESC, kind, ref",
+    ).all(tenantId, memberId) as { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[];
+  }
+
   /** 待上报的授权（本机已写、Manager 尚未收到）；上报成功后回写 synced_at。 */
   unsyncedCapabilityGrants(tenantId: string, memberId: string): { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[] {
     return this.db.prepare(
