@@ -7,6 +7,7 @@ export function composeCapabilityRequestMessage(input: { requirement: string; li
   if (link) lines.push('', `链接：${link}`)
   const json = input.json.trim()
   if (json) lines.push('', `配置 JSON：\n${json}`)
-  lines.push('', '不用自我介绍，直接判断。要求：先判断该装技能还是 MCP；来源可以是 ClawHub、GitHub、公开网址或粘贴的内容，不做限制；装之前先发 capability_install 让我批准。')
+  lines.push('', '不用自我介绍，直接判断。先回一行「标题：<6-12 字>」作为这次对话的标题，再说明你的判断。')
+  lines.push('要求：先判断该装技能还是 MCP；来源可以是 ClawHub、GitHub、公开网址或粘贴的内容，不做限制；装之前先发 capability_install 让我批准。')
   return lines.join('\n')
 }

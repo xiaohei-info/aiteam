@@ -94,7 +94,7 @@ export default function Capabilities() {
       time: '',
       _employeeId: employeeId,
     })
-    navigate('/chat', { state: { employeeId, conversationId, agentName: employee?.displayName, initialMessage: text, refreshWorkbench: true } })
+    navigate('/chat', { state: { employeeId, conversationId, agentName: employee?.displayName, initialMessage: text, titleFromEmployee: true, refreshWorkbench: true } })
     void refreshConversations().catch(console.error)
   }
 
