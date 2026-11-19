@@ -107,11 +107,15 @@ _MARKET_FIELDS = {"server_id", "ref", "display_name", "summary", "url", "tools",
 
 
 class McpMarketService:
-    def __init__(self, *, operator: OperatorCatalogPort, repo: McpCatalogRepository, members, crypto: CryptoService | None = None):
+    def __init__(self, *, operator: OperatorCatalogPort, repo: McpCatalogRepository, members, crypto: CryptoService | None = None,
+                 grants=None, audit=None):
         self._operator = operator
         self._repo = repo
         self._members = members
         self._crypto = crypto or CryptoService()
+        # 授权与审计端口（可选：单元测试可留空；真实装配见 app.py）。
+        self._grants = grants
+        self._audit = audit
 
     def _platform(self) -> list[PlatformMcpServerPull]:
         return [PlatformMcpServerPull.model_validate(item) for item in self._operator.list_platform_mcp_servers()]
@@ -174,10 +178,20 @@ class McpMarketService:
         ]
 
     def oauth_client(self, ctx: TenantContext, server_id: str) -> dict:
-        """Platform-preregistered application of an enabled OAuth entry, for the member's Agent to sign in / refresh."""
+        """平台预登记的 OAuth 应用，供成员本机 Agent 登录 / 刷新令牌。
+
+        下发前校验（设计 2026-11-19 §3.4）：企业已启用 + 成员在职 + 成员已授权该 MCP。
+        每次下发记一条审计。只有成员本机Agent 在授权后才拿得到密钥。
+        """
         require_active(self._members.get_member(ctx, ctx.user_id))
         found = self._repo.oauth_client(ctx, server_id)
         if found is None or found[0] != "oauth" or not found[1]:
             raise NotFound("本企业目录中没有该 MCP 的预登记应用")
         _auth, client_id, secret = found
-        return {"client_id": client_id, **({"client_secret": self._crypto.decrypt(secret)} if secret else {})}
+        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=server_id):
+            raise NotFound("该 MCP 尚未授权给当前成员，无法下发应用密钥")
+        result = {"client_id": client_id, **({"client_secret": self._crypto.decrypt(secret)} if secret else {})}
+        if self._audit is not None:
+            self._audit.record(ctx, actor=ctx.user_id, action="mcp.oauth_client.issued",
+                               resource_type="mcp_server", resource_id=server_id)
+        return result
