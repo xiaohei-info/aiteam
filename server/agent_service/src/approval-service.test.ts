@@ -218,7 +218,7 @@ test("session_allow 对技能安装生效（本会话），对 MCP 安装不生�
     const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
     service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true });
     assert.equal(await first, "installed");
-    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill"), true);
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill:enterprise_catalog"), true);
     // 第二次技能安装不再弹。
     assert.equal(await service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", toolCallId: "call-skill-2", summary: skillInstall }), async () => "again"), "again");
     assert.equal(required, 1, "技能安装只弹一次");
@@ -247,5 +247,69 @@ test("session_allow 对 MCP 安装（subject 为空）被拒", async () => {
     assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", ""), false);
     pending.catch(() => undefined);
     service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// 回归（#218 复核）：会话授权限来源。外部来源（ClawHub / 网址 / 粘贴）不允许写会话授权，
+// 也不能靠旧键 `skill` 命中免问；目录来源（平台 / 企业）仍可授权。
+test("session_allow 限来源：外部技能不允许，目录技能允许", async () => {
+  const { root, store } = fixture();
+  try {
+    const service = new ApprovalService(store, { onRequired: () => undefined });
+    const external = `capability_install:${JSON.stringify({ kind: "skill", ref: "weather", display_name: "天气", source: "clawhub_catalog", reason: "" })}`;
+    const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: external }), async () => "x");
+    while (service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
+    assert.throws(
+      () => service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k", sessionAllow: true }),
+      ApprovalSessionAllowError,
+    );
+    // 外部来源的 subject 是 skill:external，且旧键 `skill` 不会被写入。
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill:external"), false);
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill"), false);
+    pending.catch(() => undefined);
+    service.clear();
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("旧键 skill 仍可读（升级期兼容），但不被当作目录来源重复写入", () => {
+  const { root, store } = fixture();
+  try {
+    store.createConversation({ id: "conversation-1", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
+    store.putApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill");
+    // 旧客户端写的是 `skill`；按旧键读仍能命中，升级期不会突然每次都弹。
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill"), true);
+    // 但新代码写入 / 读取的是带来源的键，不会被旧键冒充。
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill:platform_catalog"), false);
+    assert.equal(store.hasApprovalSessionGrant("tenant-1", "member-1", "conversation-1", "capability_install", "skill:external"), false);
+  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// 能力授权（设计 2026-11-19 §3.2）：批准安装即写入本机授权，并标记为待上报。
+test("批准能力安装后写入能力授权，待上报；会话删除后清空", async () => {
+  const { root, store } = fixture();
+  try {
+    store.createConversation({ id: "conversation-1", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
+    const service = new ApprovalService(store, { onRequired: () => undefined });
+    const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "cr-test", display_name: "CRM", url: "https://crm.example.com/mcp", source: "platform_catalog", reason: "" })}`;
+    const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: mcpInstall }), async () => "x");
+    while (service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
+    service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k" });
+    await pending;
+
+    assert.deepEqual(JSON.parse(JSON.stringify(store.listCapabilityGrants("tenant-1", "member-1", "conversation-1"))),
+      [{ kind: "mcp", ref: "cr-test", source: "platform_catalog", scope: "session" }]);
+    const unsynced = store.unsyncedCapabilityGrants("tenant-1", "member-1");
+    assert.deepEqual(unsynced.map((item) => [item.conversation_id, item.kind, item.ref]), [["conversation-1", "mcp", "cr-test"]]);
+    store.markCapabilityGrantsSynced("tenant-1", "member-1", [{ conversationId: "conversation-1", kind: "mcp", ref: "cr-test" }]);
+    assert.deepEqual(store.unsyncedCapabilityGrants("tenant-1", "member-1"), []);
+
+    store.deleteCapabilityGrants("tenant-1", "member-1", "conversation-1");
+    assert.deepEqual(store.listCapabilityGrants("tenant-1", "member-1", "conversation-1"), []);
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });

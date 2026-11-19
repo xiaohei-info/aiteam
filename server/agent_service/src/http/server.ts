@@ -1695,6 +1695,10 @@ export class AgentHttpServer {
       if (!idempotencyKey) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required for approval decisions");
       try {
         const approval = this.approvals().decide({ id: values.approval_id, tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId, conversationId: values.conversation_id, decision: body.decision, expectedRevision, ...(resolution ? { resolution } : {}), ...(remember ? { remember } : {}), ...(sessionAllow ? { sessionAllow } : {}), ...(credential ? { credential } : {}), approvedBy: memberId, idempotencyKey });
+        // 批准安装后把能力授权上报 Manager（仅本会话有效），供平台密钥下发校验；失败不阻断安装。
+        if (body.decision === "approve") {
+          void this.options.host.syncCapabilityGrants({ callerId: caller!.callerId, userId: caller!.userId ?? caller!.callerId, tenantId: caller!.tenantId! }).catch(() => undefined);
+        }
         this.writeJson(response, 200, { data: approvalPublic(approval) });
       } catch (error) {
         if (error instanceof ApprovalNotFoundError) throw new HttpProblem(404, "approval_not_found", error.message);
@@ -2389,6 +2393,8 @@ export class AgentHttpServer {
 
   private async deleteConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     if (!(await this.options.host.delete(conversationId, caller.tenantId!, caller.userId ?? caller.callerId))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
+    // 会话结束：能力授权仅本会话有效，本机与 Manager 同步失效。
+    await this.options.host.revokeCapabilityGrants(caller, conversationId).catch(() => undefined);
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 

@@ -11,25 +11,40 @@ export const AUTO_INSTALL_APPROVER = "policy:auto-install";
 /** `approved_by` of external tools the member allowed once for this conversation ("本会话不再询问"). */
 export const SESSION_GRANT_APPROVER = "policy:session-grant";
 
-/** Kind and source of a `capability_install` approval, read from the summary the Agent itself wrote; null otherwise. */
-export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): { kind: "mcp" | "skill"; source: string } | null {
+/** Kind, source and ref of a `capability_install` approval, read from the summary the Agent itself wrote; null otherwise. */
+export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): { kind: "mcp" | "skill"; source: string; ref: string } | null {
   const prefix = "capability_install:";
   if (record.tool_name !== "capability_install" || !record.redacted_summary.startsWith(prefix)) return null;
   try {
-    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; source?: unknown };
-    return (data.kind === "mcp" || data.kind === "skill") && typeof data.source === "string" ? { kind: data.kind, source: data.source } : null;
+    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; source?: unknown; ref?: unknown };
+    return (data.kind === "mcp" || data.kind === "skill") && typeof data.source === "string" && typeof data.ref === "string"
+      ? { kind: data.kind, source: data.source, ref: data.ref }
+      : null;
   } catch {
     return null;
   }
 }
 
 /**
- * 会话授权的匹配键：外部工具用 tool_name（subject 空）；技能安装用 `capability_install` + subject 'skill'。
+ * 会话授权的匹配键：外部工具用 tool_name（subject 空）；技能安装用 `capability_install` + 带来源的 subject。
  * MCP 安装不做（审批弹窗还要收集 OAuth 登录 / bearer 令牌）。
+ *
+ * 来源细分是为了限住「本会话不再询问」：企业目录（平台 / 企业）来源可以授权，
+ * 外部来源（ClawHub / 网址 / 粘贴）每次都要问（设计 2026-11-19 §3.2）。
+ * 旧键 `skill` 仍然可读一个版本，但不再写入。
  */
 export function sessionGrantSubject(request: Pick<ApprovalRequest, "toolName" | "summary">): string {
   if (request.toolName !== "capability_install") return "";
-  return capabilityInstallOf({ tool_name: request.toolName, redacted_summary: request.summary ?? "" })?.kind === "skill" ? "skill" : "";
+  const install = capabilityInstallOf({ tool_name: request.toolName, redacted_summary: request.summary ?? "" });
+  if (install?.kind !== "skill") return "";
+  return install.source === "platform_catalog" || install.source === "enterprise_catalog"
+    ? `skill:${install.source}`
+    : "skill:external";
+}
+
+/** 该 subject 是否允许成员勾「本会话不再询问」：外部来源不允许。 */
+export function sessionGrantAllowed(subject: string): boolean {
+  return subject !== "" && subject !== "skill:external";
 }
 
 export interface ApprovalRequest {
@@ -155,7 +170,7 @@ export class ApprovalService {
     // External connectors and unknown tools keep requiring a human decision —— 除非成员在该会话里勾过「本会话不再询问」。
     // 会话授权只对当前会话生效：外部工具，以及技能安装（MCP 安装还要收集凭据，不做）。
     const subject = sessionGrantSubject(request);
-    const sessionGranted = (request.riskLevel === "external" || subject === "skill")
+    const sessionGranted = (request.riskLevel === "external" || sessionGrantAllowed(subject))
       && this.store.hasApprovalSessionGrant(request.tenantId, request.memberId, request.conversationId, request.toolName, subject);
     const autoApprove = sessionGranted
       || (request.permissionMode === "full-access"
@@ -235,7 +250,7 @@ export class ApprovalService {
       // 只写外部工具与技能安装：本地工具（bash/write/edit）已由「完全访问」负责；
       // MCP 安装要收集登录/令牌，跳过审批会拿不到凭据。
       const subject = target ? sessionGrantSubject({ toolName: target.tool_name, summary: target.redacted_summary }) : "";
-      const allowed = target?.risk_level === "external" || subject === "skill";
+      const allowed = target?.risk_level === "external" || sessionGrantAllowed(subject);
       if (target && (input.decision !== "approve" || !allowed)) throw new ApprovalSessionAllowError();
     }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
@@ -252,6 +267,11 @@ export class ApprovalService {
     if (input.sessionAllow && record.status === "approved") {
       const subject = sessionGrantSubject({ toolName: record.tool_name, summary: record.redacted_summary });
       this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name, subject);
+    }
+    // 能力授权（仅本会话有效）：批准安装即写入，作为 Manager 下发平台密钥的授权凭据（设计 2026-11-19 §3.2）。
+    if (record.status === "approved" && record.tool_name === "capability_install") {
+      const install = capabilityInstallOf(record);
+      if (install) this.store.putCapabilityGrant(record.tenant_id, record.member_id, record.conversation_id, install);
     }
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
