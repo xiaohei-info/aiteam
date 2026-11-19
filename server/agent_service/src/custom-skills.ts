@@ -320,6 +320,26 @@ export interface UrlImport {
   origin: CustomSkillPackage["origin"];
 }
 
+/** 只接受 https 地址；用于校验下载重定向后的最终地址。 */
+function safeUrl(raw: string): URL | undefined {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 本机回环 http：仅测试 / localhost 开发地址，生产下载一律 https。 */
+function isLoopbackHttp(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" && (["127.0.0.1", "localhost", "[::1]"].includes(url.hostname));
+  } catch {
+    return false;
+  }
+}
+
 /** Downloads a public https URL: a GitHub folder / file, a .md file or a .zip archive. */
 export async function fetchSkillFromUrl(rawUrl: string, signal?: AbortSignal): Promise<UrlImport> {
   let url: URL;
@@ -563,20 +583,44 @@ async function fetchGithub(parts: GithubParts, url: URL, signal?: AbortSignal): 
   return { files: nested, origin: { kind: "url", label, url: label } };
 }
 
-/** Unzips with a bound on entries and uncompressed size, so a zip bomb fails early. */
+/**
+ * 解包并限制条目数与解压后总大小。
+ *
+ * `filter` 在解压**之前**按 ZIP 头部里的 `originalSize` 判定，所以压缩包炸弹不会先在内存里展开；
+ * 头部可声明为 0（流式 zip），此时回退到解压后按实际大小计费。
+ */
 export function unzipEntries(buffer: Buffer): { path: string; content: Buffer }[] {
+  let total = 0;
+  let accepted = 0;
   let entries: Record<string, Uint8Array>;
   try {
-    entries = unzipSync(new Uint8Array(buffer));
-  } catch { throw new CustomSkillError("skill_download_failed", "压缩包无法解压。"); }
-  const paths = Object.keys(entries).filter((path) => !path.endsWith("/"));
-  if (paths.length > MAX_SKILL_FILES * 4) throw new CustomSkillError("skill_too_large", "压缩包条目过多。");
-  let total = 0;
+    entries = unzipSync(new Uint8Array(buffer), {
+      filter: (file) => {
+        if (file.name.endsWith("/")) return false;
+        accepted += 1;
+        if (accepted > MAX_SKILL_FILES * 4) throw new CustomSkillError("skill_too_large", "压缩包条目过多。");
+        const size = file.originalSize || 0;
+        total += size;
+        if (total > MAX_DOWNLOAD_BYTES) {
+          throw new CustomSkillError("skill_too_large", `压缩包解压后超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
+        }
+        return true;
+      },
+    });
+  } catch (error) {
+    if (error instanceof CustomSkillError) throw error;
+    throw new CustomSkillError("skill_download_failed", "压缩包无法解压。");
+  }
   const files: { path: string; content: Buffer }[] = [];
-  for (const path of paths) {
-    const content = Buffer.from(entries[path]!);
-    total += content.length;
-    if (total > MAX_DOWNLOAD_BYTES) throw new CustomSkillError("skill_too_large", `压缩包解压后超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
+  let actual = 0;
+  for (const [path, raw] of Object.entries(entries)) {
+    if (path.endsWith("/")) continue;
+    const content = Buffer.from(raw);
+    actual += content.length;
+    // 头部声明为 0 / 偏小的流式 zip：按实际大小再挡一次。
+    if (actual > MAX_DOWNLOAD_BYTES) {
+      throw new CustomSkillError("skill_too_large", `压缩包解压后超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
+    }
     files.push({ path, content });
   }
   return files;
@@ -590,11 +634,34 @@ async function download(url: string, signal?: AbortSignal): Promise<Buffer> {
   try {
     const response = await fetch(url, { redirect: "follow", signal: controller.signal });
     if (!response.ok) throw new CustomSkillError("skill_download_failed", `下载失败：HTTP ${response.status}`);
+    // 重定向可能把 https 跳到别的协议 / 主机：直接地址已在调用前校验过 https，
+    // 这里只要求最终地址仍是 https（本机回环测试地址除外）。
+    if (response.url && !isLoopbackHttp(response.url)) {
+      const final = safeUrl(response.url);
+      if (!final) throw new CustomSkillError("skill_download_failed", "下载被重定向到不受支持的地址。");
+    }
     const length = Number(response.headers.get("content-length") ?? 0);
     if (length > MAX_DOWNLOAD_BYTES) throw new CustomSkillError("skill_too_large", `文件超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > MAX_DOWNLOAD_BYTES) throw new CustomSkillError("skill_too_large", `文件超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
-    return buffer;
+    // 没有 content-length 时不能先 arrayBuffer() 整个读完再比——边读边计数，超限立即中断。
+    if (!response.body) {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > MAX_DOWNLOAD_BYTES) throw new CustomSkillError("skill_too_large", `文件超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
+      return buffer;
+    }
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_DOWNLOAD_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw new CustomSkillError("skill_too_large", `文件超过上限（${Math.round(MAX_DOWNLOAD_BYTES / 1024 / 1024)} MiB）。`);
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), received);
   } catch (error) {
     if (error instanceof CustomSkillError) throw error;
     throw new CustomSkillError("skill_download_failed", "下载失败，请检查网址或稍后再试。");

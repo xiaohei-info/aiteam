@@ -59,6 +59,28 @@ test("unzipEntries 拒绝 zip 炸弹式的解压上限", async () => {
   assert.throws(() => unzipEntries(Buffer.from(zip)), /超过上限/);
 });
 
+// 回归：fflate 的 filter 跑在解压之前，头部声明的 originalSize 就能拒掉压缩包炸弹，
+// 而不是先 unzipSync 整包展开再检查（那会先在内存里炸开）。
+test("unzipEntries 在解压前就按头部 originalSize 拒绝，不先展开", async () => {
+  const { zipSync, strToU8 } = await import("fflate");
+  // 头部声明 96 MiB，实际只放 1 字节：真正展开也不会超限，只有提前看头部才会拒。
+  const bomb = zipSync({ "bomb.bin": strToU8("x") });
+  const view = new DataView(bomb.buffer, bomb.byteOffset, bomb.byteLength);
+  const signature = 0x02014b50; // central directory file header
+  for (let i = 0; i + 46 <= bomb.byteLength; i += 1) {
+    if (view.getUint32(i, true) === signature) {
+      view.setUint32(i + 24, 96 * 1024 * 1024, true); // uncompressed size
+      view.setUint32(i + 32, 0, true); // local header offset 不动
+      view.setUint32(i + 42, 0, true);
+      break;
+    }
+  }
+  let threw: unknown;
+  try { unzipEntries(Buffer.from(bomb)); } catch (error) { threw = error; }
+  assert.ok(threw instanceof CustomSkillError, "应拒绝而不是返回文件清单");
+  assert.match((threw as Error).message, /超过上限/);
+});
+
 test("CustomSkillStore 安装后可列出、路径可加载，文件被改动后停用", () => {
   const root = mkdtempSync(join(tmpdir(), "aiteam-custom-store-"));
   try {
