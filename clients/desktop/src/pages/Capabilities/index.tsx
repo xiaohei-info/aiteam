@@ -6,7 +6,7 @@
  * 原先在「设置」页里，现在单独成页；设置页只留一行链接。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BookOpen, ExternalLink, FolderOpen, LoaderCircle, LogIn, Plug, Plus, ShieldCheck, Trash2, Zap } from 'lucide-react'
+import { AlertCircle, BookOpen, ExternalLink, FolderOpen, LoaderCircle, LogIn, Plug, Plus, ShieldCheck, Trash2, UserRound, Zap } from 'lucide-react'
 import '../../components/FileAccess/FileAccess.css'
 import '../Settings/Settings.css'
 import './McpAuth.css'
@@ -17,8 +17,11 @@ import { revealInFileManager } from '../../lib/externalOpen'
 import { isMacUserAgent } from '../../lib/projectConversation'
 import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
 import { AddSkillDialog } from './AddSkillDialog'
+import { AskEmployeeDialog } from './AskEmployeeDialog'
+import { useChatStore } from '../../stores/chat'
+import { useNavigate } from 'react-router-dom'
 
-type Dialog = { type: 'add-mcp' } | { type: 'add-skill' } | { type: 'login'; item: LocalCapability; login: McpLogin } | { type: 'token'; item: LocalCapability }
+type Dialog = { type: 'add-mcp' } | { type: 'add-skill' } | { type: 'ask-employee' } | { type: 'login'; item: LocalCapability; login: McpLogin } | { type: 'token'; item: LocalCapability }
 
 export default function Capabilities() {
   const [items, setItems] = useState<LocalCapability[] | null>(null)
@@ -29,6 +32,11 @@ export default function Capabilities() {
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const alive = useRef(true)
+  const navigate = useNavigate()
+  const employees = useChatStore((state) => state.workbenchEmployees)
+  const refreshConversations = useChatStore((state) => state.refreshConversations)
+  const addConversation = useChatStore((state) => state.addConversation)
+  const setActiveConvId = useChatStore((state) => state.setActiveConvId)
   // 挂载时置回 true：开发版 StrictMode 会先卸载再挂载一次，只在卸载时置 false 会让请求结果永远写不回页面。
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
@@ -72,6 +80,23 @@ export default function Capabilities() {
     } catch (error) { setError(error instanceof Error && error.message ? error.message : '打不开文件管理器') }
   }
   const closeAndReload = () => { setDialog(null); void load() }
+  /** 新开会话并把需求发出去；然后跳到那个会话，用户在那里看到员工判断与审批。 */
+  const sendToEmployee = async (conversationId: string, text: string, employeeId: string) => {
+    const employee = employees.find((item) => item.employeeId === employeeId)
+    setDialog(null)
+    setActiveConvId(conversationId)
+    addConversation({
+      id: conversationId,
+      title: text.slice(0, 28),
+      agentEmoji: '🤖',
+      agentName: employee?.displayName ?? '员工',
+      lastMessage: '',
+      time: '',
+      _employeeId: employeeId,
+    })
+    navigate('/chat', { state: { employeeId, conversationId, agentName: employee?.displayName, initialMessage: text, refreshWorkbench: true } })
+    void refreshConversations().catch(console.error)
+  }
 
   const mcps = (items ?? []).filter((item) => item.kind === 'mcp')
   const skills = (items ?? []).filter((item) => item.kind === 'skill')
@@ -115,7 +140,7 @@ export default function Capabilities() {
       </span>
       {/* 撤销收成右上角的小图标按钮：不占行内空间，也不跟其他操作抢位置。 */}
       <button type="button" className="cap-action danger cap-icon-btn" disabled={busy} aria-label={`撤销 ${item.display_name}`} title="撤销" onClick={() => void revoke(item)}>
-        <Trash2 size={13} aria-hidden="true" />
+        <Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
       </button>
     </li>
   }
@@ -167,10 +192,25 @@ export default function Capabilities() {
           </li>)}
         </ul>
       </section>}
+      <section className="settings-card glass-panel" aria-labelledby="capabilities-ask-title">
+        <div className="settings-section-heading">
+          <UserRound size={16} strokeWidth={1.7} aria-hidden="true" />
+          <div>
+            <h2 id="capabilities-ask-title">让员工帮我装</h2>
+            <p>企业目录里没有的能力，交给一个员工去判断和安装。装的是你个人的能力，员工判断完仍要你批准。</p>
+          </div>
+          <span className="capabilities-heading-action">
+            <button type="button" className="capabilities-add" disabled={employees.length === 0} onClick={() => setDialog({ type: 'ask-employee' })}>
+              <UserRound size={13} aria-hidden="true" />让员工帮我装
+            </button>
+          </span>
+        </div>
+      </section>
       <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能只包含说明文档，不执行代码。撤销后下一轮对话起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
     {dialog?.type === 'add-skill' && <AddSkillDialog installed={items ?? []} onInstalled={load} onClose={() => setDialog(null)} />}
+    {dialog?.type === 'ask-employee' && <AskEmployeeDialog employees={employees} onSent={sendToEmployee} onClose={() => setDialog(null)} />}
     {dialog?.type === 'login' && <McpSignInDialog item={dialog.item} login={dialog.login} onCompleted={closeAndReload} onClose={closeAndReload} />}
     {dialog?.type === 'token' && <McpTokenDialog item={dialog.item} onSaved={closeAndReload} onClose={() => setDialog(null)} />}
   </div>

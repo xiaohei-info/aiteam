@@ -174,6 +174,12 @@ export const agentApi = {
   introduceConversation: (id: string) => introduceConversation(getClient(), id),
   submitPrompt: (id: string, body: Parameters<typeof submitPrompt>[2], idempotencyKey: string) =>
     submitPrompt(getClient(), id, body, idempotencyKey),
+  /** 「让员工帮我装」：新开会话后把需求发出去，并拿到幂等键以便订阅该会话的 SSE。 */
+  sendInitialCapabilityRequest: async (conversationId: string, text: string) => {
+    const idempotencyKey = crypto.randomUUID()
+    const receipt = await submitPrompt(getClient(), conversationId, { text }, idempotencyKey)
+    return { idempotencyKey, receipt }
+  },
   listEntries: (id: string, signal?: AbortSignal) => listEntries(getClient(), id, signal),
   abortConversation: (id: string) => abortConversation(getClient(), id),
 

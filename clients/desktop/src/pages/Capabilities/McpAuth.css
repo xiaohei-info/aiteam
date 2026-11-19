@@ -2,9 +2,9 @@
 .chat-tools-dialog.mcp-dialog { width: min(600px, 100%); }
 .mcp-form { display: grid; gap: 12px; margin-top: 16px; font-size: 13px; }
 .mcp-form label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
-.mcp-form input:not([type=checkbox]), .mcp-form textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-primary); font-size: 13px; font-family: inherit; }
+.mcp-form input:not([type=checkbox]), .mcp-form textarea, .mcp-form select { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-primary); font-size: 13px; font-family: inherit; }
 .mcp-form textarea { font-family: monospace; resize: vertical; }
-.mcp-form input:focus-visible, .mcp-form textarea:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+.mcp-form input:focus-visible, .mcp-form textarea:focus-visible, .mcp-form select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
 .mcp-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
 .mcp-form footer button:last-child { background: var(--brand); color: var(--text-on-brand); }
 .mcp-form button { border: 1px solid var(--border); }
