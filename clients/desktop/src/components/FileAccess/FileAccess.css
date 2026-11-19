@@ -168,13 +168,17 @@
 .cap-action:disabled { opacity: .4; cursor: not-allowed; }
 .cap-action:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
 
-/* 撤销：右上角的小图标按钮，无文字。 */
+/* 撤销：右上角的小图标按钮，无文字、无底色。
+   常态只给一个灰图标，hover 才染色——避免「红图标 + 红底」糊成一团。 */
 .cap-icon-btn {
-  position: absolute; top: 8px; right: 8px;
-  width: 26px; height: 26px; min-height: 0; padding: 0;
-  border-color: transparent; background: transparent; color: var(--text-muted);
+  position: absolute; top: 9px; right: 10px;
+  display: grid; place-items: center;
+  width: 22px; height: 22px; min-height: 0; padding: 0;
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); opacity: .55;
 }
-.cap-icon-btn:hover:not(:disabled) { border-color: var(--danger-border-soft); background: var(--danger-bg); color: var(--danger); }
+.cap-icon-btn:hover:not(:disabled) { background: transparent; color: var(--danger); opacity: 1; }
+.cap-icon-btn:active:not(:disabled) { transform: scale(.94); }
 /* 行内其他操作落到底部右侧，给右上角的撤销腾出位置。 */
 .file-access-grants .mcp-row-actions { align-self: flex-end; padding-top: 4px; }
 
