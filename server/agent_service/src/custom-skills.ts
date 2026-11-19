@@ -387,6 +387,75 @@ async function clawHubJson(raw: string, signal?: AbortSignal): Promise<unknown> 
   }
 }
 
+/** 一条搜索结果：足够模型判断「是不是我要的」，也足够直接拿去装。 */
+export interface SkillSearchHit {
+  /** clawhub / github */
+  source: "clawhub" | "github";
+  /** 展示名（ClawHub 用 slug，GitHub 用仓库名）。 */
+  name: string;
+  description: string;
+  /** 装它要用的地址。 */
+  url: string;
+  downloads: number | null;
+  /** GitHub：全名 owner/repo，装的时候用它拼地址。 */
+  fullName?: string;
+}
+
+/** ClawHub 关键词搜索：`/api/v1/search`，按下载量排序。 */
+export async function searchClawHubSkills(query: string, limit = 10, signal?: AbortSignal): Promise<SkillSearchHit[]> {
+  const keyword = query.trim();
+  if (!keyword) return [];
+  const body = (await clawHubJson(`${clawHubOrigin()}/api/v1/search?q=${encodeURIComponent(keyword)}&limit=${Math.min(Math.max(limit, 1), 50)}`, signal)) as {
+    results?: { name?: string; slug?: string; description?: string; downloads?: number | null; install?: { reference?: string }; canonicalUrl?: string }[];
+  };
+  const hits = (body.results ?? []).flatMap((item) => {
+    const slug = typeof item.slug === "string" && item.slug ? item.slug : "";
+    const reference = item.install?.reference;
+    const owner = reference && reference.includes("/") ? reference.split("/")[0] : undefined;
+    if (!slug || !owner) return [];
+    const url = item.canonicalUrl && item.canonicalUrl.startsWith("http") ? item.canonicalUrl : `https://clawhub.ai/${owner}/skills/${slug}`;
+    return [{
+      source: "clawhub" as const, name: slug, description: typeof item.description === "string" ? item.description : "",
+      url, downloads: typeof item.downloads === "number" ? item.downloads : null,
+    }];
+  });
+  return hits.sort((a, b) => (b.downloads ?? -1) - (a.downloads ?? -1)).slice(0, limit);
+}
+
+/** GitHub 仓库搜索：只找看起来像技能集的仓库，拿 codeload 整包下载（raw 单文件链路在某些网络下不通）。 */
+export async function searchGithubSkills(query: string, limit = 10, signal?: AbortSignal): Promise<SkillSearchHit[]> {
+  const keyword = query.trim();
+  if (!keyword) return [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+  signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  try {
+    const q = encodeURIComponent(`${keyword} (claude-skill OR claude-skills OR "SKILL.md" OR mcp server)`);
+    // 测试可用 AITEAM_GITHUB_API_BASE_URL 指向本地 mock，与 ClawHub 一致。
+    const base = process.env.AITEAM_GITHUB_API_BASE_URL?.replace(/\/$/, "") || "https://api.github.com";
+    const response = await fetch(`${base}/search/repositories?q=${q}&sort=stars&order=desc&per_page=${Math.min(Math.max(limit, 1), 30)}`, {
+      signal: controller.signal, headers: { accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) throw new CustomSkillError("skill_download_failed", `GitHub 搜索返回 HTTP ${response.status}。`);
+    const body = (await response.json()) as { items?: { full_name?: string; description?: string | null; stargazers_count?: number; html_url?: string }[] };
+    return (body.items ?? []).flatMap((item) => {
+      const fullName = typeof item.full_name === "string" ? item.full_name : "";
+      if (!fullName) return [];
+      return [{
+        source: "github" as const, name: fullName.split("/")[1] ?? fullName,
+        description: item.description ?? "", url: `https://github.com/${fullName}`,
+        downloads: typeof item.stargazers_count === "number" ? item.stargazers_count : null, fullName,
+      }];
+    }).slice(0, limit);
+  } catch (error) {
+    if (error instanceof CustomSkillError) throw error;
+    throw new CustomSkillError("skill_download_failed", "连不上 GitHub，请稍后再试。");
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", () => controller.signal);
+  }
+}
+
 /** 没给 owner 时列出同名候选，用下载量排序，界面让用户挑。 */
 export async function clawHubCandidates(slug: string, signal?: AbortSignal): Promise<ClawHubCandidate[]> {
   const detail = (await clawHubJson(`${clawHubOrigin()}/api/v1/skills/${encodeURIComponent(slug)}`, signal)) as { matches?: { ownerHandle: string; slug: string; url: string }[] };

@@ -1,4 +1,4 @@
-import { approvedSkillVersion, capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
 import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
@@ -1382,9 +1382,10 @@ export class SessionHost {
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
     const mcpAuth = this.mcpRuntimeAuth(authorization.caller);
     const personal = owner ? personalConnectorTools(this.options.store, owner, mcpAuth) : [];
+    const searcher = owner && !authorization.background ? [capabilitySearchTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller))] : []
     const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth, this.options.customSkillStore)] : [];
-    for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
-    tools.push(...connectors, ...personal, ...installer);
+    for (const tool of [...connectors, ...personal, ...searcher, ...installer]) allowed.add(tool.name);
+    tools.push(...connectors, ...personal, ...searcher, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));

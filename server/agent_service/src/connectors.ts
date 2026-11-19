@@ -1,5 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
-import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, skillContentHash, toLocalPath, unzipEntries } from "./custom-skills.js";
+import { CustomSkillStore, CustomSkillError, CustomSkillPreview, CustomSkillPackage, clawHubCandidates, clawHubParts, clawHubSecurity, fetchClawHubSkill, fetchSkillFromUrl, normalizeSkillAtRoot, normalizeSkillPackage, readSkillFile, readSkillFolder, scanSkillRoots, searchClawHubSkills, searchGithubSkills, skillContentHash, toLocalPath, unzipEntries } from "./custom-skills.js";
 import type { ClawHubCandidate, ClawHubSecurity } from "./custom-skills.js";
 
 /** 北向用的 ClawHub 候选/安全结构（避免直接把内部类型暴露到 HTTP 层）。 */
@@ -758,6 +758,50 @@ export function capabilityInstallTool(store: AgentSqliteStore, owner: TaskOwner,
       const saved = storeMcp(store, owner, auth, plan, ref, connected, approvedBy);
       const signedIn = plan.auth === "oauth" ? "（已登录服务方账号）" : plan.auth === "bearer" ? "（已保存访问令牌）" : "";
       return { content: [{ type: "text" as const, text: `已安装 ${saved.display_name}（标识 ${ref}）${signedIn}，可用工具：${connected.tools.join(", ")}。下一轮对话起可调用。` }], details: undefined };
+    },
+  } as ToolDefinition;
+}
+
+/**
+ * 找技能：企业目录里没有时，让员工自己去外面找。ClawHub 用关键词搜索；GitHub 找像技能集的仓库。
+ * 只返回候选清单，不装——装仍然走 capability_install 并经成员批准。
+ */
+export function capabilitySearchTool(store: AgentSqliteStore, owner: TaskOwner, skills?: SkillInstaller, mcps?: McpCatalog, options: { signal?: AbortSignal } = {}): ToolDefinition {
+  return {
+    name: "capability_search",
+    label: "Search capabilities",
+    description: "Find a capability the member needs, in two steps. "
+      + "Step 1: look in the enterprise catalog (installable skills and enabled MCP servers) and report what matches. "
+      + "Step 2: only if the enterprise has nothing suitable, search outside — ClawHub (clawhub.ai) and GitHub — and report those candidates. "
+      + "Return a short ranked list with each candidate's address. Never install anything here; the install goes through capability_install and needs the member's approval.",
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: 120, description: "what the member needs, in a few words (Chinese or English)" }),
+    }, { additionalProperties: false }),
+    execute: async (_id: string, params: unknown, signal?: AbortSignal) => {
+      const { query } = params as { query: string };
+      const keyword = query.trim().toLowerCase();
+      const scope = signal ?? options.signal;
+      // 第一步：企业自己的目录。命中就只用它的结果，不再往外搜。
+      const sections: string[] = [];
+      try {
+        const catalog = (await skills?.list(scope)) ?? [];
+        const inEnterprise = catalog.filter((item) => `${item.display_name} ${item.skill_id}`.toLowerCase().includes(keyword)).slice(0, 5);
+        if (inEnterprise.length) sections.push(`企业技能目录（可直接装）：\n${inEnterprise.map((item) => `- ${item.display_name}（${item.skill_id}）`).join("\n")}`);
+      } catch { /* 目录读不到就跳过，不阻断外面的搜索 */ }
+      try {
+        const servers = (await mcps?.list(scope)) ?? [];
+        const inMcp = servers.filter((item) => `${item.display_name} ${item.ref} ${item.summary}`.toLowerCase().includes(keyword)).slice(0, 5);
+        if (inMcp.length) sections.push(`企业 MCP 目录（可直接装）：\n${inMcp.map((item) => `- ${item.display_name}（${item.ref}）`).join("\n")}`);
+      } catch { /* 同上 */ }
+      if (sections.length) {
+        return { content: [{ type: "text" as const, text: `${sections.join("\n\n")}\n\n企业目录里已有，直接用它，不用往外找。` }], details: undefined };
+      }
+      // 第二步：企业没有，才搜外面。
+      const results = await Promise.allSettled([searchClawHubSkills(query, 10, scope), searchGithubSkills(query, 10, scope)]);
+      const hits = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+      if (!hits.length) return { content: [{ type: "text" as const, text: `企业目录和外面（ClawHub / GitHub）都没找到和「${query}」相关的能力。换个说法再搜，或告诉用户需要他提供地址。` }], details: undefined };
+      const lines = hits.slice(0, 10).map((hit) => `${hit.source === "clawhub" ? "ClawHub" : "GitHub"} ${hit.name}${hit.downloads === null ? "" : `（${hit.downloads}）`}${hit.description ? `：${hit.description.slice(0, 120)}` : ""}\n  ${hit.url}`);
+      return { content: [{ type: "text" as const, text: `企业目录里没有，外面找到这些候选（装哪个由你判断，装前要成员批准）：\n${lines.join("\n")}` }], details: undefined };
     },
   } as ToolDefinition;
 }
