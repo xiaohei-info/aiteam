@@ -13,7 +13,7 @@ export function useMcpMarketApi() {
     const client = createOperationApiClient({ getToken: () => token });
     return {
       async list(): Promise<PlatformMcpServer[]> {
-        const items = (await client.listGet<PlatformMcpServer>(BASE)).items;
+        const items = (await client.listGet<PlatformMcpServer>(BASE))?.items;
         return Array.isArray(items) ? items : [];
       },
       create(body: PlatformMcpServerInput) {
