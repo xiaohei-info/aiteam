@@ -3,13 +3,14 @@
  * 先「检查」拿预览，再「安装」；粘贴框检查后清空。来源切换不清掉未安装的草稿。
  */
 import { useState } from 'react'
-import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe, FileText } from 'lucide-react'
+import { FolderOpen, LoaderCircle, FileArchive, ClipboardPaste, Globe, FileText, BadgeCheck } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { CustomSkillPreview, CustomSkillScanItem, CustomSkillSource } from '../../api/agent/capabilities'
 import { formatFileSize } from '../../lib/fileCache'
 import { toLocalPath } from '../../lib/localSkillPath'
 import { batchFailureSummary, canInstall, defaultPicked, installButtonLabel, normalizePicked, togglePicked } from '../../lib/skillScanSelection'
+import { alreadyInstalledText, partitionInstallResults } from '../../lib/alreadyInstalled'
 
 
 const SOURCES: { id: CustomSkillSource; label: string; icon: typeof FolderOpen; hint: string }[] = [
@@ -33,6 +34,8 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState<boolean | null>(false)
   const [error, setError] = useState('')
+  /** 撞同名已装：不是错误，是「已经装好了」的状态提示。 */
+  const [installed, setInstalled] = useState('')
   const [preview, setPreview] = useState<CustomSkillPreview | null>(null)
   const [scan, setScan] = useState<CustomSkillScanItem[] | null>(null)
   const [picked, setPicked] = useState<string[]>([])
@@ -52,7 +55,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
   }
 
   const check = async () => {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setInstalled('')
     try {
       const result = await agentApi.importCustomSkill({
         source,
@@ -73,12 +76,14 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       setPicked([])
       if (source === 'text') setText('')
     } catch (err) {
-      setError(errorText(err))
+      const text = alreadyInstalledText(err)
+      if (text) { setInstalled(text); setPreview(null); setScan(null); setPicked([]) }
+      else setError(errorText(err))
     } finally { setBusy(null) }
   }
 
   const install = async () => {
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setInstalled('')
     try {
       const result = await agentApi.importCustomSkill({
         source,
@@ -89,18 +94,28 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
         preview: false,
       })
       if (result?.results) {
-        const failed = result.results.filter((item) => !item.ok)
+        // 「已经装好了」不算失败：界面显示状态，其余照常汇报。
+        const { installed: done, already, failed } = partitionInstallResults(result.results)
         await onInstalled()
         if (failed.length > 0) {
-          setError(batchFailureSummary(result.results))
+          setError(batchFailureSummary(failed))
           return
         }
+        if (already.length > 0) {
+          setInstalled(already.map((item) => `「${item.name || item.root || '包根'}」已经装好了`).join('；') + '，无需重复安装。')
+          setScan(null)
+          setPicked([])
+          return
+        }
+        if (done.length === 0) throw new Error('安装未完成')
       }
       if (!result?.capability && !result?.results) throw new Error('安装未完成')
       await onInstalled()
       onClose()
     } catch (err) {
-      setError(errorText(err))
+      const text = alreadyInstalledText(err)
+      if (text) { setInstalled(text); setError('') }
+      else setError(errorText(err))
       setPreview(null)
       setScan(null)
       setPicked([])
@@ -135,7 +150,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
       {SOURCES.map((item) => {
         const Icon = item.icon
         return <button key={item.id} type="button" role="tab" aria-selected={source === item.id}
-          className={source === item.id ? 'on' : ''} onClick={() => { setSource(item.id); setError(''); setPreview(null) }}>
+          className={source === item.id ? 'on' : ''} onClick={() => { setSource(item.id); setError(''); setInstalled(''); setPreview(null) }}>
           <Icon size={13} aria-hidden="true" />{item.label}
         </button>
       })}
@@ -159,6 +174,7 @@ export function CustomSkillImport({ onInstalled, onClose }: { onInstalled: () =>
         </label>}
 
     {error && <p role="alert" className="mcp-error">{error}</p>}
+    {installed && <p className="mcp-note installed-note" role="status"><BadgeCheck size={14} aria-hidden="true" />{installed}</p>}
 
     {preview && <div className="skill-preview" aria-label="技能预览">
       <div className="skill-preview-row"><span>名称</span><strong>{preview.name}</strong></div>

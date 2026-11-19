@@ -15,6 +15,9 @@
 .mcp-hint > svg { flex-shrink: 0; margin-top: 3px; color: var(--brand); }
 .mcp-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
 .mcp-error { margin: 0; color: var(--danger); font-size: 12px; line-height: 1.6; }
+/* 「已经装好了」是状态，不是错误：用中性色 + 对勾。 */
+.installed-note { display: flex; align-items: flex-start; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+.installed-note svg { flex: none; margin-top: 2px; color: var(--success); }
 .mcp-imported { display: grid; gap: 6px; }
 .mcp-choices { display: flex; flex-wrap: wrap; gap: 6px; }
 .mcp-choices button[aria-pressed=true] { border-color: var(--brand); color: var(--brand); }

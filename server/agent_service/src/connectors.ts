@@ -534,7 +534,7 @@ export async function installMcpDirectly(store: AgentSqliteStore, owner: TaskOwn
     url = validMcpUrl(String(request.url));
   } catch { throw new McpInstallError("invalid_mcp", "地址无效：须为 https（或本机地址），不含账号、查询串。"); }
   const existing = store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.kind === "mcp" && item.ref === ref);
-  if (existing && !request.replace) throw new McpInstallError("mcp_exists", `已安装同名 MCP ${ref}。`);
+  if (existing && !request.replace) throw new McpInstallError("mcp_exists", `「${ref}」已经装好了，无需重复添加；需要换成这次填的配置才点替换。`);
   const plan = await withMcpAuth({
     kind: "mcp", ref, display_name: String(request.display_name ?? "").slice(0, 120), url: url.toString(), declaredTools: [], source: "user_url", sourceRef: "",
     ...(existing ? { existing } : {}), reason: String(request.reason ?? "").slice(0, 200),
@@ -794,7 +794,7 @@ function installOneCustomSkill(
     throw new CustomSkillError("invalid_skill_package", `已安装企业技能「${existing[0]!.display_name}」，同名自定义技能无法安装；请改 SKILL.md 里的 name。`);
   }
   if (existing.length > 0 && !replace) {
-    throw new SkillInstallError("skill_exists", `已安装自定义技能「${existing[0]!.display_name}」${existing[0]!.version} 版；确认后覆盖。`);
+    throw new SkillInstallError("skill_exists", `「${existing[0]!.display_name}」已经装好了（${existing[0]!.version} 版），现在就能用；需要换成这次选的内容才点替换安装。`);
   }
   const record = custom.install({ tenantId: owner.tenantId, memberId: owner.memberId }, pkg);
   store.putLocalCapability(owner.tenantId, owner.memberId, {
@@ -817,7 +817,7 @@ export async function installSkillDirectly(store: AgentSqliteStore, owner: TaskO
     if (plan.includes("暂时无法") || plan.includes("未连接")) throw new SkillInstallError("manager_unavailable", plan.replace("安装未完成：", ""));
     throw new SkillInstallError("skill_not_installable", "企业技能目录里没有这个可自行安装的技能，请联系企业管理员。");
   }
-  if (plan.existing && !request.replace) throw new SkillInstallError("skill_exists", `已安装「${plan.existing.display_name}」${plan.existing.version ?? ""} 版；确认后换成 ${plan.skill!.version} 版。`);
+  if (plan.existing && !request.replace) throw new SkillInstallError("skill_exists", `「${plan.existing.display_name}」已经装好了（${plan.existing.version ?? ""} 版）；需要换成目录里的 ${plan.skill!.version} 版才点替换安装。`);
   const outcome = await installPlannedSkill(store, owner, plan, skills, owner.memberId, signal);
   if ("error" in outcome) throw new SkillInstallError(outcome.error === "signature" ? "skill_signature_invalid" : "skill_install_failed", outcome.text);
   return outcome.capability;

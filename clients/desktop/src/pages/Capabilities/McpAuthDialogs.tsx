@@ -6,12 +6,13 @@
  * 令牌只在桌面端 → 本机 Agent 之间流转，提交后立即从界面清空。
  */
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, KeyRound, LogIn, Plug } from 'lucide-react'
+import { BadgeCheck, ChevronDown, KeyRound, LogIn, Plug } from 'lucide-react'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { LocalCapability, McpLogin } from '../../api/agent/types'
 import { parseMcpConfig, type McpConfigCandidate, type McpConfigRejected } from '../../lib/mcpConfigImport'
 import { addMcpProblem, addMcpRequest, signInFailureText, type AddMcpForm } from '../../lib/mcpSignIn'
+import { alreadyInstalledText } from '../../lib/alreadyInstalled'
 import './McpAuth.css'
 
 const errorText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
@@ -124,6 +125,8 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
   const [probedUrl, setProbedUrl] = useState('')
   const [authHost, setAuthHost] = useState('')
   const [clash, setClash] = useState(false)
+  /** 撞同名已装：展示为状态，不是错误。 */
+  const [installed, setInstalled] = useState('')
   const [busy, setBusy] = useState<'probe' | 'install' | null>(null)
   const [error, setError] = useState('')
   const [login, setLogin] = useState<McpLogin | null>(null)
@@ -180,8 +183,10 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
       else { onInstalled(); onClose() }
     } catch (err) {
       set({ token: '' })
-      if (err instanceof AgentApiError && err.code === 'mcp_exists') setClash(true)
-      setError(errorText(err, '添加失败'))
+      // 撞同名已装：不是失败，是「已经装好了」的状态；同时给出覆盖入口。
+      const already = alreadyInstalledText(err)
+      if (already) { setClash(true); setInstalled(already); setError('') }
+      else setError(errorText(err, '添加失败'))
     } finally { setBusy(null) }
   }
 
@@ -253,9 +258,10 @@ export function AddMcpDialog({ onInstalled, onClose }: { onInstalled: () => void
           </label>
         </div>
       </details>}
+      {installed && <p className="mcp-note installed-note" role="status"><BadgeCheck size={14} aria-hidden="true" />{installed}</p>}
       {clash && <label className="mcp-check">
         <input type="checkbox" checked={form.replace} disabled={disabled} onChange={(event) => set({ replace: event.target.checked })} />
-        <span>覆盖已安装的同名 MCP（或改一个标识）</span>
+        <span>用这个配置替换已装的那个（连它的凭据一起换）</span>
       </label>}
       {(error || problem) && <p role={error ? 'alert' : undefined} className={error ? 'mcp-error' : 'mcp-note'}>{error || problem}</p>}
       <footer>
