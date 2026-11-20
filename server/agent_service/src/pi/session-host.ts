@@ -1,4 +1,4 @@
-import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, enterpriseMcpServerIds, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
 import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
@@ -44,7 +44,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk, reportableCapabilityGrant } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -1434,37 +1434,27 @@ export class SessionHost {
   }
 
   /**
-   * 把本机新写入的能力授权上报 Manager（仅本会话有效）。
-   * 失败不影响安装结果：Manager 侧只是少一条授权，下次同步或重开会话可补。
+   * 授权跟着安装走（设计 2026-11-19 §3.2 / §3.4）：把本机装着的企业目录 MCP（或指定的、正在安装的
+   * serverIds）上报 Manager，只增不减。成员自装能力不上报。失败只记 warn，不阻断安装或登录。
    */
-  async syncCapabilityGrants(caller: AuthenticatedCaller): Promise<void> {
+  async syncCapabilityGrants(caller: AuthenticatedCaller, serverIds?: readonly string[]): Promise<void> {
     const client = this.options.managerClient;
     if (!client?.putCapabilityGrants || !caller.tenantId) return;
-    const pending = this.options.store.unsyncedCapabilityGrants(caller.tenantId, caller.userId ?? caller.callerId)
-      .filter(reportableCapabilityGrant);
-    if (pending.length === 0) return;
-    try {
-      await client.putCapabilityGrants(caller, pending.map((item) => ({
-        conversation_id: item.conversation_id, kind: item.kind, ref: item.ref, source: item.source, scope: item.scope,
-      })));
-      this.options.store.markCapabilityGrantsSynced(
-        caller.tenantId, caller.userId ?? caller.callerId,
-        pending.map((item) => ({ conversationId: item.conversation_id, kind: item.kind, ref: item.ref })),
-      );
-    } catch (error) {
+    const ids = serverIds ?? enterpriseMcpServerIds(this.options.store.listLocalCapabilities(caller.tenantId, caller.userId ?? caller.callerId));
+    if (ids.length === 0) return;
+    try { await client.putCapabilityGrants(caller, ids); } catch (error) {
       appLogger.log("warn", "capability_grant.sync_failed", {
         tenant_id: caller.tenantId, member_id: caller.userId ?? caller.callerId, error: String(error),
       });
     }
   }
 
-  /** 会话结束：本机与 Manager 同步删除该会话的能力授权（不再满足密钥下发条件）。 */
-  async revokeCapabilityGrants(caller: AuthenticatedCaller, conversationId: string): Promise<void> {
-    this.options.store.deleteCapabilityGrants(caller.tenantId ?? "", caller.userId ?? caller.callerId, conversationId);
+  /** 卸载企业目录 MCP：Manager 删除授权，不再下发它的应用密钥。失败只记 warn。 */
+  async revokeCapabilityGrant(caller: AuthenticatedCaller, serverId: string): Promise<void> {
     const client = this.options.managerClient;
-    if (!client?.deleteCapabilityGrants || !caller.tenantId) return;
-    try { await client.deleteCapabilityGrants(caller, conversationId); } catch (error) {
-      appLogger.log("warn", "capability_grant.revoke_failed", { tenant_id: caller.tenantId, conversation_id: conversationId, error: String(error) });
+    if (!client?.deleteCapabilityGrant || !caller.tenantId) return;
+    try { await client.deleteCapabilityGrant(caller, serverId); } catch (error) {
+      appLogger.log("warn", "capability_grant.revoke_failed", { tenant_id: caller.tenantId, server_id: serverId, error: String(error) });
     }
   }
 
@@ -1490,6 +1480,7 @@ export class SessionHost {
     return {
       list: () => client.listInstallableMcpServers!(caller),
       ...(client.getMcpOAuthClient ? { oauthClient: (serverId: string) => client.getMcpOAuthClient!(caller, serverId) } : {}),
+      ...(client.putCapabilityGrants ? { grant: (serverId: string) => this.syncCapabilityGrants(caller, [serverId]) } : {}),
     };
   }
 

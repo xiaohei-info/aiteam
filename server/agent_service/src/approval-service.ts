@@ -60,17 +60,6 @@ export class ApprovalSkippedError extends Error {
   }
 }
 
-/**
- * 上报给 Manager 的能力授权仅限「企业自有 MCP」（平台目录收录、企业已启用）。
- *
- * 红线：成员自己装的能力（自填地址 / 本机导入 / ClawHub 等）凭据只在本机，
- * 不上传 Manager（设计 2026-11-19 §3.4 范围：员工自配 MCP，Manager 不参与）。
- * 平台密钥下发也只针对这类 MCP，所以其它来源报了也没有用途。
- */
-export function reportableCapabilityGrant(item: { kind: "mcp" | "skill"; source: string }): boolean {
-  return item.kind === "mcp" && item.source === "platform_catalog";
-}
-
 export interface ApprovalRequest {
   tenantId: string;
   memberId: string;
@@ -305,11 +294,6 @@ export class ApprovalService {
     if (input.sessionAllow && record.status === "approved") {
       const subject = sessionGrantSubject({ toolName: record.tool_name, summary: record.redacted_summary });
       this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name, subject);
-    }
-    // 能力授权（仅本会话有效）：批准安装即写入，作为 Manager 下发平台密钥的授权凭据（设计 2026-11-19 §3.2）。
-    if (record.status === "approved" && record.tool_name === "capability_install") {
-      const install = capabilityInstallOf(record);
-      if (install) this.store.putCapabilityGrant(record.tenant_id, record.member_id, record.conversation_id, install);
     }
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());

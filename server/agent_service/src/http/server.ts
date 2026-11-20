@@ -46,7 +46,7 @@ import type { ExecutionAuthorizationRegistry } from "../execution-authorization.
 import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord, type CapabilityResolution } from "../storage/sqlite.js";
 import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, ApprovalSessionAllowError, capabilityInstallAuthOf } from "../approval-service.js";
-import { CustomSkillError, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
+import { CustomSkillError, enterpriseMcpServerIds, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
 import type { LocalCapability as StoredCapability } from "../storage/sqlite.js";
@@ -625,16 +625,7 @@ const McpCapabilityParams = Type.Object({ capability_ref: Type.String({ minLengt
 const McpCallbackQuery = Type.Object({ state: Type.Optional(Type.String({ description: "一次性登录状态。" })), code: Type.Optional(Type.String({ description: "服务方返回的授权码。" })), error: Type.Optional(Type.String({ description: "服务方返回的错误。" })) }, { additionalProperties: true });
 const CapabilityAutoInstall = Type.Object({ kind: Type.Union([Type.Literal("mcp"), Type.Literal("skill")], { description: "能力类型。" }), created_at: Type.String({ format: "date-time", description: "授权时间。" }) }, { $id: "CapabilityAutoInstall", additionalProperties: false, description: "成员授权：以后从平台目录安装该种能力时直接安装，不再弹审批。" });
 
-/** 成员对某个能力的授权（仅本会话有效）；设置页展示与撤销用。 */
-const CapabilityGrant = Type.Object({
-  conversation_id: Type.String({ description: "授权所在会话。" }),
-  kind: Type.Union([Type.Literal("mcp"), Type.Literal("skill")], { description: "能力类型。" }),
-  ref: Type.String({ description: "能力标识（MCP ref / 技能 id）。" }),
-  source: Type.String({ description: "来源：platform_catalog / enterprise_catalog / 外部来源标记。" }),
-  scope: Type.String({ description: "授权范围，当前只有 session。" }),
-}, { $id: "CapabilityGrant", additionalProperties: false, description: "成员能力授权；仅本会话有效。" });
 const CapabilityAutoInstallListEnvelope = Type.Object({ data: Type.Array(Type.Ref("CapabilityAutoInstall")) }, { $id: "CapabilityAutoInstallListEnvelope" });
-const CapabilityGrantListEnvelope = Type.Object({ data: Type.Array(Type.Ref("CapabilityGrant")) }, { $id: "CapabilityGrantListEnvelope" });
 const CapabilityAutoInstallParams = Type.Object({ capability_kind: Type.String({ pattern: "^(mcp|skill)$", description: "能力类型：mcp 或 skill。" }) }, { additionalProperties: false });
 const LocalCapabilityDeleteEnvelope = Type.Object({ data: Type.Object({ removed: Type.Boolean({ description: "是否已撤销。" }) }, { additionalProperties: false }) }, { $id: "LocalCapabilityDeleteEnvelope" });
 const LocalSkillPathEnvelope = Type.Object({ data: Type.Object({ path: Type.String({ description: "本机绝对路径。" }) }, { additionalProperties: false }) }, { $id: "LocalSkillPathEnvelope", additionalProperties: false });
@@ -872,7 +863,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, CapabilityGrant, CapabilityGrantListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
   promptStarted: {
@@ -1106,8 +1097,6 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   deleteMcpCredential: { responses: { "200": { description: "本机凭据已删除。", examples: { removed: { summary: "已退出登录", value: { data: { removed: true } } } } } } },
   listCapabilityAutoInstall: { responses: { "200": { description: "当前成员的自动安装授权。", examples: { list: { summary: "已授权 MCP 自动安装", value: { data: [{ kind: "mcp", created_at: "2026-11-18T00:00:00.000Z" }] } } } } } },
   deleteCapabilityAutoInstall: { responses: { "200": { description: "自动安装授权撤销结果。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
-  listCapabilityGrants: { responses: { "200": { description: "当前成员的能力授权（仅本会话有效）。", examples: { list: { summary: "已授权 MCP", value: { data: [{ conversation_id: "c-1", kind: "mcp", ref: "cr-test", source: "platform_catalog", scope: "session" }] } } } } } },
-  deleteCapabilityGrants: { responses: { "200": { description: "会话能力授权已撤销。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
   deleteLocalCapability: { responses: { "200": { description: "个人能力撤销结果。", examples: { removed: { summary: "已撤销", value: { data: { removed: true } } } } } } },
   listAuthorizedSolutions: { responses: { "200": { description: "本地已装载的方案授权投影。", examples: { list: { summary: "方案列表", value: { data: [EXAMPLE_SOLUTION], page: EXAMPLE_PAGE } } } } } },
   listFrozenSnapshots: { responses: { "200": { description: "本地冻结执行快照列表。", examples: { list: { summary: "快照列表", value: { data: [EXAMPLE_SNAPSHOT], page: EXAMPLE_PAGE } } } } } },
@@ -1707,10 +1696,6 @@ export class AgentHttpServer {
       if (!idempotencyKey) throw new HttpProblem(422, "invalid_idempotency_key", "Idempotency-Key is required for approval decisions");
       try {
         const approval = this.approvals().decide({ id: values.approval_id, tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId, conversationId: values.conversation_id, decision: body.decision, expectedRevision, ...(resolution ? { resolution } : {}), ...(remember ? { remember } : {}), ...(sessionAllow ? { sessionAllow } : {}), ...(credential ? { credential } : {}), approvedBy: memberId, idempotencyKey });
-        // 批准安装后把能力授权上报 Manager（仅本会话有效），供平台密钥下发校验；失败不阻断安装。
-        if (body.decision === "approve") {
-          void this.options.host.syncCapabilityGrants({ callerId: caller!.callerId, userId: caller!.userId ?? caller!.callerId, tenantId: caller!.tenantId! }).catch(() => undefined);
-        }
         this.writeJson(response, 200, { data: approvalPublic(approval) });
       } catch (error) {
         if (error instanceof ApprovalNotFoundError) throw new HttpProblem(404, "approval_not_found", error.message);
@@ -1761,19 +1746,6 @@ export class AgentHttpServer {
     this.registerRoute("GET", "/api/agent/capabilities/auto-install", (_request, response, caller) => {
       this.writeJson(response, 200, { data: this.options.store.listCapabilityAutoInstall(caller!.tenantId!, caller!.userId ?? caller!.callerId) });
     }, routeSchema("listCapabilityAutoInstall", { summary: "列出自动安装授权", description: "列出当前成员授权「以后从平台目录安装时直接安装」的能力种类（MCP / 技能）。只在本机。", response: { 200: jsonResponse(Type.Ref("CapabilityAutoInstallListEnvelope")), 401: problemResponse("Unauthorized") } }));
-    // 能力授权（仅本会话有效）：设置页展示与撤销。撤销后本机与 Manager 同步失效，不再满足平台密钥下发条件。
-    this.registerRoute("GET", "/api/agent/capability-grants", (_request, response, caller) => {
-      const owner = { tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId };
-      const grants = this.options.store.listAllCapabilityGrants(owner.tenantId, owner.memberId);
-      this.writeJson(response, 200, { data: grants });
-    }, routeSchema("listCapabilityGrants", { summary: "列出能力授权", description: "列出当前成员的本机能力授权（仅本会话有效），供设置页展示与撤销。", response: { 200: jsonResponse(Type.Ref("CapabilityGrantListEnvelope")), 401: problemResponse("Unauthorized") } }));
-    this.registerRoute("DELETE", "/api/agent/capability-grants/:conversation_id", async (_request, response, caller, fastifyRequest) => {
-      const { conversation_id: conversationId } = fastifyRequest?.params as { conversation_id: string };
-      const owner = { tenantId: caller!.tenantId!, memberId: caller!.userId ?? caller!.callerId };
-      this.options.store.deleteCapabilityGrants(owner.tenantId, owner.memberId, conversationId);
-      await this.options.host.revokeCapabilityGrants(caller!, conversationId).catch(() => undefined);
-      this.writeJson(response, 200, { data: { removed: true } });
-    }, routeSchema("deleteCapabilityGrants", { summary: "撤销会话能力授权", description: "删除某会话的全部能力授权（仅本会话有效）；本机与 Manager 同步删除。", params: Type.Object({ conversation_id: Type.String({ minLength: 1, description: "会话 ID。" }) }, { additionalProperties: false }), response: { 200: jsonResponse(Type.Ref("LocalCapabilityDeleteEnvelope")), 401: problemResponse("Unauthorized") } }));
     this.registerRoute("DELETE", "/api/agent/capabilities/auto-install/:capability_kind", (_request, response, caller, fastifyRequest) => {
       const { capability_kind: kind } = fastifyRequest?.params as { capability_kind: "mcp" | "skill" };
       if (!this.options.store.deleteCapabilityAutoInstall(caller!.tenantId!, caller!.userId ?? caller!.callerId, kind)) throw new HttpProblem(404, "auto_install_not_found", "Auto-install grant not found");
@@ -1783,10 +1755,16 @@ export class AgentHttpServer {
     this.registerRoute("DELETE", "/api/agent/capabilities/:capability_kind/:capability_ref", (_request, response, caller, fastifyRequest) => {
       const { capability_kind: kind, capability_ref: ref } = fastifyRequest?.params as { capability_kind: "mcp" | "skill"; capability_ref: string };
       const memberId = caller!.userId ?? caller!.callerId;
+      const installed = () => this.options.store.listLocalCapabilities(caller!.tenantId!, memberId);
+      const [serverId] = enterpriseMcpServerIds(installed().filter((item) => item.kind === kind && item.ref === ref));
       if (!this.options.store.deleteLocalCapability(caller!.tenantId!, memberId, kind, ref)) throw new HttpProblem(404, "capability_not_found", "Capability not found");
       if (kind === "skill") this.options.host.removePersonalSkill?.(caller!.tenantId!, memberId, ref);
       // Uninstalling an MCP also removes the member's sign-in / token for it.
       if (kind === "mcp") this.mcpAuthService()?.credentials.delete(this.mcpOwner(caller!), ref);
+      // 授权跟着安装走：卸载企业目录 MCP（且本机没有别的安装指向同一条目）即撤销，Manager 不再下发其应用密钥。
+      if (serverId && !enterpriseMcpServerIds(installed()).includes(serverId)) {
+        void this.options.host.revokeCapabilityGrant?.(caller!, serverId).catch(() => undefined);
+      }
       this.writeJson(response, 200, { data: { removed: true } });
     }, routeSchema("deleteLocalCapability", { summary: "撤销个人能力", description: "撤销当前成员的一项个人能力，立即失效。", params: LocalCapabilityParams, response: { 200: jsonResponse(Type.Ref("LocalCapabilityDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
     this.registerRoute("POST", "/api/agent/capabilities/skills/custom", async (request, response, caller) => {
@@ -2418,8 +2396,6 @@ export class AgentHttpServer {
 
   private async deleteConversation(response: ServerResponse, conversationId: string, caller: AuthenticatedCaller): Promise<void> {
     if (!(await this.options.host.delete(conversationId, caller.tenantId!, caller.userId ?? caller.callerId))) throw new HttpProblem(404, "conversation_not_found", "Conversation not found");
-    // 会话结束：能力授权仅本会话有效，本机与 Manager 同步失效。
-    await this.options.host.revokeCapabilityGrants(caller, conversationId).catch(() => undefined);
     this.writeJson(response, 200, { data: { deleted: true } });
   }
 
@@ -2729,6 +2705,8 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative });
       }
+      // 登录 / 恢复时补报本机装着的企业目录 MCP（含本功能上线前装的），保证刷新登录能取到应用密钥。
+      void this.options.host.syncCapabilityGrants?.(caller).catch(() => undefined);
       this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);

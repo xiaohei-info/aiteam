@@ -66,16 +66,13 @@ class McpCatalogRepository:
             rows = s.execute("SELECT " + _COLS + " FROM mcp_catalog ORDER BY display_name, ref").fetchall()
         return [_row(r) for r in rows]
 
-    def oauth_client(self, ctx: TenantContext, server_id: str) -> tuple[str, str, bytes | None, str] | None:
-        """(auth, client_id, encrypted secret, ref) of an enabled entry; None when not enabled.
-
-        `ref` 是本机 Agent 授权里用的跨端身份标识（MCP 短标识），与请求路径的 `server_id` 不同。
-        """
+    def oauth_client(self, ctx: TenantContext, server_id: str) -> tuple[str, str, bytes | None] | None:
+        """(auth, client_id, encrypted secret) of an enabled entry; None when not enabled."""
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT auth, oauth_client_id, oauth_client_secret_enc, ref FROM mcp_catalog WHERE server_id = %s", (server_id,),
+                "SELECT auth, oauth_client_id, oauth_client_secret_enc FROM mcp_catalog WHERE server_id = %s", (server_id,),
             ).fetchone()
-        return (row[0], row[1], bytes(row[2]) if row[2] is not None else None, row[3]) if row else None
+        return (row[0], row[1], bytes(row[2]) if row[2] is not None else None) if row else None
 
     def upsert(self, ctx: TenantContext, server: PlatformMcpServerPull, *, enabled_by: str, secret_enc: bytes | None = None) -> McpCatalogRow:
         """Enable or move to the platform's current revision. A ref held by another server is a conflict."""
@@ -183,18 +180,17 @@ class McpMarketService:
     def oauth_client(self, ctx: TenantContext, server_id: str) -> dict:
         """平台预登记的 OAuth 应用，供成员本机 Agent 登录 / 刷新令牌。
 
-        下发前校验（设计 2026-11-19 §3.4）：企业已启用 + 成员在职 + 成员已授权该 MCP。
-        每次下发记一条审计。只有成员本机Agent 在授权后才拿得到密钥。
+        下发前校验（设计 2026-11-19 §3.4）：企业已启用 + 成员在职 + 成员本机装着该 MCP（本机 Agent
+        上报，属自证，不是安全边界）。每次下发记一条审计。
         """
         require_active(self._members.get_member(ctx, ctx.user_id))
         found = self._repo.oauth_client(ctx, server_id)
         if found is None or found[0] != "oauth" or not found[1]:
             raise NotFound("本企业目录中没有该 MCP 的预登记应用")
-        _auth, client_id, secret, ref = found
-        # 跨端身份标识一致（AGENTS.md §3.9）：本机 Agent 授权写入的是 MCP 的 `ref`（短标识），
-        # 而请求路径用平台 `server_id`。必须先把 server_id 解析成 ref 再查授权，否则恒查不到。
-        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=ref):
-            raise NotFound("该 MCP 尚未授权给当前成员，无法下发应用密钥")
+        _auth, client_id, secret = found
+        # 授权跟着安装走：本机 Agent 装着该企业 MCP 时按平台 server_id 上报（不受本机改名影响）。
+        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=server_id):
+            raise NotFound("该 MCP 尚未安装到当前成员本机，无法下发应用密钥")
         result = {"client_id": client_id, **({"client_secret": self._crypto.decrypt(secret)} if secret else {})}
         if self._audit is not None:
             self._audit.record(ctx, actor=ctx.user_id, action="mcp.oauth_client.issued",

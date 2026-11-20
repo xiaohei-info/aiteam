@@ -4,7 +4,6 @@ import { Bell, Bot, Building2, ChevronRight, ExternalLink, Globe, LogOut, Messag
 import './Settings.css'
 import ApplicationLogs from './ApplicationLogs'
 import FileAccessSettings from './FileAccessSettings'
-import CapabilityGrantSettings from './CapabilityGrantSettings'
 import {
   buildNotificationStorageKey,
   readNotificationPreferenceResult,
@@ -246,8 +245,6 @@ export default function Settings() {
         </section>
 
         <FileAccessSettings />
-
-        <CapabilityGrantSettings />
 
         <section className="settings-card glass-panel" aria-labelledby="settings-capabilities-title">
           <div className="settings-section-heading" style={{ marginBottom: 0, alignItems: 'center' }}>

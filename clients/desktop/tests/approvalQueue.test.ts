@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { capabilityGrantSourceLabel, groupCapabilityGrants } from '../src/lib/capabilityGrantLabels.ts';
 import { isWaitingSignIn, pickCurrent, queuePosition, visibleQueue, type QueueEntry } from '../src/lib/approvalQueue.ts';
 
 const entry = (approvalId: string, conversationId: string, phase = 'pending'): QueueEntry => ({ approvalId, conversationId, phase });
@@ -31,25 +30,4 @@ test('等浏览器登录的条目不挡住新来的审批', () => {
 test('空队列不报错', () => {
   assert.equal(pickCurrent([]), undefined);
   assert.deepEqual(visibleQueue([], 'c1'), []);
-});
-
-test('能力授权来源标签翻成用户可读文案', () => {
-  assert.equal(capabilityGrantSourceLabel('platform_catalog'), '平台目录');
-  assert.equal(capabilityGrantSourceLabel('enterprise_catalog'), '企业目录');
-  assert.equal(capabilityGrantSourceLabel('clawhub_catalog'), 'ClawHub');
-  assert.equal(capabilityGrantSourceLabel('user_import'), '本机导入');
-  assert.equal(capabilityGrantSourceLabel('user_url'), '本机地址');
-  assert.equal(capabilityGrantSourceLabel(''), '本机导入');
-});
-
-test('能力授权按会话分组', () => {
-  const grants = [
-    { conversation_id: 'c1', kind: 'mcp', ref: 'a', source: 'platform_catalog' },
-    { conversation_id: 'c1', kind: 'skill', ref: 'b', source: 'enterprise_catalog' },
-    { conversation_id: 'c2', kind: 'mcp', ref: 'c', source: 'clawhub_catalog' },
-  ];
-  const grouped = groupCapabilityGrants(grants);
-  assert.deepEqual([...grouped.keys()], ['c1', 'c2']);
-  assert.deepEqual(grouped.get('c1')!.map((item) => item.ref), ['a', 'b']);
-  assert.deepEqual(groupCapabilityGrants([]).size, 0);
 });

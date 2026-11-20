@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, ApprovalSkippedError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk, reportableCapabilityGrant } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, ApprovalSkippedError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -290,33 +290,6 @@ test("旧键 skill 仍可读（升级期兼容），但不被当作目录来源�
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
-// 能力授权（设计 2026-11-19 §3.2）：批准安装即写入本机授权，并标记为待上报。
-test("批准能力安装后写入能力授权，待上报；会话删除后清空", async () => {
-  const { root, store } = fixture();
-  try {
-    store.createConversation({ id: "conversation-1", sessionFile: "", workspace: "", tenantId: "tenant-1", memberId: "member-1" });
-    const service = new ApprovalService(store, { onRequired: () => undefined });
-    const mcpInstall = `capability_install:${JSON.stringify({ kind: "mcp", ref: "cr-test", display_name: "CRM", url: "https://crm.example.com/mcp", source: "platform_catalog", reason: "" })}`;
-    const pending = service.execute(request({ toolName: "capability_install", riskLevel: "unknown", permissionMode: "workspace-write", permissionRevision: "1:workspace-write", summary: mcpInstall }), async () => "x");
-    for (let i = 0; i < 2000 && service.list("conversation-1", "tenant-1", "member-1").every((item) => item.status !== "pending"); i += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    const record = service.list("conversation-1", "tenant-1", "member-1").find((item) => item.status === "pending")!;
-    service.decide({ id: record.id, tenantId: "tenant-1", memberId: "member-1", conversationId: "conversation-1", decision: "approve", approvedBy: "member-1", idempotencyKey: "k" });
-    await pending;
-
-    assert.deepEqual(JSON.parse(JSON.stringify(store.listCapabilityGrants("tenant-1", "member-1", "conversation-1"))),
-      [{ kind: "mcp", ref: "cr-test", source: "platform_catalog", scope: "session" }]);
-    const unsynced = store.unsyncedCapabilityGrants("tenant-1", "member-1");
-    assert.deepEqual(unsynced.map((item) => [item.conversation_id, item.kind, item.ref]), [["conversation-1", "mcp", "cr-test"]]);
-    store.markCapabilityGrantsSynced("tenant-1", "member-1", [{ conversationId: "conversation-1", kind: "mcp", ref: "cr-test" }]);
-    assert.deepEqual(store.unsyncedCapabilityGrants("tenant-1", "member-1"), []);
-
-    store.deleteCapabilityGrants("tenant-1", "member-1", "conversation-1");
-    assert.deepEqual(store.listCapabilityGrants("tenant-1", "member-1", "conversation-1"), []);
-  } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
-});
-
 // 节流（设计 2026-11-19 §3.1）：同工具冷却窗口内复用上次批准，不重弹；拒绝不自动放行。
 test("同工具冷却窗口内复用上次批准，被拒绝的记录不放行", async () => {
   const { root, store } = fixture();
@@ -360,14 +333,4 @@ test("无人值守时未授权动作被跳过而不是中止", async () => {
     interactive.catch(() => undefined);
     service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
-});
-
-// 红线（设计 2026-11-19 §3.4 范围）：只有「企业自有 MCP」的授权上报 Manager；
-// 成员自装能力（自填地址 / 本机导入 / ClawHub）凭据只在本机，不上传。
-test("只有企业自有 MCP 的授权上报 Manager", () => {
-  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "platform_catalog" }), true);
-  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "enterprise_catalog" }), false);
-  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "user_url" }), false);
-  assert.equal(reportableCapabilityGrant({ kind: "skill", source: "platform_catalog" }), false);
-  assert.equal(reportableCapabilityGrant({ kind: "skill", source: "clawhub_catalog" }), false);
 });

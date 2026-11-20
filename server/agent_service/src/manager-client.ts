@@ -201,9 +201,10 @@ export interface ManagerClient {
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
   uploadSegmentOutcomes?(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown>;
   /** 上报本机能力授权（仅本会话有效），供 Manager 下发平台密钥时校验。 */
-  putCapabilityGrants?(caller: AuthenticatedCaller, grants: { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[]): Promise<unknown>;
-  /** 会话结束 / 撤销：删除该会话的能力授权。 */
-  deleteCapabilityGrants?(caller: AuthenticatedCaller, conversationId: string): Promise<unknown>;
+  /** 上报本机装着的企业目录 MCP（平台 server_id，只增不减）；Manager 据此下发预登记应用密钥。 */
+  putCapabilityGrants?(caller: AuthenticatedCaller, serverIds: readonly string[]): Promise<unknown>;
+  /** 卸载企业目录 MCP：删除对应授权。 */
+  deleteCapabilityGrant?(caller: AuthenticatedCaller, serverId: string): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -495,13 +496,14 @@ export class HttpManagerClient implements ManagerClient {
   }
 
   /** 上报本机的能力授权（仅本会话有效），作为 Manager 下发平台密钥的授权凭据。 */
-  async putCapabilityGrants(caller: AuthenticatedCaller, grants: { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[]): Promise<unknown> {
+  async putCapabilityGrants(caller: AuthenticatedCaller, serverIds: readonly string[]): Promise<unknown> {
+    const grants = serverIds.map((serverId) => ({ server_id: serverId }));
     return this.unwrap(await this.request("/api/manager/capability-grants", caller, { tenant_id: caller.tenantId, grants }, undefined, "POST"));
   }
 
-  /** 会话结束 / 撤销：通知 Manager 删除该会话的能力授权。 */
-  async deleteCapabilityGrants(caller: AuthenticatedCaller, conversationId: string): Promise<unknown> {
-    return this.unwrap(await this.request("/api/manager/capability-grants", caller, undefined, { conversation_id: conversationId }, "DELETE"));
+  /** 卸载企业目录 MCP：通知 Manager 删除对应授权。 */
+  async deleteCapabilityGrant(caller: AuthenticatedCaller, serverId: string): Promise<unknown> {
+    return this.unwrap(await this.request("/api/manager/capability-grants", caller, undefined, { server_id: serverId }, "DELETE"));
   }
 
   private async request(

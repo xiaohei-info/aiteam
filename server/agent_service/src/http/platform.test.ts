@@ -195,10 +195,14 @@ test("Grant sync stores only Manager-authorized projections", async () => {
     getOrgTree: async () => ({}),
   };
   const { fixture, http, base } = await start(remote);
+  const backfilled: unknown[] = [];
+  (fixture.host as unknown as { syncCapabilityGrants: (caller: unknown) => Promise<void> }).syncCapabilityGrants = async (caller) => { backfilled.push(caller); };
   try {
     const response = await fetch(`${base}/api/agent/grants/sync`, { method: "POST", headers: auth, body: JSON.stringify({ tenant_id: "t1", member_id: "m1" }) });
     assert.equal(response.status, 200);
     assert.deepEqual(fixture.store.listLoadedExperts().map((expert) => expert.employee_id), ["remote"]);
+    // 登录 / 恢复同步时补报本机装着的企业目录 MCP（授权跟着安装走）。
+    assert.equal(backfilled.length, 1);
   } finally {
     await http.close();
     await fixture.close();

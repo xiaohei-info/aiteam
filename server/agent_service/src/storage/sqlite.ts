@@ -681,20 +681,8 @@ export class AgentSqliteStore {
         PRIMARY KEY (tenant_id, member_id, conversation_id, tool_name, subject)
       );
 
-      -- 成员对某个能力（MCP ref / 技能 id）的授权。批准安装或首次使用时写入，仅本会话有效（设计 2026-11-19 §3.2）。
-      -- 本机留存用于「不再询问」；同时上报 Manager，作为平台密钥下发的授权凭据。会话删除时一并清掉。
-      CREATE TABLE IF NOT EXISTS capability_grant (
-        tenant_id TEXT NOT NULL,
-        member_id TEXT NOT NULL,
-        conversation_id TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
-        ref TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT '',
-        scope TEXT NOT NULL DEFAULT 'session',
-        created_at TEXT NOT NULL,
-        synced_at TEXT,
-        PRIMARY KEY (tenant_id, member_id, conversation_id, kind, ref)
-      );
+      -- 旧版会话级能力授权表：授权改为跟着安装走、直接由 local_capability 推导（设计 2026-11-19 §3.2）。
+      DROP TABLE IF EXISTS capability_grant;
 
       -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。
       CREATE TABLE IF NOT EXISTS local_capability (
@@ -1017,7 +1005,6 @@ export class AgentSqliteStore {
       this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM approval_record WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM approval_session_grant WHERE conversation_id = ?").run(id);
-      this.db.prepare("DELETE FROM capability_grant WHERE conversation_id = ?").run(id);
       this.db.exec("COMMIT");
       return true;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -1666,47 +1653,6 @@ export class AgentSqliteStore {
 
   putApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, subject = "", now = new Date().toISOString()): void {
     this.db.prepare("INSERT OR IGNORE INTO approval_session_grant (tenant_id, member_id, conversation_id, tool_name, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(tenantId, memberId, conversationId, toolName, subject, now);
-  }
-
-  // ---- 能力授权（设计 2026-11-19 §3.2）----
-
-  /** 写入一条能力授权（仅本会话有效）；重复写入不报错，并标为待上报。 */
-  putCapabilityGrant(tenantId: string, memberId: string, conversationId: string, grant: { kind: "mcp" | "skill"; ref: string; source?: string; scope?: string }, now = new Date().toISOString()): void {
-    this.db.prepare(
-      "INSERT OR IGNORE INTO capability_grant (tenant_id, member_id, conversation_id, kind, ref, source, scope, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(tenantId, memberId, conversationId, grant.kind, grant.ref, grant.source ?? "", grant.scope ?? "session", now);
-    this.db.prepare("UPDATE capability_grant SET synced_at = NULL WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND kind = ? AND ref = ?")
-      .run(tenantId, memberId, conversationId, grant.kind, grant.ref);
-  }
-
-  listCapabilityGrants(tenantId: string, memberId: string, conversationId: string): { kind: "mcp" | "skill"; ref: string; source: string; scope: string }[] {
-    return this.db.prepare(
-      "SELECT kind, ref, source, scope FROM capability_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? ORDER BY created_at, kind, ref",
-    ).all(tenantId, memberId, conversationId) as { kind: "mcp" | "skill"; ref: string; source: string; scope: string }[];
-  }
-
-  /** 设置页用：列出成员全部会话的能力授权（仅本会话有效，会话删除即消失）。 */
-  listAllCapabilityGrants(tenantId: string, memberId: string): { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[] {
-    return this.db.prepare(
-      "SELECT conversation_id, kind, ref, source, scope FROM capability_grant WHERE tenant_id = ? AND member_id = ? ORDER BY created_at DESC, kind, ref",
-    ).all(tenantId, memberId) as { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[];
-  }
-
-  /** 待上报的授权（本机已写、Manager 尚未收到）；上报成功后回写 synced_at。 */
-  unsyncedCapabilityGrants(tenantId: string, memberId: string): { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[] {
-    return this.db.prepare(
-      "SELECT conversation_id, kind, ref, source, scope FROM capability_grant WHERE tenant_id = ? AND member_id = ? AND synced_at IS NULL ORDER BY created_at, kind, ref",
-    ).all(tenantId, memberId) as { conversation_id: string; kind: "mcp" | "skill"; ref: string; source: string; scope: string }[];
-  }
-
-  markCapabilityGrantsSynced(tenantId: string, memberId: string, items: readonly { conversationId: string; kind: "mcp" | "skill"; ref: string }[], now = new Date().toISOString()): void {
-    const stmt = this.db.prepare("UPDATE capability_grant SET synced_at = ? WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND kind = ? AND ref = ?");
-    for (const item of items) stmt.run(now, tenantId, memberId, item.conversationId, item.kind, item.ref);
-  }
-
-  /** 会话结束 / 成员撤销：删除授权（Manager 侧同步删，不再满足密钥下发条件）。 */
-  deleteCapabilityGrants(tenantId: string, memberId: string, conversationId: string): void {
-    this.db.prepare("DELETE FROM capability_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ?").run(tenantId, memberId, conversationId);
   }
 
   deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {

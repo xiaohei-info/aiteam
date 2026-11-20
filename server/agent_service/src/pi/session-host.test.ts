@@ -1827,3 +1827,42 @@ test("prompt_settled reports a run aborted during a tool call as aborted", async
   }
 });
 
+
+// 授权跟着安装走（设计 2026-11-19 §3.2 / §3.4）：只上报本机装着的企业目录 MCP（平台 server_id），
+// 成员自装能力不上报；卸载撤销；上报失败不抛出。
+test("capability grants follow the install and only enterprise catalog MCPs reach Manager", async () => {
+  const fixture = await createFixture();
+  const calls: unknown[] = [];
+  let fail = false;
+  const managerClient = {
+    listInstallableMcpServers: async () => [],
+    putCapabilityGrants: async (_caller: unknown, ids: readonly string[]) => { if (fail) throw new Error("down"); calls.push(["put", [...ids]]); },
+    deleteCapabilityGrant: async (_caller: unknown, id: string) => { if (fail) throw new Error("down"); calls.push(["delete", id]); },
+  } as unknown as ManagerClient;
+  const host = new SessionHost({
+    cwdRoot: join(fixture.dataRoot, "workspaces"), agentDir: join(fixture.dataRoot, "pi"), sessionDir: join(fixture.dataRoot, "sessions"),
+    store: fixture.store, modelRuntime: fixture.modelRuntime, model: fixture.faux.getModel(),
+    resourceLoaderFactory: (_id, auth) => createControlledResourceLoader("test system prompt", undefined, auth),
+    sandbox: new LocalSandbox(), managerClient,
+  });
+  const caller = { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" };
+  const base = { display_name: "x", url: "https://example.com/mcp", tools: ["a"], reason: "", approved_by: "member-1" };
+  try {
+    await host.syncCapabilityGrants(caller);
+    assert.deepEqual(calls, [], "没装企业 MCP 时不上报");
+    fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "mcp", ref: "crm-renamed", source: "platform_catalog", source_ref: "s9" });
+    fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "mcp", ref: "mine", source: "user_url" });
+    fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "skill", ref: "weekly", source: "platform_catalog", source_ref: "skill-1" });
+    await host.syncCapabilityGrants(caller);
+    await host.mcpRuntimeAuth(caller).catalog!.grant!("s5");
+    await host.revokeCapabilityGrant(caller, "s9");
+    await host.syncCapabilityGrants({ callerId: "member-1" });
+    assert.deepEqual(calls, [["put", ["s9"]], ["put", ["s5"]], ["delete", "s9"]]);
+    fail = true;
+    await host.syncCapabilityGrants(caller);
+    await host.revokeCapabilityGrant(caller, "s9");
+  } finally {
+    await host.dispose();
+    await fixture.close();
+  }
+});

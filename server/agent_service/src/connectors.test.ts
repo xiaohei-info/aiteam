@@ -5,7 +5,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { createFixture } from "./test-fixture.js";
-import { authorizedConnectors, connectorTools, validateConnectorSelection } from "./connectors.js";
+import { authorizedConnectors, connectorTools, enterpriseMcpServerIds, startMcpRelogin, validateConnectorSelection, type McpRuntimeAuth } from "./connectors.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
 test("local MCP is owner/grant scoped, uses current installation, redacts credentials, and uses the existing approval gate", async () => {
@@ -59,4 +59,31 @@ test("local MCP is owner/grant scoped, uses current installation, redacts creden
     delete process.env.AITEAM_CONNECTOR_TEST_TOKEN;
     await fixture.close(); await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+// 授权跟着安装走（设计 2026-11-19 §3.2 / §3.4）：只有企业目录 MCP 上报，标识用平台 server_id。
+test("enterpriseMcpServerIds keeps only installed enterprise catalog MCP server ids", () => {
+  assert.deepEqual(enterpriseMcpServerIds([
+    { kind: "mcp", source: "platform_catalog", source_ref: "s9" },
+    { kind: "mcp", source: "platform_catalog", source_ref: "s9" },
+    { kind: "mcp", source: "platform_catalog", source_ref: "" },
+    { kind: "mcp", source: "user_url", source_ref: "" },
+    { kind: "skill", source: "platform_catalog", source_ref: "skill-1" },
+    { kind: "skill", source: "clawhub_catalog", source_ref: "x" },
+  ]), ["s9"]);
+});
+
+test("relogin of an enterprise catalog MCP reports the grant before signing in", async () => {
+  const fixture = await createFixture();
+  const order: string[] = [];
+  try {
+    const owner = { tenantId: "tenant-1", memberId: "member-1" };
+    fixture.store.putLocalCapability("tenant-1", "member-1", { kind: "mcp", ref: "crm", display_name: "CRM", url: "https://crm.example.com/mcp", tools: ["a"], source: "platform_catalog", source_ref: "s9", reason: "", approved_by: "member-1", auth: "oauth" });
+    const auth = {
+      service: { credentials: { get: () => undefined }, login: async () => { order.push("login"); return { done: Promise.resolve() }; } },
+      catalog: { list: async () => [], oauthClient: async () => ({ client_id: "app-1" }), grant: async (id: string) => { order.push(`grant:${id}`); } },
+    } as unknown as McpRuntimeAuth;
+    assert.deepEqual(await startMcpRelogin(fixture.store, owner, auth, "crm"), { found: true });
+    assert.deepEqual(order, ["grant:s9", "login"]);
+  } finally { await fixture.close(); }
 });

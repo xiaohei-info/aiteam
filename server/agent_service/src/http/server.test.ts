@@ -735,7 +735,7 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
     //       + MCP 鉴权 8 个（登录进度/取消/回调/探测/添加 MCP/重新登录/更新令牌/清除凭据）
     //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能
     //      + 导入自定义技能（设计 2026-11-18 §3）+ 能力授权列出与撤销（2026-11-19 §3.2）。
-    assert.equal(frontendOperations.length, 106);
+    assert.equal(frontendOperations.length, 104);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -1308,6 +1308,37 @@ test("personal capabilities are listed and revoked per owner, and a missing one 
     assert.equal((await fetch(`${base}/api/agent/capabilities/mcp/notion`, { method: "DELETE", headers })).status, 200);
     assert.deepEqual(fixture.store.listLocalCapabilities("tenant-1", "member-1"), []);
     assert.equal(fixture.store.listLocalCapabilities("tenant-1", "member-2").length, 1);
+  } finally {
+    await http.close();
+    await fixture.close();
+  }
+});
+
+// 授权跟着安装走（设计 2026-11-19 §3.2 / §3.4）：卸载企业目录 MCP 才撤销；自装 MCP 不碰 Manager；
+// 同一目录条目还有别的本机安装时不撤销。
+test("uninstalling an enterprise catalog MCP revokes its grant; personal MCPs never reach Manager", async () => {
+  const fixture = await createFixture();
+  const revoked: string[] = [];
+  (fixture.host as unknown as { revokeCapabilityGrant: (caller: unknown, id: string) => Promise<void> }).revokeCapabilityGrant = async (_caller, id) => { revoked.push(id); };
+  const base = { display_name: "x", url: "https://example.com/mcp", tools: ["a"], reason: "", approved_by: "member-1" };
+  fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "mcp", ref: "crm", source: "platform_catalog", source_ref: "s9" });
+  fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "mcp", ref: "crm-2", source: "platform_catalog", source_ref: "s9" });
+  fixture.store.putLocalCapability("tenant-1", "member-1", { ...base, kind: "mcp", ref: "mine", source: "user_url" });
+  const http = new AgentHttpServer({ host: fixture.host, store: fixture.store, authenticate: () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] }) });
+  await http.listen(0);
+  const address = http.server.address();
+  assert(address && typeof address === "object");
+  const base_ = `http://127.0.0.1:${address.port}`;
+  const headers = { Authorization: "Bearer test" };
+  try {
+    assert.equal((await fetch(`${base_}/api/agent/capabilities/mcp/mine`, { method: "DELETE", headers })).status, 200);
+    assert.equal((await fetch(`${base_}/api/agent/capabilities/mcp/crm`, { method: "DELETE", headers })).status, 200);
+    assert.deepEqual(revoked, [], "自装 MCP 不上报；crm-2 还装着同一条目，不撤销");
+    assert.equal((await fetch(`${base_}/api/agent/capabilities/mcp/crm-2`, { method: "DELETE", headers })).status, 200);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(revoked, ["s9"]);
+    // 已删除的会话级授权接口不再存在。
+    assert.equal((await fetch(`${base_}/api/agent/capability-grants`, { headers })).status, 404);
   } finally {
     await http.close();
     await fixture.close();

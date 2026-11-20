@@ -227,6 +227,19 @@ export interface McpCatalog {
   list(signal?: AbortSignal): Promise<InstallableMcpInfo[]>;
   /** Provider-issued OAuth client of a catalog entry; kept in memory only. */
   oauthClient?(serverId: string, signal?: AbortSignal): Promise<McpPreregisteredClient>;
+  /**
+   * Tells Manager this member has (or is installing) the catalog entry, so it issues the entry's
+   * preregistered client (design 2026-11-19 §3.4: the grant follows the install). Never throws.
+   */
+  grant?(serverId: string): Promise<void>;
+}
+
+/**
+ * Platform server ids of the enterprise catalog MCP servers installed on this machine.
+ * Only these are reported to Manager; MCP servers members add themselves stay local (design §3.4 scope).
+ */
+export function enterpriseMcpServerIds(items: readonly Pick<LocalCapability, "kind" | "source" | "source_ref">[]): string[] {
+  return [...new Set(items.filter(item => item.kind === "mcp" && item.source === "platform_catalog" && item.source_ref).map(item => item.source_ref))];
 }
 /** Sign-in and credentials of personal MCP servers; absent in tests that need none. */
 export interface McpRuntimeAuth {
@@ -558,6 +571,8 @@ async function connectForInstall(plan: InstallPlan, ref: string, owner: TaskOwne
   } else if (plan.auth === "oauth") {
     const service = auth!.service!;
     const fixed = options.client ? async () => options.client : plan.preregistered ? catalogClient(auth, plan.sourceRef) : undefined;
+    // Manager issues the preregistered client only to members who have the entry installed; report it before signing in.
+    if (plan.preregistered && !options.client && plan.sourceRef) await auth?.catalog?.grant?.(plan.sourceRef);
     try {
       const { done } = await service.login(owner, ref, plan.url, {
         ...(plan.scope ? { scope: plan.scope } : {}),
@@ -1039,6 +1054,8 @@ export async function startMcpRelogin(store: AgentSqliteStore, owner: TaskOwner,
   if (!auth.service) throw new McpInstallError("mcp_install_failed", "本机暂时无法保存这个 MCP 的登录凭据，请稍后再试。");
   const stored = auth.service.credentials.get(owner, ref, item.url);
   const client = stored?.catalog_client ? catalogClient(auth, stored.catalog_client) : item.source === "platform_catalog" ? catalogClient(auth, item.source_ref) : undefined;
+  const [serverId] = enterpriseMcpServerIds([item]);
+  if (client && serverId) await auth.catalog?.grant?.(serverId);
   try {
     const { login } = await auth.service.login(owner, ref, item.url, { ...(item.oauth_scope ? { scope: item.oauth_scope } : {}), ...(client ? { client } : {}) });
     return { found: true, ...(login ? { login } : {}) };

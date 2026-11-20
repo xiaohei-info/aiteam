@@ -209,10 +209,10 @@ def test_mcp_catalog_repository_paths():
     cursor._queue.append(lambda c: setattr(c, "_fetchall", [_catalog_row()]))
     assert [row.ref for row in repo.list(CTX)] == ["cr-test"]
 
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", b"enc", "cr-test")))
-    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", b"enc", "cr-test")
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", None, "cr-test")))
-    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", None, "cr-test")
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", b"enc")))
+    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", b"enc")
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", None)))
+    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", None)
     cursor._queue.append(lambda c: setattr(c, "_fetchone", None))
     assert repo.oauth_client(CTX, "missing") is None
 
@@ -233,6 +233,24 @@ def test_mcp_catalog_repository_paths():
     assert repo.delete(CTX, "s1") is True
     cursor._queue.append(lambda c: setattr(c, "_fetchone", None))
     assert repo.delete(CTX, "missing") is False
+
+
+def test_member_capability_grant_repository_paths():
+    from manager_service.member_capability_grant_repository import MemberCapabilityGrantRepository
+
+    cursor = _FakeCursor()
+    repo = MemberCapabilityGrantRepository(_FakeRouter(cursor))
+    repo.upsert(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1")
+    sql, params = cursor.calls[-1]
+    assert "ON CONFLICT" in sql and params[1:] == ("u1", "mcp", "s1")
+
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", (1,)))
+    assert repo.has(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1") is True
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", None))
+    assert repo.has(CTX, member_id="u1", capability_kind="mcp", capability_ref="s2") is False
+
+    assert repo.delete(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1") == 1
+    assert cursor.calls[-1][0].startswith("DELETE FROM member_capability_grant")
 
 
 # --------------------------------------------------------------------------

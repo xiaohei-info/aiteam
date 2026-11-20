@@ -1,4 +1,4 @@
-import type { CapabilityAutoInstall, CapabilityGrant, InstallableSkill, LocalCapability, LocalCapabilityKind, McpBearerCredential, McpInstallRequest, McpInstallResult, McpLogin, McpProbe } from './types.ts'
+import type { CapabilityAutoInstall, InstallableSkill, LocalCapability, LocalCapabilityKind, McpBearerCredential, McpInstallRequest, McpInstallResult, McpLogin, McpProbe } from './types.ts'
 
 import type { ServiceApiClient } from './client'
 
@@ -29,16 +29,6 @@ export async function listCapabilityAutoInstall(client: RequestClient): Promise<
 /** 撤销后从平台目录安装该种能力恢复为每次审批；已装能力不受影响。 */
 export async function deleteCapabilityAutoInstall(client: RequestClient, kind: LocalCapabilityKind): Promise<void> {
   await client.request({ method: 'DELETE', path: `/api/agent/capabilities/auto-install/${encodeURIComponent(kind)}` })
-}
-
-/** 列出本机能力授权（仅本会话有效），供设置页展示与撤销。 */
-export async function listCapabilityGrants(client: RequestClient): Promise<CapabilityGrant[]> {
-  return (await client.request<CapabilityGrant[] | null>({ method: 'GET', path: '/api/agent/capability-grants' })) ?? []
-}
-
-/** 撤销某会话的全部能力授权；本机与 Manager 同步删除，该平台密钥不再下发。 */
-export async function revokeCapabilityGrants(client: RequestClient, conversationId: string): Promise<void> {
-  await client.request({ method: 'DELETE', path: `/api/agent/capability-grants/${encodeURIComponent(conversationId)}` })
 }
 
 // -------------------- MCP 鉴权（设计 2026-11-18 MCP鉴权与配置导入） --------------------

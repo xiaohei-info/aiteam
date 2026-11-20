@@ -74,8 +74,6 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/capabilities/auto-install'],
   ['DELETE', '/api/agent/capabilities/auto-install/{capability_kind}'],
   // 能力授权（仅本会话有效）：设置页列出与撤销。
-  ['GET', '/api/agent/capability-grants'],
-  ['DELETE', '/api/agent/capability-grants/{conversation_id}'],
   ['DELETE', '/api/agent/capabilities/{capability_kind}/{capability_ref}'],
   // MCP 鉴权（2026-11-18）：添加 MCP、探测、登录进度/取消、重新登录、更新令牌、清除凭据。
   // 回调由浏览器直接访问，桌面端不调用；列出是为与契约快照一致。
