@@ -209,10 +209,10 @@ def test_mcp_catalog_repository_paths():
     cursor._queue.append(lambda c: setattr(c, "_fetchall", [_catalog_row()]))
     assert [row.ref for row in repo.list(CTX)] == ["cr-test"]
 
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", b"enc")))
-    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", b"enc")
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", None)))
-    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", None)
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", b"enc", "cr-test")))
+    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", b"enc", "cr-test")
+    cursor._queue.append(lambda c: setattr(c, "_fetchone", ("oauth", "app-1", None, "cr-test")))
+    assert repo.oauth_client(CTX, "s1") == ("oauth", "app-1", None, "cr-test")
     cursor._queue.append(lambda c: setattr(c, "_fetchone", None))
     assert repo.oauth_client(CTX, "missing") is None
 
