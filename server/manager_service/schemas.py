@@ -19,6 +19,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.contracts.enums import EnterpriseRole
+from shared.contracts.skill import MAX_SKILL_FILES
 from shared.contracts.snapshot import ExecutionPolicy, ModelPolicy
 
 # resource_type 取值（对齐 MemberGrant 契约）。
@@ -496,7 +497,7 @@ class SkillFileIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md）")
+    path: str = Field(description="技能目录内相对路径（posix，例 SKILL.md / references/foo.md / scripts/run.sh）；各段不得以点开头")
     content: str = Field(default="", description="文件文本内容（utf-8）")
 
 
@@ -518,7 +519,7 @@ class SkillCatalogIn(BaseModel):
     visibility: CatalogVisibility = Field(default="private")
     config: dict[str, Any] = Field(default_factory=dict, description="中立配置（不含 runtime 原生格式，D16）。")
     # M2：技能真相（文件列表 + 包级内容哈希）；供 Agent 端 cache 按 version/hash 判定更新。
-    files: list[SkillFileIn] = Field(default_factory=list, max_length=64, description="显式更新的完整文本包（含 SKILL.md）；PUT省略时保留，空列表仅创建草稿")
+    files: list[SkillFileIn] = Field(default_factory=list, max_length=MAX_SKILL_FILES, description="显式更新的完整 UTF-8 文本包（含 SKILL.md，可带脚本与资料）；PUT省略时保留，空列表仅创建草稿")
     content_hash: str = Field(default="", description="包级内容指纹（SkillPackage 同步 key）")
 
 

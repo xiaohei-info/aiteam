@@ -426,10 +426,11 @@ _SKILL_MD = "---\nname: sheet\ndescription: 读表\n---\n读表格。"
 
 
 def _shaped(files):
-    """与仓库 SQL 一致的结构判断：数组、1–64 个文件、含 SKILL.md、内容总计不超过 1 MiB。"""
-    return (isinstance(files, list) and 1 <= len(files) <= 64
+    """与仓库 SQL 一致的结构判断：数组、文件数与内容总量在共享契约上限内、含 SKILL.md。"""
+    from shared.contracts.skill import MAX_SKILL_FILES, MAX_SKILL_TOTAL_BYTES
+    return (isinstance(files, list) and 1 <= len(files) <= MAX_SKILL_FILES
             and any(isinstance(f, dict) and f.get("path") == "SKILL.md" for f in files)
-            and sum(len(str(f.get("content", "")).encode()) for f in files if isinstance(f, dict)) <= 1024 * 1024)
+            and sum(len(str(f.get("content", "")).encode()) for f in files if isinstance(f, dict)) <= MAX_SKILL_TOTAL_BYTES)
 
 
 def _catalog_with(rows):

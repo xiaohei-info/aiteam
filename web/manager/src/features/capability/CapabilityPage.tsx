@@ -406,7 +406,7 @@ export function CapabilityPage(): ReactNode {
                       {editor.draft.kind === "skill" && (
                         <>
                           <TextInput label={i18n.t("manager.capability.version")} value={editor.draft.version} onChange={(value) => updateDraft("version", value)} isDisabled={working} />
-                          <Banner status="info" title="留空保留原包；新建无包为不可执行草稿。替换完整包必须包含 SKILL.md（非空 description），内容变化须使用未占用的新版本。最多64文件/1MiB，仅Markdown文本。" />
+                          <Banner status="info" title="留空保留原包；新建无包为不可执行草稿。替换完整包必须包含 SKILL.md（非空 description），内容变化须使用未占用的新版本。最多 256 个文件、共 10 MiB，仅 UTF-8 文本（可带脚本与资料，路径各段不能以点开头）。" />
                           <TextArea label="完整技能包（JSON 文件数组，可选）" value={editor.draft.files} onChange={(value) => updateDraft("files", value)} rows={6} isDisabled={working} />
                           <Selector label={i18n.t("manager.capability.install_policy")} options={SKILL_INSTALL_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.install.${value}`) }))} value={editor.draft.install} onChange={(value) => updateDraft("install", value)} isDisabled={working} />
                           <Selector label={i18n.t("manager.capability.binding_policy")} options={SKILL_BINDING_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.binding.${value}`) }))} value={editor.draft.binding} onChange={(value) => updateDraft("binding", value)} isDisabled={working} />

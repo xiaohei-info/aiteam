@@ -155,7 +155,7 @@ export default function Capabilities() {
           <h2 id={`capabilities-${kind}-title`}>{mcp ? 'MCP' : '技能'}</h2>
           <p>{mcp
             ? '连接外部服务的工具。可以自己添加，或在对话中员工请求时由你批准安装；需要登录的服务，令牌只加密保存在本机。'
-            : '企业开放给你的说明文档类技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
+            : '企业开放给你的技能，也可以导入自己的技能（文件夹 / zip / 粘贴 / 网址）。安装后下一轮对话起可用。'}</p>
         </div>
         <span className="capabilities-heading-action">
           {items && <span className={`file-access-status ${list.length ? 'granted' : ''}`} style={{ marginLeft: 0 }}>{list.length ? `已安装 ${list.length} 个` : '未安装'}</span>}
@@ -206,7 +206,7 @@ export default function Capabilities() {
           </span>
         </div>
       </section>
-      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能只包含说明文档，不执行代码。撤销后下一轮对话起失效，不影响企业配置。</span></p>
+      <p className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>MCP 每次调用仍需你审批；技能可能附带脚本和资料，不会自动执行，员工运行命令仍按审批策略。撤销后下一轮对话起失效，不影响企业配置。</span></p>
     </div>
     {dialog?.type === 'add-mcp' && <AddMcpDialog onInstalled={() => void load()} onClose={() => setDialog(null)} />}
     {dialog?.type === 'add-skill' && <AddSkillDialog installed={items ?? []} onInstalled={load} onClose={() => setDialog(null)} />}

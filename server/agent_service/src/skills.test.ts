@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyPairKeyObjectResult } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, renameSync, symlinkSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { canonicalSignedSkillPackageBytes, SkillCache, SkillVerificationError, skillRefsForSnapshot, skillSigningVerificationForSnapshot, type SkillSigningKeyMetadata, verifySignedSkillPackage } from "./skills.js";
 import { createControlledResourceLoader } from "./pi/resources.js";
@@ -319,6 +320,61 @@ test("scope-invalid signed package is rejected before projection mutation", asyn
     await http.close();
     await fixture.close();
   }
+});
+
+// Shared with server/tests/shared/test_skill_package_contract.py: Python signs the widened package, Node verifies it.
+const contractFixture = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "tests", "fixtures", "skill_package_contract.json"), "utf8")) as {
+  accepted_paths: string[]; rejected_paths: string[]; public_key: string; key_id: string; signed: { package: { files: { path: string; content: string; content_hash: string }[] } & Record<string, unknown> } & Record<string, unknown>;
+};
+function resignedWithPaths(paths: string[]) {
+  const key = generateKeyPairSync("ed25519");
+  const files = paths.map((path) => ({ path, content: path === "SKILL.md" ? "# S\n" : "x\n", content_hash: sha16(path === "SKILL.md" ? "# S\n" : "x\n") }));
+  const sorted = [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const pkg = { skill_id: "s", version: "1", content_hash: sha16(JSON.stringify(sorted.map((file) => [file.path, file.content]))), display_name: "S", description: "", files };
+  const envelope = { package: pkg, tenant_id: "tenant-a", member_id: "member-a", key_id: "skill-key-1", algorithm: "Ed25519" as const, signature: sign(null, canonicalSignedSkillPackageBytes(pkg, "tenant-a", "member-a"), key.privateKey).toString("base64") };
+  return { envelope, options: { publicKey: key.publicKey.export({ format: "der", type: "spki" }).toString("base64"), keyId: "skill-key-1" } };
+}
+
+test("Node verifies the Python-signed widened package (scripts, json, nested paths)", () => {
+  const verified = verifySignedSkillPackage(contractFixture.signed, { publicKey: contractFixture.public_key, keyId: contractFixture.key_id, tenantId: "tenant-a", memberId: "member-a" });
+  const paths = verified.package.files.map((file) => file.path);
+  assert.ok(paths.includes("scripts/extract-skill.sh") && paths.includes("assets/schema.json") && paths.includes("csv.md"));
+  const tampered = structuredClone(contractFixture.signed);
+  tampered.package.files[0]!.content += "!";
+  assert.throws(() => verifySignedSkillPackage(tampered, { publicKey: contractFixture.public_key, keyId: contractFixture.key_id }), SkillVerificationError);
+});
+
+test("Node applies the same accepted and rejected skill paths as Python", () => {
+  for (const path of contractFixture.accepted_paths) {
+    const { envelope, options } = resignedWithPaths(path === "SKILL.md" ? ["SKILL.md"] : ["SKILL.md", path]);
+    assert.doesNotThrow(() => verifySignedSkillPackage(envelope, options), `accepted: ${path}`);
+  }
+  for (const path of contractFixture.rejected_paths) {
+    const { envelope, options } = resignedWithPaths(["SKILL.md", path]);
+    assert.throws(() => verifySignedSkillPackage(envelope, options), SkillVerificationError, `rejected: ${JSON.stringify(path)}`);
+  }
+});
+
+test("Node enforces the package file-count and size limits", () => {
+  const many = resignedWithPaths(["SKILL.md", ...Array.from({ length: 256 }, (_, index) => `f${index}.md`)]);
+  assert.throws(() => verifySignedSkillPackage(many.envelope, many.options), /too many files/);
+  const ok = resignedWithPaths(["SKILL.md", ...Array.from({ length: 255 }, (_, index) => `f${index}.md`)]);
+  assert.doesNotThrow(() => verifySignedSkillPackage(ok.envelope, ok.options));
+});
+
+test("widened package materializes with nested folders and no executable bit", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "skill-widened-")));
+  try {
+    const cache = new SkillCache(root);
+    const scope = { tenantId: "tenant-a", memberId: "member-a" };
+    const options = { publicKey: contractFixture.public_key, keyId: contractFixture.key_id };
+    cache.reconcile(scope, [contractFixture.signed as never], ["self-improving-agent"], options);
+    const [dir] = cache.pathsFor(scope, ["self-improving-agent"], options);
+    assert.ok(dir);
+    const script = join(dir!, "scripts", "extract-skill.sh");
+    assert.equal(readFileSync(script, "utf8"), "#!/bin/sh\necho extract \"$1\"\n");
+    assert.equal(statSync(script).mode & 0o111, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("skill verification fails closed for missing/mismatched key, scope and traversal", () => {

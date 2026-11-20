@@ -6,16 +6,16 @@ import re
 import yaml
 from typing import Any, Literal
 
-from shared.contracts.skill import SkillFile, SkillPackage, derive_file_hash
+from shared.contracts.skill import MAX_SKILL_FILES, MAX_SKILL_TOTAL_BYTES, SkillFile, SkillPackage, derive_file_hash
 from shared.errors import ValidationProblem
 
 
 def catalog_package(*, skill_id: str, version: str, files: list, content_hash: str = "",
                     display_name: str = "") -> SkillPackage:
-    if not 1 <= len(files) <= 64:
-        raise ValueError("a package requires 1–64 files")
-    if sum(len(f["content"].encode("utf-8")) for f in files) > 1024 * 1024:
-        raise ValueError("skill package exceeds 1 MiB")
+    if not 1 <= len(files) <= MAX_SKILL_FILES:
+        raise ValueError(f"a package requires 1–{MAX_SKILL_FILES} files")
+    if sum(len(f["content"].encode("utf-8")) for f in files) > MAX_SKILL_TOTAL_BYTES:
+        raise ValueError("skill package exceeds the size limit")
     package = SkillPackage(
         skill_id=skill_id, version=version, content_hash=content_hash, display_name=display_name,
         files=[SkillFile(path=f["path"], content=f["content"], content_hash=derive_file_hash(f["content"])) for f in files],

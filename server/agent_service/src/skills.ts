@@ -70,11 +70,23 @@ function parseRef(ref: string): { skillId: string; version?: string } {
   if (version !== undefined) safeSegment(version, "version");
   return { skillId, version };
 }
+/**
+ * Package limits and path rule — identical to `server/shared/contracts/skill.py`; change both together.
+ * Any safe relative POSIX path of UTF-8 text is allowed (scripts, assets, references). Dot-leading
+ * segments are reserved: `.aiteam-manifest.json` is written beside the files.
+ */
+export const MAX_SKILL_PACKAGE_FILES = 256;
+export const MAX_SKILL_PACKAGE_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_SKILL_PACKAGE_TOTAL_BYTES = 10 * 1024 * 1024;
+const MAX_SKILL_PATH_LENGTH = 240;
+const MAX_SKILL_PATH_DEPTH = 8;
+
 function canonicalPath(path: string): string {
-  if (!path || path.includes("\\") || path.startsWith("/") || path.startsWith("./") || path.includes("//") || !/^[A-Za-z0-9._/-]+$/u.test(path)) throw new SkillVerificationError("non-canonical skill path");
+  if (!path || path.length > MAX_SKILL_PATH_LENGTH || path.includes("\\") || path.startsWith("/") || path.includes("//") || !/^[A-Za-z0-9._/-]+$/u.test(path)) throw new SkillVerificationError("non-canonical skill path");
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === "..")) throw new SkillVerificationError("unsafe skill path");
-  if (path !== "SKILL.md" && (!path.startsWith("references/") || !path.endsWith(".md"))) throw new SkillVerificationError("only SKILL.md and references/*.md are accepted");
+  if (parts.some((part) => part.startsWith("."))) throw new SkillVerificationError("skill path segments must not start with a dot");
+  if (parts.length > MAX_SKILL_PATH_DEPTH) throw new SkillVerificationError("skill path is nested too deeply");
   return path;
 }
 function canonicalJson(value: unknown): Buffer {
@@ -204,7 +216,9 @@ export function verifySignedSkillPackage(value: unknown, options: SkillVerificat
   const p = raw as Record<string, unknown>;
   if (typeof p.skill_id !== "string" || typeof p.version !== "string" || typeof p.content_hash !== "string" || typeof p.display_name !== "string" || typeof p.description !== "string" || !Array.isArray(p.files)) throw new SkillVerificationError("invalid skill package");
   safeSegment(p.skill_id, "skill_id"); safeSegment(p.version, "version");
+  if (p.files.length > MAX_SKILL_PACKAGE_FILES) throw new SkillVerificationError("skill package has too many files");
   const seen = new Set<string>();
+  let total = 0;
   for (const item of p.files) {
     if (!item || typeof item !== "object") throw new SkillVerificationError("invalid skill file");
     const file = item as Record<string, unknown>;
@@ -212,8 +226,12 @@ export function verifySignedSkillPackage(value: unknown, options: SkillVerificat
     const path = canonicalPath(file.path);
     if (seen.has(path)) throw new SkillVerificationError("duplicate skill file path");
     seen.add(path);
+    const size = Buffer.byteLength(file.content, "utf8");
+    if (size > MAX_SKILL_PACKAGE_FILE_BYTES) throw new SkillVerificationError("skill file is too large");
+    total += size;
     if (file.content_hash !== sha16(file.content)) throw new SkillVerificationError("skill file hash mismatch");
   }
+  if (total > MAX_SKILL_PACKAGE_TOTAL_BYTES) throw new SkillVerificationError("skill package is too large");
   if (!seen.has("SKILL.md") || p.content_hash !== packageHash(p as unknown as SkillPackage)) throw new SkillVerificationError("skill package hash mismatch");
   let signature: Buffer;
   try {

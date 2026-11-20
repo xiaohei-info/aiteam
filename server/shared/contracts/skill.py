@@ -1,4 +1,9 @@
-"""Manager → Agent signed, text-only Skill package contract."""
+"""Manager → Agent signed, text-only Skill package contract.
+
+A package carries UTF-8 text files under safe relative POSIX paths (scripts, assets and references
+included); binaries are never representable. The Node verifier (`server/agent_service/src/skills.ts`)
+enforces the very same path rule and limits — change both together.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +17,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+_PATH_CHARS = re.compile(r"[A-Za-z0-9._/-]+")
+
+# Package limits, aligned with the desktop's local skill import (custom-skills.ts).
+MAX_SKILL_FILES = 256
+MAX_SKILL_FILE_BYTES = 5 * 1024 * 1024
+MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
+MAX_SKILL_PATH_LENGTH = 240
+MAX_SKILL_PATH_DEPTH = 8
 
 
 def _sha16(text: str) -> str:
@@ -19,14 +32,20 @@ def _sha16(text: str) -> str:
 
 
 def normalize_skill_file_path(path: str) -> str:
-    """Validate the deliberately small, POSIX-only skill file namespace."""
-    if not path or "\\" in path or path.startswith("/") or path.startswith("./") or "//" in path or not re.fullmatch(r"[A-Za-z0-9._/-]+", path):
+    """Validate a skill file path: relative POSIX, safe characters, no traversal, no dot segments.
+
+    Dot-leading segments are reserved (`.aiteam-manifest.json` lives beside the files on the Agent) and also
+    keep `.git` / `.env` style files out of distributed packages.
+    """
+    if not path or len(path) > MAX_SKILL_PATH_LENGTH or "\\" in path or path.startswith("/") or "//" in path or not _PATH_CHARS.fullmatch(path):
         raise ValueError("skill file path must be canonical POSIX text")
     parts = path.split("/")
     if any(not part or part in {".", ".."} for part in parts):
         raise ValueError("skill file path must not contain traversal or empty segments")
-    if path != "SKILL.md" and (not path.startswith("references/") or not path.endswith(".md")):
-        raise ValueError("only SKILL.md and references/*.md are accepted")
+    if any(part.startswith(".") for part in parts):
+        raise ValueError("skill file path segments must not start with a dot")
+    if len(parts) > MAX_SKILL_PATH_DEPTH:
+        raise ValueError("skill file path is nested too deeply")
     return path
 
 
@@ -72,6 +91,16 @@ class SkillPackage(BaseModel):
         _safe_segment(self.version, "version")
         if not self.files or not any(file.path == "SKILL.md" for file in self.files):
             raise ValueError("skill package requires SKILL.md")
+        if len(self.files) > MAX_SKILL_FILES:
+            raise ValueError("skill package has too many files")
+        total = 0
+        for file in self.files:
+            size = len(file.content.encode("utf-8"))
+            if size > MAX_SKILL_FILE_BYTES:
+                raise ValueError("skill file is too large")
+            total += size
+        if total > MAX_SKILL_TOTAL_BYTES:
+            raise ValueError("skill package is too large")
         if self.content_hash and self.content_hash != self.compute_content_hash():
             raise ValueError("skill package content_hash mismatch")
         return self

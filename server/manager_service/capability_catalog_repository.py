@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from shared.contracts.skill import MAX_SKILL_FILES, MAX_SKILL_TOTAL_BYTES
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict
@@ -55,8 +56,8 @@ class SkillCatalogRow:
 class SkillCatalogSummaryRow:
     """技能目录摘要行：不含 files，供成员可自装列表使用（不必把整包内容读出数据库）。
 
-    package_shaped 由库内对 files 的结构判断得出：数组、1–64 个文件、含 SKILL.md、内容总计不超过
-    1 MiB，与 catalog_package 的结构约束一致。哈希与 frontmatter 的完整校验只在取单个包签名时做。
+    package_shaped 由库内对 files 的结构判断得出：数组、文件数与内容总量在共享契约上限内（
+    shared.contracts.skill.MAX_SKILL_FILES / MAX_SKILL_TOTAL_BYTES）、含 SKILL.md，与 catalog_package 的结构约束一致。哈希与 frontmatter 的完整校验只在取单个包签名时做。
     """
 
     skill_id: str
@@ -120,9 +121,9 @@ def _row_to_skill(row: Any) -> SkillCatalogRow:
 # 结构判断放在 CASE 里：files 不是数组时不能调用 jsonb_array_length / jsonb_array_elements。
 _SKILL_SUMMARY_SQL = (
     "SELECT skill_id, display_name, version, binding_policy, visibility, config, content_hash, "
-    "CASE WHEN jsonb_typeof(files) = 'array' AND jsonb_array_length(files) BETWEEN 1 AND 64 THEN "
+    f"CASE WHEN jsonb_typeof(files) = 'array' AND jsonb_array_length(files) BETWEEN 1 AND {MAX_SKILL_FILES} THEN "
     "  EXISTS (SELECT 1 FROM jsonb_array_elements(files) f WHERE f->>'path' = 'SKILL.md') "
-    "  AND (SELECT COALESCE(SUM(octet_length(f->>'content')), 0) FROM jsonb_array_elements(files) f) <= 1048576 "
+    f"  AND (SELECT COALESCE(SUM(octet_length(f->>'content')), 0) FROM jsonb_array_elements(files) f) <= {MAX_SKILL_TOTAL_BYTES} "
     "ELSE false END "
     "FROM skill_catalog ORDER BY created_at"
 )
