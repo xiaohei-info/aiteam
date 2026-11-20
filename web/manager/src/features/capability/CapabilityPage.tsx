@@ -7,6 +7,7 @@ import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Dialog as AstryxDialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { DropdownMenu, DropdownMenuItem } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Heading } from "@astryxdesign/core/Heading";
@@ -20,6 +21,7 @@ import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
+import { SkillImportDialog } from "./SkillImportDialog";
 import { useCapabilityApi } from "./useCapabilityApi";
 import type {
   CatalogVisibility,
@@ -180,6 +182,7 @@ export function CapabilityPage(): ReactNode {
   const [editor, setEditor] = useState<EditorState>({ mode: "closed" });
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [working, setWorking] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -314,7 +317,8 @@ export function CapabilityPage(): ReactNode {
   const skillColumns = useMemo<TableColumn<SkillRow>[]>(() => {
     const columns: TableColumn<SkillRow>[] = [
       { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
-      { key: "version", header: i18n.t("manager.capability.version"), width: pixel(80) },
+      { key: "version", header: i18n.t("manager.capability.version"), width: pixel(150) },
+      { key: "source", header: "来源", width: pixel(110), renderCell: (row) => <Badge label={skillSourceLabel(row.config)} /> },
       { key: "package_status", header: "执行包", width: pixel(130), renderCell: (row) => <Badge label={row.package_status === "ready" ? "已验证包" : row.package_status === "invalid" ? "无效包（不可执行）" : "草稿（不可执行）"} /> },
       { key: "install_policy", header: i18n.t("manager.capability.install_policy"), width: pixel(130), renderCell: (row) => <Badge label={row.install_policy} /> },
       { key: "binding_policy", header: i18n.t("manager.capability.binding_policy"), width: pixel(120), renderCell: (row) => <Badge label={row.binding_policy} /> },
@@ -379,7 +383,15 @@ export function CapabilityPage(): ReactNode {
         </Card>
       ) : (
         <>
-          <CatalogSection title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => openCreate("skill")}>
+          <CatalogSection
+            title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => openCreate("skill")}
+            addMenu={(
+              <DropdownMenu button={{ label: i18n.t("manager.capability.add_skill"), size: "sm" }} menuWidth={200}>
+                <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting(true); }} />
+                <DropdownMenuItem label="手动编辑（高级）" onClick={() => openCreate("skill")} />
+              </DropdownMenu>
+            )}
+          >
             <Table aria-label="技能目录" tableProps={{ "aria-label": "技能目录" }} data={skills as SkillRow[]} columns={skillColumns} idKey="catalog_id" hasHover emptyState={<EmptyState title={i18n.t("manager.capability.empty")} isCompact />} />
           </CatalogSection>
           <CatalogSection title={i18n.t("manager.capability.connectors_title", { count: connectors.length })} addLabel={i18n.t("manager.capability.add_connector")} canWrite={canWrite} onAdd={() => openCreate("connector")}>
@@ -389,6 +401,14 @@ export function CapabilityPage(): ReactNode {
             <Table aria-label="记忆策略目录" tableProps={{ "aria-label": "记忆策略目录" }} data={memories as MemoryRow[]} columns={memoryColumns} idKey="catalog_id" hasHover emptyState={<EmptyState title={i18n.t("manager.capability.empty")} isCompact />} />
           </CatalogSection>
         </>
+      )}
+
+      {importing && (
+        <SkillImportDialog
+          api={api}
+          onClose={() => setImporting(false)}
+          onImported={() => { setNotice("技能已导入企业目录"); void load(); }}
+        />
       )}
 
       {editor.mode !== "closed" && (
@@ -459,11 +479,22 @@ export function CapabilityPage(): ReactNode {
   );
 }
 
-function CatalogSection({ title, addLabel, canWrite, onAdd, children }: {
+/** 技能来源：平台技能市场 / 自定义导入 / 网址 / ClawHub；手动建的条目算自定义。 */
+function skillSourceLabel(config: Record<string, unknown> | undefined): string {
+  const source = config?.source;
+  if (source === "operator") return "平台市场";
+  if (source === "url") return "网址";
+  if (source === "clawhub") return "ClawHub";
+  return "自定义";
+}
+
+function CatalogSection({ title, addLabel, canWrite, onAdd, addMenu, children }: {
   title: string;
   addLabel: string;
   canWrite: boolean;
   onAdd: () => void;
+  /** 有多种添加方式时替换单个「添加」按钮。 */
+  addMenu?: ReactNode;
   children: ReactNode;
 }): ReactNode {
   return (
@@ -471,7 +502,7 @@ function CatalogSection({ title, addLabel, canWrite, onAdd, children }: {
       <VStack gap={4}>
         <HStack justify="between" align="center" wrap="wrap" gap={2}>
           <Heading level={2}>{title}</Heading>
-          {canWrite && <Button label={addLabel} size="sm" onClick={onAdd} />}
+          {canWrite && (addMenu ?? <Button label={addLabel} size="sm" onClick={onAdd} />)}
         </HStack>
         {children}
       </VStack>

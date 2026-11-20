@@ -9,12 +9,9 @@ never stored, logged or echoed.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import re
-import socket
 import time
-from collections.abc import Callable
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -28,6 +25,7 @@ from shared.contracts.platform_mcp import (
     validate_mcp_auth_header,
     validate_mcp_url,
 )
+from shared.net_guard import Blocked, Fetch, FetchFailed, pinned_fetch, public_addresses  # noqa: F401 (re-exported)
 
 PROBE_DEADLINE_S = 10.0
 MAX_BODY_BYTES = 1024 * 1024
@@ -57,89 +55,13 @@ class McpProbeResult(BaseModel):
     detail: str = Field(default="", description="给运营人员看的说明。")
 
 
-class ProbeBlocked(Exception):
-    """The target is not allowed (scheme / address range)."""
-
-
-class ProbeFailed(Exception):
-    """Network failure, redirect, oversize or a non-MCP answer."""
-
-
-# (method, url, headers, body, deadline) -> (status, lower-cased headers, body)
-Fetch = Callable[[str, str, dict[str, str], bytes | None, float], tuple[int, dict[str, str], bytes]]
-
-
-def _blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped
-    return (
-        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_reserved
-        or ip.is_unspecified or not ip.is_global
-    )
-
-
-def public_addresses(host: str, port: int) -> list[str]:
-    """Every address of `host`, or ProbeBlocked when any of them is not public."""
-    try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise ProbeFailed("域名无法解析") from exc
-    addresses: list[str] = []
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if _blocked(ip):
-            raise ProbeBlocked("地址指向内网、本机或保留网段，不允许探测")
-        addresses.append(str(ip))
-    if not addresses:
-        raise ProbeFailed("域名无法解析")
-    return addresses
+# The SSRF guard is shared with Manager's custom imports (shared/net_guard.py); names kept for callers.
+ProbeBlocked = Blocked
+ProbeFailed = FetchFailed
 
 
 def _pinned_fetch() -> Fetch:
-    import httpcore
-
-    class _PinnedBackend(httpcore.NetworkBackend):
-        def __init__(self) -> None:
-            self._inner = httpcore.SyncBackend()
-
-        def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-            last: Exception | None = None
-            for address in public_addresses(host, port):
-                try:
-                    return self._inner.connect_tcp(address, port, timeout=timeout, socket_options=socket_options)
-                except httpcore.ConnectError as exc:
-                    last = exc
-            raise httpcore.ConnectError(str(last or "connect failed"))
-
-        def connect_unix_socket(self, path, timeout=None, socket_options=None):
-            raise httpcore.ConnectError("unix sockets are not allowed")
-
-        def sleep(self, seconds: float) -> None:
-            self._inner.sleep(seconds)
-
-    pool = httpcore.ConnectionPool(network_backend=_PinnedBackend(), retries=0)
-
-    def fetch(method: str, url: str, headers: dict[str, str], body: bytes | None, deadline: float):
-        if urlsplit(url).scheme != "https":
-            raise ProbeBlocked("只允许 https 地址")
-        remaining = max(0.1, deadline - time.monotonic())
-        timeout = {"connect": remaining, "read": remaining, "write": remaining, "pool": remaining}
-        try:
-            with pool.stream(method, url, headers=list(headers.items()), content=body, extensions={"timeout": timeout}) as response:
-                data = bytearray()
-                for chunk in response.iter_stream():
-                    data.extend(chunk)
-                    if len(data) > MAX_BODY_BYTES:
-                        raise ProbeFailed("响应超过 1 MiB")
-                    if time.monotonic() > deadline:
-                        raise ProbeFailed("探测超时")
-                return response.status, {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in response.headers}, bytes(data)
-        except (ProbeBlocked, ProbeFailed):
-            raise
-        except Exception as exc:  # httpcore errors carry no secrets, but keep the message generic anyway
-            raise ProbeFailed("无法连接") from exc
-
-    return fetch
+    return pinned_fetch(max_bytes=MAX_BODY_BYTES)
 
 
 def _rpc_message(status: int, headers: dict[str, str], body: bytes, request_id: int) -> dict:

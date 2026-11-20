@@ -14,6 +14,8 @@ import type {
   SkillCatalogIn,
   ConnectorCatalogIn,
   MemoryPolicyCatalogIn,
+  SkillImportInput,
+  SkillImportResponse,
 } from "./types";
 
 const M = "/api/manager";
@@ -31,6 +33,31 @@ export interface CapabilityApi {
   createMemoryPolicy: (input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   updateMemoryPolicy: (catalogId: string, input: MemoryPolicyCatalogIn) => Promise<MemoryPolicyCatalog | null>;
   deleteMemoryPolicy: (catalogId: string) => Promise<void>;
+  /** 检查要导入的技能（不写库）。 */
+  previewSkillImport: (input: SkillImportInput) => Promise<SkillImportResponse | null>;
+  /** 把勾选的技能写入企业目录。 */
+  importSkills: (input: SkillImportInput) => Promise<SkillImportResponse | null>;
+}
+
+const UPLOAD_SOURCES = new Set(["folder", "zip", "file"]);
+
+/** 上传来源用 multipart（文件 + 相对路径），其余用 JSON。 */
+function importBody(input: SkillImportInput): FormData | Record<string, unknown> {
+  if (!UPLOAD_SOURCES.has(input.source)) {
+    const { files: _files, ...json } = input;
+    return json;
+  }
+  const form = new FormData();
+  form.append("source", input.source);
+  for (const item of input.files ?? []) {
+    form.append("files", item.file, item.file.name);
+    form.append("paths", item.path);
+  }
+  for (const root of input.roots ?? []) form.append("roots", root);
+  for (const key of ["visibility", "binding_policy", "install_policy"] as const) {
+    if (input[key]) form.append(key, input[key]!);
+  }
+  return form;
 }
 
 export function useCapabilityApi(): CapabilityApi {
@@ -59,6 +86,8 @@ export function useCapabilityApi(): CapabilityApi {
       createMemoryPolicy: (input) => postMem(input),
       updateMemoryPolicy: (catalogId, input) => putMem(catalogId, input),
       deleteMemoryPolicy: async (catalogId) => { await delMem(catalogId); },
+      previewSkillImport: (input) => c.post<SkillImportResponse>(`${M}/skills/import/preview`, { body: importBody(input) }),
+      importSkills: (input) => c.post<SkillImportResponse>(`${M}/skills/import`, { body: importBody(input) }),
     };
   }, [token, onUnauthorized]);
 }

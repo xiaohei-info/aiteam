@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from shared.app_factory import create_app, mount_frontend
+from shared.body_limit import BodyLimit
 from shared.auth import DynamicRS256TokenVerifier, RejectingTokenVerifier, require_claims
 from shared.auth.session import SessionAwareTokenVerifier
 from shared.config import load_settings, service_client_kwargs
@@ -19,7 +20,7 @@ from .auth_sessions import ManagerAuthSessionRepository
 from .routes_auth import router as auth_router
 from .routes_bootstrap import router as bootstrap_router
 from .routes_catalog_notify import router as catalog_notify_router
-from .routes_capability import build_capability_router
+from .routes_capability import SKILL_IMPORT_MAX_BODY_BYTES, build_capability_router
 from .routes_skill_market import build_skill_market_router
 from .routes_mcp_market import build_mcp_market_router
 from .routes_employee import build_employee_router
@@ -177,7 +178,7 @@ if settings.is_production and (_skill_signer is None or not _skill_signer.has_ne
         "(AITEAM_SKILL_SIGNING_PRIVATE_KEY/AITEAM_SKILL_SIGNING_KEY_ID plus "
         "AITEAM_SKILL_SIGNING_NEXT_PRIVATE_KEY/AITEAM_SKILL_SIGNING_NEXT_KEY_ID)"
     )
-app = create_app(settings, router)
+app = create_app(settings, router, body_limits=(BodyLimit("/api/manager/skills/import", SKILL_IMPORT_MAX_BODY_BYTES),))
 app.state._skill_signer = _skill_signer
 # 启动即应用控制库迁移（fail-fast；/readyz 绿时 schema 必已就绪）。此前 manager 运行时
 # 无任何 apply_migrations 调用，全新部署无法自建控制库（tenant_registry 等表 + app_rw 角色）；
