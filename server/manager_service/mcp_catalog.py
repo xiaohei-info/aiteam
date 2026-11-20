@@ -108,13 +108,12 @@ _MARKET_FIELDS = {"server_id", "ref", "display_name", "summary", "url", "tools",
 
 class McpMarketService:
     def __init__(self, *, operator: OperatorCatalogPort, repo: McpCatalogRepository, members, crypto: CryptoService | None = None,
-                 grants=None, audit=None):
+                 audit=None):
         self._operator = operator
         self._repo = repo
         self._members = members
         self._crypto = crypto or CryptoService()
-        # 授权与审计端口（可选：单元测试可留空；真实装配见 app.py）。
-        self._grants = grants
+        # 审计端口（可选：单元测试可留空；真实装配见 routes_mcp_market）。
         self._audit = audit
 
     def _platform(self) -> list[PlatformMcpServerPull]:
@@ -180,17 +179,14 @@ class McpMarketService:
     def oauth_client(self, ctx: TenantContext, server_id: str) -> dict:
         """平台预登记的 OAuth 应用，供成员本机 Agent 登录 / 刷新令牌。
 
-        下发前校验（设计 2026-11-19 §3.4）：企业已启用 + 成员在职 + 成员本机装着该 MCP（本机 Agent
-        上报，属自证，不是安全边界）。每次下发记一条审计。
+        按需下发（设计 2026-11-19 §3.4）：本机 Agent 只在登录 / 刷新令牌用到时才请求，内存持有不落盘。
+        下发前校验企业已启用该 MCP、成员在职；每次下发记一条审计。
         """
         require_active(self._members.get_member(ctx, ctx.user_id))
         found = self._repo.oauth_client(ctx, server_id)
         if found is None or found[0] != "oauth" or not found[1]:
             raise NotFound("本企业目录中没有该 MCP 的预登记应用")
         _auth, client_id, secret = found
-        # 授权跟着安装走：本机 Agent 装着该企业 MCP 时按平台 server_id 上报（不受本机改名影响）。
-        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=server_id):
-            raise NotFound("该 MCP 尚未安装到当前成员本机，无法下发应用密钥")
         result = {"client_id": client_id, **({"client_secret": self._crypto.decrypt(secret)} if secret else {})}
         if self._audit is not None:
             self._audit.record(ctx, actor=ctx.user_id, action="mcp.oauth_client.issued",

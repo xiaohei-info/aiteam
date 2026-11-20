@@ -200,11 +200,6 @@ export interface ManagerClient {
   listKnowledgeSpaces?(caller: AuthenticatedCaller): Promise<ManagerKnowledgeSpace[]>;
   uploadUsage?(caller: AuthenticatedCaller, summary: UsageSummary): Promise<unknown>;
   uploadSegmentOutcomes?(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown>;
-  /** 上报本机能力授权（仅本会话有效），供 Manager 下发平台密钥时校验。 */
-  /** 上报本机装着的企业目录 MCP（平台 server_id，只增不减）；Manager 据此下发预登记应用密钥。 */
-  putCapabilityGrants?(caller: AuthenticatedCaller, serverIds: readonly string[]): Promise<unknown>;
-  /** 卸载企业目录 MCP：删除对应授权。 */
-  deleteCapabilityGrant?(caller: AuthenticatedCaller, serverId: string): Promise<unknown>;
 }
 
 export class ManagerAuthError extends Error {
@@ -493,17 +488,6 @@ export class HttpManagerClient implements ManagerClient {
 
   async uploadSegmentOutcomes(caller: AuthenticatedCaller, summary: SegmentOutcomeSummary): Promise<unknown> {
     return this.unwrap(await this.request("/api/manager/usage/segment-outcomes", caller, { tenant_id: summary.tenant_id, segment_outcomes: [summary] }, undefined, "POST", summary.summary_id));
-  }
-
-  /** 上报本机的能力授权（仅本会话有效），作为 Manager 下发平台密钥的授权凭据。 */
-  async putCapabilityGrants(caller: AuthenticatedCaller, serverIds: readonly string[]): Promise<unknown> {
-    const grants = serverIds.map((serverId) => ({ server_id: serverId }));
-    return this.unwrap(await this.request("/api/manager/capability-grants", caller, { tenant_id: caller.tenantId, grants }, undefined, "POST"));
-  }
-
-  /** 卸载企业目录 MCP：通知 Manager 删除对应授权。 */
-  async deleteCapabilityGrant(caller: AuthenticatedCaller, serverId: string): Promise<unknown> {
-    return this.unwrap(await this.request("/api/manager/capability-grants", caller, undefined, { server_id: serverId }, "DELETE"));
   }
 
   private async request(

@@ -215,18 +215,6 @@ def test_oauth_client_is_only_for_enabled_preregistered_oauth_entries_and_active
         inactive.oauth_client(MEMBER, "s9")
 
 
-class _FakeGrantRepo:
-    """能力授权仓库替身：只记 has 的结果与调用参数。"""
-
-    def __init__(self, granted: bool = False):
-        self.granted = granted
-        self.calls: list[tuple[str, str]] = []
-
-    def has(self, ctx, *, member_id, capability_kind, capability_ref):
-        self.calls.append((member_id, capability_ref))
-        return self.granted
-
-
 class _FakeAudit:
     def __init__(self):
         self.events: list[tuple[str, str, str | None]] = []
@@ -235,71 +223,22 @@ class _FakeAudit:
         self.events.append((actor, action, resource_id))
 
 
-def test_oauth_client_requires_member_grant_and_records_audit():
-    """密钥下发前校验成员授权，并记一条审计（设计 2026-11-19 §3.4）。"""
+def test_oauth_client_is_issued_on_demand_and_audited():
+    """按需下发（设计 2026-11-19 §3.4）：企业已启用 + 成员在职即下发，每次下发记一条审计。"""
     from cryptography.fernet import Fernet
 
     from shared.crypto import CryptoService
-    from shared.errors import NotFound
 
     crypto = CryptoService(Fernet(Fernet.generate_key()))
     operator = FakeOperatorCatalogClient()
     operator.seed_platform_mcp([_oauth_server(oauth_client_id="app-1", oauth_client_secret="sec-1")])
     repo = FakeRepo()
-    service = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto)
-    service.enable(ADMIN, "s9")
-
-    # 未授权 → 不下发密钥。
-    grants = _FakeGrantRepo(granted=False)
-    guarded = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, grants=grants)
-    with pytest.raises(NotFound):
-        guarded.oauth_client(MEMBER, "s9")
-    # 授权按平台 server_id 查（本机安装记录里的 source_ref）。
-    assert grants.calls == [("m-1", "s9")]
-
-    # 已授权 → 下发并审计。
     audit = _FakeAudit()
-    allowed = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto,
-                               grants=_FakeGrantRepo(granted=True), audit=audit)
-    assert allowed.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
-    assert audit.events == [("m-1", "mcp.oauth_client.issued", "s9")]
-
-
-def test_oauth_client_grant_keyed_by_server_id_not_local_ref():
-    """授权跟着安装走，标识是平台 server_id：本机改名安装（ref 与目录不同）也能下发。
-
-    回归：早期 Agent 写 ref、请求带 server_id，has() 恒为假、密钥永远取不到。
-    """
-    from cryptography.fernet import Fernet
-
-    from shared.crypto import CryptoService
-    from shared.errors import NotFound
-
-    crypto = CryptoService(Fernet(Fernet.generate_key()))
-    operator = FakeOperatorCatalogClient()
-    operator.seed_platform_mcp([_oauth_server(oauth_client_id="app-1", oauth_client_secret="sec-1")])
-    repo = FakeRepo()
-    service = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto)
+    service = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, audit=audit)
     service.enable(ADMIN, "s9")
-
-    class IdGrantRepo:
-        def __init__(self, ids): self.ids = set(ids); self.calls = []
-
-        def has(self, ctx, *, member_id, capability_kind, capability_ref):
-            self.calls.append((member_id, capability_ref))
-            return capability_kind == "mcp" and capability_ref in self.ids
-
-    grants = IdGrantRepo(["s9"])
-    ok = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, grants=grants)
-    assert ok.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
-    assert grants.calls == [("m-1", "s9")]
-
-    # 授权里是目录 ref（或别的 server_id）→ 404，标识不能互相冒充。
-    for ids in (["cr-test"], ["s8"]):
-        wrong = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto,
-                                 grants=IdGrantRepo(ids))
-        with pytest.raises(NotFound):
-            wrong.oauth_client(MEMBER, "s9")
+    assert service.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
+    assert service.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
+    assert audit.events == [("m-1", "mcp.oauth_client.issued", "s9")] * 2
 
 
 def _api_routes(routes):

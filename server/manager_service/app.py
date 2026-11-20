@@ -22,7 +22,6 @@ from .routes_catalog_notify import router as catalog_notify_router
 from .routes_capability import build_capability_router
 from .routes_skill_market import build_skill_market_router
 from .routes_mcp_market import build_mcp_market_router
-from .routes_capability_grant import build_capability_grant_router
 from .routes_employee import build_employee_router
 from .routes_employee_bindings import build_employee_bindings_router
 from .routes_employee_prompt import build_employee_prompt_router
@@ -228,8 +227,6 @@ app.include_router(member_router)
 # MCP 市场必须先于 grants_router 注册：/grants/mcp-servers 是固定前缀，
 # 若排在 /grants/{grant_id} 之后会被当成 grant_id 去查 uuid 列（同 /grants/skills 的问题）。
 app.include_router(build_mcp_market_router(_verifier))
-# 成员能力授权上报（Agent→Manager 窄通道，仅本会话有效；密钥下发据此校验）。
-app.include_router(build_capability_grant_router(_verifier))
 # member_grant 授权（/api/manager/grants/*，M1）。
 app.include_router(grants_router)
 # 知识空间/RAG 管理面（/api/manager/knowledge-spaces/*，M3）。verifier 由本端持有闭包注入。

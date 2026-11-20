@@ -46,7 +46,7 @@ import type { ExecutionAuthorizationRegistry } from "../execution-authorization.
 import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord, type CapabilityResolution } from "../storage/sqlite.js";
 import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, ApprovalSessionAllowError, capabilityInstallAuthOf } from "../approval-service.js";
-import { CustomSkillError, enterpriseMcpServerIds, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
+import { CustomSkillError, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
 import type { LocalCapability as StoredCapability } from "../storage/sqlite.js";
@@ -1755,16 +1755,10 @@ export class AgentHttpServer {
     this.registerRoute("DELETE", "/api/agent/capabilities/:capability_kind/:capability_ref", (_request, response, caller, fastifyRequest) => {
       const { capability_kind: kind, capability_ref: ref } = fastifyRequest?.params as { capability_kind: "mcp" | "skill"; capability_ref: string };
       const memberId = caller!.userId ?? caller!.callerId;
-      const installed = () => this.options.store.listLocalCapabilities(caller!.tenantId!, memberId);
-      const [serverId] = enterpriseMcpServerIds(installed().filter((item) => item.kind === kind && item.ref === ref));
       if (!this.options.store.deleteLocalCapability(caller!.tenantId!, memberId, kind, ref)) throw new HttpProblem(404, "capability_not_found", "Capability not found");
       if (kind === "skill") this.options.host.removePersonalSkill?.(caller!.tenantId!, memberId, ref);
       // Uninstalling an MCP also removes the member's sign-in / token for it.
       if (kind === "mcp") this.mcpAuthService()?.credentials.delete(this.mcpOwner(caller!), ref);
-      // 授权跟着安装走：卸载企业目录 MCP（且本机没有别的安装指向同一条目）即撤销，Manager 不再下发其应用密钥。
-      if (serverId && !enterpriseMcpServerIds(installed()).includes(serverId)) {
-        void this.options.host.revokeCapabilityGrant?.(caller!, serverId).catch(() => undefined);
-      }
       this.writeJson(response, 200, { data: { removed: true } });
     }, routeSchema("deleteLocalCapability", { summary: "撤销个人能力", description: "撤销当前成员的一项个人能力，立即失效。", params: LocalCapabilityParams, response: { 200: jsonResponse(Type.Ref("LocalCapabilityDeleteEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound") } }));
     this.registerRoute("POST", "/api/agent/capabilities/skills/custom", async (request, response, caller) => {
@@ -2705,8 +2699,6 @@ export class AgentHttpServer {
         refs.push(...this.options.store.listSnapshots(caller.tenantId, memberId).filter((snapshot) => currentEmployeeIds.has(snapshot.employee_id)).flatMap((snapshot) => skillRefsForSnapshot(snapshot as { skill_refs?: unknown; skills?: unknown })));
         this.options.skillCache.reconcile({ tenantId: caller.tenantId, memberId }, signedPackages, refs, verification, { authoritative: skillPackagesAuthoritative });
       }
-      // 登录 / 恢复时补报本机装着的企业目录 MCP（含本功能上线前装的），保证刷新登录能取到应用密钥。
-      void this.options.host.syncCapabilityGrants?.(caller).catch(() => undefined);
       this.writeJson(response, 200, { data: { ok: true, ...result, partial: skippedEmployeeIds.length > 0, skipped_employee_ids: skippedEmployeeIds } });
     } catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);

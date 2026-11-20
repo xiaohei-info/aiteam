@@ -681,7 +681,7 @@ export class AgentSqliteStore {
         PRIMARY KEY (tenant_id, member_id, conversation_id, tool_name, subject)
       );
 
-      -- 旧版会话级能力授权表：授权改为跟着安装走、直接由 local_capability 推导（设计 2026-11-19 §3.2）。
+      -- 本分支早期版本建过的能力授权表；平台密钥改为按需下发，不再需要（设计 2026-11-19 §3.4）。
       DROP TABLE IF EXISTS capability_grant;
 
       -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。

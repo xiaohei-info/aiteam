@@ -98,7 +98,7 @@ svg text{font-family:inherit}
 <tr><td>无风险任务也弹：未知工具一律按高风险；只读白名单是硬编码，新增只读工具要改代码。</td><td>风险分级表：只读/查询类不弹；本地写改为低风险（节流后弹）；外部与未知仍按高风险必弹。</td><td><span class="tag ag">成员</span></td></tr>
 <tr><td>安装/使用时给了权限，之后仍可能弹；「本会话不再询问」对技能安装不限来源。</td><td>能力授权记录（仅本会话有效）：批准安装/使用时写入授权，本会话内不再问；外部来源（ClawHub / 网址 / 粘贴）新技能安装每次都询问。</td><td><span class="tag ag">成员</span></td></tr>
 <tr><td>用了个人能力（含 MCP）的整轮 token 与费用都不进 outbox，MCP 用量不计入统计。</td><td>取消「整轮免计」：只要用了 MCP 就正常上报整轮用量；个人能力仅用于审计与展示。</td><td><span class="tag mg">企业</span><span class="tag op">运营</span></td></tr>
-<tr><td>企业自有 MCP 的平台应用密钥，任何在职成员的本机都能取。</td><td>下发前校验：企业已启用 + 成员在可安装 / 已授权范围；仅按需下发并记审计。员工自配 MCP 的凭据只在本机，不经过这里。</td><td><span class="tag mg">企业</span></td></tr>
+<tr><td>企业自有 MCP 的平台应用密钥，任何在职成员的本机都能取。</td><td>下发前校验：企业已启用 + 成员在职；用到时才请求（按需下发）并记审计。员工自配 MCP 的凭据只在本机，不经过这里。</td><td><span class="tag mg">企业</span></td></tr>
 </table>
 <div class="callout red"><b>不能保证的事（对外口径一致）：</b>不保证所有工具都能自动判级（未知工具仍按高风险弹）；不保证定时任务在存在未授权动作时结果完整（被跳过的动作不会执行）；不保证密钥下发到成员本机后的存储安全（只做按需下发与审计）。</div>
 </section>
@@ -263,7 +263,7 @@ svg text{font-family:inherit}
 <tr><td><span class="tag ag">agent_service</span></td><td>无人值守策略：<code>record.activeBackground</code> 下不弹框；已授权执行，未授权跳过并记录，不再中止整次运行。</td><td>P1</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag ag">agent_service</span></td><td>能力授权存储与查询（新表 <code>member_capability_grant</code>）：安装/使用时写入，调用时命中即放行；会话授权键带来源。</td><td>P2</td><td class="sz L">L</td></tr>
 <tr><td><span class="tag ag">agent_service</span></td><td>用量：移除 <code>usedPersonalCapability</code> 对整轮的上报排除，MCP 运行正常计入 token。</td><td>P4</td><td class="sz S">S</td></tr>
-<tr><td><span class="tag mg">manager_service</span></td><td><code>GET /grants/mcp-servers/{server_id}/oauth-client</code> 增加权限校验（企业已启用 + 成员在可装 / 已授权范围）与审计。仅针对企业自有 MCP；员工自配 MCP 不受此限。</td><td>P3</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td><code>GET /grants/mcp-servers/{server_id}/oauth-client</code> 按需下发：校验企业已启用 + 成员在职，并记审计。仅针对企业自有 MCP；员工自配 MCP 不受此限。</td><td>P3</td><td class="sz M">M</td></tr>
 <tr><td><span class="tag">server/shared</span></td><td>契约（新）：授权来源枚举、能力授权 DTO、跳过原因码。</td><td>P1 / P2</td><td class="sz S">S</td></tr>
 <tr><td>全部</td><td>统一 <code>application/problem+json</code>；幂等键；OpenAPI；单元 / 集成 / 跨租户隔离 / 负例测试</td><td>随各期</td><td class="sz M">M</td></tr>
 </table>

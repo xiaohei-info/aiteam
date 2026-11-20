@@ -1,4 +1,4 @@
-import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, enterpriseMcpServerIds, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
 import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
@@ -1433,31 +1433,6 @@ export class SessionHost {
       .catch(() => { record.reconcile = undefined; });
   }
 
-  /**
-   * 授权跟着安装走（设计 2026-11-19 §3.2 / §3.4）：把本机装着的企业目录 MCP（或指定的、正在安装的
-   * serverIds）上报 Manager，只增不减。成员自装能力不上报。失败只记 warn，不阻断安装或登录。
-   */
-  async syncCapabilityGrants(caller: AuthenticatedCaller, serverIds?: readonly string[]): Promise<void> {
-    const client = this.options.managerClient;
-    if (!client?.putCapabilityGrants || !caller.tenantId) return;
-    const ids = serverIds ?? enterpriseMcpServerIds(this.options.store.listLocalCapabilities(caller.tenantId, caller.userId ?? caller.callerId));
-    if (ids.length === 0) return;
-    try { await client.putCapabilityGrants(caller, ids); } catch (error) {
-      appLogger.log("warn", "capability_grant.sync_failed", {
-        tenant_id: caller.tenantId, member_id: caller.userId ?? caller.callerId, error: String(error),
-      });
-    }
-  }
-
-  /** 卸载企业目录 MCP：Manager 删除授权，不再下发它的应用密钥。失败只记 warn。 */
-  async revokeCapabilityGrant(caller: AuthenticatedCaller, serverId: string): Promise<void> {
-    const client = this.options.managerClient;
-    if (!client?.deleteCapabilityGrant || !caller.tenantId) return;
-    try { await client.deleteCapabilityGrant(caller, serverId); } catch (error) {
-      appLogger.log("warn", "capability_grant.revoke_failed", { tenant_id: caller.tenantId, server_id: serverId, error: String(error) });
-    }
-  }
-
   /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
   skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
     const client = this.options.managerClient;
@@ -1480,7 +1455,6 @@ export class SessionHost {
     return {
       list: () => client.listInstallableMcpServers!(caller),
       ...(client.getMcpOAuthClient ? { oauthClient: (serverId: string) => client.getMcpOAuthClient!(caller, serverId) } : {}),
-      ...(client.putCapabilityGrants ? { grant: (serverId: string) => this.syncCapabilityGrants(caller, [serverId]) } : {}),
     };
   }
 

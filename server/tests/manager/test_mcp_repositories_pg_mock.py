@@ -1,7 +1,7 @@
 """MCP 相关仓储与路由的 mock 单元测试（无需真实 PostgreSQL）。
 
 覆盖 PG 实现分支：platform_mcp_market（Operator 平台目录）、mcp_catalog（企业目录）、
-operator_catalog（服务间拉取端口）与 routes_mcp_market / routes_capability_grant 的
+operator_catalog（服务间拉取端口）与 routes_mcp_market 的
 「未注入服务 → 自建或 503」分支。不标 integration。
 """
 
@@ -235,24 +235,6 @@ def test_mcp_catalog_repository_paths():
     assert repo.delete(CTX, "missing") is False
 
 
-def test_member_capability_grant_repository_paths():
-    from manager_service.member_capability_grant_repository import MemberCapabilityGrantRepository
-
-    cursor = _FakeCursor()
-    repo = MemberCapabilityGrantRepository(_FakeRouter(cursor))
-    repo.upsert(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1")
-    sql, params = cursor.calls[-1]
-    assert "ON CONFLICT" in sql and params[1:] == ("u1", "mcp", "s1")
-
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", (1,)))
-    assert repo.has(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1") is True
-    cursor._queue.append(lambda c: setattr(c, "_fetchone", None))
-    assert repo.has(CTX, member_id="u1", capability_kind="mcp", capability_ref="s2") is False
-
-    assert repo.delete(CTX, member_id="u1", capability_kind="mcp", capability_ref="s1") == 1
-    assert cursor.calls[-1][0].startswith("DELETE FROM member_capability_grant")
-
-
 # --------------------------------------------------------------------------
 # Manager: operator_catalog 端口
 # --------------------------------------------------------------------------
@@ -298,13 +280,3 @@ def test_manager_routes_without_db_are_503():
     request = SimpleNamespace(app=app)
     with pytest.raises(_ManagerNotConfigured):
         _service(request)
-
-
-def test_capability_grant_router_without_db_is_503():
-    from fastapi import FastAPI
-    from manager_service.routes_capability_grant import _ManagerNotConfigured, _repo
-
-    app = FastAPI()
-    app.state.settings = SimpleNamespace(db_url=None)
-    with pytest.raises(_ManagerNotConfigured):
-        _repo(SimpleNamespace(app=app))

@@ -34,7 +34,6 @@ def _service(request: Request) -> McpMarketService:
         repo=McpCatalogRepository(router),
         members=MemberDeptService(repo=MemberDeptRepository(router)),
         crypto=getattr(request.app.state, "_crypto_service", None),
-        grants=getattr(request.app.state, "_member_capability_grant_repo", None),
         audit=getattr(request.app.state, "_enterprise_audit_repository", None),
     )
     request.app.state._mcp_market_service = service
