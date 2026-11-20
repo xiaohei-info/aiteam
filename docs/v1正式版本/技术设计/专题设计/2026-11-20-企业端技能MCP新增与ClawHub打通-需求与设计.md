@@ -352,6 +352,22 @@ POST /api/manager/capability-assist
 | P4 模型帮装 | §4.5 + §4.6 | P2、P3 | 用假 Relay（脚本化工具调用）测：轮数 / 时限上限、编造链接被丢弃、用量行 `member_id = owner`、审计不含内容；真实平台模型冒烟一次；截图 |
 | 验证收尾 | 全量测试、随包 Agent 重打、三端截图 | P1–P4 | 测试结果、截图清单；未验证项如实列出 |
 
+### 7.1 终验记录（2026-11-20）
+
+真实链路（无任何拦截，脚本见会话 scratchpad `live-chain.py`）：
+- 运营端预览并导入 ClawHub `halthelobster/proactive-agent` v3.1.0（13 个文件，含 `scripts/security-audit.sh`，扫描「有可疑项」照常导入并自动开放）→ 企业端从平台市场安装 → 成员 Agent 的可装列表出现（`origin=platform`）→ 安装经 Manager 签名、Agent 验签后落盘：13 个文件齐全，全部 `0600`、无执行位。
+- P2 遗留验收项：企业端自行从 ClawHub 导入的 `self-improving-agent` 4.0.5 由成员 Agent 安装成功（`source=enterprise_catalog`，11 个文件含 `scripts/extract-skill.sh`，全部 `0600`；`hooks/openclaw/*` 导入时已跳过）。
+- 前提：Manager 必须配置技能签名密钥（`AITEAM_SKILL_SIGNING_PRIVATE_KEY` / `_KEY_ID`）。未配置时成员可装列表返回 503「技能安装暂不可用：企业未配置技能目录或技能签名」——属于部署配置，不是缺陷；部署清单需包含此项。
+- 成员账号：本次用企业管理员账号登录成员 Agent（同时也是企业成员）；未用纯 `member` 角色账号复测。
+
+截图（真实后端）：运营端技能市场、企业端能力目录 / MCP 市场 /「让模型帮我找」对话框均有浅色与深色（系统深色偏好）各一张；桌面端「能力」与「添加 MCP · 从企业拿」为黑金深色。桌面端界面没有切换主题的入口（`stores/theme.ts` 启动时固定写入默认黑金），浅色主题用户无法到达，未截。
+
+终验发现并已修复：运营端技能卡描述较长时「已开放 / 下架」掉到卡片下方（P1 引入）；文字列改为可收缩、操作区不收缩，1440 与 900 宽下操作区都在右上且 `elementFromPoint` 命中。
+
+全量测试：后端（真 PG）3884 通过，9 失败 / 8 错误与开工前基线完全相同；Agent 552/554（2 跳过）；桌面 926/926、类型检查与契约检查通过；企业端 402/402、运营端 362/362、web/shared 54/54；web/agent 1 例 `FilesPanel` 失败为开工前已有。随包 Agent 已按 `70b85d84` 重打为 `0.1.0-src.70b85d84`（darwin-arm64），`agent:check` 与 `check:agent-package` 通过。
+
+仍未验证：真实平台模型冒烟（§4.5b）；anthropic 协议 Relay 路径。
+
 ---
 
 ## 8. 不能保证的事
