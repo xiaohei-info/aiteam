@@ -44,7 +44,7 @@ import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk, reportableCapabilityGrant } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -1440,7 +1440,8 @@ export class SessionHost {
   async syncCapabilityGrants(caller: AuthenticatedCaller): Promise<void> {
     const client = this.options.managerClient;
     if (!client?.putCapabilityGrants || !caller.tenantId) return;
-    const pending = this.options.store.unsyncedCapabilityGrants(caller.tenantId, caller.userId ?? caller.callerId);
+    const pending = this.options.store.unsyncedCapabilityGrants(caller.tenantId, caller.userId ?? caller.callerId)
+      .filter(reportableCapabilityGrant);
     if (pending.length === 0) return;
     try {
       await client.putCapabilityGrants(caller, pending.map((item) => ({

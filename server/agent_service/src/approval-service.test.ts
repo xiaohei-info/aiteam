@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, ApprovalSkippedError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk } from "./approval-service.js";
+import { ApprovalDeniedError, ApprovalRememberError, ApprovalService, ApprovalSessionAllowError, ApprovalSkippedError, POLICY_APPROVER, SESSION_GRANT_APPROVER, approvalRiskForTool, isPersonalConnectorTool, personalConnectorRisk, reportableCapabilityGrant } from "./approval-service.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -360,4 +360,14 @@ test("无人值守时未授权动作被跳过而不是中止", async () => {
     interactive.catch(() => undefined);
     service.clear();
   } finally { store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+// 红线（设计 2026-11-19 §3.4 范围）：只有「企业自有 MCP」的授权上报 Manager；
+// 成员自装能力（自填地址 / 本机导入 / ClawHub）凭据只在本机，不上传。
+test("只有企业自有 MCP 的授权上报 Manager", () => {
+  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "platform_catalog" }), true);
+  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "enterprise_catalog" }), false);
+  assert.equal(reportableCapabilityGrant({ kind: "mcp", source: "user_url" }), false);
+  assert.equal(reportableCapabilityGrant({ kind: "skill", source: "platform_catalog" }), false);
+  assert.equal(reportableCapabilityGrant({ kind: "skill", source: "clawhub_catalog" }), false);
 });

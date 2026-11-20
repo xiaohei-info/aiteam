@@ -74,6 +74,10 @@ def build_capability_grant_router(verifier) -> APIRouter:
                 raise ValidationProblem("kind must be mcp or skill")
             if item.scope != "session":
                 raise ValidationProblem("only session scope is supported")
+            # 红线：只收「企业自有 MCP」的授权。成员自装能力（自填地址 / 本机导入 /
+            # ClawHub 等）凭据只在本机，不上传 Manager（设计 2026-11-19 §3.4 范围）。
+            if item.kind != "mcp" or item.source != "platform_catalog":
+                continue
             repo.upsert(
                 ctx, member_id=ctx.user_id, conversation_id=item.conversation_id,
                 capability_kind=item.kind, capability_ref=item.ref, source=item.source, scope=item.scope,

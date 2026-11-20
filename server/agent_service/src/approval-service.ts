@@ -60,6 +60,17 @@ export class ApprovalSkippedError extends Error {
   }
 }
 
+/**
+ * 上报给 Manager 的能力授权仅限「企业自有 MCP」（平台目录收录、企业已启用）。
+ *
+ * 红线：成员自己装的能力（自填地址 / 本机导入 / ClawHub 等）凭据只在本机，
+ * 不上传 Manager（设计 2026-11-19 §3.4 范围：员工自配 MCP，Manager 不参与）。
+ * 平台密钥下发也只针对这类 MCP，所以其它来源报了也没有用途。
+ */
+export function reportableCapabilityGrant(item: { kind: "mcp" | "skill"; source: string }): boolean {
+  return item.kind === "mcp" && item.source === "platform_catalog";
+}
+
 export interface ApprovalRequest {
   tenantId: string;
   memberId: string;

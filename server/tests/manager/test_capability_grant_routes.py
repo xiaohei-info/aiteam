@@ -62,10 +62,25 @@ def test_put_records_grants_bound_to_the_authenticated_member():
     response = client.post("/api/manager/capability-grants", json=body, headers=_hdr(user_id="m-1"))
     assert response.status_code == 200, response.text
     assert response.json()["data"] == {"accepted": 2}
+    # skill 的 enterprise_catalog 不进 Manager（只收企业自有 MCP）。
     assert [(item["member_id"], item["kind"], item["ref"], item["tenant_id"]) for item in repo.upserts] == [
         ("m-1", "mcp", "cr-test", TENANT),
-        ("m-1", "skill", "weekly-report", TENANT),
     ]
+
+
+def test_only_enterprise_owned_mcp_grants_are_stored():
+    """红线：成员自装能力不上报 Manager（设计 2026-11-19 §3.4 范围）。"""
+    repo = FakeRepo()
+    client = _client(repo)
+    body = {"tenant_id": TENANT, "grants": [
+        {"conversation_id": "c-1", "kind": "mcp", "ref": "cr-test", "source": "platform_catalog", "scope": "session"},
+        {"conversation_id": "c-1", "kind": "mcp", "ref": "my-mcp", "source": "user_url", "scope": "session"},
+        {"conversation_id": "c-1", "kind": "skill", "ref": "weekly", "source": "clawhub_catalog", "scope": "session"},
+    ]}
+    response = client.post("/api/manager/capability-grants", json=body, headers=_hdr(user_id="m-1"))
+    assert response.status_code == 200, response.text
+    # 只有平台目录 MCP 落库。
+    assert [(item["kind"], item["ref"]) for item in repo.upserts] == [("mcp", "cr-test")]
 
 
 def test_tenant_mismatch_and_bad_fields_are_rejected():
