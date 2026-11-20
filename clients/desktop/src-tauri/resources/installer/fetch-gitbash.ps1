@@ -22,12 +22,18 @@ param(
     'https://registry.npmmirror.com/-/binary/git-for-windows/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip',
     'https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip'
   ),
-  [string]$Sha256 = '4a92850b6e917da4fd010669b614b55dccf5b0ec333a534cc4be4700dfefdafd'
+  [string]$Sha256 = '4a92850b6e917da4fd010669b614b55dccf5b0ec333a534cc4be4700dfefdafd',
+  # Bumped whenever the pinned archive changes; the marker makes upgrades refresh the tree.
+  [string]$Version = '2.56.1'
 )
 
 $ErrorActionPreference = 'Stop'
 $bash = Join-Path $Destination 'usr\bin\bash.exe'
-if (Test-Path -LiteralPath $bash) { Write-Host 'built-in bash already present'; exit 0 }
+$marker = Join-Path $Destination '.mingit-version'
+if ((Test-Path -LiteralPath $bash) -and (Test-Path -LiteralPath $marker)) {
+  $installed = (Get-Content -LiteralPath $marker -Raw).Trim()
+  if ($installed -eq $Version) { Write-Host "built-in bash $Version already present"; exit 0 }
+}
 
 $log = Join-Path $env:TEMP 'aiteam-gitbash-install.log'
 function Write-Log([string]$Message) {
@@ -94,16 +100,16 @@ function Download-ViaWindow([string]$Url) {
   if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
   $request = [System.Net.HttpWebRequest]::Create($Url)
   $request.UserAgent = 'AIFred-Installer'
-  $request.Timeout = 600000
-  $request.ReadWriteTimeout = 600000
+  $request.Timeout = 20000
+  $request.ReadWriteTimeout = 60000
   $response = $request.GetResponse()
   $total = $response.ContentLength
-  $input = $response.GetResponseStream()
+  $responseStream = $response.GetResponseStream()
   $output = [System.IO.File]::Create($zip)
   try {
     $buffer = New-Object byte[] 262144
     $received = 0
-    while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+    while (($read = $responseStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
       $output.Write($buffer, 0, $read)
       $received += $read
       if ($ui) {
@@ -119,7 +125,7 @@ function Download-ViaWindow([string]$Url) {
     }
   } finally {
     $output.Close()
-    $input.Close()
+    $responseStream.Close()
     $response.Close()
   }
 }
@@ -182,13 +188,19 @@ try {
   New-Item -ItemType Directory -Force -Path $extract | Out-Null
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $extract)
-  New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-  Copy-Item -Path (Join-Path $extract '*') -Destination $Destination -Recurse -Force
+  # Build next to the destination, then swap: a failed copy must not leave the user without bash.
+  $staging = "$Destination.new"
+  if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $staging | Out-Null
+  Copy-Item -Path (Join-Path $extract '*') -Destination $staging -Recurse -Force
   # MinGit ships bash as sh.exe; pi looks for bash.exe by name.
-  Copy-Item -LiteralPath (Join-Path $Destination 'usr\bin\sh.exe') -Destination $bash -Force
-  $version = & $bash -c 'echo $BASH_VERSION' 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "bash did not run: $version" }
-  Write-Log "installed bash $version"
+  Copy-Item -LiteralPath (Join-Path $staging 'usr\bin\sh.exe') -Destination (Join-Path $staging 'usr\bin\bash.exe') -Force
+  $bashVersion = & (Join-Path $staging 'usr\bin\bash.exe') -c 'echo $BASH_VERSION' 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "bash did not run: $bashVersion" }
+  Set-Content -LiteralPath (Join-Path $staging '.mingit-version') -Value $Version -Encoding ascii
+  if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+  Move-Item -LiteralPath $staging -Destination $Destination
+  Write-Log "installed bash $bashVersion (MinGit $Version)"
 } catch {
   if ($ui) { $ui.Form.Close() }
   Write-Log "extract/verify failed: $($_.Exception.Message)"

@@ -5,9 +5,14 @@
 ; MinGit into <install>\gitbash (see resources\installer\fetch-gitbash.ps1) and the host prepends
 ; <install>\gitbash\usr\bin to the Agent PATH. Users must not have to install Git themselves.
 
+!include "StrFunc.nsh"
+${StrStr}
+${UnStrStr}
+
 !macro NSIS_HOOK_POSTINSTALL
-  IfFileExists "$INSTDIR\gitbash\usr\bin\bash.exe" aiteam_gitbash_done
-  DetailPrint "正在准备内置 Git Bash（约 40 MB，仅首次安装）..."
+  ; Always run: the script keeps a .mingit-version marker, so an unchanged tree exits immediately
+  ; while a new pinned MinGit version refreshes the installed copy.
+  DetailPrint "正在检查内置 Git Bash（约 40 MB，仅首次安装或版本更新时下载）..."
   IfFileExists "$INSTDIR\installer\fetch-gitbash.ps1" aiteam_gitbash_fetch
   DetailPrint "安装包缺少 installer\fetch-gitbash.ps1，跳过内置 bash"
   Goto aiteam_gitbash_done
@@ -16,12 +21,18 @@
   Pop $0
   StrCmp $0 "0" aiteam_gitbash_done
   IfSilent aiteam_gitbash_done
-  MessageBox MB_ICONEXCLAMATION|MB_OK "内置 Git Bash 准备失败（错误码 $0）。$\r$\n应用仍会完成安装；若本机没有 Git for Windows，Agent 将无法就绪。$\r$\n可重新运行安装程序重试。"
+  MessageBox MB_ICONEXCLAMATION|MB_OK "内置 Git Bash 准备失败（错误码 $0）。$\r$\n应用仍会完成安装；若本机没有 Git for Windows，Agent 将无法就绪。$\r$\n可联网后重新运行安装程序重试。"
   aiteam_gitbash_done:
 !macroend
 
-; The bundled tree is not part of the regular file list, so the uninstaller must remove it.
+; Reinstalling/upgrading runs the old uninstaller in place with `_?=<dir>`; keep the bundled shell
+; there so an offline upgrade does not lose it. A real uninstall has no `_?=` and removes it.
 !macro NSIS_HOOK_PREUNINSTALL
+  ${GetParameters} $R8
+  ${UnStrStr} $R9 $R8 "_?="
+  StrCmp $R9 "" aiteam_gitbash_uninstall aiteam_gitbash_keep
+  aiteam_gitbash_uninstall:
   RMDir /r "$INSTDIR\gitbash"
   RMDir /r "$INSTDIR\installer"
+  aiteam_gitbash_keep:
 !macroend
