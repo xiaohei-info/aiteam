@@ -28,7 +28,10 @@ test('Windows extracts with Windows PowerShell Expand-Archive, never unzip or a 
   assert.match(calls[0].command, /System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
   assert.deepEqual(calls[0].args.slice(0, 4), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass'])
   const script = calls[0].args.at(-1) ?? ''
-  assert.match(script, /Import-Module 'C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\Modules\\Microsoft\.PowerShell\.Archive\\Microsoft\.PowerShell\.Archive\.psd1' -Force/)
+  // The module path is built with path.join, so it carries the host separator on non-Windows CI.
+  const modulePath = path.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'Modules', 'Microsoft.PowerShell.Archive', 'Microsoft.PowerShell.Archive.psd1')
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(script, new RegExp(`Import-Module '${escapeRegExp(modulePath)}' -Force`))
   assert.match(script, /Expand-Archive -LiteralPath 'C:\\dl\\a\.zip' -DestinationPath 'C:\\tmp\\x' -Force/)
   extractArchive("C:\\dl\\o'brien.zip", "C:\\tmp\\o'brien", { platform: 'win32', run, systemRoot: 'C:\\Windows' })
   assert.match(calls[1].args.at(-1) ?? '', /-LiteralPath 'C:\\dl\\o''brien\.zip' -DestinationPath 'C:\\tmp\\o''brien'/)
