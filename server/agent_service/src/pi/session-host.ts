@@ -1,8 +1,10 @@
-import { capabilityInstallTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type SkillInstaller } from "../connectors.js";
+import { approvedSkillVersion, capabilityInstallTool, capabilitySearchTool, checkCapabilityInstall, connectorTools, personalConnectorTools, type McpCatalog, type McpRuntimeAuth, type SkillInstaller } from "../connectors.js";
+import type { McpAuthService } from "../mcp-auth.js";
 import { appLogger, makeRequestContext, requestContext, safeError } from "../observability.js";
 import { orchestrationContext, validateMemberReferences } from "../groups/orchestration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, chmodSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { access as accessFile, readFile as readFileAsync } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createAgentSession,
@@ -31,17 +33,18 @@ import { createTodoUpdateTool, TODO_UPDATE_TOOL_NAME } from "../tools/todo.js";
 import { checklistUnfinished, TODO_RECONCILE_PROMPT, TODO_RECONCILE_SKIPPED, TODO_RECONCILE_TYPE } from "./todo-reconcile.js";
 import { CONTEXT_RESET_ENTRY_TYPE, failureText, redactSecrets, serializePiEvent } from "./event-sse.js";
 import { historyEntryRef, historyTimestamp, mergeHistorySources, visibleHistoryText, type HistorySource, type IndexedHistoryEntry } from "./session-history.js";
-import { aggregateUsage, measureWorkUsage, type UsageCapture } from "../usage.js";
+import { aggregateUsage, measureWorkUsage, usedPersonalCapability, type UsageCapture } from "../usage.js";
 import { lastAssistantStopReason, observedWorkOutcome, workEntryTime } from "./work-history.js";
 import { LocalSandbox } from "./sandbox.js";
 import { skillRefsForSnapshot, type SkillCache } from "../skills.js";
+import type { CustomSkillStore } from "../custom-skills.js";
 import { registerRuntimeProvider, runtimeProviderId, type RuntimePricingSnapshot, type RuntimeProviderConfig } from "./model-runtime.js";
 import { assertProjectWorkspace, isAllowedProjectFolder, projectMemoryScope, ProjectWorkspaceUnavailableError } from "./project-conversation.js";
 import { ConversationWriteQueue } from "./conversation-write-queue.js";
 import { groupMemberStateScope, isMemoryPolicyEnabled, isMemoryRetainAllowed, memoryToolNames, ragToolNames, removeHindsightState, type ControlledResourceLoader, type MemoryStatusActivity } from "./resources.js";
 import { containsLikelySecret, hasImageSignature, IMAGE_MIMES, MAX_LOCAL_FILE_BYTES, safePathSegment, scanWorkspaceFiles, type WorkspaceFile } from "../local-files.js";
 import { conversationFolder, conversationFolderBase, groupFolderOf } from "../workspace-layout.js";
-import { ApprovalExpiredError, ApprovalService, approvalRiskForTool } from "../approval-service.js";
+import { ApprovalExpiredError, ApprovalService, AUTO_INSTALL_APPROVER, approvalRiskForTool, ApprovalSkippedError, personalConnectorRisk } from "../approval-service.js";
 import type { ApprovalRecord } from "../storage/sqlite.js";
 import { encodeScope, expiryMillis, RuntimeLeaseCache } from "../runtime-lease-cache.js";
 import { ExecutionAuthorizationRegistry } from "../execution-authorization.js";
@@ -216,6 +219,10 @@ export interface SessionHostOptions {
   managerClient?: ManagerClient;
   /** Skills members installed for themselves; kept apart from the snapshot cache, whose sync prunes unknown skills. */
   personalSkillCache?: SkillCache;
+  /** Skills the member imported themselves (folder / zip / pasted / https URL); loaded with the session, never uploaded. */
+  customSkillStore?: CustomSkillStore;
+  /** Sign-in and encrypted credentials of personal MCP servers (MCP鉴权与配置导入). */
+  mcpAuth?: McpAuthService;
   customTools?: ToolDefinition[];
   sandbox?: LocalSandbox;
   /** Post-commit notification only; lifecycle and hourly usage are already atomically persisted. */
@@ -295,6 +302,8 @@ interface SessionRecord {
   activeReply?: { authorization?: SessionAuthorization; entriesBefore: number };
   /** Set when a scheduled run's tool approval expired unattended; the run is aborted and fails with this error. */
   backgroundApprovalFailure?: ApprovalExpiredError;
+  /** 无人值守运行中未获授权而跳过的工具（不中止整次运行，运行结束随结果通知）。 */
+  backgroundSkipped: string[];
   /** The running prompt comes from a schedule; the gate closure outlives each run's authorization object. */
   activeBackground?: boolean;
   /** Set while the hidden checklist turn runs; entriesAt is where its entries start. */
@@ -1161,6 +1170,7 @@ export class SessionHost {
       sessionManager,
       prompting: false,
       aborting: false,
+      backgroundSkipped: [],
       delegateCalls: 0,
       delegatePromptChars: 0,
       listeners: new Set(),
@@ -1334,14 +1344,19 @@ export class SessionHost {
     const operations = this.options.sandbox && workspace
       ? this.options.sandbox.operations(workspace, sessionId ?? record?.sessionManager.getSessionId(), record?.permissionMode, record?.extraRoots ?? [])
       : undefined;
+    // Skills (the member's own ones included) are Agent capabilities, not the expert's (design 2026-11-17 §10).
+    // Pi offers skills only to a session with a `read` tool, so an expert whose allowlist has no `read` gets one
+    // that opens nothing but the files of the skills loaded into this session.
+    const skillRead = !allowed.has("read") && record?.resourceLoader ? skillOnlyReadTool(record.resourceLoader, workspace ?? record.workspace) : undefined;
+    if (skillRead) allowed.add("read");
     const codingTools = operations && workspace
       ? [
           createBashToolDefinition(workspace, { operations: operations.bash }),
-          createReadToolDefinition(workspace, { operations: operations.read }),
+          skillRead ?? createReadToolDefinition(workspace, { operations: operations.read }),
           createWriteToolDefinition(workspace, { operations: operations.write }),
           createEditToolDefinition(workspace, { operations: operations.edit }),
         ]
-      : [];
+      : skillRead ? [skillRead] : [];
     const localDirectoryTools = record && localDirectoryToolNames.length > 0
       ? createLocalDirectoryTools(this.localDirectoryService, localDirectoryToolNames, () => ({
           caller: authorization.caller,
@@ -1368,10 +1383,12 @@ export class SessionHost {
     const connectors = record ? connectorTools(this.options.store, { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId }, authorization.employeeId, record.conversationId, authorization.snapshot) : [];
     // Personal MCP the user installed for themselves, plus the ask-to-install tool (live, human-approvable sessions only).
     const owner = record ? { tenantId: authorization.caller.tenantId!, memberId: authorization.caller.userId ?? authorization.caller.callerId } : undefined;
-    const personal = owner ? personalConnectorTools(this.options.store, owner, authorization.snapshot) : [];
-    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller))] : [];
-    for (const tool of [...connectors, ...personal, ...installer]) allowed.add(tool.name);
-    tools.push(...connectors, ...personal, ...installer);
+    const mcpAuth = this.mcpRuntimeAuth(authorization.caller);
+    const personal = owner ? personalConnectorTools(this.options.store, owner, mcpAuth) : [];
+    const searcher = owner && !authorization.background ? [capabilitySearchTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller))] : []
+    const installer = owner && !authorization.background ? [capabilityInstallTool(this.options.store, owner, this.skillInstaller(authorization.caller), this.mcpCatalog(authorization.caller), mcpAuth, this.options.customSkillStore)] : [];
+    for (const tool of [...connectors, ...personal, ...searcher, ...installer]) allowed.add(tool.name);
+    tools.push(...connectors, ...personal, ...searcher, ...installer);
     const selected = tools.filter((tool, index) => allowed.has(tool.name) && tools.findIndex((candidate) => candidate.name === tool.name) === index) as ToolDefinition[];
     if (!record) return selected;
     return selected.map((tool) => this.withApprovalGate(tool, authorization, record));
@@ -1417,7 +1434,7 @@ export class SessionHost {
   }
 
   /** Manager-backed personal skill installs for this caller; undefined without Manager or the personal skill cache. */
-  private skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
+  skillInstaller(caller: AuthenticatedCaller): SkillInstaller | undefined {
     const client = this.options.managerClient;
     const cache = this.options.personalSkillCache;
     if (!client?.listInstallableSkills || !client.getInstallableSkillPackage || !cache || !caller.tenantId) return undefined;
@@ -1431,13 +1448,35 @@ export class SessionHost {
     };
   }
 
+  /** Platform MCP servers the enterprise enabled for this caller (design §11.3); undefined without Manager. */
+  private mcpCatalog(caller: AuthenticatedCaller): McpCatalog | undefined {
+    const client = this.options.managerClient;
+    if (!client?.listInstallableMcpServers || !caller.tenantId) return undefined;
+    return {
+      list: () => client.listInstallableMcpServers!(caller),
+      ...(client.getMcpOAuthClient ? { oauthClient: (serverId: string) => client.getMcpOAuthClient!(caller, serverId) } : {}),
+    };
+  }
+
+  /** Credentials and sign-in for personal MCP servers of this caller. */
+  mcpRuntimeAuth(caller: AuthenticatedCaller): McpRuntimeAuth {
+    const catalog = this.mcpCatalog(caller);
+    return { ...(this.options.mcpAuth ? { service: this.options.mcpAuth } : {}), ...(catalog ? { catalog } : {}) };
+  }
+
+  get mcpAuth(): McpAuthService | undefined { return this.options.mcpAuth; }
+
+  /** Local store of the member's self-imported skills (design 2026-11-18 §3). */
+  get customSkillStore(): CustomSkillStore | undefined { return this.options.customSkillStore; }
+
   /** Revoking a personal skill also removes its files, so it cannot be loaded again. */
   removePersonalSkill(tenantId: string, memberId: string, skillId: string): void {
     this.options.personalSkillCache?.remove({ tenantId, memberId }, skillId);
+    this.options.customSkillStore?.remove({ tenantId, memberId }, skillId);
   }
 
   private withApprovalGate(tool: ToolDefinition, authorization: SessionAuthorization, record: SessionRecord): ToolDefinition {
-    const risk = approvalRiskForTool(tool.name);
+    const risk = approvalRiskForTool(tool.name) ?? personalConnectorRisk(tool.name, record.permissionMode);
     if (!risk) return tool;
     const execute = tool.execute.bind(tool);
     const owner = { tenantId: authorization.caller.tenantId ?? "", memberId: authorization.caller.userId ?? authorization.caller.callerId };
@@ -1446,11 +1485,15 @@ export class SessionHost {
       execute: async (toolCallId, params, signal, onUpdate, context) => {
         // Installing a personal capability: bounce impossible requests, show the user the full request (and any clash).
         let summary: string | undefined;
+        let autoInstall = false;
         const install = tool.name === "capability_install";
         if (install) {
-          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal);
+          const check = await checkCapabilityInstall(this.options.store, owner, params, this.skillInstaller(authorization.caller), signal, this.mcpCatalog(authorization.caller), this.mcpRuntimeAuth(authorization.caller), this.options.customSkillStore);
           if (!check.ok) return { content: [{ type: "text" as const, text: check.message }], details: undefined, isError: true } as Awaited<ReturnType<ToolDefinition["execute"]>>;
           summary = `capability_install: ${check.summary}`;
+          // The member's own grant (design §11.3): platform-catalog installs of this kind that replace nothing skip the prompt.
+          // Auto-install skips «may it be installed», never the sign-in: one that still needs it is asked as usual.
+          autoInstall = check.platform && !check.replaces && !check.needsCredential && this.options.store.hasCapabilityAutoInstall(owner.tenantId, owner.memberId, check.kind);
         }
         return this.abortBackgroundRunOnExpiry(record, tool.name, () => this.approvalService.execute({
         tenantId: authorization.caller.tenantId ?? "",
@@ -1468,14 +1511,24 @@ export class SessionHost {
         toolName: tool.name,
         args: params,
         ...(summary ? { summary } : {}),
+        ...(autoInstall ? { autoApproveBy: AUTO_INSTALL_APPROVER } : {}),
         riskLevel: risk,
         permissionMode: record.permissionMode,
+        unattended: record.activeBackground === true,
         expiresAt: authorizationExpiry(authorization),
         signal,
       // Queued after approval, so a request waiting for the user never holds up the other employees.
       }, (claimed) => {
         // The user's replace / rename choice reaches the install tool only through the approval record, never from the model.
-        const effective = install ? { ...(params as Record<string, unknown>), resolution: claimed.resolution } : params;
+        const effective = install
+          ? (() => {
+            // The token typed into the dialog reaches the install in memory only; the recorded tool call keeps the model's arguments.
+            const credential = this.approvalService.takeCredential(claimed.id);
+            // 外部来源的技能：批准时记下内容哈希，执行时比对（批准后内容可能已被换掉）。
+            const approvedVersion = approvedSkillVersion(claimed.redacted_summary);
+            return { ...(params as Record<string, unknown>), resolution: claimed.resolution, autoApproved: claimed.approved_by === AUTO_INSTALL_APPROVER, approvalId: claimed.id, ...(approvedVersion ? { approvedVersion } : {}), ...(credential ? { credential } : {}) };
+          })()
+          : params;
         return record.sharedWorkspace && SHARED_FOLDER_WRITE_TOOLS.has(tool.name)
           ? this.writeQueue.run(record.conversationId, signal, async () => execute(toolCallId, effective, signal, onUpdate, context))
           : execute(toolCallId, effective, signal, onUpdate, context);
@@ -1493,6 +1546,16 @@ export class SessionHost {
     try {
       return await run();
     } catch (error) {
+      // 无人值守的跳过不是失败：已授权能力已执行，未授权动作不中止整次运行（设计 2026-11-19 §3.1）。
+      // 记入跳过清单，运行结束时随结果通知。
+      if (record.activeBackground && error instanceof ApprovalSkippedError) {
+        record.backgroundSkipped.push(error.skipped.toolName);
+        return {
+          content: [{ type: "text" as const, text: `定时任务中「${error.skipped.toolName}」未获授权，已跳过该动作；本次运行继续。` }],
+          details: undefined,
+          isError: true,
+        } as unknown as T;
+      }
       if (!record.activeBackground || !(error instanceof ApprovalExpiredError) || record.aborting) throw error;
       const failure = new ApprovalExpiredError(`定时任务调用 ${toolName} 需要审批，但在有效期内无人处理，已中止本次运行。请把该对话的权限调高，或在审批提示出现时及时处理。`);
       record.backgroundApprovalFailure ??= failure;
@@ -1724,6 +1787,7 @@ export class SessionHost {
     record.prompting = true;
     record.aborting = false;
     record.backgroundApprovalFailure = undefined;
+    record.backgroundSkipped = [];
     record.activeBackground = authorization?.background === true;
     this.publishGlobal({
       type: "prompt_started",
@@ -1846,13 +1910,25 @@ export class SessionHost {
             ...owner, employeeId, startedAt, endedAt: Date.now(), entries, settled: outcome === "succeeded",
             pricing: ((authorization.snapshot.model_policy as Record<string, unknown> | undefined)?.pricing ?? null) as RuntimePricingSnapshot | null,
           };
+          // 用了个人能力（本机 MCP / 导入技能）也照常上报整轮用量：个人能力的调用结果会进入后续上下文，
+          // 难以精确拆分到单次调用，统一计入口径一致（设计 2026-11-19 §3.3）。
+          const personal = !this.options.useFauxModel && usedPersonalCapability(entries, (location) =>
+            this.options.customSkillStore?.ownsLocation({ tenantId: owner.tenantId, memberId: owner.memberId }, location) ?? false);
           const committed = this.options.store.workRecords.finish(workId, owner, {
             outcome, endedAt: capture.endedAt, endOrdinal: entriesBefore + entries.length,
             firstEntryId: entries[0]?.id ?? null, lastEntryId: entries.at(-1)?.id ?? null,
             firstEntryAt: workEntryTime(entries[0]), lastEntryAt: workEntryTime(entries.at(-1)),
             usage: this.options.useFauxModel ? null : measureWorkUsage(entries, capture.pricing),
           }, this.options.useFauxModel ? undefined : aggregateUsage(capture));
-          if (committed && !this.options.useFauxModel) await this.options.usageRecorder?.(capture, authorization.caller);
+          if (personal) {
+            appLogger.log("info", "usage.used_personal_capability", {
+              work_id: workId, conversation_id: record.conversationId, employee_id: employeeId,
+              tenant_id: owner.tenantId, member_id: owner.memberId,
+            });
+          }
+          if (committed && !this.options.useFauxModel) {
+            await this.options.usageRecorder?.(capture, authorization.caller);
+          }
         }
       } finally {
         // Read what the global settle signal needs before the active state is cleared: the abort
@@ -1901,6 +1977,8 @@ export class SessionHost {
               last_preview: settledSignal.lastPreview,
               last_message_at: new Date().toISOString(),
               assistant_message_count: settledSignal.assistantMessageCount,
+              // 无人值守运行中未获授权而跳过的动作（不中止整次运行，在此告知）。
+              ...(record.backgroundSkipped.length > 0 ? { skipped_actions: [...new Set(record.backgroundSkipped)] } : {}),
             });
           } catch (error) {
             appLogger.log("warn", "global_activity.publish_failed", { conversation_id: record.conversationId, error: error instanceof Error ? error.message : String(error) });
@@ -2626,4 +2704,26 @@ export function conversationFoldersHint(roots: readonly string[], mode: Conversa
       ? "You may read and modify files in them under the same rules as the working folder."
       : "They are the user's own folders; change them only when the task asks for it.";
   return [`The user added these folders to this conversation. Use absolute paths to reach them. ${access}`, ...roots.map((root) => `- ${root}`)].join("\n");
+}
+
+/**
+ * A `read` tool restricted to the directories of the skills loaded into a session; undefined when none are.
+ * Paths are resolved through symlinks before the containment check.
+ */
+function skillOnlyReadTool(loader: ResourceLoader, cwd: string): ToolDefinition | undefined {
+  const roots = loader.getSkills().skills.flatMap((skill) => { try { return [realpathSync(skill.baseDir)]; } catch { return []; } });
+  if (roots.length === 0) return undefined;
+  const inside = (path: string) => {
+    const real = realpathSync(resolve(cwd, path));
+    if (!roots.some((root) => { const rel = relative(root, real); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); })) {
+      throw new Error("This read tool only opens files of the installed skills listed in the system prompt.");
+    }
+    return real;
+  };
+  return createReadToolDefinition(cwd, {
+    operations: {
+      readFile: async (path) => readFileAsync(inside(path)),
+      access: async (path) => accessFile(inside(path)),
+    },
+  }) as unknown as ToolDefinition;
 }

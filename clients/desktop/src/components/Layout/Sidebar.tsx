@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   MessageCircle,
   Network,
+  Puzzle,
   Settings as SettingsIcon,
   Sparkles,
   Users,
@@ -29,6 +30,7 @@ const NAV_ITEMS: { icon: LucideIcon; path: string; label: string; shortcut: stri
   { icon: LayoutDashboard, path: '/workbench', label: '工作台', shortcut: '⌘6' },
   { icon: Network, path: '/org', label: '组织架构', shortcut: '⌘7' },
   { icon: Building2, path: '/office', label: '办公室', shortcut: '⌘8' },
+  { icon: Puzzle, path: '/capabilities', label: '能力', shortcut: '⌘9' },
 ]
 
 export default function Sidebar() {

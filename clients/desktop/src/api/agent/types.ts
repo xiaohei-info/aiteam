@@ -557,6 +557,14 @@ export interface InstallableSkill {
   content_hash: string
   /** 对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。 */
   source_skill_id: string
+  /** platform：来自平台技能市场；enterprise：企业自建。旧版 Agent 不返回。 */
+  origin?: 'platform' | 'enterprise'
+}
+
+/** 成员授权：以后从平台目录安装该种能力时直接安装，不再弹审批。 */
+export interface CapabilityAutoInstall {
+  kind: LocalCapabilityKind
+  created_at: string
 }
 
 export interface LocalCapability {
@@ -567,8 +575,8 @@ export interface LocalCapability {
   url: string
   /** MCP 工具；技能为空。 */
   tools: string[]
-  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业技能目录。 */
-  source: 'user_url' | 'enterprise_catalog'
+  /** user_url：用户同意的 MCP 地址；enterprise_catalog：企业自建技能；platform_catalog：平台目录（MCP 或技能）；user_import：成员自己导入的技能。 */
+  source: 'user_url' | 'enterprise_catalog' | 'platform_catalog' | 'user_import' | 'clawhub_catalog'
   /** 技能版本；MCP 为空。旧版 Agent 不返回。 */
   version?: string
   /** 企业目录技能对应的平台 skill ID（与方案推荐能力对应）；旧版 Agent 不返回。 */
@@ -576,6 +584,65 @@ export interface LocalCapability {
   reason: string
   approved_by: string
   created_at: string
+  /** MCP 鉴权方式（MCP 鉴权 2026-11-18）；旧版 Agent 不返回，视为 none。 */
+  auth?: McpAuth
+  /** bearer：携带令牌的请求头名；空 = Authorization: Bearer。 */
+  auth_header?: string
+  oauth_scope?: string
+  timeout_ms?: number
+  /** 本机凭据状态；凭据本身不返回。 */
+  auth_status?: McpAuthStatus
+  /** 仅自定义技能：ok 文件与导入时一致；modified 文件被改动过，已停用。 */
+  integrity?: 'ok' | 'modified'
+  /** 仅自定义技能：来源描述（本机文件夹 / 本机 zip / 粘贴 / 网址）。 */
+  origin_label?: string
+  /** oauth：当前令牌到期时间（有刷新令牌时会自动续期）。 */
+  auth_expires_at?: string | null
+}
+
+export type McpAuth = 'none' | 'oauth' | 'bearer'
+export type McpAuthStatus = 'none' | 'signed_in' | 'needs_login' | 'token_set' | 'needs_token'
+
+/** 一次 MCP 服务方登录的进度；不含令牌、授权码或 state。 */
+export interface McpLogin {
+  login_id: string
+  ref: string
+  status: 'pending' | 'completed' | 'failed'
+  /** 服务方登录页地址（浏览器没自动打开时让用户手动打开）。 */
+  authorization_url: string
+  auth_host: string
+  expires_at: string
+  error?: 'timeout' | 'cancelled' | 'denied' | 'failed'
+}
+
+export interface McpProbe {
+  auth: McpAuth
+  auth_host?: string
+  scope?: string
+}
+
+export interface McpBearerCredential {
+  token: string
+  /** 请求头名；缺省为 Authorization: Bearer。 */
+  header?: string
+}
+
+/** 桌面端「添加 MCP」：不经对话与模型，由成员本人安装。 */
+export interface McpInstallRequest {
+  ref: string
+  display_name?: string
+  url: string
+  timeout_ms?: number
+  reason?: string
+  replace?: boolean
+  credential?: McpBearerCredential
+  /** 高级：服务方不允许自动注册时，手动填写服务方发的应用编号。 */
+  oauth_client?: { client_id: string; client_secret?: string }
+}
+
+export interface McpInstallResult {
+  capability: LocalCapability | null
+  login: McpLogin | null
 }
 
 // -------------------- 本地附件 / 产物 --------------------

@@ -38,7 +38,7 @@ import {
   updateConversationSegment,
 } from './conversations'
 import { getExpertReadiness, listExperts, listSolutions } from './experts'
-import { deleteLocalCapability, listInstallableSkills, listLocalCapabilities } from './capabilities'
+import { cancelMcpLogin, getLocalSkillPath, importCustomSkill, installSkill, reopenMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listInstallableSkills, listLocalCapabilities, probeMcpServer, startMcpLogin, updateMcpToken } from './capabilities'
 import { deleteEmployeeMemory, getEmployeeMemorySummary, listEmployeeMemories } from './employeeMemories'
 import type {
   OfficeFeed,
@@ -174,6 +174,12 @@ export const agentApi = {
   introduceConversation: (id: string) => introduceConversation(getClient(), id),
   submitPrompt: (id: string, body: Parameters<typeof submitPrompt>[2], idempotencyKey: string) =>
     submitPrompt(getClient(), id, body, idempotencyKey),
+  /** 「让员工帮我装」：新开会话后把需求发出去，并拿到幂等键以便订阅该会话的 SSE。 */
+  sendInitialCapabilityRequest: async (conversationId: string, text: string) => {
+    const idempotencyKey = crypto.randomUUID()
+    const receipt = await submitPrompt(getClient(), conversationId, { text }, idempotencyKey)
+    return { idempotencyKey, receipt }
+  },
   listEntries: (id: string, signal?: AbortSignal) => listEntries(getClient(), id, signal),
   abortConversation: (id: string) => abortConversation(getClient(), id),
 
@@ -195,6 +201,22 @@ export const agentApi = {
   listLocalCapabilities: () => listLocalCapabilities(getClient()),
   listInstallableSkills: () => listInstallableSkills(getClient()),
   deleteLocalCapability: (kind: 'mcp' | 'skill', ref: string) => deleteLocalCapability(getClient(), kind, ref),
+  listCapabilityAutoInstall: () => listCapabilityAutoInstall(getClient()),
+  deleteCapabilityAutoInstall: (kind: 'mcp' | 'skill') => deleteCapabilityAutoInstall(getClient(), kind),
+  // 能力授权（仅本会话有效）：设置页展示与撤销。
+  // MCP 鉴权（2026-11-18）：令牌只在桌面端 → 本机 Agent 之间流转。
+  installSkill: (skillId: string, replace?: boolean) => installSkill(getClient(), skillId, replace),
+  importCustomSkill: (body: import('./capabilities').CustomSkillImportRequest) => importCustomSkill(getClient(), body),
+  getLocalSkillPath: (ref: string) => getLocalSkillPath(getClient(), ref),
+  probeMcpServer: (url: string) => probeMcpServer(getClient(), url),
+  installMcpServer: (body: Parameters<typeof installMcpServer>[1]) => installMcpServer(getClient(), body),
+  startMcpLogin: (ref: string) => startMcpLogin(getClient(), ref),
+  updateMcpToken: (ref: string, credential: Parameters<typeof updateMcpToken>[2]) => updateMcpToken(getClient(), ref, credential),
+  deleteMcpCredential: (ref: string) => deleteMcpCredential(getClient(), ref),
+  getMcpLogin: (loginId: string) => getMcpLogin(getClient(), loginId),
+  cancelMcpLogin: (loginId: string) => cancelMcpLogin(getClient(), loginId),
+  reopenMcpLogin: (loginId: string) => reopenMcpLogin(getClient(), loginId),
+  getApprovalMcpLogin: (conversationId: string, approvalId: string) => getApprovalMcpLogin(getClient(), conversationId, approvalId),
   getExpertReadiness: (employeeId: string) => getExpertReadiness(getClient(), employeeId),
 
   // -------- 员工记忆 --------

@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
   type ResourceLoader,
   type ToolDefinition,
+  loadSkillsFromDir,
 } from "@earendil-works/pi-coding-agent";
 import { createMemoryLifecycle } from "@luxusai/pi-hindsight/extensions/lifecycle/memory-lifecycle.js";
 import { createRecallTurnPolicy } from "@luxusai/pi-hindsight/extensions/lifecycle/memory-lifecycle-recall.js";
@@ -16,6 +17,7 @@ import { notify, setMemoryStatus, snapshotRuntime } from "@luxusai/pi-hindsight/
 import { isMemorySetupComplete } from "@luxusai/pi-hindsight/extensions/config/setup-gate.js";
 import { registerTools } from "@luxusai/pi-hindsight/extensions/operations/tools.js";
 import { skillRefsForSnapshot, skillResourcePaths, skillSigningVerificationForSnapshot, SkillCache } from "../skills.js";
+import type { CustomSkillStore } from "../custom-skills.js";
 import type { FrozenSnapshot } from "../storage/sqlite.js";
 import { HINDSIGHT_CLIENT_PROTOCOL, normalizeHindsightRuntimeConfig, type HindsightRuntimeConfig } from "../manager-client.js";
 import type { SessionAuthorization } from "./session-host.js";
@@ -114,6 +116,8 @@ export function createControlledResourceLoader(
   onMemoryStatus?: (activity: MemoryStatusActivity, queueRemaining?: number) => void,
   /** Skills the member installed for themselves (`skill@version`). Optional: one that fails to verify is skipped, not fatal. */
   personalSkills?: { cache: SkillCache; refs: readonly string[] },
+  /** Skills the member imported themselves (design 2026-11-18 §3). Optional: a modified one is skipped, not fatal. */
+  customSkills?: { store: CustomSkillStore; scope: { tenantId: string; memberId: string } },
 ): ControlledResourceLoader {
   const skillScope = authorization?.caller.tenantId && (authorization.caller.userId ?? authorization.caller.callerId)
     ? { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId }
@@ -126,8 +130,8 @@ export function createControlledResourceLoader(
   const skills = skillScope && cache
     ? skillResourcePaths(cache, skillScope, skillRefs, verification)
     : { skills: [], diagnostics: [] };
+  const names = new Set(skills.skills.map((skill) => skill.name));
   if (skillScope && personalSkills) {
-    const names = new Set(skills.skills.map((skill) => skill.name));
     for (const ref of personalSkills.refs) {
       try {
         // Installed personal skills verify with the keys pinned at install, so a later key rotation or
@@ -143,6 +147,19 @@ export function createControlledResourceLoader(
         for (const skill of fresh) names.add(skill.name);
         skills.skills.push(...fresh); skills.diagnostics.push(...loaded.diagnostics);
       } catch { /* a revoked, expired or tampered personal skill is simply not loaded */ }
+    }
+  }
+  if (skillScope && customSkills) {
+    for (const entry of customSkills.store.list(customSkills.scope)) {
+      if (names.has(entry.record.name)) continue; // 同名时企业/签名技能优先
+      const dir = customSkills.store.pathFor(customSkills.scope, entry.record.name);
+      if (!dir) continue; // 文件被改动，不加载
+      try {
+        const result = loadSkillsFromDir({ dir, source: "aiteam-custom-skill" });
+        const fresh = result.skills.filter((skill) => !names.has(skill.name));
+        for (const skill of fresh) names.add(skill.name);
+        skills.skills.push(...fresh); skills.diagnostics.push(...result.diagnostics);
+      } catch { /* 自定义技能加载不了就跳过，不影响会话 */ }
     }
   }
   const leaseConfig = hindsightRuntimeConfig ? normalizeHindsightRuntimeConfig(hindsightRuntimeConfig, managerUrl) : undefined;

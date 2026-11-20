@@ -22,6 +22,7 @@ import { AuditPage } from "./features/audit";
 import { SolutionApplyHistoryPage } from "./features/solution-apply";
 import { SettingsPage } from "./features/settings";
 import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
+import { McpMarketPage } from "./features/mcp-market/McpMarketPage";
 
 export function App(): React.ReactNode {
   return (
@@ -40,6 +41,7 @@ export function App(): React.ReactNode {
         <Route path="/knowledge" element={<KnowledgePage />} />
         <Route path="/capability" element={<CapabilityPage />} />
         <Route path="/skill-market" element={<SkillMarketPage />} />
+        <Route path="/mcp-market" element={<McpMarketPage />} />
         <Route path="/usage" element={<UsagePage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/recharge" element={<RechargePage />} />

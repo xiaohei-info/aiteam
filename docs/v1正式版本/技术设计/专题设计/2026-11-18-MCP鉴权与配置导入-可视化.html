@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP 鉴权与配置导入 · 细化方案</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--sub:#667085;--line:#e4e7ec;--brand:#3b5bdb;--ok:#12a150;--warn:#d98a00;--bad:#d92d20;--op:#7048e8;--mg:#0b7285;--ag:#e8590c}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font:14px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg)}
+nav{position:fixed;top:0;left:0;bottom:0;width:190px;background:#fff;border-right:1px solid var(--line);padding:18px 12px;overflow:auto}
+nav h1{font-size:14px;margin:0 0 14px;color:var(--brand)}
+nav a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:13px}
+nav a:hover{background:#eef2ff}
+main{margin-left:190px;padding:28px 36px 80px;max-width:1280px}
+section{margin-bottom:46px}
+h2{font-size:21px;margin:0 0 6px}
+h2 small{font-size:13px;color:var(--sub);font-weight:400;margin-left:8px}
+h3{font-size:15px;margin:22px 0 8px}
+p{margin:6px 0}
+.lead{color:var(--sub);margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#f9fafb;font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:var(--brand);margin:1px 2px}
+.tag.ok{background:#e6f6ec;color:var(--ok)}.tag.warn{background:#fff4e0;color:var(--warn)}.tag.bad{background:#fdeceb;color:var(--bad)}
+.tag.op{background:#f1ecff;color:var(--op)}.tag.mg{background:#e3f6f9;color:var(--mg)}.tag.ag{background:#fff0e6;color:var(--ag)}.tag.gray{background:#f2f4f7;color:var(--sub)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.tabs button{border:1px solid var(--line);background:#fff;padding:6px 12px;border-radius:16px;cursor:pointer;font-size:13px}
+.tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.pane{display:none}.pane.on{display:block}
+/* mock window */
+.win{border:1px solid #cfd4dc;border-radius:10px;background:#fff;overflow:hidden;box-shadow:0 2px 10px rgba(16,24,40,.06);margin:10px 0}
+.win .bar{display:flex;align-items:center;gap:6px;background:#f2f4f7;padding:7px 12px;font-size:12px;color:var(--sub);border-bottom:1px solid var(--line)}
+.win .bar i{width:9px;height:9px;border-radius:50%;background:#d0d5dd;display:inline-block}
+.win .bar b{margin-left:8px;font-weight:600;color:var(--ink)}
+.win .body{padding:14px;font-size:12.5px}
+.win .cols{display:grid;grid-template-columns:260px 1fr;gap:14px}
+.box{border:1px solid var(--line);border-radius:8px;padding:10px;background:#fcfcfd}
+.box h4{margin:0 0 8px;font-size:12.5px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+.row:last-child{border-bottom:0}
+.btn{display:inline-block;padding:4px 12px;border-radius:6px;border:1px solid var(--brand);color:var(--brand);font-size:12px;background:#fff}
+.btn.pri{background:var(--brand);color:#fff}.btn.dis{border-color:#d0d5dd;color:#98a2b3;background:#f2f4f7}.btn.danger{border-color:var(--bad);color:var(--bad)}
+.steps{display:flex;gap:4px;margin:6px 0 10px}
+.steps span{flex:1;text-align:center;padding:4px 0;border-radius:4px;font-size:11.5px;background:#f2f4f7;color:var(--sub)}
+.steps span.done{background:#e6f6ec;color:var(--ok)}.steps span.cur{background:#eef2ff;color:var(--brand);font-weight:600}
+.input{border:1px solid #d0d5dd;border-radius:6px;padding:5px 8px;background:#fff;color:#475467}
+.note{font-size:12px;color:var(--sub);margin-top:6px}
+.callout{border-left:4px solid var(--warn);background:#fffaf0;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+.callout.red{border-color:var(--bad);background:#fff5f4}.callout.green{border-color:var(--ok);background:#f3fbf6}
+svg text{font-family:inherit}
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin:10px 0}
+.flow .s{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:120px;font-size:12px;flex:1}
+.flow .s b{display:block;font-size:12.5px}
+.flow .a{align-self:center;padding:0 6px;color:var(--sub);font-size:18px}
+.sz{font-weight:700}
+.sz.S{color:var(--ok)}.sz.M{color:var(--warn)}.sz.L{color:var(--bad)}
+@media(max-width:900px){nav{display:none}main{margin-left:0;padding:16px}.grid2,.grid3,.win .cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<h1>MCP 鉴权与配置导入</h1>
+<a href="#s0">总览</a>
+<a href="#s1">1 解决什么问题</a>
+<a href="#s2">2 实现效果（UI）</a>
+<a href="#s3">3 数据流</a>
+<a href="#s4">4 前端要做什么</a>
+<a href="#s5">5 后端要做什么</a>
+<a href="#s6">6 契约与数据变更</a>
+<a href="#s7">7 阶段与依赖</a>
+<a href="#s8">8 待决策</a>
+</nav>
+<main>
+
+<section id="s0">
+<h2>需要登录的 MCP：成员自己去服务方登录，令牌只存在自己电脑上 <small>2026-11-18 · 设计稿，未写代码</small></h2>
+<p class="lead">一句话：cr-test 这类 MCP 不带凭据就返回 401 → 成员在浏览器登录服务方账号（或填服务方发的固定令牌），本机 Agent 接住结果、加密存本机文件 → 之后调用自动带上，令牌不进模型、不出电脑。</p>
+<div class="grid3">
+<div class="card"><b>服务方发起鉴权，成员本人登录</b><p class="note">支持两种：浏览器登录（OAuth，如 cr-test）和固定令牌（Bearer / 自定义请求头）。参考 pi-mcp-adapter 的做法。</p></div>
+<div class="card"><b>凭据只在成员电脑</b><p class="note">存 Agent 数据目录，文件仅本人可读、内容加密、绑定 MCP 地址；企业端 / 运营端不保存成员令牌。</p></div>
+<div class="card"><b>粘贴配置即可添加</b><p class="note">运营端「登记 MCP」和桌面端新增「添加 MCP」都能直接粘贴 JSON / 链接；运营端可自动读取工具。</p></div>
+</div>
+<div class="callout"><b>阅读提示：</b>工作量用 S / M / L 粗估，只表示相对大小，不是排期承诺；UI 为示意图，不是最终视觉稿；表格里标「新」的是仓库里目前没有的东西。配套设计文档：<code>2026-11-18-MCP鉴权与配置导入-需求与设计.md</code>（现状核对带文件行号）。</div>
+</section>
+
+<section id="s1">
+<h2>1 解决什么问题</h2>
+<table>
+<tr><th style="width:24%">现在的问题</th><th style="width:46%">本方案怎么解决</th><th>谁受益</th></tr>
+<tr><td>个人 MCP 安装前不带凭据读工具列表，cr-test 返回 401，安装直接失败</td><td>Agent 探测到 401：能发现 OAuth 元数据 → 浏览器登录；发现不到 → 要求填固定令牌。登录 / 填完后带凭据再读工具、完成安装</td><td>成员</td></tr>
+<tr><td>调用个人 MCP 不带凭据；只有运维手配的企业连接器能带令牌</td><td>每个已装 MCP 记录鉴权方式，调用时从本机凭据文件取令牌；OAuth 令牌快过期时自动刷新</td><td>成员、专家</td></tr>
+<tr><td>令牌如果走对话会进入模型上下文</td><td>安装参数里没有凭据字段；登录走浏览器、令牌走桌面端直连本机 Agent，审批记录 / 事件流 / 日志都不含令牌</td><td>成员、企业安全</td></tr>
+<tr><td>成员不能自己添加 MCP，只能靠对话让专家装</td><td>桌面端「个人能力」新增「添加 MCP」窗口：粘贴配置或链接 → 探测 → 登录 / 填令牌 → 安装</td><td>成员</td></tr>
+<tr><td>运营端登记要逐项手填、工具名手打；只有「需要凭据：是 / 否」，需要凭据的成员装不了</td><td>登记窗口支持粘贴配置导入、「读取工具」；「需要凭据」改为鉴权方式（无 / 浏览器登录 / 固定令牌），需要鉴权的条目成员也能装</td><td>平台运营</td></tr>
+<tr><td>有的服务不允许自动注册应用，浏览器登录走不通</td><td>默认自动注册（名称 "AI Team"）；「高级」里可填服务方发的应用编号 client_id / client_secret，平台目录里的 secret 加密保存</td><td>成员、平台运营</td></tr>
+</table>
+<div class="callout red"><b>不能保证的事（需要对外口径一致）：</b>
+① 服务方的 OAuth 不规范（不返回登录地址、没有元数据）时浏览器登录走不通，只能用固定令牌；
+② 本机凭据文件加密只防误拷贝 / 误上传，不防同一系统账号下运行的恶意程序；
+③ 平台目录里的 client_secret 会到成员电脑内存里使用，懂技术的成员能取到，这是桌面应用做 OAuth 的固有限制；
+④ 服务方吊销令牌后，要到下次调用失败才会发现，届时提示重新登录；
+⑤ 成员如果在对话里直接粘贴带令牌的配置，令牌已经进了对话（这是成员自己的输入），Agent 不会用也不会存，并提示改用「添加 MCP」窗口。</div>
+</section>
+
+<section id="s2">
+<h2>2 实现效果 <small>点击标签切换界面示意</small></h2>
+<div class="tabs" id="tabs-ui">
+<button class="on" data-p="u1">桌面端 · 审批弹窗（浏览器登录）</button>
+<button data-p="u2">桌面端 · 审批弹窗（固定令牌）</button>
+<button data-p="u3">桌面端 · 添加 MCP</button>
+<button data-p="u4">桌面端 · 个人能力（登录状态）</button>
+<button data-p="u5">运营端 · 登记 MCP</button>
+</div>
+
+<div class="pane on" id="u1">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>数据运营协调专家 请求权限 · 安装个人能力（MCP）</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>第一步：弹窗</h4>
+<div class="row"><span>服务地址</span><span><code>mcp-test.cycplus.com</code>/mcp/cr-test</span></div>
+<div class="row"><span>鉴权</span><span class="tag warn">需要登录服务方账号</span></div>
+<div class="row"><span>登录页</span><span><code>mcp-test.cycplus.com</code></span></div>
+<p class="note">名称与理由由模型填写，未经核实。工具以登录后实际为准。</p>
+<p style="margin-top:8px"><span class="btn">拒绝</span> <span class="btn pri">允许并登录</span></p>
+</div>
+</div>
+<div>
+<div class="box"><h4>第二步：等待浏览器登录</h4>
+<div class="row"><span>状态</span><span class="tag">已在浏览器打开 cycplus 登录页，请在浏览器完成登录…</span></div>
+<div class="row"><span>没弹出浏览器？</span><span><span class="btn">在浏览器打开</span> <span class="btn">复制链接</span></span></div>
+<div class="row"><span>等待时限</span><span>10 分钟，超时或取消则本次安装失败</span></div>
+<p style="margin-top:8px"><span class="btn danger">取消</span></p>
+</div>
+<div class="box" style="margin-top:10px"><h4>第三步：完成</h4>
+<div class="row"><span>cr-test</span><span class="tag ok">已登录，已安装 · 工具 4 个</span></div>
+<p class="note">模型只收到「已安装 cr-test，工具 4 个」，看不到令牌和授权码。</p>
+</div>
+</div></div></div></div>
+<p class="note">要点：允许安装和登录合在一步；登录在服务方网页完成；登录页域名和 MCP 不同时醒目提示。自动安装授权只跳过「是否允许」，不跳过登录。</p>
+</div>
+
+<div class="pane" id="u2">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>数据运营协调专家 请求权限 · 安装个人能力（MCP）</b></div>
+<div class="body">
+<div class="box"><h4>需要访问令牌</h4>
+<div class="row"><span>服务地址</span><span><code>api.example-crm.com</code>/mcp</span></div>
+<div class="row"><span>鉴权</span><span class="tag warn">固定令牌（服务方未提供浏览器登录）</span></div>
+<div class="row"><span>访问令牌</span><span class="input" style="min-width:280px">••••••••••••••••</span></div>
+<div class="row"><span>请求头名</span><span class="input" style="min-width:280px">Authorization（默认，可改为 X-API-Key 等）</span></div>
+<p class="note">令牌由桌面端直接交给本机 Agent，不经过对话、不写审批记录。Agent 先用它读工具列表，成功才保存。</p>
+<div class="row"><span></span><span class="tag bad">令牌无效（服务方返回 401），请重新填写</span></div>
+<p style="margin-top:8px"><span class="btn">拒绝</span> <span class="btn pri">允许并保存令牌</span></p>
+</div>
+</div></div>
+<p class="note">要点：令牌输入不回显；无效可当场重填；以后可在「个人能力」里更新或清除。</p>
+</div>
+
+<div class="pane" id="u3">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>设置 · 个人能力 · 添加 MCP <span class="tag">新</span></b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>从配置导入</h4>
+<pre class="input" style="white-space:pre-wrap;margin:0;font-size:11.5px">"cr-test": {
+  "type": "streamableHttp",
+  "url": "https://mcp-test.cycplus.com/mcp/cr-test",
+  "timeout": 30000
+}</pre>
+<p class="note">也可粘贴 <code>{"mcpServers": {…}}</code>、单条无名称的对象或一个链接。多条时列出来让你选一条。</p>
+<p style="margin-top:8px"><span class="btn">解析</span></p>
+</div>
+</div>
+<div>
+<div class="box"><h4>解析结果（可修改）</h4>
+<div class="row"><span>标识</span><span class="input">cr-test</span></div>
+<div class="row"><span>名称</span><span class="input">cr-test</span></div>
+<div class="row"><span>地址</span><span class="input">https://mcp-test.cycplus.com/mcp/cr-test</span></div>
+<div class="row"><span>超时</span><span class="input">30 秒</span></div>
+<div class="row"><span>鉴权（探测结果）</span><span class="tag warn">需要浏览器登录 · mcp-test.cycplus.com</span></div>
+<div class="row"><span>▸ 高级 · 应用编号</span><span class="note">默认自动注册，一般不用填</span></div>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri">登录并添加</span></p>
+</div>
+<p class="note">不支持的会直接说明：<span class="tag bad">sse / stdio / 本地命令：只支持 streamable HTTP 远程服务</span><span class="tag warn">配置里的令牌已忽略，请在下一步填写</span></p>
+</div></div></div></div>
+<p class="note">要点：成员自己添加，不经过对话和模型；来源记为「手动添加」，永远不会被自动安装。</p>
+</div>
+
+<div class="pane" id="u4">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>设置 · 个人能力</b></div>
+<div class="body">
+<div class="box"><h4>已安装的 MCP <span class="btn" style="float:right">添加 MCP</span></h4>
+<div class="row"><span><b>cr-test</b> · 手动添加</span><span><span class="tag ok">已登录 · 令牌 2 小时后到期，会自动续期</span> <span class="btn">重新登录</span> <span class="btn danger">退出登录</span> <span class="btn danger">卸载</span></span></div>
+<div class="row"><span><b>客户 CRM</b> · 手动添加</span><span><span class="tag ok">已填令牌</span> <span class="btn">更新令牌</span> <span class="btn danger">清除令牌</span> <span class="btn danger">卸载</span></span></div>
+<div class="row"><span><b>MES 生产批次查询</b> · 平台 MCP 目录 <span class="tag gray">自动安装</span></span><span><span class="tag gray">无需登录</span> <span class="btn danger">卸载</span></span></div>
+<div class="row"><span><b>工单系统</b> · 平台 MCP 目录</span><span><span class="tag bad">需要重新登录</span> <span class="btn pri">重新登录</span> <span class="btn danger">卸载</span></span></div>
+<p class="note">令牌失效时，专家调用工具会收到「需要重新登录，请到 设置 · 个人能力」并转告你；不会在对话里自动弹浏览器。卸载、退出登录、退出本机账号都会删除对应凭据文件。</p>
+</div>
+</div></div>
+<p class="note">要点：每个 MCP 都能看到鉴权状态，并在这里重新登录或换令牌。</p>
+</div>
+
+<div class="pane" id="u5">
+<div class="win"><div class="bar"><i></i><i></i><i></i><b>运营端 · MCP 目录 · 登记 MCP</b></div>
+<div class="body"><div class="cols">
+<div>
+<div class="box"><h4>从配置导入 <span class="tag">新</span></h4>
+<span class="input" style="display:block">粘贴 JSON 或链接…</span>
+<p class="note">与桌面端同一套解析。配置里带的令牌<b>不会保存到平台</b>，只用来把鉴权方式设为「固定令牌」。</p>
+</div>
+<div class="box" style="margin-top:10px"><h4>读取工具 <span class="tag">新</span></h4>
+<div class="row"><span>测试令牌（可选）</span><span class="input">只用这一次，不保存</span></div>
+<p style="margin-top:6px"><span class="btn">读取工具</span></p>
+<div class="row"><span>结果</span><span class="tag warn">需要浏览器登录，平台无法代登录，工具名可留空</span></div>
+<p class="note">仅 https；拒绝内网 / 本机地址；不跟随跳转；10 秒超时。</p>
+</div>
+</div>
+<div>
+<div class="box"><h4>条目</h4>
+<div class="row"><span>标识 / 名称</span><span class="input">cr-test / Cycplus 活动数据</span></div>
+<div class="row"><span>端点地址</span><span class="input">https://mcp-test.cycplus.com/mcp/cr-test</span></div>
+<div class="row"><span>鉴权方式</span><span><span class="tag gray">无</span><span class="tag ok">浏览器登录</span><span class="tag gray">固定令牌</span></span></div>
+<div class="row"><span>申请的权限范围</span><span class="input">profile.read activity.summary.read</span></div>
+<div class="row"><span>工具名</span><span class="input">（留空：以成员登录后实际为准）</span></div>
+<div class="row"><span>超时</span><span class="input">30 秒</span></div>
+<div class="row"><span>▾ 高级 · 应用编号</span><span></span></div>
+<div class="row"><span>client_id</span><span class="input">（留空 = 自动注册）</span></div>
+<div class="row"><span>client_secret</span><span><span class="tag ok">已设置</span> <span class="btn">替换</span> <span class="btn danger">清除</span></span></div>
+<p style="margin-top:8px"><span class="btn">取消</span> <span class="btn pri">登记</span></p>
+</div>
+</div></div></div></div>
+<p class="note">要点：「需要凭据」开关改为鉴权方式；client_secret 只写不读、加密入库；需要鉴权的条目进入成员可装列表（凭据由成员自己登录获得）。</p>
+</div>
+</section>
+
+<section id="s3">
+<h2>3 数据流</h2>
+<p class="lead">边界：不向用户机器入站（登录回调是成员自己的浏览器访问本机 Agent）；会话内容不上传；成员令牌不出成员电脑、不进模型；Manager 数据经 TenantContext / RLS；平台目录真相只由运营端写。</p>
+
+<h3>3.1 总图：谁在哪一端做什么</h3>
+<div class="card" style="overflow:auto">
+<svg viewBox="0 0 1100 640" width="1100" style="max-width:100%">
+<defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#667085"/></marker></defs>
+<rect x="5" y="10" width="1090" height="120" rx="10" fill="#f1ecff" stroke="#c9b8ff"/><text x="1082" text-anchor="end" y="32" font-size="13" font-weight="700" fill="#7048e8">运营端 Operator（oper 库）</text>
+<rect x="5" y="145" width="1090" height="140" rx="10" fill="#e3f6f9" stroke="#9ed8e2"/><text x="1082" text-anchor="end" y="167" font-size="13" font-weight="700" fill="#0b7285">企业端 Manager（租户数据空间 + RLS）</text>
+<rect x="5" y="300" width="1090" height="190" rx="10" fill="#fff0e6" stroke="#ffc9a3"/><text x="1082" text-anchor="end" y="322" font-size="13" font-weight="700" fill="#e8590c">成员本机 Desktop + Agent（本地库 + 加密凭据文件，会话与令牌不上传）</text>
+<rect x="5" y="505" width="1090" height="120" rx="10" fill="#f2f4f7" stroke="#d0d5dd"/><text x="1082" text-anchor="end" y="527" font-size="13" font-weight="700" fill="#475467">外部 MCP 服务方（例：mcp-test.cycplus.com，含授权服务器）</text>
+
+<g font-size="12" fill="#1d2330">
+<rect x="30" y="50" width="220" height="56" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="40" y="70">① 粘贴导入 / 登记条目</text><text x="40" y="88" fill="#667085">auth、scopes、client_id</text><text x="40" y="101" fill="#667085">secret 加密入库、只写不读</text>
+<rect x="290" y="50" width="220" height="56" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="300" y="70">② 读取工具（probe）</text><text x="300" y="88" fill="#667085">防 SSRF；测试令牌不保存</text>
+<rect x="550" y="50" width="220" height="56" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="560" y="70">③ 发布；服务间拉取</text><text x="560" y="88" fill="#667085">/mcp-market/pull（service token）</text>
+<rect x="810" y="50" width="260" height="56" rx="6" fill="#fff" stroke="#c9b8ff"/><text x="820" y="70">platform_mcp_server</text><text x="820" y="88" fill="#667085">+ auth / oauth_client_* / timeout</text>
+
+<rect x="550" y="190" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="560" y="210">④ 管理员启用</text><text x="560" y="228" fill="#667085">secret 用 Manager 密钥重新加密</text>
+<rect x="290" y="190" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="300" y="210">⑤ /grants/mcp-servers</text><text x="300" y="228" fill="#667085">含需鉴权条目；不含 secret</text>
+<rect x="30" y="190" width="220" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="40" y="210">⑥ …/{id}/oauth-client</text><text x="40" y="228" fill="#667085">仅登录 / 刷新时取，成员级</text>
+<rect x="810" y="190" width="260" height="56" rx="6" fill="#fff" stroke="#9ed8e2"/><text x="820" y="210">mcp_catalog（RLS）</text><text x="820" y="228" fill="#667085">+ auth / oauth_client_* 加密</text>
+
+<rect x="30" y="345" width="220" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="40" y="365">⑦ 安装 / 添加 MCP</text><text x="40" y="383" fill="#667085">对话审批 或「添加 MCP」</text><text x="40" y="396" fill="#667085">先探测：401 → 判定鉴权方式</text>
+<rect x="290" y="345" width="220" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="300" y="365">⑧ 登录 / 填令牌</text><text x="300" y="383" fill="#667085">打开浏览器；回调到</text><text x="300" y="396" fill="#667085">127.0.0.1 本机 Agent</text>
+<rect x="550" y="345" width="220" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="560" y="365">⑨ 换令牌、读工具、安装</text><text x="560" y="383" fill="#667085">调用时带令牌，快过期自动刷新</text>
+<rect x="810" y="345" width="260" height="56" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="820" y="365">mcp-credentials/（0600，加密）</text><text x="820" y="383" fill="#667085">令牌 + 自动注册的编号，绑定地址</text>
+<rect x="290" y="420" width="480" height="48" rx="6" fill="#fff" stroke="#ffc9a3"/><text x="300" y="440">模型 / 专家：只见「已安装 / 需要重新登录 / 工具结果」</text><text x="300" y="456" fill="#667085">看不到令牌、授权码、state、client_secret</text>
+
+<rect x="30" y="550" width="220" height="56" rx="6" fill="#fff" stroke="#d0d5dd"/><text x="40" y="570">401 + WWW-Authenticate</text><text x="40" y="588" fill="#667085">告诉 Agent 去哪登录</text>
+<rect x="290" y="550" width="220" height="56" rx="6" fill="#fff" stroke="#d0d5dd"/><text x="300" y="570">授权页（成员在浏览器登录）</text><text x="300" y="588" fill="#667085">自动注册 "AI Team"</text>
+<rect x="550" y="550" width="220" height="56" rx="6" fill="#fff" stroke="#d0d5dd"/><text x="560" y="570">令牌端点 / MCP 工具</text><text x="560" y="588" fill="#667085">code + PKCE 换令牌</text>
+</g>
+<g stroke="#667085" stroke-width="1.5" fill="none" marker-end="url(#ar)">
+<path d="M250 78 H290"/><path d="M510 78 H550"/>
+<path d="M660 106 V190" stroke-dasharray="4 3"/>
+<path d="M550 218 H510"/>
+<path d="M400 246 V345" stroke-dasharray="4 3"/>
+<path d="M140 246 V345" stroke-dasharray="4 3"/>
+<path d="M140 401 V550" stroke-dasharray="4 3"/>
+<path d="M250 373 H290"/><path d="M510 373 H550"/><path d="M770 373 H810"/>
+<path d="M400 401 V550" stroke-dasharray="4 3"/>
+<path d="M660 401 V550" stroke-dasharray="4 3"/>
+</g>
+<text x="670" y="150" font-size="11" fill="#667085">Manager 主动拉取（服务间）</text>
+<text x="150" y="300" font-size="11" fill="#667085">Agent 主动访问 Manager</text>
+<text x="150" y="530" font-size="11" fill="#667085">Agent 主动连服务方</text>
+</svg>
+<p class="note">实线 = 同端流程；虚线 = 跨端 / 对外调用，方向只有：Operator→服务方（probe）、Manager 拉 Operator、Agent 主动访问 Manager、Agent 主动连服务方。浏览器回调是成员自己的浏览器访问本机 127.0.0.1，不是控制面入站。成员令牌没有任何一条线去往 Manager / Operator。</p>
+</div>
+
+<h3>3.2 主流程（浏览器登录）</h3>
+<div class="flow">
+<div class="s"><b>① 请求安装</b>专家 capability_install，或成员「添加 MCP」</div><div class="a">→</div>
+<div class="s"><b>② 探测</b>401 + 元数据 → 浏览器登录；无元数据 → 固定令牌</div><div class="a">→</div>
+<div class="s"><b>③ 审批</b>「允许并登录」；自动安装授权也不跳过这步</div><div class="a">→</div>
+<div class="s"><b>④ 登录</b>取编号（手填 / 自动注册）→ PKCE + state → 打开浏览器</div><div class="a">→</div>
+<div class="s"><b>⑤ 回调</b>校验 state → 换令牌 → 加密存本机 → 读工具 → 安装完成</div>
+</div>
+
+<h3>3.3 状态与处置矩阵</h3>
+<table>
+<tr><th>鉴权状态</th><th>专家调用工具</th><th>设置「个人能力」</th><th>自动安装（§11.3）</th></tr>
+<tr><td><span class="tag gray">无需登录</span></td><td>直接调用</td><td>只有「卸载」</td><td>按原规则直接装</td></tr>
+<tr><td><span class="tag ok">已登录 / 已填令牌</span></td><td>带令牌调用；快过期自动刷新</td><td>重新登录 / 退出登录；更新 / 清除令牌</td><td>本机已有该地址有效凭据 → 直接装</td></tr>
+<tr><td><span class="tag warn">登录中</span></td><td>—（安装还没完成）</td><td>显示「等待浏览器登录」</td><td>—</td></tr>
+<tr><td><span class="tag bad">需要重新登录</span></td><td>返回「需要重新登录，请到 设置 · 个人能力」，不自动弹浏览器</td><td>「重新登录」高亮</td><td>仍弹窗，只问登录</td></tr>
+<tr><td><span class="tag bad">登录失败 / 超时</span></td><td>安装失败，模型收到「用户未完成登录，可稍后重试」</td><td>不产生安装记录</td><td>—</td></tr>
+</table>
+</section>
+
+<section id="s4">
+<h2>4 前端要做什么</h2>
+<p class="lead">已核对：<code>web/operation/src/features/mcp-market</code>、<code>web/manager/src/features/mcp-market</code>、<code>clients/desktop/src/components/Approvals/ApprovalDialog.tsx</code>、<code>clients/desktop/src/pages/Settings/PersonalCapabilities.tsx</code>。以下在其上扩展。</p>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">web/shared</span></td><td><b>新</b>：MCP 配置解析（4 种输入、拒绝 sse / stdio / 命令、识别令牌请求头并丢弃值、标识合规建议），运营端与桌面端共用同一份规则与测试用例</td><td>P1</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag op">web/operation</span></td><td>登记窗口：从配置导入、读取工具、鉴权方式三选一、权限范围、超时、「高级 · 应用编号」（secret 只写，显示已设置 / 替换 / 清除）；工具名在浏览器登录时可留空</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">web/manager</span></td><td>MCP 市场卡片显示鉴权方式；去掉「需要凭据（成员不可自装）」提示</td><td>P2</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag ag">clients/desktop</span></td><td>审批弹窗：浏览器登录态（打开 / 复制链接、等待、取消）、固定令牌输入；<b>新</b>「添加 MCP」窗口；「个人能力」鉴权状态与重新登录 / 退出登录 / 更新令牌</td><td>P1</td><td class="sz L">L</td></tr>
+<tr><td>全部</td><td>中文文案、按角色显隐、Dialog 用 Layout fill；小窗口长内容 + 真实点击验证；截图</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+</section>
+
+<section id="s5">
+<h2>5 后端要做什么</h2>
+<table>
+<tr><th style="width:15%">位置</th><th>要做什么</th><th style="width:9%">阶段</th><th style="width:7%">量级</th></tr>
+<tr><td><span class="tag">server/shared</span></td><td><b>契约变更</b>：<code>PlatformMcpServer</code> 的 <code>requires_credentials</code> → <code>auth</code> / <code>auth_header</code> / <code>oauth_scopes</code> / <code>timeout_ms</code> / <code>oauth_client_id</code>；<code>InstallableMcpServer</code> 同步；新增 probe 结果契约</td><td>P2</td><td class="sz S">S</td></tr>
+<tr><td><span class="tag op">operation_service</span></td><td>迁移 0025（旧 <code>requires_credentials=true</code> → <code>bearer</code>）；client_secret 用 <code>shared/crypto</code> 加密、接口只写不读；<b>新</b> <code>POST /mcp-market/probe</code>（SSRF 防护）；服务间拉取带 secret</td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag mg">manager_service</span></td><td>迁移 0056；启用时 secret 用 Manager 密钥重新加密；<code>/grants/mcp-servers</code> 不再排除需鉴权条目；<b>新</b> <code>/grants/mcp-servers/{id}/oauth-client</code></td><td>P2</td><td class="sz M">M</td></tr>
+<tr><td><span class="tag ag">agent_service（Node）</span></td><td><b>新</b>加密凭据存储（AES-256-GCM，密钥文件 0600，绑定地址）；探测判定；SDK OAuthClientProvider（自动注册 "AI Team" / 手填编号、PKCE、刷新）；回调路由；bearer 安装；调用带凭据 + 每 MCP 超时；重新登录 / 清除 / 添加 MCP 接口；<code>local_capability</code> 加列</td><td>P0</td><td class="sz L">L</td></tr>
+<tr><td>全部</td><td>统一 <code>application/problem+json</code>；OpenAPI 与门禁；令牌不出现在模型可见内容 / 日志的断言；跨租户隔离测试</td><td>随各期</td><td class="sz M">M</td></tr>
+</table>
+<div class="callout"><b>注意：</b>回调路由是 Agent 唯一新增的免登录路由，必须只认本 Agent 发起过的一次性 state、只接受 127.0.0.1；SDK 的 OAuth 发现请求不能把 MCP 的令牌发到别的域。</div>
+</section>
+
+<section id="s6">
+<h2>6 契约与数据变更</h2>
+<table>
+<tr><th style="width:24%">变更</th><th>内容</th><th style="width:16%">影响面</th><th style="width:8%">风险</th></tr>
+<tr><td><code>platform_mcp_server</code>（迁移 0025）</td><td><code>requires_credentials</code> → <code>auth</code> 等字段；<code>oauth_client_secret</code> 加密列</td><td>Operator → Manager</td><td class="sz L">高</td></tr>
+<tr><td><code>POST /api/operation/mcp-market/probe</code> 新</td><td>读取 MCP 工具与鉴权方式</td><td>运营端页面</td><td class="sz M">中</td></tr>
+<tr><td><code>mcp_catalog</code>（迁移 0056）</td><td>同步新字段，secret 加密</td><td>Manager</td><td class="sz M">中</td></tr>
+<tr><td><code>GET /api/manager/grants/mcp-servers</code></td><td>不再排除需鉴权条目，返回 <code>auth</code>、<code>oauth_client</code>（preregistered / dynamic）</td><td>Agent</td><td class="sz L">高</td></tr>
+<tr><td><code>GET /api/manager/grants/mcp-servers/{id}/oauth-client</code> 新</td><td>成员级，返回 client_id + secret，仅已启用条目</td><td>Agent</td><td class="sz L">高</td></tr>
+<tr><td><code>capability_install</code> 工具参数</td><td>加 <code>timeout_ms</code>；安装摘要加 <code>auth</code>、<code>auth_host</code>；无任何凭据字段</td><td>模型、审批弹窗</td><td class="sz M">中</td></tr>
+<tr><td>审批决定</td><td>加 <code>credential?: {token, header?}</code>，仅 bearer，仅桌面端 → 本机 Agent，不入审批记录</td><td>桌面端</td><td class="sz L">高</td></tr>
+<tr><td>Agent 新路由</td><td><code>GET /mcp-auth/callback</code>（免登录）、<code>GET /approvals/{id}/auth</code>、<code>POST /capabilities/mcp</code>、<code>POST …/mcp/{ref}/auth</code>、<code>PUT …/token</code>、<code>DELETE …/credential</code>；<code>GET /capabilities</code> 每项加 <code>auth_status</code>、<code>auth_expires_at</code></td><td>桌面端、浏览器</td><td class="sz L">高</td></tr>
+<tr><td><code>local_capability</code> 本机表</td><td>加 <code>auth</code>、<code>auth_header</code>、<code>timeout_ms</code>；凭据不进库，进加密文件</td><td>Agent 本机</td><td class="sz M">中</td></tr>
+</table>
+<div class="callout red"><b>高风险：</b>以上属跨端契约与北向 API 变更（AGENTS.md §8），用户已整体授权「全都要做」。发布顺序：Operator（新字段向后兼容）→ Manager → Agent / 桌面端。旧 Agent 遇到需鉴权条目照旧安装失败，不比现在更差。</div>
+</section>
+
+<section id="s7">
+<h2>7 阶段与依赖</h2>
+<table>
+<tr><th style="width:14%">阶段</th><th>内容</th><th style="width:16%">依赖</th><th style="width:30%">验收</th></tr>
+<tr><td>P0 Agent 鉴权核心</td><td>加密凭据存储、探测判定、OAuth（自动注册 / 手填编号、PKCE、刷新）与 bearer 的安装和调用、回调路由、重新登录 / 清除 / 添加 MCP 接口</td><td>—</td><td>本地假 OAuth MCP 全流程测试通过（含 state 错误、超时、刷新失败、地址绑定）；断言令牌 / code / state 不出现在模型可见内容和日志；对 cr-test 能拿到授权链接</td></tr>
+<tr><td>P1 桌面端</td><td>审批弹窗登录 / 填令牌；「添加 MCP」窗口（含粘贴导入、高级应用编号）；「个人能力」鉴权状态；共用配置解析</td><td>P0</td><td>1440×640 长内容截图 + 真实点击命中；粘贴用户给的 cr-test JSON 能正确填好并进入登录</td></tr>
+<tr><td>P2 运营端 + 企业端</td><td><code>auth</code> 字段与迁移、client_secret 加密只写、导入、probe；Manager 同步字段、放开成员列表、oauth-client 接口；两个页面</td><td>可与 P0 并行</td><td>probe cr-test 返回「需要浏览器登录」；SSRF 负例被拒；secret 在接口与页面不可读回；跨租户取 oauth-client 返回 404</td></tr>
+<tr><td>P3 回归与真机</td><td>全量测试 + OpenAPI 门禁；真机用 cr-test 走一遍浏览器登录并调用一个工具</td><td>P0–P2</td><td>全量通过；真机登录成功、工具返回结果、重启后无需再登录（需要一个 cycplus 测试账号）</td></tr>
+</table>
+<p class="note">P0 与 P2 可并行；P1 依赖 P0 的接口；P3 依赖全部。</p>
+</section>
+
+<section id="s8">
+<h2>8 还需要决策的方面</h2>
+<h3>已决定（用户确认 2026-11-18，仅备查）</h3>
+<p>
+<span class="tag ok">服务方发起鉴权，成员本人去服务方登录</span>
+<span class="tag ok">浏览器登录与固定令牌都要支持</span>
+<span class="tag ok">令牌存成员本机文件，不进模型</span>
+<span class="tag ok">不做企业统一令牌</span>
+<span class="tag ok">做桌面端「添加 MCP」</span>
+<span class="tag ok">密钥放 Agent 数据目录文件，不进系统钥匙串</span>
+<span class="tag ok">需登录的目录条目工具名可留空</span>
+<span class="tag ok">默认自动注册 "AI Team"，高级可填应用编号</span>
+<span class="tag ok">平台目录 client_secret 加密保存</span>
+<span class="tag ok">基于 feat/platform-capability-autoinstall 新开本地分支</span>
+</p>
+
+<h3>待决策</h3>
+<table>
+<tr><th style="width:4%">#</th><th style="width:26%">事项</th><th>建议</th><th style="width:14%">卡住谁</th></tr>
+<tr><td>1</td><td>真机验收用的 cycplus 测试账号</td><td>请提供一个能登录 mcp-test.cycplus.com 的测试账号（或由你亲自在浏览器登录一次）；没有的话 P3 只能用本地假服务验证</td><td><span class="tag warn">P3</span></td></tr>
+</table>
+<div class="callout green"><b>建议你先确认：</b>本页整体方向（尤其第 2 节界面和第 6 节契约）。确认后按 P0 → P1 / P2 → P3 开工。</div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs-ui button').forEach(function(b){
+  b.addEventListener('click',function(){
+    document.querySelectorAll('#tabs-ui button').forEach(function(x){x.classList.remove('on')});
+    document.querySelectorAll('#s2 .pane').forEach(function(x){x.classList.remove('on')});
+    b.classList.add('on');
+    document.querySelector('#' + CSS.escape(b.dataset.p)).classList.add('on');
+  });
+});
+</script>
+</body>
+</html>

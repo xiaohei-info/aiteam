@@ -38,6 +38,7 @@ OPERATOR_BOUND_ROUTE_MODULES = {
     "manager_service.routes_recruit",
     "manager_service.routes_employee",
     "manager_service.routes_skill_market",
+    "manager_service.routes_mcp_market",
 }
 
 

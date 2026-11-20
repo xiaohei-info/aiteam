@@ -28,12 +28,11 @@ const Chat = lazy(() => import('./pages/Chat'))
 const GroupChat = lazy(() => import('./pages/GroupChat'))
 const AgentConfig = lazy(() => import('./pages/AgentConfig'))
 const TalentMarket = lazy(() => import('./pages/TalentMarket'))
-const SkillCenter = lazy(() => import('./pages/SkillCenter'))
+const Capabilities = lazy(() => import('./pages/Capabilities'))
 const OrgChart = lazy(() => import('./pages/OrgChart'))
 const Workbench = lazy(() => import('./pages/Workbench'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const KnowledgeBaseDetail = lazy(() => import('./pages/KnowledgeBase/Detail'))
-const McpConfig = lazy(() => import('./pages/McpConfig'))
 const OfficeStatus = lazy(() => import('./pages/OfficeStatus'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Profile = lazy(() => import('./pages/Profile'))
@@ -170,13 +169,12 @@ function AuthenticatedContent() {
           <Route path="/auto-tasks" element={<Tasks />} />
           <Route path="/agents" element={<AgentConfig />} />
           <Route path="/talents" element={<TalentMarket />} />
-          <Route path="/skills" element={<SkillCenter />} />
+          <Route path="/capabilities" element={<Capabilities />} />
           <Route path="/knowledge" element={<KnowledgeBase />} />
           <Route path="/knowledge/local-documents" element={<KnowledgeBase />} />
           <Route path="/knowledge/:id" element={<KnowledgeBaseDetail />} />
           <Route path="/workbench" element={<Workbench />} />
           <Route path="/org" element={<OrgChart />} />
-          <Route path="/mcp" element={<McpConfig />} />
           <Route path="/office" element={<OfficeStatus />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

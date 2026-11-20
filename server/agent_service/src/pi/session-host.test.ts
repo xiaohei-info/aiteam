@@ -587,6 +587,74 @@ test("SessionHost registers todo_update only for an explicitly authorized parent
   }
 });
 
+test("a member's own MCP is offered even when the expert snapshot has an explicit tool allowlist", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    // 个人 MCP 属于成员的 Agent 能力，不受专家工具清单限制（设计 2026-11-17 §10）；另一位成员装的不出现。
+    fixture.store.putLocalCapability("tenant-1", "member-1", { kind: "mcp", ref: "sketch-local", display_name: "sketch-local", url: "http://localhost:31126/mcp", tools: ["get_document_info"], source: "user_url", reason: "", approved_by: "member-1" });
+    fixture.store.putLocalCapability("tenant-1", "member-2", { kind: "mcp", ref: "other", display_name: "other", url: "http://localhost:31127/mcp", tools: ["x"], source: "user_url", reason: "", approved_by: "member-2" });
+    const host = fixture.createHost();
+    let offered: string[] = [];
+    fixture.faux.setResponses([(context) => { offered = (context.tools ?? []).map((tool) => tool.name); return fauxAssistantMessage("done"); }]);
+    await host.prompt("conversation-1", "draw", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.ok(offered.includes("connector_my_sketch-local"), offered.join(","));
+    assert.ok(!offered.includes("connector_my_other"));
+    assert.ok(!offered.includes("bash"), "the allowlist still governs enterprise-configured tools");
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("skills reach an expert without `read` through a read that opens only skill files", async () => {
+  const fixture = await createFixture();
+  try {
+    fixture.store.replaceProjections([
+      { employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", handle: "helper", display_name: "Helper", revoked: false, synced_at: new Date().toISOString() },
+    ], [], [{ employee_id: "employee-1", tenant_id: "tenant-1", member_id: "member-1", version: "1", snapshot_version: "snapshot-1", display_name: "Helper", tool_policy: { allowed_tools: ["todo_update"] } }]);
+    fixture.store.updateConversation("conversation-1", { entryEmployeeId: "employee-1" });
+    // 技能属于成员的 Agent 能力，不受专家工具清单限制（设计 2026-11-17 §10）：Pi 只在有 read 时列出技能。
+    const skillDir = join(fixture.root, "personal-skills", "sheet");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: sheet\ndescription: read spreadsheets\n---\nSKILL BODY");
+    const secret = join(fixture.root, "secret.txt");
+    writeFileSync(secret, "TOP SECRET");
+    const host = fixture.createHost(undefined, undefined, () => {
+      const loader = createControlledResourceLoader("test system prompt");
+      const skill = { name: "sheet", description: "read spreadsheets", filePath: join(skillDir, "SKILL.md"), baseDir: skillDir, sourceInfo: {} as never, disableModelInvocation: false };
+      Object.defineProperty(loader, "getSkills", { value: () => ({ skills: [skill], diagnostics: [] }) });
+      return loader;
+    });
+    let offered: string[] = [];
+    let prompt = "";
+    fixture.faux.setResponses([
+      (context) => {
+        offered = (context.tools ?? []).map((tool) => tool.name);
+        prompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage(fauxToolCall("read", { path: join(skillDir, "SKILL.md") }), { stopReason: "toolUse" });
+      },
+      fauxAssistantMessage(fauxToolCall("read", { path: secret }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("done"),
+    ]);
+    await host.prompt("conversation-1", "read the sheet", undefined, { callerId: "member-1", userId: "member-1", tenantId: "tenant-1" });
+    assert.ok(offered.includes("read"), offered.join(","));
+    assert.ok(!offered.includes("bash") && !offered.includes("write"), "no other coding tool is granted");
+    assert.match(prompt, /<available_skills>[\s\S]*sheet/);
+    const results = (await host.entries("conversation-1")).flatMap((entry) => entry.type === "message" && entry.message.role === "toolResult"
+      ? [entry.message.content.map((part) => part.type === "text" ? part.text : "").join("")] : []);
+    assert.match(results[0] ?? "", /SKILL BODY/);
+    assert.doesNotMatch(results.join("\n"), /TOP SECRET/);
+    assert.match(results[1] ?? "", /only opens files of the installed skills/);
+    await host.dispose();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("SessionHost reminds the model about a stale checklist without storing or showing the reminder", async () => {
   const fixture = await createFixture();
   try {
@@ -1577,22 +1645,16 @@ async function expiringApprovalFixture() {
   return { fixture, host, bash, caller };
 }
 
-test("a scheduled run whose tool approval expires is aborted and recorded as a failure", async () => {
+test("a scheduled run skips an unapproved tool call and keeps going (design 2026-11-19 §3.1)", async () => {
   const { fixture, host, bash, caller } = await expiringApprovalFixture();
   try {
-    // The model would retry and then invent an answer; only the first call may be reached.
-    fixture.faux.setResponses([bash("bash-1"), bash("bash-2"), fauxAssistantMessage("here are example figures")]);
-    await assert.rejects(
-      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
-      (error: unknown) => error instanceof ApprovalExpiredError && /定时任务调用 bash 需要审批/.test(error.message),
-    );
+    // 无人值守：未授权动作不弹框、跳过并记录，不中止整次运行。
+    fixture.faux.setResponses([bash("bash-1"), fauxAssistantMessage("没有拿到数据，已跳过该动作")]);
+    await host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true });
     const approvals = fixture.store.listOwnedApprovalRecords("conversation-1", "tenant-1", "member-1", true);
-    assert.equal(approvals.length, 1, "no retry after the expiry");
-    const failures = fixture.store.conversationFailures.list("conversation-1");
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0]!.error_code, "approval_expired");
-    assert.match(failures[0]!.error_message, /定时任务/);
-    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    assert.equal(approvals.length, 0, "无人值守不为未授权动作建待审批");
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1"), []);
+    assert.match(JSON.stringify(await host.entries("conversation-1")), /没有拿到数据/);
     await host.dispose();
   } finally {
     await fixture.close();
@@ -1612,19 +1674,15 @@ test("an interactive run keeps handing an expired approval back to the model", a
   }
 });
 
-test("several tool calls expiring in one scheduled turn record a single failure", async () => {
+test("several unapproved tool calls in one scheduled turn are all skipped, not aborted", async () => {
   const { fixture, host, caller } = await expiringApprovalFixture();
   try {
     const twoCalls = fauxAssistantMessage([fauxToolCall("bash", { command: "echo a" }, { id: "bash-a" }), fauxToolCall("bash", { command: "echo b" }, { id: "bash-b" })], { stopReason: "toolUse" });
-    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("here are example figures")]);
-    await assert.rejects(
-      host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true }),
-      (error: unknown) => error instanceof ApprovalExpiredError,
-    );
-    const failures = fixture.store.conversationFailures.list("conversation-1");
-    assert.equal(failures.length, 1);
-    assert.equal(failures[0]!.error_code, "approval_expired");
-    assert.doesNotMatch(JSON.stringify(await host.entries("conversation-1")), /example figures/);
+    fixture.faux.setResponses([twoCalls, fauxAssistantMessage("两步都没能执行")]);
+    await host.prompt("conversation-1", "fetch the data", undefined, caller, undefined, { background: true });
+    assert.deepEqual(fixture.store.conversationFailures.list("conversation-1"), []);
+    assert.equal(fixture.store.listOwnedApprovalRecords("conversation-1", "tenant-1", "member-1", true).length, 0);
+    assert.match(JSON.stringify(await host.entries("conversation-1")), /两步都没能执行/);
     await host.dispose();
   } finally {
     await fixture.close();
@@ -1768,4 +1826,3 @@ test("prompt_settled reports a run aborted during a tool call as aborted", async
     await fixture.close();
   }
 });
-

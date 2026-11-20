@@ -81,7 +81,7 @@ def required_service_scope(path: str) -> str | None:
             return scope
     if path.startswith("/api/operation/catalog/pull/") or path == "/api/operation/catalog/platform-providers":
         return "catalog:read"
-    if path.startswith("/api/operation/skill-market/pull/"):
+    if path.startswith("/api/operation/skill-market/pull/") or path.startswith("/api/operation/mcp-market/pull/"):
         return "catalog:read"
     if path.startswith("/api/operation/enterprise-policy"):
         return "enterprise-policy:read"

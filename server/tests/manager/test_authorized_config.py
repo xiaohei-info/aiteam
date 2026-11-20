@@ -492,6 +492,8 @@ def test_members_can_only_self_install_tenant_visible_enabled_executable_skills(
     ]
     items = _installer(rows).installable_skills(_ctx("t-a", user_id="m-1"))
     assert [(item.skill_id, item.source_skill_id) for item in items] == [("sheet", "plat-sheet"), ("public", "")]
+    # Only skills installed from the platform skill market are platform-origin (auto-install eligible, §11.3).
+    assert [item.origin for item in items] == ["platform", "enterprise"]
     assert all(item.content_hash for item in items)
 
 

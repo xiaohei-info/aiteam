@@ -61,6 +61,12 @@ export const approvals = (client: AgentApiClient) => ({
     expectedRevision?: number,
     signal?: AbortSignal,
     resolution?: CapabilityResolution,
+    /** 批准并记住：以后从平台目录安装同种能力时直接安装（只对平台目录来源的 capability_install 有效）。 */
+    remember?: boolean,
+    /** 批准安装需要访问令牌的 MCP 时填写的令牌；只交给本机 Agent，不写入审批记录。 */
+    credential?: { token: string; header?: string },
+    /** 批准并记住：本会话内该外部工具（MCP 连接器等）不再询问（只对 risk_level=external 有效）。 */
+    sessionAllow?: boolean,
   ) =>
     client.request<{ data: ApprovalRecord }>({
       method: 'POST',
@@ -69,6 +75,9 @@ export const approvals = (client: AgentApiClient) => ({
         decision,
         ...(expectedRevision === undefined ? {} : { expected_revision: expectedRevision }),
         ...(resolution ? { capability_resolution: resolution } : {}),
+        ...(remember ? { remember: true } : {}),
+        ...(credential ? { credential } : {}),
+        ...(sessionAllow ? { session_allow: true } : {}),
       },
       idempotencyKey,
       raw: true,

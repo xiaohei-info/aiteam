@@ -289,6 +289,8 @@ export interface LoadedSolutionProjection {
 }
 
 export type LocalCapabilityKind = "mcp" | "skill";
+export type LocalCapabilityAuth = "none" | "oauth" | "bearer";
+export const DEFAULT_MCP_TIMEOUT_MS = 30_000;
 
 export interface LocalCapability {
   kind: LocalCapabilityKind;
@@ -298,8 +300,12 @@ export interface LocalCapability {
   url: string;
   /** MCP tool names; empty for a skill. */
   tools: string[];
-  /** user_url: MCP the user pointed at; enterprise_catalog: skill from the enterprise skill catalog. */
-  source: "user_url" | "enterprise_catalog";
+  /**
+   * user_url: MCP the user pointed at; enterprise_catalog: skill the enterprise built itself;
+   * platform_catalog: MCP / skill from our platform catalog (enabled or installed by the enterprise);
+   * user_import: skill the member imported themselves (folder / zip / pasted / https URL, never uploaded).
+   */
+  source: "user_url" | "enterprise_catalog" | "platform_catalog" | "user_import" | "clawhub_catalog";
   /** Installed skill version; empty for an MCP. */
   version: string;
   /** Platform skill id an enterprise-catalog skill was installed from (matches solution recommendations); empty otherwise. */
@@ -307,6 +313,14 @@ export interface LocalCapability {
   reason: string;
   approved_by: string;
   created_at: string;
+  /** MCP only: how the server authenticates this member (credentials live in the encrypted local credential file, never here). */
+  auth: LocalCapabilityAuth;
+  /** bearer: request header carrying the token ("" = Authorization: Bearer). */
+  auth_header: string;
+  /** oauth: scopes requested at sign-in ("" = the server's challenge decides). */
+  oauth_scope: string;
+  /** Per tool call; 1 000–300 000 ms. */
+  timeout_ms: number;
 }
 
 export interface FrozenSnapshot {
@@ -645,6 +659,31 @@ export class AgentSqliteStore {
       );
       CREATE INDEX IF NOT EXISTS local_file_conversation_idx ON local_file(conversation_id, created_at, id);
 
+      -- 成员授权「以后从平台目录安装同种能力时直接安装」（设计 §11.3）。按种类（mcp / skill）各一条，成员可在设置里撤销。
+      CREATE TABLE IF NOT EXISTS capability_autoinstall (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind)
+      );
+
+      -- 成员在审批弹窗里勾选的「本会话不再询问」。只在本机、只对当前会话生效；
+      -- 外部工具（MCP 连接器等）subject 为空；技能安装为带来源的 'skill:platform_catalog' /
+      -- 'skill:enterprise_catalog' / 'skill:external'（MCP 安装不做）。会话删除时一并清掉。
+      CREATE TABLE IF NOT EXISTS approval_session_grant (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        subject TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, conversation_id, tool_name, subject)
+      );
+
+      -- 本分支早期版本建过的能力授权表；平台密钥改为按需下发，不再需要（设计 2026-11-19 §3.4）。
+      DROP TABLE IF EXISTS capability_grant;
+
       -- 用户本机授权的个人能力（用户在对话中同意后安装）。只在本机、只用于该成员自己的会话，不上传、不改 Manager 配置。
       CREATE TABLE IF NOT EXISTS local_capability (
         tenant_id TEXT NOT NULL,
@@ -654,7 +693,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -737,6 +776,17 @@ export class AgentSqliteStore {
       try { this.db.exec(statement); } catch { /* already migrated */ }
     }
     this.migrateLocalCapabilityKinds();
+    this.migrateLocalCapabilitySources();
+    this.migrateLocalCapabilityUserImport();
+    // After the rebuilds above, which recreate local_capability without later columns.
+    for (const statement of [
+      "ALTER TABLE local_capability ADD COLUMN auth TEXT NOT NULL DEFAULT 'none'",
+      "ALTER TABLE local_capability ADD COLUMN auth_header TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE local_capability ADD COLUMN oauth_scope TEXT NOT NULL DEFAULT ''",
+      `ALTER TABLE local_capability ADD COLUMN timeout_ms INTEGER NOT NULL DEFAULT ${DEFAULT_MCP_TIMEOUT_MS}`,
+    ]) {
+      try { this.db.exec(statement); } catch { /* already migrated */ }
+    }
     // Retry markers written by an older Agent build did not bind a schedule
     // identity. They cannot be safely replayed after a schedule replacement.
     this.db.prepare("DELETE FROM schedule_retry WHERE schedule_id = '' OR schedule_generation = 0").run();
@@ -954,6 +1004,7 @@ export class AgentSqliteStore {
       this.db.prepare("DELETE FROM schedule_retry WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM idempotency_receipt WHERE conversation_id = ?").run(id);
       this.db.prepare("DELETE FROM approval_record WHERE conversation_id = ?").run(id);
+      this.db.prepare("DELETE FROM approval_session_grant WHERE conversation_id = ?").run(id);
       this.db.exec("COMMIT");
       return true;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -1558,14 +1609,50 @@ export class AgentSqliteStore {
   }
 
   listLocalCapabilities(tenantId: string, memberId: string): LocalCapability[] {
-    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
+    return (this.db.prepare("SELECT kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at, auth, auth_header, oauth_scope, timeout_ms FROM local_capability WHERE tenant_id = ? AND member_id = ? ORDER BY created_at, ref").all(tenantId, memberId) as (Omit<LocalCapability, "tools"> & { tools_json: string })[])
       .map(({ tools_json, ...row }) => ({ ...row, tools: JSON.parse(tools_json) as string[] }));
   }
 
   /** Inserts or replaces one personal capability of this owner; never touches another member's rows. */
-  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version" | "source_ref"> & { version?: string; source_ref?: string }, now = new Date().toISOString()): void {
-    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now);
+  putLocalCapability(tenantId: string, memberId: string, item: Omit<LocalCapability, "created_at" | "version" | "source_ref" | "auth" | "auth_header" | "oauth_scope" | "timeout_ms"> & Partial<Pick<LocalCapability, "version" | "source_ref" | "auth" | "auth_header" | "oauth_scope" | "timeout_ms">>, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR REPLACE INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at, auth, auth_header, oauth_scope, timeout_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(tenantId, memberId, item.kind, item.ref, item.display_name, item.url, JSON.stringify(item.tools), item.source, item.version ?? "", item.source_ref ?? "", item.reason, item.approved_by, now,
+        item.auth ?? "none", item.auth_header ?? "", item.oauth_scope ?? "", item.timeout_ms ?? DEFAULT_MCP_TIMEOUT_MS);
+  }
+
+  /** Kinds this member lets the platform catalog install without asking (design §11.3). */
+  listCapabilityAutoInstall(tenantId: string, memberId: string): { kind: LocalCapabilityKind; created_at: string }[] {
+    return this.db.prepare("SELECT kind, created_at FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? ORDER BY kind").all(tenantId, memberId) as { kind: LocalCapabilityKind; created_at: string }[];
+  }
+
+  hasCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind): boolean {
+    return this.db.prepare("SELECT 1 FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? AND kind = ?").get(tenantId, memberId, kind) !== undefined;
+  }
+
+  putCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind, now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR IGNORE INTO capability_autoinstall (tenant_id, member_id, kind, created_at) VALUES (?, ?, ?, ?)").run(tenantId, memberId, kind, now);
+  }
+
+  deleteCapabilityAutoInstall(tenantId: string, memberId: string, kind: LocalCapabilityKind): boolean {
+    return this.db.prepare("DELETE FROM capability_autoinstall WHERE tenant_id = ? AND member_id = ? AND kind = ?").run(tenantId, memberId, kind).changes > 0;
+  }
+
+  /** 本会话已授权免问的工具（审批弹窗的「本会话不再询问」）；subject 见 approval_session_grant。 */
+  listApprovalSessionGrants(tenantId: string, memberId: string, conversationId: string): { tool_name: string; subject: string }[] {
+    return this.db.prepare("SELECT tool_name, subject FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? ORDER BY created_at, tool_name").all(tenantId, memberId, conversationId) as { tool_name: string; subject: string }[];
+  }
+
+  hasApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, subject = ""): boolean {
+    // 旧客户端写的是 `skill`；升级期间旧键仍要能免问，否则会行为回退成每次都弹。
+    const subjects = subject === "skill" ? ["skill", "skill:platform_catalog"] : [subject];
+    const placeholders = subjects.map(() => "?").join(", ");
+    return this.db.prepare(
+      `SELECT 1 FROM approval_session_grant WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND tool_name = ? AND subject IN (${placeholders})`,
+    ).get(tenantId, memberId, conversationId, toolName, ...subjects) !== undefined;
+  }
+
+  putApprovalSessionGrant(tenantId: string, memberId: string, conversationId: string, toolName: string, subject = "", now = new Date().toISOString()): void {
+    this.db.prepare("INSERT OR IGNORE INTO approval_session_grant (tenant_id, member_id, conversation_id, tool_name, subject, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(tenantId, memberId, conversationId, toolName, subject, now);
   }
 
   deleteLocalCapability(tenantId: string, memberId: string, kind: LocalCapabilityKind, ref: string): boolean {
@@ -1821,6 +1908,30 @@ export class AgentSqliteStore {
 
   findApprovalForTool(input: { tenantId: string; memberId: string; conversationId: string; sessionId: string; participantEmployeeId?: string; toolCallId: string; canonicalArgsHmac: string; snapshotVersion: string }): ApprovalRecord | undefined {
     const row = this.db.prepare("SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json FROM approval_record WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND session_id = ? AND participant_employee_id IS ? AND tool_call_id = ? AND canonical_args_hmac = ? AND snapshot_version = ? ORDER BY created_at DESC LIMIT 1").get(input.tenantId, input.memberId, input.conversationId, input.sessionId, input.participantEmployeeId ?? null, input.toolCallId, input.canonicalArgsHmac, input.snapshotVersion) as unknown as ApprovalRecordRow | undefined;
+    return row ? this.toApprovalRecord(row) : undefined;
+  }
+
+  /**
+   * 同会话同工具最近一条已批准记录（节流用）：冷却窗口内复用，不重弹。
+   * 只认已批准且未过期的；被拒绝不算放行。
+   */
+  lastApprovedForTool(tenantId: string, memberId: string, conversationId: string, toolName: string, notBeforeIso: string): ApprovalRecord | undefined {
+    const row = this.db.prepare(
+      `SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json
+       FROM approval_record WHERE tenant_id = ? AND member_id = ? AND conversation_id = ? AND tool_name = ?
+       AND status IN ('approved', 'executing', 'succeeded', 'uncertain') AND approved_at IS NOT NULL AND approved_at >= ?
+       ORDER BY approved_at DESC LIMIT 1`,
+    ).get(tenantId, memberId, conversationId, toolName, notBeforeIso) as unknown as ApprovalRecordRow | undefined;
+    return row ? this.toApprovalRecord(row) : undefined;
+  }
+
+  /** 同批次是否已有批准（一次审批覆盖整批，设计 2026-11-19 §3.1）。 */
+  batchApproved(batchId: string, notBeforeIso: string): ApprovalRecord | undefined {
+    const row = this.db.prepare(
+      `SELECT id, approval_batch_id, tenant_id, member_id, conversation_id, participant_employee_id, session_id, snapshot_version, permission_revision, tool_call_id, tool_call_entry_id, prompt_receipt_ref, tool_name, canonical_args_hmac, redacted_summary, risk_level, status, approved_by, approved_at, expires_at, decision_revision, consumed, idempotency_key, created_at, updated_at, resolution_json
+       FROM approval_record WHERE approval_batch_id = ? AND status IN ('approved', 'executing', 'succeeded', 'uncertain')
+       AND approved_at IS NOT NULL AND approved_at >= ? ORDER BY approved_at DESC LIMIT 1`,
+    ).get(batchId, notBeforeIso) as unknown as ApprovalRecordRow | undefined;
     return row ? this.toApprovalRecord(row) : undefined;
   }
 
@@ -2157,7 +2268,7 @@ export class AgentSqliteStore {
         display_name TEXT NOT NULL,
         url TEXT NOT NULL,
         tools_json TEXT NOT NULL,
-        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog')),
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
         version TEXT NOT NULL DEFAULT '',
         source_ref TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
@@ -2168,6 +2279,62 @@ export class AgentSqliteStore {
       INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at)
         SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, reason, approved_by, created_at FROM local_capability_v1;
       DROP TABLE local_capability_v1;
+      COMMIT;`);
+  }
+
+  /** Builds before the platform catalog (§11.3) only allowed two sources; SQLite cannot widen a CHECK, so rebuild once. */
+  private migrateLocalCapabilitySources(): void {
+    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_capability'").get() as { sql?: string } | undefined;
+    if (!row?.sql || row.sql.includes("'platform_catalog'")) return;
+    this.db.exec(`BEGIN IMMEDIATE;
+      ALTER TABLE local_capability RENAME TO local_capability_v2;
+      CREATE TABLE local_capability (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        ref TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        tools_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
+        version TEXT NOT NULL DEFAULT '',
+        source_ref TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind, ref)
+      );
+      INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at)
+        SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability_v2;
+      DROP TABLE local_capability_v2;
+      COMMIT;`);
+  }
+
+  /** 早期只有三个/四个 source 取值；SQLite 不能扩宽 CHECK，所以表重建一次。 */
+  private migrateLocalCapabilityUserImport(): void {
+    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'local_capability'").get() as { sql?: string } | undefined;
+    if (!row?.sql || row.sql.includes("'clawhub_catalog'")) return;
+    this.db.exec(`BEGIN IMMEDIATE;
+      ALTER TABLE local_capability RENAME TO local_capability_v3;
+      CREATE TABLE local_capability (
+        tenant_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('mcp', 'skill')),
+        ref TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        tools_json TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user_url', 'enterprise_catalog', 'platform_catalog', 'user_import', 'clawhub_catalog')),
+        version TEXT NOT NULL DEFAULT '',
+        source_ref TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        approved_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, member_id, kind, ref)
+      );
+      INSERT INTO local_capability (tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at)
+        SELECT tenant_id, member_id, kind, ref, display_name, url, tools_json, source, version, source_ref, reason, approved_by, created_at FROM local_capability_v3;
+      DROP TABLE local_capability_v3;
       COMMIT;`);
   }
 

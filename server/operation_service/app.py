@@ -22,6 +22,7 @@ from .routes_enterprise import router as enterprise_router
 from .routes_rollup import router as rollup_router
 from .routes_platform_provider import router as platform_provider_router
 from .routes_skill_market import router as skill_market_router
+from .routes_mcp_market import router as mcp_market_router
 from .routes_solution_authoring import router as solution_authoring_router
 from .routes_admin import build_admin_router
 from .platform_provider_service import install_relay_token_lifecycle_lifespan, newapi_urls
@@ -98,6 +99,7 @@ app.include_router(catalog_pull_router)
 app.include_router(catalog_router)
 app.include_router(rollup_router)
 app.include_router(skill_market_router)
+app.include_router(mcp_market_router)
 # 行业文档生成（上传资料 → 服务端 Pi Agent 生成草稿 → 审核 → 发布到目录）。
 app.include_router(solution_authoring_router)
 # ---- 功能补全：S01 账号管理 + S03 方案统计 + S04 财务管理 + 系统健康 ----

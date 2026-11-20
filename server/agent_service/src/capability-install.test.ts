@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createFixture } from "./test-fixture.js";
-import { approvalRiskForTool } from "./approval-service.js";
-import { capabilityInstallTool, checkCapabilityInstall, personalConnectorTools } from "./connectors.js";
+import { CustomSkillStore } from "./custom-skills.js";
+import { fakeClawHub } from "./custom-skill-import.test.js";
+import { approvalRiskForTool, personalConnectorRisk } from "./approval-service.js";
+import { capabilityInstallTool, checkCapabilityInstall, installSkillDirectly, personalConnectorTools, SkillInstallError } from "./connectors.js";
 import { SkillVerificationError } from "./skills.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
@@ -35,9 +40,14 @@ test("installing asks for a human decision, stores the real tool list, and the p
   const calls: string[] = [];
   const { server, url } = await mcpServer(calls);
   try {
-    // 安装工具与个人连接器调用都必须经人工审批。
+    // 安装工具必须经人工审批；成员自己装的 MCP 默认不再每次弹（只读会话例外，见下方）。
     assert.equal(approvalRiskForTool("capability_install"), "unknown");
-    assert.equal(approvalRiskForTool("connector_my_notion"), "external");
+    assert.equal(approvalRiskForTool("connector_my_notion"), undefined);
+    assert.equal(personalConnectorRisk("connector_my_notion", "read-only"), "external");
+    assert.equal(personalConnectorRisk("connector_my_notion", "workspace-write"), undefined);
+    assert.equal(personalConnectorRisk("connector_my_notion", "full-access"), undefined);
+    // 企业配置的连接器仍然每次弹。
+    assert.equal(approvalRiskForTool("connector_notion"), "external");
 
     const install = capabilityInstallTool(fixture.store, owner);
     const ok = await run(install, { kind: "mcp", ref: "notion", display_name: "Notion", url, reason: "读页面" });
@@ -46,19 +56,20 @@ test("installing asks for a human decision, stores the real tool list, and the p
     assert.deepEqual(stored.map(item => [item.ref, item.tools, item.source, item.approved_by]), [["notion", ["search"], "user_url", "member-1"]]);
     assert.deepEqual(fixture.store.listLocalCapabilities(owner.tenantId, "member-2"), []);
 
-    const [tool] = personalConnectorTools(fixture.store, owner, snap());
+    const [tool] = personalConnectorTools(fixture.store, owner);
     assert.equal(tool?.name, "connector_my_notion");
     await run(tool!, { tool: "search", arguments: {} });
     assert.deepEqual(calls, ["search"]);
     await assert.rejects(run(tool!, { tool: "delete", arguments: {} }));
-    assert.deepEqual(personalConnectorTools(fixture.store, { ...owner, memberId: "member-2" }, snap()), []);
+    assert.deepEqual(personalConnectorTools(fixture.store, { ...owner, memberId: "member-2" }), []);
 
-    // 员工快照里的显式工具白名单可以排除个人连接器。
-    assert.deepEqual(personalConnectorTools(fixture.store, owner, snap({ tool_policy: { allowed_tools: ["read"] } })), []);
+    // 个人 MCP 属于成员自己的 Agent 能力，不受专家快照工具白名单限制（设计 2026-11-17 §10）：
+    // 企业专家配了显式工具清单时照样可用，调用仍经审批（见上方 external 风险）。
+    assert.deepEqual(personalConnectorTools(fixture.store, owner).map(item => item.name), ["connector_my_notion"]);
 
     // 撤销后立即失效。
     assert.equal(fixture.store.deleteLocalCapability(owner.tenantId, owner.memberId, "mcp", "notion"), true);
-    assert.deepEqual(personalConnectorTools(fixture.store, owner, snap()), []);
+    assert.deepEqual(personalConnectorTools(fixture.store, owner), []);
   } finally {
     await new Promise(resolve => server.close(resolve));
     await fixture.close();
@@ -222,3 +233,78 @@ test("a re-install whose package fails signature verification is refused and the
   } finally { await fixture.close(); }
 });
 
+
+test("the desktop «添加技能» installs only enterprise-catalog skills, like an approved chat install", async () => {
+  const fixture = await createFixture();
+  try {
+    let catalog = [{ skill_id: "sheet", display_name: "读表", version: "1", content_hash: "h1", source_skill_id: "plat-sheet" }];
+    const installed: string[] = [];
+    let failWith: Error | undefined;
+    const skills = {
+      list: async () => catalog,
+      install: async (skillId: string) => { if (failWith) throw failWith; installed.push(`${skillId}@${catalog.find(item => item.skill_id === skillId)?.version}`); },
+    };
+    const code = async (run: Promise<unknown>) => { try { await run; return "ok"; } catch (error) { assert(error instanceof SkillInstallError); return error.code; } };
+
+    // 没有企业服务 / 不在企业目录：不装。
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, undefined, { skill_id: "sheet" })), "manager_unavailable");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "ghost" })), "skill_not_installable");
+    assert.deepEqual(installed, []);
+
+    // 平台 skill ID 也能对应到企业目录条目；记录由本人批准。
+    const row = await installSkillDirectly(fixture.store, owner, skills, { skill_id: "plat-sheet" });
+    assert.deepEqual([row.kind, row.ref, row.version, row.source, row.approved_by, row.source_ref], ["skill", "sheet", "1", "enterprise_catalog", "member-1", "plat-sheet"]);
+    assert.deepEqual(installed, ["sheet@1"]);
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet" })), "skill_installed");
+
+    // 新版本：不确认不换；确认后换。
+    catalog = [{ ...catalog[0]!, version: "2", content_hash: "h2" }];
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet" })), "skill_exists");
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "1");
+
+    // 签名校验不过 / 企业服务不可用：已装版本不动。
+    failWith = new SkillVerificationError("unknown skill signing key id");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })), "skill_signature_invalid");
+    failWith = new Error("manager down");
+    assert.equal(await code(installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })), "skill_install_failed");
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId)[0]?.version, "1");
+
+    failWith = undefined;
+    assert.equal((await installSkillDirectly(fixture.store, owner, skills, { skill_id: "sheet", replace: true })).version, "2");
+    assert.deepEqual(installed, ["sheet@1", "sheet@2"]);
+  } finally { await fixture.close(); }
+});
+
+test("外部来源的技能（ClawHub / 网址 / 粘贴）也能装，装的是成员个人能力", async () => {
+  const fixture = await createFixture();
+  const custom = new CustomSkillStore(mkdtempSync(join(tmpdir(), "aiteam-custom-store-")));
+  const { url: clawHub, close } = await fakeClawHub("alice");
+  const md = `---\nname: pasted-skill\ndescription: 粘贴进来的技能\n---\n\n正文\n`;
+  try {
+    process.env.AITEAM_CLAWHUB_BASE_URL = clawHub;
+    const install = capabilityInstallTool(fixture.store, owner, undefined, undefined, undefined, custom);
+
+    // ClawHub：地址即来源，装完标 clawhub_catalog，文件在本机目录里。
+    const hub = await run(install, { kind: "skill", source: "clawhub", ref: "weekly-report", url: `${clawHub}/alice/skills/self-improving-agent`, reason: "做周报" });
+    assert.notEqual(hub.isError, true);
+    let row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.ref === "weekly-report");
+    assert.deepEqual([row?.source, row?.display_name], ["clawhub_catalog", "weekly-report"]);
+    assert.ok(custom.pathFor(owner, "weekly-report"), "ClawHub 技能应落到本机自定义技能目录");
+
+    // 粘贴：skill_md 即来源。
+    const pasted = await run(install, { kind: "skill", source: "text", ref: "pasted-skill", skill_md: md, reason: "试试" });
+    assert.notEqual(pasted.isError, true);
+    row = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.ref === "pasted-skill");
+    assert.equal(row?.source, "user_import");
+
+    // 批准后内容变了：哈希对不上，拒绝安装。
+    const stale = await run(install, { kind: "skill", source: "text", ref: "pasted-skill", skill_md: md, reason: "", approvedVersion: "deadbeef".repeat(4), resolution: { action: "replace" } });
+    assert.equal(stale.isError, true);
+    assert.match(String((stale as { content?: { text: string }[] }).content?.[0]?.text ?? ""), /内容.*变化/);
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+  } finally {
+    delete process.env.AITEAM_CLAWHUB_BASE_URL;
+    await close();
+    await fixture.close();
+  }
+});

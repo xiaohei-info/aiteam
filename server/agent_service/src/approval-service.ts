@@ -6,6 +6,59 @@ export type ApprovalRisk = "bash" | "write" | "edit" | "external" | "unknown";
 
 /** `approved_by` of records approved by conversation policy instead of a human decision. */
 export const POLICY_APPROVER = "policy:full-access";
+/** `approved_by` of capability installs approved by the member's auto-install grant (design §11.3). */
+export const AUTO_INSTALL_APPROVER = "policy:auto-install";
+/** `approved_by` of external tools the member allowed once for this conversation ("本会话不再询问"). */
+export const SESSION_GRANT_APPROVER = "policy:session-grant";
+
+/** Kind, source and ref of a `capability_install` approval, read from the summary the Agent itself wrote; null otherwise. */
+export function capabilityInstallOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): { kind: "mcp" | "skill"; source: string; ref: string } | null {
+  const prefix = "capability_install:";
+  if (record.tool_name !== "capability_install" || !record.redacted_summary.startsWith(prefix)) return null;
+  try {
+    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; source?: unknown; ref?: unknown };
+    return (data.kind === "mcp" || data.kind === "skill") && typeof data.source === "string" && typeof data.ref === "string"
+      ? { kind: data.kind, source: data.source, ref: data.ref }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 会话授权的匹配键：外部工具用 tool_name（subject 空）；技能安装用 `capability_install` + 带来源的 subject。
+ * MCP 安装不做（审批弹窗还要收集 OAuth 登录 / bearer 令牌）。
+ *
+ * 来源细分是为了限住「本会话不再询问」：企业目录（平台 / 企业）来源可以授权，
+ * 外部来源（ClawHub / 网址 / 粘贴）每次都要问（设计 2026-11-19 §3.2）。
+ * 旧键 `skill` 仍然可读一个版本，但不再写入。
+ */
+export function sessionGrantSubject(request: Pick<ApprovalRequest, "toolName" | "summary">): string {
+  if (request.toolName !== "capability_install") return "";
+  const install = capabilityInstallOf({ tool_name: request.toolName, redacted_summary: request.summary ?? "" });
+  if (install?.kind !== "skill") return "";
+  return install.source === "platform_catalog" || install.source === "enterprise_catalog"
+    ? `skill:${install.source}`
+    : "skill:external";
+}
+
+/** 该 subject 是否允许成员勾「本会话不再询问」：外部来源不允许。 */
+export function sessionGrantAllowed(subject: string): boolean {
+  return subject !== "" && subject !== "skill:external";
+}
+
+/** 同工具冷却窗口：窗口内再次调用复用上次批准，不再弹（设计 2026-11-19 §3.1）。 */
+export const APPROVAL_COOLDOWN_MS = 30 * 60_000;
+
+/** 节流与无人值守下「未获授权、已跳过」的动作记录（脱敏：只有工具名与风险级别）。 */
+export interface SkippedAction { toolName: string; riskLevel: ApprovalRisk; reason: "unattended" | "read_only" }
+
+export class ApprovalSkippedError extends Error {
+  constructor(readonly skipped: SkippedAction) {
+    super(`定时任务中未获授权的动作已跳过：${skipped.toolName}`);
+    this.name = "ApprovalSkippedError";
+  }
+}
 
 export interface ApprovalRequest {
   tenantId: string;
@@ -23,10 +76,14 @@ export interface ApprovalRequest {
   /** Complete, already-sanitized preview for tools whose approval needs more than the bounded generic summary. */
   summary?: string;
   riskLevel: ApprovalRisk;
+  /** Only AUTO_INSTALL_APPROVER for `capability_install`: the caller checked the member's auto-install grant. */
+  autoApproveBy?: string;
   permissionMode?: "read-only" | "workspace-write" | "full-access";
   /** The lease/JWT cutoff is an upper bound in addition to the approval TTL. */
   expiresAt?: number;
   signal?: AbortSignal;
+  /** 定时任务（无人值守）：需人工决策的动作不弹框，跳过并记录，不中止整次运行（设计 2026-11-19 §3.1）。 */
+  unattended?: boolean;
 }
 
 export interface ApprovalServiceOptions {
@@ -50,6 +107,33 @@ export class ApprovalResolutionError extends Error {
 }
 const RENAME_REF_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
+/** A token was sent for something other than approving the install of an MCP that needs one. */
+export class ApprovalCredentialError extends Error {
+  constructor(message = "credential is only accepted when approving the install of an MCP that needs an access token") { super(message); this.name = "ApprovalCredentialError"; }
+}
+
+/** Auth mode of a `capability_install` MCP approval, read from the summary the Agent itself wrote. */
+export function capabilityInstallAuthOf(record: Pick<ApprovalRecord, "tool_name" | "redacted_summary">): string | null {
+  const prefix = "capability_install:";
+  if (record.tool_name !== "capability_install" || !record.redacted_summary.startsWith(prefix)) return null;
+  try {
+    const data = JSON.parse(record.redacted_summary.slice(prefix.length)) as { kind?: unknown; auth?: unknown };
+    return data.kind === "mcp" && typeof data.auth === "string" ? data.auth : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `remember` was sent for something other than approving a platform-catalog capability install. */
+export class ApprovalRememberError extends Error {
+  constructor(message = "remember is only accepted when approving a capability install from the platform catalog") { super(message); this.name = "ApprovalRememberError"; }
+}
+
+/** `session_allow` was sent for anything other than approving an external tool. */
+export class ApprovalSessionAllowError extends Error {
+  constructor(message = "session_allow is only accepted when approving an external tool") { super(message); this.name = "ApprovalSessionAllowError"; }
+}
+
 export class ApprovalPermissionError extends Error {
   constructor(message = "Tool is not permitted by the conversation permission") { super(message); this.name = "ApprovalPermissionError"; }
 }
@@ -66,6 +150,11 @@ interface Waiter {
  */
 export class ApprovalService {
   private readonly waiters = new Map<string, Set<Waiter>>();
+  /**
+   * Tokens typed into the approval dialog, held in memory only until the approved install claims them.
+   * Never written to the approval record, the session, events or logs.
+   */
+  private readonly credentials = new Map<string, { value: { token: string; header?: string }; expires: number }>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private onRequired?: (record: ApprovalRecord) => void | Promise<void>;
@@ -93,9 +182,14 @@ export class ApprovalService {
     }
     // full-access is an explicit per-conversation opt-out of per-call confirmation for local tools. The call still
     // gets an ApprovalRecord (audit, args hash, single-use claim, lease cap) but is approved by policy without a prompt.
-    // External connectors and unknown tools keep requiring a human decision.
-    const autoApprove = request.permissionMode === "full-access"
-      && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit");
+    // External connectors and unknown tools keep requiring a human decision —— 除非成员在该会话里勾过「本会话不再询问」。
+    // 会话授权只对当前会话生效：外部工具，以及技能安装（MCP 安装还要收集凭据，不做）。
+    const subject = sessionGrantSubject(request);
+    const sessionGranted = (request.riskLevel === "external" || sessionGrantAllowed(subject))
+      && this.store.hasApprovalSessionGrant(request.tenantId, request.memberId, request.conversationId, request.toolName, subject);
+    const autoApprove = sessionGranted
+      || (request.permissionMode === "full-access"
+        && (request.riskLevel === "bash" || request.riskLevel === "write" || request.riskLevel === "edit"));
     const hash = canonicalArgsHmac(request.args);
     const existing = this.store.findApprovalForTool({
       tenantId: request.tenantId,
@@ -110,7 +204,23 @@ export class ApprovalService {
     if (existing && (existing.permission_revision !== request.permissionRevision || existing.tool_name !== request.toolName)) {
       throw new ApprovalDeniedError("Approval binding changed; request a new approval");
     }
-    const record = existing ?? this.create(request, hash, autoApprove);
+    // 节流：同参数已复用（上面）；否则同工具在冷却窗口内、或同批次已批准，不再弹。
+    const throttleSince = new Date(this.now() - APPROVAL_COOLDOWN_MS).toISOString();
+    const throttled = existing ?? (() => {
+      const batch = this.store.batchApproved(encodeScope([request.sessionId, request.promptReceiptRef ?? request.toolCallId]), throttleSince);
+      if (batch) return batch;
+      return this.store.lastApprovedForTool(request.tenantId, request.memberId, request.conversationId, request.toolName, throttleSince);
+    })();
+    // 无人值守：需要人工决策时不弹框，直接跳过并记录，不中止整次运行。
+    if (request.unattended && !autoApprove && !throttled && !request.autoApproveBy) {
+      throw new ApprovalSkippedError({ toolName: request.toolName, riskLevel: request.riskLevel, reason: "unattended" });
+    }
+    const approver = request.autoApproveBy === AUTO_INSTALL_APPROVER && request.toolName === "capability_install"
+      ? AUTO_INSTALL_APPROVER
+      : sessionGranted ? SESSION_GRANT_APPROVER
+      : autoApprove ? POLICY_APPROVER
+      : throttled ? SESSION_GRANT_APPROVER : undefined;
+    const record = existing ?? this.create(request, hash, approver);
     const claimed = await this.waitAndClaim(record, request);
     try {
       const result = await operation(claimed);
@@ -139,18 +249,63 @@ export class ApprovalService {
     approvedBy: string;
     idempotencyKey: string;
     resolution?: CapabilityResolution;
+    /** Approve, and from now on install this kind from the platform catalog without asking (design §11.3). */
+    remember?: boolean;
+    /** Approve, and stop asking for this tool in this conversation (external tools only). */
+    sessionAllow?: boolean;
+    /** bearer MCP install: the member's token, handed to the install in memory only. */
+    credential?: { token: string; header?: string };
   }): ApprovalRecord {
+    if (input.credential !== undefined) {
+      const target = this.store.getApprovalRecord(input.id);
+      if (target && (input.decision !== "approve" || capabilityInstallAuthOf(target) !== "bearer" || !input.credential.token)) throw new ApprovalCredentialError();
+      // Stashed before the decision wakes the waiting install, so it is there when the install runs.
+      if (target) this.credentials.set(target.id, { value: input.credential, expires: this.now() + this.ttlMs });
+    }
     if (input.resolution !== undefined) {
       const target = this.store.getApprovalRecord(input.id);
       const valid = input.decision === "approve" && target?.tool_name === "capability_install"
         && (input.resolution.action === "replace" || (input.resolution.action === "rename" && RENAME_REF_RE.test(input.resolution.ref)));
       if (target && !valid) throw new ApprovalResolutionError();
     }
+    if (input.remember) {
+      const target = this.store.getApprovalRecord(input.id);
+      if (target && (input.decision !== "approve" || capabilityInstallOf(target)?.source !== "platform_catalog")) throw new ApprovalRememberError();
+    }
+    if (input.sessionAllow) {
+      const target = this.store.getApprovalRecord(input.id);
+      // 只写外部工具与技能安装：本地工具（bash/write/edit）已由「完全访问」负责；
+      // MCP 安装要收集登录/令牌，跳过审批会拿不到凭据。
+      const subject = target ? sessionGrantSubject({ toolName: target.tool_name, summary: target.redacted_summary }) : "";
+      const allowed = target?.risk_level === "external" || sessionGrantAllowed(subject);
+      if (target && (input.decision !== "approve" || !allowed)) throw new ApprovalSessionAllowError();
+    }
     this.expireDue(input.conversationId, input.tenantId, input.memberId);
-    const record = this.store.decideApproval(input);
+    let record: ApprovalRecord;
+    try {
+      record = this.store.decideApproval(input);
+    } catch (error) {
+      this.credentials.delete(input.id);
+      throw error;
+    }
+    if (record.status !== "approved") this.credentials.delete(record.id);
+    const install = input.remember && record.status === "approved" ? capabilityInstallOf(record) : null;
+    if (install?.source === "platform_catalog") this.store.putCapabilityAutoInstall(record.tenant_id, record.member_id, install.kind);
+    if (input.sessionAllow && record.status === "approved") {
+      const subject = sessionGrantSubject({ toolName: record.tool_name, summary: record.redacted_summary });
+      this.store.putApprovalSessionGrant(record.tenant_id, record.member_id, record.conversation_id, record.tool_name, subject);
+    }
     if (record.status === "rejected") this.cancelBatch(record.approval_batch_id, record.id);
     this.wake(record.id, record.status === "approved" ? undefined : new ApprovalDeniedError());
     return record;
+  }
+
+  /** One-time hand-over of the token the member typed for this approval; gone after the first read. */
+  takeCredential(approvalId: string): { token: string; header?: string } | undefined {
+    const entry = this.credentials.get(approvalId);
+    this.credentials.delete(approvalId);
+    for (const [id, item] of this.credentials) if (item.expires <= this.now()) this.credentials.delete(id);
+    return entry && entry.expires > this.now() ? entry.value : undefined;
   }
 
   cancelConversation(conversationId: string, tenantId?: string, memberId?: string): void {
@@ -178,7 +333,8 @@ export class ApprovalService {
     this.waiters.clear();
   }
 
-  private create(request: ApprovalRequest, hash: string, autoApprove = false): ApprovalRecord {
+  /** `approver` set: the record is approved by that policy without a prompt. */
+  private create(request: ApprovalRequest, hash: string, approver?: string): ApprovalRecord {
     const now = this.now();
     const maxExpiry = now + this.ttlMs;
     const expiry = request.expiresAt !== undefined && Number.isFinite(request.expiresAt)
@@ -205,9 +361,9 @@ export class ApprovalService {
       risk_level: request.riskLevel,
       expires_at: new Date(expiry).toISOString(),
       idempotency_key: encodeScope([request.conversationId, request.sessionId, request.toolCallId]),
-      ...(autoApprove ? { status: "approved" as const, approved_by: POLICY_APPROVER, approved_at: new Date(now).toISOString() } : {}),
+      ...(approver ? { status: "approved" as const, approved_by: approver, approved_at: new Date(now).toISOString() } : {}),
     });
-    if (!autoApprove) void this.onRequired?.(record);
+    if (!approver) void this.onRequired?.(record);
     return record;
   }
 
@@ -291,7 +447,14 @@ export class ApprovalService {
   }
 }
 
-const SAFE_TOOLS = new Set([
+/**
+ * 只读工具注册表：新增只读工具改这里，不用动判定分支。
+ *
+ * 设计 2026-11-19 §3.1 把审批从「按工具名黑名单」升级为风险分级：只读 / 查询类不弹。
+ * 注意 Pi SDK 的 ToolDefinition 不暴露 MCP 的 readOnlyHint，所以 MCP 工具声明的只读方法
+ * 无法据此降级；未知工具仍按高风险弹（红线，不保证所有工具都能自动判级）。
+ */
+const READ_ONLY_TOOLS = new Set([
   "read", "grep", "find", "ls", "knowledge_search", "knowledge_get",
   "local_dir_search", "local_dir_read",
   "hindsight_recall", "memory_recall", "todo_update", "mention_employee", "delegate_employee",
@@ -301,11 +464,28 @@ export function approvalRiskForTool(toolName: string): ApprovalRisk | undefined 
   if (toolName === "bash") return "bash";
   if (toolName === "write") return "write";
   if (toolName === "edit") return "edit";
-  if (SAFE_TOOLS.has(toolName)) return undefined;
+  if (READ_ONLY_TOOLS.has(toolName)) return undefined;
+  // 成员自己装的 MCP（connector_my_*）：用户在自己机器上装好并授权过，调用不再每次弹审批。
+  // 只读会话例外——那里不允许写操作，调用前仍会弹框告知（见 personalConnectorRisk）。
+  if (isPersonalConnectorTool(toolName)) return undefined;
   // External connectors, memory retain and every unrecognized tool are treated
-  // as side-effecting. A remote readOnlyHint cannot lower this classification.
+  // as side-effecting. 未知工具一律高风险（红线）。
   if (toolName === "hindsight_retain" || toolName === "memory_retain" || /^(?:external|connector|jira)[._:-]/iu.test(toolName)) return "external";
   return "unknown";
+}
+
+/** 成员在本机自己安装的 MCP 连接器工具名（`connector_my_<ref>`），见 connectors.ts personalConnectorTools。 */
+export function isPersonalConnectorTool(toolName: string): boolean {
+  return /^connector_my_[a-z0-9_-]{1,63}$/iu.test(toolName);
+}
+
+/**
+ * 个人连接器在只读会话下的风险：不弹框就等于静默失败，所以仍按外部动作处理。
+ * 非只读会话返回 undefined——装在本机、用户已授权过，调用不再每次确认。
+ */
+export function personalConnectorRisk(toolName: string, permissionMode: string): ApprovalRisk | undefined {
+  if (!isPersonalConnectorTool(toolName)) return undefined;
+  return permissionMode === "read-only" ? "external" : undefined;
 }
 
 type JsonLikeValue = string | number | boolean | null | undefined | JsonLikeValue[] | { [key: string]: JsonLikeValue };

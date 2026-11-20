@@ -52,6 +52,8 @@ interface TalentChatState {
   /** 人才市场发起：会话为空时让员工先自我介绍。 */
   introduce?: boolean
   refreshWorkbench?: boolean
+  /** 「让员工帮我装」发起：员工回复里的「标题：xxx」用来当会话标题。 */
+  titleFromEmployee?: boolean
 }
 
 interface PendingInitialMessage {
@@ -209,6 +211,8 @@ export default function Chat() {
   const loadedMsgCountRef = useRef(0)
   const loadedConversationRef = useRef<string | null>(null)
   const pendingInitialMessageRef = useRef<PendingInitialMessage | null>(null)
+  // 「让员工帮我装」：等员工第一条回复里的「标题：」，填成会话标题。
+  const askTitleRef = useRef(false)
   const consumedInitialMessageKeysRef = useRef(new Set<string>())
   const conversationCreationRef = useRef<{
     sourceId: string
@@ -270,6 +274,7 @@ export default function Chat() {
       setPendingInitialMessage(pending)
     }
 
+    askTitleRef.current = Boolean(state.titleFromEmployee)
     if (state.refreshWorkbench) refreshConversations().catch(console.error)
     navigate(
       { pathname: location.pathname, search: location.search, hash: location.hash },
@@ -540,6 +545,26 @@ export default function Chat() {
     if (retryText) void sendMessage(retryText)
   }, [retryText, sendMessage])
 
+  /**
+   * 「让员工帮我装」：员工回复第一行会给「标题：<6-12 字>」，把它填成会话标题。
+   * 取不到就保持原标题，不打扰用户。
+   */
+  const applyEmployeeTitle = async (convId: string) => {
+    if (!askTitleRef.current) return
+    const text = useChatStore.getState().activeConvRawItems
+      .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
+      .map((entry) => (typeof entry.message?.content === "string" ? entry.message.content : ""))
+      .find((body) => body.includes("标题：") || body.includes("标题:"))
+    const match = text && /标题[:：]\s*(.+)/u.exec(text)
+    const title = match?.[1]?.trim().slice(0, 40)
+    if (!title) return
+    askTitleRef.current = false
+    try {
+      await agentApi.updateConversation(convId, { title })
+      refreshConversations().catch(console.error)
+    } catch { /* 标题只是显示，失败不改也不影响安装 */ }
+  }
+
   // 切换对话时从服务器拉取最新 20 条消息；人才市场跳转的默认消息等拉取完成后再发，避免被覆盖。
   useEffect(() => {
     if (!activeConvId) {
@@ -557,6 +582,7 @@ export default function Chat() {
       if (cancelled) return
       if (useChatStore.getState().activeMessagesError) return
       loadedConversationRef.current = activeConvId
+      await applyEmployeeTitle(activeConvId)
 
       const pending = pendingInitialMessageRef.current
       if (!pending || pending.convId !== activeConvId) return

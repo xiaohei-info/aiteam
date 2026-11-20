@@ -61,6 +61,7 @@ const ALL_NAV_IDS = [
   "departments",
   "solutions",
   "skills",
+  "mcp-market",
   "marketplace",
   "experts",
   "grants",
@@ -140,13 +141,13 @@ describe("manager shell config", () => {
     expect(managerShellConfig.tier).toBe("manager");
   });
 
-  it("导航覆盖企业管理入口（14 项）", () => {
+  it("导航覆盖企业管理入口（15 项）", () => {
     const navIds = managerShellConfig.nav.map((n) => n.id);
     expect(navIds).toEqual([...ALL_NAV_IDS]);
-    expect(navIds).toHaveLength(14);
+    expect(navIds).toHaveLength(15);
   });
 
-  it("owner 可见全部 14 项导航", () => {
+  it("owner 可见全部 15 项导航", () => {
     const vm = buildShellViewModel(
       managerShellConfig,
       session([EnterpriseRole.OWNER]),
@@ -168,6 +169,7 @@ describe("manager shell config", () => {
       "departments",
       "solutions",
       "skills",
+      "mcp-market",
       "marketplace",
       "experts",
       "grants",

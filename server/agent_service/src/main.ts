@@ -9,6 +9,7 @@ import { createConfiguredModelRuntime } from "./pi/model-runtime.js";
 import { SessionHost, type SessionAuthorization } from "./pi/session-host.js";
 import { LocalSandbox } from "./pi/sandbox.js";
 import { AgentSqliteStore } from "./storage/sqlite.js";
+import { McpAuthService, McpCredentialStore } from "./mcp-auth.js";
 import { backfillArtifactPaths } from "./services/artifact-paths.js";
 import { migrateWorkspaceLayout } from "./services/workspace-migration.js";
 import { groupWorkspaceHint, projectWorkspaceHint, workspaceFolderHint } from "./workspace-layout.js";
@@ -16,6 +17,7 @@ import { HttpManagerClient } from "./manager-client.js";
 import { UsageFlushService } from "./usage-flush.js";
 import { ScheduleService } from "./schedule.js";
 import { SkillCache, skillRefsForSnapshot, skillSigningVerificationFromEnv } from "./skills.js";
+import { CustomSkillStore } from "./custom-skills.js";
 import { assertAgentLaunchConfiguration, scrubAgentEnvironment } from "./launch-guards.js";
 import { loadAgentConfig } from "./config.js";
 import { ExecutionAuthorizationRegistry } from "./execution-authorization.js";
@@ -49,6 +51,7 @@ mkdirSync(cwdRoot, { recursive: true, mode: 0o700 });
 if (environment === "production" && process.platform !== "win32") await sandbox.assertAvailable(cwdRoot);
 const skillCache = new SkillCache(join(dataRoot, "capabilities", "skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
 const personalSkillCache = new SkillCache(join(dataRoot, "capabilities", "personal-skills"), { offlineTtlSeconds: skillVerification.offlineTtlSeconds });
+const customSkillStore = new CustomSkillStore(join(dataRoot, "capabilities", "custom-skills"));
 const store = new AgentSqliteStore(join(dataRoot, "agent.sqlite"));
 // Before any session runs: legacy folders move to the conversation-named layout, then artifacts
 // captured by older builds are matched against the files in their (moved) folders.
@@ -61,7 +64,10 @@ const configured = await createConfiguredModelRuntime({ useFaux: useFauxModel, m
 const managerClient = managerUrl ? new HttpManagerClient(managerUrl) : undefined;
 const executionAuthorization = new ExecutionAuthorizationRegistry();
 const usageFlush = new UsageFlushService(store, managerClient, { authorization: executionAuthorization });
+// Personal MCP sign-in / tokens: encrypted files in the data dir, never uploaded (design 2026-11-18 MCP鉴权与配置导入).
+const mcpAuth = new McpAuthService(new McpCredentialStore(dataRoot));
 const sessionHost = new SessionHost({
+  mcpAuth,
   cwdRoot,
   agentDir,
   sessionDir,
@@ -71,6 +77,7 @@ const sessionHost = new SessionHost({
   useFauxModel,
   managerClient,
   personalSkillCache,
+  customSkillStore,
   executionAuthorization,
   sandbox,
   // Faux responses are test artifacts, never billable usage.
@@ -94,8 +101,11 @@ const sessionHost = new SessionHost({
     authorization?.caller.tenantId ? {
       cache: personalSkillCache,
       refs: store.listLocalCapabilities(authorization.caller.tenantId, authorization.caller.userId ?? authorization.caller.callerId)
-        .filter((item) => item.kind === "skill").map((item) => `${item.ref}@${item.version}`),
+        .filter((item) => item.kind === "skill" && item.source !== "user_import").map((item) => `${item.ref}@${item.version}`),
     } : undefined,
+    authorization?.caller.tenantId
+      ? { store: customSkillStore, scope: { tenantId: authorization.caller.tenantId, memberId: authorization.caller.userId ?? authorization.caller.callerId } }
+      : undefined,
   ),
 });
 
@@ -150,6 +160,8 @@ const boundPort = (() => {
   const address = http.server.address();
   return address && typeof address === "object" ? address.port : port;
 })();
+// The provider sends the member's browser back to this loopback address after sign-in.
+mcpAuth.setCallbackBase(`http://${hostAddress === "::1" ? "[::1]" : "127.0.0.1"}:${boundPort}`);
 if (portFile) writePortFile(portFile, hostAddress, boundPort);
 schedule.start();
 usageFlush.start();

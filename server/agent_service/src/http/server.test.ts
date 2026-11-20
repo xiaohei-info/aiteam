@@ -731,8 +731,11 @@ test("Agent OpenAPI gives every frontend operation structured parameters, respon
         frontendOperations.push({ path, method, operation });
       }
     }
-    // 90 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口 + 企业可自装技能列表。
-    assert.equal(frontendOperations.length, 90);
+    // 100 = 87（含 GET /api/agent/events 全局活动信号）+ 个人能力列出与撤销两个接口 + 企业可自装技能列表
+    //       + MCP 鉴权 8 个（登录进度/取消/回调/探测/添加 MCP/重新登录/更新令牌/清除凭据）
+    //      + 自动安装授权列出与撤销两个接口（设计 §11.3）+ 重新打开 MCP 登录页 + 添加个人技能
+    //      + 导入自定义技能（设计 2026-11-18 §3）+ 能力授权列出与撤销（2026-11-19 §3.2）。
+    assert.equal(frontendOperations.length, 104);
     for (const { path, method, operation } of frontendOperations) {
       const label = `${method.toUpperCase()} ${path}`;
       assert(operation.summary, `${label} missing summary`);
@@ -832,7 +835,7 @@ test("Agent OpenAPI exposes complete operation metadata", async () => {
         assert(operation.tags?.length, `${method} ${path} missing tags`);
         assert(operation.operationId && !ids.has(operation.operationId), `${method} ${path} has duplicate operationId`);
         ids.add(operation.operationId);
-        assert.deepEqual(operation.security, path.startsWith("/api/auth/") || path.endsWith("/login") || path.endsWith("/reset-password") || path.endsWith("/ping") ? [] : [{ bearerAuth: [] }]);
+        assert.deepEqual(operation.security, path.startsWith("/api/auth/") || path.endsWith("/login") || path.endsWith("/reset-password") || path.endsWith("/ping") || path === "/api/agent/mcp-auth/callback" ? [] : [{ bearerAuth: [] }]);
         assert(operation.responses["422"]?.$ref === "#/components/responses/ValidationError", `${method} ${path} missing unified validation response`);
       }
     }

@@ -8,12 +8,19 @@
  * - 居中模态，遮罩不响应点击（审批必须显式决策，防误触）
  * - 按钮文案恒定（允许/拒绝），提交中仅用 spinner 表达，不变文字
  * - 多条审批在弹窗内排队，一次展示一条，右上角显示进度
+ * - MCP 鉴权（2026-11-18）：需要访问令牌的在弹窗里填令牌，令牌随决定只交给本机 Agent；
+ *   需要浏览器登录的点「允许并登录」后弹窗转为等待登录（可重新打开登录页 / 复制链接 / 取消），
+ *   等待登录不挡住新来的审批。
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { BookOpen, ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
-import { useApprovalStore, type PendingApproval } from '../../stores/approvals'
-import { parseCapabilityInstall, renameProblem, type CapabilityInstallPreview } from './capabilityInstall'
+import { BookOpen, KeyRound, LogIn, ShieldAlert, Terminal, FilePenLine, FilePlus2, Globe, Wrench, X } from 'lucide-react'
+import { agentApi } from '../../api/agent'
+import type { McpLogin } from '../../api/agent/types'
+import { useApprovalStore, type DecideOptions, type PendingApproval } from '../../stores/approvals'
+import { pickCurrent, queuePosition } from '../../lib/approvalQueue'
+import { signInFailureText } from '../../lib/mcpSignIn'
+import { parseCapabilityInstall, renameProblem, sessionGrantAllowed, type CapabilityInstallPreview } from './capabilityInstall'
 
 const riskMeta: Record<string, { label: string; icon: typeof Terminal; tone: string }> = {
   bash: { label: '执行本机命令', icon: Terminal, tone: '#ff6666' },
@@ -85,23 +92,168 @@ function InstallPreview({ preview }: { preview: CapabilityInstallPreview }) {
       )}
       {preview.kind === 'skill' ? (
         <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-          <div style={label}>来源：企业技能目录（企业管理员已安装并开放给成员）</div>
+          <div style={label}>{preview.platform ? '来源：平台技能市场（企业管理员已安装并开放给成员）' : '来源：企业自建技能（企业管理员已开放给成员）'}</div>
           <div>技能：<strong style={{ color: 'var(--text-primary)' }}>{preview.displayName || preview.ref}</strong>（标识 {preview.ref}{preview.version ? `，版本 ${preview.version}` : ''}）</div>
           {preview.reason && <div>理由（模型填写）：{preview.reason}</div>}
         </div>
       ) : <>
       <div>
-        <div style={label}>服务地址（请确认主机名是你信任的）</div>
+        <div style={label}>{preview.platform ? '来源：平台 MCP 目录（企业管理员已启用），服务地址：' : '服务地址（请确认主机名是你信任的）'}</div>
         <div data-testid="install-url" style={{ fontSize: 12, lineHeight: 1.6, fontFamily: 'monospace', wordBreak: 'break-all', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', color: 'var(--text-muted)' }}>
           {preview.before}<strong style={{ color: 'var(--text-primary)', fontSize: 13 }}>{preview.host}</strong>{preview.after}
         </div>
       </div>
       <div style={{ fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
-        <div style={label}>以下名称与理由由模型填写，未经核实</div>
+        <div style={label}>{preview.platform ? '名称来自平台目录；理由由模型填写' : '以下名称与理由由模型填写，未经核实'}</div>
         <div>名称：{preview.displayName || '—'}（标识 {preview.ref}）</div>
         {preview.reason && <div>理由：{preview.reason}</div>}
       </div>
       </>}
+    </div>
+  )
+}
+
+function signInFailure(error: McpLogin['error']): string {
+  return signInFailureText(error, '安装没有完成，可以让员工稍后重试。')
+}
+
+/** 迟迟拿不到登录进度时，多久后检查是否其实已装好（本机已有该地址的有效登录），以及多久后放弃。 */
+const SIGN_IN_CHECK_MS = 3_000
+const SIGN_IN_GIVE_UP_MS = 15_000
+
+/**
+ * 等待浏览器登录的条目在后台轮询登录进度（即使弹窗正显示另一条审批）：
+ * 完成 → 关闭；失败 → 保留并显示原因；本机凭据仍有效（Agent 直接装好，没有登录进度）→ 关闭。
+ */
+function SignInWatcher({ item, ref: capabilityRef, url }: { item: PendingApproval; ref: string; url: string }) {
+  const setLogin = useApprovalStore((s) => s.setLogin)
+  const failSignIn = useApprovalStore((s) => s.failSignIn)
+  const dismiss = useApprovalStore((s) => s.dismiss)
+  const { approvalId, conversationId } = item
+  const since = item.signInSince ?? 0
+  useEffect(() => {
+    let stopped = false
+    const tick = async () => {
+      try {
+        const login = await agentApi.getApprovalMcpLogin(conversationId, approvalId)
+        if (stopped) return
+        if (login) {
+          setLogin(approvalId, login)
+          if (login.status === 'completed') dismiss(approvalId)
+          else if (login.status === 'failed') failSignIn(approvalId, signInFailure(login.error))
+          return
+        }
+        const waited = Date.now() - since
+        if (waited < SIGN_IN_CHECK_MS) return
+        const installed = (await agentApi.listLocalCapabilities()).some((c) => c.kind === 'mcp' && c.ref === capabilityRef && c.url === url && c.auth_status === 'signed_in')
+        if (stopped) return
+        if (installed) dismiss(approvalId)
+        else if (waited > SIGN_IN_GIVE_UP_MS) failSignIn(approvalId, '没有拿到服务方登录页，安装结果请看对话里员工的回复。')
+      } catch { /* 暂时读不到本机 Agent：下一轮再读 */ }
+    }
+    void tick()
+    const timer = setInterval(() => void tick(), 1500)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [approvalId, conversationId, since, capabilityRef, url, setLogin, failSignIn, dismiss])
+  return null
+}
+
+/** 等待登录：显示登录页地址（完整、可复制），可让本机 Agent 重新打开登录页，或取消登录。 */
+function SignInBody({ item }: { item: PendingApproval }) {
+  const dismiss = useApprovalStore((s) => s.dismiss)
+  const [note, setNote] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const login = item.login
+  if (item.errorMessage) {
+    return (
+      <>
+        <div role="alert" style={{ padding: '0 20px', fontSize: 12, lineHeight: 1.6, color: '#ff6666' }}>{item.errorMessage}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 20px 18px' }}>
+          <button type="button" onClick={() => dismiss(item.approvalId)} style={ghostBtnStyle}><X size={13} style={{ marginRight: 4 }} />关闭</button>
+        </div>
+      </>
+    )
+  }
+  const act = async (run: () => Promise<string | null>) => {
+    setBusy(true)
+    try { setNote(await run()) } catch (error) { setNote(error instanceof Error ? error.message : '操作失败，请重试') } finally { setBusy(false) }
+  }
+  return (
+    <>
+      <div style={{ padding: '0 20px', display: 'grid', gap: 10, fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+        {login ? (
+          <>
+            <div>已在系统浏览器打开 <strong style={{ color: 'var(--text-primary)' }}>{login.auth_host}</strong> 的登录页。请在浏览器里登录并同意授权，完成后自动安装；令牌只保存在本机。</div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>浏览器没有打开？可以复制下面的链接到浏览器里打开（10 分钟内有效）：</div>
+              <div data-testid="sign-in-url" style={{ fontSize: 11, fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: 96, overflowY: 'auto', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', color: 'var(--text-muted)' }}>
+                {login.authorization_url}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span style={spinnerStyle('var(--border)', 'var(--brand)')} />正在准备服务方登录页…</div>
+        )}
+        {note && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{note}</div>}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10, padding: '12px 20px 18px' }}>
+        <button
+          type="button" disabled={!login || busy} style={{ ...ghostBtnStyle, opacity: !login || busy ? 0.5 : 1 }}
+          onClick={() => login && void act(async () => { await agentApi.cancelMcpLogin(login.login_id); dismiss(item.approvalId); return null })}
+        >取消登录</button>
+        <button
+          type="button" disabled={!login} style={{ ...ghostBtnStyle, opacity: login ? 1 : 0.5 }}
+          onClick={() => login && void act(async () => { await navigator.clipboard.writeText(login.authorization_url); return '链接已复制。' })}
+        >复制链接</button>
+        <button
+          type="button" disabled={!login || busy} style={{ ...primaryBtnStyle, opacity: !login || busy ? 0.6 : 1 }}
+          onClick={() => login && void act(async () => (await agentApi.reopenMcpLogin(login.login_id)) ? '已在浏览器重新打开登录页。' : '这次登录已经结束。')}
+        >在浏览器打开</button>
+      </div>
+    </>
+  )
+}
+
+/** MCP 鉴权说明 / 令牌输入。令牌输入框不回显，只随本次决定交给本机 Agent。 */
+function AuthSection({ preview, token, header, disabled, onToken, onHeader }: {
+  preview: CapabilityInstallPreview
+  token: string
+  header: string
+  disabled: boolean
+  onToken: (value: string) => void
+  onHeader: (value: string) => void
+}) {
+  if (preview.kind !== 'mcp' || preview.auth === 'none') return null
+  const box: React.CSSProperties = { fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', border: '1px solid color-mix(in srgb, #4488ff 35%, transparent)', borderRadius: 8, padding: '8px 12px', background: 'color-mix(in srgb, #4488ff 8%, var(--surface-2))' }
+  if (preview.auth === 'oauth') {
+    return (
+      <div style={{ padding: '10px 20px 0' }}>
+        <div style={box}>
+          <LogIn size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+          需要登录服务方账号{preview.authHost && <>（<strong style={{ color: 'var(--text-primary)' }}>{preview.authHost}</strong>）</>}。
+          点「允许并登录」后用系统浏览器打开服务方登录页，登录完成后自动安装；令牌只保存在本机，不交给模型。
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={{ padding: '10px 20px 0', display: 'grid', gap: 8 }}>
+      <label style={{ display: 'grid', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+        <span><KeyRound size={13} style={{ verticalAlign: '-2px', marginRight: 6 }} />访问令牌（只交给本机 Agent，不进入对话、不交给模型）</span>
+        <input
+          type="password" autoComplete="off" spellCheck={false} aria-label="访问令牌"
+          value={token} disabled={disabled} onChange={(event) => onToken(event.target.value)}
+          style={inputStyle}
+        />
+      </label>
+      {preview.authHeader ? (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>令牌放在请求头 <code>{preview.authHeader}</code>{preview.platform ? '（平台目录指定）' : ''}。</div>
+      ) : (
+        <label style={{ display: 'grid', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+          请求头名（可选；不填则为 Authorization: Bearer）
+          <input aria-label="请求头名" value={header} disabled={disabled} placeholder="例如 X-API-Key" onChange={(event) => onHeader(event.target.value)} style={inputStyle} />
+        </label>
+      )}
     </div>
   )
 }
@@ -115,8 +267,19 @@ export default function ApprovalDialog() {
   const [, setTick] = useState(0)
   // 同名冲突时「改名安装」输入的新标识；null 表示未进入改名。换到下一条审批时清空。
   const [rename, setRename] = useState<string | null>(null)
-  const currentId = pending[0]?.approvalId
-  useEffect(() => { setRename(null) }, [currentId])
+  // 「以后从平台目录安装时直接安装」：只对平台目录来源出现，换到下一条审批时清空。
+  const [remember, setRemember] = useState(false)
+  // 「本会话不再询问该工具」：只对外部工具（MCP 连接器等）出现；会话删除后失效。
+  const [sessionAllow, setSessionAllow] = useState(false)
+  // 正在等浏览器登录的条目不挡住新来的审批（新审批有倒计时）；同一会话的多条合并为一个队列卡片。
+  const item = pickCurrent(pending)
+  const currentId = item?.approvalId
+  const position = item ? queuePosition(pending, item) : null
+  // 需要访问令牌的 MCP：令牌与可选请求头名。换到下一条审批、或提交失败（含令牌被拒）时清空。
+  const [token, setToken] = useState('')
+  const [header, setHeader] = useState('')
+  useEffect(() => { setRename(null); setRemember(false); setSessionAllow(false); setToken(''); setHeader('') }, [currentId])
+  useEffect(() => { if (item?.phase === 'error') setToken('') }, [item?.phase, currentId])
 
   useEffect(() => {
     if (pending.length === 0) return
@@ -124,9 +287,12 @@ export default function ApprovalDialog() {
     return () => clearInterval(timer)
   }, [pending.length, pruneExpired])
 
-  if (pending.length === 0) return null
-  // 多条审批排队：处理完最旧的一条自动露出下一条，不展示队列数量
-  const item = pending[0]
+  if (!item) return null
+  // 多条审批排队：处理完最旧的一条自动露出下一条；同一会话显示「第 N / M 条」
+  const watchers = pending.filter((p) => p.phase === 'signing_in' && !p.errorMessage).map((p) => {
+    const preview = parseCapabilityInstall(p.toolName, p.summary)
+    return <SignInWatcher key={p.approvalId} item={p} ref={preview?.ref ?? ''} url={preview?.url ?? ''} />
+  })
   const install = parseCapabilityInstall(item.toolName, item.summary)
   const meta = install
     ? install.kind === 'skill'
@@ -137,8 +303,15 @@ export default function ApprovalDialog() {
   const remain = remainingSeconds(item, Date.now())
   const deciding = item.phase === 'deciding'
   const expired = item.phase === 'expired'
+  const signingIn = item.phase === 'signing_in'
+  const mcpAuth = install?.kind === 'mcp' ? install.auth : 'none'
+  const needsToken = mcpAuth === 'bearer' && !token.trim()
+  const tokenHeader = install?.authHeader || header.trim()
+  const authOptions: DecideOptions = mcpAuth === 'bearer'
+    ? { credential: { token: token.trim(), ...(tokenHeader ? { header: tokenHeader } : {}) } }
+    : mcpAuth === 'oauth' ? { signIn: true } : {}
 
-  return createPortal(
+  return <>{watchers}{createPortal(
     <div style={overlayStyle} role="presentation">
       <style>{`
         @keyframes approvalIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
@@ -158,17 +331,20 @@ export default function ApprovalDialog() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {expired ? '审批已失效' : item.employee ? `${item.employee} 请求权限` : '工具权限请求'}
+              {expired ? '审批已失效' : signingIn ? '登录服务方账号' : item.employee ? `${item.employee} 请求权限` : '工具权限请求'}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
               {meta.label} · <code style={{ fontSize: 11 }}>{item.toolName}</code>
+              {position && position.total > 1 ? <span aria-label="审批队列"> · 第 {position.index} / {position.total} 条</span> : null}
             </div>
           </div>
-          {!expired && remain !== null && <CountdownRing remain={remain} total={Math.ceil((item.totalMs ?? remain * 1000) / 1000)} tone={meta.tone} />}
+          {!expired && !signingIn && remain !== null && <CountdownRing remain={remain} total={Math.ceil((item.totalMs ?? remain * 1000) / 1000)} tone={meta.tone} />}
         </div>
 
+        {signingIn ? <SignInBody item={item} /> : <>
         {/* 参数预览 */}
         {install && <InstallPreview preview={install} />}
+        {install && <AuthSection preview={install} token={token} header={header} disabled={deciding} onToken={setToken} onHeader={setHeader} />}
         {!install && item.summary && (
           <div style={{ padding: '0 20px' }}>
             <div style={{
@@ -180,6 +356,41 @@ export default function ApprovalDialog() {
               {item.summary}
             </div>
           </div>
+        )}
+
+        {install?.platform && !expired && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={remember}
+              disabled={deciding}
+              onChange={(event) => setRemember(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              以后从平台目录安装{install.kind === 'skill' ? '技能' : ' MCP'}时直接安装，不再询问
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)' }}>只对平台目录来源生效；可在「设置 · 个人能力」撤销。</span>
+            </span>
+          </label>
+        )}
+
+        {/* 外部工具（MCP 连接器等）与目录来源的技能安装：本会话内不再询问。会话级，删除会话即失效。
+            MCP 安装不给出该选项：审批弹窗还要收集 OAuth 登录 / 访问令牌。
+            外部来源技能（ClawHub / 网址 / 粘贴）也不给：未签名内容每次都问。 */}
+        {(item.riskLevel === 'external' || install?.kind === 'skill') && !expired && (install?.kind !== 'skill' || sessionGrantAllowed(install)) && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '12px 20px 0', fontSize: 12, lineHeight: 1.6, color: 'var(--text-secondary)', cursor: deciding ? 'default' : 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={sessionAllow}
+              disabled={deciding}
+              onChange={(event) => setSessionAllow(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              {install?.kind === 'skill' ? '本会话内不再询问安装技能' : '本会话内不再询问该工具'}
+              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)' }}>只对当前会话生效；删除会话后恢复为每次询问。</span>
+            </span>
+          </label>
         )}
 
         {/* 错误提示（倒计时在头部右上角圆环） */}
@@ -202,8 +413,9 @@ export default function ApprovalDialog() {
               rename={rename}
               onRename={setRename}
               onCancel={() => void decide(item.approvalId, 'deny')}
-              onReplace={() => void decide(item.approvalId, 'approve', { action: 'replace' })}
-              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { action: 'rename', ref })}
+              blocked={needsToken}
+              onReplace={() => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'replace' }, remember: install.platform && remember, sessionAllow })}
+              onRenameSubmit={(ref) => void decide(item.approvalId, 'approve', { ...authOptions, resolution: { action: 'rename', ref }, remember: install.platform && remember, sessionAllow })}
             />
           ) : (
             <>
@@ -217,9 +429,10 @@ export default function ApprovalDialog() {
               </button>
               <button
                 type="button"
-                disabled={deciding}
-                onClick={() => void decide(item.approvalId, 'approve')}
-                style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : 1 }}
+                disabled={deciding || needsToken}
+                title={needsToken ? '请先填写访问令牌' : undefined}
+                onClick={() => void decide(item.approvalId, 'approve', { ...authOptions, remember: Boolean(install?.platform) && remember, sessionAllow })}
+                style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : needsToken ? 0.5 : 1 }}
               >
                 {deciding && (
                   <span style={{
@@ -228,21 +441,24 @@ export default function ApprovalDialog() {
                     animation: 'approvalSpin 0.8s linear infinite',
                   }} />
                 )}
-                允许
+                {mcpAuth === 'oauth' ? '允许并登录' : '允许'}
               </button>
             </>
           )}
         </div>
+        </>}
       </div>
     </div>,
     document.body,
-  )
+  )}</>
 }
 
 /** 同名冲突：取消 / 改名安装（仅 MCP）/ 覆盖。没有「允许」按钮，避免默认覆盖。 */
-function ClashActions({ preview, deciding, rename, onRename, onCancel, onReplace, onRenameSubmit }: {
+function ClashActions({ preview, deciding, blocked, rename, onRename, onCancel, onReplace, onRenameSubmit }: {
   preview: CapabilityInstallPreview
   deciding: boolean
+  /** 需要访问令牌但还没填：覆盖 / 改名安装不可点。 */
+  blocked: boolean
   rename: string | null
   onRename: (value: string | null) => void
   onCancel: () => void
@@ -269,7 +485,7 @@ function ClashActions({ preview, deciding, rename, onRename, onCancel, onReplace
         {problem && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{problem}</span>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
           <button type="button" disabled={deciding} onClick={() => onRename(null)} style={dim(ghostBtnStyle)}>返回</button>
-          <button type="button" disabled={deciding || Boolean(problem)} onClick={() => onRenameSubmit(rename.trim())} style={{ ...primaryBtnStyle, opacity: deciding || problem ? 0.6 : 1 }}>改名安装</button>
+          <button type="button" disabled={deciding || blocked || Boolean(problem)} onClick={() => onRenameSubmit(rename.trim())} style={{ ...primaryBtnStyle, opacity: deciding || blocked || problem ? 0.6 : 1 }}>改名安装</button>
         </div>
       </div>
     )
@@ -280,7 +496,7 @@ function ClashActions({ preview, deciding, rename, onRename, onCancel, onReplace
       {preview.kind === 'mcp' && (
         <button type="button" disabled={deciding} onClick={() => onRename(`${preview.ref}-2`.slice(0, 64))} style={dim(ghostBtnStyle)}>改名安装</button>
       )}
-      <button type="button" disabled={deciding} onClick={onReplace} style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : 1 }}>覆盖</button>
+      <button type="button" disabled={deciding || blocked} onClick={onReplace} style={{ ...primaryBtnStyle, opacity: deciding ? 0.75 : blocked ? 0.5 : 1 }}>覆盖</button>
     </>
   )
 }
@@ -294,6 +510,8 @@ const overlayStyle: React.CSSProperties = {
 
 const dialogStyle: React.CSSProperties = {
   width: 420, maxWidth: 'calc(100vw - 48px)',
+  // 令牌输入 / 登录链接让内容变高：小窗口下弹窗内部滚动，按钮始终可达。
+  maxHeight: 'calc(100vh - 48px)', overflowY: 'auto',
   background: 'var(--surface-1)',
   border: '1px solid var(--border)',
   borderRadius: 14,
@@ -313,4 +531,13 @@ const ghostBtnStyle: React.CSSProperties = {
   fontSize: 13, padding: '7px 18px', borderRadius: 8,
   border: '1px solid var(--border)', cursor: 'pointer',
   background: 'var(--surface-2)', color: 'var(--text-primary)',
+}
+
+const inputStyle: React.CSSProperties = {
+  fontSize: 13, fontFamily: 'monospace', padding: '7px 10px', borderRadius: 8,
+  border: '1px solid var(--border)', background: 'var(--surface-2)', color: 'var(--text-primary)',
+}
+
+function spinnerStyle(track: string, head: string): React.CSSProperties {
+  return { width: 12, height: 12, borderRadius: '50%', border: `2px solid ${track}`, borderTopColor: head, animation: 'approvalSpin 0.8s linear infinite', flexShrink: 0 }
 }

@@ -52,6 +52,8 @@ pub fn run() {
             file_access::revoke_file_access,
             file_access::open_file_privacy_settings,
             external_links::open_portal_in_browser,
+            external_links::open_external_url,
+            external_links::reveal_in_file_manager,
             diagnostics::append_application_logs,
             diagnostics::application_log_snapshot,
             diagnostics::export_application_logs,

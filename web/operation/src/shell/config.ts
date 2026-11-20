@@ -13,6 +13,7 @@ export const operationShellConfig: PageShellConfig = {
     { id: "accounts", labelKey: "operation.nav.accounts", path: "/accounts", icon: "enterprise", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "experts", labelKey: "operation.nav.experts", path: "/experts", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "skill-market", labelKey: "operation.nav.skillMarket", path: "/skill-market", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
+    { id: "mcp-market", labelKey: "operation.nav.mcpMarket", path: "/mcp-market", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "providers", labelKey: "operation.nav.providers", path: "/providers", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "industry-solutions", labelKey: "operation.nav.industrySolutions", path: "/industry-solutions", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },
     { id: "solution-authoring", labelKey: "operation.nav.solutionAuthoring", path: "/solution-authoring", icon: "catalog", requiredRoles: [PlatformRole.SYSTEM_ADMIN, PlatformRole.SYSTEM_OPERATOR] },

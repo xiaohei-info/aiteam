@@ -1,0 +1,106 @@
+/* 设置「个人能力」MCP 鉴权窗口（MCP 鉴权 2026-11-18）。 */
+.chat-tools-dialog.mcp-dialog { width: min(600px, 100%); }
+.mcp-form { display: grid; gap: 12px; margin-top: 16px; font-size: 13px; }
+.mcp-form label { display: grid; gap: 4px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+.mcp-form input:not([type=checkbox]), .mcp-form textarea, .mcp-form select { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-primary); font-size: 13px; font-family: inherit; }
+.mcp-form textarea { font-family: monospace; resize: vertical; }
+.mcp-form input:focus-visible, .mcp-form textarea:focus-visible, .mcp-form select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+.mcp-form footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.mcp-form footer button:last-child { background: var(--brand); color: var(--text-on-brand); }
+.mcp-form button { border: 1px solid var(--border); }
+.mcp-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.mcp-label { color: var(--text-muted); font-size: 11px; margin-bottom: 4px; }
+.mcp-link { max-height: 96px; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-muted); font-family: monospace; font-size: 11px; word-break: break-all; }
+.mcp-hint { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 8px 12px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.mcp-hint > svg { flex-shrink: 0; margin-top: 3px; color: var(--brand); }
+.mcp-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.mcp-error { margin: 0; color: var(--danger); font-size: 12px; line-height: 1.6; }
+/* 「已经装好了」是状态，不是错误：用中性色 + 对勾。 */
+.installed-note { display: flex; align-items: flex-start; gap: 6px; color: var(--text-secondary); font-size: 12px; }
+.installed-note svg { flex: none; margin-top: 2px; color: var(--success); }
+.mcp-imported { display: grid; gap: 6px; }
+.mcp-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-choices button[aria-pressed=true] { border-color: var(--brand); color: var(--brand); }
+.mcp-auth-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; color: var(--text-secondary); font-size: 12px; }
+.mcp-auth-line strong { color: var(--text-primary); }
+.mcp-advanced summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-secondary); font-size: 12px; list-style: none; }
+.mcp-advanced summary::-webkit-details-marker { display: none; }
+.mcp-advanced[open] summary svg { transform: rotate(180deg); }
+.mcp-advanced .mcp-row { margin-top: 10px; }
+.mcp-check { display: flex !important; grid-template-columns: none; align-items: center; gap: 8px; }
+.mcp-auth-badge { display: inline-block; padding: 1px 6px; border-radius: var(--radius-full); border: 1px solid var(--border); color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.mcp-auth-badge.attention { border-color: var(--danger-border-strong); color: var(--danger); }
+.mcp-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px; max-width: 220px; flex-shrink: 0; }
+
+/* 「添加技能」列表 */
+.skill-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.skill-list li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.skill-list li + li { border-top: 1px solid var(--border); }
+.skill-list-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.skill-list-copy strong { color: var(--text-primary); font-size: 13px; overflow-wrap: anywhere; }
+.skill-list-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.skill-list li > button { flex-shrink: 0; }
+.skill-search { display: flex !important; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-1); }
+.mcp-form .skill-search input { border: 0; padding: 7px 0; background: transparent; }
+/* 「能力」页 */
+.capabilities-heading-action { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 8px; }
+.capabilities-add { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 10px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--brand); font-size: 12px; cursor: pointer; }
+.capabilities-add:hover { background: var(--brand-soft); }
+.capabilities-add:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+
+/* 添加技能：一次只显示一种来源（设计 2026-11-18 自定义技能导入 §3.5） */
+.skill-source-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.skill-source-tabs button { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface-1); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.skill-source-tabs button.on { border-color: var(--brand); background: var(--brand-ghost); color: var(--brand); }
+.skill-source-tabs button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+.custom-skill-import { position: relative; }
+.skill-pick { display: flex !important; align-items: center; gap: 8px; }
+.skill-pick input { flex: 1; min-width: 0; }
+.skill-pick button { flex-shrink: 0; }
+.skill-preview { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.skill-preview-row { display: flex; gap: 8px; font-size: 12px; line-height: 1.6; }
+.skill-preview-row > span:first-child { flex-shrink: 0; width: 40px; color: var(--text-muted); }
+.skill-preview-row > :nth-child(2) { min-width: 0; overflow-wrap: anywhere; color: var(--text-secondary); }
+.skill-preview-files { margin: 6px 0 0; padding-left: 48px; color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.skill-install { background: var(--brand); color: var(--text-on-brand); }
+.skill-busy { position: absolute; right: 12px; bottom: 12px; }
+
+/* 一个包里扫出多个技能时的选择清单 */
+.skill-scan { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.skill-scan ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.skill-scan li { border: 1px solid var(--border); border-radius: var(--radius-md); }
+.skill-scan li.invalid { opacity: .7; }
+.skill-scan label { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; cursor: pointer; }
+.skill-scan li.invalid label { cursor: not-allowed; }
+.skill-scan-copy { display: grid; gap: 2px; min-width: 0; }
+.skill-scan-copy strong { color: var(--text-primary); font-size: 12.5px; overflow-wrap: anywhere; }
+.skill-scan-copy span { color: var(--text-muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+/* 安装完成：只给结果与「完成」，不再显示表单和安装按钮。 */
+.skill-success { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--success-border-soft); border-radius: var(--radius-lg); background: var(--success-bg-soft); }
+.skill-success-title { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--success); font-size: 13px; font-weight: 600; }
+.skill-success ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.skill-success li { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.skill-success footer { display: flex; justify-content: flex-end; margin-top: 2px; }
+.skill-success .skill-install { min-height: 32px; padding: 0 18px; border: 1px solid var(--brand); border-radius: var(--radius-md); background: var(--brand); color: #1a1a1a; font-size: 12.5px; cursor: pointer; }
+.skill-success .skill-install:hover { filter: brightness(1.05); }
+.skill-success .skill-install:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; box-shadow: var(--brand-focus-ring); }
+
+/* ClawHub：同名候选列表与安全提示。 */
+.clawhub-candidates li { display: flex; align-items: center; gap: 8px; }
+.clawhub-candidates li .skill-scan-copy { flex: 1; }
+.clawhub-owner { color: var(--text-muted); font-weight: 400; }
+.clawhub-open { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--surface-1); color: var(--text-secondary); font-size: 11.5px; cursor: pointer; }
+.clawhub-security { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-1); }
+.clawhub-security.warn { border-color: var(--danger); }
+.clawhub-security-title { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 11.5px; color: var(--text-secondary); }
+.clawhub-security.warn .clawhub-security-title { color: var(--danger); }
+.clawhub-security ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.clawhub-security li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11.5px; }
+.clawhub-scanner-name { color: var(--text-muted); }
+.clawhub-scanner-status { color: var(--text-secondary); }
+.clawhub-scanner-status.suspicious, .clawhub-scanner-status.malicious { color: var(--danger); }
+.clawhub-scanner-status.clean { color: var(--success); }
+.clawhub-scanner-reco { color: var(--danger); }
+.clawhub-scanner-issues { color: var(--text-muted); }
+/* 安装结果：就一段文案，成功 / 重复 / 失败各占一行，不做列表。 */
+.outcome-note { margin-top: 6px; white-space: pre-line; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }

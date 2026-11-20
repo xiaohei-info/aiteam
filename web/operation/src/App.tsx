@@ -13,6 +13,7 @@ import { SolutionsPage } from "./features/solutions";
 import { DraftDetailPage, SolutionAuthoringPage } from "./features/solution-authoring";
 import { SystemHealthPage } from "./features/system-health";
 import { SkillMarketPage } from "./features/skill-market/SkillMarketPage";
+import { McpMarketPage } from "./features/mcp-market/McpMarketPage";
 import { PlatformProvidersPage } from "./features/providers/PlatformProvidersPage";
 
 export function App(): React.ReactNode {
@@ -27,6 +28,7 @@ export function App(): React.ReactNode {
             避免注册表单状态（含已填内容）在两个注册流程间串页污染。 */}
         <Route path="/experts" element={<CatalogPage key="expert_template" catalogType="expert_template" titleKey="operation.nav.experts" registerKey="operation.catalog.registerExpert" />} />
         <Route path="/skill-market" element={<SkillMarketPage />} />
+        <Route path="/mcp-market" element={<McpMarketPage />} />
         <Route path="/providers" element={<PlatformProvidersPage />} />
         <Route path="/industry-solutions" element={<CatalogPage key="solution_template" catalogType="solution_template" titleKey="operation.nav.industrySolutions" registerKey="operation.catalog.registerSolution" />} />
         {/* 旧 /catalog 列表已拆分为 /experts + /industry-solutions，收藏夹重定向 */}

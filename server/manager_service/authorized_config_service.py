@@ -272,6 +272,7 @@ class AuthorizedConfigService:
                 skill_id=row.skill_id, display_name=row.display_name, version=row.version,
                 content_hash=row.content_hash,
                 source_skill_id=str((row.config if isinstance(row.config, dict) else {}).get("source_skill_id") or ""),
+                origin="platform" if (row.config if isinstance(row.config, dict) else {}).get("source") == "operator" else "enterprise",
             )
             for row in repo.list_skill_summaries(ctx)
             if row.package_shaped and self._member_may_self_install(row)

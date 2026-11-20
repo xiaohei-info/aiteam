@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Bot, Building2, ChevronRight, ExternalLink, Globe, LogOut, MessageSquarePlus, RefreshCw, Wrench, type LucideIcon } from 'lucide-react'
+import { Bell, Bot, Building2, ChevronRight, ExternalLink, Globe, LogOut, MessageSquarePlus, Puzzle, RefreshCw, Wrench, type LucideIcon } from 'lucide-react'
 import './Settings.css'
 import ApplicationLogs from './ApplicationLogs'
 import FileAccessSettings from './FileAccessSettings'
-import PersonalCapabilities from './PersonalCapabilities'
 import {
   buildNotificationStorageKey,
   readNotificationPreferenceResult,
@@ -247,7 +246,16 @@ export default function Settings() {
 
         <FileAccessSettings />
 
-        <PersonalCapabilities />
+        <section className="settings-card glass-panel" aria-labelledby="settings-capabilities-title">
+          <div className="settings-section-heading" style={{ marginBottom: 0, alignItems: 'center' }}>
+            <Puzzle size={16} strokeWidth={1.7} aria-hidden="true" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h2 id="settings-capabilities-title">个人能力（MCP 与技能）</h2>
+              <p>已移到左侧栏「能力」：添加 MCP 与技能、登录状态、撤销与自动安装授权都在那里。</p>
+            </div>
+            <button type="button" className="file-access-revoke" style={{ color: 'var(--brand)' }} onClick={() => navigate('/capabilities')}>打开「能力」</button>
+          </div>
+        </section>
 
         <details
           className="settings-card glass-panel settings-advanced"

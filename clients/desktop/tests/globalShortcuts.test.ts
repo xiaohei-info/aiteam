@@ -65,7 +65,7 @@ test('contextual new matrix exposes only currently usable chat and group actions
 
   assert.equal(resolveContextualNewAction('/chat', { ...allAvailable, canCreateChat: false }), null)
   assert.equal(resolveContextualNewAction('/group-chat', { ...allAvailable, canCreateGroup: false }), null)
-  for (const pathname of ['/tasks', '/knowledge', '/knowledge/kb-1', '/org', '/agents', '/talents', '/skills', '/mcp', '/settings', '/office', '/profile', '/login']) {
+  for (const pathname of ['/tasks', '/knowledge', '/knowledge/kb-1', '/org', '/agents', '/talents', '/capabilities', '/settings', '/office', '/profile', '/login']) {
     assert.equal(resolveContextualNewAction(pathname, allAvailable), null, pathname)
   }
 })
