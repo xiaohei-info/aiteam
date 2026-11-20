@@ -17,6 +17,10 @@ import { errorText, useExternalSkills } from "./useExternalSkills";
 import { useSkillMarketApi } from "./useSkillMarketApi";
 import type { ExternalSkillPreview, InternalSkill } from "./types";
 
+/** 卡片：文字列自行换行，操作区固定在右上（窄窗口时整体换到下一行）。 */
+const TEXT_COLUMN = { flex: "1 1 320px", minWidth: 0 } as const;
+const ACTIONS = { flexShrink: 0 } as const;
+
 export function SkillMarketPage(): ReactNode {
   const api = useSkillMarketApi();
   const [tab, setTab] = useState<"internal" | "external">("internal");
@@ -98,13 +102,13 @@ export function SkillMarketPage(): ReactNode {
                 {internal.map((skill) => (
                   <Card key={skill.skill_id} padding={4}>
                     <HStack justify="between" align="start" wrap="wrap" gap={3}>
-                      <VStack gap={1}>
+                      <VStack gap={1} style={TEXT_COLUMN}>
                         <Heading level={3}>{skill.display_name || skill.slug}</Heading>
                         <Text color="secondary">{skill.summary || "暂无描述"}</Text>
                         <Text color="secondary">{skill.owner}/{skill.slug} · v{skill.latest_internal_version}</Text>
                         <HStack gap={2} wrap="wrap"><SecurityBadges security={skill.security} /></HStack>
                       </VStack>
-                      <HStack gap={2}>
+                      <HStack gap={2} style={ACTIONS}>
                         <Badge
                           label={skill.latest_version_status === "draft" ? "新版待开放" : skill.status === "published" ? "已开放" : skill.status === "draft" ? "待开放" : "已下架"}
                           variant={skill.latest_version_status === "draft" ? "warning" : skill.status === "published" ? "success" : "warning"}
@@ -139,12 +143,12 @@ export function SkillMarketPage(): ReactNode {
                   return (
                     <Card key={`${skill.owner}/${skill.slug}`} padding={4}>
                       <HStack justify="between" align="start" wrap="wrap" gap={3}>
-                        <VStack gap={1}>
+                        <VStack gap={1} style={TEXT_COLUMN}>
                           <Heading level={3}>{skill.display_name || skill.slug}</Heading>
                           <Text color="secondary">{skill.summary || "暂无描述"}</Text>
                           <Text color="secondary">{skill.owner}/{skill.slug}{skill.latest_version ? ` · v${skill.latest_version}` : ""}</Text>
                         </VStack>
-                        <HStack gap={2}>
+                        <HStack gap={2} style={ACTIONS}>
                           {inside && <Badge label={current ? "已导入" : `已导入 v${inside.latest_internal_version}`} variant={current ? "success" : "info"} />}
                           <Button label="详情" href={skill.canonical_url} variant="ghost" size="sm" />
                           <Button label={newer ? "预览更新" : "预览"} variant="primary" size="sm" onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />
