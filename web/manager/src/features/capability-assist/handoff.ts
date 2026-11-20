@@ -4,7 +4,8 @@
  */
 import type { CapabilityAssistCandidate } from "./types";
 
-export const SKILL_PAGE = "/capability";
+/** 侧栏「技能管理」：默认标签「企业技能」就是技能目录。 */
+export const SKILL_PAGE = "/skill-market";
 export const MCP_PAGE = "/mcp-market";
 
 interface HandoffState {

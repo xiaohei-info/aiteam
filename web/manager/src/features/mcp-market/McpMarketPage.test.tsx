@@ -120,7 +120,7 @@ describe("让模型帮我找（MCP 市场）", () => {
     function Capability() { const location = useLocation(); return <p>技能页 {JSON.stringify(location.state)}</p>; }
     render(
       <MemoryRouter initialEntries={["/mcp-market"]}>
-        <Routes><Route path="/mcp-market" element={<McpMarketPage />} /><Route path="/capability" element={<Capability />} /></Routes>
+        <Routes><Route path="/mcp-market" element={<McpMarketPage />} /><Route path="/skill-market" element={<Capability />} /></Routes>
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByRole("button", { name: "让模型帮我找" }));

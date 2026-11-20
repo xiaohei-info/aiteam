@@ -366,6 +366,10 @@ POST /api/manager/capability-assist
 
 全量测试：后端（真 PG）3884 通过，9 失败 / 8 错误与开工前基线完全相同；Agent 552/554（2 跳过）；桌面 926/926、类型检查与契约检查通过；企业端 402/402、运营端 362/362、web/shared 54/54；web/agent 1 例 `FilesPanel` 失败为开工前已有。随包 Agent 已按 `70b85d84` 重打为 `0.1.0-src.70b85d84`（darwin-arm64），`agent:check` 与 `check:agent-package` 通过。
 
+用户验收发现并已修复：
+- 企业端侧栏「技能管理」指向 `/skill-market`（只有平台技能市场），技能目录页 `/capability` 自 08-24 起没有菜单入口，导致「导入技能 /让模型帮我找」找不到。现「技能管理」分两个标签：「企业技能」（技能目录 + 「新增技能」菜单）与「平台技能市场」（对应 08-24 spec「技能管理页：平台市场/企业已安装」）；MCP 市场交接技能候选改到 `/skill-market`。平台市场旧文案「Manager 不直接连接外部市场」已改。
+- 运营端 ClawHub「详情」/「在 ClawHub 查看」改为新标签页打开。
+
 仍未验证：真实平台模型冒烟（§4.5b）；anthropic 协议 Relay 路径。
 
 ---

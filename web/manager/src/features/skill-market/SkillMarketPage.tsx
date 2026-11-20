@@ -12,7 +12,8 @@ import { VStack } from "@astryxdesign/core/VStack";
 import { useSkillMarketApi } from "./useSkillMarketApi";
 import type { PlatformSkillMarketItem } from "./types";
 
-export function SkillMarketPage(): ReactNode {
+/** 平台技能市场：运营端审核开放的技能。`embedded` 时嵌在「技能管理」的标签页里，不显示页标题。 */
+export function SkillMarketPage({ embedded = false }: { embedded?: boolean } = {}): ReactNode {
   const api = useSkillMarketApi();
   const [items, setItems] = useState<PlatformSkillMarketItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -43,21 +44,21 @@ export function SkillMarketPage(): ReactNode {
 
   return (
     <VStack as="section" gap={5}>
-      <Heading level={1}>技能市场</Heading>
-      <Text color="secondary">技能由 Operator 从 ClawHub 审核并开放；Manager 不直接连接外部市场。</Text>
+      {!embedded && <Heading level={1}>技能市场</Heading>}
+      <Text color="secondary">运营端审核并开放的技能。安装后出现在「企业技能」里，成员即可自行安装。</Text>
       {notice && <Banner status="success" title={notice} />}
       {error && <Banner status="error" title={error} />}
       {items.length === 0 ? <EmptyState title="暂无平台开放技能" /> : (
         <VStack gap={3}>
           {items.map((item) => (
             <Card key={item.skill_id} padding={4}>
-              <HStack justify="between" align="start" wrap="wrap">
-                <VStack gap={1}>
+              <HStack justify="between" align="start" wrap="wrap" gap={3}>
+                <VStack gap={1} style={{ flex: "1 1 320px", minWidth: 0 }}>
                   <Heading level={3}>{item.display_name || item.slug}</Heading>
                   <Text color="secondary">{item.summary || "暂无描述"}</Text>
                   <Text color="secondary">{item.owner}/{item.slug} · v{item.published_version}</Text>
                 </VStack>
-                <HStack gap={2}>
+                <HStack gap={2} style={{ flexShrink: 0 }}>
                   {item.installed && <Badge label={item.update_available ? "可更新" : "已安装"} variant={item.update_available ? "warning" : "success"} />}
                   <Button
                     label={item.installed ? item.update_available ? "更新" : "已安装" : "安装"}

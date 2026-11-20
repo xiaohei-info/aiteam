@@ -172,7 +172,12 @@ function draftFrom(kind: Kind, item: SkillCatalog | ConnectorCatalog | MemoryPol
   };
 }
 
-export function CapabilityPage(): ReactNode {
+interface CapabilityPageProps {
+  /** 嵌在「技能管理 · 企业技能」里：只显示技能目录，不显示页标题（连接器、记忆另有菜单）。 */
+  skillsOnly?: boolean;
+}
+
+export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {}): ReactNode {
   const { session } = useSession();
   const i18n = useI18n();
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
@@ -396,7 +401,7 @@ export function CapabilityPage(): ReactNode {
 
   return (
     <VStack as="section" gap={6}>
-      <Heading level={1}>{i18n.t("manager.nav.capability")}</Heading>
+      {!skillsOnly && <Heading level={1}>{i18n.t("manager.nav.capability")}</Heading>}
       {notice && <Banner status="success" title={notice} />}
       {actionError && editor.mode === "closed" && <Banner status="error" title={actionError} />}
       {error && <Banner status="error" title={error} />}
@@ -419,12 +424,14 @@ export function CapabilityPage(): ReactNode {
           >
             <Table aria-label="技能目录" tableProps={{ "aria-label": "技能目录" }} data={skills as SkillRow[]} columns={skillColumns} idKey="catalog_id" hasHover emptyState={<EmptyState title={i18n.t("manager.capability.empty")} isCompact />} />
           </CatalogSection>
+          {!skillsOnly && <>
           <CatalogSection title={i18n.t("manager.capability.connectors_title", { count: connectors.length })} addLabel={i18n.t("manager.capability.add_connector")} canWrite={canWrite} onAdd={() => openCreate("connector")}>
             <Table aria-label="连接器目录" tableProps={{ "aria-label": "连接器目录" }} data={connectors as ConnectorRow[]} columns={connectorColumns} idKey="catalog_id" hasHover emptyState={<EmptyState title={i18n.t("manager.capability.empty")} isCompact />} />
           </CatalogSection>
           <CatalogSection title={i18n.t("manager.capability.memories_title", { count: memories.length })} addLabel={i18n.t("manager.capability.add_memory_policy")} canWrite={canWrite} onAdd={() => openCreate("memory")}>
             <Table aria-label="记忆策略目录" tableProps={{ "aria-label": "记忆策略目录" }} data={memories as MemoryRow[]} columns={memoryColumns} idKey="catalog_id" hasHover emptyState={<EmptyState title={i18n.t("manager.capability.empty")} isCompact />} />
           </CatalogSection>
+          </>}
         </>
       )}
 
