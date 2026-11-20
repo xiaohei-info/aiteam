@@ -1,3 +1,4 @@
+import type { CapabilityProvenance } from "@aiteam/shared";
 export interface ExternalSkill {
   owner: string;
   slug: string;
@@ -27,6 +28,10 @@ export interface InternalSkill {
   latest_version_status?: "draft" | "published";
   /** 最新版本导入时的 ClawHub 安全扫描结论（只提示，不拦截）。 */
   security?: SkillSecurity | null;
+  /** 展示前缀：平台自建与改编的为 taiyim；原样取自 ClawHub / 网址的为空。 */
+  namespace?: string;
+  /** 来自其他平台时的出处；改编副本 edited=true。 */
+  provenance?: CapabilityProvenance | null;
 }
 
 /** ClawHub 单个扫描器的结论；两个扫描器并列展示，不合并成一个词。 */

@@ -9,6 +9,8 @@ that enterprises install from 「平台技能市场」 like any ClawHub one.
 * `save` stores the chosen skills: a new name is a new platform skill; changed content is a new version
   (enterprises see 「可更新」); identical content is reported as a duplicate;
 * publishing follows the same 「自动开放」 switch as ClawHub imports;
+* editing a ClawHub skill (`fork_of`) saves our own copy (``taiyim/<name>``, 「改自 ClawHub …」); the ClawHub
+  original stays (design「技能MCP命名空间出处与更新提示」§4.2);
 * nothing is executed.
 """
 
@@ -17,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from shared.capability_namespace import as_edited, clawhub_provenance, url_provenance
 from shared.errors import ValidationProblem
 from shared.net_guard import Fetch
 from shared.skill_import import skill_roots
@@ -28,8 +31,9 @@ from .platform_skill_market import CustomSkillState, plan_custom_version
 class CustomSkillStore(Protocol):
     def find_custom(self, *, name: str) -> CustomSkillState | None: ...
     def save_custom(self, *, name: str, description: str, files: list[dict[str, str]], content_hash: str,
-                    declared_version: str, auto_publish: bool, source_url: str) -> dict: ...
+                    declared_version: str, auto_publish: bool, source_url: str, provenance: dict | None = None) -> dict: ...
     def get_setting(self) -> bool: ...
+    def get_internal(self, *, skill_id: str) -> dict: ...
 
 
 @dataclass
@@ -39,6 +43,7 @@ class CustomSkillRequest:
     text: str = ""
     url: str = ""
     roots: list[str] | None = None
+    fork_of: str = ""  # platform skill_id of the ClawHub skill being edited into our own copy
 
 
 class CustomSkillService:
@@ -60,6 +65,7 @@ class CustomSkillService:
             if not reads:
                 raise ValidationProblem("这个来源里没有可导入的技能")
         auto_publish = self._repo.get_setting()
+        forked = self._fork_provenance(request.fork_of)
         results = []
         for read in reads:
             base = {"root": read.root, "name": read.name, "version": ""}
@@ -69,10 +75,29 @@ class CustomSkillService:
             saved = self._repo.save_custom(
                 name=read.name, description=read.description, files=read.files, content_hash=read.content_hash,
                 declared_version=read.declared_version, auto_publish=auto_publish, source_url=gathered.origin.url,
+                provenance=self._provenance(read.name, gathered, forked),
             )
             results.append({**base, "version": saved["version"], "status": saved["status"], "skill_id": saved["skill_id"],
                             **({"reason": "平台目录里已有内容相同的这个技能"} if saved["status"] == "duplicate" else {})})
         return {"origin": gathered.origin.as_dict(), "results": results, "auto_publish": auto_publish}
+
+    def _fork_provenance(self, fork_of: str) -> dict | None:
+        if not fork_of:
+            return None
+        source = self._repo.get_internal(skill_id=fork_of)
+        if source.get("source") != "clawhub":
+            raise ValidationProblem("只有 ClawHub 导入的技能需要另存为平台副本；平台自建技能直接编辑")
+        return clawhub_provenance(source["owner"], source["slug"], version=source.get("latest_internal_version") or "", edited=True)
+
+    def _provenance(self, name: str, gathered: Gathered, forked: dict | None) -> dict | None:
+        """Edited copy of a ClawHub skill → 改自 ClawHub; an address taken as is → 来自 it; otherwise the skill's
+        recorded origin, now edited (an import from a folder or the editor is our content)."""
+        if forked is not None:
+            return forked
+        if gathered.origin.kind == "url" and gathered.origin.url:
+            return url_provenance(gathered.origin.url)
+        existing = self._repo.find_custom(name=name)
+        return as_edited(existing.provenance if existing else None)
 
     def _gather(self, request: CustomSkillRequest) -> Gathered:
         return self._sources.gather(request.source, entries=request.entries, text=request.text, url=request.url)

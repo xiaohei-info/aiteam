@@ -19,6 +19,8 @@ export interface PlatformMcpServer {
   /** 应用密钥是否已设置；密钥本身只写不读。 */
   oauth_client_secret_set: boolean;
   revision: number;
+  /** 展示前缀：平台 MCP 一律为 taiyim。 */
+  namespace?: string;
   status: "draft" | "published" | "unpublished";
 }
 
