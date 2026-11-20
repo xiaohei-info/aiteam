@@ -1445,7 +1445,9 @@ export class SessionHost {
         const result = await client.getInstallableSkillPackage!(caller, skillId);
         cache.install(scope, result.package, result.signing_keys);
       },
-      remove: (ref) => this.removePersonalSkill(scope.tenantId, scope.memberId, ref),
+      remove: (ref, only) => only === "imported"
+        ? this.options.customSkillStore?.remove(scope, ref)
+        : this.removePersonalSkill(scope.tenantId, scope.memberId, ref),
     };
   }
 

@@ -293,6 +293,20 @@ test("同名技能（SKILL.md name 相同）本机只能留一个：替换安装
     assert.equal(row.ref, "platform-p2");
     assert.deepEqual(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).map(item => item.ref), ["platform-p2"]);
     assert.deepEqual(removed, ["weather"]);
+
+    // Same ref as a self-imported skill: replacing keeps the record id but drops only the imported files.
+    fixture.store.putLocalCapability(owner.tenantId, owner.memberId, { kind: "skill", ref: "notes", display_name: "notes", url: "", tools: [], version: "x", source_ref: "", source: "user_import", reason: "", approved_by: "member-1" });
+    const removedOnly: Array<[string, string | undefined]> = [];
+    const enterprise = {
+      list: async () => [{ skill_id: "notes", display_name: "notes", version: "e1", content_hash: "h", source_skill_id: "", origin: "enterprise" as const, name: "notes", namespace: "太一科技" }],
+      install: async () => {},
+      remove: (ref: string, only?: "imported") => { removedOnly.push([ref, only]); },
+    };
+    await assert.rejects(installSkillDirectly(fixture.store, owner, enterprise, { skill_id: "notes" }),
+      (error: unknown) => error instanceof SkillInstallError && error.code === "skill_exists" && error.message.includes("同名技能「notes」"));
+    const notes = await installSkillDirectly(fixture.store, owner, enterprise, { skill_id: "notes", replace: true });
+    assert.deepEqual([notes.ref, notes.source, notes.version], ["notes", "enterprise_catalog", "e1"]);
+    assert.deepEqual(removedOnly, [["notes", "imported"]]);
   } finally { await fixture.close(); }
 });
 

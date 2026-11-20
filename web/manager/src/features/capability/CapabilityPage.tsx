@@ -338,7 +338,10 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         return (
           <VStack gap={1} align="start">
             <Badge label={skillSourceLabel(row.config)} />
-            {update && <Badge label={`平台有新版本 v${update.published_version}`} variant="warning" />}
+            {update && <>
+              <Badge label="平台有新版本" variant="warning" />
+              <Text size="sm" color="secondary" style={{ overflowWrap: "anywhere" }}>v{update.published_version}</Text>
+            </>}
           </VStack>
         );
       } },

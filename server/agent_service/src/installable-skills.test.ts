@@ -53,12 +53,14 @@ test("each enterprise skill carries its state here: same entry by version, other
     put("notes", "a1", "enterprise_catalog");
     put("weather", "x", "user_import");
     put("platform-old-1-h", "1", "platform_catalog", "p9");
+    put("ppt-outline", "mine", "user_import");
     const catalog = [
       { skill_id: "platform-p1", display_name: "天气", version: "2.0.0", content_hash: "h", source_skill_id: "p1", name: "weather-pro", namespace: "taiyim" },
       { skill_id: "notes", display_name: "notes", version: "a1", content_hash: "h", source_skill_id: "", name: "notes", namespace: "太一科技" },
       { skill_id: "platform-p2", display_name: "weather", version: "1", content_hash: "h", source_skill_id: "p2", name: "weather", namespace: "taiyim" },
       { skill_id: "platform-p9", display_name: "old", version: "1", content_hash: "h", source_skill_id: "p9", name: "old" },
       { skill_id: "fresh", display_name: "fresh", version: "1", content_hash: "h", source_skill_id: "" },
+      { skill_id: "ppt-outline", display_name: "ppt-outline", version: "e1", content_hash: "h", source_skill_id: "", name: "ppt-outline", namespace: "太一科技" },
     ];
     const states = listInstallableSkillStates(fixture.store, owner, catalog);
     assert.deepEqual(states.map(item => [item.skill_id, item.state, item.local_ref ?? ""]), [
@@ -67,6 +69,7 @@ test("each enterprise skill carries its state here: same entry by version, other
       ["platform-p2", "conflict", "weather"],      // a self-imported skill already uses the SKILL.md name «weather»
       ["platform-p9", "update", "platform-old-1-h"], // the same platform skill installed under an older catalog id
       ["fresh", "install", ""],
+      ["ppt-outline", "conflict", "ppt-outline"],  // same ref as a self-imported skill: a different skill, not an update
     ]);
   } finally { await fixture.close(); }
 });

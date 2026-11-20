@@ -225,8 +225,11 @@ export interface SkillInstaller {
   list(signal?: AbortSignal): Promise<InstallableSkillInfo[]>;
   /** Fetches the package signed for this member, verifies it and stores it in the personal skill cache. */
   install(skillId: string, signal?: AbortSignal): Promise<void>;
-  /** Removes a replaced skill's files (signed cache or self-imported store), like revoking it. */
-  remove?(ref: string): void;
+  /**
+   * Removes a replaced skill's files, like revoking it. `imported`: only the self-imported copy (the new catalog
+   * install has the same ref and its signed files must stay).
+   */
+  remove?(ref: string, only?: "imported"): void;
 }
 /** An MCP the enterprise enabled from the platform catalog or built itself (Manager `GET /grants/mcp-servers`, design §11.3 / MCP鉴权 §3.8 / 2026-11-20 §4.4). */
 export interface InstallableMcpInfo {
@@ -417,8 +420,10 @@ function localSkillName(local: LocalCapability, catalog: readonly InstallableSki
  */
 export function skillListing(installed: readonly LocalCapability[], catalog: readonly InstallableSkillInfo[], item: InstallableSkillInfo): InstallableSkillListing {
   const skills = installed.filter(local => local.kind === "skill");
-  const mine = skills.find(local => local.ref === item.skill_id)
-    ?? (item.source_skill_id ? skills.find(local => isCatalogMcpSource(local.source) && local.source_ref === item.source_skill_id) : undefined);
+  // Only an install from the catalog is "this entry": a self-imported skill may use the same ref and is a different skill.
+  const fromCatalog = skills.filter(local => isCatalogMcpSource(local.source));
+  const mine = fromCatalog.find(local => local.ref === item.skill_id)
+    ?? (item.source_skill_id ? fromCatalog.find(local => local.source_ref === item.source_skill_id) : undefined);
   const name = item.name || item.skill_id;
   const other = mine ? undefined : skills.find(local => localSkillName(local, catalog) === name);
   const local = mine ?? other;
@@ -980,6 +985,8 @@ async function installPlannedSkill(store: AgentSqliteStore, owner: TaskOwner, pl
   if (plan.existing && plan.existing.ref !== found.skill_id) {
     store.deleteLocalCapability(owner.tenantId, owner.memberId, "skill", plan.existing.ref);
     skills.remove?.(plan.existing.ref);
+  } else if (plan.existing && !isCatalogMcpSource(plan.existing.source)) {
+    skills.remove?.(plan.existing.ref, "imported");
   }
   store.putLocalCapability(owner.tenantId, owner.memberId, {
     kind: "skill", ref: found.skill_id, display_name: found.display_name || found.skill_id, url: "", tools: [], version: found.version, source_ref: plan.sourceRef,
@@ -1171,7 +1178,7 @@ export async function installSkillDirectly(store: AgentSqliteStore, owner: TaskO
     throw new SkillInstallError("skill_not_installable", "企业技能目录里没有这个可自行安装的技能，请联系企业管理员。");
   }
   if (plan.existing && !request.replace) {
-    throw new SkillInstallError("skill_exists", plan.existing.ref === plan.ref
+    throw new SkillInstallError("skill_exists", plan.existing.ref === plan.ref && isCatalogMcpSource(plan.existing.source)
       ? `「${plan.existing.display_name}」已经装好了（${plan.existing.version ?? ""} 版）；需要换成目录里的 ${plan.skill!.version} 版才点替换安装。`
       : `本机已有同名技能「${plan.existing.display_name}」，同一个名字只能装一个；替换安装会换成企业目录里的这个。`);
   }

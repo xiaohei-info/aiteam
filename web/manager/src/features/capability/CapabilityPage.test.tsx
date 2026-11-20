@@ -232,7 +232,8 @@ describe("CapabilityPage", () => {
     mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill]) });
     renderPage();
     const table = await screen.findByRole("table", { name: "技能目录" });
-    await within(table).findByText("平台有新版本 v2.0.0");
+    await within(table).findByText("平台有新版本");
+    expect(within(table).getByText("v2.0.0")).toBeInTheDocument();
     fireEvent.click(within(table).getByRole("button", { name: "更新" }));
     await waitFor(() => expect(marketApi.install).toHaveBeenCalledWith(item));
     expect(await screen.findByText(/已把 taiyim\/weather 更新到 v2.0.0/)).toBeInTheDocument();

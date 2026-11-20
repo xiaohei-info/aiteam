@@ -43,6 +43,8 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
     try {
       await agentApi.installSkill(skill.skill_id, replace)
       await onInstalled()
+      // 状态（已装 / 有更新 / 同名冲突）由 Agent 按本机现状算，装完重读一次。
+      setSkills(await agentApi.listInstallableSkills().catch(() => skills))
     } catch (err) {
       setRowError({ id: skill.skill_id, text: err instanceof Error && err.message ? err.message : '安装失败，请重试' })
     } finally { setBusy(null) }
