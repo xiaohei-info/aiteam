@@ -169,6 +169,48 @@ const INHERITED_ENV: &[&str] = if cfg!(windows) {
     &["HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG"]
 };
 
+/// Directories of the MinGit tree the installer drops next to the bundled Agent
+/// (`<install>/gitbash`). The Agent resolves its shell with `where bash.exe`, so these must lead PATH;
+/// `cmd` carries the git wrapper used by the bash tool. Neither exists when the installer could not
+/// fetch MinGit, in which case the inherited PATH is left untouched.
+#[cfg(windows)]
+fn bundled_bash_dirs(agent: &Path) -> Vec<PathBuf> {
+    let Some(gitbash) = agent.parent().map(|parent| parent.join("gitbash")) else {
+        return Vec::new();
+    };
+    let bin = gitbash.join("usr").join("bin");
+    if !bin.join("bash.exe").is_file() {
+        return Vec::new();
+    }
+    let cmd = gitbash.join("cmd");
+    if cmd.is_dir() {
+        vec![bin, cmd]
+    } else {
+        vec![bin]
+    }
+}
+
+/// Build a PATH value with `dirs` first and the inherited entries after them.
+#[cfg(windows)]
+fn prepend_path_dirs(dirs: &[PathBuf], inherited: Option<&std::ffi::OsStr>) -> OsString {
+    let mut path = OsString::new();
+    for dir in dirs {
+        if !path.is_empty() {
+            path.push(";");
+        }
+        path.push(dir.as_os_str());
+    }
+    if let Some(existing) = inherited {
+        if !existing.is_empty() {
+            if !path.is_empty() {
+                path.push(";");
+            }
+            path.push(existing);
+        }
+    }
+    path
+}
+
 fn copy_config_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -279,6 +321,18 @@ fn launch(agent: &Path, root: &Path, log: &Path) -> Result<Child, String> {
     for key in INHERITED_ENV {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
+        }
+    }
+    // The installer ships MinGit under `<install>/gitbash`; put it ahead of the inherited PATH so
+    // Pi's `where bash.exe` resolves on machines without Git for Windows.
+    #[cfg(windows)]
+    {
+        let bash_dirs = bundled_bash_dirs(agent);
+        if !bash_dirs.is_empty() {
+            command.env(
+                "PATH",
+                prepend_path_dirs(&bash_dirs, std::env::var_os("PATH").as_deref()),
+            );
         }
     }
     // The private directory-authority channel is a macOS Unix-socket feature.
@@ -635,6 +689,41 @@ mod tests {
         let root = std::env::temp_dir().join(format!("aiteam-{label}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_bash_dirs_follow_the_installed_gitbash_tree() {
+        let root = temporary_root("gitbash");
+        let agent = root.join("agent");
+        fs::create_dir_all(&agent).unwrap();
+        assert!(bundled_bash_dirs(&agent).is_empty());
+        fs::create_dir_all(root.join("gitbash/usr/bin")).unwrap();
+        fs::write(root.join("gitbash/usr/bin/bash.exe"), "stub").unwrap();
+        assert_eq!(bundled_bash_dirs(&agent), vec![root.join("gitbash/usr/bin")]);
+        fs::create_dir_all(root.join("gitbash/cmd")).unwrap();
+        assert_eq!(
+            bundled_bash_dirs(&agent),
+            vec![root.join("gitbash/usr/bin"), root.join("gitbash/cmd")]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_bash_leads_the_agent_path() {
+        let dirs = [
+            PathBuf::from(r"C:\app\gitbash\usr\bin"),
+            PathBuf::from(r"C:\app\gitbash\cmd"),
+        ];
+        assert_eq!(
+            prepend_path_dirs(&dirs, Some(std::ffi::OsStr::new(r"C:\Windows"))),
+            OsString::from(r"C:\app\gitbash\usr\bin;C:\app\gitbash\cmd;C:\Windows")
+        );
+        assert_eq!(
+            prepend_path_dirs(&dirs, None),
+            OsString::from(r"C:\app\gitbash\usr\bin;C:\app\gitbash\cmd")
+        );
     }
 
     fn write_env(root: &Path, body: &str) -> PathBuf {

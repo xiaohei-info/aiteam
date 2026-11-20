@@ -23,7 +23,8 @@ test('repository runtime archive restores exact bytes and executable permissions
     unlinkSync(f.filename)
     restoreAgentNode(f.directory, f.manifest)
     assert.deepEqual(readFileSync(f.filename), f.bytes)
-    assert.equal(statSync(f.filename).mode & 0o777, 0o755)
+    // Windows has no POSIX executable bits; chmod there only toggles read-only.
+    if (process.platform !== 'win32') assert.equal(statSync(f.filename).mode & 0o777, 0o755)
     restoreAgentNode(f.directory, f.manifest)
     assert.deepEqual(readFileSync(f.filename), f.bytes)
   } finally { rmSync(f.directory, { recursive: true, force: true }) }
