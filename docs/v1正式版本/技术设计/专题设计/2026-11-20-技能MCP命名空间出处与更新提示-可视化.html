@@ -269,6 +269,14 @@ svg text{font-family:inherit}
 <tr><td>P4 收尾</td><td>全量测试、截图（1440×640、长列表、elementFromPoint）、文档</td><td>P1–P3</td><td>测试与截图清单；未验证项如实列出</td></tr>
 </table>
 <p class="note">顺序执行：每一阶段都依赖上一阶段的字段。</p>
+<h3>实施记录（2026-11-20）</h3>
+<table>
+<tr><th style="width:12%">阶段</th><th>提交</th><th>结果</th></tr>
+<tr><td>P1</td><td><code>bfd6f065</code></td><td>运营端字段、ClawHub「编辑」→ <code>taiyim/</code> 副本、MCP 前缀。</td></tr>
+<tr><td>P2</td><td><code>0690d7f6</code></td><td>企业端前缀与出处、平台技能编辑另存副本、一技能一行原地更新、「平台有新版本 / 更新」。</td></tr>
+<tr><td>P3</td><td><code>85322bf3</code></td><td>Agent 计算本机状态（install / installed / update / conflict），同名替换；桌面「有更新 / 全部更新」、前缀与出处。细化见 MD §10。</td></tr>
+<tr><td>P4</td><td><code>e4a1e543</code></td><td>三端真实点击跑通（运营端改版 → 企业端「平台有新版本」→ 更新 → 桌面「1 项有更新」→ 全部更新；企业端编辑平台技能得到 <code>太一科技/proactive-agent · 改自 ClawHub …</code>；桌面同名「替换安装」）。实测修了三处：自导入技能与企业技能同标识被误判为「有更新」、「添加技能」装完不刷新状态、更新徽标被来源列截断。</td></tr>
+</table>
 </section>
 
 <section id="s8">
