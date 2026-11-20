@@ -5,6 +5,7 @@ export function capabilityGrantSourceLabel(source: string): string {
   if (source === 'platform_catalog') return '平台目录'
   if (source === 'enterprise_catalog') return '企业目录'
   if (source === 'clawhub_catalog') return 'ClawHub'
+  if (source === 'user_url') return '本机地址'
   return '本机导入'
 }
 

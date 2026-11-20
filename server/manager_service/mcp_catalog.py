@@ -66,13 +66,16 @@ class McpCatalogRepository:
             rows = s.execute("SELECT " + _COLS + " FROM mcp_catalog ORDER BY display_name, ref").fetchall()
         return [_row(r) for r in rows]
 
-    def oauth_client(self, ctx: TenantContext, server_id: str) -> tuple[str, str, bytes | None] | None:
-        """(auth, client_id, encrypted secret) of an enabled entry; None when not enabled."""
+    def oauth_client(self, ctx: TenantContext, server_id: str) -> tuple[str, str, bytes | None, str] | None:
+        """(auth, client_id, encrypted secret, ref) of an enabled entry; None when not enabled.
+
+        `ref` 是本机 Agent 授权里用的跨端身份标识（MCP 短标识），与请求路径的 `server_id` 不同。
+        """
         with self._router.session(ctx) as s:
             row = s.execute(
-                "SELECT auth, oauth_client_id, oauth_client_secret_enc FROM mcp_catalog WHERE server_id = %s", (server_id,),
+                "SELECT auth, oauth_client_id, oauth_client_secret_enc, ref FROM mcp_catalog WHERE server_id = %s", (server_id,),
             ).fetchone()
-        return (row[0], row[1], bytes(row[2]) if row[2] is not None else None) if row else None
+        return (row[0], row[1], bytes(row[2]) if row[2] is not None else None, row[3]) if row else None
 
     def upsert(self, ctx: TenantContext, server: PlatformMcpServerPull, *, enabled_by: str, secret_enc: bytes | None = None) -> McpCatalogRow:
         """Enable or move to the platform's current revision. A ref held by another server is a conflict."""
@@ -187,8 +190,10 @@ class McpMarketService:
         found = self._repo.oauth_client(ctx, server_id)
         if found is None or found[0] != "oauth" or not found[1]:
             raise NotFound("本企业目录中没有该 MCP 的预登记应用")
-        _auth, client_id, secret = found
-        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=server_id):
+        _auth, client_id, secret, ref = found
+        # 跨端身份标识一致（AGENTS.md §3.9）：本机 Agent 授权写入的是 MCP 的 `ref`（短标识），
+        # 而请求路径用平台 `server_id`。必须先把 server_id 解析成 ref 再查授权，否则恒查不到。
+        if self._grants is not None and not self._grants.has(ctx, member_id=ctx.user_id, capability_kind="mcp", capability_ref=ref):
             raise NotFound("该 MCP 尚未授权给当前成员，无法下发应用密钥")
         result = {"client_id": client_id, **({"client_secret": self._crypto.decrypt(secret)} if secret else {})}
         if self._audit is not None:

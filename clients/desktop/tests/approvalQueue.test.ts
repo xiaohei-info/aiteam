@@ -38,7 +38,7 @@ test('能力授权来源标签翻成用户可读文案', () => {
   assert.equal(capabilityGrantSourceLabel('enterprise_catalog'), '企业目录');
   assert.equal(capabilityGrantSourceLabel('clawhub_catalog'), 'ClawHub');
   assert.equal(capabilityGrantSourceLabel('user_import'), '本机导入');
-  assert.equal(capabilityGrantSourceLabel('user_url'), '本机导入');
+  assert.equal(capabilityGrantSourceLabel('user_url'), '本机地址');
   assert.equal(capabilityGrantSourceLabel(''), '本机导入');
 });
 

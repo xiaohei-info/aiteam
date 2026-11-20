@@ -187,6 +187,8 @@
 .file-access-grants li + li { border-top: 1px solid var(--border); }
 .file-access-directory-icon { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: var(--radius-md); background: var(--brand-bg-soft); color: var(--brand); }
 .file-access-directory-path { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; line-height: 1.6; }
+/* 能力授权：元信息与主标识分开字号/颜色，不抢主信息。 */
+.capability-grant-meta { display: block; margin-top: 2px; color: var(--text-muted); font-family: -apple-system, "PingFang SC", sans-serif; font-size: 11px; line-height: 1.5; }
 .file-access-revoke { flex-shrink: 0; min-height: 32px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 11px; }
 .file-access-empty { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-glass-subtle); }
 .file-access-empty > svg { flex-shrink: 0; color: var(--text-muted); }

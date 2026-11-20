@@ -71,4 +71,13 @@ describe("parseMcpConfig", () => {
     expect(parseMcpConfig("ftp://x.example.com")).toMatchObject({ ok: false });
     expect(parseMcpConfig(JSON.stringify({ a: { url: "javascript:alert(1)" } }))).toMatchObject({ ok: true, servers: [], rejected: [{ name: "a" }] });
   });
+
+  // 非 http(s) 地址走 URL 解析的 catch 分支；非令牌请求头进 ignoredHeaders。
+  it("rejects malformed urls and keeps non-secret headers out of the token fields", () => {
+    expect(parseMcpConfig(JSON.stringify({ a: { url: "::not a url::" } }))).toMatchObject({ ok: true, servers: [], rejected: [{ name: "a" }] });
+    const parsed = parseMcpConfig(JSON.stringify({ a: { url: "https://a.example.com/mcp", headers: { "X-Trace": "abc" } } }));
+    expect(parsed.servers[0]).toMatchObject({ ref: "a" });
+    expect(parsed.servers[0]!.auth).toBeUndefined();
+    expect(parsed.rejected).toEqual([]);
+  });
 });

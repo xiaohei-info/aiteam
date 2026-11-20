@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
 import { McpServerDialog } from "./McpServerDialog";
 import type { McpProbeInput, McpProbeResult, PlatformMcpServer, PlatformMcpServerInput } from "./types";
 
@@ -16,8 +17,8 @@ const probeResult = (extra: Partial<McpProbeResult>): McpProbeResult => ({
 
 function setup(item: PlatformMcpServer | null = null, probe = vi.fn(async (_input: McpProbeInput) => probeResult({}))) {
   const onSave = vi.fn(async (_input: PlatformMcpServerInput) => undefined);
-  render(<McpServerDialog item={item} busy={false} onClose={() => undefined} onSave={onSave} probe={probe} />);
-  return { onSave, probe };
+  const rendered = render(<McpServerDialog item={item} busy={false} onClose={() => undefined} onSave={onSave} probe={probe} />);
+  return { onSave, probe, unmount: rendered.unmount };
 }
 
 describe("McpServerDialog", () => {
@@ -88,5 +89,42 @@ describe("McpServerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
     expect(onSave.mock.calls[1]![0]).toMatchObject({ oauth_client_id: "app-1", oauth_client_secret: "" });
+  });
+
+  // 读取工具的三种结果与失败分支（needs_token / 连不上 / probe 报错）。
+  it("读取工具提示需要访问令牌、连不上与读取失败", async () => {
+    const probe = vi.fn(async (_input: McpProbeInput) => probeResult({ status: "needs_token", auth: "bearer", detail: "需要令牌", token_rejected: true }));
+    const first = setup(null, probe);
+    fireEvent.change(screen.getByLabelText(/端点地址/), { target: { value: "https://x.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取工具" }));
+    await waitFor(() => expect(screen.getByText(/测试令牌被拒绝/)).toBeInTheDocument());
+    first.unmount();
+
+    const down = vi.fn(async (_input: McpProbeInput) => probeResult({ status: "unreachable", detail: "连不上" }));
+    const second = setup(null, down);
+    fireEvent.change(screen.getByLabelText(/端点地址/), { target: { value: "https://y.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取工具" }));
+    await waitFor(() => expect(screen.getByText("无法连接")).toBeInTheDocument());
+    second.unmount();
+
+    const boom = vi.fn(async (_input: McpProbeInput) => { throw new Error("boom"); });
+    setup(null, boom);
+    fireEvent.change(screen.getByLabelText(/端点地址/), { target: { value: "https://z.example.com/mcp" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取工具" }));
+    await waitFor(() => expect(screen.getByText("读取失败，请稍后再试")).toBeInTheDocument());
+  });
+
+  // 配置里有多个 MCP 时列出候选择；导入note 的 info / error 分支。
+  it("配置里有多个 MCP 时列出候选；无可导条目给错误提示", async () => {
+    setup();
+    const multi = JSON.stringify({ mcpServers: { a: { url: "https://a.example.com/mcp" }, b: { url: "https://b.example.com/mcp" } } });
+    fireEvent.change(screen.getByLabelText(/粘贴配置/), { target: { value: multi } });
+    fireEvent.click(screen.getByRole("button", { name: "解析并填入" }));
+    expect(screen.getByText(/配置里有 2 个 MCP/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /a\.example\.com/ })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/粘贴配置/), { target: { value: JSON.stringify({ mcpServers: { local: { command: "npx" } } }) } });
+    fireEvent.click(screen.getByRole("button", { name: "解析并填入" }));
+    expect(screen.getAllByText(/配置里没有可用的 MCP|只支持 streamable HTTP/).length).toBeGreaterThan(0);
   });
 });

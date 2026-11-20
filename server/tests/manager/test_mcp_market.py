@@ -57,7 +57,8 @@ class FakeRepo:
 
     def oauth_client(self, ctx, server_id):
         row = self.rows.get(server_id)
-        return (row.auth, row.oauth_client_id, self.secrets.get(server_id)) if row else None
+        # 真实仓库返回 (auth, client_id, secret, ref)；ref 才是跨端身份标识。
+        return (row.auth, row.oauth_client_id, self.secrets.get(server_id), row.ref) if row else None
 
     def delete(self, ctx, server_id):
         self.secrets.pop(server_id, None)
@@ -254,14 +255,52 @@ def test_oauth_client_requires_member_grant_and_records_audit():
     guarded = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, grants=grants)
     with pytest.raises(NotFound):
         guarded.oauth_client(MEMBER, "s9")
-    assert grants.calls == [("m-1", "s9")]
+    # 请求用 server_id（s9），但授权存的是 MCP 的 ref（cr-test）。
+    assert grants.calls == [("m-1", "cr-test")]
 
-    # 已授权 → 下发并审计。
+    # 已授权（授权里的 ref 是目录短标识 cr-test，不是 server_id）→ 下发并审计。
     audit = _FakeAudit()
     allowed = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto,
                                grants=_FakeGrantRepo(granted=True), audit=audit)
     assert allowed.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
     assert audit.events == [("m-1", "mcp.oauth_client.issued", "s9")]
+
+
+def test_oauth_client_grant_keyed_by_catalog_ref_not_server_id():
+    """跨端身份标识一致（AGENTS.md §3.9）：Agent 授权写 slug，请求带 server_id，仍要能下发。
+
+    回归：早期两侧各自用同一标识做自洽用例，掩盖了 has() 恒为假、密钥永远取不到的问题。
+    """
+    from cryptography.fernet import Fernet
+
+    from shared.crypto import CryptoService
+    from shared.errors import NotFound
+
+    crypto = CryptoService(Fernet(Fernet.generate_key()))
+    operator = FakeOperatorCatalogClient()
+    operator.seed_platform_mcp([_oauth_server(oauth_client_id="app-1", oauth_client_secret="sec-1")])
+    repo = FakeRepo()
+    service = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto)
+    service.enable(ADMIN, "s9")
+
+    class RefGrantRepo:
+        def __init__(self, refs): self.refs = set(refs); self.calls = []
+
+        def has(self, ctx, *, member_id, capability_kind, capability_ref):
+            self.calls.append((member_id, capability_ref))
+            return capability_ref in self.refs
+
+    # 授权里是 slug cr-test；请求用 server_id s9 —— 应成功。
+    grants = RefGrantRepo(["cr-test"])
+    ok = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto, grants=grants)
+    assert ok.oauth_client(MEMBER, "s9") == {"client_id": "app-1", "client_secret": "sec-1"}
+    assert grants.calls == [("m-1", "cr-test")]
+
+    # 授权的是别的 ref → 仍 404（标识不能互相冒充）。
+    wrong = McpMarketService(operator=operator, repo=repo, members=FakeMembers(), crypto=crypto,
+                             grants=RefGrantRepo(["other"]))
+    with pytest.raises(NotFound):
+        wrong.oauth_client(MEMBER, "s9")
 
 
 def _api_routes(routes):

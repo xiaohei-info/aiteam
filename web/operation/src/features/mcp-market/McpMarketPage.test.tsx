@@ -66,4 +66,27 @@ describe("McpMarketPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
+
+  // act() 的成功与失败分支：保存成功给提示并重加载；失败给错误、保留弹窗。
+  it("保存成功提示并重新加载；保存失败提示且不关弹窗", async () => {
+    api.list.mockResolvedValue([server({ status: "published" })]);
+    render(<McpMarketPage />);
+    await screen.findByText("MES 查询");
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith("s1", expect.anything()));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/已保存，修订号加 1/)).toBeInTheDocument();
+  });
+
+  it("保存失败提示错误且不关弹窗", async () => {
+    api.list.mockResolvedValue([server({ status: "published" })]);
+    api.update.mockRejectedValueOnce(new Error("boom"));
+    render(<McpMarketPage />);
+    await screen.findByText("MES 查询");
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByRole("button", { name: "保存" }));
+    expect(await screen.findByText("保存失败")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
 });
