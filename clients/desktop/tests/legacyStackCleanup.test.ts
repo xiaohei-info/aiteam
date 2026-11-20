@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { extname, join, relative } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 const root = new URL('..', import.meta.url)
-const rootPath = root.pathname
+const rootPath = fileURLToPath(root)
 
 const removedLegacyFiles = [
   'src/api/client.ts',

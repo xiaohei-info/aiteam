@@ -36,7 +36,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "resources/agent/": "agent/"
+      "resources/agent/": "agent/",
+      "resources/installer/": "installer/"
     },
     "icon": [
       "icons/32x32.png",
@@ -49,6 +50,11 @@
       "infoPlist": "Info.plist",
       "hardenedRuntime": true,
       "entitlements": "Entitlements.plist"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
     }
   }
 }

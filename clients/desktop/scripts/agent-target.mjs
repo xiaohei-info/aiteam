@@ -28,12 +28,31 @@ export function agentRuntimePath(target) {
   return agentTargetSpec(target).runtime
 }
 
-/** Extract one archive with the tools each host ships: Windows 10+ has bsdtar (tar.exe, reads zip) but no unzip. */
-export function extractArchive(archive, into, { platform = process.platform, run = execFileSync } = {}) {
+/**
+ * Extract one archive with the tools each host ships: Windows 10+ has bsdtar (tar.exe, reads zip) but no unzip.
+ * The Agent zip ends with an empty-name entry and stores backslash-separated names, so bsdtar skips that entry and
+ * exits 1 even though the extraction succeeded; Windows therefore expands through Windows PowerShell instead.
+ */
+export function extractArchive(
+  archive,
+  into,
+  { platform = process.platform, run = execFileSync, systemRoot = process.env.SystemRoot ?? 'C:\\Windows' } = {},
+) {
   if (platform === 'win32') {
-    // Use System32's bsdtar explicitly; a Git Bash GNU tar earlier on PATH cannot read zip.
-    const tar = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
-    run(tar, ['-xf', archive, '-C', into])
+    const powershell = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    // Autoload of Microsoft.PowerShell.Archive breaks when PSModulePath is polluted (for example by a
+    // PowerShell 7 install), and Windows PowerShell honors a Restricted execution policy, so load the module
+    // Windows ships explicitly and bypass the policy for this one call.
+    const module = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules', 'Microsoft.PowerShell.Archive', 'Microsoft.PowerShell.Archive.psd1')
+    const quote = value => `'${value.replaceAll("'", "''")}'`
+    run(powershell, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `Import-Module ${quote(module)} -Force; Expand-Archive -LiteralPath ${quote(archive)} -DestinationPath ${quote(into)} -Force`,
+    ])
   } else if (archive.endsWith('.zip')) {
     run('unzip', ['-q', archive, '-d', into])
   } else {

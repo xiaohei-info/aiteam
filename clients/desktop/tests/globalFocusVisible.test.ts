@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 const globalStyles = readFileSync(new URL('../src/styles/globals.css', import.meta.url), 'utf8')
 
@@ -20,8 +21,8 @@ function listStyleFiles(directory: string): string[] {
 }
 
 test('组件高优先级 focus-visible 规则不会覆盖统一 3px 品牌 ring', () => {
-  const sourceRoot = new URL('../src', import.meta.url)
-  const styleFiles = listStyleFiles(sourceRoot.pathname)
+  const sourceRoot = fileURLToPath(new URL('../src', import.meta.url))
+  const styleFiles = listStyleFiles(sourceRoot)
   const focusRulePattern = /([^{}]*:focus-visible[^{}]*)\{([^{}]*)\}/g
 
   for (const file of styleFiles) {
@@ -46,12 +47,12 @@ test('组件高优先级 focus-visible 规则不会覆盖统一 3px 品牌 ring'
 })
 
 test('Tailwind 交互类不会以 2px ring 或 outline-none 覆盖全局键盘焦点', () => {
-  const sourceRoot = new URL('../src', import.meta.url)
-  const sourceFiles = readdirSync(sourceRoot.pathname, { recursive: true })
+  const sourceRoot = fileURLToPath(new URL('../src', import.meta.url))
+  const sourceFiles = readdirSync(sourceRoot, { recursive: true })
     .filter((file): file is string => typeof file === 'string' && file.endsWith('.tsx'))
 
   for (const relativeFile of sourceFiles) {
-    const source = readFileSync(path.join(sourceRoot.pathname, relativeFile), 'utf8')
+    const source = readFileSync(path.join(sourceRoot, relativeFile), 'utf8')
     assert.doesNotMatch(source, /focus-visible:(?:outline-none|ring-2|ring-brand)/)
   }
 })
