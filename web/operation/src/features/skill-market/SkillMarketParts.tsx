@@ -161,7 +161,7 @@ export function SkillPreviewDialog({ api, owner, slug, confirmLabel, currentLabe
         footer={
           <LayoutFooter hasDivider>
             <HStack justify="between" gap={2} align="center">
-              {preview ? <Button label="在 ClawHub 查看" href={preview.canonical_url} variant="ghost" size="sm" /> : <span />}
+              {preview ? <Button label="在 ClawHub 查看" href={preview.canonical_url} target="_blank" rel="noopener noreferrer" variant="ghost" size="sm" /> : <span />}
               <HStack gap={2}>
                 <Button label="取消" onClick={onClose} isDisabled={busy} />
                 <Button label={current ? (currentLabel ?? "已导入") : confirmLabel} variant="primary" isLoading={busy} isDisabled={!preview || (current && !currentLabel)} onClick={() => void confirm()} />

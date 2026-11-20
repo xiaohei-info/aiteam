@@ -146,7 +146,7 @@ export function PlatformSkillSelector({ value, onChange, disabled, title = "技�
                   </VStack>
                   <HStack gap={2}>
                     {selected && <Badge label="已选择" variant="success" />}
-                    <Button label="详情" href={skill.canonical_url} variant="ghost" size="sm" />
+                    <Button label="详情" href={skill.canonical_url} target="_blank" rel="noopener noreferrer" variant="ghost" size="sm" />
                     {current && inside
                       ? <Button label="选择" size="sm" isDisabled={disabled || selected} onClick={() => selectCurrent(inside)} />
                       : <Button label={newer ? "预览更新" : "预览并选择"} size="sm" isDisabled={disabled || (selected && !newer)} onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />}

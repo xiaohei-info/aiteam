@@ -150,7 +150,7 @@ export function SkillMarketPage(): ReactNode {
                         </VStack>
                         <HStack gap={2} style={ACTIONS}>
                           {inside && <Badge label={current ? "已导入" : `已导入 v${inside.latest_internal_version}`} variant={current ? "success" : "info"} />}
-                          <Button label="详情" href={skill.canonical_url} variant="ghost" size="sm" />
+                          <Button label="详情" href={skill.canonical_url} target="_blank" rel="noopener noreferrer" variant="ghost" size="sm" />
                           <Button label={newer ? "预览更新" : "预览"} variant="primary" size="sm" onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />
                         </HStack>
                       </HStack>

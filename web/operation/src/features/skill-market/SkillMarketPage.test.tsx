@@ -116,6 +116,22 @@ describe("SkillMarketPage", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("ClawHub 详情与「在 ClawHub 查看」在新标签页打开，不离开运营端", async () => {
+    render(<SkillMarketPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));
+    await screen.findByText("fresh");
+    const details = screen.getAllByRole("link", { name: "详情" });
+    expect(details.length).toBeGreaterThan(0);
+    for (const link of details) {
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
+    fireEvent.click(screen.getAllByRole("button", { name: "预览" }).at(-1)!);
+    const view = await within(await screen.findByRole("dialog")).findByRole("link", { name: "在 ClawHub 查看" });
+    expect(view).toHaveAttribute("href", "https://clawhub.ai/pub/skills/fresh");
+    expect(view).toHaveAttribute("target", "_blank");
+  });
+
   it("导入失败时弹窗保留并显示原因", async () => {
     api.download.mockRejectedValueOnce(new ApiError("下载的文件与 ClawHub 校验清单不一致：SKILL.md", 422, "validation_error"));
     render(<SkillMarketPage />);
