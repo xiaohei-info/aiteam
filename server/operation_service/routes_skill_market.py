@@ -1,19 +1,38 @@
-"""Operator platform skill market: ClawHub discovery and internal imports."""
+"""Operator platform skill market: ClawHub discovery and internal imports.
+
+Design 2026-11-20 (企业端技能MCP新增与ClawHub打通) §4.2:
+* packages carry any safe UTF-8 text (scripts, assets); binaries / platform hooks are skipped and reported;
+* ClawHub `/verify` is an *integrity* check (identity + per-file sha256/size), not a security gate;
+* the `/scan` result is shown side by side for both scanners and stored with the version, never blocking.
+
+ClawHub calls are blocking HTTP, so those handlers are plain `def` (FastAPI runs them in the threadpool).
+"""
 
 from __future__ import annotations
 
+import hashlib
+import os
+
+import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
-from shared.contracts.envelope import Envelope, ListEnvelope
+from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.enums import PlatformRole
 from shared.contracts.platform_skill import PlatformSkillPackage
 from shared.contracts.skill import SkillFile, SkillPackage, derive_file_hash
-from shared.errors import AppError, NotFound, ValidationProblem
+from shared.errors import AppError, ValidationProblem
 
-from .platform_skill_market import ClawHubClient, PlatformSkillRepository, parse_skill_zip
+from .platform_skill_market import (
+    REGISTRY_FILES,
+    ClawHubClient,
+    ParsedSkillArchive,
+    PlatformSkillRepository,
+    clawhub_url_parts,
+    parse_skill_zip,
+)
 
 router = APIRouter(prefix="/api/operation/skill-market", tags=["operation", "skill-market"])
 
@@ -50,10 +69,65 @@ class ExternalSkillOut(BaseModel):
     security_ok: bool | None = Field(default=None, description="外部安全检查结果。")
 
 
-class ExternalSkillBrowseOut(BaseModel):
+class SecurityScannerOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    data: list[ExternalSkillOut] = Field(default_factory=list, description="外部技能结果列表。")
-    next_cursor: str | None = Field(default=None, description="下一页游标。")
+    name: str = Field(description="扫描器名称（如 skillspector / llm）。")
+    status: str = Field(description="该扫描器结论（clean / suspicious / pending …）。")
+    verdict: str | None = Field(default=None, description="模型复核结论。")
+    confidence: str | None = Field(default=None, description="置信度。")
+    recommendation: str | None = Field(default=None, description="建议（如 DO_NOT_INSTALL）。")
+    severity: str | None = Field(default=None, description="严重程度。")
+    issue_count: int | None = Field(default=None, description="问题数。")
+
+
+class SkillSecurityOut(BaseModel):
+    """ClawHub 安全扫描结论：两个扫描器并列显示，只提示不拦截。"""
+
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(description="ClawHub 汇总状态。")
+    has_warnings: bool = Field(default=False, description="是否有警告。")
+    scanners: list[SecurityScannerOut] = Field(default_factory=list, description="各扫描器结论。")
+
+
+class SkippedFileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="被跳过的文件路径。")
+    reason: str = Field(description="platform_hook（平台专用钩子）| binary（二进制）| unsupported_path（路径不支持）。")
+
+
+class SkillFileSummaryOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="文件路径。")
+    size: int = Field(ge=0, description="字节数。")
+
+
+class ExternalSkillPreviewOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(description="外部技能发布者。")
+    slug: str = Field(description="外部技能 slug。")
+    display_name: str = Field(description="技能展示名称。")
+    summary: str = Field(default="", description="技能摘要。")
+    version: str = Field(description="将导入的版本。")
+    canonical_url: str = Field(description="ClawHub 页面地址。")
+    files: list[SkillFileSummaryOut] = Field(default_factory=list, description="将导入的文件。")
+    total_bytes: int = Field(ge=0, description="将导入的文件总字节数。")
+    skipped: list[SkippedFileOut] = Field(default_factory=list, description="被跳过的文件及原因。")
+    security: SkillSecurityOut | None = Field(default=None, description="ClawHub 安全扫描结论；取不到时为空。")
+    imported_version: str | None = Field(default=None, description="平台目录里已导入的最新版本。")
+
+
+class ClawHubCandidateOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner: str = Field(description="发布者句柄。")
+    slug: str = Field(description="技能 slug。")
+    url: str = Field(description="ClawHub 页面地址。")
+
+
+class ClawHubResolveOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str = Field(description="技能 slug。")
+    owner: str | None = Field(default=None, description="唯一确定时的发布者；多个同名时为空，见 candidates。")
+    candidates: list[ClawHubCandidateOut] = Field(default_factory=list, description="同名技能候选（地址未写作者时）。")
 
 
 class PlatformSkillOut(BaseModel):
@@ -72,6 +146,7 @@ class PlatformSkillOut(BaseModel):
     latest_version_status: str | None = Field(default=None, description="最新版本状态。")
     version_id: str | None = Field(default=None, description="导入版本 ID。")
     version: str | None = Field(default=None, description="导入版本号。")
+    security: SkillSecurityOut | None = Field(default=None, description="最新版本导入时的 ClawHub 安全扫描结论。")
 
 
 class PlatformSkillImportOut(BaseModel):
@@ -85,34 +160,39 @@ class PlatformSkillImportOut(BaseModel):
     version: str = Field(description="导入版本。")
     content_hash: str = Field(description="技能内容哈希。")
     status: str = Field(description="导入后的发布状态。")
+    skipped: list[SkippedFileOut] = Field(default_factory=list, description="被跳过的文件及原因。")
+    security: SkillSecurityOut | None = Field(default=None, description="ClawHub 安全扫描结论（只提示）。")
 
 
-def _verified_text_manifest(verification: dict, *, owner: str, slug: str, version: str) -> set[tuple[object, object, object]]:
+def verified_artifact(verification: dict, *, owner: str, slug: str, version: str) -> dict[str, tuple[str, int]]:
+    """Expected `{path: (sha256, size)}` from ClawHub `/verify`. Integrity only — security is not consulted."""
     identity_matches = (
-        verification.get("publisherHandle", "").lower() == owner.lower()
+        str(verification.get("publisherHandle") or "").lower() == owner.lower()
         and verification.get("slug") == slug
         and verification.get("version") == version
     )
-    security_passed = bool((verification.get("security") or {}).get("passed"))
-    reasons = set(verification.get("reasons") or [])
-    card_only_pending = not verification.get("ok") and reasons == {"card.missing"}
-    if not identity_matches or not security_passed or (not verification.get("ok") and not card_only_pending):
-        raise ValidationProblem("ClawHub skill version did not pass exact security verification")
+    if not identity_matches:
+        raise ValidationProblem("ClawHub 校验信息与所选技能（作者 / 标识 / 版本）不一致，已停止导入")
+    expected: dict[str, tuple[str, int]] = {}
+    for item in (verification.get("artifact") or {}).get("files") or []:
+        path = str(item.get("path") or "")
+        if path and path not in REGISTRY_FILES:
+            expected[path] = (str(item.get("sha256") or ""), int(item.get("size") or 0))
+    if "SKILL.md" not in expected:
+        raise ValidationProblem("ClawHub 没有返回该版本的文件清单，暂时无法校验完整性，请稍后再试")
+    return expected
 
-    expected_files = (verification.get("artifact") or {}).get("files", [])
-    allowed_registry_files = {"_meta.json", "skill-card.md"}
-    if any(
-        item.get("path") not in allowed_registry_files
-        and item.get("path") != "SKILL.md"
-        and not (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
-        for item in expected_files
-    ):
-        raise ValidationProblem("该技能包含脚本或资源文件，当前仅支持 SKILL.md 和 references/*.md 纯文本技能")
-    return {
-        (item.get("path"), item.get("sha256"), item.get("size"))
-        for item in expected_files
-        if item.get("path") == "SKILL.md" or (str(item.get("path") or "").startswith("references/") and str(item.get("path") or "").endswith(".md"))
-    }
+
+def check_integrity(parsed: ParsedSkillArchive, expected: dict[str, tuple[str, int]]) -> None:
+    """Every kept file must match the verified sha256/size; every verified file must be kept or reported skipped."""
+    for item in parsed.files:
+        data = item["content"].encode("utf-8")
+        if expected.get(item["path"]) != (hashlib.sha256(data).hexdigest(), len(data)):
+            raise ValidationProblem(f"下载的文件与 ClawHub 校验清单不一致：{item['path']}")
+    accounted = {item["path"] for item in parsed.files} | {item.path for item in parsed.skipped}
+    missing = sorted(set(expected) - accounted)
+    if missing:
+        raise ValidationProblem(f"下载的技能包缺少 ClawHub 校验清单里的文件：{'、'.join(missing[:5])}")
 
 
 def _claims(request: Request) -> TokenClaims:
@@ -141,34 +221,110 @@ def _repo(request: Request) -> PlatformSkillRepository:
 def _client(request: Request) -> ClawHubClient:
     client = getattr(request.app.state, "_clawhub_client", None)
     if client is None:
-        client = ClawHubClient()
+        # Tests and private mirrors may point at another ClawHub-compatible origin.
+        client = ClawHubClient(os.environ.get("AITEAM_CLAWHUB_BASE_URL") or "https://clawhub.ai")
         request.app.state._clawhub_client = client
     return client
 
 
-@router.get("/external", summary="浏览外部技能市场", description="从外部技能市场检索或分页浏览可导入的纯文本技能。", operation_id="operation_skill_market_external_list", response_model_exclude_none=True)
-async def browse_external(
+def _upstream_error(exc: Exception, what: str) -> AppError:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return _ClawHubUnavailable(f"{what}：ClawHub 返回 HTTP {exc.response.status_code}")
+    if isinstance(exc, httpx.TimeoutException):
+        return _ClawHubUnavailable(f"{what}：连接 ClawHub 超时")
+    return _ClawHubUnavailable(f"{what}：连不上 ClawHub")
+
+
+def _fetch_verified(client: ClawHubClient, *, owner: str, slug: str, version: str | None) -> tuple[dict, str, ParsedSkillArchive, dict | None]:
+    detail = client.detail(owner=owner, slug=slug)
+    chosen = version or (detail.get("latestVersion") or {}).get("version")
+    if not chosen:
+        raise ValidationProblem("ClawHub 上这个技能还没有可下载的版本")
+    expected = verified_artifact(client.verify(owner=owner, slug=slug, version=chosen), owner=owner, slug=slug, version=chosen)
+    parsed = parse_skill_zip(client.download(owner=owner, slug=slug, version=chosen))
+    check_integrity(parsed, expected)
+    return detail, chosen, parsed, client.scan(owner=owner, slug=slug, version=chosen)
+
+
+def _skipped(parsed: ParsedSkillArchive) -> list[SkippedFileOut]:
+    return [SkippedFileOut(path=item.path, reason=item.reason) for item in parsed.skipped]
+
+
+@router.get("/external", summary="浏览外部技能市场", description="从 ClawHub 检索或分页浏览技能；不按扫描结论过滤，结论在预览里查看。", operation_id="operation_skill_market_external_list", response_model_exclude_none=True)
+def browse_external(
     request: Request,
     q: str | None = Query(default=None, description="外部技能搜索关键词。"),
     cursor: str | None = Query(default=None, description="外部市场分页游标。"),
     limit: int = Query(default=20, ge=1, le=100, description="返回条数上限。"),
     claims: TokenClaims = Depends(_claims),
-) -> ExternalSkillBrowseOut:
+) -> ListEnvelope[ExternalSkillOut]:
     del claims
     client = _client(request)
     try:
         if q and q.strip():
-            return ExternalSkillBrowseOut(data=[ExternalSkillOut.model_validate(item.__dict__) for item in client.search(q.strip(), limit=limit)])
+            return ListEnvelope(data=[ExternalSkillOut.model_validate(item.__dict__) for item in client.search(q.strip(), limit=limit)])
         items, next_cursor = client.browse(cursor=cursor, limit=limit)
-        return ExternalSkillBrowseOut(data=[ExternalSkillOut.model_validate(item.__dict__) for item in items], next_cursor=next_cursor)
+        return ListEnvelope(data=[ExternalSkillOut.model_validate(item.__dict__) for item in items], page=Page(next_cursor=next_cursor, has_more=bool(next_cursor)))
     except AppError:
         raise
     except Exception as exc:
-        raise _ClawHubUnavailable("ClawHub is unavailable") from exc
+        raise _upstream_error(exc, "ClawHub 列表读取失败") from exc
+
+
+@router.get("/external/resolve", summary="解析 ClawHub 技能地址", description="把 ClawHub 技能页地址解析为作者与标识；地址没写作者时返回同名候选。", operation_id="operation_skill_market_external_resolve")
+def resolve_external(
+    request: Request,
+    url: str = Query(min_length=1, max_length=2048, description="ClawHub 技能页地址，例如 https://clawhub.ai/作者/skills/标识。"),
+    _claims: TokenClaims = Depends(_claims),
+) -> Envelope[ClawHubResolveOut]:
+    client = _client(request)
+    parts = clawhub_url_parts(url, base_url=client.base_url)
+    if parts is None:
+        raise ValidationProblem("不是 ClawHub 技能页地址：应为 https://clawhub.ai/作者/skills/标识")
+    owner, slug = parts
+    if owner:
+        return Envelope(data=ClawHubResolveOut(slug=slug, owner=owner))
+    try:
+        candidates = client.candidates(slug)
+    except AppError:
+        raise
+    except Exception as exc:
+        raise _upstream_error(exc, "ClawHub 同名技能查询失败") from exc
+    if not candidates:
+        raise ValidationProblem(f"ClawHub 上找不到技能：{slug}")
+    only = candidates[0]["owner"] if len(candidates) == 1 else None
+    return Envelope(data=ClawHubResolveOut(slug=slug, owner=only, candidates=[ClawHubCandidateOut(**item) for item in candidates]))
+
+
+@router.get("/external/{owner}/{slug}/preview", summary="预览外部技能", description="下载并校验完整性后返回将导入的文件、被跳过的文件与安全扫描结论；不写库。", operation_id="operation_skill_market_external_preview")
+def preview_external(
+    owner: str,
+    slug: str,
+    request: Request,
+    version: str | None = Query(default=None, description="要预览的版本；缺省为最新版本。"),
+    _claims: TokenClaims = Depends(_claims),
+) -> Envelope[ExternalSkillPreviewOut]:
+    client = _client(request)
+    try:
+        detail, chosen, parsed, security = _fetch_verified(client, owner=owner, slug=slug, version=version)
+    except AppError:
+        raise
+    except Exception as exc:
+        raise _upstream_error(exc, "ClawHub 技能预览失败") from exc
+    imported = next((row for row in _repo(request).list_internal() if row["owner"] == owner and row["slug"] == slug), None)
+    skill = detail.get("skill") or {}
+    files = [SkillFileSummaryOut(path=item["path"], size=len(item["content"].encode("utf-8"))) for item in parsed.files]
+    return Envelope(data=ExternalSkillPreviewOut(
+        owner=owner, slug=slug, display_name=str(skill.get("displayName") or slug), summary=str(skill.get("summary") or ""),
+        version=chosen, canonical_url=f"{client.base_url}/{owner}/skills/{slug}",
+        files=files, total_bytes=sum(item.size for item in files), skipped=_skipped(parsed),
+        security=SkillSecurityOut.model_validate(security) if security else None,
+        imported_version=imported["latest_internal_version"] if imported else None,
+    ))
 
 
 @router.get("/internal", summary="列出平台技能目录", description="列出已导入 Operator 平台目录的技能及其发布状态。", operation_id="operation_skill_market_internal_list")
-async def list_internal(
+def list_internal(
     request: Request,
     _claims: TokenClaims = Depends(_claims),
 ) -> ListEnvelope[PlatformSkillOut]:
@@ -176,7 +332,7 @@ async def list_internal(
 
 
 @router.get("/settings", summary="读取技能市场设置", description="读取外部技能下载后的自动发布开关。", operation_id="operation_skill_market_settings_get")
-async def get_settings(
+def get_settings(
     request: Request,
     _claims: TokenClaims = Depends(_claims),
 ) -> Envelope[SkillMarketSettingsOut]:
@@ -184,7 +340,7 @@ async def get_settings(
 
 
 @router.put("/settings", summary="更新技能市场设置", description="更新外部技能下载后的自动发布策略。", operation_id="operation_skill_market_settings_update")
-async def set_settings(
+def set_settings(
     request: Request,
     body: SkillMarketSettingsIn,
     _claims: TokenClaims = Depends(_claims),
@@ -192,8 +348,8 @@ async def set_settings(
     return Envelope(data=SkillMarketSettingsOut(auto_publish_downloads=_repo(request).set_setting(body.auto_publish_downloads)))
 
 
-@router.post("/external/{owner}/{slug}/download", summary="导入外部技能", description="校验外部技能安全清单后下载并导入平台目录。", operation_id="operation_skill_market_external_download")
-async def download_external(
+@router.post("/external/{owner}/{slug}/download", summary="导入外部技能", description="校验 ClawHub 文件清单完整性后下载并导入平台目录；安全扫描结论只记录与提示，不拦截。", operation_id="operation_skill_market_external_download")
+def download_external(
     owner: str,
     slug: str,
     request: Request,
@@ -203,60 +359,42 @@ async def download_external(
     client = _client(request)
     repo = _repo(request)
     try:
-        detail = client.detail(owner=owner, slug=slug)
-        latest = (detail.get("latestVersion") or {}).get("version")
-        chosen = version or latest
-        if not chosen:
-            raise ValidationProblem("ClawHub skill has no downloadable version")
-        verification = client.verify(owner=owner, slug=slug, version=chosen)
-        expected = _verified_text_manifest(verification, owner=owner, slug=slug, version=chosen)
-        raw = client.download(owner=owner, slug=slug, version=chosen)
-        files, content_hash = parse_skill_zip(raw)
-        actual = {(item["path"], __import__("hashlib").sha256(item["content"].encode()).hexdigest(), len(item["content"].encode())) for item in files}
-        if not expected or actual != expected:
-            raise ValidationProblem("downloaded skill files do not match ClawHub verified artifact")
-        package = {
-            "skill_id": f"clawhub-{owner}-{slug}".replace("/", "-"),
-            "version": chosen,
-            "content_hash": content_hash,
-            "display_name": detail.get("skill", {}).get("displayName") or slug,
-            "description": detail.get("skill", {}).get("summary") or "",
-            "files": [
-                {"path": f["path"], "content": f["content"], "content_hash": __import__("hashlib").sha256(f["content"].encode()).hexdigest()[:16]}
-                for f in files
-            ],
-        }
-        auto_publish = repo.get_setting()
-        return Envelope(data=repo.upsert_download(
-            owner=owner, slug=slug, display_name=package["display_name"], summary=package["description"],
-            version=chosen, files=files, content_hash=content_hash,
-            security=verification.get("security") or {}, auto_publish=auto_publish,
-            source_url=verification.get("pageUrl") or f"https://clawhub.ai/{owner}/skills/{slug}",
-        ))
-    except (ValidationProblem, NotFound):
+        detail, chosen, parsed, security = _fetch_verified(client, owner=owner, slug=slug, version=version)
+    except AppError:
         raise
     except Exception as exc:
-        raise _ClawHubUnavailable("ClawHub skill download failed") from exc
+        raise _upstream_error(exc, "ClawHub 技能下载失败") from exc
+    skill = detail.get("skill") or {}
+    imported = repo.upsert_download(
+        owner=owner, slug=slug, display_name=str(skill.get("displayName") or slug), summary=str(skill.get("summary") or ""),
+        version=chosen, files=parsed.files, content_hash=parsed.content_hash,
+        security=security or {}, auto_publish=repo.get_setting(),
+        source_url=f"{client.base_url}/{owner}/skills/{slug}",
+    )
+    return Envelope(data=PlatformSkillImportOut(
+        **imported, skipped=_skipped(parsed),
+        security=SkillSecurityOut.model_validate(security) if security else None,
+    ))
 
 
 @router.post("/internal/{skill_id}/publish", summary="发布平台技能", description="发布指定版本的平台技能，使 Manager 可以拉取。", operation_id="operation_skill_market_internal_publish")
-async def publish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
+def publish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
     return Envelope(data=_repo(request).set_status(skill_id=skill_id, status="published"))
 
 
 @router.post("/internal/{skill_id}/unpublish", summary="下架平台技能", description="下架指定平台技能，阻止新的 Manager 拉取。", operation_id="operation_skill_market_internal_unpublish")
-async def unpublish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
+def unpublish_internal(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillOut]:
     return Envelope(data=_repo(request).set_status(skill_id=skill_id, status="unpublished"))
 
 
 @router.get("/pull/skills", summary="拉取已发布技能目录", description="供 Manager 服务间调用，返回已发布的平台技能摘要。", operation_id="operation_skill_market_pull_list")
-async def pull_published_skills(request: Request) -> ListEnvelope[PlatformSkillOut]:
+def pull_published_skills(request: Request) -> ListEnvelope[PlatformSkillOut]:
     _service_token(request)
     return ListEnvelope(data=[PlatformSkillOut(**item) for item in _repo(request).list_internal(status="published")])
 
 
 @router.get("/pull/skills/{skill_id}/versions/{version}", summary="拉取固定版本技能包", description="供 Manager 服务间调用，返回已发布技能的固定版本和签名材料。", operation_id="operation_skill_market_pull_package")
-async def pull_published_skill_package(skill_id: str, version: str, request: Request) -> Envelope[PlatformSkillPackage]:
+def pull_published_skill_package(skill_id: str, version: str, request: Request) -> Envelope[PlatformSkillPackage]:
     _service_token(request)
     row = _repo(request).get_package(skill_id=skill_id, version=version, published_only=True)
     files = [

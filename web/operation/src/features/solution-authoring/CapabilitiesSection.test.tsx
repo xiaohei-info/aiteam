@@ -9,13 +9,18 @@ const internal = [
 ];
 const external = [{ owner: "claw", slug: "report", display_name: "写报告", summary: "生成报告", latest_version: "1.0.0", downloads: 3, canonical_url: "https://clawhub.ai/claw/skills/report" }];
 const download = vi.fn();
-vi.mock("../skill-market/useSkillMarketApi", () => ({
-  useSkillMarketApi: () => ({
-    listInternal: async () => internal,
-    listExternal: async () => external,
-    download: (...args: unknown[]) => download(...args),
-  }),
-}));
+const preview = { owner: "claw", slug: "report", display_name: "写报告", summary: "生成报告", version: "1.0.0", canonical_url: "https://clawhub.ai/claw/skills/report",
+  files: [{ path: "SKILL.md", size: 12 }], total_bytes: 12, skipped: [], security: null, imported_version: null };
+// 与真实 hook 一样返回稳定对象（真实实现按 token useMemo）。
+const api = {
+  listInternal: async () => internal,
+  listExternal: async () => external,
+  browseExternal: async () => ({ items: external, nextCursor: null }),
+  preview: async () => preview,
+  resolve: async () => null,
+  download: (...args: unknown[]) => download(...args),
+};
+vi.mock("../skill-market/useSkillMarketApi", () => ({ useSkillMarketApi: () => api }));
 
 const expert = (key: string, name: string, extra: Record<string, unknown> = {}) => ({
   key, display_name: name, category: "质检", description: "d", system_prompt: "p", evidence: [], ...extra,
@@ -64,7 +69,8 @@ describe("CapabilitiesSection 添加 skill", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑能力清单" }));
     expect(await screen.findByTestId("capability-add")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "ClawHub 外部市场" }));
-    fireEvent.click(await screen.findByRole("button", { name: "下载并选择" }));
+    fireEvent.click(await screen.findByRole("button", { name: "预览并选择" }));
+    fireEvent.click(await screen.findByRole("button", { name: "导入并选择" }));
     expect(await screen.findByText(/保存后新增：clawhub-claw-report v1.0.0/)).toBeInTheDocument();
     expect(download).toHaveBeenCalledWith("claw", "report", "1.0.0");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -80,7 +86,8 @@ describe("CapabilitiesSection 添加 skill", () => {
     const { onSave } = renderSection();
     fireEvent.click(screen.getByRole("button", { name: "编辑能力清单" }));
     fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));
-    fireEvent.click(await screen.findByRole("button", { name: "下载并选择" }));
+    fireEvent.click(await screen.findByRole("button", { name: "预览并选择" }));
+    fireEvent.click(await screen.findByRole("button", { name: "导入并选择" }));
     expect(await screen.findByText(/在技能市场开放后才能添加到方案/)).toBeInTheDocument();
     expect(screen.queryByText(/保存后新增/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));

@@ -1,5 +1,6 @@
 -- 0008: Operator 平台技能市场（ClawHub -> 内部固定版本包）。
--- 仅保存纯文本技能：SKILL.md 与 references/*.md；不执行外部下载内容。
+-- 保存固定版本技能包（files 为 UTF-8 文本文件列表）；不执行外部下载内容。
+-- 路径/数量/大小规则由共享契约 shared/contracts/skill.py 校验（2026-11-20 起可含脚本与资料）。
 
 CREATE TABLE IF NOT EXISTS platform_skill (
     id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
