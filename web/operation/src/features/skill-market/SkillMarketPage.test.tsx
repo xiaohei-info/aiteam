@@ -61,6 +61,19 @@ describe("SkillMarketPage", () => {
     expect(screen.getByText("Demo")).toBeInTheDocument();
   });
 
+  it("搜索结果不带版本时不误报「更新」；版本已知且不同时才提示", async () => {
+    api.browseExternal.mockResolvedValue({ items: [external("demo")], nextCursor: null });
+    const { unmount } = render(<SkillMarketPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));
+    expect(await screen.findByText("已导入 v1.0.0")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "预览更新" })).not.toBeInTheDocument();
+    unmount();
+    api.browseExternal.mockResolvedValue({ items: [external("demo", { latest_version: "1.1.0" })], nextCursor: null });
+    render(<SkillMarketPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));
+    expect(await screen.findByRole("button", { name: "预览更新" })).toBeInTheDocument();
+  });
+
   it("加载更多按游标追加；搜索停顿后才请求", async () => {
     render(<SkillMarketPage />);
     fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));

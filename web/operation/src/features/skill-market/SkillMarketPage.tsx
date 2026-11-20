@@ -134,6 +134,8 @@ export function SkillMarketPage(): ReactNode {
                 {external.items.map((skill) => {
                   const inside = internal.find((item) => item.owner === skill.owner && item.slug === skill.slug);
                   const current = Boolean(inside && skill.latest_version && inside.latest_internal_version === skill.latest_version);
+                  // 搜索结果不带版本，无法判断是否有新版，只有已知不同才提示更新。
+                  const newer = Boolean(inside && skill.latest_version && !current);
                   return (
                     <Card key={`${skill.owner}/${skill.slug}`} padding={4}>
                       <HStack justify="between" align="start" wrap="wrap" gap={3}>
@@ -145,7 +147,7 @@ export function SkillMarketPage(): ReactNode {
                         <HStack gap={2}>
                           {inside && <Badge label={current ? "已导入" : `已导入 v${inside.latest_internal_version}`} variant={current ? "success" : "info"} />}
                           <Button label="详情" href={skill.canonical_url} variant="ghost" size="sm" />
-                          <Button label={inside && !current ? "预览更新" : "预览"} variant="primary" size="sm" onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />
+                          <Button label={newer ? "预览更新" : "预览"} variant="primary" size="sm" onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />
                         </HStack>
                       </HStack>
                     </Card>

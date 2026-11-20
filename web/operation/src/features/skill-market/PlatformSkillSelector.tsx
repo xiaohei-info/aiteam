@@ -70,6 +70,21 @@ export function PlatformSkillSelector({ value, onChange, disabled, title = "技�
 
   /** 预览弹窗确认后调用；失败时抛出，由弹窗显示错误。 */
   async function importAndSelect(preview: ExternalSkillPreview) {
+    if (preview.imported_version === preview.version) {
+      // 平台目录已是该版本：不重复下载，直接选已开放版本。
+      const latest = await api.listInternal();
+      setInternal(latest);
+      setPreviewing(null);
+      const existing = latest.find((item) => item.owner === preview.owner && item.slug === preview.slug);
+      const ref = existing && existing.published_version === preview.version ? refFor(existing) : null;
+      if (!ref) {
+        setMessage(`该技能 v${preview.version} 已在内部市场但尚未开放；在技能市场开放后才能${purpose}。`);
+        return;
+      }
+      onChange([...value.filter((item) => item.skill_id !== ref.skill_id), ref]);
+      setMessage(`已选择 ${preview.display_name}`);
+      return;
+    }
     const downloaded = await api.download(preview.owner, preview.slug, preview.version);
     setPreviewing(null);
     setMessage(null);
@@ -119,6 +134,8 @@ export function PlatformSkillSelector({ value, onChange, disabled, title = "技�
             const inside = internal.find((item) => item.owner === skill.owner && item.slug === skill.slug);
             const selected = inside ? selectedIds.includes(inside.skill_id) : false;
             const current = Boolean(inside && skill.latest_version && inside.published_version === skill.latest_version && refFor(inside));
+            // 搜索结果不带版本：只有 ClawHub 版本已知且与平台目录不同时才算有更新。
+            const newer = Boolean(inside && skill.latest_version && inside.latest_internal_version !== skill.latest_version);
             return (
               <Card key={key} padding={3}>
                 <HStack justify="between" align="start" wrap="wrap">
@@ -132,7 +149,7 @@ export function PlatformSkillSelector({ value, onChange, disabled, title = "技�
                     <Button label="详情" href={skill.canonical_url} variant="ghost" size="sm" />
                     {current && inside
                       ? <Button label="选择" size="sm" isDisabled={disabled || selected} onClick={() => selectCurrent(inside)} />
-                      : <Button label={inside ? "预览更新" : "预览并选择"} size="sm" isDisabled={disabled} onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />}
+                      : <Button label={newer ? "预览更新" : "预览并选择"} size="sm" isDisabled={disabled || (selected && !newer)} onClick={() => setPreviewing({ owner: skill.owner, slug: skill.slug })} />}
                   </HStack>
                 </HStack>
               </Card>
@@ -147,6 +164,7 @@ export function PlatformSkillSelector({ value, onChange, disabled, title = "技�
           owner={previewing.owner}
           slug={previewing.slug}
           confirmLabel="导入并选择"
+          currentLabel="选择"
           onConfirm={importAndSelect}
           onClose={() => setPreviewing(null)}
         />

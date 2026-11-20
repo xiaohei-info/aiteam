@@ -96,6 +96,30 @@ describe("CapabilitiesSection 添加 skill", () => {
   });
 });
 
+describe("ClawHub 已导入的同版本技能", () => {
+  it("预览里直接「选择」平台已开放版本，不重复下载", async () => {
+    const saved = { ...preview };
+    download.mockClear();
+    Object.assign(preview, { owner: "acme", slug: "sheet", display_name: "读表", version: "2", imported_version: "2" });
+    try {
+      render(
+        <CapabilitiesSection
+          solution={solution()} version={7} canEdit busy={false}
+          active={null} onActiveChange={() => {}} onSave={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "编辑能力清单" }));
+      fireEvent.click(await screen.findByRole("button", { name: "ClawHub 外部市场" }));
+      fireEvent.click(await screen.findByRole("button", { name: "预览并选择" }));
+      fireEvent.click(await screen.findByRole("button", { name: "选择" }));
+      expect(await screen.findByText(/已选择 读表/)).toBeInTheDocument();
+      expect(download).not.toHaveBeenCalled();
+    } finally {
+      Object.assign(preview, saved);
+    }
+  });
+});
+
 describe("CapabilitiesSection 展示", () => {
   it("skill 按内部技能市场的名称和版本展示，而不是平台 skill_id", async () => {
     render(

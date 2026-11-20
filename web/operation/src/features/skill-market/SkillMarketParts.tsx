@@ -69,12 +69,14 @@ interface SkillPreviewDialogProps {
   slug: string;
   /** 确认按钮文字，如「导入」「导入并选择」。 */
   confirmLabel: string;
+  /** 平台目录已是该版本时的按钮文字；不传则按钮显示「已导入」并禁用。 */
+  currentLabel?: string;
   onConfirm: (preview: ExternalSkillPreview) => Promise<void>;
   onClose: () => void;
 }
 
 /** 下载并校验后展示将导入的文件、跳过的文件与扫描结论；确认后才写入平台目录。 */
-export function SkillPreviewDialog({ api, owner, slug, confirmLabel, onConfirm, onClose }: SkillPreviewDialogProps): ReactNode {
+export function SkillPreviewDialog({ api, owner, slug, confirmLabel, currentLabel, onConfirm, onClose }: SkillPreviewDialogProps): ReactNode {
   const [preview, setPreview] = useState<ExternalSkillPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -162,7 +164,7 @@ export function SkillPreviewDialog({ api, owner, slug, confirmLabel, onConfirm, 
               {preview ? <Button label="在 ClawHub 查看" href={preview.canonical_url} variant="ghost" size="sm" /> : <span />}
               <HStack gap={2}>
                 <Button label="取消" onClick={onClose} isDisabled={busy} />
-                <Button label={current ? "已导入" : confirmLabel} variant="primary" isLoading={busy} isDisabled={!preview || current} onClick={() => void confirm()} />
+                <Button label={current ? (currentLabel ?? "已导入") : confirmLabel} variant="primary" isLoading={busy} isDisabled={!preview || (current && !currentLabel)} onClick={() => void confirm()} />
               </HStack>
             </HStack>
           </LayoutFooter>
@@ -198,14 +200,18 @@ export function ClawHubLinkImport({ api, disabled, onPick }: { api: Api; disable
   return (
     <VStack gap={2}>
       <HStack gap={2} align="end">
-        <TextInput
-          label="按链接导入"
-          value={url}
-          onChange={setUrl}
-          placeholder="https://clawhub.ai/作者/skills/标识"
-          isOptional
-          isDisabled={disabled}
-        />
+        <VStack style={{ minWidth: 0, flex: 1 }}>
+          <TextInput
+            label="按链接导入"
+            value={url}
+            onChange={setUrl}
+            onEnter={() => { if (url.trim() && !busy) void resolve(); }}
+            placeholder="https://clawhub.ai/作者/skills/标识"
+            isOptional
+            isDisabled={disabled}
+            width="100%"
+          />
+        </VStack>
         <Button label="预览" onClick={() => void resolve()} isLoading={busy} isDisabled={disabled || !url.trim()} />
       </HStack>
       {error && <Banner status="error" title={error} />}
