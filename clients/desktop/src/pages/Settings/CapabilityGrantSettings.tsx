@@ -43,7 +43,7 @@ export default function CapabilityGrantSettings() {
       <ShieldCheck size={16} strokeWidth={1.7} aria-hidden="true" />
       <div>
         <h2 id="settings-capability-grants-title">能力授权</h2>
-        <p>批准安装过的能力会在这里留下授权，<strong>仅本会话有效</strong>。平台预登记的 MCP 应用密钥只在授权期间下发给你的本机；撤销后不再下发，已装能力不受影响。</p>
+        <p>批准安装过的能力会在这里留下授权，<strong>仅本会话有效</strong>。平台预登记的 MCP 应用密钥只向已登记授权的本机会话下发；撤销后不再下发，已装能力不受影响。<br /><span className="capability-grant-meta">注：这里的授权是本机 Agent 上报的，Manager 只校验租户一致，不核对能力是否真的已安装；真正的约束仍是企业已启用该 MCP 且成员在职。</span></p>
       </div>
     </div>
     {grants === null
