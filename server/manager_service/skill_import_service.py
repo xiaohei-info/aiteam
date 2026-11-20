@@ -40,6 +40,7 @@ from shared.skill_sources import (  # noqa: F401 (SkillSourceUnavailable re-expo
     read_skill,
 )
 
+from .capability_origin import fork_provenance, import_provenance
 from .capability_catalog_repository import CapabilityCatalogRepository, SkillCatalogRow
 
 Source = Literal["folder", "zip", "file", "text", "editor", "url", "clawhub"]
@@ -54,6 +55,7 @@ class ImportRequest:
     text: str = ""
     url: str = ""
     roots: list[str] | None = None
+    fork_of: str = ""  # editor: catalog_id of the platform-market row being edited into the enterprise's own copy
 
 
 @dataclass
@@ -112,6 +114,7 @@ class SkillImportService:
         gathered = self._gather(request)
         if gathered.clawhub and gathered.clawhub.get("candidates"):
             raise ValidationProblem("ClawHub 上有多个同名技能，请先在预览里选择作者")
+        forked = self._fork_provenance(ctx, request.fork_of)
         analyses = [self._analyze(ctx, gathered.entries, root) for root in self._roots(gathered, request)]
         if request.roots is None:
             analyses = [item for item in analyses if item.ok]
@@ -120,8 +123,17 @@ class SkillImportService:
         results = []
         for item in analyses:
             results.append(self._install_one(ctx, item, gathered, visibility=visibility,
-                                             binding_policy=binding_policy, install_policy=install_policy))
+                                             binding_policy=binding_policy, install_policy=install_policy, forked=forked))
         return {"origin": gathered.origin.as_dict(), "results": results}
+
+    def _fork_provenance(self, ctx: TenantContext, fork_of: str) -> dict | None:
+        """The platform-market row an enterprise copy is edited from; the row itself is left as it is."""
+        if not fork_of:
+            return None
+        row = self._repo.get_skill(ctx, catalog_id=fork_of)
+        if row is None or (row.config or {}).get("source") != "operator":
+            raise ValidationProblem("只有从平台技能市场安装的技能需要另存为企业副本；企业自己的技能直接编辑")
+        return fork_provenance(row.config, skill_id=row.skill_id, version=row.version)
 
     # ---- gathering ----
 
@@ -211,7 +223,7 @@ class SkillImportService:
         return item
 
     def _install_one(self, ctx: TenantContext, item: _Analysis, gathered: Gathered, *, visibility: str,
-                     binding_policy: str, install_policy: str) -> dict[str, Any]:
+                     binding_policy: str, install_policy: str, forked: dict | None = None) -> dict[str, Any]:
         base = {"root": item.root, "name": item.name, "version": item.version}
         if not item.ok:
             return {**base, "status": "failed", "reason": item.reason}
@@ -220,6 +232,8 @@ class SkillImportService:
         config = {
             "source": "clawhub" if gathered.origin.kind == "clawhub" else "url" if gathered.origin.kind == "url" else "custom",
             "origin": gathered.origin.as_dict(),
+            "provenance": import_provenance(gathered.origin.kind, gathered.origin.url, gathered.clawhub,
+                                            item.existing_row.config if item.existing_row else None, forked),
             "description": item.description,
             **({"skipped": [{"path": s.path, "reason": s.reason} for s in item.skipped]} if item.skipped else {}),
             **({"security": gathered.clawhub["security"]} if gathered.clawhub and gathered.clawhub.get("security") else {}),

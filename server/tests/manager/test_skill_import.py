@@ -8,6 +8,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
+from manager_service.capability_origin import skill_origin
 from manager_service.skill_import_service import (
     ImportRequest,
     SkillImportService,
@@ -205,6 +206,40 @@ def test_editor_source_saves_a_skill_and_editing_a_clawhub_skill_makes_it_custom
     assert [f["content"] for f in row.files] == [_skill("x", body="# 改过\n")]
 
 
+def test_provenance_is_cited_until_edited_and_kept_after():
+    """Design「技能MCP命名空间出处与更新提示」§4.1: imported as is → 来自 ClawHub; after an edit → 改自, enterprise namespace."""
+    fetch = _Fetch({"https://clawhub.ai/api/v1/download?slug=x&ownerHandle=o": (200, {}, _zip({"SKILL.md": _skill("x")}))})
+    repo = _FakeRepo()
+    svc = _svc(fetch, repo=repo)
+    _install(svc, _ctx(), ImportRequest(source="clawhub", url="https://clawhub.ai/o/skills/x"))
+    prov = repo.get_skill_by_id(_ctx(), skill_id="x").config["provenance"]
+    assert prov == {"kind": "clawhub", "label": "ClawHub o/x", "url": "https://clawhub.ai/o/skills/x", "version": "", "edited": False}
+    _install(svc, _ctx(), ImportRequest(source="editor", entries=[("SKILL.md", _skill("x", body="# 改过\n").encode())]))
+    row = repo.get_skill_by_id(_ctx(), skill_id="x")
+    assert row.config["provenance"]["edited"] is True and row.config["provenance"]["label"] == "ClawHub o/x"
+    origin = skill_origin(row.config, skill_id="x", enterprise="太一科技")
+    assert origin["namespace"] == "太一科技"
+    _install(svc, _ctx(), ImportRequest(source="text", text=_skill("own")))
+    assert repo.get_skill_by_id(_ctx(), skill_id="own").config["provenance"] is None
+
+
+def test_editing_a_platform_market_skill_saves_an_enterprise_copy_and_leaves_the_original():
+    repo = _FakeRepo()
+    platform = repo.create_skill(
+        _ctx(), skill_id="platform-p1", display_name="weather", version="8c2d", install_policy="on_demand", binding_policy="opt_in",
+        visibility="tenant", config={"source": "operator", "owner": "platform", "slug": "weather", "namespace": "taiyim", "provenance": None, "skill_name": "weather"},
+        files=[{"path": "SKILL.md", "content": _skill("weather")}], content_hash="h",
+    )
+    svc = _svc(repo=repo)
+    copy = ImportRequest(source="editor", entries=[("SKILL.md", _skill("weather", body="# 企业改的\n").encode())], fork_of=platform.catalog_id)
+    assert _install(svc, _ctx(), copy)["results"][0]["status"] == "installed"
+    row = repo.get_skill_by_id(_ctx(), skill_id="weather")
+    assert row.config["provenance"] == {"kind": "platform", "label": "taiyim/weather", "url": "", "version": "8c2d", "edited": True}
+    assert repo.get_skill_by_id(_ctx(), skill_id="platform-p1").version == "8c2d"  # the platform original stays
+    with pytest.raises(ValidationProblem, match="平台技能市场"):
+        _install(svc, _ctx(), ImportRequest(source="editor", entries=[("SKILL.md", _skill("weather").encode())], fork_of=row.catalog_id))
+
+
 def test_platform_skill_name_is_not_overwritten():
     repo = _FakeRepo()
     repo.create_skill(_ctx(), skill_id="pdf", display_name="pdf", version="1", install_policy="on_demand", binding_policy="opt_in",
@@ -309,3 +344,7 @@ def test_routes_reject_wrong_transport_member_role_and_unauthenticated():
     assert client.post("/api/manager/skills/import/preview", headers=_hdr(), files=[("files", ("a.md", b"x"))], data={"source": "text"}).status_code == 422
     assert client.post("/api/manager/skills/import/preview", headers=_hdr(("member",)), json={"source": "text", "text": _skill()}).status_code == 403
     assert client.post("/api/manager/skills/import/preview", json={"source": "text", "text": _skill()}).status_code == 401
+    # fork_of only makes sense for the editor (an edited copy of a platform-market skill)
+    files = [("files", ("SKILL.md", _skill().encode()))]
+    assert client.post("/api/manager/skills/import", headers=_hdr(), files=files, data={"source": "folder", "paths": ["SKILL.md"], "fork_of": "x"}).status_code == 422
+    assert client.post("/api/manager/skills/import", headers=_hdr(), json={"source": "text", "text": _skill(), "fork_of": "x"}).status_code == 422

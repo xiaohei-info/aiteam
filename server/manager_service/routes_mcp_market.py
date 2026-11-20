@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
 
+from shared.capability_namespace import PLATFORM_NAMESPACE
 from shared.auth import require_claims, tenant_context_from
 from shared.contracts.auth import TokenClaims
 from shared.contracts.crosstier import InstallableMcpServer
@@ -13,6 +14,7 @@ from shared.db import PgTenantRouter
 from shared.errors import AppError
 from shared.mcp_probe import McpProbeRequest, McpProbeResult
 
+from .capability_origin import app_enterprise_namespace, mcp_namespace
 from .enterprise_audit_repository import build_enterprise_audit_repository
 from .mcp_catalog import McpCatalogRepository, McpMarketService, enterprise_entry
 from .openapi_schemas import (
@@ -55,7 +57,9 @@ def build_mcp_market_router(verifier) -> APIRouter:
 
     @router.get("/mcp-market", summary="列出平台 MCP 市场", description="列出平台已发布的 MCP 与本企业启用状态；平台不可达时只列出已启用项。", operation_id="manager_mcp_market_list")
     def list_market(request: Request, claims: TokenClaims = Depends(require)) -> Envelope[McpMarketOut]:
-        return Envelope(data=McpMarketOut(**_service(request).list_market(tenant_context_from(claims))))
+        ctx = tenant_context_from(claims)
+        return Envelope(data=McpMarketOut(**_service(request).list_market(ctx), platform_namespace=PLATFORM_NAMESPACE,
+                                          enterprise_namespace=app_enterprise_namespace(request.app)(ctx)))
 
     @router.post("/mcp-market/{server_id}/enable", summary="启用平台 MCP", description="把平台已发布的 MCP 启用到本企业目录，或更新到平台当前修订（owner / enterprise_admin）。", operation_id="manager_mcp_market_enable")
     def enable(server_id: str, request: Request, claims: TokenClaims = Depends(require)) -> Envelope[McpCatalogEntryOut]:
@@ -82,7 +86,10 @@ def build_mcp_market_router(verifier) -> APIRouter:
 
     @router.get("/grants/mcp-servers", summary="列出可自行安装的 MCP", description="列出当前成员可自行安装的 MCP：本企业从平台启用的与企业自建的（origin 区分；含需鉴权的：成员在本机自行登录或填写令牌）。只读，不含任何凭据。", operation_id="manager_grants_installable_mcp_servers")
     def installable(request: Request, claims: TokenClaims = Depends(require)) -> ListEnvelope[InstallableMcpServer]:
-        return ListEnvelope(data=_service(request).installable(tenant_context_from(claims)))
+        ctx = tenant_context_from(claims)
+        rows = _service(request).installable(ctx)
+        enterprise = app_enterprise_namespace(request.app)(ctx) if rows else ""
+        return ListEnvelope(data=[row.model_copy(update={"namespace": mcp_namespace(row.origin, enterprise)}) for row in rows])
 
     @router.get("/grants/mcp-servers/{server_id}/oauth-client", summary="取预登记的 MCP 应用", description="成员本机 Agent 仅在登录 / 刷新令牌时调用，取回平台或企业为该 MCP 登记的应用编号与密钥；只放内存，不落盘。仅本企业目录中、oauth 且已登记应用的条目。", operation_id="manager_grants_mcp_oauth_client")
     def oauth_client(server_id: str, request: Request, claims: TokenClaims = Depends(require)) -> Envelope[McpOAuthClientOut]:

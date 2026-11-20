@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, CapabilityOrigin, capabilityTitle } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -56,7 +56,8 @@ export function SkillMarketPage({ embedded = false }: { embedded?: boolean } = {
                 <VStack gap={1} style={{ flex: "1 1 320px", minWidth: 0 }}>
                   <Heading level={3}>{item.display_name || item.slug}</Heading>
                   <Text color="secondary">{item.summary || "暂无描述"}</Text>
-                  <Text color="secondary">{item.owner}/{item.slug} · v{item.published_version}</Text>
+                  <Text color="secondary">{capabilityTitle(item.namespace, item.slug)} · v{item.published_version}</Text>
+                  <CapabilityOrigin provenance={item.provenance} />
                 </VStack>
                 <HStack gap={2} style={{ flexShrink: 0 }}>
                   {item.installed && <Badge label={item.update_available ? "可更新" : "已安装"} variant={item.update_available ? "warning" : "success"} />}

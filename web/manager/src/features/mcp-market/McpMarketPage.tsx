@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
+import { ApiError, capabilityTitle } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -117,6 +117,8 @@ export function McpMarketPage(): ReactNode {
 
   const servers = market?.servers ?? [];
   const enterprise = market?.enterprise ?? [];
+  const platformNs = market?.platform_namespace ?? "taiyim";
+  const enterpriseNs = market?.enterprise_namespace ?? "";
   return (
     <VStack as="section" gap={5}>
       <VStack gap={1}>
@@ -148,7 +150,7 @@ export function McpMarketPage(): ReactNode {
                       </HStack>
                       <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                       <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                      <Text color="secondary">标识 {item.ref} · 修订 {item.revision} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
+                      <Text color="secondary">标识 {capabilityTitle(enterpriseNs, item.ref)} · 修订 {item.revision} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                     </VStack>
                     <HStack gap={2}>
                       <Button label="编辑" size="sm" isDisabled={busy !== null} onClick={() => { setSaveError(null); setEditing(item); }} />
@@ -179,7 +181,7 @@ export function McpMarketPage(): ReactNode {
                       </HStack>
                       <Text color="secondary">{item.summary || "暂无用途说明"}</Text>
                       <Text color="secondary" style={{ wordBreak: "break-all" }}>{item.url}</Text>
-                      <Text color="secondary">标识 {item.ref} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
+                      <Text color="secondary">标识 {capabilityTitle(platformNs, item.ref)} · 工具：{item.tools.length ? item.tools.join("、") : "以成员登录后实际工具为准"}</Text>
                     </VStack>
                     <HStack gap={2}>
                       {item.enabled && (

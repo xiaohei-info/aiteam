@@ -12,6 +12,9 @@ import type { ConnectorCatalog, MemoryPolicyCatalog, SkillCatalog } from "./type
 vi.mock("./useCapabilityApi", () => ({ useCapabilityApi: vi.fn() }));
 const modelsApi = { list: async () => ({ providers: [], models: [] }) };
 vi.mock("../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: () => modelsApi }));
+const marketApi = { list: vi.fn(async () => [] as unknown[]), install: vi.fn(async () => ({})) };
+vi.mock("../skill-market/useSkillMarketApi", () => ({ useSkillMarketApi: () => marketApi }));
+vi.mock("../../shell/useMe", () => ({ useMe: () => ({ me: { enterprise_name: "太一科技", enterprise_code: "e2e" }, blocked: null }) }));
 
 const skill: SkillCatalog = {
   catalog_id: "skill-c1", skill_id: "skill-a", display_name: "技能 A", version: "1",
@@ -181,21 +184,58 @@ describe("CapabilityPage", () => {
     expect(api.updateSkillSettings).not.toHaveBeenCalled();
   });
 
-  it("平台技能市场装的技能：只能查看内容，两项设置可改，没有删除", async () => {
-    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, config: { source: "operator" } }]) });
+  const platformSkill: SkillCatalog = {
+    ...skill, catalog_id: "skill-p1", skill_id: "platform-p1", display_name: "weather", version: "1.0.0", namespace: "taiyim",
+    config: { source: "operator", source_skill_id: "p1", skill_name: "weather" },
+    files: [{ path: "SKILL.md", content: "---\nname: weather\ndescription: 查天气。出门前用。\n---\n# W\n" }],
+  };
+
+  it("平台技能：显示 taiyim/ 前缀；只改设置作用于原件，没有删除", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill]) });
     renderPage();
     const table = await screen.findByRole("table", { name: "技能目录" });
-    await within(table).findByText("技能 A");
+    await within(table).findByText("taiyim/weather");
     expect(within(table).queryByRole("button", { name: "删除" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "查看" }));
-    const dialog = within(await screen.findByRole("dialog", { name: "查看技能 技能 A" }));
-    expect(dialog.getByText(/内容由运营端维护/)).toBeInTheDocument();
-    expect(dialog.getByRole("textbox", { name: /^说明/ })).toBeDisabled();
-    expect(dialog.queryByRole("button", { name: "添加文件" })).toBeNull();
+    fireEvent.click(within(table).getByRole("button", { name: "编辑" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 taiyim/weather" }));
+    expect(dialog.getByText(/「太一科技\/名称」这个副本，平台原件保留/)).toBeInTheDocument();
     fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
     fireEvent.click(dialog.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "opt_in" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-p1", { skill_id: "platform-p1", visibility: "private", binding_policy: "opt_in" }));
     expect(api.importSkills).not.toHaveBeenCalled();
+  });
+
+  it("编辑平台技能的内容：另存为企业副本（fork_of），不动原件；与企业技能重名时拦下", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill, { ...skill, skill_id: "weather-taiyi", display_name: "weather-taiyi" }]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    fireEvent.click((await within(table).findAllByRole("button", { name: "编辑" }))[0]!);
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 taiyim/weather" }));
+    const name = dialog.getByRole("textbox", { name: /^名称/ });
+    expect(name).not.toBeDisabled();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "查天气，带穿衣建议。出门前用。" } });
+    fireEvent.change(name, { target: { value: "weather-taiyi" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText(/企业技能里已有「weather-taiyi」/)).toBeInTheDocument();
+    fireEvent.change(name, { target: { value: "weather" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.importSkills).mock.calls[0]![0]).toMatchObject({ source: "editor", fork_of: "skill-p1", visibility: "tenant", binding_policy: "opt_in" });
+    expect(api.updateSkillSettings).not.toHaveBeenCalled();
+    expect(await screen.findByText("已另存为企业技能 太一科技/weather，平台原件保留")).toBeInTheDocument();
+  });
+
+  it("平台有新版本：版本列提示，点「更新」走市场安装", async () => {
+    const item = { skill_id: "p1", owner: "platform", slug: "weather", display_name: "weather", summary: "", status: "published",
+      published_version: "2.0.0", content_hash: "h2", installed: true, update_available: true };
+    marketApi.list.mockResolvedValueOnce([item]);
+    mockApi({ listSkills: vi.fn().mockResolvedValue([platformSkill]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    await within(table).findByText("平台有新版本 v2.0.0");
+    fireEvent.click(within(table).getByRole("button", { name: "更新" }));
+    await waitFor(() => expect(marketApi.install).toHaveBeenCalledWith(item));
+    expect(await screen.findByText(/已把 taiyim\/weather 更新到 v2.0.0/)).toBeInTheDocument();
   });
 
   it("删除技能：经 AlertDialog 确认后调用 deleteSkill", async () => {

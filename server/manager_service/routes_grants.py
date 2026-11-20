@@ -23,6 +23,7 @@ from shared.contracts.envelope import Envelope, ListEnvelope
 from shared.db import PgTenantRouter
 from shared.errors import AppError, Forbidden, ValidationProblem
 
+from .capability_origin import app_enterprise_namespace
 from .authorized_config_service import AuthorizedConfigService
 from .knowledge_access_policy import KnowledgeAccessPolicy
 from .employee_bindings_repositories import EmployeeKnowledgeBindingRepository
@@ -114,7 +115,8 @@ async def list_installable_skills(
     claims: TokenClaims = Depends(_token_claims),
 ) -> ListEnvelope[InstallableSkill]:
     ctx = tenant_context_from(claims)
-    return ListEnvelope[InstallableSkill](data=_authorized_config_service(request).installable_skills(ctx))
+    return ListEnvelope[InstallableSkill](data=_authorized_config_service(request).installable_skills(
+        ctx, enterprise_namespace=app_enterprise_namespace(request.app)(ctx)))
 
 
 @router.get(

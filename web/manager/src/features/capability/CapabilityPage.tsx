@@ -3,7 +3,7 @@
  * 技能按技能本身编辑（SKILL.md + 附带文件，见 EnterpriseSkillDialogs）；连接器与记忆策略仍用通用表单。
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, EnterpriseRole, hasRole, skillSummary } from "@aiteam/shared";
+import { ApiError, CapabilityOrigin, EnterpriseRole, hasRole, skillSummary } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -30,7 +30,10 @@ import { CapabilityAssistDialog } from "../capability-assist/CapabilityAssistDia
 import { handoffState, MCP_PAGE, readHandoff, skillImportInitial } from "../capability-assist/handoff";
 import type { CapabilityAssistCandidate } from "../capability-assist/types";
 import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssistApi";
-import { EnterpriseSkillEditor, EnterpriseSkillImport, isPlatformSkill } from "./EnterpriseSkillDialogs";
+import { useMe } from "../../shell/useMe";
+import type { PlatformSkillMarketItem } from "../skill-market/types";
+import { useSkillMarketApi } from "../skill-market/useSkillMarketApi";
+import { EnterpriseSkillEditor, EnterpriseSkillImport, isPlatformSkill, skillTitle } from "./EnterpriseSkillDialogs";
 import { useCapabilityApi } from "./useCapabilityApi";
 import type {
   CatalogVisibility,
@@ -152,6 +155,11 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   const canWrite = hasRole(session, EnterpriseRole.OWNER, EnterpriseRole.ENTERPRISE_ADMIN);
   const api = useCapabilityApi();
   const [skills, setSkills] = useState<SkillCatalog[]>([]);
+  /** 平台技能市场：用来提示「平台有新版本」（读不到不影响页面）。 */
+  const marketApi = useSkillMarketApi();
+  const [market, setMarket] = useState<PlatformSkillMarketItem[]>([]);
+  const { me } = useMe();
+  const enterpriseNamespace = me?.enterprise_name || me?.enterprise_code || "";
   const [connectors, setConnectors] = useState<ConnectorCatalog[]>([]);
   const [memories, setMemories] = useState<MemoryPolicyCatalog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -194,6 +202,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
         api.listMemoryPolicies(),
       ]);
       setSkills(skillItems);
+      if (skillItems.some(isPlatformSkill)) setMarket(await marketApi.list().catch(() => []));
       setConnectors(connectorItems);
       setMemories(memoryItems);
     } catch (err) {
@@ -201,9 +210,32 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     } finally {
       setLoading(false);
     }
-  }, [api, i18n]);
+  }, [api, marketApi, i18n]);
 
   useEffect(() => { void load(); }, [load]);
+
+  /** 平台技能有新版本时的市场条目（按平台技能 id 对上）。 */
+  const updateFor = useCallback((row: SkillCatalog): PlatformSkillMarketItem | null => {
+    if (!isPlatformSkill(row)) return null;
+    const item = market.find((entry) => entry.skill_id === row.config?.source_skill_id);
+    return item?.update_available && item.published_version && item.published_version !== row.version ? item : null;
+  }, [market]);
+
+  const [updating, setUpdating] = useState<string | null>(null);
+  const updateSkill = useCallback(async (row: SkillCatalog, item: PlatformSkillMarketItem) => {
+    setUpdating(row.catalog_id);
+    setActionError(null);
+    setNotice(null);
+    try {
+      await marketApi.install(item);
+      setNotice(`已把 ${skillTitle(row)} 更新到 v${item.published_version}，专家和成员下次对话起用新版本`);
+      await load();
+    } catch (err) {
+      setActionError(err instanceof ApiError || err instanceof Error ? err.message : "更新失败，请重试");
+    } finally {
+      setUpdating(null);
+    }
+  }, [marketApi, load]);
 
   const runWrite = useCallback(async (fn: () => Promise<unknown>, successKey: string): Promise<boolean> => {
     setWorking(true);
@@ -293,10 +325,23 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   // 技能按技能本身展示：名称、说明（SKILL.md 的 description）、版本、来源，加两项真正生效的设置。
   const skillColumns = useMemo<TableColumn<SkillRow>[]>(() => {
     const columns: TableColumn<SkillRow>[] = [
-      { key: "display_name", header: "名称", width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
+      { key: "display_name", header: "名称", width: proportional(1), renderCell: (row) => (
+        <VStack gap={0.5}>
+          <Text>{skillTitle(row) || "未命名技能"}</Text>
+          <CapabilityOrigin provenance={row.provenance} />
+        </VStack>
+      ) },
       { key: "description", header: "说明", width: proportional(2), renderCell: (row) => <Text color="secondary" style={CLAMP_2}>{skillDescription(row) || "—"}</Text> },
       { key: "version", header: i18n.t("manager.capability.version"), width: pixel(130) },
-      { key: "source", header: "来源", width: pixel(100), renderCell: (row) => <Badge label={skillSourceLabel(row.config)} /> },
+      { key: "source", header: "来源", width: pixel(150), renderCell: (row) => {
+        const update = updateFor(row);
+        return (
+          <VStack gap={1} align="start">
+            <Badge label={skillSourceLabel(row.config)} />
+            {update && <Badge label={`平台有新版本 v${update.published_version}`} variant="warning" />}
+          </VStack>
+        );
+      } },
       { key: "member_install", header: "成员自装", width: pixel(110), renderCell: (row) => row.visibility === "private" ? <Badge label="仅配给专家" /> : <Badge label="可以" variant="success" /> },
       { key: "status", header: "状态", width: pixel(100), renderCell: (row) => { const status = skillStatus(row); return <Badge label={status.label} variant={status.variant} />; } },
     ];
@@ -304,7 +349,14 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end",
       renderCell: (row) => (
         <HStack gap={1} justify="end">
-          <Button label={isPlatformSkill(row) ? "查看" : i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => { setNotice(null); setSkillEditor({ row }); }} />
+          {(() => {
+            const update = updateFor(row);
+            return update && (
+              <Button label="更新" variant="primary" size="sm" isLoading={updating === row.catalog_id} isDisabled={updating !== null}
+                onClick={() => void updateSkill(row, update)} />
+            );
+          })()}
+          <Button label={i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => { setNotice(null); setSkillEditor({ row }); }} />
           {!isPlatformSkill(row) && (
             <Button label={i18n.t("manager.capability.delete")} variant="destructive" size="sm"
               onClick={() => setPendingDelete({ kind: "skill", catalogId: row.catalog_id, displayName: row.display_name || "未命名技能" })} />
@@ -313,7 +365,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       ),
     });
     return columns;
-  }, [canWrite, i18n]);
+  }, [canWrite, i18n, updateFor, updateSkill, updating]);
 
   const connectorColumns = useMemo<TableColumn<ConnectorRow>[]>(() => {
     const columns: TableColumn<ConnectorRow>[] = [
@@ -405,6 +457,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
           api={api}
           row={skillEditor.row}
           existingIds={new Set(skills.map((item) => item.skill_id))}
+          enterpriseNamespace={enterpriseNamespace}
           onClose={() => setSkillEditor(null)}
           onSaved={(message) => { setSkillEditor(null); setNotice(message); void load(); }}
         />

@@ -208,6 +208,20 @@ class CapabilityCatalogRepository:
             ).fetchone()
         return _row_to_skill(row) if row is not None else None
 
+    def replace_platform_package(self, ctx: TenantContext, *, catalog_id: str, display_name: str, version: str,
+                                 config: dict, files: list, content_hash: str) -> SkillCatalogRow | None:
+        """Moves a platform-market row to another Operator version in place (design「技能MCP命名空间出处与更新提示」§4.3).
+
+        skill_id, visibility, binding_policy and expert bindings stay; only Operator-managed rows qualify.
+        """
+        with _skill_write(self._router, ctx) as s:
+            row = s.execute(
+                "UPDATE skill_catalog SET display_name = %s, version = %s, config = %s::jsonb, files = %s::jsonb, content_hash = %s "
+                "WHERE id = %s AND config->>'source' = 'operator' RETURNING " + _SKILL_COLS,
+                (display_name, version, json.dumps(config), json.dumps(files), content_hash, catalog_id),
+            ).fetchone()
+        return _row_to_skill(row) if row is not None else None
+
     def get_skill(self, ctx: TenantContext, *, catalog_id: str) -> SkillCatalogRow | None:
         with self._router.session(ctx) as s:
             row = s.execute("SELECT " + _SKILL_COLS + " FROM skill_catalog WHERE id = %s", (catalog_id,)).fetchone()

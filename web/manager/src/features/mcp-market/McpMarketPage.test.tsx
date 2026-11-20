@@ -82,6 +82,12 @@ describe("企业自建 MCP", () => {
     expect(await screen.findByText(/ERP 已添加/)).toBeInTheDocument();
   });
 
+  it("标识带前缀：平台 taiyim/、企业自建为企业名/", async () => {
+    api.list.mockResolvedValue({ platform_available: true, servers: [], enterprise: [own()], enterprise_namespace: "太一科技" });
+    render(<MemoryRouter><McpMarketPage /></MemoryRouter>);
+    expect(await screen.findByText(/标识 太一科技\/erp · 修订 2/)).toBeInTheDocument();
+  });
+
   it("编辑不能改标识；删除先确认", async () => {
     api.list.mockResolvedValue({ platform_available: true, servers: [], enterprise: [own()] });
     render(<MemoryRouter><McpMarketPage /></MemoryRouter>);
