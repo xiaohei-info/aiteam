@@ -197,7 +197,7 @@ class _FakeRouter:
 
 def _catalog_row(secret_set=False):
     return ("s1", "cr-test", "CRM", "客户", "https://crm.example.com/mcp", ["a"], "oauth", "",
-            "openid", 30000, "app-1", secret_set, 1)
+            "openid", 30000, "app-1", secret_set, 1, "platform")
 
 
 def test_mcp_catalog_repository_paths():

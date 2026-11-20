@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bearerHeaders, McpAuthService, McpCredentialStore, probeMcpAuth, validBearerHeader } from "./mcp-auth.js";
 import { createFixture } from "./test-fixture.js";
-import { capabilityInstallTool, installMcpDirectly, listMcpTools, McpInstallError, personalConnectorTools, updateMcpToken, verifyMcpBearer } from "./connectors.js";
+import { capabilityInstallTool, installMcpDirectly, installMcpFromCatalog, listCatalogMcps, listMcpTools, McpInstallError, personalConnectorTools, updateMcpToken, verifyMcpBearer, type InstallableMcpInfo } from "./connectors.js";
+import { ManagerUnavailableError, type ManagerClient } from "./manager-client.js";
 
 const owner = { tenantId: "tenant-1", memberId: "member-1" };
 
@@ -477,6 +478,149 @@ test("tokens never reach the model or the logs: tool results, install results an
     process.stderr.write = err;
     bearer.server.close();
     oauth.server.close();
+    await fixture.close();
+  }
+});
+
+test("«从企业拿»: one-click installs of catalog MCPs for each auth mode, with install / installed / update / conflict states", async () => {
+  const fixture = await createFixture();
+  const root = mkdtempSync(join(tmpdir(), "mcp-catalog-"));
+  const open = await authServer("open");
+  const bearer = await authServer("bearer", { token: "good-token", header: "X-API-Key" });
+  const oauth = await authServer("oauth");
+  const mine = await authServer("open");
+  const auth = service(root);
+  let entries: InstallableMcpInfo[] = [
+    { server_id: "p-1", ref: "activity", display_name: "活动", summary: "", url: open.url, tools: ["activity_summary", "other"], revision: 2, auth: "none", origin: "platform" },
+    { server_id: "ent-crm", ref: "crm", display_name: "CRM", summary: "", url: bearer.url, tools: [], revision: 1, auth: "bearer", auth_header: "X-API-Key", origin: "enterprise" },
+    { server_id: "ent-cr", ref: "cr-test", display_name: "Cycplus", summary: "", url: oauth.url, tools: [], revision: 3, auth: "oauth", origin: "enterprise" },
+    { server_id: "ent-mine", ref: "mine", display_name: "同名", summary: "", url: open.url, tools: [], revision: 1, auth: "none", origin: "enterprise" },
+  ];
+  const catalog = { list: async () => entries };
+  const runtime = { service: auth, catalog };
+  const states = async () => Object.fromEntries((await listCatalogMcps(fixture.store, owner, catalog)).map(item => [item.ref, item.state]));
+  try {
+    await installMcpDirectly(fixture.store, owner, { service: auth }, { ref: "mine", url: mine.url });
+    assert.deepEqual(await states(), { activity: "install", crm: "install", "cr-test": "install", mine: "conflict" });
+
+    // No sign-in needed: installed at once, with only the declared tools and the catalog revision.
+    const added = await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "p-1", {});
+    assert.deepEqual([added.capability?.source, added.capability?.version, added.capability?.tools, added.capability?.url], ["platform_catalog", "2", ["activity_summary"], open.url]);
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "p-1", {}), { code: "mcp_exists" });
+
+    // Token: required, checked by the server, kept only in the local credential file.
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-crm", {}), { code: "mcp_install_failed" });
+    // The member reads the reason in the desktop row: it must address them, not a model relaying to "the user".
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-crm", { credential: { token: "bad" } }), (error: Error) => {
+      assert.match(error.message, /拒绝了 CRM 的访问令牌.*请检查令牌后重试/u);
+      assert.doesNotMatch(error.message, /用户/u);
+      return true;
+    });
+    const crm = await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-crm", { credential: { token: "good-token" } });
+    assert.deepEqual([crm.capability?.source, crm.capability?.auth, crm.capability?.auth_header, crm.capability?.version], ["enterprise_catalog", "bearer", "X-API-Key", "1"]);
+    assert.equal(auth.credentials.get(owner, "crm", bearer.url)?.token, "good-token");
+
+    // Browser sign-in: pending first, installed when the browser comes back.
+    const pending = await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-cr", {});
+    assert(pending.login && !pending.capability);
+    assert.equal((await states())["cr-test"], "install", "nothing is installed before sign-in");
+    assert.equal(await auth.callback({ state: new URL(pending.login.authorization_url).searchParams.get("state"), code: "c1" }), true);
+    const signedIn = fixture.store.listLocalCapabilities("tenant-1", "member-1").find(item => item.ref === "cr-test");
+    assert.deepEqual([signedIn?.source, signedIn?.auth, signedIn?.version], ["enterprise_catalog", "oauth", "3"]);
+
+    // The catalog moves on: «update» re-installs from the newer revision (needs replace); a same-ref MCP of the member's own is replaced only on request.
+    entries = entries.map(item => item.server_id === "p-1" ? { ...item, revision: 5 } : item);
+    assert.deepEqual(await states(), { activity: "update", crm: "installed", "cr-test": "installed", mine: "conflict" });
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "p-1", {}), { code: "mcp_exists" });
+    assert.equal((await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "p-1", { replace: true })).capability?.version, "5");
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-mine", {}), { code: "mcp_exists" });
+    const replaced = await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-mine", { replace: true });
+    assert.deepEqual([replaced.capability?.source, replaced.capability?.url], ["enterprise_catalog", open.url]);
+    assert.deepEqual(await states(), { activity: "installed", crm: "installed", "cr-test": "installed", mine: "installed" });
+
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "gone", {}), { code: "mcp_not_in_catalog" });
+    assert(!JSON.stringify(await listCatalogMcps(fixture.store, owner, catalog)).includes("good-token"));
+  } finally {
+    for (const item of [open, bearer, oauth, mine]) item.server.close();
+    await fixture.close();
+  }
+});
+
+test("«从企业拿»: a catalog entry's declared token auth wins over a probe that also finds OAuth on the server", async () => {
+  const fixture = await createFixture();
+  const root = mkdtempSync(join(tmpdir(), "mcp-catalog-declared-"));
+  const bearer = await authServer("bearer", { token: "good-token", header: "X-API-Key" });
+  const auth = service(root);
+  const entries: InstallableMcpInfo[] = [
+    { server_id: "ent-gh", ref: "gh", display_name: "GitHub", summary: "", url: bearer.url, tools: [], revision: 1, auth: "bearer", auth_header: "X-API-Key", origin: "enterprise" },
+  ];
+  const catalog = { list: async () => entries };
+  // The server also publishes OAuth metadata (GitHub's MCP accepts a PAT or OAuth).
+  const probe = async () => ({ auth: "oauth" as const, auth_host: "github.com", scope: "repo", resourceMetadataUrl: "https://example.invalid/.well-known/oauth-protected-resource" });
+  const runtime = { service: auth, catalog, probe };
+  try {
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-gh", {}), /需要访问令牌/u);
+    await assert.rejects(installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-gh", { credential: { token: "bad" } }), /拒绝了 GitHub 的访问令牌/u);
+    const done = await installMcpFromCatalog(fixture.store, owner, runtime, catalog, "ent-gh", { credential: { token: "good-token" } });
+    assert.equal(done.login, undefined);
+    assert.deepEqual([done.capability?.auth, done.capability?.auth_header, done.capability?.oauth_scope], ["bearer", "X-API-Key", ""]);
+  } finally {
+    bearer.server.close();
+    await fixture.close();
+  }
+});
+
+test("HTTP «从企业拿»: list and install through Manager, 404 / 409 / 503 when the entry is gone, installed or Manager is down", async () => {
+  const fixture = await createFixture();
+  const root = mkdtempSync(join(tmpdir(), "mcp-catalog-http-"));
+  const open = await authServer("open");
+  const auth = service(root);
+  let down = false;
+  const managerClient = {
+    pullAuthorizedConfig: async () => { throw new Error("unused"); },
+    listInstallableMcpServers: async () => {
+      if (down) throw new ManagerUnavailableError("down");
+      return [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], revision: 2, auth: "none", auth_header: "", oauth_scopes: "", oauth_client: "dynamic", origin: "enterprise" }];
+    },
+  } as unknown as ManagerClient;
+  const host = fixture.createHost(undefined, managerClient, undefined, undefined, { mcpAuth: auth });
+  const bare = fixture.createHost(undefined, undefined, undefined, undefined, { mcpAuth: auth });
+  const { AgentHttpServer } = await import("./http/server.js");
+  const caller = () => ({ callerId: "member-1", userId: "member-1", tenantId: "tenant-1", roles: ["member"] });
+  const http = new AgentHttpServer({ host, store: fixture.store, authenticate: caller });
+  const withoutManager = new AgentHttpServer({ host: bare, store: fixture.store, authenticate: caller });
+  await http.listen(0);
+  await withoutManager.listen(0);
+  const at = (server: { server: { address(): unknown } }) => { const address = server.server.address() as { port: number }; return `http://127.0.0.1:${address.port}`; };
+  const base = at(http);
+  const headers = { Authorization: "Bearer test", "Content-Type": "application/json" };
+  try {
+    const listed = await (await fetch(`${base}/api/agent/capabilities/installable-mcp-servers`, { headers })).json() as { data: Record<string, unknown>[] };
+    assert.deepEqual(listed.data, [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], auth: "none", origin: "enterprise", revision: 2, state: "install" }]);
+    const install = (body: unknown, id = "ent-1") => fetch(`${base}/api/agent/capabilities/mcp/catalog/${id}/install`, { method: "POST", headers, body: JSON.stringify(body) });
+    // The address always comes from the catalog: one sent by the client is ignored.
+    const done = await install({ url: "https://evil.example/mcp", ref: "evil" });
+    assert.equal(done.status, 200, await done.clone().text());
+    const installed = (await done.json() as { data: { capability: Record<string, unknown>; login: unknown } }).data;
+    assert.deepEqual([installed.capability.source, installed.capability.url, installed.capability.ref, installed.login], ["enterprise_catalog", open.url, "erp", null]);
+    assert.equal((await install({})).status, 409);
+    assert.equal((await install({}, "missing")).status, 404);
+    const after = await (await fetch(`${base}/api/agent/capabilities/installable-mcp-servers`, { headers })).json() as { data: { state: string }[] };
+    assert.equal(after.data[0]?.state, "installed");
+
+    down = true;
+    const unavailable = await fetch(`${base}/api/agent/capabilities/installable-mcp-servers`, { headers });
+    assert.deepEqual([unavailable.status, (await unavailable.json() as { code: string }).code], [503, "manager_unavailable"]);
+    assert.equal((await install({ replace: true })).status, 503);
+    assert.equal((await fetch(`${at(withoutManager)}/api/agent/capabilities/installable-mcp-servers`, { headers })).status, 503);
+    // The custom «添加 MCP» path keeps working without the enterprise catalog.
+    assert.equal((await fetch(`${base}/api/agent/capabilities/mcp/probe`, { method: "POST", headers, body: JSON.stringify({ url: open.url }) })).status, 200);
+  } finally {
+    await http.close();
+    await withoutManager.close();
+    await host.dispose();
+    await bare.dispose();
+    open.server.close();
     await fixture.close();
   }
 });

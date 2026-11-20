@@ -46,7 +46,7 @@ import type { ExecutionAuthorizationRegistry } from "../execution-authorization.
 import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord, type CapabilityResolution } from "../storage/sqlite.js";
 import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, ApprovalSessionAllowError, capabilityInstallAuthOf } from "../approval-service.js";
-import { CustomSkillError, importCustomSkill, installMcpDirectly, installSkillDirectly, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
+import { CustomSkillError, importCustomSkill, installMcpDirectly, installMcpFromCatalog, installSkillDirectly, listCatalogMcps, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
 import type { LocalCapability as StoredCapability } from "../storage/sqlite.js";
@@ -556,6 +556,25 @@ const McpInstallRequest = Type.Object({
   oauth_client: Type.Optional(Type.Object({ client_id: Type.String({ minLength: 1, maxLength: 512, description: "服务方发的应用编号。" }), client_secret: Type.Optional(Type.String({ maxLength: 4096, description: "应用密钥；只保存在本机加密文件。" })) }, { additionalProperties: false, description: "高级：服务方不允许自动注册时手动填写的应用编号。" })),
 }, { $id: "McpInstallRequest", additionalProperties: false });
 const McpInstallEnvelope = Type.Object({ data: Type.Object({ capability: Type.Union([Type.Ref("LocalCapability"), Type.Null()], { description: "已安装的 MCP；需要先登录时为 null。" }), login: Type.Union([Type.Ref("McpLogin"), Type.Null()], { description: "需要成员在浏览器登录时的进度；登录完成后自动完成安装。" }) }, { additionalProperties: false }) }, { $id: "McpInstallEnvelope" });
+const McpAuthMode = Type.Union([Type.Literal("none"), Type.Literal("oauth"), Type.Literal("bearer")], { description: "鉴权方式：none 无需；oauth 成员在服务方网页登录；bearer 成员填写服务方发的访问令牌。" });
+const CatalogMcpOut = Type.Object({
+  server_id: Type.String({ description: "平台 MCP ID，或企业自建 MCP ID（`ent-` 前缀）。" }),
+  ref: Type.String({ description: "本机安装标识；已从该条目装过时为本机实际使用的标识。" }),
+  display_name: Type.String({ description: "展示名称。" }),
+  summary: Type.String({ description: "用途说明。" }),
+  url: Type.String({ description: "端点地址（https），以企业目录为准。" }),
+  tools: Type.Array(Type.String(), { description: "企业目录声明的工具名；安装时只保留与服务端实际工具的交集。" }),
+  auth: McpAuthMode,
+  origin: Type.Union([Type.Literal("platform"), Type.Literal("enterprise")], { description: "platform：企业从平台目录启用；enterprise：企业自建。" }),
+  revision: Type.Integer({ minimum: 1, description: "目录修订号。" }),
+  state: Type.Union([Type.Literal("install"), Type.Literal("installed"), Type.Literal("update"), Type.Literal("conflict")], { description: "install 本机未装；installed 已从该条目装好；update 本机装的是旧修订；conflict 本机已有同标识的其他 MCP（安装需 replace）。" }),
+}, { $id: "CatalogMcp", additionalProperties: false, description: "成员可从企业 MCP 目录一键安装的条目；不含任何凭据。" });
+const CatalogMcpListEnvelope = Type.Object({ data: Type.Array(Type.Ref("CatalogMcp")) }, { $id: "CatalogMcpListEnvelope" });
+const CatalogMcpInstallRequest = Type.Object({
+  replace: Type.Optional(Type.Boolean({ description: "更新本机已装的旧修订，或替换同标识的其他 MCP。" })),
+  credential: Type.Optional(McpBearerCredentialIn),
+}, { $id: "CatalogMcpInstallRequest", additionalProperties: false, description: "地址、工具与鉴权方式都以企业目录为准，不接受客户端传值。" });
+const CatalogMcpParams = Type.Object({ server_id: Type.String({ minLength: 1, maxLength: 128, description: "目录条目 ID。" }) }, { additionalProperties: false });
 const McpTokenRequest = Type.Object({ token: Type.String({ minLength: 1, maxLength: 8192, description: "新的访问令牌。" }), header: Type.Optional(Type.String({ maxLength: 64, description: "请求头名；缺省沿用安装时的设置。" })) }, { $id: "McpTokenRequest", additionalProperties: false });
 const SkillInstallRequest = Type.Object({
   skill_id: Type.String({ minLength: 1, maxLength: 200, description: "企业可自装技能列表里的技能 ID（或其平台技能 ID）。" }),
@@ -863,7 +882,7 @@ const ApprovalDecisionRequest = Type.Object({ decision: Type.Union([Type.Literal
 const ProblemSchema = Type.Object({ type: Type.String({ description: "错误类型 URI。" }), title: Type.String({ description: "错误标题。" }), status: Type.Integer({ description: "HTTP 状态码。" }), code: Type.String({ description: "机器可读错误码。" }), detail: Type.String({ description: "人类可读错误说明。" }), instance: Type.String({ description: "错误实例或请求关联 ID。" }), request_id: Type.String({ description: "请求关联 ID。" }), errors: Type.Optional(Type.Array(Type.Object({ loc: Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "错误字段路径。" }), message: Type.String({ description: "字段错误说明。" }), type: Type.String({ description: "校验错误类型。" }) }, { additionalProperties: false }), { description: "字段级错误。" })), meta: Type.Optional(Type.Record(Type.String({ description: "元数据键。" }), Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Null()]), { description: "非敏感诊断元数据。" })) }, { $id: "Problem", additionalProperties: false, description: "统一 problem+json 错误。" });
 const LOCAL_FILE_DOWNLOAD_CONTENT = Object.fromEntries([...ALLOWED_FILE_MIMES].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `${mime} 文件内容。` } }]));
 const LOCAL_AVATAR_DOWNLOAD_CONTENT = Object.fromEntries(["image/jpeg", "image/png", "image/webp"].map((mime) => [mime, { schema: { type: "string", format: "binary", description: `本机 ${mime} 员工头像内容。` } }]));
-const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
+const OPENAPI_SCHEMAS = [ConversationFailureOut, CustomGroupCreateRequest, GroupOrchestration, GroupOrchestrationUpdateRequest, GroupMembersUpdateRequest, GroupMembersUpdateEnvelope,...WORK_RECORD_SCHEMAS, ...CONVERSATION_READ_SCHEMAS, ...CONVERSATION_WORKSPACE_SCHEMAS, ConversationSchedule, ConversationScheduleInput, ResolveTenantRequest, AgentLoginRequest, AgentResetPasswordRequest, ConversationMetadata, ConversationCreateRequest, ConversationUpdateRequest, ConversationStateUpdateRequest, ConversationProjectFolderRequest, ConversationState, ConversationEnvelope, ConversationListEnvelope, ConversationStateOut, ConversationStateEnvelope, ThinkingLevel, ConversationContextOut, ConversationContextEnvelope, ConversationThinkingLevelRequest, ContextResetMemoryReason, ConversationContextResetRequest, ConversationContextResetParticipantOut, ConversationContextResetOut, ConversationContextResetEnvelope, GrantSyncRequest, UsageFlushRequest, ConversationDeleteEnvelope, ConversationContentPart, ConversationMessage, ConversationEntry, ConversationEntriesEnvelope, BoundedJsonValue, PiSseToolCall, PiSseAssistantMessageEvent, PiSseEventData, PiSseReconciliation, AbortEnvelope, AuthClaims, AuthResult, AuthResultEnvelope, TenantResolution, TenantResolutionEnvelope, PingEnvelope, ClaimsEnvelope, ModelPolicy, SkillSigningKeyMetadata, ExpertProjection, SolutionProjection, SnapshotProjection, ExpertListEnvelope, SolutionListEnvelope, LocalCapability, LocalCapabilityListEnvelope, InstallableSkillOut, InstallableSkillListEnvelope, CapabilityAutoInstall, CapabilityAutoInstallListEnvelope, LocalCapabilityDeleteEnvelope, McpLoginOut, McpLoginEnvelope, McpLoginStartEnvelope, McpLoginCancelEnvelope, McpProbeRequest, McpProbeOut, McpProbeEnvelope, McpInstallRequest, McpInstallEnvelope, CatalogMcpOut, CatalogMcpListEnvelope, CatalogMcpInstallRequest, McpTokenRequest, McpTokenEnvelope, SkillInstallRequest, SkillInstallEnvelope, CustomSkillImportRequest, CustomSkillPreviewOut, CustomSkillScanItem, CustomSkillInstallResultItem, CustomSkillClawHubCandidate, CustomSkillClawHubSecurity, CustomSkillClawHubPreview, CustomSkillImportEnvelope, LocalSkillPathEnvelope, SnapshotListEnvelope, ReadinessState, SkillReadiness, CapabilityReadiness, ExpertReadiness, ReadinessEnvelope, ExpertReadinessEnvelope, GrantSyncEnvelope, UsageFlushEnvelope, OrgTreeNode, OrgTreeEnvelope, OrgDepartmentCreateRequest, OrgDepartmentUpdateRequest, OrgDepartmentPromoteRequest, OrgDepartmentEnvelope, OrgDepartmentDeleteEnvelope, OrgAssignmentRequest, OrgAssignmentEnvelope, OfficeSceneEnvelope, OfficeFeedEnvelope, GoneEnvelope, PromptImage, PromptRequest, PromptAccepted, PromptAcceptedEnvelope, LocalFileUpload, AudioTranscriptionRequest, AudioTranscriptionResponse, AudioTranscriptionEnvelope, EmployeeAvatarRequest, EmployeeAvatarResponse, LocalFileMetadata, LocalFileEnvelope, Page, LocalFileListEnvelope, LocalFileDeleteEnvelope, MarketplaceOutputType, MarketplaceTemplate, MarketplaceTemplateEnvelope, MarketplaceTemplateListEnvelope, UsageSummary, UsageOutboxItem, UsageOutboxListEnvelope, ApprovalRecordSchema, ApprovalListEnvelope, ApprovalEnvelope, ApprovalDecisionRequest, ProblemSchema] as const;
 
 const GLOBAL_ACTIVITY_STREAM_EXAMPLES = {
   promptStarted: {
@@ -1006,6 +1025,7 @@ const OPENAPI_PARAMETER_EXAMPLES: Record<string, unknown> = {
   ...CONTEXT_SEGMENT_PARAMETER_EXAMPLES,
   ...EMPLOYEE_MEMORY_PARAMETER_EXAMPLES,
   ...KNOWLEDGE_SOURCE_PARAMETER_EXAMPLES,
+  server_id: "ent-1d87dbbe-331a-4d01-b214-bcd739a1ef74",
   capability_kind: "mcp", capability_ref: "notion", login_id: "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11", state: "opaque-one-time-state", code: "provider-authorization-code", error: "access_denied", conversation_id: "conversation-1", attachment_id: "file-1", artifact_id: "artifact-1", employee_id: "employee-1", department_id: "department-1",
   template_id: "template-1", knowledge_base_id: "legacy-knowledge-base", resource_id: "resource-1", kind: "document", skill_ref: "weekly-report",
   after: "employee-1:assistant-1", cursor: "page_v1.opaque", limit: 50, entry_ref: "entry_v1_opaque",
@@ -1079,6 +1099,11 @@ const OPENAPI_OPERATION_DOCS: Record<string, OpenApiOperationDocs> = {
   deleteAttachment: { responses: { "200": { description: "附件删除结果。", examples: { deleted: { summary: "删除成功", value: { data: { deleted: true, id: "file-1" } } } } } } },
   deleteArtifact: { responses: { "200": { description: "产物删除结果。", examples: { deleted: { summary: "删除成功", value: { data: { deleted: true, id: "artifact-1" } } } } } } },
   listAuthorizedExperts: { responses: { "200": { description: "本地已装载的专家授权投影。", examples: { list: { summary: "专家列表", value: { data: [EXAMPLE_EXPERT], page: EXAMPLE_PAGE } } } } } },
+  listInstallableMcpServers: { responses: { "200": { description: "企业目录里成员可自装的 MCP 及本机状态。", examples: { list: { summary: "平台启用与企业自建各一项", value: { data: [
+    { server_id: "6b0f4c1e-2d7a-4b3e-9f10-5a8c2e7d9b01", ref: "deepwiki", display_name: "DeepWiki 文档问答", summary: "查询开源仓库的文档与结构", url: "https://mcp.deepwiki.com/mcp", tools: ["ask_wiki_question"], auth: "none", origin: "platform", revision: 2, state: "installed" },
+    { server_id: "ent-1d87dbbe-331a-4d01-b214-bcd739a1ef74", ref: "crm", display_name: "CRM 订单", summary: "查订单与客户", url: "https://crm.example.com/mcp", tools: ["find_order", "list_orders"], auth: "bearer", origin: "enterprise", revision: 3, state: "update" },
+  ] } } } } } },
+  installCatalogMcpServer: { request: { install: { summary: "无需鉴权或需要登录的条目", value: {} }, bearer: { summary: "需要令牌的条目", value: { credential: { token: "example-token" } } }, update: { summary: "更新到企业最新修订", value: { replace: true } } }, responses: { "200": { description: "已安装，或返回待完成的登录。", examples: { installed: { summary: "已安装", value: { data: { capability: { kind: "mcp", ref: "crm", display_name: "CRM 订单", url: "https://crm.example.com/mcp", tools: ["find_order", "list_orders"], source: "enterprise_catalog", version: "3", source_ref: "ent-1d87dbbe-331a-4d01-b214-bcd739a1ef74", reason: "从企业 MCP 目录安装", approved_by: "member-1", created_at: "2026-11-20T10:00:00.000Z", auth: "bearer", auth_header: "X-API-Key", oauth_scope: "", timeout_ms: 30000, auth_status: "token_set", auth_expires_at: null }, login: null } } }, login: { summary: "等待浏览器登录", value: { data: { capability: null, login: { login_id: "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11", ref: "notion", status: "pending", authorization_url: "https://mcp.notion.com/authorize?response_type=code&client_id=abc123", auth_host: "mcp.notion.com", expires_at: "2026-11-20T10:10:00.000Z" } } } } } } } },
   listInstallableSkills: { responses: { "200": { description: "当前成员可自装的企业技能。", examples: { list: { summary: "企业目录里全员可见的技能", value: { data: [{ skill_id: "tenant-sampling", display_name: "抽样检验", version: "1.2.0", content_hash: "4f2a9c1d7b3e8a60", source_skill_id: "3f9c9e2a-7b1d-4c55-9a0e-621006291fb6" }] } } } } } },
   listLocalCapabilities: { responses: { "200": { description: "当前成员的个人能力列表。", examples: { list: { summary: "已安装并已登录的 MCP", value: { data: [{ kind: "mcp", ref: "cr-test", display_name: "Cycplus 活动数据", url: "https://mcp-test.cycplus.com/mcp/cr-test", tools: ["activity_summary"], source: "user_url", version: "", source_ref: "", reason: "", approved_by: "member-1", created_at: "2026-11-18T10:00:00.000Z", auth: "oauth", auth_header: "", oauth_scope: "profile.read openid", timeout_ms: 30000, auth_status: "signed_in", auth_expires_at: "2026-11-18T12:00:00.000Z" }] } } } } } },
   getMcpLogin: { responses: { "200": { description: "登录进度。", examples: { pending: { summary: "等待浏览器登录", value: { data: { login_id: "6f1c2b0e-3a51-4c7e-9d0a-2b7f4f1e8c11", ref: "cr-test", status: "pending", authorization_url: "https://mcp-test.cycplus.com/oauth2/authorize?response_type=code&client_id=abc123", auth_host: "mcp-test.cycplus.com", expires_at: "2026-11-18T10:10:00.000Z" } } } } } } },
@@ -2500,12 +2525,19 @@ export class AgentHttpServer {
   }
 
   private mcpProblem(error: unknown): never {
-    if (error instanceof McpInstallError) throw new HttpProblem(error.code === "mcp_exists" ? 409 : 422, error.code, error.message);
+    if (error instanceof McpInstallError) throw new HttpProblem(error.code === "mcp_exists" ? 409 : error.code === "mcp_not_in_catalog" ? 404 : 422, error.code, error.message);
     throw error;
   }
 
+  /** Errors of the enterprise MCP catalog read through Manager. */
+  private catalogProblem(error: unknown): never {
+    if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
+    if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Enterprise MCP catalog is unavailable");
+    return this.mcpProblem(error);
+  }
+
   /** Personal MCP sign-in, tokens and the desktop «添加 MCP» window (design 2026-11-18 MCP鉴权与配置导入). */
-  private registerMcpAuthRoutes(jsonResponse: (schema: unknown, description?: string) => Record<string, unknown>, problemResponse: (name: "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "ValidationError") => Record<string, unknown>): void {
+  private registerMcpAuthRoutes(jsonResponse: (schema: unknown, description?: string) => Record<string, unknown>, problemResponse: (name: "Unauthorized" | "Forbidden" | "NotFound" | "Conflict" | "ValidationError" | "ManagerUnavailable") => Record<string, unknown>): void {
     const requireService = () => {
       const service = this.mcpAuthService();
       if (!service) throw new HttpProblem(503, "mcp_auth_unavailable", "MCP sign-in is unavailable on this Agent");
@@ -2575,6 +2607,28 @@ export class AgentHttpServer {
         this.writeJson(response, 200, { data: { capability: result.capability ? this.capabilityView(result.capability, caller!) : null, login: result.login ?? null } });
       } catch (error) { this.mcpProblem(error); }
     }, routeSchema("installMcpServer", { summary: "添加个人 MCP", description: "成员自己添加 MCP（不经对话和模型）。需要浏览器登录时返回登录进度，登录完成后自动安装；令牌与应用密钥只保存在本机加密文件。", body: Type.Ref("McpInstallRequest"), response: { 200: jsonResponse(Type.Ref("McpInstallEnvelope")), 401: problemResponse("Unauthorized"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError") } }));
+    const catalogOf = (caller: AuthenticatedCaller) => {
+      const catalog = runtime(caller).catalog;
+      if (!catalog) throw new HttpProblem(503, "manager_unavailable", "Enterprise MCP catalog is unavailable");
+      return catalog;
+    };
+    this.registerRoute("GET", "/api/agent/capabilities/installable-mcp-servers", async (_request, response, caller) => {
+      try {
+        this.writeJson(response, 200, { data: await listCatalogMcps(this.options.store, this.mcpOwner(caller!), catalogOf(caller!)) });
+      } catch (error) { this.catalogProblem(error); }
+    }, routeSchema("listInstallableMcpServers", { summary: "列出企业可装 MCP", description: "经企业端读取当前成员可自行安装的 MCP（企业从平台启用的与企业自建的），并与本机已装的比对给出状态。只读，不含任何凭据。企业端不可达时返回 503，「自定义」添加不受影响。", response: { 200: jsonResponse(Type.Ref("CatalogMcpListEnvelope")), 401: problemResponse("Unauthorized"), 503: problemResponse("ManagerUnavailable") } }));
+    this.registerRoute("POST", "/api/agent/capabilities/mcp/catalog/:server_id/install", async (request, response, caller, fastifyRequest) => {
+      const { server_id: serverId } = fastifyRequest?.params as { server_id: string };
+      const body = await this.readJson(request) as Record<string, any>;
+      if (body.credential?.header !== undefined && !validBearerHeader(body.credential.header)) throw new HttpProblem(422, "invalid_mcp", "令牌请求头名无效。");
+      try {
+        const result = await installMcpFromCatalog(this.options.store, this.mcpOwner(caller!), runtime(caller!), catalogOf(caller!), serverId, {
+          ...(body.replace === true ? { replace: true } : {}),
+          ...(body.credential ? { credential: body.credential } : {}),
+        });
+        this.writeJson(response, 200, { data: { capability: result.capability ? this.capabilityView(result.capability, caller!) : null, login: result.login ?? null } });
+      } catch (error) { this.catalogProblem(error); }
+    }, routeSchema("installCatalogMcpServer", { summary: "从企业目录安装 MCP", description: "成员一键安装企业目录里的 MCP（不经对话和模型）：地址、工具与鉴权方式以企业目录为准。需要浏览器登录时返回登录进度，登录完成后自动安装；需要令牌时随请求填写，只保存在本机加密文件。更新旧修订或替换同标识的其他 MCP 须 replace=true。", params: CatalogMcpParams, body: Type.Ref("CatalogMcpInstallRequest"), response: { 200: jsonResponse(Type.Ref("McpInstallEnvelope")), 401: problemResponse("Unauthorized"), 404: problemResponse("NotFound"), 409: problemResponse("Conflict"), 422: problemResponse("ValidationError"), 503: problemResponse("ManagerUnavailable") } }));
     this.registerRoute("POST", "/api/agent/capabilities/mcp/:capability_ref/auth", async (_request, response, caller, fastifyRequest) => {
       const { capability_ref: ref } = fastifyRequest?.params as { capability_ref: string };
       requireService();

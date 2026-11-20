@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from manager_service import mcp_catalog
 from manager_service.mcp_catalog import McpCatalogRow, McpMarketService
 from manager_service.operator_catalog import (
     FakeOperatorCatalogClient,
@@ -62,6 +63,34 @@ class FakeRepo:
     def delete(self, ctx, server_id):
         self.secrets.pop(server_id, None)
         return self.rows.pop(server_id, None) is not None
+
+    def get(self, ctx, server_id):
+        return self.rows.get(server_id)
+
+    def _put(self, server_id, fields, revision, secret_enc):
+        row = McpCatalogRow(server_id, fields.ref, fields.display_name, fields.summary, fields.url, fields.tools,
+                            fields.auth, fields.auth_header, fields.oauth_scopes, fields.timeout_ms,
+                            fields.oauth_client_id, secret_enc is not None, revision, "enterprise")
+        self.rows[server_id] = row
+        if secret_enc is None:
+            self.secrets.pop(server_id, None)
+        else:
+            self.secrets[server_id] = secret_enc
+        return row
+
+    def create_custom(self, ctx, fields, *, server_id, created_by, secret_enc):
+        if any(row.ref == fields.ref for row in self.rows.values()):
+            raise Conflict("ref clash")
+        return self._put(server_id, fields, 1, secret_enc)
+
+    def update_custom(self, ctx, server_id, fields, *, updated_by, secret_enc=mcp_catalog._KEEP):
+        row = self.rows.get(server_id)
+        if row is None or row.origin != "enterprise":
+            return None
+        secret = self.secrets.get(server_id) if secret_enc is mcp_catalog._KEEP else secret_enc
+        if fields.auth != "oauth" or not fields.oauth_client_id:
+            secret = None
+        return self._put(server_id, fields, row.source_revision + 1, secret)
 
 
 class FakeMembers:
@@ -166,6 +195,7 @@ def test_routes_roundtrip():
         "server_id": "s1", "ref": "mes-lookup", "display_name": "MCP mes-lookup", "summary": "用途",
         "url": "https://mcp.example.com/mes-lookup", "tools": ["a", "b"], "revision": 1,
         "auth": "none", "auth_header": "", "oauth_scopes": "", "timeout_ms": 30000, "oauth_client": "dynamic",
+        "origin": "platform",
     }]
     assert client.delete("/api/manager/mcp-market/s1", headers=owner).status_code == 204
 
@@ -291,3 +321,123 @@ def test_oauth_client_route_returns_the_application_to_members():
     assert client.get("/api/manager/grants/mcp-servers/nope/oauth-client", headers=member).status_code == 404
     listed = client.get("/api/manager/grants/mcp-servers", headers=member)
     assert "sec-1" not in listed.text and listed.json()["data"][0]["oauth_client"] == "preregistered"
+
+
+# ---- 企业自建 MCP（设计 2026-11-20 §4.4）----
+
+def _fields(**extra):
+    from shared.contracts.platform_mcp import PlatformMcpServerFields
+    base = {"ref": "erp-orders", "display_name": "ERP 订单", "summary": "查订单", "url": "https://erp.example.com/mcp", "tools": ["find_order"]}
+    return PlatformMcpServerFields.model_validate({**base, **extra})
+
+
+def _crypto_service():
+    from cryptography.fernet import Fernet
+
+    from shared.crypto import CryptoService
+    return CryptoService(Fernet(Fernet.generate_key()))
+
+
+def test_enterprise_mcp_create_update_delete_and_member_listing():
+    from shared.errors import NotFound, ValidationProblem
+    operator = FakeOperatorCatalogClient()
+    operator.seed_platform_mcp([_server()])
+    audit = _FakeAudit()
+    service = McpMarketService(operator=operator, repo=FakeRepo(), members=FakeMembers(), crypto=_crypto_service(), audit=audit)
+    service.enable(ADMIN, "s1")
+
+    created = service.create_custom(ADMIN, _fields())
+    assert created.server_id.startswith("ent-") and created.source_revision == 1 and created.origin == "enterprise"
+    market = service.list_market(ADMIN)
+    # Enterprise entries are their own group, never shown as «platform unpublished».
+    assert [item["ref"] for item in market["servers"]] == ["mes-lookup"]
+    assert [(item["ref"], item["revision"]) for item in market["enterprise"]] == [("erp-orders", 1)]
+    assert {(item.ref, item.origin) for item in service.installable(MEMBER)} == {("mes-lookup", "platform"), ("erp-orders", "enterprise")}
+
+    updated = service.update_custom(ADMIN, created.server_id, _fields(display_name="ERP 订单 v2", tools=["find_order", "list_orders"]))
+    assert (updated.display_name, updated.source_revision, updated.tools) == ("ERP 订单 v2", 2, ["find_order", "list_orders"])
+    with pytest.raises(ValidationProblem):
+        service.update_custom(ADMIN, created.server_id, _fields(ref="erp-renamed"))
+    with pytest.raises(NotFound):  # a platform entry is not editable here
+        service.update_custom(ADMIN, "s1", _fields(ref="mes-lookup"))
+
+    service.disable(ADMIN, created.server_id)
+    assert [item.ref for item in service.installable(MEMBER)] == ["mes-lookup"]
+    assert [action for _actor, action, _id in audit.events] == [
+        "mcp_catalog.custom_created", "mcp_catalog.custom_updated", "mcp_catalog.custom_deleted",
+    ]
+    assert all(resource == created.server_id for _actor, _action, resource in audit.events)
+
+
+def test_enterprise_mcp_admin_only_and_ref_unique_across_both_kinds():
+    from shared.errors import Forbidden
+    service, _ = _service([_server()])
+    service.enable(ADMIN, "s1")
+    for call in (lambda: service.create_custom(MEMBER, _fields()), lambda: service.update_custom(MEMBER, "ent-x", _fields()),
+                 lambda: service.probe(MEMBER, None)):
+        with pytest.raises(Forbidden):
+            call()
+    with pytest.raises(Conflict):  # ref held by the enabled platform entry
+        service.create_custom(ADMIN, _fields(ref="mes-lookup"))
+
+
+def test_enterprise_mcp_application_secret_is_write_only_kept_replaced_or_cleared():
+    crypto = _crypto_service()
+    repo = FakeRepo()
+    service = McpMarketService(operator=FakeOperatorCatalogClient(), repo=repo, members=FakeMembers(), crypto=crypto)
+    oauth = {"auth": "oauth", "tools": [], "oauth_client_id": "app-9"}
+    row = service.create_custom(ADMIN, _fields(**oauth, oauth_client_secret="s-1"))
+    assert row.oauth_client_secret_set and crypto.decrypt(repo.secrets[row.server_id]) == "s-1"
+    assert service.oauth_client(MEMBER, row.server_id) == {"client_id": "app-9", "client_secret": "s-1"}
+    assert "s-1" not in str(mcp_catalog.enterprise_entry(row))
+
+    service.update_custom(ADMIN, row.server_id, _fields(**oauth, summary="不传密钥"))  # not sent: kept
+    assert crypto.decrypt(repo.secrets[row.server_id]) == "s-1"
+    service.update_custom(ADMIN, row.server_id, _fields(**oauth, oauth_client_secret="s-2"))
+    assert crypto.decrypt(repo.secrets[row.server_id]) == "s-2"
+    service.update_custom(ADMIN, row.server_id, _fields(**oauth, oauth_client_secret=""))
+    assert row.server_id not in repo.secrets
+    service.update_custom(ADMIN, row.server_id, _fields(**oauth, oauth_client_secret="s-3"))
+    cleared = service.update_custom(ADMIN, row.server_id, _fields(auth="bearer"))  # no longer a preregistered app
+    assert not cleared.oauth_client_secret_set and row.server_id not in repo.secrets
+
+
+def test_enterprise_mcp_routes_and_probe():
+    from shared.mcp_probe import McpProbeResult
+    probed: list[str] = []
+
+    def fake_probe(request):
+        probed.append(request.url)
+        return McpProbeResult(status="ok", auth="none", tools=["find_order"], server_name="ERP")
+
+    operator = FakeOperatorCatalogClient()
+    service = McpMarketService(operator=operator, repo=FakeRepo(), members=FakeMembers(), probe=fake_probe)
+    app = create_app(Settings(tier="manager", service_name="manager"), APIRouter())
+    app.state._mcp_market_service = service
+    app.include_router(build_mcp_market_router(_VERIFIER))
+    client = TestClient(app)
+    owner = {"Authorization": f"Bearer {sign_inmem_token(_SIGNER, TENANT, ['owner'], user_id='owner-1')}"}
+    member = {"Authorization": f"Bearer {sign_inmem_token(_SIGNER, TENANT, ['member'], user_id='m-1')}"}
+    body = {"ref": "erp-orders", "display_name": "ERP 订单", "url": "https://erp.example.com/mcp", "tools": ["find_order"]}
+
+    assert client.post("/api/manager/mcp-market/probe", headers=member, json={"url": "https://erp.example.com/mcp"}).status_code == 403
+    probe = client.post("/api/manager/mcp-market/probe", headers=owner, json={"url": "https://erp.example.com/mcp"})
+    assert probe.status_code == 200 and probe.json()["data"]["tools"] == ["find_order"] and probed == ["https://erp.example.com/mcp"]
+    assert client.post("/api/manager/mcp-market/custom", headers=member, json=body).status_code == 403
+    assert client.post("/api/manager/mcp-market/custom", headers=owner, json={**body, "url": "http://erp.example.com/mcp"}).status_code == 422
+    created = client.post("/api/manager/mcp-market/custom", headers=owner, json=body)
+    assert created.status_code == 201, created.text
+    entry = created.json()["data"]
+    assert entry["server_id"].startswith("ent-") and entry["revision"] == 1 and "oauth_client_secret" not in entry
+    assert client.post("/api/manager/mcp-market/custom", headers=owner, json=body).status_code == 409
+    path = f"/api/manager/mcp-market/custom/{entry['server_id']}"
+    updated = client.put(path, headers=owner, json={**body, "summary": "查订单"})
+    assert updated.status_code == 200 and updated.json()["data"]["revision"] == 2
+    assert client.put(path, headers=owner, json={**body, "ref": "other"}).status_code == 422
+    assert client.put("/api/manager/mcp-market/custom/ent-missing", headers=owner, json=body).status_code == 404
+    listed = client.get("/api/manager/mcp-market", headers=owner).json()["data"]
+    assert [item["ref"] for item in listed["enterprise"]] == ["erp-orders"] and listed["servers"] == []
+    installable = client.get("/api/manager/grants/mcp-servers", headers=member).json()["data"]
+    assert [(item["ref"], item["origin"], item["revision"]) for item in installable] == [("erp-orders", "enterprise", 2)]
+    assert client.delete(f"/api/manager/mcp-market/{entry['server_id']}", headers=owner).status_code == 204
+    assert client.get("/api/manager/grants/mcp-servers", headers=member).json()["data"] == []

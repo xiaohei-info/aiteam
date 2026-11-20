@@ -211,7 +211,7 @@ export interface SkillInstaller {
   /** Fetches the package signed for this member, verifies it and stores it in the personal skill cache. */
   install(skillId: string, signal?: AbortSignal): Promise<void>;
 }
-/** A platform MCP server the enterprise enabled (Manager `GET /grants/mcp-servers`, design §11.3 / MCP鉴权 §3.8). */
+/** An MCP the enterprise enabled from the platform catalog or built itself (Manager `GET /grants/mcp-servers`, design §11.3 / MCP鉴权 §3.8 / 2026-11-20 §4.4). */
 export interface InstallableMcpInfo {
   server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[]; revision: number;
   /** Older Managers omit these: such entries need no authentication. */
@@ -221,6 +221,13 @@ export interface InstallableMcpInfo {
   timeout_ms?: number;
   /** preregistered: the platform holds the provider-issued client id (and secret), fetched only to sign in / refresh. */
   oauth_client?: "preregistered" | "dynamic";
+  /** platform: enabled from our platform catalog; enterprise: built by the enterprise (never auto-installable). Older Managers omit it. */
+  origin?: "platform" | "enterprise";
+}
+
+/** An MCP installed from the enterprise's catalog (platform-enabled or enterprise-built); its address and tools come from there. */
+export function isCatalogMcpSource(source: LocalCapability["source"]): boolean {
+  return source === "platform_catalog" || source === "enterprise_catalog";
 }
 /** Manager-backed platform MCP catalog; absent without Manager. */
 export interface McpCatalog {
@@ -389,6 +396,8 @@ interface InstallPlan {
   declaredTools: string[];
   /** Platform server id of a catalog MCP, platform skill id of a skill; empty otherwise. */
   sourceRef: string;
+  /** Catalog MCP: the entry's revision, stored as the capability's version to tell when the catalog has an update. */
+  catalogRevision?: number;
   skill?: InstallableSkillInfo;
   /** 企业外来源的技能包（ClawHub / 网址 / 粘贴）：内容与来源都在这里，装进本机自定义技能目录。 */
   external?: { pkg: CustomSkillPackage; version: string; originLabel: string; originUrl: string };
@@ -439,7 +448,7 @@ async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: Cap
     try { url = validMcpUrl(entry.url); } catch { return "安装未完成：企业 MCP 目录里该条目的地址无效，请告诉用户联系企业管理员。"; }
     return withMcpAuth({
       kind: "mcp", ref, display_name: entry.display_name.slice(0, 120), url: url.toString(), declaredTools: entry.tools,
-      source: "platform_catalog", sourceRef: entry.server_id, existing, reason,
+      source: entry.origin === "enterprise" ? "enterprise_catalog" : "platform_catalog", sourceRef: entry.server_id, catalogRevision: entry.revision, existing, reason,
       auth: entry.auth ?? "none", authHeader: entry.auth_header ?? "", scope: entry.oauth_scopes ?? "",
       timeoutMs: clampMcpTimeout(input.timeout_ms ?? entry.timeout_ms), preregistered: entry.oauth_client === "preregistered",
     }, auth, signal);
@@ -469,11 +478,16 @@ async function planInstall(store: AgentSqliteStore, owner: TaskOwner, input: Cap
 async function withMcpAuth(plan: InstallPlan, auth: McpRuntimeAuth | undefined, signal?: AbortSignal): Promise<InstallPlan> {
   let probe: McpProbe;
   try { probe = await (auth?.probe ?? probeMcpAuth)(plan.url, signal); } catch { return plan; }
+  // A catalog entry that declares a token or a sign-in is authoritative (「鉴权方式以企业目录为准」): a server that
+  // accepts both, e.g. a PAT and OAuth, must not turn the member's token install into an OAuth registration.
+  // An entry declared "none" still follows the probe, so a server that really needs auth can be installed.
+  const kind = isCatalogMcpSource(plan.source) && plan.auth !== "none" ? plan.auth : probe.auth;
+  const oauth = kind === "oauth" && probe.auth === "oauth";
   return {
-    ...plan, auth: probe.auth,
-    ...(probe.auth_host ? { authHost: probe.auth_host } : {}),
-    ...(probe.resourceMetadataUrl ? { resourceMetadataUrl: probe.resourceMetadataUrl } : {}),
-    scope: plan.scope || probe.scope || "",
+    ...plan, auth: kind,
+    ...(oauth && probe.auth_host ? { authHost: probe.auth_host } : {}),
+    ...(oauth && probe.resourceMetadataUrl ? { resourceMetadataUrl: probe.resourceMetadataUrl } : {}),
+    scope: plan.scope || (oauth ? probe.scope : "") || "",
   };
 }
 
@@ -543,6 +557,8 @@ interface ConnectResult { target: McpTarget; tools: string[]; credential?: McpBe
  */
 async function connectForInstall(plan: InstallPlan, ref: string, owner: TaskOwner, auth: McpRuntimeAuth | undefined, options: {
   credential?: McpBearerCredential; approvalId?: string; client?: McpPreregisteredClient; signal?: AbortSignal;
+  /** The member installs from the desktop and reads the reason directly; otherwise the model relays it. */
+  forMember?: boolean;
 }): Promise<ConnectResult | string> {
   const name = plan.display_name || ref;
   const base: McpTarget = { url: plan.url, timeoutMs: plan.timeoutMs };
@@ -577,14 +593,15 @@ async function connectForInstall(plan: InstallPlan, ref: string, owner: TaskOwne
   try {
     const advertised = (await listMcpTools(target, options.signal)).filter(tool => TOOL_RE.test(tool)).slice(0, 50);
     // An OAuth catalog entry may leave its tools empty: the server's real list after sign-in counts (design §8 #4).
-    const tools = plan.source === "platform_catalog" && plan.declaredTools.length ? advertised.filter(tool => plan.declaredTools.includes(tool)) : advertised;
+    const tools = isCatalogMcpSource(plan.source) && plan.declaredTools.length ? advertised.filter(tool => plan.declaredTools.includes(tool)) : advertised;
     if (!tools.length) throw new Error("no tools");
     return { target, tools, ...(credential ? { credential } : {}) };
   } catch (error) {
-    if (plan.auth === "bearer" && isMcpAuthFailure(error)) return `安装未完成：服务方拒绝了 ${name} 的访问令牌（令牌无效或已过期）。请让用户检查令牌。`;
-    return plan.source === "platform_catalog"
-      ? "安装未完成：企业 MCP 目录里的这个服务暂时无法连接，或没有目录声明的工具。请稍后再试或告诉用户联系企业管理员。"
-      : "安装未完成：地址无效、服务无法连接或没有可用工具。请让用户检查地址。";
+    const member = options.forMember === true;
+    if (plan.auth === "bearer" && isMcpAuthFailure(error)) return `安装未完成：服务方拒绝了 ${name} 的访问令牌（令牌无效或已过期）。${member ? "请检查令牌后重试。" : "请让用户检查令牌。"}`;
+    return isCatalogMcpSource(plan.source)
+      ? `安装未完成：企业 MCP 目录里的这个服务暂时无法连接，或没有目录声明的工具。${member ? "请稍后再试，或联系企业管理员。" : "请稍后再试或告诉用户联系企业管理员。"}`
+      : `安装未完成：地址无效、服务无法连接或没有可用工具。${member ? "请检查地址。" : "请让用户检查地址。"}`;
   }
 }
 
@@ -593,6 +610,7 @@ function storeMcp(store: AgentSqliteStore, owner: TaskOwner, auth: McpRuntimeAut
   const name = (plan.display_name || ref).slice(0, 120);
   store.putLocalCapability(owner.tenantId, owner.memberId, {
     kind: "mcp", ref, display_name: name, url: plan.url, tools: connected.tools, source_ref: plan.sourceRef,
+    ...(plan.catalogRevision ? { version: String(plan.catalogRevision) } : {}),
     source: plan.source, reason: plan.reason, approved_by: approvedBy,
     auth: plan.auth, auth_header: connected.credential?.header ?? (plan.auth === "bearer" ? plan.authHeader : ""), oauth_scope: plan.auth === "oauth" ? plan.scope : "", timeout_ms: plan.timeoutMs,
   });
@@ -606,7 +624,7 @@ function dropOrphanCredential(store: AgentSqliteStore, owner: TaskOwner, auth: M
 }
 
 export class McpInstallError extends Error {
-  constructor(readonly code: "invalid_mcp" | "mcp_exists" | "mcp_install_failed", message: string) { super(message); this.name = "McpInstallError"; }
+  constructor(readonly code: "invalid_mcp" | "mcp_exists" | "mcp_install_failed" | "mcp_not_in_catalog", message: string) { super(message); this.name = "McpInstallError"; }
 }
 
 /** What the desktop «添加 MCP» window sends; the token and client go straight from the desktop to this Agent. */
@@ -634,22 +652,39 @@ export async function installMcpDirectly(store: AgentSqliteStore, owner: TaskOwn
     ...(existing ? { existing } : {}), reason: String(request.reason ?? "").slice(0, 200),
     auth: "none", authHeader: request.credential?.header ?? "", scope: "", timeoutMs: clampMcpTimeout(request.timeout_ms), preregistered: false,
   }, auth, signal);
+  return installPlannedMcp(store, owner, auth, plan, {
+    ...(request.credential ? { credential: request.credential } : {}),
+    ...(request.oauth_client?.client_id ? { oauthClient: request.oauth_client } : {}),
+  }, signal);
+}
+
+/**
+ * Finishes a member-initiated MCP install (no model involved): connects with the given token, or starts the
+ * provider sign-in and installs when it completes. A hand-entered OAuth client is kept with the member's credential;
+ * a catalog entry's preregistered client is fetched through Manager only when signing in.
+ */
+async function installPlannedMcp(store: AgentSqliteStore, owner: TaskOwner, auth: McpRuntimeAuth, plan: InstallPlan, request: {
+  credential?: McpBearerCredential; oauthClient?: McpPreregisteredClient;
+}, signal?: AbortSignal): Promise<{ capability?: LocalCapability; login?: McpLogin }> {
+  const ref = plan.ref;
   if (plan.auth === "bearer" && !request.credential?.token && !auth.service?.credentials.get(owner, ref, plan.url)?.token) {
     throw new McpInstallError("mcp_install_failed", "这个 MCP 需要访问令牌，请填写服务方发的令牌。");
   }
-  const client = request.oauth_client?.client_id ? request.oauth_client : undefined;
   if (plan.auth !== "oauth") {
-    const connected = await connectForInstall(plan, ref, owner, auth, { ...(request.credential ? { credential: request.credential } : {}), ...(signal ? { signal } : {}) });
+    const connected = await connectForInstall(plan, ref, owner, auth, { forMember: true, ...(request.credential ? { credential: request.credential } : {}), ...(signal ? { signal } : {}) });
     if (typeof connected === "string") throw new McpInstallError("mcp_install_failed", connected);
     return { capability: storeMcp(store, owner, auth, plan, ref, connected, owner.memberId) };
   }
   if (!auth.service) throw new McpInstallError("mcp_install_failed", "本机暂时无法保存这个 MCP 的登录凭据，请稍后再试。");
   const service = auth.service;
-  const fixed = client ? async () => client : undefined;
+  const client = request.oauthClient;
+  const fixed = client ? async () => client : plan.preregistered ? catalogClient(auth, plan.sourceRef) : undefined;
   const finish = async () => {
     const target: McpTarget = { url: plan.url, timeoutMs: plan.timeoutMs, authProvider: service.provider(owner, ref, plan.url, { ...(plan.scope ? { scope: plan.scope } : {}), ...(fixed ? { client: fixed } : {}) }) };
     try {
-      const tools = (await listMcpTools(target)).filter(tool => TOOL_RE.test(tool)).slice(0, 50);
+      const advertised = (await listMcpTools(target)).filter(tool => TOOL_RE.test(tool)).slice(0, 50);
+      // A catalog entry may declare its tools: only those are kept (an OAuth entry may leave them empty).
+      const tools = isCatalogMcpSource(plan.source) && plan.declaredTools.length ? advertised.filter(tool => plan.declaredTools.includes(tool)) : advertised;
       if (!tools.length) throw new Error("no tools");
       storeMcp(store, owner, auth, plan, ref, { target, tools }, owner.memberId);
     } catch (error) {
@@ -661,7 +696,9 @@ export async function installMcpDirectly(store: AgentSqliteStore, owner: TaskOwn
     const { login } = await service.login(owner, ref, plan.url, {
       ...(plan.scope ? { scope: plan.scope } : {}),
       ...(plan.resourceMetadataUrl ? { resourceMetadataUrl: plan.resourceMetadataUrl } : {}),
-      ...(fixed ? { client: fixed, preregistered: client } : {}),
+      ...(fixed ? { client: fixed } : {}),
+      ...(client ? { preregistered: client } : {}),
+      ...(plan.preregistered && !client ? { catalogClient: plan.sourceRef } : {}),
       onDone: finish,
     });
     if (login) return { login };
@@ -670,6 +707,69 @@ export async function installMcpDirectly(store: AgentSqliteStore, owner: TaskOwn
     throw new McpInstallError("mcp_install_failed", loginFailureText(error, plan.display_name || ref));
   }
   return { capability: store.listLocalCapabilities(owner.tenantId, owner.memberId).find(item => item.kind === "mcp" && item.ref === ref) };
+}
+
+/** One row of the desktop «添加 MCP · 从企业拿» list (design 2026-11-20 §4.4b). Never carries a credential. */
+export interface CatalogMcpListing {
+  server_id: string; ref: string; display_name: string; summary: string; url: string; tools: string[];
+  auth: LocalCapabilityAuth; origin: "platform" | "enterprise"; revision: number;
+  /**
+   * install: not on this machine; installed: installed from this entry (at its revision, or one this Agent did not
+   * record); update: installed from an older revision; conflict: this machine has another MCP with the same ref.
+   */
+  state: "install" | "installed" | "update" | "conflict";
+}
+
+function installedFromCatalog(installed: LocalCapability[], serverId: string): LocalCapability | undefined {
+  return installed.find(item => item.kind === "mcp" && isCatalogMcpSource(item.source) && item.source_ref === serverId);
+}
+
+/** Catalog entries this member may install, compared with what is installed here. Manager errors propagate. */
+export async function listCatalogMcps(store: AgentSqliteStore, owner: TaskOwner, catalog: McpCatalog, signal?: AbortSignal): Promise<CatalogMcpListing[]> {
+  const entries = await catalog.list(signal);
+  const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter(item => item.kind === "mcp");
+  return entries.map(entry => {
+    const mine = installedFromCatalog(installed, entry.server_id);
+    const recorded = Number(mine?.version ?? 0);
+    const state = mine
+      ? recorded > 0 && recorded < entry.revision ? "update" : "installed"
+      : installed.some(item => item.ref === entry.ref) ? "conflict" : "install";
+    return {
+      server_id: entry.server_id, ref: mine?.ref ?? entry.ref, display_name: entry.display_name, summary: entry.summary, url: entry.url,
+      tools: entry.tools, auth: entry.auth ?? "none", origin: entry.origin ?? "platform", revision: entry.revision, state,
+    };
+  });
+}
+
+/**
+ * Desktop «从企业拿»: one-click install of a catalog entry. Address, tools and authentication come from the catalog,
+ * never from the request; an update or a same-ref clash needs `replace`. OAuth returns the pending sign-in and
+ * installs when it completes; a bearer entry needs the member's token. Manager errors propagate.
+ */
+export async function installMcpFromCatalog(store: AgentSqliteStore, owner: TaskOwner, auth: McpRuntimeAuth, catalog: McpCatalog, serverId: string, request: {
+  replace?: boolean; credential?: McpBearerCredential;
+}, signal?: AbortSignal): Promise<{ capability?: LocalCapability; login?: McpLogin }> {
+  const entry = (await catalog.list(signal)).find(item => item.server_id === serverId);
+  if (!entry) throw new McpInstallError("mcp_not_in_catalog", "企业 MCP 目录里没有这一项，可能已被管理员停用。");
+  const installed = store.listLocalCapabilities(owner.tenantId, owner.memberId).filter(item => item.kind === "mcp");
+  const mine = installedFromCatalog(installed, entry.server_id);
+  const ref = mine?.ref ?? entry.ref;
+  const existing = installed.find(item => item.ref === ref);
+  if (existing && !request.replace) {
+    throw new McpInstallError("mcp_exists", mine
+      ? `「${entry.display_name || ref}」已经装好了；企业更新后点「更新」即可。`
+      : `本机已有标识为 ${ref} 的其他 MCP；要换成企业提供的这个，请点「替换」。`);
+  }
+  let url: URL;
+  try { url = validMcpUrl(entry.url); } catch { throw new McpInstallError("mcp_install_failed", "企业 MCP 目录里该条目的地址无效，请联系企业管理员。"); }
+  const plan = await withMcpAuth({
+    kind: "mcp", ref, display_name: entry.display_name.slice(0, 120), url: url.toString(), declaredTools: entry.tools,
+    source: entry.origin === "enterprise" ? "enterprise_catalog" : "platform_catalog", sourceRef: entry.server_id, catalogRevision: entry.revision,
+    ...(existing ? { existing } : {}), reason: "从企业 MCP 目录安装",
+    auth: entry.auth ?? "none", authHeader: entry.auth_header ?? "", scope: entry.oauth_scopes ?? "",
+    timeoutMs: clampMcpTimeout(entry.timeout_ms), preregistered: entry.oauth_client === "preregistered",
+  }, auth, signal);
+  return installPlannedMcp(store, owner, auth, plan, request.credential ? { credential: request.credential } : {}, signal);
 }
 
 /**
@@ -1038,7 +1138,7 @@ export async function startMcpRelogin(store: AgentSqliteStore, owner: TaskOwner,
   if (!item || item.auth !== "oauth") return { found: false };
   if (!auth.service) throw new McpInstallError("mcp_install_failed", "本机暂时无法保存这个 MCP 的登录凭据，请稍后再试。");
   const stored = auth.service.credentials.get(owner, ref, item.url);
-  const client = stored?.catalog_client ? catalogClient(auth, stored.catalog_client) : item.source === "platform_catalog" ? catalogClient(auth, item.source_ref) : undefined;
+  const client = stored?.catalog_client ? catalogClient(auth, stored.catalog_client) : isCatalogMcpSource(item.source) ? catalogClient(auth, item.source_ref) : undefined;
   try {
     const { login } = await auth.service.login(owner, ref, item.url, { ...(item.oauth_scope ? { scope: item.oauth_scope } : {}), ...(client ? { client } : {}) });
     return { found: true, ...(login ? { login } : {}) };

@@ -218,22 +218,26 @@ class InstallableSkill(BaseModel):
 
 
 class InstallableMcpServer(BaseModel):
-    """成员可自行安装的平台 MCP（企业已启用；设计 §11.3）。需鉴权的条目由成员在本机自行登录 / 填写令牌（设计 2026-11-18）。"""
+    """成员可自行安装的 MCP：企业从平台目录启用的，或企业自建的（设计 §11.3、2026-11-20 §4.4）。需鉴权的条目由成员在本机自行登录 / 填写令牌（设计 2026-11-18）。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    server_id: str = Field(description="Operator 平台 MCP 的 server_id")
+    server_id: str = Field(description="平台 MCP ID（Operator server_id），或企业自建 MCP ID（`ent-` 前缀）")
     ref: str = Field(description="成员本机安装时使用的标识")
     display_name: str
     summary: str = ""
     url: str = Field(description="端点地址（https）；以企业目录为准，模型给出的地址被忽略")
     tools: list[str] = Field(description="声明的工具名；安装时只保留与服务端实际工具的交集")
-    revision: int = Field(ge=1, description="企业启用时的平台修订号")
+    revision: int = Field(ge=1, description="平台条目：企业启用时的平台修订号；企业自建条目：企业修订号（每次修改加 1）")
     auth: Literal["none", "oauth", "bearer"] = Field(default="none", description="鉴权方式：none 无需；oauth 成员在服务方网页登录；bearer 成员填写服务方发的访问令牌")
     auth_header: str = Field(default="", description="bearer：携带令牌的请求头名；空表示 Authorization: Bearer")
     oauth_scopes: str = Field(default="", description="oauth：登录时申请的权限范围（空格分隔）")
     timeout_ms: int = Field(default=30000, ge=1000, le=300000, description="单次工具调用超时（毫秒）")
-    oauth_client: Literal["preregistered", "dynamic"] = Field(default="dynamic", description="oauth：preregistered 平台已登记应用编号（登录时经 oauth-client 接口取回）；dynamic 成员登录时自动注册")
+    oauth_client: Literal["preregistered", "dynamic"] = Field(default="dynamic", description="oauth：preregistered 平台或企业已登记应用编号（登录时经 oauth-client 接口取回）；dynamic 成员登录时自动注册")
+    origin: Literal["platform", "enterprise"] = Field(
+        default="platform",
+        description="platform：企业从平台 MCP 目录启用；enterprise：企业自建。只有 platform 可使用「以后自动安装」",
+    )
 
 
 class InstallableSkillPackage(BaseModel):

@@ -71,6 +71,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   // 个人能力（MCP）：对话中经本人审批安装，仅本机；这里只列出与撤销。
   ['GET', '/api/agent/capabilities'],
   ['GET', '/api/agent/capabilities/installable-skills'],
+  ['GET', '/api/agent/capabilities/installable-mcp-servers'],
   ['GET', '/api/agent/capabilities/auto-install'],
   ['DELETE', '/api/agent/capabilities/auto-install/{capability_kind}'],
   // 能力授权（仅本会话有效）：设置页列出与撤销。
@@ -82,6 +83,7 @@ export const documentedRoutes: readonly (readonly [string, string])[] = [
   ['GET', '/api/agent/capabilities/skills/{skill_ref}/local-path'],
   ['POST', '/api/agent/capabilities/mcp'],
   ['POST', '/api/agent/capabilities/mcp/probe'],
+  ['POST', '/api/agent/capabilities/mcp/catalog/{server_id}/install'],
   ['POST', '/api/agent/capabilities/mcp/{capability_ref}/auth'],
   ['PUT', '/api/agent/capabilities/mcp/{capability_ref}/token'],
   ['DELETE', '/api/agent/capabilities/mcp/{capability_ref}/credential'],

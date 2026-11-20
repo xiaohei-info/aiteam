@@ -225,6 +225,26 @@ POST /api/agent/capabilities/mcp/catalog/:server_id/install
 
 与 P3 其它部分的关系：平台启用的 MCP 现在就存在，本节不依赖企业自建 MCP 也能先交付；企业自建条目在 P3 完成后自动出现在同一列表。
 
+### 4.4c P3 实施记录（2026-11-20）
+
+与上文一致的部分不再重复，只记落地细节、偏差与实测中发现并修掉的问题。
+
+落地细节：
+- 迁移 `server/manager_service/migrations/0056_mcp_catalog_origin.sql:10` 另加约束 `chk_mcp_catalog_origin`：`origin='enterprise'` 必须配 `server_id LIKE 'ent-%'`，平台条目不得用该前缀。迁移可重复执行。
+- 企业条目读写在 `server/manager_service/mcp_catalog.py:119`（`create_custom`）、`:136`（`update_custom`，修订号 +1、标识不可改；应用密钥可保留 / 替换 / 清除，改成非 OAuth 时自动清除）；列表分组用 `enterprise_entry`（`:298`）。审计动作 `mcp_catalog.custom_created / custom_updated / custom_deleted`。
+- 顺带修复：`routes_mcp_market.py:45` 原先只读 `app.state._enterprise_audit_repository`，该属性从未赋值，MCP 市场审计（含已有的 OAuth 应用操作）一直静默丢弃；现回退到 `build_enterprise_audit_repository`。
+- 登记时**不**对地址做外呼校验：地址由成员本机 Agent 连接，Manager 只在「读取工具」（probe）时外呼并走 `shared/net_guard`（待决策 #4）。
+- 本机记录目录修订号用现有 `local_capability.version` 列（存字符串化的 `revision`），无需迁移。
+- 列表与安装：`server/agent_service/src/connectors.ts:728`（`listCatalogMcps`）、`:749`（`installMcpFromCatalog`）；与「自定义」共用安装尾段 `installPlannedMcp`（`:666`）。
+- 桌面：「从企业拿」面板 `clients/desktop/src/pages/Capabilities/CatalogMcpPanel.tsx`；企业端「企业自建」分组与对话框 `web/manager/src/features/mcp-market/{McpMarketPage,EnterpriseMcpDialog}.tsx`（对话框不能放 `@aiteam/shared`，`no-legacy-ui` 守卫禁止，故在 manager 内按运营端对话框改写）。
+
+实测发现并已修复（均有回归测试）：
+1. **目录声明的鉴权方式被探测结果覆盖**：`withMcpAuth` 原先无条件用探测结果替换鉴权方式。服务端同时支持令牌和 OAuth（如 GitHub MCP 同时接受 PAT 与 OAuth）时，管理员登记为「需要令牌」，成员填了令牌点安装却被带去 OAuth 注册登录，填的令牌被忽略。此问题在平台目录的模型安装路径上早已存在。现规则（`connectors.ts:484`）：目录条目声明了 `bearer` / `oauth` 时以目录为准，探测只补 OAuth 细节；声明为 `none` 的仍跟随探测（服务端确需鉴权时还能装）。测试：`mcp-auth.test.ts`「declared token auth wins over a probe that also finds OAuth」（撤掉修复时失败）。
+2. **成员直接看到写给模型的话**：连接失败原因原为「请告诉用户联系企业管理员」「请让用户检查地址」，这些话本是给模型转述的，桌面「从企业拿」与「自定义」里由成员直接阅读。`connectForInstall` 增加 `forMember`（`connectors.ts:561`），桌面直装路径改为「请检查令牌后重试 / 请稍后再试，或联系企业管理员 / 请检查地址」；模型路径文字不变。
+3. **装好后整张列表锁住数秒**：安装成功后等目录重新读取完才解除忙碌状态，企业目录慢时（实测运营端不可达时约 3 秒）行内一直显示「正在安装…」、其他行按钮不可点。现装好即把该行标为「已安装」，目录在后台刷新（`CatalogMcpPanel.tsx:71`）。
+
+已接受的风险：旧版 Agent 不认识 `origin`，会把企业自建 MCP 当作平台条目（因而有自动安装资格）。按发布顺序先发 Agent 即可规避。
+
 ### 4.5 企业端模型帮装（P4）
 
 ```
@@ -285,6 +305,7 @@ POST /api/manager/capability-assist
 |---|---|
 | 技能带脚本后，模型可能让员工运行 | 脚本以 0600 落盘、不加执行位；员工跑命令仍走现有审批策略；桌面文案更新（待决策 #6） |
 | 旧 Agent 拒收宽包 | 严格按发布顺序；成员侧错误提示「请升级客户端」 |
+| 旧 Agent 不认识 MCP 的 `origin`（P3） | 会把企业自建 MCP 当平台条目、有自动安装资格；严格按发布顺序先发 Agent |
 | Manager 外呼 SSRF | 共用 `shared/net_guard`（拒私网 / 回环 / 链路本地 / 元数据地址，钉 IP，不跨主机重定向） |
 | ClawHub / GitHub 限速 | 运营端 10 分钟缓存（已有）+ 前端防抖；企业端帮装受 GitHub 匿名 10 次/分钟限制，失败时候选里注明 |
 | 模型编造链接 | 服务端只保留出现在本次工具结果里的 URL |

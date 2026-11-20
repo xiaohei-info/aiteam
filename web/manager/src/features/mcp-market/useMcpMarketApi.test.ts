@@ -4,9 +4,10 @@ import { createManagerApiClient } from "../../api/client";
 
 const get = vi.fn();
 const post = vi.fn();
+const put = vi.fn();
 const del = vi.fn();
 vi.mock("../../api/client", () => ({
-  createManagerApiClient: vi.fn(() => ({ get, post, del })),
+  createManagerApiClient: vi.fn(() => ({ get, post, put, del })),
 }));
 vi.mock("../../auth/session", () => ({
   useSession: () => ({ token: "tok", onUnauthorized: () => undefined }),
@@ -43,6 +44,17 @@ describe("useMcpMarketApi", () => {
     expect(post).toHaveBeenCalledWith("/api/manager/mcp-market/a%20b/enable");
     await result.current.disable("a b");
     expect(del).toHaveBeenCalledWith("/api/manager/mcp-market/a%20b");
+  });
+
+  it("企业自建 MCP：检查地址、添加、修改走本端接口并编码 id", async () => {
+    const { result } = renderHook(() => useMcpMarketApi());
+    const input = { ref: "erp", display_name: "ERP", summary: "", url: "https://erp.example.com/mcp", tools: ["find"], auth: "none" as const, auth_header: "", oauth_scopes: "", timeout_ms: 30000, oauth_client_id: "" };
+    await result.current.probe({ url: input.url });
+    expect(post).toHaveBeenCalledWith("/api/manager/mcp-market/probe", { body: { url: input.url } });
+    await result.current.createCustom(input);
+    expect(post).toHaveBeenCalledWith("/api/manager/mcp-market/custom", { body: input });
+    await result.current.updateCustom("ent-a b", input);
+    expect(put).toHaveBeenCalledWith("/api/manager/mcp-market/custom/ent-a%20b", { body: input });
   });
 
   it("token 变化时重建 client（依赖 token）", () => {

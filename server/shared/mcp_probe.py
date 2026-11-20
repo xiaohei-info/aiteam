@@ -1,4 +1,5 @@
-"""Operator «登记 MCP» probe: reads an MCP server's auth requirement and tool list (design 2026-11-18 §3.11).
+"""«登记 MCP» probe shared by Operator and Manager: reads an MCP server's auth requirement and tool list
+(design 2026-11-18 §3.11; Manager enterprise MCP, design 2026-11-20 §4.4).
 
 SSRF guard: https only; every connection resolves the host and refuses private / loopback / link-local /
 multicast / reserved / documentation addresses, then connects to the vetted address itself (TLS still verifies
@@ -43,7 +44,7 @@ class McpProbeRequest(BaseModel):
 
 class McpProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    status: Literal["ok", "needs_oauth", "needs_token", "unreachable"] = Field(description="ok 已读到工具；needs_oauth 需要成员在服务方网页登录（运营端无法代为登录，工具可留空）；needs_token 需要访问令牌；unreachable 无法连接。")
+    status: Literal["ok", "needs_oauth", "needs_token", "unreachable"] = Field(description="ok 已读到工具；needs_oauth 需要成员在服务方网页登录（管理端无法代为登录，工具可留空）；needs_token 需要访问令牌；unreachable 无法连接。")
     auth: Literal["none", "oauth", "bearer"] = Field(description="建议的鉴权方式。")
     tools: list[str] = Field(default_factory=list, description="读到的工具名（最多 50 个）。")
     scopes_supported: list[str] = Field(default_factory=list, description="oauth：服务方声明支持的权限范围。")
@@ -52,10 +53,10 @@ class McpProbeResult(BaseModel):
     dynamic_registration: bool = Field(default=False, description="oauth：服务方是否支持自动注册应用；不支持时需填写应用编号。")
     server_name: str = Field(default="", description="服务自报名称。")
     token_rejected: bool = Field(default=False, description="带了测试令牌但被服务方拒绝。")
-    detail: str = Field(default="", description="给运营人员看的说明。")
+    detail: str = Field(default="", description="给管理员看的说明。")
 
 
-# The SSRF guard is shared with Manager's custom imports (shared/net_guard.py); names kept for callers.
+# The SSRF guard lives in shared/net_guard.py (also used by Manager's custom imports); names kept for callers.
 ProbeBlocked = Blocked
 ProbeFailed = FetchFailed
 
@@ -159,7 +160,7 @@ def probe_mcp(request: McpProbeRequest, fetch: Fetch | None = None) -> McpProbeR
             if oauth:
                 return McpProbeResult(
                     status="needs_oauth", auth="oauth", scope=_challenge(response_headers).get("scope", ""), **oauth,
-                    detail="该服务需要成员在服务方网页用自己的账号登录；运营端无法代为登录，工具名可留空，以成员登录后实际工具为准。",
+                    detail="该服务需要成员在服务方网页用自己的账号登录；管理端无法代为登录，工具名可留空，以成员登录后实际工具为准。",
                 )
             return McpProbeResult(
                 status="needs_token", auth="bearer", token_rejected=bool(token),

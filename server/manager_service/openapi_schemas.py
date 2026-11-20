@@ -85,10 +85,30 @@ class McpMarketServerOut(BaseModel):
     update_available: bool = Field(default=False, description="平台有更新的修订。")
 
 
+class McpEnterpriseServerOut(BaseModel):
+    """企业自建 MCP（设计 2026-11-20 §4.4）。应用密钥只写不读。"""
+
+    model_config = ConfigDict(extra="forbid")
+    server_id: str = Field(description="企业 MCP ID（`ent-` 前缀）。")
+    ref: str = Field(description="成员本机安装标识；创建后不能修改。")
+    display_name: str = Field(description="展示名称。")
+    summary: str = Field(default="", description="用途说明。")
+    url: str = Field(description="端点地址（https）。")
+    tools: list[str] = Field(default_factory=list, description="声明的工具名；成员安装时只保留与服务端实际工具的交集。")
+    auth: Literal["none", "oauth", "bearer"] = Field(default="none", description="鉴权方式：none 无需；oauth 成员在服务方网页登录；bearer 成员填写访问令牌。凭据由成员本机保存。")
+    auth_header: str = Field(default="", description="bearer：携带令牌的请求头名；空表示 Authorization: Bearer。")
+    oauth_scopes: str = Field(default="", description="oauth：登录时申请的权限范围。")
+    timeout_ms: int = Field(default=30000, description="单次工具调用超时（毫秒）。")
+    oauth_client_id: str = Field(default="", description="oauth：服务方发的应用编号；空表示成员登录时自动注册。")
+    oauth_client_secret_set: bool = Field(default=False, description="是否已设置应用密钥（密钥本身不返回）。")
+    revision: int = Field(ge=1, description="修订号：每次修改加 1，成员本机据此提示有更新。")
+
+
 class McpMarketOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     platform_available: bool = Field(description="平台 MCP 目录是否可读；不可读时只列出已启用项。")
     servers: list[McpMarketServerOut] = Field(default_factory=list, description="平台 MCP 列表。")
+    enterprise: list[McpEnterpriseServerOut] = Field(default_factory=list, description="企业自建 MCP 列表。")
 
 
 class McpOAuthClientOut(BaseModel):

@@ -104,3 +104,13 @@
 .clawhub-scanner-issues { color: var(--text-muted); }
 /* 安装结果：就一段文案，成功 / 重复 / 失败各占一行，不做列表。 */
 .outcome-note { margin-top: 6px; white-space: pre-line; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+
+/* 「添加 MCP · 从企业拿」：每行可在下方展开令牌输入 / 替换确认（设计 2026-11-20 §4.4b）。 */
+.catalog-mcp-list li { display: grid; gap: 8px; }
+.catalog-mcp-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.catalog-mcp-row > button { flex-shrink: 0; }
+.catalog-mcp-expand { display: grid; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--surface-1); }
+.catalog-mcp-expand .mcp-note { margin: 0; }
+.catalog-mcp-expand-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.catalog-mcp-expand-actions .primary { background: var(--brand); color: var(--text-on-brand); border-color: var(--brand); }
+.catalog-mcp-expand-actions .primary:disabled { opacity: 0.5; }

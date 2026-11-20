@@ -38,7 +38,7 @@ import {
   updateConversationSegment,
 } from './conversations'
 import { getExpertReadiness, listExperts, listSolutions } from './experts'
-import { cancelMcpLogin, getLocalSkillPath, importCustomSkill, installSkill, reopenMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installMcpServer, listCapabilityAutoInstall, listInstallableSkills, listLocalCapabilities, probeMcpServer, startMcpLogin, updateMcpToken } from './capabilities'
+import { cancelMcpLogin, getLocalSkillPath, importCustomSkill, installSkill, reopenMcpLogin, deleteCapabilityAutoInstall, deleteLocalCapability, deleteMcpCredential, getApprovalMcpLogin, getMcpLogin, installCatalogMcpServer, installMcpServer, listCapabilityAutoInstall, listInstallableMcpServers, listInstallableSkills, listLocalCapabilities, probeMcpServer, startMcpLogin, updateMcpToken } from './capabilities'
 import { deleteEmployeeMemory, getEmployeeMemorySummary, listEmployeeMemories } from './employeeMemories'
 import type {
   OfficeFeed,
@@ -210,6 +210,8 @@ export const agentApi = {
   getLocalSkillPath: (ref: string) => getLocalSkillPath(getClient(), ref),
   probeMcpServer: (url: string) => probeMcpServer(getClient(), url),
   installMcpServer: (body: Parameters<typeof installMcpServer>[1]) => installMcpServer(getClient(), body),
+  listInstallableMcpServers: () => listInstallableMcpServers(getClient()),
+  installCatalogMcpServer: (serverId: string, body?: Parameters<typeof installCatalogMcpServer>[2]) => installCatalogMcpServer(getClient(), serverId, body),
   startMcpLogin: (ref: string) => startMcpLogin(getClient(), ref),
   updateMcpToken: (ref: string, credential: Parameters<typeof updateMcpToken>[2]) => updateMcpToken(getClient(), ref, credential),
   deleteMcpCredential: (ref: string) => deleteMcpCredential(getClient(), ref),

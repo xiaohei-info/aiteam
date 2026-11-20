@@ -1,4 +1,4 @@
-import type { CapabilityAutoInstall, InstallableSkill, LocalCapability, LocalCapabilityKind, McpBearerCredential, McpInstallRequest, McpInstallResult, McpLogin, McpProbe } from './types.ts'
+import type { CapabilityAutoInstall, CatalogMcp, CatalogMcpInstallRequest, InstallableSkill, LocalCapability, LocalCapabilityKind, McpBearerCredential, McpInstallRequest, McpInstallResult, McpLogin, McpProbe } from './types.ts'
 
 import type { ServiceApiClient } from './client'
 
@@ -135,6 +135,16 @@ export async function getLocalSkillPath(client: RequestClient, ref: string): Pro
 /** 添加个人 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */
 export async function installMcpServer(client: RequestClient, body: McpInstallRequest): Promise<McpInstallResult> {
   return (await client.request<McpInstallResult>({ method: 'POST', path: '/api/agent/capabilities/mcp', body })) ?? { capability: null, login: null }
+}
+
+/** 经本机 Agent 读取企业 MCP 目录里本人可装的条目，并带上与本机已装的比对结果（企业端不可达时抛 503）。 */
+export async function listInstallableMcpServers(client: RequestClient): Promise<CatalogMcp[]> {
+  return (await client.request<CatalogMcp[] | null>({ method: 'GET', path: '/api/agent/capabilities/installable-mcp-servers' })) ?? []
+}
+
+/** 一键安装企业目录里的 MCP；需要浏览器登录时返回 login，登录完成后 Agent 自动完成安装。 */
+export async function installCatalogMcpServer(client: RequestClient, serverId: string, body: CatalogMcpInstallRequest = {}): Promise<McpInstallResult> {
+  return (await client.request<McpInstallResult>({ method: 'POST', path: `/api/agent/capabilities/mcp/catalog/${encodeURIComponent(serverId)}/install`, body })) ?? { capability: null, login: null }
 }
 
 /** 重新登录已安装的 MCP；令牌仍可用时返回 null。 */

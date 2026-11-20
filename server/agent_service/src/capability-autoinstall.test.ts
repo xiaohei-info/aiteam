@@ -73,6 +73,29 @@ test("a catalog MCP uses the enterprise catalog address and only declared tools;
   }
 });
 
+test("an enterprise-built catalog MCP installs as enterprise_catalog, records its revision and is never auto-installed", async () => {
+  const fixture = await createFixture();
+  const { server, url } = await mcpServer(["search"]);
+  try {
+    const entries: InstallableMcpInfo[] = [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "", url, tools: ["search"], revision: 4, origin: "enterprise" }];
+    const mcps = { list: async () => entries };
+    const check = await checkCapabilityInstall(fixture.store, owner, { kind: "mcp", ref: "erp", reason: "" }, undefined, undefined, mcps);
+    assert(check.ok);
+    assert.equal(check.platform, false, "«以后直接安装» is offered for the platform catalog only");
+    assert.equal(JSON.parse(check.summary).source, "enterprise_catalog");
+
+    const install = capabilityInstallTool(fixture.store, owner, undefined, mcps);
+    assert.equal((await run(install, { kind: "mcp", ref: "erp", reason: "", autoApproved: true })).isError, true);
+    assert.equal(fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId).length, 0);
+    assert.notEqual((await run(install, { kind: "mcp", ref: "erp", reason: "" })).isError, true);
+    const [row] = fixture.store.listLocalCapabilities(owner.tenantId, owner.memberId);
+    assert.deepEqual([row?.source, row?.source_ref, row?.version, row?.tools], ["enterprise_catalog", "ent-1", "4", ["search"]]);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await fixture.close();
+  }
+});
+
 test("a platform-origin skill is a platform_catalog install; an enterprise-built one is not", async () => {
   const fixture = await createFixture();
   try {
