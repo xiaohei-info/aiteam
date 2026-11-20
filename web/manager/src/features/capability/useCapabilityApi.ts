@@ -5,6 +5,7 @@
  * 目录写操作需 owner/enterprise_admin（后端鉴权兜底，前端仅做 UI 门控）。
  */
 import { useMemo } from "react";
+import { skillImportBody } from "@aiteam/shared";
 import { createManagerApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
 import type {
@@ -16,6 +17,7 @@ import type {
   MemoryPolicyCatalogIn,
   SkillImportInput,
   SkillImportResponse,
+  SkillSettingsIn,
 } from "./types";
 
 const M = "/api/manager";
@@ -26,6 +28,8 @@ export interface CapabilityApi {
   listMemoryPolicies: () => Promise<MemoryPolicyCatalog[]>;
   createSkill: (input: SkillCatalogIn) => Promise<SkillCatalog | null>;
   updateSkill: (catalogId: string, input: SkillCatalogIn) => Promise<SkillCatalog | null>;
+  /** 只改企业自己的两项设置（成员能否自己安装 / 停用）；平台市场装的技能也可以改。 */
+  updateSkillSettings: (catalogId: string, input: SkillSettingsIn) => Promise<SkillCatalog | null>;
   deleteSkill: (catalogId: string) => Promise<void>;
   createConnector: (input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
   updateConnector: (catalogId: string, input: ConnectorCatalogIn) => Promise<ConnectorCatalog | null>;
@@ -39,25 +43,13 @@ export interface CapabilityApi {
   importSkills: (input: SkillImportInput) => Promise<SkillImportResponse | null>;
 }
 
-const UPLOAD_SOURCES = new Set(["folder", "zip", "file"]);
-
-/** 上传来源用 multipart（文件 + 相对路径），其余用 JSON。 */
+/** 上传来源与在线编辑用 multipart，其余用 JSON；企业端附带新建条目的可见范围与停用。 */
 function importBody(input: SkillImportInput): FormData | Record<string, unknown> {
-  if (!UPLOAD_SOURCES.has(input.source)) {
-    const { files: _files, ...json } = input;
-    return json;
-  }
-  const form = new FormData();
-  form.append("source", input.source);
-  for (const item of input.files ?? []) {
-    form.append("files", item.file, item.file.name);
-    form.append("paths", item.path);
-  }
-  for (const root of input.roots ?? []) form.append("roots", root);
-  for (const key of ["visibility", "binding_policy", "install_policy"] as const) {
-    if (input[key]) form.append(key, input[key]!);
-  }
-  return form;
+  const { visibility, binding_policy, ...rest } = input;
+  const extra: Record<string, string> = {};
+  if (visibility) extra.visibility = visibility;
+  if (binding_policy) extra.binding_policy = binding_policy;
+  return skillImportBody(rest, extra);
 }
 
 export function useCapabilityApi(): CapabilityApi {
@@ -79,6 +71,7 @@ export function useCapabilityApi(): CapabilityApi {
       async listMemoryPolicies() { return (await c.listGet<MemoryPolicyCatalog>("/api/manager/memory-policies")).items; },
       createSkill: (input) => postSkill(input),
       updateSkill: (catalogId, input) => putSkill(catalogId, input),
+      updateSkillSettings: (catalogId, input) => c.put<SkillCatalog>(`/api/manager/skills/${catalogId}`, { body: input }),
       deleteSkill: async (catalogId) => { await delSkill(catalogId); },
       createConnector: (input) => postConn(input),
       updateConnector: (catalogId, input) => putConn(catalogId, input),

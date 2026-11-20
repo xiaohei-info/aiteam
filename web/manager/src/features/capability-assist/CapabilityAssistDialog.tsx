@@ -15,7 +15,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { scannerBadge } from "../capability/SkillImportDialog";
+import { scannerBadge } from "@aiteam/shared";
 import { ModelPicker } from "../platform-models/ModelPicker";
 import { useRecruitModels } from "../platform-models/useRecruitModels";
 import type { CapabilityAssistCandidate, CapabilityAssistResult } from "./types";

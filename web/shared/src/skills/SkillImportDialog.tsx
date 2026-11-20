@@ -1,10 +1,9 @@
 /**
- * 企业端「导入技能」（设计 2026-11-20 §4.3）：6 种来源 → 检查 → 预览 / 多技能勾选 / ClawHub 同名候选 /
- * 安全扫描提示 / 跳过的文件 → 可见范围等 3 个策略 → 导入 → 结果分「成功 / 重复 / 失败」。
+ * 「导入技能」（企业端与运营端共用；设计 2026-11-20 §4.3 / §4.7）：选来源 → 检查 → 预览 / 多技能勾选 /
+ * ClawHub 同名候选 / 安全扫描提示 / 跳过的文件 → 端上的设置 → 导入 → 结果分「成功 / 重复 / 失败」。
  * 与桌面端「添加技能 → 自定义」同一套规则；技能可带脚本和资料，不会自动执行。
  */
 import { useRef, useState, type ReactNode } from "react";
-import { ApiError } from "@aiteam/shared";
 import { Badge, type BadgeVariant } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
@@ -14,30 +13,25 @@ import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
 import { FileInput } from "@astryxdesign/core/FileInput";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
-import { Selector } from "@astryxdesign/core/Selector";
 import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
-import { useI18n } from "../../i18n/context";
-import type { CapabilityApi } from "./useCapabilityApi";
-import {
-  CATALOG_VISIBILITIES,
-  SKILL_BINDING_POLICIES,
-  SKILL_INSTALL_POLICIES,
-  type CatalogVisibility,
-  type SkillBindingPolicy,
-  type SkillImportInput,
-  type SkillImportItem,
-  type SkillImportResponse,
-  type SkillImportResult,
-  type SkillImportSource,
-  type SkillInstallPolicy,
-  type SkillSecurityScanner,
-} from "./types";
+import { ApiError } from "../api-client/index.js";
+import type {
+  SkillImportApi,
+  SkillImportInput,
+  SkillImportItem,
+  SkillImportResponse,
+  SkillImportResult,
+  SkillImportSource,
+  SkillSecurityScanner,
+} from "./types.js";
 
-const SOURCES: { id: SkillImportSource; label: string; hint: string }[] = [
+type PickableSource = Exclude<SkillImportSource, "editor">;
+
+const SOURCES: { id: PickableSource; label: string; hint: string }[] = [
   { id: "folder", label: "文件夹", hint: "选一个含 SKILL.md 的文件夹（可以带模板、脚本、参考资料）；一个文件夹里有多个技能时可勾选。" },
   { id: "zip", label: "zip", hint: "选一个技能压缩包（.zip）。" },
   { id: "file", label: "单个 .md", hint: "选一个 SKILL.md 文件；技能名取自文件里的 name，与文件名无关。" },
@@ -87,18 +81,26 @@ function folderFiles(list: FileList | null): { file: File; path: string }[] {
   return Array.from(list ?? []).map((file) => ({ file, path: file.webkitRelativePath || file.name }));
 }
 
-interface SkillImportDialogProps {
-  api: CapabilityApi;
+export interface SkillImportDialogProps {
+  api: SkillImportApi;
   onClose: () => void;
   /** 有技能写入目录后调用（用于刷新列表）。 */
   onImported: () => void;
   /** 从「让模型帮我找」带过来的链接：直接停在对应来源并填好地址，管理员点「检查」后照常导入。 */
   initial?: { source: "url" | "clawhub"; url: string };
+  /** 可选的来源（默认全部；运营端没有 ClawHub，它有自己的外部市场）。 */
+  sources?: PickableSource[];
+  /** 新增技能的设置（企业端：成员可以自己安装）。 */
+  settings?: ReactNode;
+  /** 升级已有技能时的说明。 */
+  updateNote?: string;
 }
 
-export function SkillImportDialog({ api, onClose, onImported, initial }: SkillImportDialogProps): ReactNode {
-  const i18n = useI18n();
-  const [source, setSource] = useState<SkillImportSource>(initial?.source ?? "folder");
+export function SkillImportDialog({
+  api, onClose, onImported, initial, sources: allowed, settings, updateNote,
+}: SkillImportDialogProps): ReactNode {
+  const sourceList = allowed ? SOURCES.filter((item) => allowed.includes(item.id)) : SOURCES;
+  const [source, setSource] = useState<PickableSource>(initial?.source ?? sourceList[0]!.id);
   const [folder, setFolder] = useState<{ file: File; path: string }[]>([]);
   const [archive, setArchive] = useState<File | null>(null);
   const [mdFile, setMdFile] = useState<File | null>(null);
@@ -106,15 +108,12 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
   const [url, setUrl] = useState(initial?.url ?? "");
   const [checked, setChecked] = useState<{ input: SkillImportInput; response: SkillImportResponse } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [visibility, setVisibility] = useState<CatalogVisibility>("tenant");
-  const [binding, setBinding] = useState<SkillBindingPolicy>("opt_in");
-  const [install, setInstall] = useState<SkillInstallPolicy>("on_demand");
   const [busy, setBusy] = useState<"check" | "import" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SkillImportResult[] | null>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
-  const current = SOURCES.find((item) => item.id === source)!;
+  const current = sourceList.find((item) => item.id === source) ?? sourceList[0]!;
   const items: SkillImportItem[] = checked?.response.preview ? [checked.response.preview] : checked?.response.scan ?? [];
   const candidates = checked?.response.clawhub?.candidates ?? null;
   const security = checked?.response.clawhub?.security ?? null;
@@ -144,7 +143,7 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
     setBusy("check");
     resetCheck();
     try {
-      const response = await api.previewSkillImport(input);
+      const response = await api.preview(input);
       if (!response) throw new Error("没有拿到检查结果");
       setChecked({ input, response });
       const scanned = response.preview ? [response.preview] : response.scan ?? [];
@@ -161,10 +160,7 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
     setBusy("import");
     setError(null);
     try {
-      const response = await api.importSkills({
-        ...checked.input, roots: chosen.map((item) => item.root),
-        visibility, binding_policy: binding, install_policy: install,
-      });
+      const response = await api.save({ ...checked.input, roots: chosen.map((item) => item.root) });
       const done = response?.results ?? [];
       setResults(done);
       if (done.some((item) => item.status === "installed" || item.status === "updated")) onImported();
@@ -249,8 +245,8 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
             <VStack gap={3}>
               {results ? resultView : (
                 <>
-                  <TabList aria-label="技能来源" value={source} onChange={(value) => { setSource(value as SkillImportSource); resetCheck(); }} hasDivider>
-                    {SOURCES.map((item) => <Tab key={item.id} value={item.id} label={item.label} />)}
+                  <TabList aria-label="技能来源" value={source} onChange={(value) => { setSource(value as PickableSource); resetCheck(); }} hasDivider>
+                    {sourceList.map((item) => <Tab key={item.id} value={item.id} label={item.label} />)}
                   </TabList>
                   <Text type="supporting">{current.hint}</Text>
                   {sourceInput}
@@ -264,7 +260,7 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
                       {candidates.map((item) => (
                         <HStack key={item.owner} gap={2} align="center" wrap="wrap">
                           <Button label={`${item.owner}/${item.slug}`} size="sm" variant="secondary" onClick={() => pickCandidate(item.url)} isDisabled={Boolean(busy)} />
-                          <Button label="在 ClawHub 查看" size="sm" variant="ghost" href={item.url} />
+                          <Button label="在 ClawHub 查看" size="sm" variant="ghost" href={item.url} target="_blank" rel="noopener noreferrer" />
                         </HStack>
                       ))}
                     </VStack>
@@ -287,15 +283,11 @@ export function SkillImportDialog({ api, onClose, onImported, initial }: SkillIm
                       <Text type="supporting">技能可能附带脚本和资料，不会自动执行；员工运行命令仍按审批策略。</Text>
                     </VStack>
                   )}
-                  {installable.length > 0 && (
+                  {installable.length > 0 && (settings || (updateNote && installable.some((item) => item.existing === "update"))) && (
                     <VStack gap={2}>
-                      <Text weight="semibold">新增技能的设置</Text>
-                      <HStack gap={3} wrap="wrap">
-                        <Selector label={i18n.t("manager.capability.visibility")} options={CATALOG_VISIBILITIES.map((value) => ({ value, label: i18n.t(`manager.capability.visibility.${value}`) }))} value={visibility} onChange={(value) => setVisibility(value as CatalogVisibility)} isDisabled={Boolean(busy)} />
-                        <Selector label={i18n.t("manager.capability.binding_policy")} options={SKILL_BINDING_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.binding.${value}`) }))} value={binding} onChange={(value) => setBinding(value as SkillBindingPolicy)} isDisabled={Boolean(busy)} />
-                        <Selector label={i18n.t("manager.capability.install_policy")} options={SKILL_INSTALL_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.install.${value}`) }))} value={install} onChange={(value) => setInstall(value as SkillInstallPolicy)} isDisabled={Boolean(busy)} />
-                      </HStack>
-                      {installable.some((item) => item.existing === "update") && <Text type="supporting">升级已有技能时保留它原来的可见范围和策略。</Text>}
+                      {settings && <Text weight="semibold">新增技能的设置</Text>}
+                      {settings}
+                      {updateNote && installable.some((item) => item.existing === "update") && <Text type="supporting">{updateNote}</Text>}
                     </VStack>
                   )}
                 </>

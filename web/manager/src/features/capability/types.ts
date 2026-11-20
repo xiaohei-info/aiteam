@@ -22,6 +22,12 @@ export interface SkillCatalogIn {
   visibility: CatalogVisibility;
   config: Record<string, unknown>;
 }
+/** 只改两项设置时的请求体：未提供的字段（名称、版本、内容）保持不变。 */
+export interface SkillSettingsIn {
+  skill_id: string;
+  visibility: CatalogVisibility;
+  binding_policy: SkillBindingPolicy;
+}
 export interface ConnectorCatalogIn {
   connector_id: string;
   display_name: string;
@@ -39,71 +45,19 @@ export interface MemoryPolicyCatalogIn {
   config: Record<string, unknown>;
 }
 
-/** 导入技能（设计 2026-11-20 §4.3）：文件夹 / 压缩包 / 单个 .md 走上传，其余走 JSON。 */
-export type SkillImportSource = "folder" | "zip" | "file" | "text" | "url" | "clawhub";
+/** 导入技能 / 技能编辑（设计 2026-11-20 §4.3 / §4.7）：与运营端共用 @aiteam/shared 的类型。 */
+export type {
+  SkillImportItem,
+  SkillImportResponse,
+  SkillImportResult,
+  SkillImportSource,
+  SkillSecurity,
+  SkillSecurityScanner,
+} from "@aiteam/shared";
+import type { SkillImportInput as SharedSkillImportInput } from "@aiteam/shared";
 
-export interface SkillImportItem {
-  root: string;
-  ok: boolean;
-  reason?: string | null;
-  name: string;
-  description: string;
-  version: string;
-  file_count: number;
-  total_bytes: number;
-  files: { path: string; size: number }[];
-  skipped: { path: string; reason: "platform_hook" | "binary" | "unsupported_path" }[];
-  existing: "none" | "same" | "update";
-  existing_version?: string | null;
-}
-
-/** ClawHub 安全扫描结论（只提示不拦截）。 */
-export interface SkillSecurity {
-  status: string;
-  has_warnings: boolean;
-  scanners: SkillSecurityScanner[];
-}
-
-export interface SkillSecurityScanner {
-  name: string;
-  status: string;
-  verdict?: string;
-  confidence?: string;
-  recommendation?: string;
-  severity?: string;
-  issue_count?: number;
-}
-
-export interface SkillImportResult {
-  root: string;
-  name: string;
-  version: string;
-  status: "installed" | "updated" | "duplicate" | "failed";
-  reason?: string | null;
-  catalog_id?: string | null;
-}
-
-export interface SkillImportResponse {
-  origin: { kind: SkillImportSource; label: string; url?: string | null };
-  preview?: SkillImportItem | null;
-  scan?: SkillImportItem[] | null;
-  clawhub?: {
-    candidates?: { owner: string; slug: string; url: string }[] | null;
-    security?: SkillSecurity | null;
-    owner?: string | null;
-    slug?: string | null;
-  } | null;
-  results?: SkillImportResult[] | null;
-}
-
-export interface SkillImportInput {
-  source: SkillImportSource;
-  /** folder：每个文件带相对路径（webkitRelativePath）；zip / file：一个文件。 */
-  files?: { file: File; path: string }[];
-  text?: string;
-  url?: string;
-  roots?: string[];
+/** 企业端导入时附带新建条目的设置：可见范围决定成员能否自己安装；停用对应 binding_policy=disabled。 */
+export interface SkillImportInput extends SharedSkillImportInput {
   visibility?: CatalogVisibility;
   binding_policy?: SkillBindingPolicy;
-  install_policy?: SkillInstallPolicy;
 }

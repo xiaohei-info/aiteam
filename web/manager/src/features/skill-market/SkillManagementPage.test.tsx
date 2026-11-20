@@ -47,7 +47,7 @@ beforeEach(() => {
 });
 
 describe("技能管理（侧栏入口）", () => {
-  it("默认「企业技能」：技能目录与「新增技能」菜单（导入 / 让模型帮我找 / 手动编辑），不带连接器与记忆", async () => {
+  it("默认「企业技能」：技能目录与「新增技能」菜单（导入 / 让模型帮我找 / 从零写一个），不带连接器与记忆", async () => {
     renderPage();
     expect(screen.getByRole("heading", { level: 1, name: "技能管理" })).toBeInTheDocument();
     const table = await screen.findByRole("table", { name: "技能目录" });
@@ -55,7 +55,7 @@ describe("技能管理（侧栏入口）", () => {
     expect(screen.queryByRole("table", { name: "连接器目录" })).toBeNull();
     expect(screen.queryByRole("table", { name: "记忆策略目录" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "新增技能" }));
-    for (const name of ["导入技能", "让模型帮我找", "手动编辑（高级）"]) expect(await screen.findByRole("menuitem", { name })).toBeInTheDocument();
+    for (const name of ["导入技能", "让模型帮我找", "从零写一个"]) expect(await screen.findByRole("menuitem", { name })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("menuitem", { name: "导入技能" }));
     expect(await screen.findByRole("dialog", { name: "导入技能" })).toBeInTheDocument();
   });

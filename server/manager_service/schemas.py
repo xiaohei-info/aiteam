@@ -535,7 +535,7 @@ class SkillCatalogOut(SkillCatalogIn):
     package_status: Literal["draft", "ready", "invalid"] = Field(default="draft", description="实际包状态；draft/invalid 不可分发执行")
 
 
-SkillImportSource = Literal["folder", "zip", "file", "text", "url", "clawhub"]
+SkillImportSource = Literal["folder", "zip", "file", "text", "editor", "url", "clawhub"]
 
 
 class SkillImportJsonIn(BaseModel):

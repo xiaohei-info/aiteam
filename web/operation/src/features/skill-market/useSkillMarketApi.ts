@@ -1,7 +1,8 @@
 import { useMemo } from "react";
+import { skillImportBody, type SkillImportInput, type SkillImportResponse } from "@aiteam/shared";
 import { createOperationApiClient } from "../../api/client";
 import { useSession } from "../../auth/session";
-import type { ClawHubResolve, DownloadedSkill, ExternalSkill, ExternalSkillPreview, InternalSkill } from "./types";
+import type { ClawHubResolve, DownloadedSkill, ExternalSkill, ExternalSkillPreview, InternalSkill, PlatformSkillFiles } from "./types";
 
 const BASE = "/api/operation/skill-market";
 
@@ -39,6 +40,17 @@ export function useSkillMarketApi() {
           query: version ? { version } : undefined,
           body: {},
         });
+      },
+      /** 自建技能：检查（不写库）。上传与在线编辑用 multipart，粘贴与网址用 JSON。 */
+      previewCustom(input: SkillImportInput) {
+        return client.post<SkillImportResponse>(`${BASE}/custom/preview`, { body: skillImportBody(input) });
+      },
+      /** 自建技能：保存为平台技能（同名内容不同成为新版本）。 */
+      saveCustom(input: SkillImportInput) {
+        return client.post<SkillImportResponse>(`${BASE}/custom`, { body: skillImportBody(input) });
+      },
+      files(skillId: string) {
+        return client.get<PlatformSkillFiles>(`${BASE}/internal/${encodeURIComponent(skillId)}/files`);
       },
       publish(skillId: string) {
         return client.post<InternalSkill>(`${BASE}/internal/${encodeURIComponent(skillId)}/publish`);

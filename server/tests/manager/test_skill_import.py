@@ -8,7 +8,11 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from manager_service.skill_import_service import ImportRequest, SkillImportService, SkillSourceUnavailable
+from manager_service.skill_import_service import (
+    ImportRequest,
+    SkillImportService,
+    SkillSourceUnavailable,
+)
 from shared.config import Settings
 from shared.contracts.tenancy import TenantContext
 from shared.errors import Forbidden, ValidationProblem
@@ -178,6 +182,29 @@ def test_same_name_different_content_becomes_new_version_and_keeps_policies():
     assert updated.version == preview["version"] and updated.visibility == "private"
 
 
+def test_editor_source_saves_a_skill_and_editing_a_clawhub_skill_makes_it_custom():
+    """「从零写一个」/「编辑」 send the editor's files; editing an imported skill makes it the enterprise's own."""
+    fetch = _Fetch({
+        "https://clawhub.ai/api/v1/download?slug=x&ownerHandle=o": (200, {}, _zip({"SKILL.md": _skill("x"), "hooks/openclaw/h.js": "x"})),
+        "https://clawhub.ai/api/v1/skills/x/scan?ownerHandle=o": (200, {}, json.dumps({"security": {"status": "suspicious"}}).encode()),
+    })
+    repo = _FakeRepo()
+    svc = _svc(fetch, repo=repo)
+    written = ImportRequest(source="editor", entries=[("SKILL.md", _skill("weekly-report").encode()), ("scripts/fill.sh", b"echo")])
+    result = _install(svc, _ctx(), written)["results"][0]
+    row = repo.get_skill_by_id(_ctx(), skill_id="weekly-report")
+    assert result["status"] == "installed" and row.config["source"] == "custom" and row.config["origin"]["label"] == "在线编辑"
+    assert {f["path"] for f in row.files} == {"SKILL.md", "scripts/fill.sh"} and row.version == row.content_hash[:12]
+
+    _install(svc, _ctx(), ImportRequest(source="clawhub", url="https://clawhub.ai/o/skills/x"))
+    assert repo.get_skill_by_id(_ctx(), skill_id="x").config["security"]["status"] == "suspicious"
+    edited = ImportRequest(source="editor", entries=[("SKILL.md", _skill("x", body="# 改过\n").encode())])
+    assert _install(svc, _ctx(), edited)["results"][0]["status"] == "updated"
+    row = repo.get_skill_by_id(_ctx(), skill_id="x")
+    assert row.config["source"] == "custom" and "security" not in row.config and "skipped" not in row.config
+    assert [f["content"] for f in row.files] == [_skill("x", body="# 改过\n")]
+
+
 def test_platform_skill_name_is_not_overwritten():
     repo = _FakeRepo()
     repo.create_skill(_ctx(), skill_id="pdf", display_name="pdf", version="1", install_policy="on_demand", binding_policy="opt_in",
@@ -269,6 +296,11 @@ def test_routes_accept_json_and_multipart_folder():
     assert response.json()["data"]["results"][0]["status"] == "installed"
     row = repo.list_skills(TenantContext(tenant_id="t1", user_id="u", roles=["owner"]))[0]
     assert row.visibility == "private" and {f["path"] for f in row.files} == {"SKILL.md", "scripts/run.sh"}
+
+    files = [("files", ("SKILL.md", _skill("written").encode()))]
+    response = client.post("/api/manager/skills/import", headers=_hdr(), files=files, data={"source": "editor", "paths": ["SKILL.md"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["results"][0]["status"] == "installed"
 
 
 def test_routes_reject_wrong_transport_member_role_and_unauthenticated():

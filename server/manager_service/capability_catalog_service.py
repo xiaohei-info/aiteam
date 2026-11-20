@@ -87,11 +87,13 @@ class CapabilityCatalogService:
     def update_skill(self, ctx: TenantContext, body: SkillCatalogIn, *, catalog_id: str) -> SkillCatalogOut:
         _ensure_can_write(ctx)
         current = self._require_skill(ctx, catalog_id)
-        if current.config.get("source") == "operator":
-            raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         if body.skill_id != current.skill_id:
             raise Conflict("skill_id is immutable")
         supplied = body.model_fields_set
+        # Platform-market packages are immutable, but whether members may install them and whether the
+        # skill is switched off are the enterprise's own settings (design §4.7).
+        if current.config.get("source") == "operator" and supplied - {"skill_id", "visibility", "binding_policy"}:
+            raise Conflict("Operator-managed skills are immutable; update through the platform skill market")
         if "config" in supplied:
             _reject_reserved_skill_config(body.config)
         files = None

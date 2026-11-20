@@ -44,12 +44,12 @@ from .skill_import_service import ImportRequest, SkillImportService
 
 # 导入请求体上限：技能包 10 MiB + multipart 开销（design 2026-11-20 §4.3；app 以 BodyLimit 在读体前拦截）。
 SKILL_IMPORT_MAX_BODY_BYTES = 12 * 1024 * 1024
-_UPLOAD_SOURCES = ("folder", "zip", "file")
+_UPLOAD_SOURCES = ("folder", "zip", "file", "editor")
 _IMPORT_FORM_SCHEMA = {
     "type": "object",
     "required": ["source", "files"],
     "properties": {
-        "source": {"type": "string", "enum": list(_UPLOAD_SOURCES), "description": "folder 上传文件夹；zip 上传一个压缩包；file 上传一个 .md。"},
+        "source": {"type": "string", "enum": list(_UPLOAD_SOURCES), "description": "folder 上传文件夹；zip 上传一个压缩包；file 上传一个 .md；editor 控制台 SKILL.md 编辑器写的文件（同文件夹）。"},
         "files": {"type": "array", "items": {"type": "string", "format": "binary"}, "description": "上传的文件；文件夹上传每个文件一项。"},
         "paths": {"type": "array", "items": {"type": "string"}, "description": "与 files 一一对应的相对路径（文件夹上传用 webkitRelativePath）；缺省用文件名。"},
         "roots": {"type": "array", "items": {"type": "string"}, "description": "安装时勾选的技能根目录；缺省安装全部可用技能。"},
@@ -99,7 +99,7 @@ async def _read_import(request: Request) -> tuple[ImportRequest, SkillImportJson
                 **{key: form[key] for key in ("visibility", "binding_policy", "install_policy") if form.get(key)},
             })
             if options.source not in _UPLOAD_SOURCES:
-                raise ValidationProblem("multipart 只用于 folder / zip / file 来源")
+                raise ValidationProblem("multipart 只用于 folder / zip / file / editor 来源")
             entries = [(paths[i] if paths else (upload.filename or ""), await upload.read()) for i, upload in enumerate(uploads)]
             return ImportRequest(source=options.source, entries=entries, roots=options.roots), options
         options = SkillImportJsonIn.model_validate(await request.json())

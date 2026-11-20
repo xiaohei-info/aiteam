@@ -1,6 +1,6 @@
 """Real route/service/PG fingerprints and metadata editing; no real skills or keys."""
-from concurrent.futures import ThreadPoolExecutor
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -105,7 +105,9 @@ def test_migration0039_preserves_scalar_and_object_skill_files_as_invalid(migrat
 
 def test_signed_distribution_after_metadata_edit_uses_verified_bytes_and_required_version(migrated_db, two_tenants):
     import base64
+
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
     from manager_service.authorized_config_service import AuthorizedConfigService
     from manager_service.skill_signing import SkillPackageSigner
     from shared.contracts.skill import canonical_skill_package_bytes
@@ -152,3 +154,24 @@ def test_installable_summaries_judge_package_shape_in_sql_without_returning_file
         assert summaries[skill_id].package_shaped is False, skill_id
     other = TenantContext(tenant_id=two_tenants[1], user_id="other", roles=["owner"])
     assert not any(row.skill_id.startswith("sum-") for row in repo.list_skill_summaries(other))
+
+
+def test_platform_market_row_allows_only_the_enterprise_switches_in_sql(migrated_db, two_tenants):
+    """Design §4.7: platform packages stay immutable even at the SQL guard, but 成员自装 / 停用 are the enterprise's."""
+    router = PgTenantRouter(migrated_db)
+    ctx = TenantContext(tenant_id=two_tenants[0], user_id="fixture", roles=["owner"])
+    repo = CapabilityCatalogRepository(router)
+    row = repo.create_skill(
+        ctx, skill_id="platform-pg-switches", display_name="Platform", version="1.0.0", install_policy="on_demand",
+        binding_policy="opt_in", visibility="tenant", config={"source": "operator"},
+        files=[{"path": "SKILL.md", "content": "---\nname: x\ndescription: d\n---\n"}], content_hash="hash",
+    )
+    service = CapabilityCatalogService(repo)
+    switched = service.update_skill(ctx, SkillCatalogIn(skill_id="platform-pg-switches", visibility="private", binding_policy="disabled"), catalog_id=row.catalog_id)
+    assert (switched.visibility, switched.binding_policy, switched.version, switched.content_hash) == ("private", "disabled", "1.0.0", "hash")
+    unset = {"display_name": None, "version": None, "install_policy": None, "binding_policy": None, "visibility": None, "config": None}
+    for change in ({"display_name": "Renamed"}, {"version": "2"}, {"config": {}}, {"files": [], "content_hash": "other"}):
+        assert repo.update_skill(ctx, catalog_id=row.catalog_id, **{**unset, **change}) is None
+    with pytest.raises(Conflict, match="immutable"):
+        service.update_skill(ctx, SkillCatalogIn(skill_id="platform-pg-switches", display_name="Renamed"), catalog_id=row.catalog_id)
+    assert repo.get_skill(ctx, catalog_id=row.catalog_id).display_name == "Platform"

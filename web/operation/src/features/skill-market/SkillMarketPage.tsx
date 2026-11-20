@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { SkillFile } from "@aiteam/shared";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
+import { DropdownMenu, DropdownMenuItem } from "@astryxdesign/core/DropdownMenu";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -12,6 +14,7 @@ import { Tab, TabList } from "@astryxdesign/core/TabList";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { CustomSkillImport, PlatformSkillEditor } from "./CustomSkillDialogs";
 import { ClawHubLinkImport, SecurityBadges, SkillPreviewDialog } from "./SkillMarketParts";
 import { errorText, useExternalSkills } from "./useExternalSkills";
 import { useSkillMarketApi } from "./useSkillMarketApi";
@@ -33,6 +36,9 @@ export function SkillMarketPage(): ReactNode {
   const [busy, setBusy] = useState<string | null>(null);
   const [autoPublish, setAutoPublish] = useState(true);
   const [previewing, setPreviewing] = useState<{ owner: string; slug: string } | null>(null);
+  /** 技能编辑器：skill 为空是「从零写一个」；查看 / 编辑已有技能时先取到它的文件。 */
+  const [editing, setEditing] = useState<{ skill?: InternalSkill; files?: SkillFile[] } | null>(null);
+  const [importing, setImporting] = useState(false);
   const external = useExternalSkills(api, query, tab === "external");
 
   // 内部目录只读本库，和 ClawHub 是否可用无关，单独加载。
@@ -67,6 +73,20 @@ export function SkillMarketPage(): ReactNode {
     }
   }
 
+  async function openSkill(skill: InternalSkill): Promise<void> {
+    setBusy(`files:${skill.skill_id}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const data = await api.files(skill.skill_id);
+      setEditing({ skill, files: data?.files ?? [] });
+    } catch (err) {
+      setError(errorText(err, "读取技能文件失败"));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function importPreview(preview: ExternalSkillPreview): Promise<void> {
     const imported = await api.download(preview.owner, preview.slug, preview.version);
     setPreviewing(null);
@@ -94,10 +114,19 @@ export function SkillMarketPage(): ReactNode {
         <Tab value="internal" label="内部技能市场" />
         <Tab value="external" label="ClawHub 外部市场" />
       </TabList>
+      {tab === "internal" && (
+        <HStack justify="between" align="center" gap={2} wrap="wrap">
+          <Text color="secondary">平台已有的技能：从 ClawHub 导入的，和运营端自建的。开放后企业可以安装。</Text>
+          <DropdownMenu button={{ label: "新增自定义技能", size: "sm" }} menuWidth={200}>
+            <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting(true); }} />
+            <DropdownMenuItem label="从零写一个" onClick={() => { setNotice(null); setEditing({}); }} />
+          </DropdownMenu>
+        </HStack>
+      )}
       {tab === "internal" ? (
         internalError ? <Banner status="error" title={internalError} endContent={<Button label="重试" variant="ghost" size="sm" onClick={() => void loadInternal()} />} />
           : internalLoading ? <HStack gap={2} align="center"><Spinner size="sm" /><Text color="secondary">加载中…</Text></HStack>
-            : internal.length === 0 ? <EmptyState title="暂无内部技能" description="到「ClawHub 外部市场」预览并导入。" /> : (
+            : internal.length === 0 ? <EmptyState title="暂无内部技能" description="到「ClawHub 外部市场」预览并导入，或点「新增自定义技能」。" /> : (
               <VStack gap={3}>
                 {internal.map((skill) => (
                   <Card key={skill.skill_id} padding={4}>
@@ -105,10 +134,17 @@ export function SkillMarketPage(): ReactNode {
                       <VStack gap={1} style={TEXT_COLUMN}>
                         <Heading level={3}>{skill.display_name || skill.slug}</Heading>
                         <Text color="secondary">{skill.summary || "暂无描述"}</Text>
-                        <Text color="secondary">{skill.owner}/{skill.slug} · v{skill.latest_internal_version}</Text>
-                        <HStack gap={2} wrap="wrap"><SecurityBadges security={skill.security} /></HStack>
+                        <Text color="secondary">{skill.source === "custom" ? `平台自建 · ${skill.slug}` : `${skill.owner}/${skill.slug}`} · v{skill.latest_internal_version}</Text>
+                        {skill.source !== "custom" && <HStack gap={2} wrap="wrap"><SecurityBadges security={skill.security} /></HStack>}
                       </VStack>
                       <HStack gap={2} style={ACTIONS}>
+                        <Button
+                          label={skill.source === "custom" ? "编辑" : "查看"}
+                          size="sm"
+                          variant="ghost"
+                          isLoading={busy === `files:${skill.skill_id}`}
+                          onClick={() => void openSkill(skill)}
+                        />
                         <Badge
                           label={skill.latest_version_status === "draft" ? "新版待开放" : skill.status === "published" ? "已开放" : skill.status === "draft" ? "待开放" : "已下架"}
                           variant={skill.latest_version_status === "draft" ? "warning" : skill.status === "published" ? "success" : "warning"}
@@ -161,6 +197,23 @@ export function SkillMarketPage(): ReactNode {
               </VStack>
             )}
         </VStack>
+      )}
+      {importing && (
+        <CustomSkillImport
+          api={api}
+          onClose={() => setImporting(false)}
+          onImported={() => { setNotice("自建技能已保存"); void loadInternal(); }}
+        />
+      )}
+      {editing && (
+        <PlatformSkillEditor
+          api={api}
+          skill={editing.skill}
+          files={editing.files}
+          customNames={new Set(internal.filter((item) => item.source === "custom").map((item) => item.slug))}
+          onClose={() => setEditing(null)}
+          onSaved={(message) => { setEditing(null); setNotice(message); void loadInternal(); }}
+        />
       )}
       {previewing && (
         <SkillPreviewDialog

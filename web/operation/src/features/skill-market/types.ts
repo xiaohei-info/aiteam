@@ -12,6 +12,8 @@ export interface ExternalSkill {
 
 export interface InternalSkill {
   skill_id: string;
+  /** clawhub 从 ClawHub 导入；custom 运营端自建（上传 / 粘贴 / 网址 / 在线编辑），只有它可以在这里编辑。 */
+  source?: "clawhub" | "custom";
   owner: string;
   slug: string;
   display_name: string;
@@ -91,4 +93,14 @@ export interface PlatformSkillRef {
   skill_id: string;
   version: string;
   content_hash: string;
+}
+
+/** 平台技能当前版本的全部文件（查看 / 编辑用）。 */
+export interface PlatformSkillFiles {
+  skill_id: string;
+  source: "clawhub" | "custom";
+  display_name: string;
+  summary: string;
+  version?: string | null;
+  files: { path: string; content: string }[];
 }

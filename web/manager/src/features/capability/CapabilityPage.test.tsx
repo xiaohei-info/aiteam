@@ -15,8 +15,9 @@ vi.mock("../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi
 
 const skill: SkillCatalog = {
   catalog_id: "skill-c1", skill_id: "skill-a", display_name: "技能 A", version: "1",
-  install_policy: "on_demand", binding_policy: "opt_in", visibility: "private",
-  config: {}, catalog_version: 1,
+  install_policy: "on_demand", binding_policy: "opt_in", visibility: "tenant",
+  config: {}, catalog_version: 1, package_status: "ready",
+  files: [{ path: "SKILL.md", content: "---\nname: skill-a\ndescription: 技能 A 的说明。写周报时使用。\n---\n# A\n" }, { path: "scripts/a.sh", content: "echo a\n" }],
 };
 const connector: ConnectorCatalog = {
   catalog_id: "connector-c1", connector_id: "connector-a", display_name: "连接器 A",
@@ -41,11 +42,14 @@ function sessionValue(roles: string[]): SessionContextValue {
   return { session, token: "tok", signIn: () => {}, signOut: () => {}, onUnauthorized: () => {} };
 }
 
-/** 「新增技能」是菜单：导入技能 / 手动编辑（高级）。 */
-async function openManualSkillEditor() {
+/** 「新增技能」是菜单：导入技能 / 让模型帮我找 / 从零写一个。 */
+async function openNewSkillEditor() {
   fireEvent.click(screen.getByRole("button", { name: "新增技能" }));
-  fireEvent.click(await screen.findByRole("menuitem", { name: "手动编辑（高级）" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "从零写一个" }));
+  return screen.findByRole("dialog", { name: "从零写一个技能" });
 }
+
+const saved = { origin: { kind: "editor", label: "在线编辑" }, results: [{ root: "", name: "skill-b", version: "abc", status: "installed" }] };
 
 function mockApi(overrides: Partial<CapabilityApi> = {}): CapabilityApi {
   const api: CapabilityApi = {
@@ -61,8 +65,9 @@ function mockApi(overrides: Partial<CapabilityApi> = {}): CapabilityApi {
     createMemoryPolicy: vi.fn().mockResolvedValue(memory),
     updateMemoryPolicy: vi.fn().mockResolvedValue(memory),
     deleteMemoryPolicy: vi.fn().mockResolvedValue(undefined),
+    updateSkillSettings: vi.fn().mockResolvedValue(skill),
     previewSkillImport: vi.fn().mockResolvedValue(null),
-    importSkills: vi.fn().mockResolvedValue(null),
+    importSkills: vi.fn().mockResolvedValue(saved),
     ...overrides,
   };
   (useCapabilityApi as unknown as ReturnType<typeof vi.fn>).mockReturnValue(api);
@@ -100,51 +105,97 @@ describe("CapabilityPage", () => {
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 
-  it("创建技能：提交默认策略与输入字段", async () => {
+  it("技能表按技能本身展示：说明取自 SKILL.md、成员自装、状态；没有安装 / 绑定策略列", async () => {
+    mockApi({ listSkills: vi.fn().mockResolvedValue([skill, { ...skill, catalog_id: "c2", display_name: "技能 B", visibility: "private", binding_policy: "disabled" }]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    expect(within(table).getAllByText("技能 A 的说明。写周报时使用。")).toHaveLength(2);
+    expect(within(table).getByText("可以")).toBeInTheDocument();
+    expect(within(table).getByText("仅配给专家")).toBeInTheDocument();
+    expect(within(table).getByText("已停用")).toBeInTheDocument();
+    for (const gone of ["安装策略", "绑定策略", "可见性", "执行包"]) expect(within(table).queryByText(gone)).toBeNull();
+  });
+
+  it("从零写一个：按 SKILL.md 填名称、说明、指令，存为在线编辑来源并带上两项设置", async () => {
     const api = mockApi();
     renderPage();
     await screen.findByText("技能 A");
-    await openManualSkillEditor();
-    expect(screen.getByRole("dialog", { name: "新增技能" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/标识/), { target: { value: "skill-b" } });
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "技能 B" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.createSkill).toHaveBeenCalledWith({
-      skill_id: "skill-b",
-      display_name: "技能 B",
-      version: "1",
-      install_policy: "on_demand",
-      binding_policy: "opt_in",
-      visibility: "private",
-      config: {},
-    }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增技能" })).not.toBeInTheDocument());
+    const dialog = within(await openNewSkillEditor());
+    for (const gone of [/安装策略/, /绑定策略/, /JSON/]) expect(dialog.queryByText(gone)).toBeNull();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-b" } });
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "整理会议纪要。开完会要出纪要时使用。" } });
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(api.importSkills).mock.calls[0]![0];
+    expect(input).toMatchObject({ source: "editor", visibility: "private", binding_policy: "opt_in" });
+    expect(input.files!.map((item) => item.path)).toEqual(["SKILL.md"]);
+    expect(await screen.findByText("已新建技能 skill-b")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "从零写一个技能" })).toBeNull();
   });
 
-  it("创建失败：显示错误且保留 Dialog", async () => {
-    const api = mockApi({ createSkill: vi.fn().mockRejectedValue(new Error("boom")) });
+  it("从零写一个：与已有技能重名时提示，不覆盖；保存失败留在弹窗里", async () => {
+    const api = mockApi({ importSkills: vi.fn().mockResolvedValue({ ...saved, results: [{ ...saved.results[0], status: "failed", reason: "技能包不符合规则" }] }) });
     renderPage();
     await screen.findByText("技能 A");
-    await openManualSkillEditor();
-    fireEvent.change(screen.getByLabelText(/标识/), { target: { value: "skill-b" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("操作失败，请重试"));
-    expect(screen.getByRole("dialog", { name: "新增技能" })).toBeInTheDocument();
-    expect(api.createSkill).toHaveBeenCalledTimes(1);
+    const dialog = within(await openNewSkillEditor());
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-a" } });
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "说明" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText(/企业技能里已有「skill-a」/)).toBeInTheDocument();
+    expect(api.importSkills).not.toHaveBeenCalled();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "skill-c" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText("技能包不符合规则")).toBeInTheDocument();
   });
 
-  it("编辑技能：保存调用 updateSkill", async () => {
+  it("编辑技能：名称锁定；只改设置时只调 updateSkillSettings，不存新版本", async () => {
     const api = mockApi();
     renderPage();
     await screen.findByText("技能 A");
     fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    expect(screen.getByRole("dialog", { name: "编辑技能" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "技能 A+" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalledWith(
-      "skill-c1",
-      expect.objectContaining({ display_name: "技能 A+" }),
-    ));
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    expect(dialog.getByRole("textbox", { name: /^名称/ })).toBeDisabled();
+    expect(dialog.getByRole("textbox", { name: "指令" })).toHaveValue("# A\n");
+    expect(dialog.getByText("scripts/a.sh · 7 B")).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("checkbox", { name: /停用/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "tenant", binding_policy: "disabled" }));
+    expect(api.importSkills).not.toHaveBeenCalled();
+    expect(await screen.findByText("已更新 技能 A 的设置")).toBeInTheDocument();
+  });
+
+  it("编辑技能内容：附带文件照带，存为新版本", async () => {
+    const api = mockApi();
+    renderPage();
+    await screen.findByText("技能 A");
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 技能 A" }));
+    fireEvent.change(dialog.getByRole("textbox", { name: "指令" }), { target: { value: "# A 改过\n" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledTimes(1));
+    const input = vi.mocked(api.importSkills).mock.calls[0]![0];
+    expect(input.source).toBe("editor");
+    expect(input.files!.map((item) => item.path)).toEqual(["SKILL.md", "scripts/a.sh"]);
+    expect(input).not.toHaveProperty("visibility");  // 升级保留原设置
+    expect(api.updateSkillSettings).not.toHaveBeenCalled();
+  });
+
+  it("平台技能市场装的技能：只能查看内容，两项设置可改，没有删除", async () => {
+    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, config: { source: "operator" } }]) });
+    renderPage();
+    const table = await screen.findByRole("table", { name: "技能目录" });
+    await within(table).findByText("技能 A");
+    expect(within(table).queryByRole("button", { name: "删除" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "查看技能 技能 A" }));
+    expect(dialog.getByText(/内容由运营端维护/)).toBeInTheDocument();
+    expect(dialog.getByRole("textbox", { name: /^说明/ })).toBeDisabled();
+    expect(dialog.queryByRole("button", { name: "添加文件" })).toBeNull();
+    fireEvent.click(dialog.getByRole("checkbox", { name: /成员可以自己安装/ }));
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.updateSkillSettings).toHaveBeenCalledWith("skill-c1", { skill_id: "skill-a", visibility: "private", binding_policy: "opt_in" }));
+    expect(api.importSkills).not.toHaveBeenCalled();
   });
 
   it("删除技能：经 AlertDialog 确认后调用 deleteSkill", async () => {
@@ -156,39 +207,6 @@ describe("CapabilityPage", () => {
     expect(dialog).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(api.deleteSkill).toHaveBeenCalledWith("skill-c1"));
-  });
-});
-
-describe("S05 executable skill package contract", () => {
-  it("metadata-only edits omit files/hash and show a draft as non-executable", async () => {
-    const api = mockApi();
-    renderPage();
-    expect(await screen.findByText("草稿（不可执行）")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    fireEvent.change(screen.getByLabelText(/名称/), { target: { value: "Only metadata" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalled());
-    const body = vi.mocked(api.updateSkill).mock.calls[0]![1];
-    expect(body).not.toHaveProperty("files");
-    expect(body).not.toHaveProperty("content_hash");
-    expect(body.version).toBe("1");
-  });
-
-  it("explicit complete package is sent, while malformed JSON is not silently converted to a draft", async () => {
-    const api = mockApi({ listSkills: vi.fn().mockResolvedValue([{ ...skill, package_status: "ready" }]) });
-    renderPage();
-    expect(await screen.findByText("已验证包")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[0]!);
-    const input = screen.getByLabelText("完整技能包（JSON 文件数组，可选）");
-    fireEvent.change(input, { target: { value: "[invalid" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(api.updateSkill).not.toHaveBeenCalled();
-    expect(screen.getByText(/技能包必须是包含 SKILL.md/)).toBeInTheDocument();
-    const files = [{ path: "SKILL.md", content: "---\ndescription: Test\n---\nSynthetic instructions" }];
-    fireEvent.change(input, { target: { value: JSON.stringify(files) } });
-    fireEvent.change(screen.getByLabelText("版本"), { target: { value: "2" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(api.updateSkill).toHaveBeenCalledWith("skill-c1", expect.objectContaining({ files, version: "2" })));
   });
 });
 
@@ -227,7 +245,7 @@ describe("导入技能", () => {
     expect(screen.getByText("hooks/openclaw/h.js")).toBeInTheDocument();
     expect(screen.getByText("其他平台专用钩子")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "导入" }));
-    await waitFor(() => expect(api.importSkills).toHaveBeenCalledWith(expect.objectContaining({ source: "text", roots: [""], visibility: "tenant", binding_policy: "opt_in", install_policy: "on_demand" })));
+    await waitFor(() => expect(api.importSkills).toHaveBeenCalledWith(expect.objectContaining({ source: "text", roots: [""], visibility: "tenant" })));
     expect(await screen.findByText("已新增 1 个")).toBeInTheDocument();
     expect(api.listSkills).toHaveBeenCalledTimes(2);
   });

@@ -1,6 +1,9 @@
-/** 能力目录页：技能、连接器和记忆策略的租户内 CRUD。 */
+/**
+ * 能力目录页：技能、连接器和记忆策略的租户内 CRUD。
+ * 技能按技能本身编辑（SKILL.md + 附带文件，见 EnterpriseSkillDialogs）；连接器与记忆策略仍用通用表单。
+ */
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, EnterpriseRole, hasRole } from "@aiteam/shared";
+import { ApiError, EnterpriseRole, hasRole, skillSummary } from "@aiteam/shared";
 import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -15,6 +18,7 @@ import { HStack } from "@astryxdesign/core/HStack";
 import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
 import { Selector } from "@astryxdesign/core/Selector";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { Text } from "@astryxdesign/core/Text";
 import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core/Table";
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
@@ -26,7 +30,7 @@ import { CapabilityAssistDialog } from "../capability-assist/CapabilityAssistDia
 import { handoffState, MCP_PAGE, readHandoff, skillImportInitial } from "../capability-assist/handoff";
 import type { CapabilityAssistCandidate } from "../capability-assist/types";
 import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssistApi";
-import { SkillImportDialog } from "./SkillImportDialog";
+import { EnterpriseSkillEditor, EnterpriseSkillImport, isPlatformSkill } from "./EnterpriseSkillDialogs";
 import { useCapabilityApi } from "./useCapabilityApi";
 import type {
   CatalogVisibility,
@@ -35,31 +39,13 @@ import type {
   ConnectorGrantScope,
   MemoryPolicyCatalog,
   MemoryPolicyCatalogIn,
-  SkillBindingPolicy,
   SkillCatalog,
-  SkillCatalogIn,
-  SkillInstallPolicy,
 } from "./types";
-import {
-  CATALOG_VISIBILITIES,
-  CONNECTOR_GRANT_SCOPES,
-  SKILL_BINDING_POLICIES,
-  SKILL_INSTALL_POLICIES,
-} from "./types";
+import { CATALOG_VISIBILITIES, CONNECTOR_GRANT_SCOPES } from "./types";
 
 type Kind = "skill" | "connector" | "memory";
-
-interface SkillDraft {
-  files: string;
-  kind: "skill";
-  id: string;
-  displayName: string;
-  version: string;
-  install: SkillInstallPolicy;
-  binding: SkillBindingPolicy;
-  visibility: CatalogVisibility;
-  config: string;
-}
+/** 通用表单只剩连接器与记忆策略；技能用技能编辑器。 */
+type EditorKind = Exclude<Kind, "skill">;
 
 interface ConnectorDraft {
   kind: "connector";
@@ -81,11 +67,11 @@ interface MemoryDraft {
   seed: string;
 }
 
-type Draft = SkillDraft | ConnectorDraft | MemoryDraft;
+type Draft = ConnectorDraft | MemoryDraft;
 type EditorState =
   | { mode: "closed" }
-  | { mode: "create"; kind: Kind; draft: Draft }
-  | { mode: "edit"; kind: Kind; catalogId: string; draft: Draft };
+  | { mode: "create"; kind: EditorKind; draft: Draft }
+  | { mode: "edit"; kind: EditorKind; catalogId: string; draft: Draft };
 
 interface PendingDelete {
   kind: Kind;
@@ -123,31 +109,14 @@ function jsonText(value: Record<string, unknown>): string {
   return Object.keys(value).length > 0 ? JSON.stringify(value) : "";
 }
 
-function emptyDraft(kind: Kind): Draft {
-  if (kind === "skill") {
-    return { kind, files: "", id: "", displayName: "", version: "1", install: "on_demand", binding: "opt_in", visibility: "private", config: "" };
-  }
+function emptyDraft(kind: EditorKind): Draft {
   if (kind === "connector") {
     return { kind, id: "", displayName: "", grant: "tenant_wide", visibility: "private", config: "" };
   }
   return { kind, id: "", displayName: "", retention: "", visibility: "private", config: "", policy: "", seed: "[]" };
 }
 
-function draftFrom(kind: Kind, item: SkillCatalog | ConnectorCatalog | MemoryPolicyCatalog): Draft {
-  if (kind === "skill") {
-    const skill = item as SkillCatalog;
-    return {
-      kind,
-      id: skill.skill_id,
-      files: "",
-      displayName: skill.display_name,
-      version: skill.version,
-      install: skill.install_policy as SkillInstallPolicy,
-      binding: skill.binding_policy as SkillBindingPolicy,
-      visibility: skill.visibility as CatalogVisibility,
-      config: jsonText(skill.config),
-    };
-  }
+function draftFrom(kind: EditorKind, item: ConnectorCatalog | MemoryPolicyCatalog): Draft {
   if (kind === "connector") {
     const connector = item as ConnectorCatalog;
     return {
@@ -195,6 +164,8 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   /** 导入对话框；从「让模型帮我找」来时带着预填的来源与地址。 */
   const [importing, setImporting] = useState<{ initial?: { source: "url" | "clawhub"; url: string } } | null>(null);
   const [assisting, setAssisting] = useState(false);
+  /** 技能编辑器：row 为空时是「从零写一个」。 */
+  const [skillEditor, setSkillEditor] = useState<{ row?: SkillCatalog } | null>(null);
   const assistApi = useCapabilityAssistApi();
   const navigate = useNavigate();
   const location = useLocation();
@@ -251,11 +222,11 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     }
   }, [i18n, load]);
 
-  const openCreate = (kind: Kind) => {
+  const openCreate = (kind: EditorKind) => {
     setActionError(null);
     setEditor({ mode: "create", kind, draft: emptyDraft(kind) });
   };
-  const openEdit = (kind: Kind, item: SkillCatalog | ConnectorCatalog | MemoryPolicyCatalog) => {
+  const openEdit = (kind: EditorKind, item: ConnectorCatalog | MemoryPolicyCatalog) => {
     setActionError(null);
     setEditor({ mode: "edit", kind, catalogId: item.catalog_id, draft: draftFrom(kind, item) });
   };
@@ -272,31 +243,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     const editingId = editor.mode === "edit" ? editor.catalogId : null;
     let operation: () => Promise<unknown>;
 
-    if (editor.kind === "skill") {
-      const draft = editor.draft as SkillDraft;
-      const body: SkillCatalogIn = {
-        skill_id: draft.id.trim(),
-        display_name: draft.displayName.trim(),
-        version: draft.version.trim() || "1",
-        install_policy: draft.install,
-        binding_policy: draft.binding,
-        visibility: draft.visibility,
-        config: parseJson(draft.config),
-      };
-      if (draft.files.trim()) {
-        try {
-          const files: unknown = JSON.parse(draft.files);
-          if (!Array.isArray(files) || files.length < 1 || files.length > 64 || files.some((file) => !file || typeof file.path !== "string" || typeof file.content !== "string")) throw new Error();
-          body.files = files;
-        } catch {
-          setActionError("技能包必须是包含 SKILL.md 的文件 JSON 数组；空白保留原包。");
-          return;
-        }
-      }
-      operation = editingId
-        ? () => api.updateSkill(editingId, body)
-        : () => api.createSkill(body);
-    } else if (editor.kind === "connector") {
+    if (editor.kind === "connector") {
       const draft = editor.draft as ConnectorDraft;
       const body: ConnectorCatalogIn = {
         connector_id: draft.id.trim(),
@@ -331,7 +278,7 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     if (success) setEditor({ mode: "closed" });
   };
 
-  const actionCell = useCallback((kind: Kind, item: SkillCatalog | ConnectorCatalog | MemoryPolicyCatalog, name: string) => (
+  const actionCell = useCallback((kind: EditorKind, item: ConnectorCatalog | MemoryPolicyCatalog, name: string) => (
     <HStack gap={1} justify="end">
       <Button label={i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => openEdit(kind, item)} />
       <Button
@@ -343,19 +290,30 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
     </HStack>
   ), [i18n]);
 
+  // 技能按技能本身展示：名称、说明（SKILL.md 的 description）、版本、来源，加两项真正生效的设置。
   const skillColumns = useMemo<TableColumn<SkillRow>[]>(() => {
     const columns: TableColumn<SkillRow>[] = [
-      { key: "display_name", header: i18n.t("manager.capability.display_name"), width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
-      { key: "version", header: i18n.t("manager.capability.version"), width: pixel(150) },
-      { key: "source", header: "来源", width: pixel(110), renderCell: (row) => <Badge label={skillSourceLabel(row.config)} /> },
-      { key: "package_status", header: "执行包", width: pixel(130), renderCell: (row) => <Badge label={row.package_status === "ready" ? "已验证包" : row.package_status === "invalid" ? "无效包（不可执行）" : "草稿（不可执行）"} /> },
-      { key: "install_policy", header: i18n.t("manager.capability.install_policy"), width: pixel(130), renderCell: (row) => <Badge label={row.install_policy} /> },
-      { key: "binding_policy", header: i18n.t("manager.capability.binding_policy"), width: pixel(120), renderCell: (row) => <Badge label={row.binding_policy} /> },
-      { key: "visibility", header: i18n.t("manager.capability.visibility"), width: pixel(100), renderCell: (row) => <Badge label={row.visibility} /> },
+      { key: "display_name", header: "名称", width: proportional(1), renderCell: (row) => row.display_name || "未命名技能" },
+      { key: "description", header: "说明", width: proportional(2), renderCell: (row) => <Text color="secondary" style={CLAMP_2}>{skillDescription(row) || "—"}</Text> },
+      { key: "version", header: i18n.t("manager.capability.version"), width: pixel(130) },
+      { key: "source", header: "来源", width: pixel(100), renderCell: (row) => <Badge label={skillSourceLabel(row.config)} /> },
+      { key: "member_install", header: "成员自装", width: pixel(110), renderCell: (row) => row.visibility === "private" ? <Badge label="仅配给专家" /> : <Badge label="可以" variant="success" /> },
+      { key: "status", header: "状态", width: pixel(100), renderCell: (row) => { const status = skillStatus(row); return <Badge label={status.label} variant={status.variant} />; } },
     ];
-    if (canWrite) columns.push({ key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end", renderCell: (row) => actionCell("skill", row, row.display_name || "未命名技能") });
+    if (canWrite) columns.push({
+      key: "actions", header: i18n.t("manager.capability.actions"), width: pixel(150), align: "end",
+      renderCell: (row) => (
+        <HStack gap={1} justify="end">
+          <Button label={isPlatformSkill(row) ? "查看" : i18n.t("manager.capability.edit")} variant="ghost" size="sm" onClick={() => { setNotice(null); setSkillEditor({ row }); }} />
+          {!isPlatformSkill(row) && (
+            <Button label={i18n.t("manager.capability.delete")} variant="destructive" size="sm"
+              onClick={() => setPendingDelete({ kind: "skill", catalogId: row.catalog_id, displayName: row.display_name || "未命名技能" })} />
+          )}
+        </HStack>
+      ),
+    });
     return columns;
-  }, [actionCell, canWrite, i18n]);
+  }, [canWrite, i18n]);
 
   const connectorColumns = useMemo<TableColumn<ConnectorRow>[]>(() => {
     const columns: TableColumn<ConnectorRow>[] = [
@@ -392,12 +350,8 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
   const editorTitle = editor.mode === "closed"
     ? ""
     : editor.mode === "edit"
-      ? `编辑${editor.kind === "skill" ? "技能" : editor.kind === "connector" ? "连接器" : "记忆策略"}`
-      : i18n.t(editor.kind === "skill"
-        ? "manager.capability.add_skill"
-        : editor.kind === "connector"
-          ? "manager.capability.add_connector"
-          : "manager.capability.add_memory_policy");
+      ? `编辑${editor.kind === "connector" ? "连接器" : "记忆策略"}`
+      : i18n.t(editor.kind === "connector" ? "manager.capability.add_connector" : "manager.capability.add_memory_policy");
 
   return (
     <VStack as="section" gap={6}>
@@ -413,12 +367,12 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       ) : (
         <>
           <CatalogSection
-            title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => openCreate("skill")}
+            title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => setSkillEditor({})}
             addMenu={(
               <DropdownMenu button={{ label: i18n.t("manager.capability.add_skill"), size: "sm" }} menuWidth={200}>
                 <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting({}); }} />
                 <DropdownMenuItem label="让模型帮我找" onClick={() => { setNotice(null); setAssisting(true); }} />
-                <DropdownMenuItem label="手动编辑（高级）" onClick={() => openCreate("skill")} />
+                <DropdownMenuItem label="从零写一个" onClick={() => { setNotice(null); setSkillEditor({}); }} />
               </DropdownMenu>
             )}
           >
@@ -438,11 +392,21 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       {assisting && <CapabilityAssistDialog api={assistApi} onClose={() => setAssisting(false)} onUse={pickCandidate} />}
 
       {importing && (
-        <SkillImportDialog
+        <EnterpriseSkillImport
           api={api}
           initial={importing.initial}
           onClose={() => setImporting(null)}
           onImported={() => { setNotice("技能已导入企业目录"); void load(); }}
+        />
+      )}
+
+      {skillEditor && (
+        <EnterpriseSkillEditor
+          api={api}
+          row={skillEditor.row}
+          existingIds={new Set(skills.map((item) => item.skill_id))}
+          onClose={() => setSkillEditor(null)}
+          onSaved={(message) => { setSkillEditor(null); setNotice(message); void load(); }}
         />
       )}
 
@@ -458,15 +422,6 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
                     <FormLayout>
                       <TextInput label={i18n.t("manager.capability.id")} value={editor.draft.id} onChange={(value) => updateDraft("id", value)} isRequired isDisabled={working} data-testid="field-id" />
                       <TextInput label={i18n.t("manager.capability.display_name")} value={editor.draft.displayName} onChange={(value) => updateDraft("displayName", value)} isDisabled={working} />
-                      {editor.draft.kind === "skill" && (
-                        <>
-                          <TextInput label={i18n.t("manager.capability.version")} value={editor.draft.version} onChange={(value) => updateDraft("version", value)} isDisabled={working} />
-                          <Banner status="info" title="留空保留原包；新建无包为不可执行草稿。替换完整包必须包含 SKILL.md（非空 description），内容变化须使用未占用的新版本。最多 256 个文件、共 10 MiB，仅 UTF-8 文本（可带脚本与资料，路径各段不能以点开头）。" />
-                          <TextArea label="完整技能包（JSON 文件数组，可选）" value={editor.draft.files} onChange={(value) => updateDraft("files", value)} rows={6} isDisabled={working} />
-                          <Selector label={i18n.t("manager.capability.install_policy")} options={SKILL_INSTALL_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.install.${value}`) }))} value={editor.draft.install} onChange={(value) => updateDraft("install", value)} isDisabled={working} />
-                          <Selector label={i18n.t("manager.capability.binding_policy")} options={SKILL_BINDING_POLICIES.map((value) => ({ value, label: i18n.t(`manager.capability.binding.${value}`) }))} value={editor.draft.binding} onChange={(value) => updateDraft("binding", value)} isDisabled={working} />
-                        </>
-                      )}
                       {editor.draft.kind === "connector" && (
                         <Selector label={i18n.t("manager.capability.grant_scope")} options={CONNECTOR_GRANT_SCOPES.map((value) => ({ value, label: i18n.t(`manager.capability.grant.${value}`) }))} value={editor.draft.grant} onChange={(value) => updateDraft("grant", value)} isDisabled={working} />
                       )}
@@ -512,6 +467,20 @@ export function CapabilityPage({ skillsOnly = false }: CapabilityPageProps = {})
       )}
     </VStack>
   );
+}
+
+const CLAMP_2 = { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } as const;
+
+/** 说明取自 SKILL.md 的 description（导入时也存了一份在 config 里）。 */
+function skillDescription(row: SkillCatalog): string {
+  return skillSummary(row.files).description || String(row.config?.description ?? "");
+}
+
+function skillStatus(row: SkillCatalog): { label: string; variant: "success" | "warning" | "error" | "neutral" } {
+  if (row.binding_policy === "disabled") return { label: "已停用", variant: "warning" };
+  if (row.package_status === "invalid") return { label: "包无效", variant: "error" };
+  if (row.package_status === "draft") return { label: "草稿", variant: "neutral" };
+  return { label: "可用", variant: "success" };
 }
 
 /** 技能来源：平台技能市场 / 自定义导入 / 网址 / ClawHub；手动建的条目算自定义。 */

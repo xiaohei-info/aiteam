@@ -19,11 +19,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from psycopg.errors import CheckViolation
+
 from shared.contracts.skill import MAX_SKILL_FILES, MAX_SKILL_TOTAL_BYTES
 from shared.contracts.tenancy import TenantContext
 from shared.db import PgTenantRouter
 from shared.errors import Conflict
-from psycopg.errors import CheckViolation
 
 ResourceKind = Literal["skill", "connector", "memory_policy"]
 
@@ -195,10 +196,15 @@ class CapabilityCatalogRepository:
                 "install_policy = COALESCE(%s, install_policy), binding_policy = COALESCE(%s, binding_policy), "
                 "visibility = COALESCE(%s, visibility), config = COALESCE(%s::jsonb, config), "
                 "files = COALESCE(%s::jsonb, files), content_hash = COALESCE(%s, content_hash) "
-                "WHERE id = %s AND config->>'source' IS DISTINCT FROM 'operator' RETURNING " + _SKILL_COLS,
+                # Platform-market rows: only the enterprise's own switches (visibility / binding_policy) may change.
+                "WHERE id = %s AND (config->>'source' IS DISTINCT FROM 'operator' OR (%s::text IS NULL AND %s::text IS NULL "
+                "AND %s::text IS NULL AND %s::jsonb IS NULL AND %s::jsonb IS NULL AND %s::text IS NULL)) RETURNING " + _SKILL_COLS,
                 (display_name, version, install_policy, binding_policy, visibility,
                  json.dumps(config) if config is not None else None,
-                 json.dumps(files) if files is not None else None, content_hash, catalog_id),
+                 json.dumps(files) if files is not None else None, content_hash, catalog_id,
+                 display_name, version, install_policy,
+                 json.dumps(config) if config is not None else None,
+                 json.dumps(files) if files is not None else None, content_hash),
             ).fetchone()
         return _row_to_skill(row) if row is not None else None
 

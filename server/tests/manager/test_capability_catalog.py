@@ -12,9 +12,6 @@ import uuid
 
 import pytest
 
-from shared.contracts.tenancy import TenantContext
-from shared.errors import Conflict, Forbidden, NotFound
-
 from manager_service.capability_catalog_repository import (
     ConnectorCatalogRow,
     MemoryPolicyCatalogRow,
@@ -29,7 +26,8 @@ from manager_service.schemas import (
     SkillCatalogIn,
     SkillCatalogOut,
 )
-
+from shared.contracts.tenancy import TenantContext
+from shared.errors import Conflict, Forbidden, NotFound
 
 # ---- runtime 中立性（D16 红线：不配置 runtime 非中立）+ 红线相关断言 ----
 
@@ -240,8 +238,12 @@ def test_operator_managed_skill_ids_and_rows_are_immutable_via_generic_crud():
         install_policy="on_demand", binding_policy="opt_in", visibility="tenant",
         config={"source": "operator"}, files=[{"path": "SKILL.md", "content": "# X"}], content_hash="hash",
     )
-    with pytest.raises(Conflict, match="immutable"):
-        svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real"), catalog_id=row.catalog_id)
+    for change in ({"display_name": "Renamed"}, {"version": "2.0.0"}, {"files": [{"path": "SKILL.md", "content": "# Y"}]}, {"config": {}}):
+        with pytest.raises(Conflict, match="immutable"):
+            svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real", **change), catalog_id=row.catalog_id)
+    # The enterprise's own switches stay editable: members may self-install / switched off.
+    updated = svc.update_skill(ctx, SkillCatalogIn(skill_id="platform-real", visibility="private", binding_policy="disabled"), catalog_id=row.catalog_id)
+    assert (updated.visibility, updated.binding_policy, updated.version, updated.display_name) == ("private", "disabled", "1.0.0", "Platform")
     with pytest.raises(Conflict, match="immutable"):
         svc.delete_skill(ctx, catalog_id=row.catalog_id)
 

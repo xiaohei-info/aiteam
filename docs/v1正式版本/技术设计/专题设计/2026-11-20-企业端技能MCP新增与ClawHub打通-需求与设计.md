@@ -304,6 +304,29 @@ POST /api/manager/capability-assist
 - `server/manager_service/provider_credential_service.py:11`、`connector_probe.py` docstring 同步。
 - 08-24 ClawHub 设计 spec 标注被本文 A/B/C 取代的条目。
 
+### 4.7 技能编辑器按 SKILL.md 本质重做 + 运营端自建技能（用户验收追加，2026-11-20）
+
+**起因（用户原话）**：「运营端没有新增自定义技能的入口，而且企业端的技能编辑不符合实际的 skill 设置」。
+
+**技能的本质**（pi `docs/skills.md` 与 Agent Skills 规范）：一个技能就是一个文件夹，`SKILL.md` = frontmatter（`name` 必填，小写字母/数字/连字符；`description` 必填，≤1024 字，模型只凭它决定是否加载）+ Markdown 指令；可附 `scripts/`、`references/`、`assets/`，指令里写相对路径引用。旧企业端表单编辑的 `install_policy` / `auto_bind` / `visibility=public` / JSON 配置框并不对应技能本身，且核对后发现：`install_policy` 从未被读取；`auto_bind` 未实现，只有 `binding_policy=disabled` 生效（`server/manager_service/authorized_config_service.py:230`）；`visibility` 的 tenant 与 public 行为相同，private 只能由管理员配给专家（同文件 `:263`）。
+
+**用户拍板（均为推荐项）**：
+1. 编辑器按 SKILL.md 表单化：名称 / 说明 / 指令 / 附带文件；其余 frontmatter 原样保留。设置只留「成员可以自己安装」（`visibility` tenant↔private）与「停用」（`binding_policy` disabled↔opt_in）。废字段从界面移除，数据库列保留。
+2. 运营端「新增自定义技能」：导入（文件夹 / zip / .md / 粘贴 / 网址）+「从零写一个」+ 编辑；每次保存成新版本；ClawHub 技能只读；开放跟随「自动开放」。
+3. 企业端：企业自己的技能（自定义 / 网址 / ClawHub 导入）可编辑，编辑后来源变「在线编辑」；平台市场装来的只能查看，但两个开关可改。
+
+**实现**：
+- 共享前端 `web/shared/src/skills/`：`skill-md.ts`（`parseSkillMd` `:31`、`composeSkillMd` `:46`，与服务端同一 frontmatter 分隔规则）、`SkillEditorDialog.tsx`（`:109`；附件按扩展名放 `scripts/`/`references/`/`assets/`，`attachmentPath` `:72`；同名加 `-2` 不覆盖，`placeAttachment` `:81`；严格 UTF-8 解码，二进制拒收）、通用 `SkillImportDialog.tsx`（从企业端移入）。
+- 共享后端：`server/shared/skill_package.py`（包目录、frontmatter 校验）、`server/shared/skill_sources.py`（`UPLOAD_SOURCES` 含 `editor` `:40`、`SourceGatherer` `:87`、`read_skill` `:152`）；Manager `skill_import_service.py` 改用共享模块，新增来源 `editor`（multipart，与文件夹同路径）。
+- 企业端：`web/manager/src/features/capability/EnterpriseSkillDialogs.tsx`（`isPlatformSkill` `:28`、`EnterpriseSkillEditor` `:54`、`EnterpriseSkillImport` `:107`）；技能表列改为 名称 / 说明（从 SKILL.md 解析，两行截断）/ 版本 / 来源 / 成员自装 / 状态（`CapabilityPage.tsx` `skillStatus` `:479`）；菜单「从零写一个」（`:375`）。平台行只发两个开关：服务层 `capability_catalog_service.py:93` 判断字段集合，**仓储 SQL 也同步放行**（`capability_catalog_repository.py:198`：平台行仅当名称/版本/安装策略/config/files/content_hash 全为空时可更新）。
+- 运营端：迁移 `operation_service/migrations/0025_platform_skill_custom.sql`（`platform_skill.source IN ('clawhub','custom')`）；`platform_skill_market.py`（`CUSTOM_OWNER="platform"` `:194`、`plan_custom_version` `:207`：版本取 frontmatter `version`，否则内容哈希前 12 位；版本号已被占用时追加 `-哈希8`；内容等于旧版本则回到该版本）；`platform_custom_skill.py`（`CustomSkillService` `:44`）；路由 `POST /api/operation/skill-market/custom/preview`、`POST .../custom`、`GET .../internal/{skill_id}/files`（`routes_skill_market.py:508/515/522`）。前端 `CustomSkillDialogs.tsx`（`PlatformSkillEditor` `:28`、`CustomSkillImport` `:66`），卡片标「平台自建 · name · v版本」，自建技能不显示 ClawHub 扫描徽章。
+- 契约：Operator→Manager 拉取列表只新增 `source` 字段，Manager 按字典读取，不影响旧版本；签名分发与 Agent 验签不变（自建技能走 §4.1 同一包契约）。
+
+**验证**：
+- 单测：`tests/operation/test_platform_custom_skill.py` 9 例；`test_skill_import.py` 编辑器来源（服务 + 路由）；`test_capability_catalog.py` 平台行开关；真 PG `test_custom_skill_pg.py::test_platform_market_row_allows_only_the_enterprise_switches_in_sql`（开关能改；改名/版本/config/files 在 SQL 层也返回空）。前端 web/shared 65、企业端 406、运营端技能市场全部通过，两端类型检查通过。
+- 真实三端 + 真实点击（`elementFromPoint` 全部命中，无页面报错）：企业端「从零写一个」在 1440×640 下填 60 行指令 + 选 4 个文件（`.png` 被拒并提示，其余自动归入 `references/`、`scripts/`），滚到底勾选设置、点保存成功；编辑说明 → 新版本；平台技能「查看」只读、无删除，「停用」保存后表格显示「已停用」，再还原；导入对话框只剩「成员可以自己安装」一个设置。运营端「新增自定义技能」→「从零写一个」带 `scripts/fill.sh` 保存（自动开放）→ 编辑成第二版 → ClawHub 技能「查看」无保存按钮 → 粘贴导入；企业端「平台技能市场」随即可见。
+- 终验中真实 PG 发现并修复：平台行开关保存返回 404——服务层已放行，但仓储 SQL 的 `source IS DISTINCT FROM 'operator'` 守卫仍拦截（单测用内存仓储未覆盖），已加真 PG 回归用例。
+
 ---
 
 ## 5. 接口与契约变更汇总
@@ -369,6 +392,8 @@ POST /api/manager/capability-assist
 用户验收发现并已修复：
 - 企业端侧栏「技能管理」指向 `/skill-market`（只有平台技能市场），技能目录页 `/capability` 自 08-24 起没有菜单入口，导致「导入技能 /让模型帮我找」找不到。现「技能管理」分两个标签：「企业技能」（技能目录 + 「新增技能」菜单）与「平台技能市场」（对应 08-24 spec「技能管理页：平台市场/企业已安装」）；MCP 市场交接技能候选改到 `/skill-market`。平台市场旧文案「Manager 不直接连接外部市场」已改。
 - 运营端 ClawHub「详情」/「在 ClawHub 查看」改为新标签页打开。
+
+- 运营端没有新增自定义技能入口、企业端技能编辑不符合 SKILL.md 本质：见 §4.7。
 
 仍未验证：真实平台模型冒烟（§4.5b）；anthropic 协议 Relay 路径。
 

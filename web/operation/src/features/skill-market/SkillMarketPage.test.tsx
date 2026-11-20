@@ -7,6 +7,7 @@ import { SEARCH_DEBOUNCE_MS } from "./useExternalSkills";
 const api = {
   listInternal: vi.fn(), listExternal: vi.fn(), browseExternal: vi.fn(), preview: vi.fn(), resolve: vi.fn(),
   download: vi.fn(), publish: vi.fn(), unpublish: vi.fn(), getSettings: vi.fn(), setSettings: vi.fn(),
+  previewCustom: vi.fn(), saveCustom: vi.fn(), files: vi.fn(),
 };
 
 vi.mock("./useSkillMarketApi", () => ({ useSkillMarketApi: () => api }));
@@ -151,5 +152,87 @@ describe("SkillMarketPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "预览" })[0]!);
     fireEvent.click(await screen.findByRole("button", { name: "other/fresh" }));
     await waitFor(() => expect(api.preview).toHaveBeenCalledWith("other", "fresh"));
+  });
+});
+
+describe("自建技能", () => {
+  const custom = { skill_id: "s3", source: "custom", owner: "platform", slug: "weekly-report", display_name: "weekly-report", summary: "生成周报", latest_internal_version: "1.0.0", published_version: "1.0.0", content_hash: "h3", status: "published", security: null };
+  const SKILL = "---\nname: weekly-report\ndescription: 生成周报。写周报时使用。\n---\n# 周报\n";
+
+  beforeEach(() => {
+    api.listInternal.mockResolvedValue([{ skill_id: "s1", source: "clawhub", owner: "pub", slug: "demo", display_name: "Demo", summary: "x", latest_internal_version: "1.0.0", published_version: "1.0.0", content_hash: "hash", status: "published", security: null }, custom]);
+    api.saveCustom.mockResolvedValue({ origin: { kind: "editor", label: "在线编辑" }, results: [{ root: "", name: "meeting-notes", version: "abc123", status: "installed" }], auto_publish: true });
+    api.files.mockImplementation(async (id: string) => ({ skill_id: id, source: id === "s3" ? "custom" : "clawhub", display_name: "x", summary: "", version: "1.0.0", files: [{ path: "SKILL.md", content: SKILL }, { path: "scripts/run.sh", content: "echo\n" }] }));
+  });
+
+  async function openMenu(item: string) {
+    await screen.findByText("Demo");
+    fireEvent.click(screen.getByRole("button", { name: "新增自定义技能" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: item }));
+  }
+
+  it("自建技能标「平台自建」可编辑；ClawHub 技能只能查看", async () => {
+    render(<SkillMarketPage />);
+    expect(await screen.findByText("平台自建 · weekly-report · v1.0.0")).toBeInTheDocument();
+    expect(screen.getByText("pub/demo · v1.0.0")).toBeInTheDocument();
+    expect(screen.getAllByText("未取得扫描结论")).toHaveLength(1);  // 只有 ClawHub 技能有扫描结论一说
+    expect(screen.getByRole("button", { name: "编辑" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "查看技能 Demo" }));
+    expect(api.files).toHaveBeenCalledWith("s1");
+    expect(dialog.getByText(/内容以 ClawHub 为准/)).toBeInTheDocument();
+    expect(dialog.getByRole("textbox", { name: /^说明/ })).toBeDisabled();
+    expect(dialog.queryByRole("button", { name: "保存" })).toBeNull();
+    expect(dialog.getByRole("button", { name: "关闭" })).toBeInTheDocument();
+  });
+
+  it("从零写一个：按 SKILL.md 填写，保存为在线编辑来源；与已有自建技能重名时提示", async () => {
+    render(<SkillMarketPage />);
+    await openMenu("从零写一个");
+    const dialog = within(await screen.findByRole("dialog", { name: "从零写一个技能" }));
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "weekly-report" } });
+    fireEvent.change(dialog.getByRole("textbox", { name: /^说明/ }), { target: { value: "整理会议纪要。开完会时使用。" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    expect(await dialog.findByText(/平台里已有自建技能「weekly-report」/)).toBeInTheDocument();
+    expect(api.saveCustom).not.toHaveBeenCalled();
+    fireEvent.change(dialog.getByRole("textbox", { name: /^名称/ }), { target: { value: "meeting-notes" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.saveCustom).toHaveBeenCalledTimes(1));
+    const input = api.saveCustom.mock.calls[0]![0];
+    expect(input.source).toBe("editor");
+    expect(input.files.map((item: { path: string }) => item.path)).toEqual(["SKILL.md"]);
+    expect(await screen.findByText("已保存 meeting-notes vabc123（已开放给企业）")).toBeInTheDocument();
+    expect(api.listInternal).toHaveBeenCalledTimes(2);
+  });
+
+  it("编辑自建技能：取当前版本文件、名称锁定，附带文件照带，存为新版本", async () => {
+    api.saveCustom.mockResolvedValue({ origin: { kind: "editor", label: "在线编辑" }, results: [{ root: "", name: "weekly-report", version: "1.0.0-aaaa", status: "updated" }], auto_publish: false });
+    render(<SkillMarketPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "编辑技能 weekly-report" }));
+    expect(api.files).toHaveBeenCalledWith("s3");
+    expect(dialog.getByRole("textbox", { name: /^名称/ })).toBeDisabled();
+    fireEvent.change(dialog.getByRole("textbox", { name: "指令" }), { target: { value: "# 周报 v2\n" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(api.saveCustom).toHaveBeenCalledTimes(1));
+    expect(api.saveCustom.mock.calls[0]![0].files.map((item: { path: string }) => item.path)).toEqual(["SKILL.md", "scripts/run.sh"]);
+    expect(await screen.findByText("已保存 weekly-report v1.0.0-aaaa（待开放）")).toBeInTheDocument();
+  });
+
+  it("导入技能：没有 ClawHub 来源（它在外部市场）；检查与保存走自建接口", async () => {
+    api.previewCustom.mockResolvedValue({ origin: { kind: "text", label: "粘贴" }, preview: { root: "", ok: true, name: "weekly-report", description: "生成周报", version: "1.0.1", file_count: 1, total_bytes: 60, files: [{ path: "SKILL.md", size: 60 }], skipped: [], existing: "update", existing_version: "1.0.0" } });
+    api.saveCustom.mockResolvedValue({ origin: { kind: "text", label: "粘贴" }, results: [{ root: "", name: "weekly-report", version: "1.0.1", status: "updated" }], auto_publish: true });
+    render(<SkillMarketPage />);
+    await openMenu("导入技能");
+    const dialog = within(await screen.findByRole("dialog", { name: "导入技能" }));
+    expect(dialog.queryByRole("button", { name: "ClawHub" })).toBeNull();
+    fireEvent.click(dialog.getByRole("button", { name: "粘贴 SKILL.md" }));
+    fireEvent.change(dialog.getByLabelText(/SKILL.md 内容/), { target: { value: SKILL } });
+    fireEvent.click(dialog.getByRole("button", { name: "检查" }));
+    expect(await dialog.findByText("将升级 v1.0.0 → v1.0.1")).toBeInTheDocument();
+    expect(dialog.getByText(/会成为它的新版本/)).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("button", { name: "导入" }));
+    await waitFor(() => expect(api.saveCustom).toHaveBeenCalledWith(expect.objectContaining({ source: "text", roots: [""] })));
+    expect(await dialog.findByText("已升级新版本 1 个")).toBeInTheDocument();
   });
 });

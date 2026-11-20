@@ -12,19 +12,25 @@ from __future__ import annotations
 
 import hashlib
 import os
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from starlette.datastructures import UploadFile
 
 from shared.auth import authorize, require_claims
 from shared.contracts.auth import TokenClaims
-from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.enums import PlatformRole
+from shared.contracts.envelope import Envelope, ListEnvelope, Page
 from shared.contracts.platform_skill import PlatformSkillPackage
 from shared.contracts.skill import SkillFile, SkillPackage, derive_file_hash
 from shared.errors import AppError, ValidationProblem
+from shared.skill_import import MAX_ARCHIVE_ENTRIES
+from shared.skill_sources import UPLOAD_SOURCES
 
+from .platform_custom_skill import CustomSkillRequest, CustomSkillService
 from .platform_skill_market import (
     REGISTRY_FILES,
     ClawHubClient,
@@ -133,6 +139,7 @@ class ClawHubResolveOut(BaseModel):
 class PlatformSkillOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
     skill_id: str = Field(description="平台技能 ID。")
+    source: Literal["clawhub", "custom"] = Field(default="clawhub", description="clawhub 从 ClawHub 导入；custom 运营端自建（上传 / 粘贴 / 网址 / 在线编辑）。")
     owner: str = Field(default="", description="技能发布者。")
     slug: str = Field(default="", description="技能 slug。")
     display_name: str = Field(default="", description="技能展示名称。")
@@ -162,6 +169,99 @@ class PlatformSkillImportOut(BaseModel):
     status: str = Field(description="导入后的发布状态。")
     skipped: list[SkippedFileOut] = Field(default_factory=list, description="被跳过的文件及原因。")
     security: SkillSecurityOut | None = Field(default=None, description="ClawHub 安全扫描结论（只提示）。")
+
+
+class CustomSkillJsonIn(BaseModel):
+    """自建技能（JSON 来源：粘贴 SKILL.md / 网址）。文件夹、压缩包、单个 .md、在线编辑用 multipart 上传。"""
+
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["text", "url"] = Field(description="text 粘贴 SKILL.md；url 公开 https 网址（GitHub / .zip / .md）。")
+    text: str = Field(default="", max_length=1024 * 1024, description="source=text 时的 SKILL.md 内容。")
+    url: str = Field(default="", max_length=2048, description="source=url 时的地址（仅 https）。")
+    roots: list[str] | None = Field(default=None, max_length=MAX_ARCHIVE_ENTRIES, description="要保存的技能根目录（检查结果里的 root）；缺省保存全部可用技能。")
+
+
+class CustomSkillOriginOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(description="来源种类：folder / zip / file / text / editor / url。")
+    label: str = Field(description="给人看的来源说明。")
+    url: str | None = Field(default=None, description="远程来源地址。")
+
+
+class CustomSkillItemOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str = Field(description="包内技能根目录；包根本身是技能时为空串。")
+    ok: bool = Field(description="是否可以保存；否时见 reason。")
+    reason: str | None = Field(default=None, description="不能保存的原因。")
+    name: str = Field(description="SKILL.md 的 name。")
+    description: str = Field(description="SKILL.md 的 description。")
+    version: str = Field(description="将写入的版本：frontmatter version，否则内容哈希前 12 位。")
+    file_count: int = Field(ge=0, description="将保存的文件数。")
+    total_bytes: int = Field(ge=0, description="将保存的总字节数。")
+    files: list[SkillFileSummaryOut] = Field(default_factory=list, description="将保存的文件。")
+    skipped: list[SkippedFileOut] = Field(default_factory=list, description="被跳过的文件及原因。")
+    existing: Literal["none", "same", "update"] = Field(description="平台里同名自建技能：none 没有；same 内容相同；update 内容不同（将成为新版本）。")
+    existing_version: str | None = Field(default=None, description="已有的当前版本。")
+
+
+class CustomSkillCheckOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    origin: CustomSkillOriginOut = Field(description="来源。")
+    preview: CustomSkillItemOut | None = Field(default=None, description="来源里只有一个技能时的预览。")
+    scan: list[CustomSkillItemOut] | None = Field(default=None, description="来源里有多个技能时逐个列出。")
+
+
+class CustomSkillResultOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    root: str = Field(description="包内技能根目录。")
+    name: str = Field(description="技能名。")
+    version: str = Field(description="写入或已有的版本。")
+    status: Literal["installed", "updated", "duplicate", "failed"] = Field(description="installed 新增；updated 新版本；duplicate 内容相同；failed 见 reason。")
+    reason: str | None = Field(default=None, description="失败或重复的原因。")
+    skill_id: str | None = Field(default=None, description="平台技能 ID。")
+
+
+class CustomSkillSaveOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    origin: CustomSkillOriginOut = Field(description="来源。")
+    results: list[CustomSkillResultOut] = Field(description="逐个技能的结果。")
+    auto_publish: bool = Field(description="保存后是否已自动开放给企业（跟随「自动开放」开关）。")
+
+
+class PlatformSkillFileOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(description="文件相对路径。")
+    content: str = Field(description="文件内容（UTF-8 文本）。")
+
+
+class PlatformSkillFilesOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    skill_id: str = Field(description="平台技能 ID。")
+    source: Literal["clawhub", "custom"] = Field(description="来源；只有 custom 可以在控制台编辑。")
+    display_name: str = Field(description="技能名称。")
+    summary: str = Field(default="", description="技能说明。")
+    version: str | None = Field(default=None, description="当前（最新导入）版本。")
+    files: list[PlatformSkillFileOut] = Field(description="当前版本的全部文件。")
+
+
+_CUSTOM_BODY = {
+    "requestBody": {
+        "required": True,
+        "description": "JSON（text / url）或 multipart/form-data（folder / zip / file / editor：files + 一一对应的 paths，可选 roots）；技能包最多 256 个文件、共 10 MiB。",
+        "content": {
+            "application/json": {"schema": CustomSkillJsonIn.model_json_schema()},
+            "multipart/form-data": {"schema": {
+                "type": "object", "required": ["source", "files"],
+                "properties": {
+                    "source": {"type": "string", "enum": list(UPLOAD_SOURCES)},
+                    "files": {"type": "array", "items": {"type": "string", "format": "binary"}},
+                    "paths": {"type": "array", "items": {"type": "string"}},
+                    "roots": {"type": "array", "items": {"type": "string"}},
+                },
+            }},
+        },
+    },
+}
 
 
 def verified_artifact(verification: dict, *, owner: str, slug: str, version: str) -> dict[str, tuple[str, int]]:
@@ -225,6 +325,34 @@ def _client(request: Request) -> ClawHubClient:
         client = ClawHubClient(os.environ.get("AITEAM_CLAWHUB_BASE_URL") or "https://clawhub.ai")
         request.app.state._clawhub_client = client
     return client
+
+
+def _custom_service(request: Request) -> CustomSkillService:
+    service = getattr(request.app.state, "_custom_skill_service", None)
+    return service if service is not None else CustomSkillService(_repo(request))
+
+
+async def _read_custom(request: Request) -> CustomSkillRequest:
+    """multipart（上传 / 在线编辑）或 JSON（粘贴 / 网址）→ 统一的自建技能请求。"""
+    try:
+        if request.headers.get("content-type", "").startswith("multipart/form-data"):
+            form = await request.form(max_files=MAX_ARCHIVE_ENTRIES, max_fields=MAX_ARCHIVE_ENTRIES * 2 + 16)
+            source = str(form.get("source") or "")
+            if source not in UPLOAD_SOURCES:
+                raise ValidationProblem("multipart 只用于 folder / zip / file / editor 来源")
+            uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
+            paths = [str(item) for item in form.getlist("paths")]
+            if paths and len(paths) != len(uploads):
+                raise ValidationProblem("paths 必须与 files 一一对应")
+            roots = [str(item) for item in form.getlist("roots")]
+            entries = [(paths[i] if paths else (upload.filename or ""), await upload.read()) for i, upload in enumerate(uploads)]
+            return CustomSkillRequest(source=source, entries=entries, roots=roots or None)
+        body = CustomSkillJsonIn.model_validate(await request.json())
+    except ValidationError as exc:
+        raise ValidationProblem("请求格式不对：" + "; ".join(err["msg"] for err in exc.errors()[:3])) from exc
+    except ValueError as exc:  # malformed JSON / multipart
+        raise ValidationProblem("请求体无法解析") from exc
+    return CustomSkillRequest(source=body.source, text=body.text, url=body.url, roots=body.roots)
 
 
 def _upstream_error(exc: Exception, what: str) -> AppError:
@@ -375,6 +503,25 @@ def download_external(
         **imported, skipped=_skipped(parsed),
         security=SkillSecurityOut.model_validate(security) if security else None,
     ))
+
+
+@router.post("/custom/preview", summary="检查自建技能", description="从上传的文件夹 / 压缩包 / .md、粘贴的 SKILL.md、公开 https 网址或在线编辑的文件读取技能，校验后返回将保存的文件、跳过的文件与同名情况；不写库。", operation_id="operation_skill_market_custom_preview", openapi_extra=_CUSTOM_BODY, response_model_exclude_none=True)
+async def preview_custom(request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[CustomSkillCheckOut]:
+    req = await _read_custom(request)
+    data = await run_in_threadpool(_custom_service(request).preview, req)
+    return Envelope(data=CustomSkillCheckOut.model_validate(data))
+
+
+@router.post("/custom", summary="保存自建技能", description="把检查过的技能存入平台目录：新名称新建平台技能；同名内容不同成为新版本（企业端显示可更新）；内容相同记为重复。是否自动开放跟随「自动开放」开关。", operation_id="operation_skill_market_custom_save", openapi_extra=_CUSTOM_BODY, response_model_exclude_none=True)
+async def save_custom(request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[CustomSkillSaveOut]:
+    req = await _read_custom(request)
+    data = await run_in_threadpool(_custom_service(request).save, req)
+    return Envelope(data=CustomSkillSaveOut.model_validate(data))
+
+
+@router.get("/internal/{skill_id}/files", summary="读取平台技能文件", description="返回平台技能当前版本的全部文件，用于查看或编辑（只有自建技能可以编辑）。", operation_id="operation_skill_market_internal_files")
+def internal_files(skill_id: str, request: Request, _claims: TokenClaims = Depends(_claims)) -> Envelope[PlatformSkillFilesOut]:
+    return Envelope(data=PlatformSkillFilesOut.model_validate(_repo(request).get_latest_files(skill_id=skill_id)))
 
 
 @router.post("/internal/{skill_id}/publish", summary="发布平台技能", description="发布指定版本的平台技能，使 Manager 可以拉取。", operation_id="operation_skill_market_internal_publish")
