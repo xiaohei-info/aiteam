@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { createI18n, sharedMessages, type AuthSession } from "@aiteam/shared";
 import { SessionContext, type SessionContextValue } from "../../auth/session";
@@ -10,6 +10,8 @@ import { useCapabilityApi, type CapabilityApi } from "./useCapabilityApi";
 import type { ConnectorCatalog, MemoryPolicyCatalog, SkillCatalog } from "./types";
 
 vi.mock("./useCapabilityApi", () => ({ useCapabilityApi: vi.fn() }));
+const modelsApi = { list: async () => ({ providers: [], models: [] }) };
+vi.mock("../platform-models/usePlatformModelsApi", () => ({ usePlatformModelsApi: () => modelsApi }));
 
 const skill: SkillCatalog = {
   catalog_id: "skill-c1", skill_id: "skill-a", display_name: "技能 A", version: "1",
@@ -67,11 +69,11 @@ function mockApi(overrides: Partial<CapabilityApi> = {}): CapabilityApi {
   return api;
 }
 
-function renderPage(roles: string[] = ["owner"]) {
+function renderPage(roles: string[] = ["owner"], state?: unknown) {
   return render(
     <I18nContext.Provider value={makeI18n()}>
       <SessionContext.Provider value={sessionValue(roles)}>
-        <MemoryRouter><CapabilityPage /></MemoryRouter>
+        <MemoryRouter initialEntries={[{ pathname: "/capability", state }]}><CapabilityPage /></MemoryRouter>
       </SessionContext.Provider>
     </I18nContext.Provider>,
   );
@@ -281,5 +283,24 @@ describe("导入技能", () => {
     fireEvent.click(screen.getByRole("button", { name: "检查" }));
     expect(await screen.findByText(/不允许访问/)).toBeInTheDocument();
     expect(dialog).toBeInTheDocument();
+  });
+});
+
+describe("让模型帮我找（技能目录）", () => {
+  it("「新增技能」菜单里有入口，打开查找对话框", async () => {
+    mockApi();
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /新增技能|添加技能/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "让模型帮我找" }));
+    expect(await screen.findByRole("dialog", { name: "让模型帮我找" })).toBeInTheDocument();
+  });
+
+  it("MCP 市场交过来的技能候选：打开导入对话框，停在 ClawHub 并填好地址", async () => {
+    mockApi();
+    const candidate = { kind: "skill", source: "clawhub", url: "https://clawhub.ai/alice/skills/minutes", title: "会议纪要", summary: "", reason: "", verified: true };
+    renderPage(["owner"], { assistCandidate: candidate });
+    const dialog = await screen.findByRole("dialog", { name: "导入技能" });
+    expect(within(dialog).getByRole("button", { name: "ClawHub" })).toHaveAttribute("aria-current", "page");
+    expect(within(dialog).getByDisplayValue("https://clawhub.ai/alice/skills/minutes")).toBeInTheDocument();
   });
 });

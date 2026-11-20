@@ -71,7 +71,7 @@ export function distinctLabels(rows: Array<{ name: string; id: string | null }>)
 function withRowKeys(groups: UsageStatisticsGroup[] | undefined): GroupRow[] {
   const rows = groups ?? [];
   const labels = distinctLabels(rows.map((group) => ({ name: group.display_name, id: group.group_id })));
-  return rows.map((group, index) => ({ ...group, display_name: labels[index]!, row_key: group.group_id ?? "unattributed" }));
+  return rows.map((group, index) => ({ ...group, display_name: labels[index]!, row_key: group.group_id ?? `unattributed:${group.display_name}` }));
 }
 
 function outcomeRows(groups: SegmentOutcomeGroup[]): OutcomeRow[] {

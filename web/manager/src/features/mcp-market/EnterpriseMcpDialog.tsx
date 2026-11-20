@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ApiError, parseMcpConfig, type McpConfigCandidate } from "@aiteam/shared";
+import { ApiError, parseMcpConfig, suggestMcpRef, type McpConfigCandidate } from "@aiteam/shared";
 import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
@@ -30,6 +30,8 @@ interface Props {
   onClose: () => void;
   onSave: (input: EnterpriseMcpServerInput) => Promise<void>;
   probe: (input: McpProbeInput) => Promise<McpProbeResult | null>;
+  /** 新增时预填（「让模型帮我找」的候选）：地址、名称、用途与建议标识；管理员仍需「读取工具」后保存。 */
+  initial?: { url: string; display_name?: string; summary?: string };
 }
 
 /**
@@ -37,14 +39,15 @@ interface Props {
  * 「读取工具」由企业端连一次服务判断鉴权方式与工具（仅 https、拒绝内网地址）；需要鉴权时成员各自登录或填令牌，
  * 企业端只记鉴权方式。服务方发的应用密钥只写不读。
  */
-export function EnterpriseMcpDialog({ item, busy, error, onClose, onSave, probe }: Props): ReactNode {
+export function EnterpriseMcpDialog({ item, busy, error, onClose, onSave, probe, initial }: Props): ReactNode {
   const [config, setConfig] = useState("");
   const [importNote, setImportNote] = useState<{ status: "info" | "warning" | "error"; text: string } | null>(null);
   const [choices, setChoices] = useState<McpConfigCandidate[]>([]);
-  const [ref, setRef] = useState(item?.ref ?? "");
-  const [displayName, setDisplayName] = useState(item?.display_name ?? "");
-  const [summary, setSummary] = useState(item?.summary ?? "");
-  const [url, setUrl] = useState(item?.url ?? "");
+  const seed = item ? undefined : initial;
+  const [ref, setRef] = useState(item?.ref ?? (seed?.display_name ? suggestMcpRef(seed.display_name) : ""));
+  const [displayName, setDisplayName] = useState(item?.display_name ?? seed?.display_name ?? "");
+  const [summary, setSummary] = useState(item?.summary ?? seed?.summary?.slice(0, 500) ?? "");
+  const [url, setUrl] = useState(item?.url ?? seed?.url ?? "");
   const [tools, setTools] = useState(item?.tools.join("\n") ?? "");
   const [auth, setAuth] = useState<McpAuth>(item?.auth ?? "none");
   const [authHeader, setAuthHeader] = useState(item?.auth_header ?? "");
@@ -157,7 +160,7 @@ export function EnterpriseMcpDialog({ item, busy, error, onClose, onSave, probe 
         content={
           <LayoutContent>
             <VStack gap={3}>
-              <Collapsible defaultIsOpen={!item} trigger={<Text weight="semibold">从配置导入</Text>}>
+              <Collapsible defaultIsOpen={!item && !seed} trigger={<Text weight="semibold">从配置导入</Text>}>
                 <VStack gap={2}>
                   <TextArea
                     label="粘贴配置"

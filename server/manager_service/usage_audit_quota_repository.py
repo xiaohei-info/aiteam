@@ -203,13 +203,18 @@ _USAGE_STATISTICS_COLUMNS = """
 
 _USAGE_STATISTICS_TOTAL_SQL = "SELECT" + _USAGE_STATISTICS_COLUMNS + "FROM usage_rollup AS u WHERE "
 
+# Enterprise-side 「让模型帮我找」 usage (design 2026-11-20 §4.5) has no employee; it is its own row, not 「未知员工」.
+MANAGER_ASSIST_LABEL = "管理工具"
+_IS_MANAGER_ASSIST = "(u.employee_id IS NULL AND u.summary_id LIKE 'manager-assist-%%')"
+
 # group_by value -> prebuilt (SELECT ... WHERE, GROUP BY ... ORDER BY) SQL.
 # Fixed allowlist; caller input never reaches SQL identifiers.
 _USAGE_GROUP_SQL = {
     "employee": (
-        "SELECT u.employee_id, MAX(n.display_name)," + _USAGE_STATISTICS_COLUMNS
+        f"SELECT u.employee_id, CASE WHEN {_IS_MANAGER_ASSIST} THEN '{MANAGER_ASSIST_LABEL}' ELSE MAX(n.display_name) END,"
+        + _USAGE_STATISTICS_COLUMNS
         + "FROM usage_rollup AS u LEFT JOIN employee AS n ON n.id = u.employee_id WHERE ",
-        " GROUP BY u.employee_id ORDER BY SUM(u.token_total) DESC, u.employee_id NULLS LAST",
+        f" GROUP BY u.employee_id, {_IS_MANAGER_ASSIST} ORDER BY SUM(u.token_total) DESC, u.employee_id NULLS LAST",
     ),
     "member": (
         "SELECT u.member_id, MAX(n.display_name)," + _USAGE_STATISTICS_COLUMNS
@@ -491,7 +496,8 @@ class UsageAuditQuotaRepository:
         """Aggregate the same scope as ``aggregate_usage_statistics`` per employee/member.
 
         Legacy rows without attribution form one ``group_id = None`` group so
-        group sums always equal the totals.  Ordered by token_total desc.
+        group sums always equal the totals; by employee, Manager assist usage is a
+        second ``group_id = None`` group labelled ``MANAGER_ASSIST_LABEL``.  Ordered by token_total desc.
         """
 
         select_sql, group_sql = _USAGE_GROUP_SQL[group_by]

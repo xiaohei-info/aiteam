@@ -57,6 +57,13 @@ export interface SkillImportItem {
   existing_version?: string | null;
 }
 
+/** ClawHub 安全扫描结论（只提示不拦截）。 */
+export interface SkillSecurity {
+  status: string;
+  has_warnings: boolean;
+  scanners: SkillSecurityScanner[];
+}
+
 export interface SkillSecurityScanner {
   name: string;
   status: string;
@@ -82,7 +89,7 @@ export interface SkillImportResponse {
   scan?: SkillImportItem[] | null;
   clawhub?: {
     candidates?: { owner: string; slug: string; url: string }[] | null;
-    security?: { status: string; has_warnings: boolean; scanners: SkillSecurityScanner[] } | null;
+    security?: SkillSecurity | null;
     owner?: string | null;
     slug?: string | null;
   } | null;

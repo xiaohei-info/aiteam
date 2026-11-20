@@ -80,7 +80,7 @@ svg text{font-family:inherit}
 <main>
 
 <section id="s0">
-<h2>企业端能自己加技能和 MCP、能让模型帮忙找；运营端 ClawHub 全链路走通 <small>2026-11-20 · 设计草案，未写代码</small></h2>
+<h2>企业端能自己加技能和 MCP、能让模型帮忙找；运营端 ClawHub 全链路走通 <small>2026-11-20 · 已按阶段实现（P0–P4，本地提交未推送），实施记录见 §7</small></h2>
 <p class="lead">一句话：技能包只认纯 Markdown、安全扫描强拦截、企业端没有自建入口 → 放宽技能包契约、扫描改为「显示不拦」、企业端补齐导入 / 自建 MCP / 模型帮装 → 带脚本和资料的技能能从 ClawHub 一路装到成员本机，企业也能自己加。</p>
 <div class="grid3">
 <div class="card"><b>放宽签名技能包（三端同改）</b><p class="note">任意安全相对路径的 UTF-8 文本，256 文件 / 10 MiB；二进制与 <code>hooks/&lt;平台&gt;/</code> 跳过并列出。</p></div>
@@ -352,6 +352,14 @@ svg text{font-family:inherit}
 <tr><td>P4 模型帮装</td><td>capability-assist、对话框、文档修订</td><td>P2、P3</td><td>假 Relay 测轮数 / 时限上限、编造链接丢弃、用量记 owner、审计无内容；真实模型冒烟一次；截图</td></tr>
 </table>
 <p class="note">P2 与 P3 可并行；P4 依赖二者的导入窗口；每阶段结束跑本阶段测试并截图，最后统一重打随包 Agent。</p>
+<h3>实施记录（2026-11-20）</h3>
+<table>
+<tr><th style="width:12%">阶段</th><th>落地与偏差</th><th style="width:34%">实测发现并已修复（均有回归测试）</th></tr>
+<tr><td>P0–P2</td><td>按设计落地；运营端真实 ClawHub 热门 15 个全部可导入（原来 3 个）。</td><td>—</td></tr>
+<tr><td>P3</td><td>迁移另加约束：企业条目 <code>server_id</code> 必须 <code>ent-</code> 开头；登记时不外呼，只在「读取工具」时外呼（走 net_guard）；顺带修复 MCP 市场审计一直静默丢弃的问题。</td><td>① 目录声明的「需要令牌」被探测结果改成 OAuth，成员填的令牌被忽略（平台目录路径早已存在）② 成员看到写给模型的提示语 ③ 装好后整张列表锁住数秒</td></tr>
+<tr><td>P4</td><td>响应多 <code>incomplete / dropped / verified</code>，不回传 MCP 配置（令牌已丢，鉴权由「读取工具」判断）；运营端不可用 → 503；没有在职 owner 时用量记发起管理员；用量页与账单把帮装用量标「管理工具」，与「未知员工」分行。</td><td>① 运营端不可达时接口返回 500 ② 用量表两行 <code>group_id</code> 为空时行键冲突 ③ 可选的「粘贴 MCP 配置」默认展开</td></tr>
+</table>
+<div class="callout"><b>未验证：</b>真实平台模型冒烟（本环境没有运营端与真实上游密钥，只验到「运营端不可用 → 503」）；anthropic 协议的 Relay 地址（<code>base/v1/messages</code>，与成员 Agent 拼法相同）。浏览器测试里只有 <code>capability-assist</code> 与 <code>platform-models</code> 两个接口是拦截返回的，其余都是真实 Manager。</div>
 </section>
 
 <section id="s8">

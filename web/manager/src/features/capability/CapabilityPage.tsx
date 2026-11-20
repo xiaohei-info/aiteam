@@ -19,8 +19,13 @@ import { Table, pixel, proportional, type TableColumn } from "@astryxdesign/core
 import { TextArea } from "@astryxdesign/core/TextArea";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../../auth/session";
 import { useI18n } from "../../i18n/context";
+import { CapabilityAssistDialog } from "../capability-assist/CapabilityAssistDialog";
+import { handoffState, MCP_PAGE, readHandoff, skillImportInitial } from "../capability-assist/handoff";
+import type { CapabilityAssistCandidate } from "../capability-assist/types";
+import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssistApi";
 import { SkillImportDialog } from "./SkillImportDialog";
 import { useCapabilityApi } from "./useCapabilityApi";
 import type {
@@ -182,7 +187,26 @@ export function CapabilityPage(): ReactNode {
   const [editor, setEditor] = useState<EditorState>({ mode: "closed" });
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [working, setWorking] = useState(false);
-  const [importing, setImporting] = useState(false);
+  /** 导入对话框；从「让模型帮我找」来时带着预填的来源与地址。 */
+  const [importing, setImporting] = useState<{ initial?: { source: "url" | "clawhub"; url: string } } | null>(null);
+  const [assisting, setAssisting] = useState(false);
+  const assistApi = useCapabilityAssistApi();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // MCP 市场页的「让模型帮我找」选中了技能候选：在这里打开导入对话框，然后清掉路由 state，刷新不再重复弹出。
+  useEffect(() => {
+    const candidate = readHandoff(location.state, "skill");
+    if (!candidate) return;
+    setImporting({ initial: skillImportInitial(candidate) });
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
+
+  const pickCandidate = (candidate: CapabilityAssistCandidate) => {
+    setAssisting(false);
+    if (candidate.kind === "skill") setImporting({ initial: skillImportInitial(candidate) });
+    else navigate(MCP_PAGE, { state: handoffState(candidate) });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -387,7 +411,8 @@ export function CapabilityPage(): ReactNode {
             title={i18n.t("manager.capability.skills_title", { count: skills.length })} addLabel={i18n.t("manager.capability.add_skill")} canWrite={canWrite} onAdd={() => openCreate("skill")}
             addMenu={(
               <DropdownMenu button={{ label: i18n.t("manager.capability.add_skill"), size: "sm" }} menuWidth={200}>
-                <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting(true); }} />
+                <DropdownMenuItem label="导入技能" onClick={() => { setNotice(null); setImporting({}); }} />
+                <DropdownMenuItem label="让模型帮我找" onClick={() => { setNotice(null); setAssisting(true); }} />
                 <DropdownMenuItem label="手动编辑（高级）" onClick={() => openCreate("skill")} />
               </DropdownMenu>
             )}
@@ -403,10 +428,13 @@ export function CapabilityPage(): ReactNode {
         </>
       )}
 
+      {assisting && <CapabilityAssistDialog api={assistApi} onClose={() => setAssisting(false)} onUse={pickCandidate} />}
+
       {importing && (
         <SkillImportDialog
           api={api}
-          onClose={() => setImporting(false)}
+          initial={importing.initial}
+          onClose={() => setImporting(null)}
           onImported={() => { setNotice("技能已导入企业目录"); void load(); }}
         />
       )}

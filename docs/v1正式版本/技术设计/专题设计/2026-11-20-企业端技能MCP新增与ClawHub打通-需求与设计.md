@@ -272,6 +272,31 @@ POST /api/manager/capability-assist
 - 用量：每次调用写一条 `usage_rollup`：`summary_id = "manager-assist-<uuid>"`、`member_id = 企业 owner`、`employee_id = NULL`、`run_count = 1`、tokens、按冻结的平台价格算 `cost_total`（价格未知 → `pricing_status = unknown`、`cost_total = NULL`）；经 `upsert_usage_with_delivery` 同事务投递 Operator。另写企业审计 `capability_assist.invoked`（actor = 发起管理员、model、token 数）。
 - 前端：MCP 市场页与技能目录区都有「让模型帮我找」入口 → 对话框（需求必填、链接 / JSON 可选、模型选择）→ 候选列表（来源、理由、安全）→ 点「用这个」打开 §4.3 导入对话框（预填 ClawHub / 网址）或 §4.4 MCP 对话框（预填配置），走正常检查 → 安装。
 
+### 4.5b P4 实施记录（2026-11-20）
+
+落地位置：
+- 服务：`server/manager_service/capability_assist.py`（`CapabilityAssistService.run` `:462`、工具 `AssistTools`、三种协议适配、`earliest_owner` `:657`）；路由 `routes_capability_assist.py`（`POST /api/manager/capability-assist`，仅 owner / enterprise_admin）；入参出参 `schemas.py:643` 起 `CapabilityAssist*`。
+- `parse_mcp_config` 的 Python 版 `server/shared/mcp_config.py`，规则与 `web/shared/src/contracts/mcp-config.ts`、`clients/desktop/src/lib/mcpConfigImport.ts` 相同（三份，头注释已写明须同步；测试用例对齐）。
+- 前端 `web/manager/src/features/capability-assist/`：对话框、API、候选交接 `handoff.ts`。入口：技能目录「新增技能」菜单、MCP 市场「企业自建」标题旁。技能候选 → `SkillImportDialog`（`initial` 预填 ClawHub / 网址来源与地址）；MCP 候选 → `EnterpriseMcpDialog`（`initial` 预填地址、名称、用途、建议标识）。候选属于另一页时经路由 state 跳过去，打开后立刻清掉 state，刷新不会重复弹出。
+
+与 §4.5 的偏差：
+- 响应比草案多 `incomplete / dropped / error / rounds / tool_calls`，候选多 `verified`（模型是否用 `inspect_link` 核实过），`url` 必填；**不返回 `mcp_config`**：管理员粘贴的配置在服务端解析后只把去掉令牌的结果给模型，MCP 候选只带地址，鉴权方式由管理员在 MCP 对话框里「读取工具」判断。候选最多 8 个。
+- 错误：403 角色不符；404 模型不属本企业或不在 tenant access 里；422 入参；**503 运营端不可用**（目录 / Relay access 取不到；运营端的 401/403 也归 503，不能原样给管理员，否则前端当成登录失效）；502 第一轮模型调用就失败（仍记用量行）。第一轮之后失败返回已有结果并标 `incomplete` + `error`。
+- owner 归属：取最早在职 owner（`created_at` 最早）；企业没有在职 owner 时退回发起管理员自己，避免用量丢失。
+- 「管理工具」标注：用量页「按员工」与账单明细里，`employee_id` 为空且 `summary_id` 以 `manager-assist-` 开头的行显示为「管理工具」，与旧的「未知员工」分开（`usage_audit_quota_repository.py:206` 起、`billing_repository.py:320`）；「按成员」照常计在 owner 名下。前端用量表两行 `group_id` 都为空，行键改为带名称（`UsagePage.tsx:74`）。
+- `resolve_tenant_access` 只传所选模型；运营端会把它与企业已有模型取并集（不会缩小企业令牌），但可能顺带给企业开通该模型的 access，与招募路径相同。
+- Relay 地址拼接与成员 Agent 一致：completions → `base/chat/completions`，responses → `base/responses`，anthropic → `base/v1/messages`（base 以 `/v1` 结尾，实际是 `/v1/v1/messages`，与 Agent 侧 Pi SDK 行为相同）。**anthropic 路径未对真实 Relay 验证。**
+
+实测发现并已修复（均有回归测试）：
+1. 运营端不可达时接口返回 **500 internal_error**（`service_client` 把 502 等未映射状态码转成通用 `AppError`，原代码原样抛出）；现统一映射为 503「运营端暂时不可用，取不到企业的模型，请稍后再试」（`test_operation_failures_map_to_clear_admin_errors`）。
+2. 用量页两行 `group_id = null`（「管理工具」与「未知员工」）行键相同，React 可能丢行；行键改为带名称（`UsagePage.test.tsx`「让模型帮我找」的用量单列…，撤掉修复时失败）。
+3. 对话框里「粘贴 MCP 配置（可选）」默认展开（Astryx `Collapsible` 默认打开），改为收起；MCP 对话框带预填时「从配置导入」也收起，预填字段与「读取工具」直接可见。
+
+验证：
+- 后端：`test_capability_assist.py`（假 Relay 三协议、轮数 / 工具 / 时限上限、编造链接丢弃、配置令牌不进模型、真实导入预览不写库、Operation 失败映射）；`test_capability_assist_pg.py`（真 PG / RLS：最早在职 owner、`usage_rollup` 行 `employee_id NULL`、投递 outbox、跨租户不可见、「管理工具」分组与账单名称）。
+- 前端：对话框 / 交接 / 两页入口 / 用量页单测；真实 Manager + 真实点击（1440×900 与 1440×640，`elementFromPoint` 命中）：失败提示留在表单、长候选列表滚到底主按钮可点、「用这个」预填 MCP 对话框后「读取工具」读到 DeepWiki 3 个工具、跨页交接技能候选后「检查」真实 ClawHub（steipete/weather）出预览与扫描结论。浏览器测试中仅 `capability-assist` 与 `platform-models` 两个接口被拦截返回脚本结果。
+- **未验证：真实平台模型冒烟**（§7 P4 验收项）。本环境没有运营端与真实上游模型密钥，接口只验证到「运营端不可用 → 503」。
+
 ### 4.6 文档同步修订
 
 - `docs/v1正式版本/技术设计/概要设计/04-数据架构与多租户隔离.md` §6.7：加一条「例外：Manager 管理员能力帮装可经本企业 Relay 令牌做有界模型调用；不落内容；用量计入企业 owner」。
@@ -309,7 +334,8 @@ POST /api/manager/capability-assist
 | Manager 外呼 SSRF | 共用 `shared/net_guard`（拒私网 / 回环 / 链路本地 / 元数据地址，钉 IP，不跨主机重定向） |
 | ClawHub / GitHub 限速 | 运营端 10 分钟缓存（已有）+ 前端防抖；企业端帮装受 GitHub 匿名 10 次/分钟限制，失败时候选里注明 |
 | 模型编造链接 | 服务端只保留出现在本次工具结果里的 URL |
-| 帮装费用不可见 | 用量计入 owner、企业用量页可见（新来源标「管理工具」） |
+| 帮装费用不可见 | 用量计入 owner、企业用量页可见（新来源标「管理工具」，已实现见 §4.5b） |
+| 帮装 anthropic 协议路径（P4） | 按成员 Agent 的拼法请求 `base/v1/messages`，未对真实 Relay 验证；上线前用真实 anthropic 协议模型冒烟一次 |
 | 大包撑爆请求 | Manager 导入 `BodyLimit` 12 MiB；Operation zip 上限 10 MiB |
 | 成员同步变重（P0 实施中发现） | `authorized-config` 每次同步都把成员所有专家的技能包**全量**带上（`server/manager_service/authorized_config_service.py:188-222`，不看 `known_versions`），Agent 端请求超时 10 s（`server/agent_service/src/manager-client.ts:13`）。上限从 1 MiB 升到 10 MiB 后，大技能会拖慢每次同步。实测 ClawHub 技能多为几十 KB，短期可接受；根治见待决策 #9 |
 

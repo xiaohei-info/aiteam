@@ -229,6 +229,24 @@ describe("UsagePage 用量监控", () => {
     expect(within(solved).getByText("已删除员工（eeeeeeee）")).toBeInTheDocument();
   });
 
+  it("「让模型帮我找」的用量单列为「管理工具」，与未知员工各占一行", async () => {
+    const employee: UsageStatistics = {
+      ...responses.employee,
+      groups: [
+        group({ group_id: null, display_name: "管理工具", token_total: 1200 }),
+        group({ group_id: null, display_name: "未知员工", token_total: 300 }),
+      ],
+    };
+    mockApi({ getStatistics: vi.fn((groupBy: UsageGroupBy) => Promise.resolve(groupBy === "employee" ? employee : responses.member)) });
+    const consoleError = vi.spyOn(console, "error");
+    renderPage();
+    const usage = await screen.findByRole("table", { name: "员工用量" });
+    expect(within(usage).getByText("管理工具")).toBeInTheDocument();
+    expect(within(usage).getByText("未知员工")).toBeInTheDocument();
+    // 两行 group_id 都是 null：行键不能相同，否则 React 可能丢行。
+    expect(consoleError.mock.calls.some((args) => String(args[0]).includes("same key"))).toBe(false);
+  });
+
   it("加载失败展示错误信息", async () => {
     mockApi({ getStatistics: vi.fn().mockRejectedValue(new ApiError("用量服务暂不可用", 503, "manager_db_unconfigured")) });
     renderPage();

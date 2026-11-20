@@ -10,6 +10,11 @@ import { Heading } from "@astryxdesign/core/Heading";
 import { HStack } from "@astryxdesign/core/HStack";
 import { Text } from "@astryxdesign/core/Text";
 import { VStack } from "@astryxdesign/core/VStack";
+import { useLocation, useNavigate } from "react-router-dom";
+import { CapabilityAssistDialog } from "../capability-assist/CapabilityAssistDialog";
+import { handoffState, mcpDialogInitial, readHandoff, SKILL_PAGE } from "../capability-assist/handoff";
+import type { CapabilityAssistCandidate } from "../capability-assist/types";
+import { useCapabilityAssistApi } from "../capability-assist/useCapabilityAssistApi";
 import { EnterpriseMcpDialog } from "./EnterpriseMcpDialog";
 import { useMcpMarketApi } from "./useMcpMarketApi";
 import type { EnterpriseMcpServer, EnterpriseMcpServerInput, McpMarket, McpMarketServer } from "./types";
@@ -40,6 +45,28 @@ export function McpMarketPage(): ReactNode {
   const [editing, setEditing] = useState<EnterpriseMcpServer | "new" | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<EnterpriseMcpServer | null>(null);
+  /** 新增对话框的预填（来自「让模型帮我找」）。 */
+  const [seed, setSeed] = useState<ReturnType<typeof mcpDialogInitial> | undefined>(undefined);
+  const [assisting, setAssisting] = useState(false);
+  const assistApi = useCapabilityAssistApi();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const openNew = (initial?: ReturnType<typeof mcpDialogInitial>) => { setSaveError(null); setSeed(initial); setEditing("new"); };
+
+  // 技能目录页的「让模型帮我找」选中了 MCP 候选：在这里打开预填的添加对话框，然后清掉路由 state。
+  useEffect(() => {
+    const candidate = readHandoff(location.state, "mcp");
+    if (!candidate) return;
+    openNew(mcpDialogInitial(candidate));
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
+
+  const pickCandidate = (candidate: CapabilityAssistCandidate) => {
+    setAssisting(false);
+    if (candidate.kind === "mcp") openNew(mcpDialogInitial(candidate));
+    else navigate(SKILL_PAGE, { state: handoffState(candidate) });
+  };
 
   const load = useCallback(async () => {
     setError(null);
@@ -101,7 +128,10 @@ export function McpMarketPage(): ReactNode {
       <VStack gap={3} as="section" aria-label="企业自建 MCP">
         <HStack justify="between" align="center" wrap="wrap" gap={2}>
           <Heading level={2}>企业自建</Heading>
-          <Button label="添加企业 MCP" size="sm" variant="primary" isDisabled={busy !== null} onClick={() => { setSaveError(null); setEditing("new"); }} />
+          <HStack gap={2}>
+            <Button label="让模型帮我找" size="sm" isDisabled={busy !== null} onClick={() => setAssisting(true)} />
+            <Button label="添加企业 MCP" size="sm" variant="primary" isDisabled={busy !== null} onClick={() => openNew()} />
+          </HStack>
         </HStack>
         {market === null && !error ? <Text color="secondary">正在加载…</Text> : enterprise.length === 0
           ? <EmptyState title="还没有企业自建的 MCP" description="可以添加企业内部或第三方的 MCP 服务；添加后成员在「添加 MCP · 从企业拿」里一键安装。企业自建的 MCP 不参与「以后自动安装」。" />
@@ -168,10 +198,12 @@ export function McpMarketPage(): ReactNode {
           </VStack>
         )}
       </VStack>
+      {assisting && <CapabilityAssistDialog api={assistApi} onClose={() => setAssisting(false)} onUse={pickCandidate} />}
+
       {editing && (
         <EnterpriseMcpDialog
           item={editing === "new" ? null : editing} busy={busy === "save"} error={saveError}
-          onClose={() => setEditing(null)} onSave={save} probe={(input) => api.probe(input)}
+          onClose={() => setEditing(null)} onSave={save} probe={(input) => api.probe(input)} initial={editing === "new" ? seed : undefined}
         />
       )}
       {pendingDelete && (

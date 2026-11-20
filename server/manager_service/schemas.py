@@ -624,6 +624,54 @@ class SkillImportOut(BaseModel):
     results: list[SkillImportResultOut] | None = Field(default=None, description="安装结果，逐个技能给出。")
 
 
+class CapabilityAssistModelIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: str = Field(min_length=1, max_length=128, description="平台 Provider ID（取自 GET /api/manager/platform-models）。")
+    model_id: str = Field(min_length=1, max_length=256, description="平台模型 ID。")
+
+
+class CapabilityAssistIn(BaseModel):
+    """让模型帮忙找技能 / MCP：只返回候选，不安装、不保存需求与模型输出。"""
+
+    model_config = ConfigDict(extra="forbid")
+    requirement: str = Field(min_length=1, max_length=2000, description="想给员工增加的能力（自然语言）。")
+    link: str = Field(default="", max_length=2048, description="可选：已知的 https 链接（技能页 / 仓库 / MCP 地址）。")
+    config_json: str = Field(default="", max_length=20_000, description="可选：MCP 配置原文。在服务端解析，令牌值丢弃，只把地址与鉴权方式交给模型；不保存。")
+    model: CapabilityAssistModelIn = Field(description="从本企业可见的平台模型中选一个；用量计入企业 owner。")
+
+
+class CapabilityAssistCandidateOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["skill", "mcp"] = Field(description="技能或 MCP。")
+    source: Literal["clawhub", "github", "url", "config"] = Field(description="候选来自哪里。")
+    url: str = Field(description="技能链接或 MCP 地址；必定出现在本次工具结果或管理员给的链接里。")
+    title: str = Field(description="名称。")
+    summary: str = Field(description="用途说明。")
+    reason: str = Field(description="模型给出的推荐理由。")
+    verified: bool = Field(description="模型是否已用 inspect_link 核实过这个链接。")
+    security: dict[str, Any] | None = Field(default=None, description="ClawHub 安全扫描结论；只提示不拦截。")
+
+
+class CapabilityAssistUsageOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input_tokens: int = Field(description="输入 token（含缓存命中）。")
+    output_tokens: int = Field(description="输出 token。")
+    cost: str | None = Field(default=None, description="USD 费用（十进制字符串）；价格未知时为空。")
+    pricing_status: Literal["known", "unknown"] = Field(description="价格是否已知。")
+
+
+class CapabilityAssistOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[CapabilityAssistCandidateOut] = Field(description="候选，最多 8 个；管理员逐个检查后自行安装。")
+    notes: str = Field(description="模型的补充说明。")
+    incomplete: bool = Field(description="轮数 / 工具次数 / 时间用完或中途出错，结果可能不全。")
+    dropped: int = Field(description="链接不在工具结果里等原因被丢弃的候选数。")
+    error: str | None = Field(default=None, description="模型服务中途出错时的原因。")
+    rounds: int = Field(description="模型调用轮数。")
+    tool_calls: int = Field(description="工具调用次数。")
+    usage: CapabilityAssistUsageOut = Field(description="本次用量，计入企业 owner。")
+
+
 class ConnectorCatalogIn(BaseModel):
     """连接器定义写入请求体（runtime 无关，D16）。
 

@@ -4,6 +4,8 @@ D18/Architecture line: Manager manages connector "admin-face truth" WITHOUT maki
 outbound calls to external connector services; credential bodies belong to M5, real
 connectivity is executed on the user side. So this module only does "locally
 reachable local validation":
+(Manager outbound calls exist only for admin custom skill import and the MCP market "读取工具" probe,
+both through ``shared/net_guard``; design 2026-11-20 decision C. Connectors are unchanged.)
 
   1. connector_id naming semantics (DB/RLS friendly identifier)
   2. auth_scheme enum validation + connection flow classification

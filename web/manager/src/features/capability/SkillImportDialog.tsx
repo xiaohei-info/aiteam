@@ -56,7 +56,7 @@ const SCAN_STATUS: Record<string, { label: string; variant: BadgeVariant }> = {
   pending: { label: "扫描中", variant: "neutral" },
 };
 
-function scannerBadge(scanner: SkillSecurityScanner): { label: string; variant: BadgeVariant } {
+export function scannerBadge(scanner: SkillSecurityScanner): { label: string; variant: BadgeVariant } {
   const status = SCAN_STATUS[scanner.status] ?? { label: "结论未知", variant: "neutral" as BadgeVariant };
   return { label: `${SCANNER_LABEL[scanner.name] ?? scanner.name}：${status.label}`, variant: status.variant };
 }
@@ -92,16 +92,18 @@ interface SkillImportDialogProps {
   onClose: () => void;
   /** 有技能写入目录后调用（用于刷新列表）。 */
   onImported: () => void;
+  /** 从「让模型帮我找」带过来的链接：直接停在对应来源并填好地址，管理员点「检查」后照常导入。 */
+  initial?: { source: "url" | "clawhub"; url: string };
 }
 
-export function SkillImportDialog({ api, onClose, onImported }: SkillImportDialogProps): ReactNode {
+export function SkillImportDialog({ api, onClose, onImported, initial }: SkillImportDialogProps): ReactNode {
   const i18n = useI18n();
-  const [source, setSource] = useState<SkillImportSource>("folder");
+  const [source, setSource] = useState<SkillImportSource>(initial?.source ?? "folder");
   const [folder, setFolder] = useState<{ file: File; path: string }[]>([]);
   const [archive, setArchive] = useState<File | null>(null);
   const [mdFile, setMdFile] = useState<File | null>(null);
   const [text, setText] = useState("");
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initial?.url ?? "");
   const [checked, setChecked] = useState<{ input: SkillImportInput; response: SkillImportResponse } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [visibility, setVisibility] = useState<CatalogVisibility>("tenant");
