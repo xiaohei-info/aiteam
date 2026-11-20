@@ -8504,6 +8504,124 @@
               }
             ],
             "description": "platform：来自平台技能市场（可设为以后自动安装）；enterprise：企业自建。"
+          },
+          "name": {
+            "type": "string",
+            "description": "SKILL.md 的 name；本机同名只能装一个。旧企业端不返回。"
+          },
+          "namespace": {
+            "type": "string",
+            "description": "展示前缀：taiyim（平台）/ 企业名；原样取自其他平台的为空。"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "label",
+                  "url",
+                  "version",
+                  "edited"
+                ],
+                "properties": {
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "clawhub"
+                        ],
+                        "description": "旧资源类型。"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "url"
+                        ],
+                        "description": "旧资源类型。"
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "platform"
+                        ],
+                        "description": "旧资源类型。"
+                      }
+                    ],
+                    "description": "出处类型。"
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "如「ClawHub steipete/weather」「taiyim/weather」。"
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "出处页面（https），没有为空。"
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "改自的上游版本。"
+                  },
+                  "edited": {
+                    "type": "boolean",
+                    "description": "false 原样取来（来自）；true 我们改过（改自）。"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "来自其他平台时的出处，仅供展示。"
+              },
+              {
+                "type": "null",
+                "description": "允许为 null。"
+              }
+            ],
+            "description": "provenance 字段值。"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "install"
+                ],
+                "description": "state 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "installed"
+                ],
+                "description": "state 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "update"
+                ],
+                "description": "state 字段值。"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "conflict"
+                ],
+                "description": "state 字段值。"
+              }
+            ],
+            "description": "install 本机未装；installed 已装当前版本；update 本机装的是旧版本；conflict 本机已有同名的其他技能（安装需 replace，会替换它）。"
+          },
+          "local_ref": {
+            "type": "string",
+            "description": "installed / update：本机对应的记录；conflict：本机同名的另一个技能。"
+          },
+          "local_display_name": {
+            "type": "string",
+            "description": "本机对应记录的展示名称。"
+          },
+          "local_version": {
+            "type": "string",
+            "description": "本机对应记录的版本。"
           }
         },
         "additionalProperties": false,
@@ -9268,6 +9386,10 @@
             "type": "integer",
             "minimum": 1,
             "description": "目录修订号。"
+          },
+          "namespace": {
+            "type": "string",
+            "description": "展示前缀：taiyim（平台）/ 企业名。旧企业端不返回。"
           },
           "state": {
             "anyOf": [

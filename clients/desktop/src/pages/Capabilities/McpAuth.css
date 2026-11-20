@@ -114,3 +114,9 @@
 .catalog-mcp-expand-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .catalog-mcp-expand-actions .primary { background: var(--brand); color: var(--text-on-brand); border-color: var(--brand); }
 .catalog-mcp-expand-actions .primary:disabled { opacity: 0.5; }
+
+/* 「N 项有更新 · 全部更新」：只有一行，放在能力列表上方。 */
+.cap-update-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border: 1px solid var(--border-active); border-radius: var(--radius-md); background: var(--brand-ghost); color: var(--text-primary); font-size: 12.5px; }
+.cap-update-bar > svg { color: var(--brand); flex-shrink: 0; }
+.cap-update-bar > span { flex: 1; min-width: 0; }
+.cap-update-bar .capabilities-add { flex-shrink: 0; }

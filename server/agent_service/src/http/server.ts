@@ -46,7 +46,7 @@ import type { ExecutionAuthorizationRegistry } from "../execution-authorization.
 import type { UsageFlushService } from "../usage-flush.js";
 import { ApprovalDecisionConflictError, ApprovalExpiredError, ApprovalNotFoundError, ApprovalRevisionConflictError, type ApprovalRecord, type CapabilityResolution } from "../storage/sqlite.js";
 import { ApprovalCredentialError, ApprovalRememberError, ApprovalResolutionError, ApprovalSessionAllowError, capabilityInstallAuthOf } from "../approval-service.js";
-import { CustomSkillError, importCustomSkill, installMcpDirectly, installMcpFromCatalog, installSkillDirectly, listCatalogMcps, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
+import { CustomSkillError, importCustomSkill, installMcpDirectly, installMcpFromCatalog, installSkillDirectly, listCatalogMcps, listInstallableSkillStates, McpInstallError, probeMcpUrl, SkillInstallError, startMcpRelogin, updateMcpToken, verifyMcpBearer } from "../connectors.js";
 import type { CustomSkillStore } from "../custom-skills.js";
 import { validBearerHeader, type McpOwner } from "../mcp-auth.js";
 import type { LocalCapability as StoredCapability } from "../storage/sqlite.js";
@@ -527,7 +527,14 @@ const LocalCapability = Type.Object({ kind: Type.Union([Type.Literal("mcp"), Typ
   auth_expires_at: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "oauth：当前令牌到期时间（有刷新令牌时会自动续期）；未知或不适用为 null。" }),
   integrity: Type.Optional(Type.Union([Type.Literal("ok"), Type.Literal("modified")], { description: "仅自定义技能：ok 文件与导入时一致；modified 文件被改动过，已停用。其他能力不返回。" })),
 }, { $id: "LocalCapability", additionalProperties: false, description: "用户在本机授权安装的个人能力；只在本机、只对本人会话生效。" });
-const InstallableSkillOut = Type.Object({ skill_id: Type.String({ description: "企业技能目录里的技能 ID。" }), display_name: Type.String({ description: "展示名称。" }), version: Type.String({ description: "可安装的版本。" }), content_hash: Type.String({ description: "技能包内容哈希。" }), source_skill_id: Type.String({ description: "对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。" }), origin: Type.Optional(Type.Union([Type.Literal("platform"), Type.Literal("enterprise")], { description: "platform：来自平台技能市场（可设为以后自动安装）；enterprise：企业自建。" })) }, { $id: "InstallableSkill", additionalProperties: false, description: "当前成员可在对话中自行安装的企业技能（只读，来自企业技能目录）。" });
+const CapabilityProvenanceOut = Type.Object({
+  kind: Type.Union([Type.Literal("clawhub"), Type.Literal("url"), Type.Literal("platform")], { description: "出处类型。" }),
+  label: Type.String({ description: "如「ClawHub steipete/weather」「taiyim/weather」。" }),
+  url: Type.String({ description: "出处页面（https），没有为空。" }),
+  version: Type.String({ description: "改自的上游版本。" }),
+  edited: Type.Boolean({ description: "false 原样取来（来自）；true 我们改过（改自）。" }),
+}, { additionalProperties: false, description: "来自其他平台时的出处，仅供展示。" });
+const InstallableSkillOut = Type.Object({ skill_id: Type.String({ description: "企业技能目录里的技能 ID。" }), display_name: Type.String({ description: "展示名称。" }), version: Type.String({ description: "可安装的版本。" }), content_hash: Type.String({ description: "技能包内容哈希。" }), source_skill_id: Type.String({ description: "对应的平台 skill ID（与方案推荐能力对应）；企业自建技能为空。" }), origin: Type.Optional(Type.Union([Type.Literal("platform"), Type.Literal("enterprise")], { description: "platform：来自平台技能市场（可设为以后自动安装）；enterprise：企业自建。" })), name: Type.Optional(Type.String({ description: "SKILL.md 的 name；本机同名只能装一个。旧企业端不返回。" })), namespace: Type.Optional(Type.String({ description: "展示前缀：taiyim（平台）/ 企业名；原样取自其他平台的为空。" })), provenance: Type.Optional(Type.Union([CapabilityProvenanceOut, Type.Null()])), state: Type.Optional(Type.Union([Type.Literal("install"), Type.Literal("installed"), Type.Literal("update"), Type.Literal("conflict")], { description: "install 本机未装；installed 已装当前版本；update 本机装的是旧版本；conflict 本机已有同名的其他技能（安装需 replace，会替换它）。" })), local_ref: Type.Optional(Type.String({ description: "installed / update：本机对应的记录；conflict：本机同名的另一个技能。" })), local_display_name: Type.Optional(Type.String({ description: "本机对应记录的展示名称。" })), local_version: Type.Optional(Type.String({ description: "本机对应记录的版本。" })) }, { $id: "InstallableSkill", additionalProperties: false, description: "当前成员可在对话中自行安装的企业技能（只读，来自企业技能目录）。" });
 const InstallableSkillListEnvelope = Type.Object({ data: Type.Array(Type.Ref("InstallableSkill")) }, { $id: "InstallableSkillListEnvelope" });
 const LocalCapabilityListEnvelope = Type.Object({ data: Type.Array(Type.Ref("LocalCapability")) }, { $id: "LocalCapabilityListEnvelope" });
 const McpLoginOut = Type.Object({
@@ -567,6 +574,7 @@ const CatalogMcpOut = Type.Object({
   auth: McpAuthMode,
   origin: Type.Union([Type.Literal("platform"), Type.Literal("enterprise")], { description: "platform：企业从平台目录启用；enterprise：企业自建。" }),
   revision: Type.Integer({ minimum: 1, description: "目录修订号。" }),
+  namespace: Type.Optional(Type.String({ description: "展示前缀：taiyim（平台）/ 企业名。旧企业端不返回。" })),
   state: Type.Union([Type.Literal("install"), Type.Literal("installed"), Type.Literal("update"), Type.Literal("conflict")], { description: "install 本机未装；installed 已从该条目装好；update 本机装的是旧修订；conflict 本机已有同标识的其他 MCP（安装需 replace）。" }),
 }, { $id: "CatalogMcp", additionalProperties: false, description: "成员可从企业 MCP 目录一键安装的条目；不含任何凭据。" });
 const CatalogMcpListEnvelope = Type.Object({ data: Type.Array(Type.Ref("CatalogMcp")) }, { $id: "CatalogMcpListEnvelope" });
@@ -2476,7 +2484,8 @@ export class AgentHttpServer {
   private async listInstallableSkills(response: ServerResponse, caller: AuthenticatedCaller): Promise<void> {
     if (!this.options.managerClient?.listInstallableSkills) throw new HttpProblem(503, "manager_unavailable", "Enterprise skill catalog is unavailable");
     try {
-      this.writeJson(response, 200, { data: await this.options.managerClient.listInstallableSkills(caller) });
+      const catalog = await this.options.managerClient.listInstallableSkills(caller);
+      this.writeJson(response, 200, { data: listInstallableSkillStates(this.options.store, this.mcpOwner(caller), catalog) });
     } catch (error) {
       if (error instanceof ManagerAuthorizationError) throw new HttpProblem(error.status, error.status === 401 ? "unauthenticated" : "forbidden", error.message);
       if (error instanceof ManagerUnavailableError) throw new HttpProblem(503, "manager_unavailable", "Enterprise skill catalog is unavailable");

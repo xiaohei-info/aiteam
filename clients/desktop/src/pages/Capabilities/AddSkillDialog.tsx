@@ -7,7 +7,7 @@ import { BookOpen, LoaderCircle, Search } from 'lucide-react'
 import { ChatDialog } from '../../components/Chat/ChatDialog'
 import { agentApi, AgentApiError } from '../../api/agent'
 import type { InstallableSkill, LocalCapability } from '../../api/agent/types'
-import { installableSkillState } from './capabilityLabels'
+import { capabilityTitle, installableSkillState, provenanceText } from './capabilityLabels'
 import { CustomSkillImport } from './CustomSkillImport'
 import './McpAuth.css'
 
@@ -34,7 +34,7 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
 
   const shown = useMemo(() => {
     const keyword = query.trim().toLowerCase()
-    return (skills ?? []).filter((skill) => !keyword || `${skill.display_name} ${skill.skill_id}`.toLowerCase().includes(keyword))
+    return (skills ?? []).filter((skill) => !keyword || `${capabilityTitle(skill.namespace, skill.display_name)} ${skill.skill_id}`.toLowerCase().includes(keyword))
   }, [skills, query])
 
   const install = async (skill: InstallableSkill, replace: boolean) => {
@@ -71,15 +71,16 @@ export function AddSkillDialog({ installed, onInstalled, onClose }: { installed:
                   const working = busy === skill.skill_id
                   return <li key={skill.skill_id}>
                     <span className="skill-list-copy">
-                      <strong>{skill.display_name || skill.skill_id}</strong>
-                      <span>{skill.origin === 'platform' ? '平台技能市场' : '企业自建'} · 版本 {skill.version} · 标识 {skill.skill_id}</span>
+                      <strong>{capabilityTitle(skill.namespace, skill.display_name || skill.skill_id)}</strong>
+                      <span>{skill.origin === 'platform' ? '平台技能市场' : '企业自建'} · 版本 {skill.version}{provenanceText(skill.provenance) ? ` · ${provenanceText(skill.provenance)}` : ''}</span>
                       {state.action === 'upgrade' && <span>本机已装 {state.from || '其他'} 版，安装后换成 {skill.version} 版。</span>}
+                      {state.action === 'conflict' && <span>本机已有同名技能「{state.name}」，同一个名字只能装一个；替换后改用这个，原来那个会被移除。</span>}
                       {rowError?.id === skill.skill_id && <span role="alert" className="mcp-error">{rowError.text}</span>}
                     </span>
                     {state.action === 'installed'
                       ? <span className="mcp-auth-badge">已安装</span>
-                      : <button type="button" disabled={busy !== null} onClick={() => void install(skill, state.action === 'upgrade')}>
-                        {working ? '正在安装…' : state.action === 'upgrade' ? `换成 ${skill.version} 版` : '安装'}
+                      : <button type="button" disabled={busy !== null} onClick={() => void install(skill, state.action === 'upgrade' || state.action === 'conflict')}>
+                        {working ? '正在安装…' : state.action === 'upgrade' ? `换成 ${skill.version} 版` : state.action === 'conflict' ? '替换安装' : '安装'}
                       </button>}
                   </li>
                 })}

@@ -2,17 +2,19 @@
  * 左侧栏「能力」页：成员本人的个人 MCP 与技能（只在本机、只对本人会话生效）。
  * - MCP：添加 MCP（从企业拿一键安装 / 粘贴配置、检查鉴权、登录或填令牌）、鉴权状态、重新登录 / 更新令牌 / 退出登录、撤销
  * - 技能：添加技能（企业开放给本人的技能目录）、升级、撤销
+ * - 企业目录里有新版本的：行内「有更新」+「更新」，顶部「N 项有更新 · 全部更新」（设计「技能MCP命名空间出处与更新提示」§4.5）；
+ *   新版本下一轮对话起生效，不推送、不弹窗
  * - 自动安装授权（设计 §11.3）的查看与撤销
  * 原先在「设置」页里，现在单独成页；设置页只留一行链接。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BookOpen, ExternalLink, FolderOpen, LoaderCircle, LogIn, Plug, Plus, ShieldCheck, Trash2, UserRound, Zap } from 'lucide-react'
+import { AlertCircle, BookOpen, ExternalLink, FolderOpen, LoaderCircle, LogIn, Plug, Plus, RefreshCw, ShieldCheck, Trash2, UserRound, Zap } from 'lucide-react'
 import '../../components/FileAccess/FileAccess.css'
 import '../Settings/Settings.css'
 import './McpAuth.css'
 import { agentApi } from '../../api/agent'
-import type { CapabilityAutoInstall, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
-import { autoInstallKindLabel, capabilitySourceLabel, capabilitySourceTone, customSkillIntegrityLabel, hasLocalDirectory, isAutoInstalled, mcpAuthStatusLabel } from './capabilityLabels'
+import type { CapabilityAutoInstall, CapabilityProvenance, CatalogMcp, InstallableSkill, LocalCapability, LocalCapabilityKind, McpLogin } from '../../api/agent/types'
+import { autoInstallKindLabel, capabilityTitle, capabilitySourceLabel, capabilitySourceTone, customSkillIntegrityLabel, hasLocalDirectory, isAutoInstalled, mcpAuthStatusLabel, provenanceText } from './capabilityLabels'
 import { revealInFileManager } from '../../lib/externalOpen'
 import { isMacUserAgent } from '../../lib/projectConversation'
 import { AddMcpDialog, McpSignInDialog, McpTokenDialog } from './McpAuthDialogs'
@@ -21,12 +23,42 @@ import { AskEmployeeDialog } from './AskEmployeeDialog'
 import { useChatStore } from '../../stores/chat'
 import { useNavigate } from 'react-router-dom'
 
+/** 一个已装能力在企业目录里的对应条目：用来显示前缀 / 出处，以及有没有新版本。 */
+type CatalogMatch = { kind: 'skill'; entry: InstallableSkill } | { kind: 'mcp'; entry: CatalogMcp }
+
+function catalogMatches(skills: InstallableSkill[], mcps: CatalogMcp[]): Map<string, CatalogMatch> {
+  const map = new Map<string, CatalogMatch>()
+  for (const entry of skills) {
+    if ((entry.state === 'installed' || entry.state === 'update') && entry.local_ref) map.set(`skill:${entry.local_ref}`, { kind: 'skill', entry })
+  }
+  for (const entry of mcps) {
+    if (entry.state === 'installed' || entry.state === 'update') map.set(`mcp:${entry.ref}`, { kind: 'mcp', entry })
+  }
+  return map
+}
+
+function hasUpdate(match: CatalogMatch | undefined): boolean {
+  return match?.entry.state === 'update'
+}
+
+function Provenance({ provenance }: { provenance: CapabilityProvenance | null | undefined }) {
+  const text = provenanceText(provenance)
+  if (!text) return null
+  return provenance?.url
+    ? <a className="cap-meta-text cap-origin-link" href={provenance.url} target="_blank" rel="noopener noreferrer"
+      onClick={(event) => { event.preventDefault(); window.open(provenance.url, '_blank', 'noopener,noreferrer') }}>{text} ↗</a>
+    : <span className="cap-meta-text">{text}</span>
+}
+
 type Dialog = { type: 'add-mcp' } | { type: 'add-skill' } | { type: 'ask-employee' } | { type: 'login'; item: LocalCapability; login: McpLogin } | { type: 'token'; item: LocalCapability }
 
 export default function Capabilities() {
   const [items, setItems] = useState<LocalCapability[] | null>(null)
   // 自动安装授权；旧版 Agent 没有该接口时为空列表，不影响已装能力。
   const [grants, setGrants] = useState<CapabilityAutoInstall[]>([])
+  // 企业目录（读不到不影响已装能力，只是不显示前缀 / 更新）。
+  const [catalogSkills, setCatalogSkills] = useState<InstallableSkill[]>([])
+  const [catalogMcps, setCatalogMcps] = useState<CatalogMcp[]>([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busyKey, setBusyKey] = useState<string | null>(null)
@@ -41,8 +73,12 @@ export default function Capabilities() {
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const load = useCallback(async () => {
-    const [rows, autoInstall] = await Promise.allSettled([agentApi.listLocalCapabilities(), agentApi.listCapabilityAutoInstall()])
+    const [rows, autoInstall, skillCatalog, mcpCatalog] = await Promise.allSettled([
+      agentApi.listLocalCapabilities(), agentApi.listCapabilityAutoInstall(), agentApi.listInstallableSkills(), agentApi.listInstallableMcpServers(),
+    ])
     if (!alive.current) return
+    setCatalogSkills(skillCatalog.status === 'fulfilled' ? skillCatalog.value : [])
+    setCatalogMcps(mcpCatalog.status === 'fulfilled' ? mcpCatalog.value : [])
     if (rows.status === 'fulfilled') { setItems(rows.value); setError('') }
     else setError(rows.reason instanceof Error ? rows.reason.message : '个人能力读取失败')
     setGrants(autoInstall.status === 'fulfilled' ? autoInstall.value : [])
@@ -63,6 +99,33 @@ export default function Capabilities() {
     }
   }
   const keyOf = (item: LocalCapability) => `${item.kind}:${item.ref}`
+  const matches = catalogMatches(catalogSkills, catalogMcps)
+  const updates = (items ?? []).filter((item) => hasUpdate(matches.get(keyOf(item))))
+  /** 换成企业目录的当前版本；OAuth 的 MCP 可能要重新登录：返回 false 并打开登录窗口。 */
+  const applyUpdate = async (item: LocalCapability): Promise<boolean> => {
+    const match = matches.get(keyOf(item))
+    if (!match) return true
+    if (match.kind === 'skill') { await agentApi.installSkill(match.entry.skill_id, true); return true }
+    const result = await agentApi.installCatalogMcpServer(match.entry.server_id, { replace: true })
+    if (result.login) { setDialog({ type: 'login', item, login: result.login }); return false }
+    return true
+  }
+  const updateOne = (item: LocalCapability) => run(keyOf(item), async () => {
+    if (await applyUpdate(item)) setNotice(`已更新「${item.display_name}」，下一轮对话起用新版本。`)
+  }, '更新失败')
+  /** 逐个更新；遇到要登录的停下打开登录窗口，失败的停下说明是哪一个。 */
+  const updateAll = () => run('update:all', async () => {
+    let done = 0
+    for (const item of updates) {
+      try {
+        if (!(await applyUpdate(item))) { setNotice(done ? `已更新 ${done} 项；「${item.display_name}」需要重新登录，登录完成后即更新好。` : ''); return }
+      } catch (err) {
+        throw new Error(`${done ? `已更新 ${done} 项；` : ''}「${item.display_name}」更新失败：${err instanceof Error && err.message ? err.message : '请重试'}`)
+      }
+      done += 1
+    }
+    setNotice(`已更新 ${done} 项，下一轮对话起用新版本。`)
+  }, '更新失败')
   const revoke = (item: LocalCapability) => run(keyOf(item), () => agentApi.deleteLocalCapability(item.kind, item.ref), '撤销失败')
   const relogin = (item: LocalCapability) => run(keyOf(item), async () => {
     const login = await agentApi.startMcpLogin(item.ref)
@@ -106,12 +169,15 @@ export default function Capabilities() {
     const busy = busyKey === keyOf(item)
     const status = mcpAuthStatusLabel(item)
     const integrity = customSkillIntegrityLabel(item)
+    const match = matches.get(keyOf(item))
+    const update = hasUpdate(match)
+    const title = capabilityTitle(match?.entry.namespace, item.display_name)
     return <li key={keyOf(item)}>
       <span className="file-access-directory-icon">{item.kind === 'skill'
         ? <BookOpen size={17} strokeWidth={1.7} aria-hidden="true" />
         : <Plug size={17} strokeWidth={1.7} aria-hidden="true" />}</span>
       <span style={{ flex: 1, minWidth: 0, display: 'grid', gap: 4 }}>
-        <strong style={{ color: 'var(--text-primary)', fontSize: 13, overflowWrap: 'anywhere' }}>{item.display_name}</strong>
+        <strong style={{ color: 'var(--text-primary)', fontSize: 13, overflowWrap: 'anywhere' }}>{title}</strong>
         <span className="cap-meta">
           <span className={`cap-source-badge tone-${capabilitySourceTone(item)}`} title={`来源：${capabilitySourceLabel(item)}`}>
             <span className="cap-source-dot" aria-hidden="true" />{capabilitySourceLabel(item)}
@@ -120,6 +186,8 @@ export default function Capabilities() {
           {isAutoInstalled(item) && <span className="cap-meta-text">自动安装</span>}
           {status && <span className={`cap-pill ${status.attention ? 'attention' : ''}`}>{status.text}</span>}
           {integrity && <span className={`cap-pill ${integrity.attention ? 'attention' : ''}`}>{integrity.text}</span>}
+          {update && <span className="cap-pill update">有更新</span>}
+          {match?.kind === 'skill' && <Provenance provenance={match.entry.provenance} />}
         </span>
         {item.kind === 'mcp' && <span className="file-access-directory-path" title={item.url}>{item.url}</span>}
         <span style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.6, overflowWrap: 'anywhere' }}>
@@ -127,6 +195,9 @@ export default function Capabilities() {
         </span>
       </span>
       <span className="mcp-row-actions">
+        {update && <button type="button" className="cap-action primary" disabled={busy || busyKey === 'update:all'} onClick={() => void updateOne(item)}>
+          <RefreshCw size={12} aria-hidden="true" />{busy ? '正在更新…' : '更新'}
+        </button>}
         {item.kind === 'mcp' && item.auth === 'oauth' && <>
           <button type="button" className="cap-action" disabled={busy} onClick={() => void relogin(item)}><LogIn size={12} aria-hidden="true" />重新登录</button>
           {item.auth_status === 'signed_in' && <button type="button" className="cap-action" disabled={busy} onClick={() => void signOut(item)}>退出登录</button>}
@@ -177,6 +248,13 @@ export default function Capabilities() {
     <div className="settings-content">
       {error && <p role="alert" className="file-access-error"><AlertCircle size={14} aria-hidden="true" /><span>{error}</span></p>}
       {notice && <p role="status" className="file-access-note"><ShieldCheck size={13} aria-hidden="true" /><span>{notice}</span></p>}
+      {updates.length > 0 && <div className="cap-update-bar" role="region" aria-label="能力更新">
+        <RefreshCw size={14} aria-hidden="true" />
+        <span>{updates.length} 项有更新，企业已发布新版本；更新后下一轮对话起生效。</span>
+        <button type="button" className="capabilities-add" disabled={busyKey !== null} onClick={() => void updateAll()}>
+          {busyKey === 'update:all' ? '正在更新…' : '全部更新'}
+        </button>
+      </div>}
       {section('mcp', mcps)}
       {section('skill', skills)}
       {grants.length > 0 && <section className="settings-card glass-panel" aria-labelledby="capabilities-auto-title">

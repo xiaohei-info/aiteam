@@ -580,7 +580,7 @@ test("HTTP «从企业拿»: list and install through Manager, 404 / 409 / 503 w
     pullAuthorizedConfig: async () => { throw new Error("unused"); },
     listInstallableMcpServers: async () => {
       if (down) throw new ManagerUnavailableError("down");
-      return [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], revision: 2, auth: "none", auth_header: "", oauth_scopes: "", oauth_client: "dynamic", origin: "enterprise" }];
+      return [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], revision: 2, auth: "none", auth_header: "", oauth_scopes: "", oauth_client: "dynamic", origin: "enterprise", namespace: "太一科技" }];
     },
   } as unknown as ManagerClient;
   const host = fixture.createHost(undefined, managerClient, undefined, undefined, { mcpAuth: auth });
@@ -596,7 +596,7 @@ test("HTTP «从企业拿»: list and install through Manager, 404 / 409 / 503 w
   const headers = { Authorization: "Bearer test", "Content-Type": "application/json" };
   try {
     const listed = await (await fetch(`${base}/api/agent/capabilities/installable-mcp-servers`, { headers })).json() as { data: Record<string, unknown>[] };
-    assert.deepEqual(listed.data, [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], auth: "none", origin: "enterprise", revision: 2, state: "install" }]);
+    assert.deepEqual(listed.data, [{ server_id: "ent-1", ref: "erp", display_name: "ERP", summary: "订单", url: open.url, tools: [], auth: "none", origin: "enterprise", revision: 2, namespace: "太一科技", state: "install" }]);
     const install = (body: unknown, id = "ent-1") => fetch(`${base}/api/agent/capabilities/mcp/catalog/${id}/install`, { method: "POST", headers, body: JSON.stringify(body) });
     // The address always comes from the catalog: one sent by the client is ignored.
     const done = await install({ url: "https://evil.example/mcp", ref: "evil" });

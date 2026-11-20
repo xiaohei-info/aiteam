@@ -1,4 +1,4 @@
-import type { InstallableSkill, LocalCapability, LocalCapabilityKind } from '../../api/agent/types'
+import type { CapabilityProvenance, InstallableSkill, LocalCapability, LocalCapabilityKind } from '../../api/agent/types'
 
 /** `approved_by` of installs approved by the member's auto-install grant (Agent AUTO_INSTALL_APPROVER). */
 export const AUTO_INSTALL_APPROVER = 'policy:auto-install'
@@ -71,10 +71,30 @@ function formatExpiry(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** 「添加技能」列表里一项企业可装技能对本人的状态：未装 / 已装同版本 / 已装其他版本（可换成目录当前版本）。 */
-export type InstallableSkillState = { action: 'install' } | { action: 'installed' } | { action: 'upgrade'; from: string }
+/**
+ * 完整名称（设计「技能MCP命名空间出处与更新提示」§4.1）：taiyim/weather、太一科技/周报；原样取自其他平台的不带前缀。
+ * 与 web/shared/src/skills/namespace.ts 同一规则（桌面端不引用 web 源码，这里各存一份）。
+ */
+export function capabilityTitle(namespace: string | null | undefined, name: string): string {
+  return namespace ? `${namespace}/${name}` : name
+}
 
-export function installableSkillState(skill: Pick<InstallableSkill, 'skill_id' | 'version'>, installed: Pick<LocalCapability, 'kind' | 'ref' | 'version'>[]): InstallableSkillState {
+/** 「来自 ClawHub steipete/weather」/「改自 taiyim/weather v8c2d」；自己的内容为空。 */
+export function provenanceText(provenance: CapabilityProvenance | null | undefined): string {
+  if (!provenance?.label) return ''
+  if (!provenance.edited) return `来自 ${provenance.label}`
+  return `改自 ${provenance.label}${provenance.version ? ` v${provenance.version}` : ''}`
+}
+
+/** 「添加技能」列表里一项企业可装技能对本人的状态：未装 / 已装同版本 / 已装旧版本（可更新）/ 本机已有同名的其他技能（可替换）。 */
+export type InstallableSkillState = { action: 'install' } | { action: 'installed' } | { action: 'upgrade'; from: string } | { action: 'conflict'; name: string }
+
+export function installableSkillState(skill: Pick<InstallableSkill, 'skill_id' | 'version' | 'state' | 'local_display_name' | 'local_version' | 'local_ref'>, installed: Pick<LocalCapability, 'kind' | 'ref' | 'version'>[]): InstallableSkillState {
+  // 新版 Agent 自己算好了（按 SKILL.md 同名判断）；旧版 Agent 退回按标识比对。
+  if (skill.state === 'installed') return { action: 'installed' }
+  if (skill.state === 'update') return { action: 'upgrade', from: skill.local_version ?? '' }
+  if (skill.state === 'conflict') return { action: 'conflict', name: skill.local_display_name || skill.local_ref || '' }
+  if (skill.state === 'install') return { action: 'install' }
   const current = installed.find((item) => item.kind === 'skill' && item.ref === skill.skill_id)
   if (!current) return { action: 'install' }
   return current.version === skill.version ? { action: 'installed' } : { action: 'upgrade', from: current.version ?? '' }

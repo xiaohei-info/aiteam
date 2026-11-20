@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { capabilitySourceLabel, capabilitySourceTone, customSkillIntegrityLabel, hasLocalDirectory } from '../src/pages/Capabilities/capabilityLabels.ts'
+import { capabilitySourceLabel, capabilitySourceTone, capabilityTitle, customSkillIntegrityLabel, hasLocalDirectory, installableSkillState, provenanceText } from '../src/pages/Capabilities/capabilityLabels.ts'
 
 /** 来源文案：本地导入显示「自定义」，有明确平台的 URL 来源显示平台名。 */
 test('来源显示：本地导入=自定义，ClawHub=平台名', () => {
@@ -37,4 +37,21 @@ test('只有本机导入的技能能在文件管理器里显示目录', () => {
   assert.equal(hasLocalDirectory({ kind: 'skill', source: 'platform_catalog' }), false)
   // MCP 不是本机目录
   assert.equal(hasLocalDirectory({ kind: 'mcp', source: 'user_url' }), false)
+})
+
+test('名称带前缀、出处分「来自 / 改自」（与 web/shared namespace.ts 同一规则）', () => {
+  assert.equal(capabilityTitle('taiyim', 'weather'), 'taiyim/weather')
+  assert.equal(capabilityTitle('', 'self-improving'), 'self-improving')
+  assert.equal(provenanceText({ kind: 'clawhub', label: 'ClawHub a/b', url: '', version: '', edited: false }), '来自 ClawHub a/b')
+  assert.equal(provenanceText({ kind: 'platform', label: 'taiyim/weather', url: '', version: '8c2d', edited: true }), '改自 taiyim/weather v8c2d')
+  assert.equal(provenanceText(null), '')
+})
+
+test('企业可装技能的本机状态：新版 Agent 给的 state 为准（含同名冲突），旧版退回按标识比对', () => {
+  const skill = { skill_id: 'platform-p2', version: '2' }
+  assert.deepEqual(installableSkillState({ ...skill, state: 'conflict', local_display_name: 'weather', local_ref: 'weather' }, []), { action: 'conflict', name: 'weather' })
+  assert.deepEqual(installableSkillState({ ...skill, state: 'update', local_version: '1' }, []), { action: 'upgrade', from: '1' })
+  assert.deepEqual(installableSkillState({ ...skill, state: 'installed' }, []), { action: 'installed' })
+  assert.deepEqual(installableSkillState(skill, [{ kind: 'skill', ref: 'platform-p2', version: '1' }]), { action: 'upgrade', from: '1' })
+  assert.deepEqual(installableSkillState(skill, []), { action: 'install' })
 })
